@@ -6,11 +6,28 @@
  */
 import { test, expect, navigateToTab } from './fixtures/base';
 import { selectors } from './fixtures/test-data';
+import { Page } from '@playwright/test';
 
 const filterButtonSelector = '.filter-settings-button';
 const filterMenuSelector = '.filter-settings-menu';
 const filterSeparatorSelector = '.filter-settings-separator';
 const filterSubheaderSelector = '.filter-settings-subheader';
+
+/**
+ * Reload the page with retry logic.
+ * Transient ERR_NETWORK_CHANGED errors can occur under parallel test load.
+ */
+async function reloadWithRetry(page: Page, maxRetries = 3): Promise<void> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      await page.reload({ timeout: 10000 });
+      return;
+    } catch {
+      if (attempt === maxRetries - 1) throw new Error('Page reload failed after retries');
+      await page.waitForTimeout(500);
+    }
+  }
+}
 
 test.describe('Missing Data Filters - UI', () => {
   test.beforeEach(async ({ appPage }) => {
@@ -20,19 +37,22 @@ test.describe('Missing Data Filters - UI', () => {
   test('filter dropdown contains Missing Data section with separator and subheader', async ({ appPage }) => {
     // Open the filter dropdown
     const filterButton = appPage.locator(filterButtonSelector);
-    await expect(filterButton).toBeVisible();
+    await expect(filterButton).toBeVisible({ timeout: 10000 });
     await filterButton.click();
 
     const filterMenu = appPage.locator(filterMenuSelector);
-    await expect(filterMenu).toBeVisible();
+    await expect(filterMenu).toBeVisible({ timeout: 5000 });
 
-    // Check separator exists
-    const separator = filterMenu.locator(filterSeparatorSelector);
-    await expect(separator).toBeVisible();
+    // Wait for filter options to be fully rendered
+    await expect(filterMenu.locator('.filter-settings-option').first()).toBeVisible({ timeout: 5000 });
+
+    // Check separator exists (there may be multiple separators; check first one)
+    const separator = filterMenu.locator(filterSeparatorSelector).first();
+    await expect(separator).toBeVisible({ timeout: 5000 });
 
     // Check "Missing Data" subheader exists
-    const subheader = filterMenu.locator(filterSubheaderSelector);
-    await expect(subheader).toBeVisible();
+    const subheader = filterMenu.locator(filterSubheaderSelector).first();
+    await expect(subheader).toBeVisible({ timeout: 5000 });
     await expect(subheader).toHaveText('Missing Data');
   });
 
@@ -53,7 +73,7 @@ test.describe('Missing Data Filters - UI', () => {
   test('missing data checkboxes are unchecked by default', async ({ appPage }) => {
     // Clear any saved filter state from localStorage
     await appPage.evaluate(() => localStorage.removeItem('channelListFilters'));
-    await appPage.reload();
+    await reloadWithRetry(appPage);
     await appPage.waitForSelector(selectors.channelsPane, { timeout: 10000 });
 
     const filterButton = appPage.locator(filterButtonSelector);
@@ -114,11 +134,15 @@ test.describe('Missing Data Filters - Active Indicator', () => {
   test('filter button has no filter-active class when no missing data filters are checked', async ({ appPage }) => {
     // Clear filters
     await appPage.evaluate(() => localStorage.removeItem('channelListFilters'));
-    await appPage.reload();
+    await reloadWithRetry(appPage);
     await appPage.waitForSelector(selectors.channelsPane, { timeout: 10000 });
 
+    // Wait for the filter button to be visible and state to settle after reload
     const filterButton = appPage.locator(filterButtonSelector);
-    await expect(filterButton).not.toHaveClass(/filter-active/);
+    await expect(filterButton).toBeVisible({ timeout: 10000 });
+    await appPage.waitForTimeout(500);
+
+    await expect(filterButton).not.toHaveClass(/filter-active/, { timeout: 5000 });
   });
 
   test('filter button gets filter-active class when a missing data filter is checked', async ({ appPage }) => {
@@ -142,14 +166,16 @@ test.describe('Missing Data Filters - Active Indicator', () => {
     await filterButton.click();
 
     const filterMenu = appPage.locator(filterMenuSelector);
+    await expect(filterMenu).toBeVisible({ timeout: 5000 });
+
     const missingLogoCheckbox = filterMenu.locator('label.filter-settings-option', { hasText: 'Missing Logo' }).locator('input[type="checkbox"]');
 
     // Check then uncheck
     await missingLogoCheckbox.check();
-    await expect(filterButton).toHaveClass(/filter-active/);
+    await expect(filterButton).toHaveClass(/filter-active/, { timeout: 5000 });
 
     await missingLogoCheckbox.uncheck();
-    await expect(filterButton).not.toHaveClass(/filter-active/);
+    await expect(filterButton).not.toHaveClass(/filter-active/, { timeout: 5000 });
   });
 });
 
@@ -329,7 +355,7 @@ test.describe('Missing Data Filters - Persistence', () => {
     await appPage.locator(selectors.channelsPane).click({ position: { x: 5, y: 5 } });
 
     // Reload the page
-    await appPage.reload();
+    await reloadWithRetry(appPage);
     await appPage.waitForSelector(selectors.channelsPane, { timeout: 10000 });
 
     // The filter button should still show active state

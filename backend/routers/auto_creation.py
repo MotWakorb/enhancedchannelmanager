@@ -5,6 +5,7 @@ Extracted from main.py (Phase 3 of v0.13.0 backend refactor).
 """
 import json
 import logging
+import time
 from datetime import datetime
 from typing import List, Optional
 
@@ -85,6 +86,7 @@ class ImportYAMLRequest(BaseModel):
 @router.get("/rules")
 async def get_auto_creation_rules():
     """Get all auto-creation rules sorted by priority."""
+    logger.debug("[AUTO-CREATE] GET /rules")
     try:
         from models import AutoCreationRule
         session = get_session()
@@ -92,22 +94,23 @@ async def get_auto_creation_rules():
             rules = session.query(AutoCreationRule).order_by(
                 AutoCreationRule.priority
             ).all()
-            logger.debug(f"[Auto-Creation] Returning {len(rules)} rules to UI")
+            logger.debug("[AUTO-CREATE] Returning %s rules to UI", len(rules))
             for r in rules:
                 actions = r.get_actions()
                 action_summary = ", ".join(f"{a.get('type', '?')}" for a in actions)
-                logger.debug(f"[Auto-Creation]   Rule id={r.id} '{r.name}': actions=[{action_summary}], raw_actions={r.actions}")
+                logger.debug("[AUTO-CREATE]   Rule id=%s '%s': actions=[%s], raw_actions=%s", r.id, r.name, action_summary, r.actions)
             return {"rules": [r.to_dict() for r in rules]}
         finally:
             session.close()
     except Exception as e:
-        logger.error(f"Failed to get auto-creation rules: {e}")
+        logger.exception("[AUTO-CREATE] Failed to get auto-creation rules: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/rules/{rule_id}")
 async def get_auto_creation_rule(rule_id: int):
     """Get a specific auto-creation rule by ID."""
+    logger.debug("[AUTO-CREATE] GET /rules/%s", rule_id)
     try:
         from models import AutoCreationRule
         session = get_session()
@@ -123,7 +126,7 @@ async def get_auto_creation_rule(rule_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get auto-creation rule {rule_id}: {e}")
+        logger.exception("[AUTO-CREATE] Failed to get auto-creation rule %s: %s", rule_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -135,9 +138,9 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
         from auto_creation_schema import validate_rule
 
         # Validate conditions and actions
-        logger.debug(f"[Auto-Creation] Creating rule '{request.name}' with {len(request.actions)} actions")
+        logger.debug("[AUTO-CREATE] Creating rule '%s' with %s actions", request.name, len(request.actions))
         for j, action in enumerate(request.actions):
-            logger.debug(f"[Auto-Creation]   Action {j}: {action}")
+            logger.debug("[AUTO-CREATE]   Action %s: %s", j, action)
         validation = validate_rule(request.conditions, request.actions)
         if not validation["valid"]:
             raise HTTPException(status_code=400, detail={
@@ -171,19 +174,20 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
             # Log to journal
             journal.log_entry(
                 category="auto_creation",
-                action_type="create_rule",
+                action_type="create",
                 entity_id=rule.id,
                 entity_name=rule.name,
                 description=f"Created auto-creation rule '{rule.name}'"
             )
 
+            logger.info("[AUTO-CREATE] Created rule id=%s name='%s'", rule.id, rule.name)
             return rule.to_dict()
         finally:
             session.close()
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to create auto-creation rule: {e}")
+        logger.exception("[AUTO-CREATE] Failed to create auto-creation rule: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -234,9 +238,9 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
             conditions = request.conditions if request.conditions is not None else rule.get_conditions()
             actions = request.actions if request.actions is not None else rule.get_actions()
 
-            logger.debug(f"[Auto-Creation] Updating rule id={rule_id} '{rule.name}' with {len(actions)} actions")
+            logger.debug("[AUTO-CREATE] Updating rule id=%s '%s' with %s actions", rule_id, rule.name, len(actions))
             for j, action in enumerate(actions):
-                logger.debug(f"[Auto-Creation]   Action {j}: {action}")
+                logger.debug("[AUTO-CREATE]   Action %s: %s", j, action)
 
             validation = validate_rule(conditions, actions)
             if not validation["valid"]:
@@ -256,25 +260,27 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
             # Log to journal
             journal.log_entry(
                 category="auto_creation",
-                action_type="update_rule",
+                action_type="update",
                 entity_id=rule.id,
                 entity_name=rule.name,
                 description=f"Updated auto-creation rule '{rule.name}'"
             )
 
+            logger.info("[AUTO-CREATE] Updated rule id=%s name='%s'", rule.id, rule.name)
             return rule.to_dict()
         finally:
             session.close()
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update auto-creation rule {rule_id}: {e}")
+        logger.exception("[AUTO-CREATE] Failed to update auto-creation rule %s: %s", rule_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/rules/{rule_id}")
 async def delete_auto_creation_rule(rule_id: int):
     """Delete an auto-creation rule."""
+    logger.debug("[AUTO-CREATE] DELETE /rules/%s", rule_id)
     try:
         from models import AutoCreationRule
         session = get_session()
@@ -292,25 +298,27 @@ async def delete_auto_creation_rule(rule_id: int):
             # Log to journal
             journal.log_entry(
                 category="auto_creation",
-                action_type="delete_rule",
+                action_type="delete",
                 entity_id=rule_id,
                 entity_name=rule_name,
                 description=f"Deleted auto-creation rule '{rule_name}'"
             )
 
+            logger.info("[AUTO-CREATE] Deleted rule id=%s name='%s'", rule_id, rule_name)
             return {"status": "deleted", "id": rule_id}
         finally:
             session.close()
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to delete auto-creation rule {rule_id}: {e}")
+        logger.exception("[AUTO-CREATE] Failed to delete auto-creation rule %s: %s", rule_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/rules/reorder")
 async def reorder_auto_creation_rules(rule_ids: List[int] = Body(...)):
     """Reorder auto-creation rules by setting priorities based on array order."""
+    logger.debug("[AUTO-CREATE] POST /rules/reorder - %d rules", len(rule_ids))
     try:
         from models import AutoCreationRule
         session = get_session()
@@ -326,13 +334,14 @@ async def reorder_auto_creation_rules(rule_ids: List[int] = Body(...)):
         finally:
             session.close()
     except Exception as e:
-        logger.error(f"Failed to reorder auto-creation rules: {e}")
+        logger.exception("[AUTO-CREATE] Failed to reorder auto-creation rules: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/rules/{rule_id}/toggle")
 async def toggle_auto_creation_rule(rule_id: int):
     """Toggle the enabled state of an auto-creation rule."""
+    logger.debug("[AUTO-CREATE] POST /rules/%s/toggle", rule_id)
     try:
         from models import AutoCreationRule
         session = get_session()
@@ -353,13 +362,14 @@ async def toggle_auto_creation_rule(rule_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to toggle auto-creation rule {rule_id}: {e}")
+        logger.exception("[AUTO-CREATE] Failed to toggle auto-creation rule %s: %s", rule_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/rules/{rule_id}/duplicate")
 async def duplicate_auto_creation_rule(rule_id: int):
     """Duplicate an auto-creation rule."""
+    logger.debug("[AUTO-CREATE] POST /rules/%s/duplicate", rule_id)
     try:
         from models import AutoCreationRule
         session = get_session()
@@ -396,7 +406,7 @@ async def duplicate_auto_creation_rule(rule_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to duplicate auto-creation rule {rule_id}: {e}")
+        logger.exception("[AUTO-CREATE] Failed to duplicate auto-creation rule %s: %s", rule_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -408,6 +418,7 @@ async def duplicate_auto_creation_rule(rule_id: int):
 @router.post("/run")
 async def run_auto_creation_pipeline(request: RunPipelineRequest):
     """Run the auto-creation pipeline."""
+    logger.debug("[AUTO-CREATE] POST /run - dry_run=%s", request.dry_run)
     try:
         from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
 
@@ -426,13 +437,14 @@ async def run_auto_creation_pipeline(request: RunPipelineRequest):
 
         return result
     except Exception as e:
-        logger.error(f"Failed to run auto-creation pipeline: {e}", exc_info=True)
+        logger.exception("[AUTO-CREATE] Failed to run auto-creation pipeline: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/rules/{rule_id}/run")
 async def run_auto_creation_rule(rule_id: int, dry_run: bool = False):
     """Run a specific auto-creation rule."""
+    logger.debug("[AUTO-CREATE] POST /rules/%s/run - dry_run=%s", rule_id, dry_run)
     try:
         from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
 
@@ -450,7 +462,7 @@ async def run_auto_creation_rule(rule_id: int, dry_run: bool = False):
 
         return result
     except Exception as e:
-        logger.error(f"Failed to run auto-creation rule {rule_id}: {e}")
+        logger.exception("[AUTO-CREATE] Failed to run auto-creation rule %s: %s", rule_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -462,6 +474,7 @@ async def get_auto_creation_executions(
     status: Optional[str] = None
 ):
     """Get auto-creation execution history."""
+    logger.debug("[AUTO-CREATE] GET /executions - limit=%s offset=%s rule_id=%s status=%s", limit, offset, rule_id, status)
     try:
         from models import AutoCreationExecution
         session = get_session()
@@ -487,13 +500,14 @@ async def get_auto_creation_executions(
         finally:
             session.close()
     except Exception as e:
-        logger.error(f"Failed to get auto-creation executions: {e}")
+        logger.exception("[AUTO-CREATE] Failed to get auto-creation executions: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/executions/{execution_id}")
 async def get_auto_creation_execution(execution_id: int, include_entities: bool = False, include_log: bool = False):
     """Get details of a specific execution."""
+    logger.debug("[AUTO-CREATE] GET /executions/%s", execution_id)
     try:
         from models import AutoCreationExecution, AutoCreationConflict
         session = get_session()
@@ -518,13 +532,14 @@ async def get_auto_creation_execution(execution_id: int, include_entities: bool 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get auto-creation execution {execution_id}: {e}")
+        logger.exception("[AUTO-CREATE] Failed to get auto-creation execution %s: %s", execution_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/executions/{execution_id}/rollback")
 async def rollback_auto_creation_execution(execution_id: int):
     """Rollback an auto-creation execution."""
+    logger.debug("[AUTO-CREATE] POST /executions/%s/rollback", execution_id)
     try:
         from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
 
@@ -559,7 +574,7 @@ async def rollback_auto_creation_execution(execution_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to rollback auto-creation execution {execution_id}: {e}")
+        logger.exception("[AUTO-CREATE] Failed to rollback auto-creation execution %s: %s", execution_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -575,6 +590,7 @@ async def export_auto_creation_rules_yaml():
     Includes portable name fields (group_name, target_group_name, m3u_account_name)
     alongside numeric IDs so rules can be shared between ECM instances.
     """
+    logger.debug("[AUTO-CREATE-YAML] GET /export/yaml")
     try:
         import yaml
         from models import AutoCreationRule
@@ -589,15 +605,21 @@ async def export_auto_creation_rules_yaml():
             group_id_to_name = {}
             m3u_id_to_name = {}
             try:
+                start = time.time()
                 groups = await client.get_channel_groups()
+                elapsed_ms = (time.time() - start) * 1000
+                logger.debug("[AUTO-CREATE-YAML] Fetched channel groups in %.1fms", elapsed_ms)
                 group_id_to_name = {g["id"]: g["name"] for g in groups}
             except Exception as e:
-                logger.warning(f"Could not fetch channel groups for YAML export: {e}")
+                logger.warning("[AUTO-CREATE-YAML] Could not fetch channel groups for YAML export: %s", e)
             try:
+                start = time.time()
                 m3u_accounts = await client.get_m3u_accounts()
+                elapsed_ms = (time.time() - start) * 1000
+                logger.debug("[AUTO-CREATE-YAML] Fetched M3U accounts in %.1fms", elapsed_ms)
                 m3u_id_to_name = {a["id"]: a["name"] for a in m3u_accounts}
             except Exception as e:
-                logger.warning(f"Could not fetch M3U accounts for YAML export: {e}")
+                logger.warning("[AUTO-CREATE-YAML] Could not fetch M3U accounts for YAML export: %s", e)
 
             export_data = {
                 "version": 1,
@@ -644,7 +666,7 @@ async def export_auto_creation_rules_yaml():
         finally:
             session.close()
     except Exception as e:
-        logger.error(f"Failed to export auto-creation rules: {e}")
+        logger.exception("[AUTO-CREATE] Failed to export auto-creation rules: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -656,6 +678,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
     are present and corresponding IDs are missing, names are resolved to local IDs.
     Explicit IDs always take priority over names.
     """
+    logger.debug("[AUTO-CREATE-YAML] POST /import/yaml - overwrite=%s", request.overwrite)
     try:
         import yaml
         from models import AutoCreationRule
@@ -664,7 +687,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
         # Parse YAML
         try:
             data = yaml.safe_load(request.yaml_content)
-            logger.debug(f"[YAML Import] Parsed YAML with {len(data.get('rules', data) if isinstance(data, dict) else data)} rules")
+            logger.debug("[AUTO-CREATE-YAML] Parsed YAML with %s rules", len(data.get('rules', data) if isinstance(data, dict) else data))
         except yaml.YAMLError as e:
             raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
 
@@ -680,15 +703,21 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
         group_name_to_id = {}
         m3u_name_to_id = {}
         try:
+            start = time.time()
             groups = await client.get_channel_groups()
+            elapsed_ms = (time.time() - start) * 1000
+            logger.debug("[AUTO-CREATE-YAML] Fetched channel groups in %.1fms", elapsed_ms)
             group_name_to_id = {g["name"].lower(): g["id"] for g in groups}
         except Exception as e:
-            logger.warning(f"Could not fetch channel groups for YAML import: {e}")
+            logger.warning("[AUTO-CREATE-YAML] Could not fetch channel groups for YAML import: %s", e)
         try:
+            start = time.time()
             m3u_accounts = await client.get_m3u_accounts()
+            elapsed_ms = (time.time() - start) * 1000
+            logger.debug("[AUTO-CREATE-YAML] Fetched M3U accounts in %.1fms", elapsed_ms)
             m3u_name_to_id = {a["name"].lower(): a["id"] for a in m3u_accounts}
         except Exception as e:
-            logger.warning(f"Could not fetch M3U accounts for YAML import: {e}")
+            logger.warning("[AUTO-CREATE-YAML] Could not fetch M3U accounts for YAML import: %s", e)
 
         session = get_session()
         try:
@@ -698,11 +727,11 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
 
             for i, rule_data in enumerate(data["rules"]):
                 rule_name = rule_data.get('name', f'Rule {i}')
-                logger.debug(f"[YAML Import] Processing rule {i}: '{rule_name}'")
+                logger.debug("[AUTO-CREATE-YAML] Processing rule %s: '%s'", i, rule_name)
                 for j, action in enumerate(rule_data.get("actions", [])):
-                    logger.debug(f"[YAML Import]   Action {j} from YAML: type={action.get('type')}, params={{{', '.join(f'{k}={v}' for k, v in action.items() if k != 'type')}}}")
+                    logger.debug("[AUTO-CREATE-YAML]   Action %s from YAML: type=%s, params={%s}", j, action.get('type'), ', '.join('%s=%s' % (k, v) for k, v in action.items() if k != 'type'))
                 for j, cond in enumerate(rule_data.get("conditions", [])):
-                    logger.debug(f"[YAML Import]   Condition {j} from YAML: type={cond.get('type')}, value={cond.get('value')}, connector={cond.get('connector')}")
+                    logger.debug("[AUTO-CREATE-YAML]   Condition %s from YAML: type=%s, value=%s, connector=%s", j, cond.get('type'), cond.get('value'), cond.get('connector'))
                 # Resolve portable name fields to local IDs
                 # target_group_name → target_group_id
                 if not rule_data.get("target_group_id") and rule_data.get("target_group_name"):
@@ -740,9 +769,9 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                 # Validate rule
                 conditions = rule_data.get("conditions", [])
                 actions = rule_data.get("actions", [])
-                logger.debug(f"[YAML Import] Rule '{rule_name}': validating {len(conditions)} conditions, {len(actions)} actions")
+                logger.debug("[AUTO-CREATE-YAML] Rule '%s': validating %s conditions, %s actions", rule_name, len(conditions), len(actions))
                 for j, action in enumerate(actions):
-                    logger.debug(f"[YAML Import]   Action {j} pre-validate: type={action.get('type')}, all_keys={list(action.keys())}")
+                    logger.debug("[AUTO-CREATE-YAML]   Action %s pre-validate: type=%s, all_keys=%s", j, action.get('type'), list(action.keys()))
                 validation = validate_rule(conditions, actions)
 
                 if not validation["valid"]:
@@ -773,7 +802,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         existing.sort_field = rule_data.get("sort_field")
                         existing.sort_order = rule_data.get("sort_order", "asc")
                         existing.normalize_names = rule_data.get("normalize_names", False)
-                        logger.debug(f"[YAML Import] Rule '{rule_name}': updated existing (id={existing.id}), stored actions={existing.actions}")
+                        logger.debug("[AUTO-CREATE-YAML] Rule '%s': updated existing (id=%s), stored actions=%s", rule_name, existing.id, existing.actions)
                         imported.append({"name": existing.name, "action": "updated"})
                     else:
                         errors.append({
@@ -800,7 +829,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         normalize_names=rule_data.get("normalize_names", False)
                     )
                     session.add(rule)
-                    logger.debug(f"[YAML Import] Rule '{rule_name}': created new, stored actions={rule.actions}")
+                    logger.debug("[AUTO-CREATE-YAML] Rule '%s': created new, stored actions=%s", rule_name, rule.actions)
                     imported.append({"name": rule.name, "action": "created"})
 
             session.commit()
@@ -809,7 +838,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
             if imported:
                 journal.log_entry(
                     category="auto_creation",
-                    action_type="import_rules",
+                    action_type="import",
                     entity_id=None,
                     entity_name="YAML Import",
                     description=f"Imported {len(imported)} auto-creation rules from YAML"
@@ -828,7 +857,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to import auto-creation rules: {e}")
+        logger.exception("[AUTO-CREATE] Failed to import auto-creation rules: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -843,12 +872,13 @@ async def validate_auto_creation_rule(
     actions: list = Body(...)
 ):
     """Validate conditions and actions without creating a rule."""
+    logger.debug("[AUTO-CREATE] POST /validate")
     try:
         from auto_creation_schema import validate_rule
         result = validate_rule(conditions, actions)
         return result
     except Exception as e:
-        logger.error(f"Failed to validate auto-creation rule: {e}")
+        logger.exception("[AUTO-CREATE] Failed to validate auto-creation rule: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

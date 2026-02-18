@@ -99,12 +99,12 @@ def create_demo_rules(
     existing_groups = db.query(NormalizationRuleGroup).count()
 
     if existing_groups > 0 and not force:
-        logger.info(f"Rule groups already exist ({existing_groups}), skipping demo creation")
+        logger.info("[NORMALIZE-MIGRATE] Rule groups already exist (%s), skipping demo creation", existing_groups)
         return {"groups_created": 0, "rules_created": 0, "custom_rules_created": 0, "skipped": True}
 
     if force and existing_groups > 0:
         # Delete all existing rule groups and rules
-        logger.info(f"Force mode: deleting {existing_groups} existing groups")
+        logger.info("[NORMALIZE-MIGRATE] Force mode: deleting %s existing groups", existing_groups)
         db.query(NormalizationRule).delete()
         db.query(NormalizationRuleGroup).delete()
         db.commit()
@@ -121,7 +121,7 @@ def create_demo_rules(
         tag_group_id = tag_group_map.get(tag_group_name)
 
         if not tag_group_id:
-            logger.warning(f"Tag group '{tag_group_name}' not found, skipping rule")
+            logger.warning("[NORMALIZE-MIGRATE] Tag group '%s' not found, skipping rule", tag_group_name)
             continue
 
         # Create the rule group - DISABLED by default, editable
@@ -152,7 +152,7 @@ def create_demo_rules(
         db.add(rule)
         rules_created += 1
 
-        logger.info(f"Created rule group '{config['rule_group_name']}' with tag group condition")
+        logger.info("[NORMALIZE-MIGRATE] Created rule group '%s' with tag group condition", config['rule_group_name'])
 
     # Create custom rules from user's custom_normalization_tags (legacy migration)
     custom_rules_created = 0
@@ -199,8 +199,9 @@ def create_demo_rules(
 
     db.commit()
     logger.info(
-        f"Created {groups_created} demo groups (disabled by default) with {rules_created} tag-group rules "
-        f"and {custom_rules_created} custom rules"
+        "[NORMALIZE-MIGRATE] Created %s demo groups (disabled by default) with %s tag-group rules "
+        "and %s custom rules",
+        groups_created, rules_created, custom_rules_created
     )
 
     return {
@@ -256,7 +257,7 @@ def fix_timezone_tags_remove_directional(db: Session) -> dict:
     ).first()
 
     if not timezone_group:
-        logger.info("Timezone Tags tag group not found, skipping fix")
+        logger.info("[NORMALIZE-MIGRATE] Timezone Tags tag group not found, skipping fix")
         return {"tags_added": 0, "skipped": True}
 
     # Ensure each required tag exists
@@ -278,9 +279,9 @@ def fix_timezone_tags_remove_directional(db: Session) -> dict:
 
     if added > 0:
         db.commit()
-        logger.info(f"Added {added} missing tags to Timezone Tags (EAST/WEST)")
+        logger.info("[NORMALIZE-MIGRATE] Added %s missing tags to Timezone Tags (EAST/WEST)", added)
     else:
-        logger.info("Timezone Tags already has EAST and WEST")
+        logger.info("[NORMALIZE-MIGRATE] Timezone Tags already has EAST and WEST")
 
     return {"tags_added": added, "skipped": False}
 
@@ -315,9 +316,9 @@ def fix_tag_group_action_types(db: Session) -> dict:
 
     if updated > 0:
         db.commit()
-        logger.info(f"Updated {updated} tag-group rules to use strip_prefix/strip_suffix actions")
+        logger.info("[NORMALIZE-MIGRATE] Updated %s tag-group rules to use strip_prefix/strip_suffix actions", updated)
     else:
-        logger.info("No tag-group rules needed action type fixes")
+        logger.info("[NORMALIZE-MIGRATE] No tag-group rules needed action type fixes")
 
     return {"rules_updated": updated}
 
@@ -339,13 +340,13 @@ def ensure_provider_tags_rule(db: Session) -> dict:
     ).first()
 
     if existing:
-        logger.info("Strip Provider Tags rule group already exists")
+        logger.info("[NORMALIZE-MIGRATE] Strip Provider Tags rule group already exists")
         return {"created": False}
 
     # Check if we have any rule groups at all (if none, create_demo_rules handles it)
     total_groups = db.query(NormalizationRuleGroup).count()
     if total_groups == 0:
-        logger.info("No rule groups exist yet, skipping (create_demo_rules will handle)")
+        logger.info("[NORMALIZE-MIGRATE] No rule groups exist yet, skipping (create_demo_rules will handle)")
         return {"created": False}
 
     # Find the Provider Tags tag group
@@ -354,7 +355,7 @@ def ensure_provider_tags_rule(db: Session) -> dict:
     ).first()
 
     if not provider_group:
-        logger.warning("Provider Tags tag group not found, skipping rule creation")
+        logger.warning("[NORMALIZE-MIGRATE] Provider Tags tag group not found, skipping rule creation")
         return {"created": False}
 
     # Create the rule group - disabled by default like other demo rules
@@ -384,5 +385,5 @@ def ensure_provider_tags_rule(db: Session) -> dict:
     db.add(rule)
     db.commit()
 
-    logger.info("Created 'Strip Provider Tags' rule group with tag group condition")
+    logger.info("[NORMALIZE-MIGRATE] Created 'Strip Provider Tags' rule group with tag group condition")
     return {"created": True}

@@ -5,6 +5,7 @@ auto-created detection, and with-streams endpoints.
 Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 """
 import logging
+import time
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Body
@@ -16,7 +17,7 @@ import journal
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["Channel Groups"])
+router = APIRouter(prefix="/api/channel-groups", tags=["Channel Groups"])
 
 
 # ---------------------------------------------------------------------------
@@ -39,11 +40,13 @@ class DeleteOrphanedGroupsRequest(BaseModel):
 # Channel Groups list / create / update
 # ---------------------------------------------------------------------------
 
-@router.get("/api/channel-groups")
+@router.get("")
 async def get_channel_groups():
     """List all channel groups (excluding hidden)."""
+    logger.debug("[GROUPS] GET /channel-groups")
     client = get_client()
     try:
+        start = time.time()
         groups = await client.get_channel_groups()
 
         # Filter out hidden groups
@@ -66,18 +69,24 @@ async def get_channel_groups():
                 group_data = dict(g)
                 group_data["is_auto_sync"] = g.get("id") in auto_sync_group_ids
                 result.append(group_data)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[GROUPS] Fetched %s channel groups in %.1fms", len(result), elapsed_ms)
         return result
     except Exception as e:
+        logger.exception("[GROUPS] Failed to fetch channel groups")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/channel-groups")
+@router.post("")
 async def create_channel_group(request: CreateChannelGroupRequest):
     """Create a channel group."""
+    logger.debug("[GROUPS] POST /channel-groups - name=%s", request.name)
     client = get_client()
     try:
+        start = time.time()
         result = await client.create_channel_group(request.name)
-        logger.info(f"Created channel group: id={result.get('id')}, name={result.get('name')}")
+        elapsed_ms = (time.time() - start) * 1000
+        logger.info("[GROUPS] Created channel group id=%s name=%s in %.1fms", result.get('id'), result.get('name'), elapsed_ms)
         return result
     except Exception as e:
         error_str = str(e)
@@ -88,22 +97,28 @@ async def create_channel_group(request: CreateChannelGroupRequest):
                 groups = await client.get_channel_groups()
                 for group in groups:
                     if group.get("name") == request.name:
-                        logger.info(f"Found existing channel group: id={group.get('id')}, name={group.get('name')}")
+                        logger.info("[GROUPS] Found existing channel group id=%s name=%s", group.get('id'), group.get('name'))
                         return group
-                logger.warning(f"Group exists error but could not find group by name: {request.name}")
+                logger.warning("[GROUPS] Group exists error but could not find group by name: %s", request.name)
             except Exception as search_err:
-                logger.error(f"Error searching for existing group: {search_err}")
-        logger.error(f"Channel group creation failed: {e}")
+                logger.error("[GROUPS] Error searching for existing group: %s", search_err)
+        logger.exception("[GROUPS] Channel group creation failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.patch("/api/channel-groups/{group_id}")
+@router.patch("/{group_id}")
 async def update_channel_group(group_id: int, data: dict):
     """Update a channel group."""
+    logger.debug("[GROUPS] PATCH /channel-groups/%s - data=%s", group_id, data)
     client = get_client()
     try:
-        return await client.update_channel_group(group_id, data)
+        start = time.time()
+        result = await client.update_channel_group(group_id, data)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.info("[GROUPS] Updated channel group id=%s in %.1fms", group_id, elapsed_ms)
+        return result
     except Exception as e:
+        logger.exception("[GROUPS] Failed to update channel group id=%s", group_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -111,9 +126,10 @@ async def update_channel_group(group_id: int, data: dict):
 # Static routes — MUST be defined before /api/channel-groups/{group_id}
 # ---------------------------------------------------------------------------
 
-@router.get("/api/channel-groups/hidden")
+@router.get("/hidden")
 async def get_hidden_channel_groups():
     """Get list of all hidden channel groups."""
+    logger.debug("[GROUPS] GET /channel-groups/hidden")
     try:
         from models import HiddenChannelGroup
 
@@ -121,18 +137,20 @@ async def get_hidden_channel_groups():
             hidden_groups = db.query(HiddenChannelGroup).all()
             return [g.to_dict() for g in hidden_groups]
     except Exception as e:
-        logger.error(f"Failed to get hidden channel groups: {e}")
+        logger.exception("[GROUPS] Failed to get hidden channel groups: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/channel-groups/orphaned")
+@router.get("/orphaned")
 async def get_orphaned_channel_groups():
     """Find channel groups that are truly orphaned.
 
     A group is considered orphaned if it has no streams AND no channels.
     M3U groups contain streams, manual groups contain channels.
     """
+    logger.debug("[GROUPS-ORPHAN] GET /channel-groups/orphaned")
     client = get_client()
+    start = time.time()
     try:
         # Get all channel groups from Dispatcharr
         all_groups = await client.get_channel_groups()
@@ -191,11 +209,11 @@ async def get_orphaned_channel_groups():
                     if group_override:
                         group_override_targets.add(group_override)
 
-        logger.info(f"Total streams fetched: {len(streams)}")
-        logger.info(f"Total channels fetched: {len(channels)}")
-        logger.info(f"Groups with streams: {len(group_stream_count)}")
-        logger.info(f"Groups with channels: {len(group_channel_count)}")
-        logger.info(f"Groups that are group_override targets: {len(group_override_targets)}")
+        logger.debug("[GROUPS-ORPHAN] Total streams fetched: %s", len(streams))
+        logger.debug("[GROUPS-ORPHAN] Total channels fetched: %s", len(channels))
+        logger.debug("[GROUPS-ORPHAN] Groups with streams: %s", len(group_stream_count))
+        logger.debug("[GROUPS-ORPHAN] Groups with channels: %s", len(group_channel_count))
+        logger.debug("[GROUPS-ORPHAN] Groups that are group_override targets: %s", len(group_override_targets))
 
         # Find orphaned groups
         # A group is orphaned if it has no streams AND no channels AND is NOT in any M3U account
@@ -229,18 +247,19 @@ async def get_orphaned_channel_groups():
         # Sort by name for consistent display
         orphaned_groups.sort(key=lambda g: g["name"].lower())
 
-        logger.info(f"Found {len(orphaned_groups)} orphaned channel groups out of {len(all_groups)} total")
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[GROUPS-ORPHAN] Found %s orphaned channel groups out of %s total in %.1fms", len(orphaned_groups), len(all_groups), elapsed_ms)
         return {
             "orphaned_groups": orphaned_groups,
             "total_groups": len(all_groups),
             "groups_with_content": len(set(list(group_stream_count.keys()) + list(str(gid) for gid in group_channel_count.keys()))),
         }
     except Exception as e:
-        logger.error(f"Failed to find orphaned channel groups: {e}")
+        logger.exception("[GROUPS-ORPHAN] Failed to find orphaned channel groups: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/api/channel-groups/orphaned")
+@router.delete("/orphaned")
 async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest | None = Body(None)):
     """Delete channel groups that are truly orphaned.
 
@@ -250,18 +269,18 @@ async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest | 
     Args:
         request: Optional request body with group_ids list. If None or empty, all orphaned groups are deleted.
     """
-    logger.debug(f"[DELETE-ORPHANED] Request received: {request}")
-    logger.debug(f"[DELETE-ORPHANED] Request type: {type(request)}")
+    logger.debug("[GROUPS-ORPHAN] Request received: %s", request)
+    logger.debug("[GROUPS-ORPHAN] Request type: %s", type(request))
 
     client = get_client()
     group_ids = request.group_ids if request else None
-    logger.debug(f"[DELETE-ORPHANED] Extracted group_ids: {group_ids}")
+    logger.debug("[GROUPS-ORPHAN] Extracted group_ids: %s", group_ids)
 
     try:
         # Use the same logic as GET to find orphaned groups
-        logger.debug(f"[DELETE-ORPHANED] Fetching all channel groups...")
+        logger.debug("[GROUPS-ORPHAN] Fetching all channel groups...")
         all_groups = await client.get_channel_groups()
-        logger.debug(f"[DELETE-ORPHANED] Found {len(all_groups)} total channel groups")
+        logger.debug("[GROUPS-ORPHAN] Found %s total channel groups", len(all_groups))
 
         # Get M3U group settings to see which groups are still in M3U accounts
         m3u_group_settings = await client.get_all_m3u_group_settings()
@@ -320,7 +339,7 @@ async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest | 
         # Find orphaned groups
         # A group is orphaned if it has no streams AND no channels AND is NOT in any M3U account
         # AND is NOT a target of group_override from an auto_channel_sync M3U group
-        logger.debug(f"[DELETE-ORPHANED] Identifying orphaned groups...")
+        logger.debug("[GROUPS-ORPHAN] Identifying orphaned groups...")
         orphaned_groups = []
         for group in all_groups:
             group_id = group["id"]
@@ -346,12 +365,12 @@ async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest | 
                     "name": group_name,
                     "reason": "No streams, channels, or M3U association",
                 })
-                logger.debug(f"[DELETE-ORPHANED] Group {group_id} ({group_name}) is orphaned: streams={stream_count}, channels={channel_count}, m3u={m3u_info is not None}, override_target={is_override_target}")
+                logger.debug("[GROUPS-ORPHAN] Group %s (%s) is orphaned: streams=%s, channels=%s, m3u=%s, override_target=%s", group_id, group_name, stream_count, channel_count, m3u_info is not None, is_override_target)
 
-        logger.debug(f"[DELETE-ORPHANED] Found {len(orphaned_groups)} orphaned groups")
+        logger.debug("[GROUPS-ORPHAN] Found %s orphaned groups", len(orphaned_groups))
 
         if not orphaned_groups:
-            logger.debug(f"[DELETE-ORPHANED] No orphaned groups found, returning early")
+            logger.debug("[GROUPS-ORPHAN] No orphaned groups found, returning early")
             return {
                 "status": "ok",
                 "message": "No orphaned channel groups found",
@@ -362,11 +381,11 @@ async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest | 
         # Filter to only the specified group IDs if provided
         groups_to_delete = orphaned_groups
         if group_ids is not None:
-            logger.debug(f"[DELETE-ORPHANED] Filtering to specified group IDs: {group_ids}")
+            logger.debug("[GROUPS-ORPHAN] Filtering to specified group IDs: %s", group_ids)
             groups_to_delete = [g for g in orphaned_groups if g["id"] in group_ids]
-            logger.debug(f"[DELETE-ORPHANED] After filtering: {len(groups_to_delete)} groups to delete")
+            logger.debug("[GROUPS-ORPHAN] After filtering: %s groups to delete", len(groups_to_delete))
             if not groups_to_delete:
-                logger.debug(f"[DELETE-ORPHANED] No matching groups to delete, returning early")
+                logger.debug("[GROUPS-ORPHAN] No matching groups to delete, returning early")
                 return {
                     "status": "ok",
                     "message": "No matching orphaned groups to delete",
@@ -375,20 +394,20 @@ async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest | 
                 }
 
         # Delete each orphaned group
-        logger.debug(f"[DELETE-ORPHANED] Deleting {len(groups_to_delete)} orphaned groups...")
+        logger.debug("[GROUPS-ORPHAN] Deleting %s orphaned groups...", len(groups_to_delete))
         deleted_groups = []
         failed_groups = []
         for orphan in groups_to_delete:
             group_id = orphan["id"]
             group_name = orphan["name"]
             try:
-                logger.debug(f"[DELETE-ORPHANED] Attempting to delete group {group_id} ({group_name})...")
+                logger.debug("[GROUPS-ORPHAN] Attempting to delete group %s (%s)...", group_id, group_name)
                 await client.delete_channel_group(group_id)
                 deleted_groups.append({"id": group_id, "name": group_name, "reason": orphan["reason"]})
-                logger.info(f"[DELETE-ORPHANED] Successfully deleted orphaned channel group: {group_id} ({group_name}) - {orphan['reason']}")
+                logger.info("[GROUPS-ORPHAN] Successfully deleted orphaned channel group: %s (%s) - %s", group_id, group_name, orphan['reason'])
             except Exception as group_err:
                 failed_groups.append({"id": group_id, "name": group_name, "error": str(group_err)})
-                logger.error(f"[DELETE-ORPHANED] Failed to delete orphaned channel group {group_id} ({group_name}): {group_err}")
+                logger.error("[GROUPS-ORPHAN] Failed to delete orphaned channel group %s (%s): %s", group_id, group_name, group_err)
 
         # Log to journal
         if deleted_groups:
@@ -411,17 +430,19 @@ async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest | 
             "failed_groups": failed_groups,
         }
     except Exception as e:
-        logger.error(f"Failed to delete orphaned channel groups: {e}")
+        logger.exception("[GROUPS-ORPHAN] Failed to delete orphaned channel groups: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/channel-groups/auto-created")
+@router.get("/auto-created")
 async def get_groups_with_auto_created_channels():
     """Find channel groups that contain auto_created channels.
 
     Returns groups with at least one channel that has auto_created=True.
     """
+    logger.debug("[GROUPS] GET /channel-groups/auto-created")
     client = get_client()
+    start = time.time()
     try:
         # Get all channel groups
         all_groups = await client.get_channel_groups()
@@ -471,28 +492,31 @@ async def get_groups_with_auto_created_channels():
         # Sort by name
         groups_with_auto_created.sort(key=lambda g: g["name"].lower())
 
-        logger.info(f"Found {len(groups_with_auto_created)} groups with {total_auto_created} total auto_created channels")
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[GROUPS] Found %s groups with %s total auto_created channels in %.1fms", len(groups_with_auto_created), total_auto_created, elapsed_ms)
         return {
             "groups": groups_with_auto_created,
             "total_auto_created_channels": total_auto_created,
         }
     except Exception as e:
-        logger.error(f"Failed to find groups with auto_created channels: {e}")
+        logger.exception("[GROUPS] Failed to find groups with auto_created channels: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/channel-groups/with-streams")
+@router.get("/with-streams")
 async def get_channel_groups_with_streams():
     """Get all channel groups that have channels with streams.
 
     Returns groups that have at least one channel containing at least one stream.
     These are the groups that can be probed.
     """
+    logger.debug("[GROUPS] GET /channel-groups/with-streams")
     client = get_client()
+    start = time.time()
     try:
         # Get all channel groups first
         all_groups = await client.get_channel_groups()
-        logger.info(f"Found {len(all_groups)} total channel groups")
+        logger.debug("[GROUPS] Found %s total channel groups", len(all_groups))
 
         # Build a map of group_id -> group info for easy lookup
         group_map = {g["id"]: g for g in all_groups}
@@ -554,7 +578,7 @@ async def get_channel_groups_with_streams():
 
                     # Collect samples for debugging - dump first channel completely
                     if len(sample_channel_groups) == 0:
-                        logger.info(f"First channel with streams (FULL DATA): {channel}")
+                        logger.debug("[GROUPS] First channel with streams (FULL DATA): %s", channel)
 
                     if len(sample_channel_groups) < 5:
                         sample_channel_groups.append({
@@ -590,16 +614,16 @@ async def get_channel_groups_with_streams():
 
         # Log samples for debugging
         if sample_channel_groups:
-            logger.info(f"Sample channels with streams (first 5): {sample_channel_groups}")
+            logger.debug("[GROUPS] Sample channels with streams (first 5): %s", sample_channel_groups)
 
         # Log channels without streams
         if sample_channels_no_streams:
-            logger.warning(f"[DEBUG] Found {channels_without_streams} channels WITHOUT streams. Samples: {sample_channels_no_streams}")
+            logger.warning("[GROUPS] Found %s channels WITHOUT streams. Samples: %s", channels_without_streams, sample_channels_no_streams)
 
         # Log auto-created channels summary
-        logger.info(f"[DEBUG] Auto-created channels: {auto_created_count} out of {total_channels} total")
+        logger.debug("[GROUPS] Auto-created channels: %s out of %s total", auto_created_count, total_channels)
         if sample_auto_created:
-            logger.info(f"[DEBUG] Sample auto-created channels: {sample_auto_created}")
+            logger.debug("[GROUPS] Sample auto-created channels: %s", sample_auto_created)
 
         # Log groups that have channels but NO streams
         groups_with_channels_no_streams = []
@@ -614,23 +638,23 @@ async def get_channel_groups_with_streams():
                 })
 
         if groups_with_channels_no_streams:
-            logger.warning(f"[DEBUG] Groups with channels but NO streams ({len(groups_with_channels_no_streams)}): {groups_with_channels_no_streams[:20]}")
+            logger.warning("[GROUPS] Groups with channels but NO streams (%s): %s", len(groups_with_channels_no_streams), groups_with_channels_no_streams[:20])
 
-        logger.info(f"Scanned {total_channels} channels, found {channels_with_streams} with streams")
-        logger.info(f"Found {len(groups_with_streams_ids)} groups with channels containing streams")
-        logger.info(f"Group IDs found: {sorted(list(groups_with_streams_ids))}")
+        logger.debug("[GROUPS] Scanned %s channels, found %s with streams", total_channels, channels_with_streams)
+        logger.debug("[GROUPS] Found %s groups with channels containing streams", len(groups_with_streams_ids))
+        logger.debug("[GROUPS] Group IDs found: %s", sorted(list(groups_with_streams_ids)))
 
         # Log group names for groups with streams
         groups_with_streams_names = []
         for gid in sorted(groups_with_streams_ids):
             group_name = group_map.get(gid, {}).get("name", "Unknown")
             groups_with_streams_names.append(f"{gid}:{group_name}")
-        logger.info(f"[DEBUG] Groups with streams (id:name): {groups_with_streams_names}")
+        logger.debug("[GROUPS] Groups with streams (id:name): %s", groups_with_streams_names)
 
         # Log any groups named "Entertainment" specifically
         entertainment_groups = [g for g in all_groups if "entertainment" in g.get("name", "").lower()]
-        logger.info(f"[DEBUG] Groups containing 'Entertainment' in name: {entertainment_groups}")
-        logger.info(f"Group IDs in group_map: {sorted(list(group_map.keys()))}")
+        logger.debug("[GROUPS] Groups containing 'Entertainment' in name: %s", entertainment_groups)
+        logger.debug("[GROUPS] Group IDs in group_map: %s", sorted(list(group_map.keys())))
 
         # Build the result list
         groups_with_streams = []
@@ -646,18 +670,19 @@ async def get_channel_groups_with_streams():
                 not_in_map.append(group_id)
 
         if not_in_map:
-            logger.warning(f"Found {len(not_in_map)} group IDs in channels but not in group_map: {not_in_map}")
+            logger.warning("[GROUPS] Found %s group IDs in channels but not in group_map: %s", len(not_in_map), not_in_map)
 
         # Sort by name for consistent display
         groups_with_streams.sort(key=lambda g: g["name"].lower())
 
-        logger.info(f"Returning {len(groups_with_streams)} groups with streams")
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[GROUPS] Returning %s groups with streams in %.1fms", len(groups_with_streams), elapsed_ms)
         return {
             "groups": groups_with_streams,
             "total_groups": len(all_groups)
         }
     except Exception as e:
-        logger.error(f"Failed to get channel groups with streams: {e}")
+        logger.exception("[GROUPS] Failed to get channel groups with streams: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -665,12 +690,14 @@ async def get_channel_groups_with_streams():
 # Parameterized routes — must come after all static routes
 # ---------------------------------------------------------------------------
 
-@router.delete("/api/channel-groups/{group_id}")
+@router.delete("/{group_id}")
 async def delete_channel_group(group_id: int):
     """Delete a channel group (hides M3U-synced groups instead)."""
+    logger.debug("[GROUPS] DELETE /channel-groups/%s", group_id)
     client = get_client()
     try:
         # Check if this group has M3U sync settings
+        start = time.time()
         m3u_settings = await client.get_all_m3u_group_settings()
         has_m3u_sync = group_id in m3u_settings
 
@@ -689,22 +716,27 @@ async def delete_channel_group(group_id: int):
                     hidden_group = HiddenChannelGroup(group_id=group_id, group_name=group_name)
                     db.add(hidden_group)
                     db.commit()
-                    logger.info(f"Hidden channel group {group_id} ({group_name}) due to M3U sync settings")
+                    logger.info("[GROUPS] Hidden channel group id=%s name=%s due to M3U sync settings", group_id, group_name)
 
+            elapsed_ms = (time.time() - start) * 1000
+            logger.debug("[GROUPS] Hid channel group %s in %.1fms", group_id, elapsed_ms)
             return {"status": "hidden", "message": "Group hidden (M3U sync active)"}
         else:
             # No M3U sync, safe to delete
             await client.delete_channel_group(group_id)
-            logger.info(f"Deleted channel group {group_id}")
+            elapsed_ms = (time.time() - start) * 1000
+            logger.debug("[GROUPS] Deleted channel group %s via API in %.1fms", group_id, elapsed_ms)
+            logger.info("[GROUPS] Deleted channel group id=%s", group_id)
             return {"status": "deleted"}
     except Exception as e:
-        logger.error(f"Failed to delete/hide channel group {group_id}: {e}")
+        logger.exception("[GROUPS] Failed to delete/hide channel group %s: %s", group_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/channel-groups/{group_id}/restore")
+@router.post("/{group_id}/restore")
 async def restore_channel_group(group_id: int):
     """Restore a hidden channel group back to the visible list."""
+    logger.debug("[GROUPS] POST /channel-groups/%s/restore", group_id)
     try:
         from models import HiddenChannelGroup
 
@@ -713,12 +745,12 @@ async def restore_channel_group(group_id: int):
             if hidden_group:
                 db.delete(hidden_group)
                 db.commit()
-                logger.info(f"Restored channel group {group_id} ({hidden_group.group_name})")
+                logger.info("[GROUPS] Restored channel group id=%s name=%s", group_id, hidden_group.group_name)
                 return {"status": "restored", "message": f"Group '{hidden_group.group_name}' restored"}
             else:
                 raise HTTPException(status_code=404, detail="Group not found in hidden list")
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to restore channel group {group_id}: {e}")
+        logger.exception("[GROUPS] Failed to restore channel group %s: %s", group_id, e)
         raise HTTPException(status_code=500, detail=str(e))

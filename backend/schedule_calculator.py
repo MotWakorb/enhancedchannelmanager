@@ -58,7 +58,7 @@ def calculate_next_run(
     elif schedule_type == "monthly":
         return _calculate_monthly_next_run(schedule_time, tz, now_local, day_of_month)
     else:
-        logger.warning(f"Unknown schedule type: {schedule_type}")
+        logger.warning("[SCHEDULER] Unknown schedule type: %s", schedule_type)
         return None
 
 
@@ -94,7 +94,7 @@ def _calculate_daily_next_run(
     try:
         hour, minute = map(int, schedule_time.split(":"))
     except (ValueError, AttributeError):
-        logger.warning(f"Invalid schedule_time format: {schedule_time}")
+        logger.warning("[SCHEDULER] Invalid schedule_time format: %s", schedule_time)
         return None
 
     # Create target time for today in local timezone
@@ -121,7 +121,7 @@ def _calculate_weekly_next_run(
     try:
         hour, minute = map(int, schedule_time.split(":"))
     except (ValueError, AttributeError):
-        logger.warning(f"Invalid schedule_time format: {schedule_time}")
+        logger.warning("[SCHEDULER] Invalid schedule_time format: %s", schedule_time)
         return None
 
     # Convert days to 0-6 (Sunday=0 in our system, but Python's weekday() has Monday=0)
@@ -173,7 +173,7 @@ def _calculate_biweekly_next_run(
     try:
         hour, minute = map(int, schedule_time.split(":"))
     except (ValueError, AttributeError):
-        logger.warning(f"Invalid schedule_time format: {schedule_time}")
+        logger.warning("[SCHEDULER] Invalid schedule_time format: %s", schedule_time)
         return None
 
     # Calculate current week number (ISO week)
@@ -238,7 +238,7 @@ def _calculate_monthly_next_run(
     try:
         hour, minute = map(int, schedule_time.split(":"))
     except (ValueError, AttributeError):
-        logger.warning(f"Invalid schedule_time format: {schedule_time}")
+        logger.warning("[SCHEDULER] Invalid schedule_time format: %s", schedule_time)
         return None
 
     year = now_local.year

@@ -59,7 +59,7 @@ def send_password_reset_email(to_email: str, reset_token: str, base_url: str) ->
     settings = get_settings()
 
     if not settings.is_smtp_configured():
-        logger.warning("Password reset email not sent: SMTP not configured")
+        logger.warning("[AUTH] Password reset email not sent: SMTP not configured")
         return False
 
     smtp_host = settings.smtp_host
@@ -157,20 +157,20 @@ Enhanced Channel Manager
                 server.login(smtp_user, smtp_password)
 
             server.sendmail(from_email, [to_email], msg.as_string())
-            logger.info(f"Password reset email sent to: {to_email}")
+            logger.info("[AUTH] Password reset email sent to: %s", to_email)
             return True
 
         finally:
             server.quit()
 
     except smtplib.SMTPAuthenticationError as e:
-        logger.error(f"SMTP authentication failed: {e}")
+        logger.error("[AUTH] SMTP authentication failed: %s", e)
         return False
     except smtplib.SMTPException as e:
-        logger.error(f"SMTP error sending password reset email: {e}")
+        logger.error("[AUTH] SMTP error sending password reset email: %s", e)
         return False
     except Exception as e:
-        logger.error(f"Failed to send password reset email: {e}")
+        logger.exception("[AUTH] Failed to send password reset email: %s", e)
         return False
 
 
@@ -431,7 +431,7 @@ async def initial_setup(
     session.commit()
     session.refresh(user)
 
-    logger.info(f"Initial setup completed. Admin user created: {user.username}")
+    logger.info("[AUTH] Initial setup completed. Admin user created: %s", user.username)
 
     return SetupResponse(
         user=UserResponse.model_validate(user),
@@ -468,7 +468,7 @@ async def login(
         user = session.query(User).filter(User.username == login_request.username).first()
 
     if user is None:
-        logger.warning(f"Login attempt for nonexistent user: {login_request.username}")
+        logger.warning("[AUTH] Login attempt for nonexistent user: %s", login_request.username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
@@ -482,7 +482,7 @@ async def login(
 
     # If no local identity, check if user was created with local auth_provider (legacy)
     if not has_local_identity and user.auth_provider != "local":
-        logger.warning(f"Non-local user attempted local login: {login_request.username}")
+        logger.warning("[AUTH] Non-local user attempted local login: %s", login_request.username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Please use your configured authentication provider to log in",
@@ -490,7 +490,7 @@ async def login(
 
     # Verify password
     if not user.password_hash or not verify_password(login_request.password, user.password_hash):
-        logger.warning(f"Failed login attempt for user: {login_request.username}")
+        logger.warning("[AUTH] Failed login attempt for user: %s", login_request.username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
@@ -502,7 +502,7 @@ async def login(
 
     # Check if user is active
     if not user.is_active:
-        logger.warning(f"Login attempt for disabled user: {login_request.username}")
+        logger.warning("[AUTH] Login attempt for disabled user: %s", login_request.username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User account is disabled",
@@ -530,7 +530,7 @@ async def login(
     # Set cookies
     _set_auth_cookies(response, access_token, refresh_token)
 
-    logger.info(f"User logged in: {user.username}")
+    logger.info("[AUTH] User logged in: %s", user.username)
 
     return LoginResponse(
         user=UserResponse.model_validate(user),
@@ -595,7 +595,7 @@ async def update_current_user_profile(
     session.commit()
     session.refresh(current_user)
 
-    logger.info(f"User {current_user.username} updated their profile")
+    logger.info("[AUTH] User %s updated their profile", current_user.username)
 
     return UpdateProfileResponse(
         user=UserResponse.model_validate(current_user),
@@ -660,7 +660,7 @@ async def refresh_tokens(
         # Set new cookies
         _set_auth_cookies(response, new_access_token, new_refresh_token)
 
-        logger.info(f"Token refreshed for user: {user.username}")
+        logger.info("[AUTH] Token refreshed for user: %s", user.username)
         return RefreshResponse(message="Token refreshed")
 
     except TokenExpiredError:
@@ -695,9 +695,9 @@ async def logout(
             if user_session:
                 user_session.is_revoked = True
                 session.commit()
-                logger.info(f"Session revoked for user_id: {user_session.user_id}")
+                logger.info("[AUTH] Session revoked for user_id: %s", user_session.user_id)
         except Exception as e:
-            logger.warning(f"Error revoking session: {e}")
+            logger.warning("[AUTH] Error revoking session: %s", e)
 
     # Always clear cookies
     _clear_auth_cookies(response)
@@ -740,7 +740,7 @@ async def change_password(
     current_user.updated_at = datetime.utcnow()
     session.commit()
 
-    logger.info(f"Password changed for user: {current_user.username}")
+    logger.info("[AUTH] Password changed for user: %s", current_user.username)
 
     return ChangePasswordResponse(message="Password changed successfully")
 
@@ -782,10 +782,10 @@ async def forgot_password(
         # Send the password reset email
         email_sent = send_password_reset_email(user.email, raw_token, base_url)
         if email_sent:
-            logger.info(f"Password reset email sent to: {user.email}")
+            logger.info("[AUTH] Password reset email sent to: %s", user.email)
         else:
             # Still log the token for debugging if email fails
-            logger.warning(f"Password reset email failed for {user.email}, token: {raw_token}")
+            logger.warning("[AUTH] Password reset email failed for %s, token: %s", user.email, raw_token)
 
     # Always return success for security
     return ForgotPasswordResponse()
@@ -851,7 +851,7 @@ async def reset_password(
 
     session.commit()
 
-    logger.info(f"Password reset for user: {user.username}")
+    logger.info("[AUTH] Password reset for user: %s", user.username)
 
     return ResetPasswordResponse(message="Password reset successfully")
 
@@ -958,25 +958,25 @@ async def dispatcharr_login(
                 login_request.password,
             )
     except DispatcharrAuthenticationError as e:
-        logger.warning(f"Dispatcharr auth failed for user: {login_request.username}")
+        logger.warning("[AUTH] Dispatcharr auth failed for user: %s", login_request.username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e),
         )
     except TimeoutError:
-        logger.error("Dispatcharr connection timeout")
+        logger.error("[AUTH] Dispatcharr connection timeout")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Dispatcharr connection timeout",
         )
     except DispatcharrConnectionError as e:
-        logger.error(f"Dispatcharr connection error: {e}")
+        logger.error("[AUTH] Dispatcharr connection error: %s", e)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Cannot connect to Dispatcharr",
         )
     except Exception as e:
-        logger.exception(f"Unexpected Dispatcharr auth error: {e}")
+        logger.exception("[AUTH] Unexpected Dispatcharr auth error: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Authentication error",
@@ -998,7 +998,7 @@ async def dispatcharr_login(
         # Update user info from Dispatcharr
         user.email = auth_result.email or user.email
         user.display_name = auth_result.display_name or user.display_name
-        logger.info(f"Dispatcharr user found via identity: {user.username}")
+        logger.info("[AUTH] Dispatcharr user found via identity: %s", user.username)
     else:
         # Fallback to direct user lookup for backwards compatibility
         user = session.query(User).filter(
@@ -1010,7 +1010,7 @@ async def dispatcharr_login(
             # Update existing user info from Dispatcharr
             user.email = auth_result.email or user.email
             user.display_name = auth_result.display_name or user.display_name
-            logger.info(f"Updated user info from Dispatcharr: {user.username}")
+            logger.info("[AUTH] Updated user info from Dispatcharr: %s", user.username)
         else:
             # Create new user from Dispatcharr
             # Check if username exists with different provider
@@ -1018,7 +1018,7 @@ async def dispatcharr_login(
             if existing:
                 # Username taken by local user - create with modified username
                 username = f"disp_{auth_result.username}"
-                logger.info(f"Username '{auth_result.username}' taken, using '{username}'")
+                logger.info("[AUTH] Username '%s' taken, using '%s'", auth_result.username, username)
             else:
                 username = auth_result.username
 
@@ -1042,7 +1042,7 @@ async def dispatcharr_login(
                 identifier=auth_result.username,
             )
             session.add(new_identity)
-            logger.info(f"Created new user from Dispatcharr: {user.username} (id={user.id})")
+            logger.info("[AUTH] Created new user from Dispatcharr: %s (id=%s)", user.username, user.id)
 
     # Check if user is active
     if not user.is_active:
@@ -1075,7 +1075,7 @@ async def dispatcharr_login(
     # Set cookies
     _set_auth_cookies(response, access_token, refresh_token)
 
-    logger.info(f"Dispatcharr user logged in: {user.username}")
+    logger.info("[AUTH] Dispatcharr user logged in: %s", user.username)
 
     return LoginResponse(
         user=UserResponse.model_validate(user),
@@ -1177,7 +1177,7 @@ async def update_admin_auth_settings(
         settings.dispatcharr.auto_create_users = update_request.dispatcharr_auto_create_users
 
     save_auth_settings(settings)
-    logger.info(f"Auth settings updated by admin: {admin_user.username}")
+    logger.info("[AUTH] Auth settings updated by admin: %s", admin_user.username)
 
     return AuthSettingsUpdateResponse(message="Settings updated")
 
@@ -1310,7 +1310,7 @@ async def update_user(
     session.commit()
     session.refresh(user)
 
-    logger.info(f"User {user.username} updated by admin {admin_user.username}")
+    logger.info("[AUTH] User %s updated by admin %s", user.username, admin_user.username)
 
     return UserUpdateResponse(
         user=UserResponse.model_validate(user),
@@ -1355,7 +1355,7 @@ async def delete_user(
     session.delete(user)
     session.commit()
 
-    logger.info(f"User {username} deleted by admin {admin_user.username}")
+    logger.info("[AUTH] User %s deleted by admin %s", username, admin_user.username)
 
     return UserDeleteResponse(message=f"User '{username}' deleted")
 
@@ -1617,7 +1617,7 @@ async def link_identity(
     session.commit()
     session.refresh(identity)
 
-    logger.info(f"User {current_user.username} linked {provider} identity: {identity.identifier}")
+    logger.info("[AUTH] User %s linked %s identity: %s", current_user.username, provider, identity.identifier)
 
     return LinkIdentityResponse(
         identity=UserIdentityResponse.model_validate(identity),
@@ -1668,7 +1668,7 @@ async def unlink_identity(
     session.delete(identity)
     session.commit()
 
-    logger.info(f"User {current_user.username} unlinked {provider} identity: {identifier}")
+    logger.info("[AUTH] User %s unlinked %s identity: %s", current_user.username, provider, identifier)
 
     return UnlinkIdentityResponse(message="Identity unlinked successfully")
 

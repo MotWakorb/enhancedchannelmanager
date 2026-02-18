@@ -85,13 +85,13 @@ def validate_alert_sources(alert_sources: Optional[dict]) -> Optional[str]:
 @router.get("/types")
 async def get_alert_method_types():
     """Get available alert method types and their configuration fields."""
-    logger.debug("Fetching alert method types")
+    logger.debug("[ALERTS] GET /types")
     try:
         types = get_method_types()
-        logger.debug(f"Found {len(types)} alert method types: {[t['type'] for t in types]}")
+        logger.debug("[ALERTS] Found %s alert method types: %s", len(types), [t['type'] for t in types])
         return types
     except Exception as e:
-        logger.exception(f"Error fetching alert method types: {e}")
+        logger.exception("[ALERTS] Failed to fetch alert method types")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -100,11 +100,11 @@ async def list_alert_methods():
     """List all configured alert methods."""
     from models import AlertMethod as AlertMethodModel
 
-    logger.debug("Listing alert methods")
+    logger.debug("[ALERTS] GET /alert-methods")
     session = get_session()
     try:
         methods = session.query(AlertMethodModel).all()
-        logger.debug(f"Found {len(methods)} alert methods in database")
+        logger.debug("[ALERTS] Found %s alert methods in database", len(methods))
         result = []
         for m in methods:
             alert_sources = None
@@ -129,7 +129,7 @@ async def list_alert_methods():
             })
         return result
     except Exception as e:
-        logger.exception(f"Error listing alert methods: {e}")
+        logger.exception("[ALERTS] Failed to list alert methods")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
@@ -140,14 +140,14 @@ async def create_alert_method(data: AlertMethodCreate):
     """Create a new alert method."""
     from models import AlertMethod as AlertMethodModel
 
-    logger.debug(f"Creating alert method: name={data.name}, type={data.method_type}")
+    logger.debug("[ALERTS] POST /alert-methods - name=%s type=%s", data.name, data.method_type)
 
     session = None
     try:
         # Validate method type
         method_types = {mt["type"] for mt in get_method_types()}
         if data.method_type not in method_types:
-            logger.warning(f"Unknown method type attempted: {data.method_type}")
+            logger.warning("[ALERTS] Unknown method type attempted: %s", data.method_type)
             raise HTTPException(status_code=400, detail=f"Unknown method type: {data.method_type}")
 
         # Validate config
@@ -155,14 +155,14 @@ async def create_alert_method(data: AlertMethodCreate):
         if method:
             is_valid, error = method.validate_config(data.config)
             if not is_valid:
-                logger.warning(f"Invalid config for method {data.name}: {error}")
+                logger.warning("[ALERTS] Invalid config for method %s: %s", data.name, error)
                 raise HTTPException(status_code=400, detail=error)
 
         # Validate alert_sources if provided
         if data.alert_sources is not None:
             alert_sources_error = validate_alert_sources(data.alert_sources)
             if alert_sources_error:
-                logger.warning(f"Invalid alert_sources for method {data.name}: {alert_sources_error}")
+                logger.warning("[ALERTS] Invalid alert_sources for method %s: %s", data.name, alert_sources_error)
                 raise HTTPException(status_code=400, detail=alert_sources_error)
 
         session = get_session()
@@ -184,7 +184,7 @@ async def create_alert_method(data: AlertMethodCreate):
         # Reload the manager to pick up the new method
         get_alert_manager().reload_method(method_model.id)
 
-        logger.info(f"Created alert method: id={method_model.id}, name={method_model.name}, type={method_model.method_type}")
+        logger.info("[ALERTS] Created alert method id=%s name=%s type=%s", method_model.id, method_model.name, method_model.method_type)
         return {
             "id": method_model.id,
             "name": method_model.name,
@@ -194,7 +194,7 @@ async def create_alert_method(data: AlertMethodCreate):
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Error creating alert method: {e}")
+        logger.exception("[ALERTS] Failed to create alert method")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if session:
@@ -206,7 +206,7 @@ async def get_alert_method(method_id: int):
     """Get a specific alert method."""
     from models import AlertMethod as AlertMethodModel
 
-    logger.debug(f"Getting alert method: id={method_id}")
+    logger.debug("[ALERTS] GET /alert-methods/%s", method_id)
     session = get_session()
     try:
         method = session.query(AlertMethodModel).filter(
@@ -214,10 +214,10 @@ async def get_alert_method(method_id: int):
         ).first()
 
         if not method:
-            logger.debug(f"Alert method not found: id={method_id}")
+            logger.debug("[ALERTS] Alert method not found: id=%s", method_id)
             raise HTTPException(status_code=404, detail="Alert method not found")
 
-        logger.debug(f"Found alert method: id={method.id}, name={method.name}")
+        logger.debug("[ALERTS] Found alert method: id=%s name=%s", method.id, method.name)
         alert_sources = None
         if method.alert_sources:
             try:
@@ -241,7 +241,7 @@ async def get_alert_method(method_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Error getting alert method {method_id}: {e}")
+        logger.exception("[ALERTS] Failed to get alert method %s", method_id)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
@@ -252,7 +252,7 @@ async def update_alert_method(method_id: int, data: AlertMethodUpdate):
     """Update an alert method."""
     from models import AlertMethod as AlertMethodModel
 
-    logger.debug(f"Updating alert method: id={method_id}")
+    logger.debug("[ALERTS] PATCH /alert-methods/%s", method_id)
     session = get_session()
     try:
         method = session.query(AlertMethodModel).filter(
@@ -260,7 +260,7 @@ async def update_alert_method(method_id: int, data: AlertMethodUpdate):
         ).first()
 
         if not method:
-            logger.debug(f"Alert method not found for update: id={method_id}")
+            logger.debug("[ALERTS] Alert method not found for update: id=%s", method_id)
             raise HTTPException(status_code=404, detail="Alert method not found")
 
         if data.name is not None:
@@ -271,7 +271,7 @@ async def update_alert_method(method_id: int, data: AlertMethodUpdate):
             if method_instance:
                 is_valid, error = method_instance.validate_config(data.config)
                 if not is_valid:
-                    logger.warning(f"Invalid config for method {method_id}: {error}")
+                    logger.warning("[ALERTS] Invalid config for method %s: %s", method_id, error)
                     raise HTTPException(status_code=400, detail=error)
             method.config = json.dumps(data.config)
         if data.enabled is not None:
@@ -288,7 +288,7 @@ async def update_alert_method(method_id: int, data: AlertMethodUpdate):
             # Validate alert_sources
             alert_sources_error = validate_alert_sources(data.alert_sources)
             if alert_sources_error:
-                logger.warning(f"Invalid alert_sources for method {method_id}: {alert_sources_error}")
+                logger.warning("[ALERTS] Invalid alert_sources for method %s: %s", method_id, alert_sources_error)
                 raise HTTPException(status_code=400, detail=alert_sources_error)
             method.alert_sources = json.dumps(data.alert_sources) if data.alert_sources else None
 
@@ -297,12 +297,12 @@ async def update_alert_method(method_id: int, data: AlertMethodUpdate):
         # Reload the manager to pick up the changes
         get_alert_manager().reload_method(method_id)
 
-        logger.info(f"Updated alert method: id={method_id}, name={method.name}")
+        logger.info("[ALERTS] Updated alert method id=%s name=%s", method_id, method.name)
         return {"success": True}
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Error updating alert method {method_id}: {e}")
+        logger.exception("[ALERTS] Failed to update alert method %s", method_id)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
@@ -313,7 +313,7 @@ async def delete_alert_method(method_id: int):
     """Delete an alert method."""
     from models import AlertMethod as AlertMethodModel
 
-    logger.debug(f"Deleting alert method: id={method_id}")
+    logger.debug("[ALERTS] DELETE /alert-methods/%s", method_id)
     session = get_session()
     try:
         method = session.query(AlertMethodModel).filter(
@@ -321,7 +321,7 @@ async def delete_alert_method(method_id: int):
         ).first()
 
         if not method:
-            logger.debug(f"Alert method not found for deletion: id={method_id}")
+            logger.debug("[ALERTS] Alert method not found for deletion: id=%s", method_id)
             raise HTTPException(status_code=404, detail="Alert method not found")
 
         method_name = method.name
@@ -331,12 +331,12 @@ async def delete_alert_method(method_id: int):
         # Remove from manager
         get_alert_manager().reload_method(method_id)
 
-        logger.info(f"Deleted alert method: id={method_id}, name={method_name}")
+        logger.info("[ALERTS] Deleted alert method id=%s name=%s", method_id, method_name)
         return {"success": True}
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Error deleting alert method {method_id}: {e}")
+        logger.exception("[ALERTS] Failed to delete alert method %s", method_id)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
@@ -347,7 +347,7 @@ async def test_alert_method(method_id: int):
     """Test an alert method by sending a test message."""
     from models import AlertMethod as AlertMethodModel
 
-    logger.debug(f"Testing alert method: id={method_id}")
+    logger.debug("[ALERTS] POST /alert-methods/%s/test", method_id)
     session = get_session()
     try:
         method_model = session.query(AlertMethodModel).filter(
@@ -355,7 +355,7 @@ async def test_alert_method(method_id: int):
         ).first()
 
         if not method_model:
-            logger.debug(f"Alert method not found for test: id={method_id}")
+            logger.debug("[ALERTS] Alert method not found for test: id=%s", method_id)
             raise HTTPException(status_code=404, detail="Alert method not found")
 
         config = json.loads(method_model.config) if method_model.config else {}
@@ -367,17 +367,17 @@ async def test_alert_method(method_id: int):
         )
 
         if not method:
-            logger.warning(f"Unknown method type for test: {method_model.method_type}")
+            logger.warning("[ALERTS] Unknown method type for test: %s", method_model.method_type)
             raise HTTPException(status_code=400, detail=f"Unknown method type: {method_model.method_type}")
 
-        logger.debug(f"Sending test message to method: {method_model.name} ({method_model.method_type})")
+        logger.debug("[ALERTS] Sending test message to method: %s (%s)", method_model.name, method_model.method_type)
         success, message = await method.test_connection()
-        logger.info(f"Test result for method {method_model.name}: success={success}, message={message}")
+        logger.info("[ALERTS] Test result for method %s: success=%s message=%s", method_model.name, success, message)
         return {"success": success, "message": message}
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Error testing alert method {method_id}: {e}")
+        logger.exception("[ALERTS] Failed to test alert method %s", method_id)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()

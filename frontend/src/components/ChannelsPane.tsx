@@ -6277,7 +6277,7 @@ export function ChannelsPane({
         {/* Channel List Filter Settings */}
         <div className="filter-settings-dropdown" ref={filterSettingsRef}>
           <button
-            className={`filter-settings-button${channelListFilters?.filterMissingLogo || channelListFilters?.filterMissingTvgId || channelListFilters?.filterMissingEpgData || channelListFilters?.filterMissingGracenote || channelListFilters?.filterFailedStreams || channelListFilters?.filterWorkingStreams || channelListFilters?.filterUnprobedStreams ? ' filter-active' : ''}`}
+            className={`filter-settings-button${channelListFilters?.filterMissingLogo || channelListFilters?.filterMissingTvgId || channelListFilters?.filterMissingEpgData || channelListFilters?.filterMissingGracenote || !channelListFilters?.filterFailedStreams || !channelListFilters?.filterWorkingStreams || !channelListFilters?.filterUnprobedStreams ? ' filter-active' : ''}`}
             onClick={() => setFilterSettingsOpen(!filterSettingsOpen)}
             title="Channel List Filters"
           >

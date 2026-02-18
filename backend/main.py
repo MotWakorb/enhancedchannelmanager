@@ -172,22 +172,23 @@ async def request_timing_middleware(request: Request, call_next):
 
         # Log timing at DEBUG level
         logger.debug(
-            f"[REQUEST] {method} {path} - {duration_ms:.1f}ms - "
-            f"status={response.status_code} - "
-            f"rate={request_count}/{_rate_window_seconds}s"
+            "[REQUEST] %s %s - %.1fms - status=%s - rate=%s/%ss",
+            method, path, duration_ms, response.status_code,
+            request_count, _rate_window_seconds
         )
 
         # Warn if endpoint is being hit too frequently (possible runaway loop)
         if request_count >= _rate_alert_threshold:
             logger.warning(
-                f"[RAPID-POLLING] {endpoint_key} hit {request_count} times in "
-                f"{_rate_window_seconds}s - possible polling issue!"
+                "[RAPID-POLLING] %s hit %s times in %ss - possible polling issue!",
+                endpoint_key, request_count, _rate_window_seconds
             )
 
         # Log slow requests at INFO level
         if duration_ms > 1000:
             logger.info(
-                f"[SLOW-REQUEST] {method} {path} took {duration_ms:.1f}ms"
+                "[SLOW-REQUEST] %s %s took %.1fms",
+                method, path, duration_ms
             )
 
     return response
@@ -229,20 +230,20 @@ async def get_request_rates():
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Log detailed validation errors for debugging."""
-    logger.error(f"[VALIDATION-ERROR] Request path: {request.url.path}")
-    logger.error(f"[VALIDATION-ERROR] Request method: {request.method}")
-    logger.error(f"[VALIDATION-ERROR] Request headers: {dict(request.headers)}")
+    logger.error("[VALIDATION-ERROR] Request path: %s", request.url.path)
+    logger.error("[VALIDATION-ERROR] Request method: %s", request.method)
+    logger.error("[VALIDATION-ERROR] Request headers: %s", dict(request.headers))
 
     # Try to read the body
     try:
         body = await request.body()
-        logger.error(f"[VALIDATION-ERROR] Request body (raw): {body}")
-        logger.error(f"[VALIDATION-ERROR] Request body (decoded): {body.decode()}")
+        logger.error("[VALIDATION-ERROR] Request body (raw): %s", body)
+        logger.error("[VALIDATION-ERROR] Request body (decoded): %s", body.decode())
     except Exception as e:
-        logger.error(f"[VALIDATION-ERROR] Could not read body: {e}")
+        logger.error("[VALIDATION-ERROR] Could not read body: %s", e)
 
-    logger.error(f"[VALIDATION-ERROR] Validation errors: {exc.errors()}")
-    logger.error(f"[VALIDATION-ERROR] Validation body: {exc.body}")
+    logger.error("[VALIDATION-ERROR] Validation errors: %s", exc.errors())
+    logger.error("[VALIDATION-ERROR] Validation body: %s", exc.body)
 
     return JSONResponse(
         status_code=422,
@@ -257,8 +258,8 @@ async def startup_event():
     _is_https_subprocess = is_https_subprocess()
 
     logger.info("=" * 60)
-    logger.info(f"Enhanced Channel Manager starting up{' (HTTPS subprocess)' if _is_https_subprocess else ''}")
-    logger.info(f"Initial log level from environment: {initial_log_level}")
+    logger.info("[MAIN] Enhanced Channel Manager starting up%s", " (HTTPS subprocess)" if _is_https_subprocess else "")
+    logger.info("[MAIN] Initial log level from environment: %s", initial_log_level)
 
     # Initialize journal database
     init_db()
@@ -270,11 +271,11 @@ async def startup_event():
         try:
             result = fix_timezone_tags_remove_directional(session)
             if result.get("tags_added", 0) > 0:
-                logger.info(f"Added {result['tags_added']} missing tags to Timezone Tags")
+                logger.info("[MAIN] Added %s missing tags to Timezone Tags", result["tags_added"])
         finally:
             session.close()
     except Exception as e:
-        logger.warning(f"Could not apply timezone tags fix: {e}")
+        logger.warning("[MAIN] Could not apply timezone tags fix: %s", e)
 
     # Ensure Provider Tags normalization rule exists for existing installations
     try:
@@ -283,57 +284,58 @@ async def startup_event():
         try:
             result = ensure_provider_tags_rule(session)
             if result.get("created"):
-                logger.info("Created Provider Tags normalization rule for existing installation")
+                logger.info("[MAIN] Created Provider Tags normalization rule for existing installation")
         finally:
             session.close()
     except Exception as e:
-        logger.warning(f"Could not ensure Provider Tags rule: {e}")
+        logger.warning("[MAIN] Could not ensure Provider Tags rule: %s", e)
 
-    logger.info(f"CONFIG_DIR: {CONFIG_DIR}")
-    logger.info(f"CONFIG_FILE: {CONFIG_FILE}")
-    logger.info(f"CONFIG_DIR exists: {CONFIG_DIR.exists()}")
-    logger.info(f"CONFIG_FILE exists: {CONFIG_FILE.exists()}")
+    logger.info("[MAIN] CONFIG_DIR: %s", CONFIG_DIR)
+    logger.info("[MAIN] CONFIG_FILE: %s", CONFIG_FILE)
+    logger.info("[MAIN] CONFIG_DIR exists: %s", CONFIG_DIR.exists())
+    logger.info("[MAIN] CONFIG_FILE exists: %s", CONFIG_FILE.exists())
 
     if CONFIG_DIR.exists():
         try:
             contents = list(CONFIG_DIR.iterdir())
-            logger.info(f"CONFIG_DIR contents: {[str(p) for p in contents]}")
+            logger.info("[MAIN] CONFIG_DIR contents: %s", [str(p) for p in contents])
         except Exception as e:
-            logger.error(f"Failed to list CONFIG_DIR: {e}")
+            logger.exception("[MAIN] Failed to list CONFIG_DIR: %s", e)
 
     # Load settings to log status and apply log level from settings
     settings = get_settings()
-    logger.info(f"Settings configured: {settings.is_configured()}")
+    logger.info("[MAIN] Settings configured: %s", settings.is_configured())
     if settings.url:
-        logger.info(f"Dispatcharr URL: {settings.url}")
+        logger.info("[MAIN] Dispatcharr URL: %s", settings.url)
 
     # Apply log level from settings (overrides environment variable)
     if settings.backend_log_level:
         set_log_level(settings.backend_log_level)
-        logger.info(f"Applied log level from settings: {settings.backend_log_level}")
+        logger.info("[MAIN] Applied log level from settings: %s", settings.backend_log_level)
 
     # Skip background services in HTTPS subprocess — only the main process
     # should run schedulers, probers, and trackers to avoid duplicate execution
     if _is_https_subprocess:
-        logger.info("HTTPS subprocess: skipping background services (task engine, prober, tracker)")
+        logger.info("[MAIN] HTTPS subprocess: skipping background services (task engine, prober, tracker)")
         return
 
     # Start bandwidth tracker if configured
     if settings.is_configured():
         try:
-            logger.debug(f"Starting bandwidth tracker with poll interval {settings.stats_poll_interval}s")
+            logger.debug("[MAIN] Starting bandwidth tracker with poll interval %ss", settings.stats_poll_interval)
             tracker = BandwidthTracker(get_client(), poll_interval=settings.stats_poll_interval)
             set_tracker(tracker)
             await tracker.start()
-            logger.info("Bandwidth tracker started successfully")
+            logger.info("[MAIN] Bandwidth tracker started successfully")
         except Exception as e:
-            logger.error(f"Failed to start bandwidth tracker: {e}", exc_info=True)
+            logger.error("[MAIN] Failed to start bandwidth tracker: %s", e, exc_info=True)
 
         # Always create stream prober for on-demand probing support
         # Note: Scheduled probing is now controlled by the Task Engine (StreamProbeTask)
         try:
             logger.debug(
-                f"Initializing stream prober (batch: {settings.stream_probe_batch_size}, timeout: {settings.stream_probe_timeout}s)"
+                "[MAIN] Initializing stream prober (batch: %s, timeout: %ss)",
+                settings.stream_probe_batch_size, settings.stream_probe_timeout
             )
             prober = StreamProber(
                 get_client(),
@@ -360,34 +362,34 @@ async def startup_event():
                 update_callback=update_notification_internal,
                 delete_by_source_callback=delete_notifications_by_source_internal
             )
-            logger.info("Notification callbacks configured for stream prober")
-            logger.info(f"StreamProber instance created: {prober is not None}")
+            logger.info("[MAIN] Notification callbacks configured for stream prober")
+            logger.info("[MAIN] StreamProber instance created: %s", prober is not None)
 
             set_prober(prober)
-            logger.info("set_prober() called successfully")
+            logger.info("[MAIN] set_prober() called successfully")
 
             await prober.start()
-            logger.info("prober.start() completed")
+            logger.info("[MAIN] prober.start() completed")
 
             # Verify prober is accessible via get_prober()
             test_prober = get_prober()
-            logger.info(f"Verification: get_prober() returns: {test_prober is not None}")
+            logger.info("[MAIN] Verification: get_prober() returns: %s", test_prober is not None)
 
-            logger.info("Stream prober initialized (scheduled probing via Task Engine)")
+            logger.info("[MAIN] Stream prober initialized (scheduled probing via Task Engine)")
         except Exception as e:
-            logger.error(f"Failed to initialize stream prober: {e}", exc_info=True)
-            logger.error("Stream probing will not be available!")
+            logger.error("[MAIN] Failed to initialize stream prober: %s", e, exc_info=True)
+            logger.error("[MAIN] Stream probing will not be available!")
 
     # Start the task execution engine
     try:
         # Import tasks module to trigger @register_task decorators
         import tasks  # noqa: F401 - imported for side effects
-        logger.info("Task modules loaded and registered")
+        logger.info("[MAIN] Task modules loaded and registered")
 
         # Start the task engine
         from task_engine import start_engine, get_engine
         await start_engine()
-        logger.info("Task execution engine started")
+        logger.info("[MAIN] Task execution engine started")
 
         # Set notification callbacks on the task engine for progress updates
         engine = get_engine()
@@ -396,7 +398,7 @@ async def startup_event():
             update_callback=update_notification_internal,
             delete_callback=delete_notifications_by_source_internal,
         )
-        logger.info("Task engine notification callbacks configured")
+        logger.info("[MAIN] Task engine notification callbacks configured")
 
         # Connect the prober to the StreamProbeTask AFTER tasks are registered
         prober = get_prober()
@@ -407,14 +409,14 @@ async def startup_event():
                 stream_probe_task = registry.get_task_instance("stream_probe")
                 if stream_probe_task:
                     stream_probe_task.set_prober(prober)
-                    logger.info("Connected StreamProber to StreamProbeTask")
+                    logger.info("[MAIN] Connected StreamProber to StreamProbeTask")
                 else:
-                    logger.warning("StreamProbeTask not found in registry")
+                    logger.warning("[MAIN] StreamProbeTask not found in registry")
             except Exception as e:
-                logger.warning(f"Failed to connect prober to task: {e}")
+                logger.warning("[MAIN] Failed to connect prober to task: %s", e)
     except Exception as e:
-        logger.error(f"Failed to start task engine: {e}", exc_info=True)
-        logger.error("Scheduled tasks will not be available!")
+        logger.error("[MAIN] Failed to start task engine: %s", e, exc_info=True)
+        logger.error("[MAIN] Scheduled tasks will not be available!")
 
     # Schedule a background auto-sync for channel groups in probe schedules
     # Removes stale groups and adds new groups automatically
@@ -456,11 +458,11 @@ async def startup_event():
                         sess.add(sched)
                         total_stale += len(stale)
 
-                        logger.info(f"Startup: auto-removed {len(stale)} stale group(s) from probe schedule {sched.id}")
+                        logger.info("[MAIN] Startup: auto-removed %s stale group(s) from probe schedule %s", len(stale), sched.id)
 
                 if total_stale:
                     sess.commit()
-                    logger.info(f"Startup: auto-removed {total_stale} stale group(s) from probe schedules")
+                    logger.info("[MAIN] Startup: auto-removed %s stale group(s) from probe schedules", total_stale)
 
                 # Clean up any stale group notifications since we auto-fix
                 stale_notifs = sess.query(NotificationModel).filter(
@@ -473,7 +475,7 @@ async def startup_event():
             finally:
                 sess.close()
         except Exception as e:
-            logger.debug(f"Stale groups startup check skipped: {e}")
+            logger.debug("[MAIN] Stale groups startup check skipped: %s", e)
 
     asyncio.create_task(_check_stale_groups_on_startup())
 
@@ -484,18 +486,18 @@ async def startup_event():
         tls_settings = get_tls_settings()
         if tls_settings.enabled and tls_settings.mode == "letsencrypt" and tls_settings.auto_renew:
             renewal_manager.start(check_interval=86400)  # Check every 24 hours
-            logger.info("TLS certificate renewal manager started")
+            logger.info("[MAIN] TLS certificate renewal manager started")
         else:
-            logger.info("TLS auto-renewal not enabled, skipping renewal manager")
+            logger.info("[MAIN] TLS auto-renewal not enabled, skipping renewal manager")
     except Exception as e:
-        logger.warning(f"Failed to start TLS renewal manager: {e}")
+        logger.warning("[MAIN] Failed to start TLS renewal manager: %s", e)
 
     # Start HTTPS server if TLS is configured
     try:
         from tls.https_server import start_https_if_configured
         await start_https_if_configured()
     except Exception as e:
-        logger.warning(f"Failed to start HTTPS server: {e}")
+        logger.warning("[MAIN] Failed to start HTTPS server: %s", e)
 
     logger.info("=" * 60)
 
@@ -503,31 +505,31 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Clean up on shutdown."""
-    logger.info("Enhanced Channel Manager shutting down")
+    logger.info("[MAIN] Enhanced Channel Manager shutting down")
 
     # Stop HTTPS server
     try:
         from tls.https_server import stop_https_server
         await stop_https_server()
-        logger.info("HTTPS server stopped")
+        logger.info("[MAIN] HTTPS server stopped")
     except Exception as e:
-        logger.error(f"Error stopping HTTPS server: {e}")
+        logger.error("[MAIN] Error stopping HTTPS server: %s", e)
 
     # Stop TLS renewal manager
     try:
         from tls.renewal import renewal_manager
         renewal_manager.stop()
-        logger.info("TLS renewal manager stopped")
+        logger.info("[MAIN] TLS renewal manager stopped")
     except Exception as e:
-        logger.error(f"Error stopping TLS renewal manager: {e}")
+        logger.error("[MAIN] Error stopping TLS renewal manager: %s", e)
 
     # Stop task engine
     try:
         from task_engine import stop_engine
         await stop_engine()
-        logger.info("Task execution engine stopped")
+        logger.info("[MAIN] Task execution engine stopped")
     except Exception as e:
-        logger.error(f"Error stopping task engine: {e}")
+        logger.error("[MAIN] Error stopping task engine: %s", e)
 
     # Stop bandwidth tracker
     tracker = get_tracker()
@@ -565,4 +567,4 @@ if os.path.exists(static_dir):
         index_path = os.path.join(static_dir, "index.html")
         if os.path.exists(index_path):
             return FileResponse(index_path)
-        return {"error": "Frontend not built"}
+        return {"detail": "Frontend not built"}

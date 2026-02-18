@@ -54,11 +54,11 @@ async def create_notification_internal(
     from models import Notification
 
     if not message:
-        logger.warning("create_notification_internal called with empty message")
+        logger.warning("[NOTIFY-SVC] create_notification_internal called with empty message")
         return None
 
     if notification_type not in ("info", "success", "warning", "error"):
-        logger.warning(f"Invalid notification type: {notification_type}, defaulting to info")
+        logger.warning("[NOTIFY-SVC] Invalid notification type: %s, defaulting to info", notification_type)
         notification_type = "info"
 
     session = get_session()
@@ -93,10 +93,10 @@ async def create_notification_internal(
                 )
             )
 
-        logger.debug(f"Created notification: {notification_type} - {title or message[:50]}")
+        logger.debug("[NOTIFY-SVC] Created notification: %s - %s", notification_type, title or message[:50])
         return result
     except Exception as e:
-        logger.error(f"Failed to create notification: {e}")
+        logger.exception("[NOTIFY-SVC] Failed to create notification: %s", e)
         return None
     finally:
         session.close()
@@ -130,7 +130,7 @@ async def update_notification_internal(
         ).first()
 
         if not notification:
-            logger.warning(f"Notification {notification_id} not found for update")
+            logger.warning("[NOTIFY-SVC] Notification %s not found for update", notification_id)
             return None
 
         if notification_type is not None and notification_type in ("info", "success", "warning", "error"):
@@ -146,10 +146,10 @@ async def update_notification_internal(
         session.refresh(notification)
         result = notification.to_dict()
 
-        logger.debug(f"Updated notification {notification_id}: {notification_type or 'same type'} - {message[:50] if message else 'same message'}")
+        logger.debug("[NOTIFY-SVC] Updated notification %s: %s - %s", notification_id, notification_type or 'same type', message[:50] if message else 'same message')
         return result
     except Exception as e:
-        logger.error(f"Failed to update notification {notification_id}: {e}")
+        logger.exception("[NOTIFY-SVC] Failed to update notification %s: %s", notification_id, e)
         session.rollback()
         return None
     finally:
@@ -176,10 +176,10 @@ async def delete_notifications_by_source_internal(source: str) -> int:
         ).delete()
         session.commit()
         if deleted > 0:
-            logger.debug(f"Deleted {deleted} notification(s) with source '{source}'")
+            logger.debug("[NOTIFY-SVC] Deleted %s notification(s) with source '%s'", deleted, source)
         return deleted
     except Exception as e:
-        logger.error(f"Failed to delete notifications by source '{source}': {e}")
+        logger.exception("[NOTIFY-SVC] Failed to delete notifications by source '%s': %s", source, e)
         session.rollback()
         return 0
     finally:
@@ -242,13 +242,13 @@ async def _dispatch_to_alert_channels(
                 ) as response:
                     if response.status == 204:
                         results["discord"] = True
-                        logger.debug("Alert sent to Discord successfully")
+                        logger.debug("[NOTIFY-SVC] Alert sent to Discord successfully")
                     else:
                         results["discord"] = False
-                        logger.warning(f"Discord alert failed: {response.status}")
+                        logger.warning("[NOTIFY-SVC] Discord alert failed: %s", response.status)
         except Exception as e:
             results["discord"] = False
-            logger.error(f"Failed to send Discord alert: {e}")
+            logger.error("[NOTIFY-SVC] Failed to send Discord alert: %s", e)
 
     # Send to Telegram if configured and enabled
     if send_telegram and settings.is_telegram_configured():
@@ -275,26 +275,26 @@ async def _dispatch_to_alert_channels(
                 ) as response:
                     if response.status == 200:
                         results["telegram"] = True
-                        logger.debug("Alert sent to Telegram successfully")
+                        logger.debug("[NOTIFY-SVC] Alert sent to Telegram successfully")
                     else:
                         results["telegram"] = False
                         text = await response.text()
-                        logger.warning(f"Telegram alert failed: {response.status} - {text}")
+                        logger.warning("[NOTIFY-SVC] Telegram alert failed: %s - %s", response.status, text)
         except Exception as e:
             results["telegram"] = False
-            logger.error(f"Failed to send Telegram alert: {e}")
+            logger.error("[NOTIFY-SVC] Failed to send Telegram alert: %s", e)
 
     # Send to Email if configured and enabled
     if send_email and settings.is_smtp_configured():
         # TODO: Implement email alerts for task notifications
         # For now, just log that it would be sent
-        logger.debug(f"Email alert would be sent (not yet implemented for task alerts)")
+        logger.debug("[NOTIFY-SVC] Email alert would be sent (not yet implemented for task alerts)")
         results["email"] = None  # None means not attempted
 
     # Log summary
     sent = [k for k, v in results.items() if v is True]
     failed = [k for k, v in results.items() if v is False]
     if sent:
-        logger.info(f"Alert dispatched to: {', '.join(sent)}")
+        logger.info("[NOTIFY-SVC] Alert dispatched to: %s", ', '.join(sent))
     if failed:
-        logger.warning(f"Alert failed for: {', '.join(failed)}")
+        logger.warning("[NOTIFY-SVC] Alert failed for: %s", ', '.join(failed))

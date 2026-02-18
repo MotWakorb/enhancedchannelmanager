@@ -73,7 +73,7 @@ function TaskCard({ task, onRunNow, onCancel, onToggleEnabled, onEdit, isRunning
   };
 
   return (
-    <div style={{
+    <div data-testid={`task-card-${task.task_id}`} style={{
       backgroundColor: 'var(--bg-secondary)',
       border: '1px solid var(--border-color)',
       borderRadius: '8px',

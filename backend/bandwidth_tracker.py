@@ -23,7 +23,7 @@ def get_user_timezone() -> timezone:
         if settings.user_timezone:
             return ZoneInfo(settings.user_timezone)
     except Exception as e:
-        logger.debug(f"Could not get user timezone: {e}")
+        logger.debug("[BANDWIDTH] Could not get user timezone: %s", e)
     return timezone.utc
 
 
@@ -70,7 +70,7 @@ class BandwidthTracker:
     async def start(self):
         """Start the background polling task."""
         if self._running:
-            logger.warning("BandwidthTracker already running")
+            logger.warning("[BANDWIDTH] BandwidthTracker already running")
             return
 
         # Initialize channel maps on startup
@@ -81,7 +81,7 @@ class BandwidthTracker:
 
         self._running = True
         self._task = asyncio.create_task(self._poll_loop())
-        logger.info(f"BandwidthTracker started (polling every {self.poll_interval}s)")
+        logger.info("[BANDWIDTH] BandwidthTracker started (polling every %ss)", self.poll_interval)
 
     async def stop(self):
         """Stop the background polling task."""
@@ -93,7 +93,7 @@ class BandwidthTracker:
             except asyncio.CancelledError:
                 pass
             self._task = None
-        logger.info("BandwidthTracker stopped")
+        logger.info("[BANDWIDTH] BandwidthTracker stopped")
 
     async def _initialize_channel_maps(self):
         """
@@ -128,10 +128,10 @@ class BandwidthTracker:
             self._ecm_channel_number_map = number_map
             self._last_channel_map_refresh = time.time()
 
-            logger.info(f"Loaded channel maps: {len(uuid_map)} by UUID, {len(number_map)} by channel number")
+            logger.info("[BANDWIDTH] Loaded channel maps: %s by UUID, %s by channel number", len(uuid_map), len(number_map))
 
         except Exception as e:
-            logger.error(f"Failed to initialize channel maps: {e}")
+            logger.exception("[BANDWIDTH] Failed to initialize channel maps: %s", e)
 
     def _cleanup_stale_connections(self):
         """
@@ -206,9 +206,9 @@ class BandwidthTracker:
 
             session.commit()
             if stale_count > 0 or name_updates > 0:
-                logger.info(f"Cleaned up {stale_count} stale connections, updated {name_updates} channel names")
+                logger.info("[BANDWIDTH] Cleaned up %s stale connections, updated %s channel names", stale_count, name_updates)
         except Exception as e:
-            logger.error(f"Failed to cleanup stale connections: {e}")
+            logger.error("[BANDWIDTH] Failed to cleanup stale connections: %s", e)
             session.rollback()
         finally:
             session.close()
@@ -223,7 +223,7 @@ class BandwidthTracker:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"BandwidthTracker error: {e}")
+                logger.exception("[BANDWIDTH] BandwidthTracker error: %s", e)
 
             # Wait for next poll interval
             try:
@@ -267,20 +267,20 @@ class BandwidthTracker:
             self._ecm_channel_map = uuid_map
             self._ecm_channel_number_map = number_map
             self._last_channel_map_refresh = now
-            logger.debug(f"Refreshed channel maps: {len(uuid_map)} by UUID, {len(number_map)} by number")
+            logger.debug("[BANDWIDTH] Refreshed channel maps: %s by UUID, %s by number", len(uuid_map), len(number_map))
         except Exception as e:
-            logger.debug(f"Failed to refresh channel map: {e}")
+            logger.debug("[BANDWIDTH] Failed to refresh channel map: %s", e)
 
     async def _collect_stats(self):
         """Fetch stats from Dispatcharr and update daily totals."""
         try:
             stats = await self.client.get_channel_stats()
         except Exception as e:
-            logger.warning(f"Failed to fetch stats from Dispatcharr: {e}")
+            logger.warning("[BANDWIDTH] Failed to fetch stats from Dispatcharr: %s", e)
             return
 
         channels = stats.get("channels", [])
-        logger.debug(f"Collected stats for {len(channels)} active channels")
+        logger.debug("[BANDWIDTH] Collected stats for %s active channels", len(channels))
 
         # Calculate totals from all active channels
         total_bytes_delta = 0
@@ -411,7 +411,7 @@ class BandwidthTracker:
             )
             if total_bytes_delta > 0:
                 bytes_mb = total_bytes_delta / (1024 * 1024)
-                logger.debug(f"Bandwidth delta: {bytes_mb:.2f} MB (in: {total_bytes_in_delta / (1024*1024):.2f}, out: {total_bytes_out_delta / (1024*1024):.2f}), active channels: {active_channels}, clients: {total_clients}")
+                logger.debug("[BANDWIDTH] Bandwidth delta: %.2f MB (in: %.2f, out: %.2f), active channels: %s, clients: %s", bytes_mb, total_bytes_in_delta / (1024*1024), total_bytes_out_delta / (1024*1024), active_channels, total_clients)
 
         # Update per-channel bandwidth (v0.11.0)
         if channel_bandwidth_updates:
@@ -419,7 +419,7 @@ class BandwidthTracker:
 
         # Update watch counts for newly active channels (and log start events)
         if newly_active_channels:
-            logger.info(f"{len(newly_active_channels)} channel(s) started streaming")
+            logger.info("[BANDWIDTH] %s channel(s) started streaming", len(newly_active_channels))
             self._update_watch_counts(newly_active_channels)
 
         # Accumulate watch time for still-active channels
@@ -428,7 +428,7 @@ class BandwidthTracker:
 
         # Log stopped channels
         if stopped_channels:
-            logger.info(f"{len(stopped_channels)} channel(s) stopped streaming")
+            logger.info("[BANDWIDTH] %s channel(s) stopped streaming", len(stopped_channels))
 
     def _update_daily_record(
         self,
@@ -475,7 +475,7 @@ class BandwidthTracker:
 
             session.commit()
         except Exception as e:
-            logger.error(f"Failed to update bandwidth record: {e}")
+            logger.error("[BANDWIDTH] Failed to update bandwidth record: %s", e)
             session.rollback()
         finally:
             session.close()
@@ -516,9 +516,9 @@ class BandwidthTracker:
                 record.channel_name = channel_name  # Update name in case it changed
 
             session.commit()
-            logger.debug(f"Updated channel bandwidth for {len(updates)} channels")
+            logger.debug("[BANDWIDTH] Updated channel bandwidth for %s channels", len(updates))
         except Exception as e:
-            logger.error(f"Failed to update channel bandwidth: {e}")
+            logger.error("[BANDWIDTH] Failed to update channel bandwidth: %s", e)
             session.rollback()
         finally:
             session.close()
@@ -599,9 +599,9 @@ class BandwidthTracker:
                 )
 
             session.commit()
-            logger.debug(f"Updated watch counts for {len(channels)} channels")
+            logger.debug("[BANDWIDTH] Updated watch counts for %s channels", len(channels))
         except Exception as e:
-            logger.error(f"Failed to update watch counts: {e}")
+            logger.error("[BANDWIDTH] Failed to update watch counts: %s", e)
             session.rollback()
         finally:
             session.close()
@@ -678,7 +678,7 @@ class BandwidthTracker:
 
             session.commit()
         except Exception as e:
-            logger.error(f"Failed to update watch time: {e}")
+            logger.error("[BANDWIDTH] Failed to update watch time: %s", e)
             session.rollback()
         finally:
             session.close()
@@ -721,9 +721,9 @@ class BandwidthTracker:
                     },
                 )
 
-            logger.debug(f"Logged watch stop events for {len(channel_ids)} channels")
+            logger.debug("[BANDWIDTH] Logged watch stop events for %s channels", len(channel_ids))
         except Exception as e:
-            logger.error(f"Failed to log watch stop events: {e}")
+            logger.error("[BANDWIDTH] Failed to log watch stop events: %s", e)
         finally:
             session.close()
 
@@ -752,9 +752,9 @@ class BandwidthTracker:
 
             session.commit()
             if closed_count > 0:
-                logger.debug(f"Closed {closed_count} client connections for stopped channels")
+                logger.debug("[BANDWIDTH] Closed %s client connections for stopped channels", closed_count)
         except Exception as e:
-            logger.error(f"Failed to close client connections: {e}")
+            logger.error("[BANDWIDTH] Failed to close client connections: %s", e)
             session.rollback()
         finally:
             session.close()
@@ -912,9 +912,9 @@ class BandwidthTracker:
             ).delete()
             session.commit()
             if deleted > 0:
-                logger.info(f"Purged {deleted} old bandwidth records")
+                logger.info("[BANDWIDTH] Purged %s old bandwidth records", deleted)
         except Exception as e:
-            logger.error(f"Failed to purge old records: {e}")
+            logger.error("[BANDWIDTH] Failed to purge old records: %s", e)
             session.rollback()
         finally:
             session.close()

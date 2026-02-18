@@ -23,7 +23,7 @@ import journal
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["Channels"])
+router = APIRouter(prefix="/api/channels", tags=["Channels"])
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +187,7 @@ class BulkCommitResponse(BaseModel):
 # Channel list / create
 # ---------------------------------------------------------------------------
 
-@router.get("/api/channels")
+@router.get("")
 async def get_channels(
     page: int = 1,
     page_size: int = 100,
@@ -197,8 +197,9 @@ async def get_channels(
     """List channels with pagination, search, and group filtering."""
     start_time = time.time()
     logger.debug(
-        f"[CHANNELS] Fetching channels - page={page}, page_size={page_size}, "
-        f"search={search}, group={channel_group}"
+        "[CHANNELS] Fetching channels - page=%s, page_size=%s, "
+        "search=%s, group=%s",
+        page, page_size, search, channel_group
     )
     client = get_client()
     try:
@@ -231,25 +232,26 @@ async def get_channels(
                         f"#{ch.get('channel_number')} {ch.get('name', 'unnamed')}"
                     )
 
-            logger.info(f"[CHANNELS-DEBUG] Page 1 stats: {result_count} channels returned, API total={total_count}")
-            logger.info(f"[CHANNELS-DEBUG] Channels per group_id (page 1 only):")
+            logger.debug("[CHANNELS] Page 1 stats: %s channels returned, API total=%s", result_count, total_count)
+            logger.debug("[CHANNELS] Channels per group_id (page 1 only):")
             for key, data in sorted(group_counts.items(), key=lambda x: -x[1]['count']):
-                logger.info(f"  {key}: {data['count']} channels (samples: {data['sample_channels']})")
+                logger.debug("  %s: %s channels (samples: %s)", key, data['count'], data['sample_channels'])
 
         logger.debug(
-            f"[CHANNELS] Fetched {result_count} channels (total={total_count}, page={page}) "
-            f"- fetch={fetch_time:.1f}ms, total={total_time:.1f}ms"
+            "[CHANNELS] Fetched %s channels (total=%s, page=%s) "
+            "- fetch=%.1fms, total=%.1fms",
+            result_count, total_count, page, fetch_time, total_time
         )
         return result
     except Exception as e:
-        logger.exception(f"[CHANNELS] Failed to retrieve channels: {e}")
+        logger.exception("[CHANNELS] Failed to retrieve channels: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/channels")
+@router.post("")
 async def create_channel(request: CreateChannelRequest):
     """Create a new channel."""
-    logger.debug(f"POST /api/channels - Creating channel: {request.name}, number: {request.channel_number}, normalize: {request.normalize}")
+    logger.debug("[CHANNELS] POST /channels - name=%s number=%s normalize=%s", request.name, request.channel_number, request.normalize)
     client = get_client()
     try:
         # Apply normalization if requested
@@ -262,9 +264,9 @@ async def create_channel(request: CreateChannelRequest):
                     norm_result = engine.normalize(request.name)
                     channel_name = norm_result.normalized
                     if channel_name != request.name:
-                        logger.debug(f"Normalized channel name: '{request.name}' -> '{channel_name}'")
+                        logger.debug("[CHANNELS] Normalized channel name: '%s' -> '%s'", request.name, channel_name)
             except Exception as norm_err:
-                logger.warning(f"Failed to normalize channel name '{request.name}': {norm_err}")
+                logger.warning("[CHANNELS] Failed to normalize channel name '%s': %s", request.name, norm_err)
                 # Continue with original name
 
         data = {"name": channel_name}
@@ -276,8 +278,11 @@ async def create_channel(request: CreateChannelRequest):
             data["logo_id"] = request.logo_id
         if request.tvg_id is not None:
             data["tvg_id"] = request.tvg_id
+        start = time.time()
         result = await client.create_channel(data)
-        logger.info(f"Created channel: id={result.get('id')}, name={result.get('name')}, number={result.get('channel_number')}")
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[CHANNELS] Created channel via API in %.1fms", elapsed_ms)
+        logger.info("[CHANNELS] Created channel id=%s name=%s number=%s", result.get('id'), result.get('name'), result.get('channel_number'))
 
         # Log to journal
         journal.log_entry(
@@ -291,7 +296,7 @@ async def create_channel(request: CreateChannelRequest):
 
         return result
     except Exception as e:
-        logger.error(f"Channel creation failed: {e}")
+        logger.exception("[CHANNELS] Channel creation failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -299,37 +304,52 @@ async def create_channel(request: CreateChannelRequest):
 # Logos — MUST be defined before /api/channels/{channel_id} routes
 # ---------------------------------------------------------------------------
 
-@router.get("/api/channels/logos")
+@router.get("/logos")
 async def get_logos(
     page: int = 1,
     page_size: int = 100,
     search: Optional[str] = None,
 ):
     """List logos with pagination and search."""
+    logger.debug("[CHANNELS-LOGO] GET /channels/logos - page=%s search=%s", page, search)
     client = get_client()
     try:
-        return await client.get_logos(page=page, page_size=page_size, search=search)
+        start = time.time()
+        result = await client.get_logos(page=page, page_size=page_size, search=search)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[CHANNELS-LOGO] Fetched logos in %.1fms", elapsed_ms)
+        return result
     except Exception as e:
+        logger.exception("[CHANNELS-LOGO] Failed to fetch logos: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/channels/logos/{logo_id}")
+@router.get("/logos/{logo_id}")
 async def get_logo(logo_id: int):
     """Get a single logo by ID."""
+    logger.debug("[CHANNELS-LOGO] GET /channels/logos/%s", logo_id)
     client = get_client()
     try:
-        return await client.get_logo(logo_id)
+        start = time.time()
+        result = await client.get_logo(logo_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[CHANNELS-LOGO] Fetched logo id=%s in %.1fms", logo_id, elapsed_ms)
+        return result
     except Exception as e:
+        logger.exception("[CHANNELS-LOGO] Failed to fetch logo id=%s", logo_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/channels/logos")
+@router.post("/logos")
 async def create_logo(request: CreateLogoRequest):
     """Create a logo from a URL."""
+    logger.debug("[CHANNELS-LOGO] POST /channels/logos - name=%s", request.name)
     client = get_client()
     try:
+        start = time.time()
         result = await client.create_logo({"name": request.name, "url": request.url})
-        logger.info(f"Created new logo: id={result.get('id')}, name={result.get('name')}")
+        elapsed_ms = (time.time() - start) * 1000
+        logger.info("[CHANNELS-LOGO] Created logo id=%s name=%s in %.1fms", result.get('id'), result.get('name'), elapsed_ms)
         return result
     except Exception as e:
         error_str = str(e)
@@ -338,19 +358,20 @@ async def create_logo(request: CreateLogoRequest):
             try:
                 existing_logo = await client.find_logo_by_url(request.url)
                 if existing_logo:
-                    logger.info(f"Found existing logo: id={existing_logo.get('id')}, name={existing_logo.get('name')}, url={existing_logo.get('url')}")
+                    logger.info("[CHANNELS-LOGO] Found existing logo id=%s name=%s", existing_logo.get('id'), existing_logo.get('name'))
                     return existing_logo
                 else:
-                    logger.warning(f"Logo exists but could not find it by URL: {request.url}")
+                    logger.warning("[CHANNELS-LOGO] Logo exists but could not find it by URL: %s", request.url)
             except Exception as search_err:
-                logger.error(f"Error searching for existing logo: {search_err}")
-        logger.error(f"Logo creation failed: {e}")
+                logger.error("[CHANNELS-LOGO] Error searching for existing logo: %s", search_err)
+        logger.exception("[CHANNELS-LOGO] Logo creation failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/channels/logos/upload")
+@router.post("/logos/upload")
 async def upload_logo(request: Request, file: UploadFile = File(...)):
     """Upload a logo image file directly to Dispatcharr."""
+    logger.debug("[CHANNELS-LOGO] POST /channels/logos/upload - filename=%s", file.filename)
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
 
@@ -358,37 +379,50 @@ async def upload_logo(request: Request, file: UploadFile = File(...)):
     name = os.path.splitext(file.filename or "logo")[0]
     client = get_client()
     try:
+        start = time.time()
         result = await client.upload_logo_file(
             name=name,
             filename=file.filename or "logo.png",
             content=contents,
             content_type=file.content_type,
         )
-        logger.info(f"Uploaded logo to Dispatcharr: id={result.get('id')}, name={name}")
+        elapsed_ms = (time.time() - start) * 1000
+        logger.info("[CHANNELS-LOGO] Uploaded logo id=%s name=%s in %.1fms", result.get('id'), name, elapsed_ms)
         return result
     except Exception as e:
-        logger.error(f"Logo upload failed: {e}")
+        logger.exception("[CHANNELS-LOGO] Logo upload failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.patch("/api/channels/logos/{logo_id}")
+@router.patch("/logos/{logo_id}")
 async def update_logo(logo_id: int, data: dict):
     """Update a logo."""
+    logger.debug("[CHANNELS-LOGO] PATCH /channels/logos/%s", logo_id)
     client = get_client()
     try:
-        return await client.update_logo(logo_id, data)
+        start = time.time()
+        result = await client.update_logo(logo_id, data)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.info("[CHANNELS-LOGO] Updated logo id=%s in %.1fms", logo_id, elapsed_ms)
+        return result
     except Exception as e:
+        logger.exception("[CHANNELS-LOGO] Failed to update logo id=%s", logo_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/api/channels/logos/{logo_id}")
+@router.delete("/logos/{logo_id}")
 async def delete_logo(logo_id: int):
     """Delete a logo."""
+    logger.debug("[CHANNELS-LOGO] DELETE /channels/logos/%s", logo_id)
     client = get_client()
     try:
+        start = time.time()
         await client.delete_logo(logo_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.info("[CHANNELS-LOGO] Deleted logo id=%s in %.1fms", logo_id, elapsed_ms)
         return {"success": True}
     except Exception as e:
+        logger.exception("[CHANNELS-LOGO] Failed to delete logo id=%s", logo_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -396,9 +430,10 @@ async def delete_logo(logo_id: int):
 # CSV Import/Export — MUST be defined before /api/channels/{channel_id} routes
 # ---------------------------------------------------------------------------
 
-@router.get("/api/channels/csv-template")
+@router.get("/csv-template")
 async def get_csv_template():
     """Download CSV template for channel import."""
+    logger.debug("[CHANNELS-CSV] GET /channels/csv-template")
     template_content = generate_template()
     return Response(
         content=template_content,
@@ -409,12 +444,14 @@ async def get_csv_template():
     )
 
 
-@router.get("/api/channels/export-csv")
+@router.get("/export-csv")
 async def export_channels_csv():
     """Export all channels to CSV format."""
+    logger.debug("[CHANNELS-CSV] GET /channels/export-csv")
     client = get_client()
     try:
         # Fetch channel groups to build ID -> name lookup
+        start = time.time()
         groups = await client.get_channel_groups()
         group_lookup = {g.get("id"): g.get("name", "") for g in groups}
 
@@ -451,7 +488,10 @@ async def export_channels_csv():
                     for s in streams:
                         stream_url_lookup[s.get("id")] = s.get("url", "")
                 except Exception as e:
-                    logger.warning(f"Failed to fetch stream batch: {e}")
+                    logger.warning("[CHANNELS-CSV] Failed to fetch stream batch: %s", e)
+
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[CHANNELS-CSV] Fetched export data (%s channels, %s streams) in %.1fms", len(all_channels), len(stream_url_lookup), elapsed_ms)
 
         # Transform channel data for CSV export
         csv_channels = []
@@ -485,13 +525,14 @@ async def export_channels_csv():
             }
         )
     except Exception as e:
-        logger.error(f"CSV export failed: {e}")
+        logger.exception("[CHANNELS-CSV] CSV export failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/channels/import-csv")
+@router.post("/import-csv")
 async def import_channels_csv(file: UploadFile = File(...)):
     """Import channels from CSV file."""
+    logger.debug("[CHANNELS-CSV] POST /channels/import-csv - filename=%s", file.filename)
     client = get_client()
 
     # Read and decode the file
@@ -519,15 +560,19 @@ async def import_channels_csv(file: UploadFile = File(...)):
 
     # Get existing channel groups for matching
     try:
+        start = time.time()
         existing_groups = await client.get_channel_groups()
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[CHANNELS-CSV] Fetched channel groups in %.1fms", elapsed_ms)
         group_map = {g["name"].lower(): g for g in existing_groups}
     except Exception as e:
-        logger.error(f"Failed to fetch channel groups: {e}")
+        logger.exception("[CHANNELS-CSV] Failed to fetch channel groups: %s", e)
         raise HTTPException(status_code=500, detail=f"Failed to fetch channel groups: {e}")
 
     # Build URL -> stream ID lookup for stream linking
     stream_url_to_id = {}
     try:
+        start = time.time()
         page = 1
         page_size = 500
         while True:
@@ -540,14 +585,16 @@ async def import_channels_csv(file: UploadFile = File(...)):
             if not result.get("next"):
                 break
             page += 1
-        logger.info(f"Built stream URL lookup with {len(stream_url_to_id)} streams")
+        elapsed_ms = (time.time() - start) * 1000
+        logger.info("[CHANNELS-CSV] Built stream URL lookup with %s streams in %.1fms", len(stream_url_to_id), elapsed_ms)
     except Exception as e:
-        logger.warning(f"Failed to fetch streams for URL lookup: {e}")
+        logger.warning("[CHANNELS-CSV] Failed to fetch streams for URL lookup: %s", e)
 
     # Build EPG tvg_id -> icon_url lookup for logo assignment
     epg_tvg_id_to_icon = {}
     epg_name_to_icon = {}
     try:
+        start = time.time()
         epg_data = await client.get_epg_data()
         for entry in epg_data:
             tvg_id = entry.get("tvg_id", "")
@@ -562,9 +609,10 @@ async def import_channels_csv(file: UploadFile = File(...)):
                     if normalized_name.endswith(suffix):
                         normalized_name = normalized_name[:-len(suffix)]
                 epg_name_to_icon[normalized_name] = icon_url
-        logger.info(f"Built EPG logo lookup with {len(epg_tvg_id_to_icon)} tvg_id entries and {len(epg_name_to_icon)} name entries")
+        elapsed_ms = (time.time() - start) * 1000
+        logger.info("[CHANNELS-CSV] Built EPG logo lookup with %s tvg_id entries and %s name entries in %.1fms", len(epg_tvg_id_to_icon), len(epg_name_to_icon), elapsed_ms)
     except Exception as e:
-        logger.warning(f"Failed to fetch EPG data for logo lookup: {e}")
+        logger.warning("[CHANNELS-CSV] Failed to fetch EPG data for logo lookup: %s", e)
 
     channels_created = 0
     groups_created = 0
@@ -592,7 +640,7 @@ async def import_channels_csv(file: UploadFile = File(...)):
                         group_id = new_group["id"]
                         group_map[group_key] = new_group
                         groups_created += 1
-                        logger.info(f"Created channel group: {group_name}")
+                        logger.info("[CHANNELS-CSV] Created channel group: %s", group_name)
                     except Exception as ge:
                         warnings.append(f"Row {row_num}: Failed to create group '{group_name}': {ge}")
 
@@ -655,15 +703,15 @@ async def import_channels_csv(file: UploadFile = File(...)):
                         existing_logo = await client.find_logo_by_url(epg_icon_url)
                         if existing_logo:
                             logo_id = existing_logo["id"]
-                            logger.debug(f"Row {row_num}: Found existing logo ID {logo_id} for EPG icon")
+                            logger.debug("[CHANNELS-CSV] Row %s: Found existing logo ID %s for EPG icon", row_num, logo_id)
                         else:
                             new_logo = await client.create_logo({"name": channel_name_for_logo, "url": epg_icon_url})
                             logo_id = new_logo["id"]
-                            logger.debug(f"Row {row_num}: Created new logo ID {logo_id} for EPG icon")
+                            logger.debug("[CHANNELS-CSV] Row %s: Created new logo ID %s for EPG icon", row_num, logo_id)
                         # Update channel with logo_id
                         await client.update_channel(channel_id, {"logo_id": logo_id})
                         logos_from_epg += 1
-                        logger.debug(f"Row {row_num}: Assigned EPG logo to channel '{row['name']}'")
+                        logger.debug("[CHANNELS-CSV] Row %s: Assigned EPG logo to channel '%s'", row_num, row['name'])
                     except Exception as le:
                         warnings.append(f"Row {row_num}: Failed to assign EPG logo: {le}")
 
@@ -691,7 +739,7 @@ async def import_channels_csv(file: UploadFile = File(...)):
             errors.append({"row": row_num, "error": str(e)})
 
     # Log the import
-    logger.info(f"CSV import completed: {channels_created} channels created, {groups_created} groups created, {streams_linked} streams linked, {logos_from_epg} logos from EPG, {len(errors)} errors")
+    logger.info("[CHANNELS-CSV] Import completed: %s channels created, %s groups created, %s streams linked, %s logos from EPG, %s errors", channels_created, groups_created, streams_linked, logos_from_epg, len(errors))
 
     return {
         "success": len(errors) == 0,
@@ -704,9 +752,10 @@ async def import_channels_csv(file: UploadFile = File(...)):
     }
 
 
-@router.post("/api/channels/preview-csv")
+@router.post("/preview-csv")
 async def preview_csv(data: dict):
     """Preview CSV content and validate before import."""
+    logger.debug("[CHANNELS-CSV] POST /channels/preview-csv")
     content = data.get("content", "")
     if not content:
         return {"rows": [], "errors": []}
@@ -729,14 +778,16 @@ async def preview_csv(data: dict):
 # Static bulk routes — MUST be defined before /api/channels/{channel_id}
 # ---------------------------------------------------------------------------
 
-@router.post("/api/channels/assign-numbers")
+@router.post("/assign-numbers")
 async def assign_channel_numbers(request: AssignNumbersRequest):
     """Bulk assign channel numbers."""
+    logger.debug("[CHANNELS] POST /channels/assign-numbers - %s channels starting_number=%s", len(request.channel_ids), request.starting_number)
     client = get_client()
     settings = get_settings()
 
     try:
         # Get current channel data for all affected channels (needed for journal and auto-rename)
+        start = time.time()
         batch_id = str(uuid.uuid4())[:8]
         channels_before = {}
         name_updates = {}
@@ -774,9 +825,11 @@ async def assign_channel_numbers(request: AssignNumbersRequest):
         for channel_id, new_name in name_updates.items():
             try:
                 await client.update_channel(channel_id, {"name": new_name})
-            except Exception:
-                # Don't fail the whole operation if a name update fails
-                pass
+            except Exception as e:
+                logger.warning("[CHANNELS] Failed to update name for channel %s: %s", channel_id, e)
+
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[CHANNELS] Assigned numbers to %s channels in %.1fms", len(request.channel_ids), elapsed_ms)
 
         # Log individual journal entries for each channel
         for idx, channel_id in enumerate(request.channel_ids):
@@ -799,10 +852,11 @@ async def assign_channel_numbers(request: AssignNumbersRequest):
 
         return result
     except Exception as e:
+        logger.exception("[CHANNELS] Failed to assign channel numbers: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/channels/bulk-commit")
+@router.post("/bulk-commit")
 async def bulk_commit_operations(request: BulkCommitRequest):
     """
     Process multiple channel operations in a single request.
@@ -828,10 +882,10 @@ async def bulk_commit_operations(request: BulkCommitRequest):
         op_counts[op.type] = op_counts.get(op.type, 0) + 1
     op_summary = ", ".join(f"{count} {op_type}" for op_type, count in sorted(op_counts.items()))
 
-    logger.debug(f"[BULK-COMMIT] Starting bulk commit (batch={batch_id}): {len(request.operations)} operations ({op_summary})")
-    logger.debug(f"[BULK-COMMIT] Options: validateOnly={request.validateOnly}, continueOnError={request.continueOnError}")
+    logger.debug("[CHANNELS-BULK] Starting bulk commit (batch=%s): %s operations (%s)", batch_id, len(request.operations), op_summary)
+    logger.debug("[CHANNELS-BULK] Options: validateOnly=%s, continueOnError=%s", request.validateOnly, request.continueOnError)
     if request.groupsToCreate:
-        logger.debug(f"[BULK-COMMIT] Groups to create: {[g.get('name') for g in request.groupsToCreate]}")
+        logger.debug("[CHANNELS-BULK] Groups to create: %s", [g.get('name') for g in request.groupsToCreate])
 
     result = {
         "success": True,
@@ -856,7 +910,7 @@ async def bulk_commit_operations(request: BulkCommitRequest):
 
     try:
         # Phase 0: Pre-validation - check that referenced entities exist
-        logger.debug(f"[BULK-VALIDATE] Phase 0: Starting pre-validation")
+        logger.debug("[CHANNELS-BULK] Phase 0: Starting pre-validation")
 
         # Collect all channel IDs that are referenced (not created) in operations
         referenced_channel_ids = set()
@@ -892,16 +946,16 @@ async def bulk_commit_operations(request: BulkCommitRequest):
         existing_channels = {}  # id -> channel dict
         existing_streams = {}   # id -> stream dict
 
-        logger.debug(f"[BULK-VALIDATE] Referenced entities: {len(referenced_channel_ids)} channels, {len(referenced_stream_ids)} streams")
-        logger.debug(f"[BULK-VALIDATE] Channels to create: {len(channels_to_create)} (temp IDs: {sorted(channels_to_create)})")
+        logger.debug("[CHANNELS-BULK] Referenced entities: %s channels, %s streams", len(referenced_channel_ids), len(referenced_stream_ids))
+        logger.debug("[CHANNELS-BULK] Channels to create: %s (temp IDs: %s)", len(channels_to_create), sorted(channels_to_create))
         if referenced_channel_ids:
             # Log a sample of referenced channel IDs (first 20)
             sample_ids = sorted(referenced_channel_ids)[:20]
-            logger.debug(f"[BULK-VALIDATE] Referenced channel IDs (sample): {sample_ids}{'...' if len(referenced_channel_ids) > 20 else ''}")
+            logger.debug("[CHANNELS-BULK] Referenced channel IDs (sample): %s%s", sample_ids, '...' if len(referenced_channel_ids) > 20 else '')
 
         if referenced_channel_ids:
             try:
-                logger.debug(f"[BULK-VALIDATE] Fetching existing channels for validation...")
+                logger.debug("[CHANNELS-BULK] Fetching existing channels for validation...")
                 # Fetch all pages of channels to build lookup
                 page = 1
                 while True:
@@ -911,26 +965,26 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                     if not response.get("next"):
                         break
                     page += 1
-                logger.debug(f"[BULK-VALIDATE] Loaded {len(existing_channels)} existing channels")
+                logger.debug("[CHANNELS-BULK] Loaded %s existing channels", len(existing_channels))
                 # Check which referenced channels don't exist
                 missing_channels = referenced_channel_ids - set(existing_channels.keys())
                 if missing_channels:
-                    logger.warning(f"[BULK-VALIDATE] Missing channels detected: {sorted(missing_channels)} ({len(missing_channels)} total)")
+                    logger.warning("[CHANNELS-BULK] Missing channels detected: %s (%s total)", sorted(missing_channels), len(missing_channels))
                 else:
-                    logger.debug(f"[BULK-VALIDATE] All {len(referenced_channel_ids)} referenced channels exist")
+                    logger.debug("[CHANNELS-BULK] All %s referenced channels exist", len(referenced_channel_ids))
             except Exception as e:
-                logger.warning(f"[BULK-VALIDATE] Failed to fetch channels for validation: {e}")
+                logger.warning("[CHANNELS-BULK] Failed to fetch channels for validation: %s", e)
 
         if referenced_stream_ids:
             try:
-                logger.debug(f"[BULK-VALIDATE] Fetching {len(referenced_stream_ids)} referenced streams for validation...")
+                logger.debug("[CHANNELS-BULK] Fetching %s referenced streams for validation...", len(referenced_stream_ids))
                 # Fetch only the specific streams that are referenced (not all streams)
                 streams = await client.get_streams_by_ids(list(referenced_stream_ids))
                 for s in streams:
                     existing_streams[s["id"]] = s
-                logger.debug(f"[BULK-VALIDATE] Loaded {len(existing_streams)} of {len(referenced_stream_ids)} referenced streams")
+                logger.debug("[CHANNELS-BULK] Loaded %s of %s referenced streams", len(existing_streams), len(referenced_stream_ids))
             except Exception as e:
-                logger.warning(f"[BULK-VALIDATE] Failed to fetch streams for validation: {e}")
+                logger.warning("[CHANNELS-BULK] Failed to fetch streams for validation: %s", e)
 
         # Validate each operation
         for idx, op in enumerate(request.operations):
@@ -1011,9 +1065,9 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                         result["validationPassed"] = False
 
         # Log validation summary
-        logger.debug(f"[BULK-VALIDATE] Validation complete: passed={result['validationPassed']}, issues={len(result['validationIssues'])}")
+        logger.debug("[CHANNELS-BULK] Validation complete: passed=%s, issues=%s", result['validationPassed'], len(result['validationIssues']))
         if result['validationIssues']:
-            logger.warning(f"[BULK-VALIDATE] === VALIDATION ISSUES DETAIL ===")
+            logger.warning("[CHANNELS-BULK] === VALIDATION ISSUES DETAIL ===")
             for i, issue in enumerate(result['validationIssues'][:10]):  # Show first 10
                 op_idx = issue.get('operationIndex', '?')
                 ch_id = issue.get('channelId', '?')
@@ -1021,129 +1075,129 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                 # Get the actual operation for more context
                 if op_idx != '?' and op_idx < len(request.operations):
                     op = request.operations[op_idx]
-                    logger.warning(f"[BULK-VALIDATE]   Issue {i+1}: {issue['type']} - {issue['message']}")
-                    logger.warning(f"[BULK-VALIDATE]     Operation[{op_idx}]: type={op.type}, channelId={op.channelId}, streamId={getattr(op, 'streamId', None)}")
+                    logger.warning("[CHANNELS-BULK]   Issue %s: %s - %s", i+1, issue['type'], issue['message'])
+                    logger.warning("[CHANNELS-BULK]     Operation[%s]: type=%s, channelId=%s, streamId=%s", op_idx, op.type, op.channelId, getattr(op, 'streamId', None))
                     if op.type == "updateChannel" and op.data:
-                        logger.warning(f"[BULK-VALIDATE]     Update data: name={op.data.get('name')}, number={op.data.get('channel_number')}")
+                        logger.warning("[CHANNELS-BULK]     Update data: name=%s, number=%s", op.data.get('name'), op.data.get('channel_number'))
                 else:
-                    logger.warning(f"[BULK-VALIDATE]   Issue {i+1}: {issue['type']} - {issue['message']} (channelId={ch_id}, streamId={stream_id})")
+                    logger.warning("[CHANNELS-BULK]   Issue %s: %s - %s (channelId=%s, streamId=%s)", i+1, issue['type'], issue['message'], ch_id, stream_id)
             if len(result['validationIssues']) > 10:
-                logger.warning(f"[BULK-VALIDATE]   ... and {len(result['validationIssues']) - 10} more issues")
-            logger.warning(f"[BULK-VALIDATE] === END VALIDATION ISSUES ===")
+                logger.warning("[CHANNELS-BULK]   ... and %s more issues", len(result['validationIssues']) - 10)
+            logger.warning("[CHANNELS-BULK] === END VALIDATION ISSUES ===")
 
         # If validateOnly, return now without executing
         if request.validateOnly:
-            logger.info(f"[BULK-COMMIT] Validation only mode: {len(result['validationIssues'])} issues found, returning without executing")
+            logger.info("[CHANNELS-BULK] Validation only mode: %s issues found, returning without executing", len(result['validationIssues']))
             result["success"] = result["validationPassed"]
             return result
 
         # If validation failed and continueOnError is false, return without executing
         if not result["validationPassed"] and not request.continueOnError:
-            logger.warning(f"[BULK-COMMIT] Validation failed with {len(result['validationIssues'])} issues, aborting (continueOnError=false)")
-            logger.warning(f"[BULK-COMMIT] No operations will be executed. Total operations that would have been attempted: {len(request.operations)}")
+            logger.warning("[CHANNELS-BULK] Validation failed with %s issues, aborting (continueOnError=false)", len(result['validationIssues']))
+            logger.warning("[CHANNELS-BULK] No operations will be executed. Total operations that would have been attempted: %s", len(request.operations))
             # Log a hint about the issue
             if result['validationIssues']:
                 first_issue = result['validationIssues'][0]
-                logger.warning(f"[BULK-COMMIT] First issue: {first_issue.get('message', 'Unknown')}")
+                logger.warning("[CHANNELS-BULK] First issue: %s", first_issue.get('message', 'Unknown'))
                 if first_issue.get('type') == 'missing_channel':
-                    logger.warning(f"[BULK-COMMIT] Hint: Channel {first_issue.get('channelId')} may have been deleted from Dispatcharr. Try refreshing the page to sync.")
+                    logger.warning("[CHANNELS-BULK] Hint: Channel %s may have been deleted from Dispatcharr. Try refreshing the page to sync.", first_issue.get('channelId'))
             result["success"] = False
             return result
 
         # Log if continuing despite validation issues
         if not result["validationPassed"] and request.continueOnError:
-            logger.warning(f"[BULK-COMMIT] Continuing despite {len(result['validationIssues'])} validation issues (continueOnError=true)")
+            logger.warning("[CHANNELS-BULK] Continuing despite %s validation issues (continueOnError=true)", len(result['validationIssues']))
 
         # Phase 1: Create groups first (if any)
         if request.groupsToCreate:
-            logger.debug(f"[BULK-GROUP] Phase 1: Creating {len(request.groupsToCreate)} groups")
+            logger.debug("[CHANNELS-BULK] Phase 1: Creating %s groups", len(request.groupsToCreate))
             for group_info in request.groupsToCreate:
                 group_name = group_info.get("name")
                 if not group_name:
-                    logger.debug(f"[BULK-GROUP] Skipping group with no name")
+                    logger.debug("[CHANNELS-BULK] Skipping group with no name")
                     continue
                 try:
-                    logger.debug(f"[BULK-GROUP] Creating group: '{group_name}'")
+                    logger.debug("[CHANNELS-BULK] Creating group: '%s'", group_name)
                     # Try to create the group
                     new_group = await client.create_channel_group(group_name)
                     result["groupIdMap"][group_name] = new_group["id"]
-                    logger.debug(f"[BULK-GROUP] Created group '{group_name}' -> ID {new_group['id']}")
+                    logger.debug("[CHANNELS-BULK] Created group '%s' -> ID %s", group_name, new_group['id'])
                 except Exception as e:
                     error_str = str(e)
                     # If group already exists, try to find it
                     if "400" in error_str or "already exists" in error_str.lower():
-                        logger.debug(f"[BULK-GROUP] Group '{group_name}' may already exist, searching...")
+                        logger.debug("[CHANNELS-BULK] Group '%s' may already exist, searching...", group_name)
                         try:
                             groups = await client.get_channel_groups()
                             for g in groups:
                                 if g.get("name") == group_name:
                                     result["groupIdMap"][group_name] = g["id"]
-                                    logger.debug(f"[BULK-GROUP] Found existing group '{group_name}' -> ID {g['id']}")
+                                    logger.debug("[CHANNELS-BULK] Found existing group '%s' -> ID %s", group_name, g['id'])
                                     break
                         except Exception as find_err:
-                            logger.debug(f"[BULK-GROUP] Failed to search for existing group: {find_err}")
+                            logger.debug("[CHANNELS-BULK] Failed to search for existing group: %s", find_err)
                     else:
                         # Non-duplicate error - fail the whole operation
-                        logger.error(f"[BULK-GROUP] Failed to create group '{group_name}': {e}")
+                        logger.error("[CHANNELS-BULK] Failed to create group '%s': %s", group_name, e)
                         result["success"] = False
                         result["errors"].append({
                             "operationId": f"create-group-{group_name}",
                             "error": str(e)
                         })
                         return result
-            logger.debug(f"[BULK-GROUP] Group creation complete: {len(result['groupIdMap'])} groups mapped")
+            logger.debug("[CHANNELS-BULK] Group creation complete: %s groups mapped", len(result['groupIdMap']))
 
         # Phase 2: Process operations sequentially
-        logger.debug(f"[BULK-APPLY] Phase 2: Processing {len(request.operations)} operations")
+        logger.debug("[CHANNELS-BULK] Phase 2: Processing %s operations", len(request.operations))
         for idx, op in enumerate(request.operations):
             op_id = f"op-{idx}-{op.type}"
             try:
                 if op.type == "updateChannel":
                     channel_id = resolve_id(op.channelId)
-                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] updateChannel: channel_id={channel_id}, data={op.data}")
+                    logger.debug("[CHANNELS-BULK] [%s/%s] updateChannel: channel_id=%s, data=%s", idx+1, len(request.operations), channel_id, op.data)
                     await client.update_channel(channel_id, op.data)
                     result["operationsApplied"] += 1
 
                 elif op.type == "addStreamToChannel":
                     channel_id = resolve_id(op.channelId)
-                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] addStreamToChannel: channel_id={channel_id}, stream_id={op.streamId}")
+                    logger.debug("[CHANNELS-BULK] [%s/%s] addStreamToChannel: channel_id=%s, stream_id=%s", idx+1, len(request.operations), channel_id, op.streamId)
                     channel = await client.get_channel(channel_id)
                     current_streams = channel.get("streams", [])
                     if op.streamId not in current_streams:
                         current_streams.append(op.streamId)
                         await client.update_channel(channel_id, {"streams": current_streams})
-                        logger.debug(f"[BULK-APPLY] Added stream {op.streamId} to channel {channel_id}")
+                        logger.debug("[CHANNELS-BULK] Added stream %s to channel %s", op.streamId, channel_id)
                     else:
-                        logger.debug(f"[BULK-APPLY] Stream {op.streamId} already in channel {channel_id}, skipping")
+                        logger.debug("[CHANNELS-BULK] Stream %s already in channel %s, skipping", op.streamId, channel_id)
                     result["operationsApplied"] += 1
 
                 elif op.type == "removeStreamFromChannel":
                     channel_id = resolve_id(op.channelId)
-                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] removeStreamFromChannel: channel_id={channel_id}, stream_id={op.streamId}")
+                    logger.debug("[CHANNELS-BULK] [%s/%s] removeStreamFromChannel: channel_id=%s, stream_id=%s", idx+1, len(request.operations), channel_id, op.streamId)
                     channel = await client.get_channel(channel_id)
                     current_streams = channel.get("streams", [])
                     if op.streamId in current_streams:
                         current_streams.remove(op.streamId)
                         await client.update_channel(channel_id, {"streams": current_streams})
-                        logger.debug(f"[BULK-APPLY] Removed stream {op.streamId} from channel {channel_id}")
+                        logger.debug("[CHANNELS-BULK] Removed stream %s from channel %s", op.streamId, channel_id)
                     else:
-                        logger.debug(f"[BULK-APPLY] Stream {op.streamId} not in channel {channel_id}, skipping")
+                        logger.debug("[CHANNELS-BULK] Stream %s not in channel %s, skipping", op.streamId, channel_id)
                     result["operationsApplied"] += 1
 
                 elif op.type == "reorderChannelStreams":
                     channel_id = resolve_id(op.channelId)
-                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] reorderChannelStreams: channel_id={channel_id}, streams={op.streamIds}")
+                    logger.debug("[CHANNELS-BULK] [%s/%s] reorderChannelStreams: channel_id=%s, streams=%s", idx+1, len(request.operations), channel_id, op.streamIds)
                     await client.update_channel(channel_id, {"streams": op.streamIds})
                     result["operationsApplied"] += 1
 
                 elif op.type == "bulkAssignChannelNumbers":
                     resolved_ids = [resolve_id(cid) for cid in op.channelIds]
-                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] bulkAssignChannelNumbers: {len(resolved_ids)} channels starting at {op.startingNumber}")
+                    logger.debug("[CHANNELS-BULK] [%s/%s] bulkAssignChannelNumbers: %s channels starting at %s", idx+1, len(request.operations), len(resolved_ids), op.startingNumber)
                     await client.assign_channel_numbers(resolved_ids, op.startingNumber)
                     result["operationsApplied"] += 1
 
                 elif op.type == "createChannel":
-                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] createChannel: name='{op.name}', tempId={op.tempId}, groupId={op.groupId}, newGroupName={op.newGroupName}, normalize={op.normalize}")
+                    logger.debug("[CHANNELS-BULK] [%s/%s] createChannel: name='%s', tempId=%s, groupId=%s, newGroupName=%s, normalize=%s", idx+1, len(request.operations), op.name, op.tempId, op.groupId, op.newGroupName, op.normalize)
                     # Resolve group ID
                     group_id = resolve_group_id(op.groupId, op.newGroupName)
 
@@ -1157,28 +1211,28 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                                 norm_result = engine.normalize(op.name)
                                 channel_name = norm_result.normalized
                                 if channel_name != op.name:
-                                    logger.debug(f"[BULK-APPLY] Normalized channel name: '{op.name}' -> '{channel_name}'")
+                                    logger.debug("[CHANNELS-BULK] Normalized channel name: '%s' -> '%s'", op.name, channel_name)
                         except Exception as norm_err:
-                            logger.warning(f"[BULK-APPLY] Failed to normalize channel name '{op.name}': {norm_err}")
+                            logger.warning("[CHANNELS-BULK] Failed to normalize channel name '%s': %s", op.name, norm_err)
                             # Continue with original name
 
                     # Handle logo - if logoUrl provided but no logoId, try to find/create logo
                     logo_id = op.logoId
                     if not logo_id and op.logoUrl:
                         try:
-                            logger.debug(f"[BULK-APPLY] Looking for logo by URL for channel '{op.name}'")
+                            logger.debug("[CHANNELS-BULK] Looking for logo by URL for channel '%s'", op.name)
                             # Try to find existing logo by URL
                             existing_logo = await client.find_logo_by_url(op.logoUrl)
                             if existing_logo:
                                 logo_id = existing_logo["id"]
-                                logger.debug(f"[BULK-APPLY] Found existing logo ID {logo_id}")
+                                logger.debug("[CHANNELS-BULK] Found existing logo ID %s", logo_id)
                             else:
                                 # Create new logo
                                 new_logo = await client.create_logo({"name": channel_name, "url": op.logoUrl})
                                 logo_id = new_logo["id"]
-                                logger.debug(f"[BULK-APPLY] Created new logo ID {logo_id}")
+                                logger.debug("[CHANNELS-BULK] Created new logo ID %s", logo_id)
                         except Exception as logo_err:
-                            logger.warning(f"[BULK-APPLY] Failed to create/find logo for channel '{channel_name}': {logo_err}")
+                            logger.warning("[CHANNELS-BULK] Failed to create/find logo for channel '%s': %s", channel_name, logo_err)
                             # Continue without logo
 
                     # Create the channel
@@ -1194,8 +1248,8 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                     if op.tvcGuideStationId is not None:
                         channel_data["tvc_guide_stationid"] = op.tvcGuideStationId
 
-                    logger.debug(f"[BULK-APPLY] op.tvgId={op.tvgId}, op.tvcGuideStationId={op.tvcGuideStationId}")
-                    logger.debug(f"[BULK-APPLY] Creating channel with data: {channel_data}")
+                    logger.debug("[CHANNELS-BULK] op.tvgId=%s, op.tvcGuideStationId=%s", op.tvgId, op.tvcGuideStationId)
+                    logger.debug("[CHANNELS-BULK] Creating channel with data: %s", channel_data)
                     new_channel = await client.create_channel(channel_data)
 
                     # Track temp ID -> real ID mapping
@@ -1203,37 +1257,37 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                         result["tempIdMap"][op.tempId] = new_channel["id"]
 
                     result["operationsApplied"] += 1
-                    logger.debug(f"[BULK-APPLY] Created channel '{channel_name}' (temp: {op.tempId} -> real: {new_channel['id']})")
+                    logger.debug("[CHANNELS-BULK] Created channel '%s' (temp: %s -> real: %s)", channel_name, op.tempId, new_channel['id'])
 
                 elif op.type == "deleteChannel":
                     channel_id = resolve_id(op.channelId)
-                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] deleteChannel: channel_id={channel_id}")
+                    logger.debug("[CHANNELS-BULK] [%s/%s] deleteChannel: channel_id=%s", idx+1, len(request.operations), channel_id)
                     await client.delete_channel(channel_id)
                     result["operationsApplied"] += 1
-                    logger.debug(f"[BULK-APPLY] Deleted channel {channel_id}")
+                    logger.debug("[CHANNELS-BULK] Deleted channel %s", channel_id)
 
                 elif op.type == "createGroup":
-                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] createGroup: name='{op.name}'")
+                    logger.debug("[CHANNELS-BULK] [%s/%s] createGroup: name='%s'", idx+1, len(request.operations), op.name)
                     # Groups should be created in Phase 1, but handle here if needed
                     if op.name not in result["groupIdMap"]:
                         new_group = await client.create_channel_group(op.name)
                         result["groupIdMap"][op.name] = new_group["id"]
-                        logger.debug(f"[BULK-APPLY] Created group '{op.name}' -> ID {new_group['id']}")
+                        logger.debug("[CHANNELS-BULK] Created group '%s' -> ID %s", op.name, new_group['id'])
                     else:
-                        logger.debug(f"[BULK-APPLY] Group '{op.name}' already exists with ID {result['groupIdMap'][op.name]}")
+                        logger.debug("[CHANNELS-BULK] Group '%s' already exists with ID %s", op.name, result['groupIdMap'][op.name])
                     result["operationsApplied"] += 1
 
                 elif op.type == "deleteChannelGroup":
-                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] deleteChannelGroup: groupId={op.groupId}")
+                    logger.debug("[CHANNELS-BULK] [%s/%s] deleteChannelGroup: groupId=%s", idx+1, len(request.operations), op.groupId)
                     await client.delete_channel_group(op.groupId)
                     result["operationsApplied"] += 1
-                    logger.debug(f"[BULK-APPLY] Deleted group {op.groupId}")
+                    logger.debug("[CHANNELS-BULK] Deleted group %s", op.groupId)
 
                 elif op.type == "renameChannelGroup":
-                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] renameChannelGroup: groupId={op.groupId}, newName='{op.newName}'")
+                    logger.debug("[CHANNELS-BULK] [%s/%s] renameChannelGroup: groupId=%s, newName='%s'", idx+1, len(request.operations), op.groupId, op.newName)
                     await client.update_channel_group(op.groupId, {"name": op.newName})
                     result["operationsApplied"] += 1
-                    logger.debug(f"[BULK-APPLY] Renamed group {op.groupId} to '{op.newName}'")
+                    logger.debug("[CHANNELS-BULK] Renamed group %s to '%s'", op.groupId, op.newName)
 
             except Exception as e:
                 # Build detailed error info with channel/stream names
@@ -1266,18 +1320,18 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                 # Log with detailed context
                 channel_info = f" (channel: {error_details.get('channelName', 'N/A')})" if 'channelName' in error_details else ""
                 stream_info = f" (stream: {error_details.get('streamName', 'N/A')})" if 'streamName' in error_details else ""
-                logger.error(f"[BULK-APPLY] Operation {op_id} failed{channel_info}{stream_info}: {e}")
+                logger.exception("[CHANNELS-BULK] Operation %s failed%s%s: %s", op_id, channel_info, stream_info, e)
 
                 result["operationsFailed"] += 1
                 result["errors"].append(error_details)
 
                 # If continueOnError, keep processing; otherwise stop
                 if not request.continueOnError:
-                    logger.debug(f"[BULK-APPLY] Stopping due to error (continueOnError=false)")
+                    logger.debug("[CHANNELS-BULK] Stopping due to error (continueOnError=false)")
                     result["success"] = False
                     break
                 else:
-                    logger.debug(f"[BULK-APPLY] Continuing despite error (continueOnError=true)")
+                    logger.debug("[CHANNELS-BULK] Continuing despite error (continueOnError=true)")
                 # If continuing, mark as partial failure but keep going
                 # success will be determined at the end based on whether any ops succeeded
 
@@ -1289,8 +1343,8 @@ async def bulk_commit_operations(request: BulkCommitRequest):
             result["success"] = result["operationsFailed"] == 0
 
         # Log summary
-        logger.debug(f"[BULK-COMMIT] Phase 2 complete: {result['operationsApplied']} applied, {result['operationsFailed']} failed")
-        logger.debug(f"[BULK-COMMIT] ID mappings: {len(result['tempIdMap'])} channels, {len(result['groupIdMap'])} groups")
+        logger.debug("[CHANNELS-BULK] Phase 2 complete: %s applied, %s failed", result['operationsApplied'], result['operationsFailed'])
+        logger.debug("[CHANNELS-BULK] ID mappings: %s channels, %s groups", len(result['tempIdMap']), len(result['groupIdMap']))
 
         # Log summary to journal
         journal.log_entry(
@@ -1311,12 +1365,13 @@ async def bulk_commit_operations(request: BulkCommitRequest):
             batch_id=batch_id,
         )
 
-        logger.info(f"[BULK-COMMIT] Completed (batch={batch_id}): success={result['success']}, applied={result['operationsApplied']}, failed={result['operationsFailed']}" +
-                   (f", validation_issues={len(result['validationIssues'])}" if result["validationIssues"] else ""))
+        logger.info("[CHANNELS-BULK] Completed (batch=%s): success=%s, applied=%s, failed=%s%s",
+                   batch_id, result['success'], result['operationsApplied'], result['operationsFailed'],
+                   (", validation_issues=%s" % len(result['validationIssues'])) if result["validationIssues"] else "")
         return result
 
     except Exception as e:
-        logger.exception(f"[BULK-COMMIT] Unexpected error (batch={batch_id}): {e}")
+        logger.exception("[CHANNELS-BULK] Unexpected error (batch=%s): %s", batch_id, e)
         result["success"] = False
         result["errors"].append({
             "operationId": "bulk-commit",
@@ -1325,13 +1380,14 @@ async def bulk_commit_operations(request: BulkCommitRequest):
         return result
 
 
-@router.post("/api/channels/clear-auto-created")
+@router.post("/clear-auto-created")
 async def clear_auto_created_flag(request: ClearAutoCreatedRequest):
     """Clear the auto_created flag from all channels in the specified groups.
 
     This converts auto_created channels to manual channels by setting
     auto_created=False and auto_created_by=None.
     """
+    logger.debug("[CHANNELS] POST /channels/clear-auto-created - group_ids=%s", request.group_ids)
     client = get_client()
     group_ids = set(request.group_ids)
 
@@ -1340,6 +1396,7 @@ async def clear_auto_created_flag(request: ClearAutoCreatedRequest):
 
     try:
         # Fetch all channels and find auto_created ones in the specified groups
+        start = time.time()
         channels_to_update = []
         page = 1
 
@@ -1371,9 +1428,12 @@ async def clear_auto_created_flag(request: ClearAutoCreatedRequest):
                 "failed_channels": [],
             }
 
-        logger.info(f"Clearing auto_created flag from {len(channels_to_update)} channels in groups {group_ids}")
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[CHANNELS] Fetched channels for auto_created clearing in %.1fms", elapsed_ms)
+        logger.info("[CHANNELS] Clearing auto_created flag from %s channels in groups %s", len(channels_to_update), group_ids)
 
         # Update each channel via Dispatcharr API
+        start = time.time()
         updated_channels = []
         failed_channels = []
 
@@ -1385,10 +1445,13 @@ async def clear_auto_created_flag(request: ClearAutoCreatedRequest):
                     "auto_created_by": None,
                 })
                 updated_channels.append(channel)
-                logger.debug(f"Cleared auto_created flag from channel {channel_id} ({channel['name']})")
+                logger.debug("[CHANNELS] Cleared auto_created flag from channel %s (%s)", channel_id, channel['name'])
             except Exception as update_err:
                 failed_channels.append({**channel, "error": str(update_err)})
-                logger.error(f"Failed to clear auto_created flag from channel {channel_id}: {update_err}")
+                logger.error("[CHANNELS] Failed to clear auto_created flag from channel %s: %s", channel_id, update_err)
+
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[CHANNELS] Updated %s channels (cleared auto_created) in %.1fms", len(updated_channels), elapsed_ms)
 
         # Log to journal
         journal.log_entry(
@@ -1412,7 +1475,7 @@ async def clear_auto_created_flag(request: ClearAutoCreatedRequest):
             "failed_channels": failed_channels,
         }
     except Exception as e:
-        logger.error(f"Failed to clear auto_created flags: {e}")
+        logger.exception("[CHANNELS] Failed to clear auto_created flags: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1420,36 +1483,51 @@ async def clear_auto_created_flag(request: ClearAutoCreatedRequest):
 # Channel by ID routes — must come after all static routes
 # ---------------------------------------------------------------------------
 
-@router.get("/api/channels/{channel_id}")
+@router.get("/{channel_id}")
 async def get_channel(channel_id: int):
     """Get channel details by ID."""
+    logger.debug("[CHANNELS] GET /channels/%s", channel_id)
     client = get_client()
     try:
-        return await client.get_channel(channel_id)
+        start = time.time()
+        result = await client.get_channel(channel_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[CHANNELS] Fetched channel id=%s in %.1fms", channel_id, elapsed_ms)
+        return result
     except Exception as e:
+        logger.exception("[CHANNELS] Failed to fetch channel id=%s", channel_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/channels/{channel_id}/streams")
+@router.get("/{channel_id}/streams")
 async def get_channel_streams(channel_id: int):
     """Get streams assigned to a channel."""
+    logger.debug("[CHANNELS] GET /channels/%s/streams", channel_id)
     client = get_client()
     try:
-        return await client.get_channel_streams(channel_id)
+        start = time.time()
+        result = await client.get_channel_streams(channel_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[CHANNELS] Fetched streams for channel id=%s in %.1fms", channel_id, elapsed_ms)
+        return result
     except Exception as e:
+        logger.exception("[CHANNELS] Failed to fetch streams for channel id=%s", channel_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.patch("/api/channels/{channel_id}")
+@router.patch("/{channel_id}")
 async def update_channel(channel_id: int, data: dict):
     """Update a channel."""
-    logger.debug(f"PATCH /api/channels/{channel_id} - Updating channel with data: {data}")
+    logger.debug("[CHANNELS] PATCH /channels/%s - data=%s", channel_id, data)
     client = get_client()
     try:
         # Get before state for logging
+        start = time.time()
         before_channel = await client.get_channel(channel_id)
 
         result = await client.update_channel(channel_id, data)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[CHANNELS] Updated channel %s via API in %.1fms", channel_id, elapsed_ms)
 
         # Determine what changed for description and build before/after values
         changes = []
@@ -1487,7 +1565,7 @@ async def update_channel(channel_id: int, data: dict):
             after_value["logo_id"] = new_logo
 
         if changes:
-            logger.info(f"Updated channel {channel_id}: {', '.join(changes)}")
+            logger.info("[CHANNELS] Updated channel id=%s: %s", channel_id, ', '.join(changes))
             journal.log_entry(
                 category="channel",
                 action_type="update",
@@ -1498,26 +1576,29 @@ async def update_channel(channel_id: int, data: dict):
                 after_value=after_value,
             )
         else:
-            logger.debug(f"No changes detected for channel {channel_id}")
+            logger.debug("[CHANNELS] No changes detected for channel %s", channel_id)
 
         return result
     except Exception as e:
-        logger.exception(f"Failed to update channel {channel_id}: {e}")
+        logger.exception("[CHANNELS] Failed to update channel %s: %s", channel_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/api/channels/{channel_id}")
+@router.delete("/{channel_id}")
 async def delete_channel(channel_id: int):
     """Delete a channel."""
-    logger.debug(f"DELETE /api/channels/{channel_id} - Deleting channel")
+    logger.debug("[CHANNELS] DELETE /channels/%s", channel_id)
     client = get_client()
     try:
         # Get channel info before deleting for logging
+        start = time.time()
         channel = await client.get_channel(channel_id)
         channel_name = channel.get("name", "Unknown")
 
         await client.delete_channel(channel_id)
-        logger.info(f"Deleted channel {channel_id}: {channel_name}")
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[CHANNELS] Deleted channel %s via API in %.1fms", channel_id, elapsed_ms)
+        logger.info("[CHANNELS] Deleted channel id=%s name=%s", channel_id, channel_name)
 
         # Log to journal
         journal.log_entry(
@@ -1531,17 +1612,18 @@ async def delete_channel(channel_id: int):
 
         return {"success": True}
     except Exception as e:
-        logger.exception(f"Failed to delete channel {channel_id}: {e}")
+        logger.exception("[CHANNELS] Failed to delete channel %s: %s", channel_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/channels/{channel_id}/add-stream")
+@router.post("/{channel_id}/add-stream")
 async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
     """Add a stream to a channel."""
-    logger.debug(f"POST /api/channels/{channel_id}/add-stream - Adding stream {request.stream_id}")
+    logger.debug("[CHANNELS] POST /channels/%s/add-stream - stream_id=%s", channel_id, request.stream_id)
     client = get_client()
     try:
         # Get current channel
+        start = time.time()
         channel = await client.get_channel(channel_id)
         channel_name = channel.get("name", "Unknown")
         current_streams = channel.get("streams", [])
@@ -1551,7 +1633,9 @@ async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
             before_streams = list(current_streams)
             current_streams.append(request.stream_id)
             result = await client.update_channel(channel_id, {"streams": current_streams})
-            logger.info(f"Added stream {request.stream_id} to channel {channel_id} ({channel_name})")
+            elapsed_ms = (time.time() - start) * 1000
+            logger.debug("[CHANNELS] Added stream to channel %s via API in %.1fms", channel_id, elapsed_ms)
+            logger.info("[CHANNELS] Added stream %s to channel id=%s name=%s", request.stream_id, channel_id, channel_name)
 
             # Log to journal
             journal.log_entry(
@@ -1565,20 +1649,21 @@ async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
             )
 
             return result
-        logger.debug(f"Stream {request.stream_id} already in channel {channel_id}")
+        logger.debug("[CHANNELS] Stream %s already in channel %s", request.stream_id, channel_id)
         return channel
     except Exception as e:
-        logger.exception(f"Failed to add stream {request.stream_id} to channel {channel_id}: {e}")
+        logger.exception("[CHANNELS] Failed to add stream %s to channel %s: %s", request.stream_id, channel_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/channels/{channel_id}/remove-stream")
+@router.post("/{channel_id}/remove-stream")
 async def remove_stream_from_channel(channel_id: int, request: RemoveStreamRequest):
     """Remove a stream from a channel."""
-    logger.debug(f"POST /api/channels/{channel_id}/remove-stream - Removing stream {request.stream_id}")
+    logger.debug("[CHANNELS] POST /channels/%s/remove-stream - stream_id=%s", channel_id, request.stream_id)
     client = get_client()
     try:
         # Get current channel
+        start = time.time()
         channel = await client.get_channel(channel_id)
         channel_name = channel.get("name", "Unknown")
         current_streams = channel.get("streams", [])
@@ -1588,7 +1673,9 @@ async def remove_stream_from_channel(channel_id: int, request: RemoveStreamReque
             before_streams = list(current_streams)
             current_streams.remove(request.stream_id)
             result = await client.update_channel(channel_id, {"streams": current_streams})
-            logger.info(f"Removed stream {request.stream_id} from channel {channel_id} ({channel_name})")
+            elapsed_ms = (time.time() - start) * 1000
+            logger.debug("[CHANNELS] Removed stream from channel %s via API in %.1fms", channel_id, elapsed_ms)
+            logger.info("[CHANNELS] Removed stream %s from channel id=%s name=%s", request.stream_id, channel_id, channel_name)
 
             # Log to journal
             journal.log_entry(
@@ -1602,24 +1689,28 @@ async def remove_stream_from_channel(channel_id: int, request: RemoveStreamReque
             )
 
             return result
-        logger.debug(f"Stream {request.stream_id} not in channel {channel_id}")
+        logger.debug("[CHANNELS] Stream %s not in channel %s", request.stream_id, channel_id)
         return channel
     except Exception as e:
-        logger.exception(f"Failed to remove stream {request.stream_id} from channel {channel_id}: {e}")
+        logger.exception("[CHANNELS] Failed to remove stream %s from channel %s: %s", request.stream_id, channel_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/channels/{channel_id}/reorder-streams")
+@router.post("/{channel_id}/reorder-streams")
 async def reorder_channel_streams(channel_id: int, request: ReorderStreamsRequest):
     """Reorder streams within a channel."""
+    logger.debug("[CHANNELS] POST /channels/%s/reorder-streams - stream_ids=%s", channel_id, request.stream_ids)
     client = get_client()
     try:
         # Get before state
+        start = time.time()
         channel = await client.get_channel(channel_id)
         channel_name = channel.get("name", "Unknown")
         before_streams = channel.get("streams", [])
 
         result = await client.update_channel(channel_id, {"streams": request.stream_ids})
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[CHANNELS] Reordered streams for channel %s via API in %.1fms", channel_id, elapsed_ms)
 
         # Log to journal
         journal.log_entry(
@@ -1634,4 +1725,5 @@ async def reorder_channel_streams(channel_id: int, request: ReorderStreamsReques
 
         return result
     except Exception as e:
+        logger.exception("[CHANNELS] Failed to reorder streams for channel %s: %s", channel_id, e)
         raise HTTPException(status_code=500, detail=str(e))

@@ -5,6 +5,7 @@ Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 """
 import json
 import logging
+import time
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -116,6 +117,7 @@ class ReorderGroupsRequest(BaseModel):
 @router.get("/rules")
 async def get_all_normalization_rules():
     """Get all normalization rules organized by group."""
+    logger.debug("[NORMALIZE] GET /rules")
     try:
         from normalization_engine import get_normalization_engine
         session = get_session()
@@ -126,13 +128,14 @@ async def get_all_normalization_rules():
         finally:
             session.close()
     except Exception as e:
-        logger.error(f"Failed to get normalization rules: {e}")
+        logger.exception("[NORMALIZE] Failed to get normalization rules")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/groups")
 async def get_normalization_groups():
     """Get all normalization rule groups."""
+    logger.debug("[NORMALIZE] GET /groups")
     try:
         from models import NormalizationRuleGroup
         session = get_session()
@@ -144,13 +147,14 @@ async def get_normalization_groups():
         finally:
             session.close()
     except Exception as e:
-        logger.error(f"Failed to get normalization groups: {e}")
+        logger.exception("[NORMALIZE] Failed to get normalization groups")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/groups")
 async def create_normalization_group(request: CreateRuleGroupRequest):
     """Create a new normalization rule group."""
+    logger.debug("[NORMALIZE] POST /groups - name=%s", request.name)
     try:
         from models import NormalizationRuleGroup
         session = get_session()
@@ -165,17 +169,19 @@ async def create_normalization_group(request: CreateRuleGroupRequest):
             session.add(group)
             session.commit()
             session.refresh(group)
+            logger.info("[NORMALIZE] Created group id=%s name=%s", group.id, group.name)
             return group.to_dict()
         finally:
             session.close()
     except Exception as e:
-        logger.error(f"Failed to create normalization group: {e}")
+        logger.exception("[NORMALIZE] Failed to create normalization group")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/groups/{group_id}")
 async def get_normalization_group(group_id: int):
     """Get a normalization rule group by ID."""
+    logger.debug("[NORMALIZE] GET /groups/%s", group_id)
     try:
         from models import NormalizationRuleGroup, NormalizationRule
         session = get_session()
@@ -199,13 +205,14 @@ async def get_normalization_group(group_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get normalization group {group_id}: {e}")
+        logger.exception("[NORMALIZE] Failed to get normalization group %s", group_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.patch("/groups/{group_id}")
 async def update_normalization_group(group_id: int, request: UpdateRuleGroupRequest):
     """Update a normalization rule group."""
+    logger.debug("[NORMALIZE] PATCH /groups/%s", group_id)
     try:
         from models import NormalizationRuleGroup
         session = get_session()
@@ -227,19 +234,21 @@ async def update_normalization_group(group_id: int, request: UpdateRuleGroupRequ
 
             session.commit()
             session.refresh(group)
+            logger.info("[NORMALIZE] Updated group id=%s name=%s", group.id, group.name)
             return group.to_dict()
         finally:
             session.close()
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update normalization group {group_id}: {e}")
+        logger.exception("[NORMALIZE] Failed to update normalization group %s", group_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/groups/{group_id}")
 async def delete_normalization_group(group_id: int):
     """Delete a normalization rule group and all its rules."""
+    logger.debug("[NORMALIZE] DELETE /groups/%s", group_id)
     try:
         from models import NormalizationRuleGroup, NormalizationRule
         session = get_session()
@@ -258,19 +267,21 @@ async def delete_normalization_group(group_id: int):
             # Delete the group
             session.delete(group)
             session.commit()
+            logger.info("[NORMALIZE] Deleted group id=%s", group_id)
             return {"status": "deleted", "id": group_id}
         finally:
             session.close()
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to delete normalization group {group_id}: {e}")
+        logger.exception("[NORMALIZE] Failed to delete normalization group %s", group_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/groups/reorder")
 async def reorder_normalization_groups(request: ReorderGroupsRequest):
     """Reorder normalization rule groups."""
+    logger.debug("[NORMALIZE] POST /groups/reorder - count=%s", len(request.group_ids))
     try:
         from models import NormalizationRuleGroup
         session = get_session()
@@ -284,13 +295,14 @@ async def reorder_normalization_groups(request: ReorderGroupsRequest):
         finally:
             session.close()
     except Exception as e:
-        logger.error(f"Failed to reorder normalization groups: {e}")
+        logger.exception("[NORMALIZE] Failed to reorder normalization groups")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/rules/{rule_id}")
 async def get_normalization_rule(rule_id: int):
     """Get a normalization rule by ID."""
+    logger.debug("[NORMALIZE] GET /rules/%s", rule_id)
     try:
         from models import NormalizationRule
         session = get_session()
@@ -306,13 +318,14 @@ async def get_normalization_rule(rule_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get normalization rule {rule_id}: {e}")
+        logger.exception("[NORMALIZE] Failed to get normalization rule %s", rule_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/rules")
 async def create_normalization_rule(request: CreateRuleRequest):
     """Create a new normalization rule."""
+    logger.debug("[NORMALIZE] POST /rules - name=%s group_id=%s", request.name, request.group_id)
     try:
         from models import NormalizationRule, NormalizationRuleGroup
         session = get_session()
@@ -350,19 +363,21 @@ async def create_normalization_rule(request: CreateRuleRequest):
             session.add(rule)
             session.commit()
             session.refresh(rule)
+            logger.info("[NORMALIZE] Created rule id=%s name=%s", rule.id, rule.name)
             return rule.to_dict()
         finally:
             session.close()
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to create normalization rule: {e}")
+        logger.exception("[NORMALIZE] Failed to create normalization rule")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.patch("/rules/{rule_id}")
 async def update_normalization_rule(rule_id: int, request: UpdateRuleRequest):
     """Update a normalization rule."""
+    logger.debug("[NORMALIZE] PATCH /rules/%s", rule_id)
     try:
         from models import NormalizationRule
         session = get_session()
@@ -408,19 +423,21 @@ async def update_normalization_rule(rule_id: int, request: UpdateRuleRequest):
 
             session.commit()
             session.refresh(rule)
+            logger.info("[NORMALIZE] Updated rule id=%s name=%s", rule.id, rule.name)
             return rule.to_dict()
         finally:
             session.close()
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update normalization rule {rule_id}: {e}")
+        logger.exception("[NORMALIZE] Failed to update normalization rule %s", rule_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/rules/{rule_id}")
 async def delete_normalization_rule(rule_id: int):
     """Delete a normalization rule."""
+    logger.debug("[NORMALIZE] DELETE /rules/%s", rule_id)
     try:
         from models import NormalizationRule
         session = get_session()
@@ -433,19 +450,21 @@ async def delete_normalization_rule(rule_id: int):
 
             session.delete(rule)
             session.commit()
+            logger.info("[NORMALIZE] Deleted rule id=%s", rule_id)
             return {"status": "deleted", "id": rule_id}
         finally:
             session.close()
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to delete normalization rule {rule_id}: {e}")
+        logger.exception("[NORMALIZE] Failed to delete normalization rule %s", rule_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/groups/{group_id}/rules/reorder")
 async def reorder_normalization_rules(group_id: int, request: ReorderRulesRequest):
     """Reorder normalization rules within a group."""
+    logger.debug("[NORMALIZE] POST /groups/%s/rules/reorder - count=%s", group_id, len(request.rule_ids))
     try:
         from models import NormalizationRule
         session = get_session()
@@ -460,13 +479,14 @@ async def reorder_normalization_rules(group_id: int, request: ReorderRulesReques
         finally:
             session.close()
     except Exception as e:
-        logger.error(f"Failed to reorder rules in group {group_id}: {e}")
+        logger.exception("[NORMALIZE] Failed to reorder rules in group %s", group_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/test")
 async def test_normalization_rule(request: TestRuleRequest):
     """Test a rule configuration against sample text without saving."""
+    logger.debug("[NORMALIZE] POST /test - action_type=%s condition_type=%s", request.action_type, request.condition_type)
     try:
         from normalization_engine import get_normalization_engine
         session = get_session()
@@ -490,13 +510,14 @@ async def test_normalization_rule(request: TestRuleRequest):
         finally:
             session.close()
     except Exception as e:
-        logger.error(f"Failed to test normalization rule: {e}")
+        logger.exception("[NORMALIZE] Failed to test normalization rule")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/test-batch")
 async def test_normalization_batch(request: TestRulesBatchRequest):
     """Test all enabled rules against multiple sample texts."""
+    logger.debug("[NORMALIZE] POST /test-batch - count=%s", len(request.texts))
     try:
         from normalization_engine import get_normalization_engine
         session = get_session()
@@ -520,13 +541,14 @@ async def test_normalization_batch(request: TestRulesBatchRequest):
         finally:
             session.close()
     except Exception as e:
-        logger.error(f"Failed to test normalization batch: {e}")
+        logger.exception("[NORMALIZE] Failed to test normalization batch")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/normalize")
 async def normalize_text(request: TestRulesBatchRequest):
     """Normalize one or more texts using all enabled rules."""
+    logger.debug("[NORMALIZE] POST /normalize - count=%s", len(request.texts))
     try:
         from normalization_engine import get_normalization_engine
         session = get_session()
@@ -542,7 +564,7 @@ async def normalize_text(request: TestRulesBatchRequest):
         finally:
             session.close()
     except Exception as e:
-        logger.error(f"Failed to normalize texts: {e}")
+        logger.exception("[NORMALIZE] Failed to normalize texts")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -560,6 +582,7 @@ async def get_normalization_rule_stats(limit: int = 500):
         Dict with rule_stats (list of {rule_id, rule_name, group_name, match_count})
         and metadata (total_streams_tested, total_rules)
     """
+    logger.debug("[NORMALIZE] GET /rule-stats - limit=%s", limit)
     try:
         from models import NormalizationRule, NormalizationRuleGroup
         from normalization_engine import get_normalization_engine
@@ -569,7 +592,10 @@ async def get_normalization_rule_stats(limit: int = 500):
 
         # Fetch streams from Dispatcharr
         client = get_client()
+        start = time.time()
         streams_result = await client.get_streams(page=1, page_size=limit)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[NORMALIZE] get_streams completed in %.1fms", elapsed_ms)
         streams = streams_result.get("results", [])
         stream_names = [s.get("name", "") for s in streams if s.get("name")]
 
@@ -621,13 +647,14 @@ async def get_normalization_rule_stats(limit: int = 500):
         finally:
             session.close()
     except Exception as e:
-        logger.error(f"Failed to get rule stats: {e}")
+        logger.exception("[NORMALIZE] Failed to get rule stats")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/migration/status")
 async def get_normalization_migration_status():
     """Get the status of the normalization rules migration."""
+    logger.debug("[NORMALIZE] GET /migration/status")
     try:
         from normalization_migration import get_migration_status
         session = get_session()
@@ -637,7 +664,7 @@ async def get_normalization_migration_status():
         finally:
             session.close()
     except Exception as e:
-        logger.error(f"Failed to get migration status: {e}")
+        logger.exception("[NORMALIZE] Failed to get migration status")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -652,6 +679,7 @@ async def run_normalization_migration(force: bool = False, migrate_settings: boo
         force: If True, recreate rules even if they already exist
         migrate_settings: If True, also migrate user's custom_normalization_tags
     """
+    logger.debug("[NORMALIZE] POST /migration/run - force=%s migrate_settings=%s", force, migrate_settings)
     try:
         from normalization_migration import create_demo_rules
 
@@ -673,5 +701,5 @@ async def run_normalization_migration(force: bool = False, migrate_settings: boo
         finally:
             session.close()
     except Exception as e:
-        logger.error(f"Failed to create demo rules: {e}")
+        logger.exception("[NORMALIZE] Failed to create demo rules")
         raise HTTPException(status_code=500, detail=str(e))

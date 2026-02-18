@@ -6,6 +6,7 @@ Extracted from main.py (Phase 3 of v0.13.0 backend refactor).
 import asyncio
 import logging
 import subprocess
+import time
 
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -49,6 +50,7 @@ async def stream_preview(stream_id: int):
 
     Returns MPEG-TS stream suitable for mpegts.js playback.
     """
+    logger.debug("[PREVIEW] GET /api/stream-preview/%s", stream_id)
     settings = get_settings()
     mode = settings.stream_preview_mode
 
@@ -58,17 +60,20 @@ async def stream_preview(stream_id: int):
         raise HTTPException(status_code=503, detail="Not connected to Dispatcharr")
 
     try:
+        start = time.time()
         stream = await client.get_stream(stream_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[PREVIEW] get_stream %s completed in %.1fms", stream_id, elapsed_ms)
         if not stream or not stream.get("url"):
             raise HTTPException(status_code=404, detail="Stream not found or has no URL")
         stream_url = stream["url"]
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get stream {stream_id}: {e}")
+        logger.exception("[PREVIEW] Failed to get stream %s", stream_id)
         raise HTTPException(status_code=500, detail=f"Failed to get stream: {str(e)}")
 
-    logger.info(f"Stream preview requested for stream {stream_id}, mode: {mode}")
+    logger.info("[PREVIEW] Stream preview requested for stream %s, mode: %s", stream_id, mode)
 
     if mode == "passthrough":
         # Direct proxy - just fetch and forward
@@ -132,7 +137,7 @@ async def stream_preview(stream_id: int):
                 detail="FFmpeg not found. Please install FFmpeg for transcoding support."
             )
         except Exception as e:
-            logger.error(f"FFmpeg transcode error: {e}")
+            logger.exception("[PREVIEW] FFmpeg transcode error for stream %s", stream_id)
             raise HTTPException(status_code=500, detail=f"Transcoding failed: {str(e)}")
 
     elif mode == "video_only":
@@ -175,7 +180,7 @@ async def stream_preview(stream_id: int):
                 detail="FFmpeg not found. Please install FFmpeg for video-only preview."
             )
         except Exception as e:
-            logger.error(f"FFmpeg video-only error: {e}")
+            logger.exception("[PREVIEW] FFmpeg video-only error for stream %s", stream_id)
             raise HTTPException(status_code=500, detail=f"Video extraction failed: {str(e)}")
 
     else:
@@ -197,6 +202,7 @@ async def channel_preview(channel_id: int):
 
     Returns MPEG-TS stream suitable for mpegts.js playback.
     """
+    logger.debug("[PREVIEW] GET /api/channel-preview/%s", channel_id)
     settings = get_settings()
     mode = settings.stream_preview_mode
 
@@ -206,7 +212,10 @@ async def channel_preview(channel_id: int):
         raise HTTPException(status_code=503, detail="Not connected to Dispatcharr")
 
     try:
+        start = time.time()
         channel = await client.get_channel(channel_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[PREVIEW] get_channel %s completed in %.1fms", channel_id, elapsed_ms)
         if not channel:
             raise HTTPException(status_code=404, detail="Channel not found")
 
@@ -222,15 +231,15 @@ async def channel_preview(channel_id: int):
         await client._ensure_authenticated()
         auth_headers = {"Authorization": f"Bearer {client.access_token}"}
 
-        logger.info(f"Channel preview: proxying Dispatcharr stream for channel {channel_id} (uuid={channel_uuid})")
+        logger.info("[PREVIEW] Channel preview: proxying Dispatcharr stream for channel %s (uuid=%s)", channel_id, channel_uuid)
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get channel {channel_id}: {e}")
+        logger.exception("[PREVIEW] Failed to get channel %s", channel_id)
         raise HTTPException(status_code=500, detail=f"Failed to get channel: {str(e)}")
 
-    logger.info(f"Channel preview requested for channel {channel_id}, mode: {mode}")
+    logger.info("[PREVIEW] Channel preview requested for channel %s, mode: %s", channel_id, mode)
 
     if mode == "passthrough":
         # Direct proxy with JWT auth - just fetch and forward
@@ -238,7 +247,7 @@ async def channel_preview(channel_id: int):
             async with httpx.AsyncClient(timeout=None, follow_redirects=True) as http_client:
                 async with http_client.stream("GET", channel_url, headers=auth_headers) as response:
                     if response.status_code != 200:
-                        logger.error(f"Dispatcharr proxy returned {response.status_code}")
+                        logger.error("[PREVIEW] Dispatcharr proxy returned %s", response.status_code)
                         return
                     async for chunk in response.aiter_bytes(chunk_size=65536):
                         yield chunk
@@ -297,7 +306,7 @@ async def channel_preview(channel_id: int):
                 detail="FFmpeg not found. Please install FFmpeg for transcoding support."
             )
         except Exception as e:
-            logger.error(f"FFmpeg transcode error: {e}")
+            logger.exception("[PREVIEW] FFmpeg transcode error for channel %s", channel_id)
             raise HTTPException(status_code=500, detail=f"Transcoding failed: {str(e)}")
 
     elif mode == "video_only":
@@ -342,7 +351,7 @@ async def channel_preview(channel_id: int):
                 detail="FFmpeg not found. Please install FFmpeg for video-only preview."
             )
         except Exception as e:
-            logger.error(f"FFmpeg video-only error: {e}")
+            logger.exception("[PREVIEW] FFmpeg video-only error for channel %s", channel_id)
             raise HTTPException(status_code=500, detail=f"Video extraction failed: {str(e)}")
 
     else:

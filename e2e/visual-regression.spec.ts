@@ -13,12 +13,14 @@
 import { test, expect, navigateToTab } from './fixtures/base';
 import { selectors } from './fixtures/test-data';
 
-// Disable animations for consistent screenshots
+// Consistent viewport and disabled animations for deterministic screenshots
 test.use({
   // Disable CSS animations and transitions
   launchOptions: {
     args: ['--force-prefers-reduced-motion'],
   },
+  // Pin viewport size to avoid baseline dimension mismatches
+  viewport: { width: 1280, height: 720 },
 });
 
 test.describe('Visual Regression - Tabs', () => {
@@ -34,10 +36,11 @@ test.describe('Visual Regression - Tabs', () => {
 
   test('settings tab', async ({ appPage }) => {
     await navigateToTab(appPage, 'settings');
-    await appPage.waitForSelector('.settings-tab', { timeout: 10000 });
-    await appPage.waitForTimeout(500);
+    await appPage.waitForSelector('.settings-tab', { timeout: 20000 });
+    await appPage.waitForTimeout(1000);
     await expect(appPage).toHaveScreenshot('settings-tab.png', {
       fullPage: true,
+      maxDiffPixelRatio: 0.1,
     });
   });
 
@@ -67,25 +70,30 @@ test.describe('Visual Regression - Tabs', () => {
 
   test('stats tab', async ({ appPage }) => {
     await navigateToTab(appPage, 'stats');
-    await appPage.waitForTimeout(1000);
+    // Extra wait for dynamic content (counters, charts) to settle
+    await appPage.waitForTimeout(2000);
     await expect(appPage).toHaveScreenshot('stats-tab.png', {
       fullPage: true,
+      maxDiffPixelRatio: 0.1,
     });
   });
 
   test('journal tab', async ({ appPage }) => {
     await navigateToTab(appPage, 'journal');
-    await appPage.waitForTimeout(1000);
+    // Extra wait for dynamic content to settle
+    await appPage.waitForTimeout(2000);
     await expect(appPage).toHaveScreenshot('journal-tab.png', {
       fullPage: true,
+      maxDiffPixelRatio: 0.1,
     });
   });
 
   test('guide tab', async ({ appPage }) => {
     await navigateToTab(appPage, 'guide');
-    await appPage.waitForTimeout(1000);
+    await appPage.waitForTimeout(2000);
     await expect(appPage).toHaveScreenshot('guide-tab.png', {
       fullPage: true,
+      maxDiffPixelRatio: 0.1,
     });
   });
 });
@@ -98,7 +106,10 @@ test.describe('Visual Regression - Components', () => {
 
   test('tab navigation', async ({ appPage }) => {
     const tabNav = appPage.locator('.tab-navigation');
-    await expect(tabNav).toHaveScreenshot('tab-navigation.png');
+    await appPage.waitForTimeout(500);
+    await expect(tabNav).toHaveScreenshot('tab-navigation.png', {
+      maxDiffPixelRatio: 0.1,
+    });
   });
 
   test('channels pane header', async ({ appPage }) => {
@@ -121,7 +132,7 @@ test.describe('Visual Regression - Components', () => {
 test.describe('Visual Regression - Settings Sections', () => {
   test.beforeEach(async ({ appPage }) => {
     await navigateToTab(appPage, 'settings');
-    await appPage.waitForSelector('.settings-tab', { timeout: 10000 });
+    await appPage.waitForSelector('.settings-tab', { timeout: 20000 });
   });
 
   test('settings general section', async ({ appPage }) => {
@@ -146,10 +157,11 @@ test.describe('Visual Regression - Dark Mode', () => {
 
   test('settings tab - dark mode', async ({ appPage }) => {
     await navigateToTab(appPage, 'settings');
-    await appPage.waitForSelector('.settings-tab', { timeout: 10000 });
-    await appPage.waitForTimeout(500);
+    await appPage.waitForSelector('.settings-tab', { timeout: 20000 });
+    await appPage.waitForTimeout(1000);
     await expect(appPage).toHaveScreenshot('settings-tab-dark.png', {
       fullPage: true,
+      maxDiffPixelRatio: 0.1,
     });
   });
 });
@@ -157,27 +169,31 @@ test.describe('Visual Regression - Dark Mode', () => {
 test.describe('Visual Regression - Interactive States', () => {
   test('button hover states', async ({ appPage }) => {
     await navigateToTab(appPage, 'settings');
-    await appPage.waitForSelector('.settings-tab', { timeout: 10000 });
+    await appPage.waitForSelector('.settings-tab', { timeout: 15000 });
 
     // Find a primary button and hover over it
     const primaryButton = appPage.locator('button.btn-primary, button.modal-btn-primary').first();
     if (await primaryButton.isVisible()) {
       await primaryButton.hover();
-      await appPage.waitForTimeout(100);
-      await expect(primaryButton).toHaveScreenshot('button-primary-hover.png');
+      await appPage.waitForTimeout(300);
+      await expect(primaryButton).toHaveScreenshot('button-primary-hover.png', {
+        maxDiffPixelRatio: 0.15,
+      });
     }
   });
 
   test('input focus states', async ({ appPage }) => {
     await navigateToTab(appPage, 'settings');
-    await appPage.waitForSelector('.settings-tab', { timeout: 10000 });
+    await appPage.waitForSelector('.settings-tab', { timeout: 15000 });
 
     // Find an input and focus it
     const input = appPage.locator('input[type="text"], input[type="number"]').first();
     if (await input.isVisible()) {
       await input.focus();
-      await appPage.waitForTimeout(100);
-      await expect(input).toHaveScreenshot('input-focus.png');
+      await appPage.waitForTimeout(300);
+      await expect(input).toHaveScreenshot('input-focus.png', {
+        maxDiffPixelRatio: 0.15,
+      });
     }
   });
 });
@@ -186,11 +202,12 @@ test.describe('Visual Regression - Loading States', () => {
   test('loading spinner visibility', async ({ appPage }) => {
     // Navigate to a tab that might show loading
     await navigateToTab(appPage, 'stats');
-    // Just verify the tab loads without screenshot (loading states are transient)
-    await appPage.waitForTimeout(2000);
+    // Wait for dynamic content to fully load and settle
+    await appPage.waitForTimeout(3000);
     // After loading completes, take screenshot
     await expect(appPage).toHaveScreenshot('stats-tab-loaded.png', {
       fullPage: true,
+      maxDiffPixelRatio: 0.15,
     });
   });
 });

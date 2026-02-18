@@ -11,24 +11,27 @@ test.describe('M3U Changes Tab', () => {
   });
 
   test('m3u changes tab is accessible', async ({ appPage }) => {
+    // Wait for content to confirm navigation completed
+    const content = appPage.locator('.m3u-changes-tab');
+    await content.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
     const changesTab = appPage.locator('[data-tab="m3u-changes"]');
-    await expect(changesTab).toHaveClass(/active/);
+    await expect(changesTab).toHaveClass(/active/, { timeout: 10000 });
   });
 
   test('m3u changes content is visible', async ({ appPage }) => {
     // Look for the main container
     const changesContent = appPage.locator('.m3u-changes-tab');
-    await expect(changesContent).toBeVisible();
+    await expect(changesContent).toBeVisible({ timeout: 15000 });
   });
 
   test('displays header with title', async ({ appPage }) => {
     const header = appPage.locator('.changes-header h2');
-    await expect(header).toContainText('M3U Changes');
+    await expect(header).toContainText('M3U Changes', { timeout: 10000 });
   });
 
   test('displays refresh button', async ({ appPage }) => {
     const refreshButton = appPage.locator('.header-actions button:has-text("Refresh")');
-    await expect(refreshButton).toBeVisible();
+    await expect(refreshButton).toBeVisible({ timeout: 10000 });
   });
 });
 
@@ -39,17 +42,18 @@ test.describe('M3U Changes Filters', () => {
 
   test('filter bar is visible', async ({ appPage }) => {
     const filtersBar = appPage.locator('.filters-bar');
-    await expect(filtersBar).toBeVisible();
+    await expect(filtersBar).toBeVisible({ timeout: 10000 });
   });
 
   test('time range filter exists', async ({ appPage }) => {
     // Look for the time range filter (should show options like "Last 7 days")
     const timeFilter = appPage.locator('.filter-select').first();
-    await expect(timeFilter).toBeVisible();
+    await expect(timeFilter).toBeVisible({ timeout: 10000 });
   });
 
   test('account filter dropdown exists', async ({ appPage }) => {
     // There should be multiple filter selects
+    await appPage.waitForTimeout(1000);
     const filterSelects = appPage.locator('.filter-select');
     const count = await filterSelects.count();
     expect(count).toBeGreaterThanOrEqual(2);
@@ -109,12 +113,23 @@ test.describe('M3U Changes List', () => {
   });
 
   test('changes list or empty state is displayed', async ({ appPage }) => {
-    // Wait for loading to complete
-    await appPage.waitForTimeout(500);
+    // Verify the M3U Changes tab content is visible first
+    const tabContent = appPage.locator('.m3u-changes-tab');
+    await tabContent.waitFor({ state: 'visible', timeout: 15000 });
+
+    // Wait for data to load - the page fetches changes asynchronously
+    await appPage.waitForTimeout(3000);
 
     // Either changes list or empty state should be visible
     const changesList = appPage.locator('.changes-list');
     const emptyState = appPage.locator('.empty-state');
+    const loadingIndicator = appPage.locator('.loading, :has-text("Loading")');
+
+    // Wait for loading to finish if it's still loading
+    const isLoading = await loadingIndicator.isVisible().catch(() => false);
+    if (isLoading) {
+      await appPage.waitForTimeout(5000);
+    }
 
     const hasChanges = await changesList.isVisible().catch(() => false);
     const hasEmptyState = await emptyState.isVisible().catch(() => false);
@@ -270,7 +285,7 @@ test.describe('M3U Changes Refresh', () => {
 
   test('refresh button works', async ({ appPage }) => {
     const refreshButton = appPage.locator('.header-actions button:has-text("Refresh")');
-    await expect(refreshButton).toBeVisible();
+    await expect(refreshButton).toBeVisible({ timeout: 10000 });
 
     // Click refresh
     await refreshButton.click();

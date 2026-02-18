@@ -35,10 +35,10 @@ def init_db() -> None:
     try:
         # Ensure config directory exists
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        logger.debug(f"Config directory ensured: {CONFIG_DIR}")
+        logger.debug("[DATABASE] Config directory ensured: %s", CONFIG_DIR)
 
         database_url = get_database_url()
-        logger.info(f"Initializing journal database at {JOURNAL_DB_FILE}")
+        logger.info("[DATABASE] Initializing journal database at %s", JOURNAL_DB_FILE)
 
         # Create engine with SQLite-specific settings
         _engine = create_engine(
@@ -47,7 +47,7 @@ def init_db() -> None:
             poolclass=StaticPool,
             echo=False,  # Set to True for SQL debugging
         )
-        logger.debug("Database engine created")
+        logger.debug("[DATABASE] Database engine created")
 
         # Create session factory
         _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
@@ -57,7 +57,7 @@ def init_db() -> None:
 
         # Create all tables
         Base.metadata.create_all(bind=_engine)
-        logger.debug("Database tables created/verified")
+        logger.debug("[DATABASE] Database tables created/verified")
 
         # Run migrations for existing tables (add new columns if missing)
         _run_migrations(_engine)
@@ -68,9 +68,9 @@ def init_db() -> None:
         # Perform maintenance: purge old entries and vacuum
         _perform_maintenance(_engine)
 
-        logger.info("Journal database initialized successfully")
+        logger.info("[DATABASE] Journal database initialized successfully")
     except Exception as e:
-        logger.exception(f"Failed to initialize database: {e}")
+        logger.exception("[DATABASE] Failed to initialize database: %s", e)
         raise
 
 
@@ -78,7 +78,7 @@ def _run_migrations(engine) -> None:
     """Run database migrations to add new columns to existing tables."""
     from sqlalchemy import text
 
-    logger.debug("Checking for database migrations")
+    logger.debug("[DATABASE] Checking for database migrations")
     try:
         with engine.connect() as conn:
             # Check if total_watch_seconds column exists in channel_watch_stats
@@ -86,33 +86,33 @@ def _run_migrations(engine) -> None:
             columns = [row[1] for row in result.fetchall()]
 
             if "total_watch_seconds" not in columns:
-                logger.info("Adding total_watch_seconds column to channel_watch_stats")
+                logger.info("[DATABASE] Adding total_watch_seconds column to channel_watch_stats")
                 conn.execute(text(
                     "ALTER TABLE channel_watch_stats ADD COLUMN total_watch_seconds INTEGER DEFAULT 0 NOT NULL"
                 ))
                 conn.commit()
-                logger.info("Migration complete: added total_watch_seconds column")
+                logger.info("[DATABASE] Migration complete: added total_watch_seconds column")
 
             # Check if video_bitrate column exists in stream_stats
             result = conn.execute(text("PRAGMA table_info(stream_stats)"))
             columns = [row[1] for row in result.fetchall()]
 
             if "video_bitrate" not in columns:
-                logger.info("Adding video_bitrate column to stream_stats")
+                logger.info("[DATABASE] Adding video_bitrate column to stream_stats")
                 conn.execute(text(
                     "ALTER TABLE stream_stats ADD COLUMN video_bitrate BIGINT"
                 ))
                 conn.commit()
-                logger.info("Migration complete: added video_bitrate column")
+                logger.info("[DATABASE] Migration complete: added video_bitrate column")
 
             # Check if dismissed_at column exists in stream_stats (v0.8.4-0059)
             if "dismissed_at" not in columns:
-                logger.info("Adding dismissed_at column to stream_stats")
+                logger.info("[DATABASE] Adding dismissed_at column to stream_stats")
                 conn.execute(text(
                     "ALTER TABLE stream_stats ADD COLUMN dismissed_at DATETIME"
                 ))
                 conn.commit()
-                logger.info("Migration complete: added dismissed_at column")
+                logger.info("[DATABASE] Migration complete: added dismissed_at column")
 
             # Migrate existing schedules from scheduled_tasks to task_schedules
             _migrate_task_schedules(conn)
@@ -193,9 +193,9 @@ def _run_migrations(engine) -> None:
             # Add streams_excluded column to auto_creation_executions (v0.12.5 - Global exclusion filters)
             _add_auto_creation_executions_streams_excluded_column(conn)
 
-            logger.debug("All migrations complete - schema is up to date")
+            logger.debug("[DATABASE] All migrations complete - schema is up to date")
     except Exception as e:
-        logger.exception(f"Migration failed: {e}")
+        logger.exception("[DATABASE] Migration failed: %s", e)
         raise
 
 
@@ -211,16 +211,16 @@ def _create_demo_normalization_rules() -> None:
             from normalization_migration import create_demo_rules
             result = create_demo_rules(db, force=False)
             if result.get("skipped"):
-                logger.debug("Demo normalization rules already exist, skipping creation")
+                logger.debug("[DATABASE] Demo normalization rules already exist, skipping creation")
             else:
                 groups = result.get("groups_created", 0)
                 rules = result.get("rules_created", 0)
                 if groups > 0:
-                    logger.info(f"Created {groups} demo normalization rule groups with {rules} rules")
+                    logger.info("[DATABASE] Created %s demo normalization rule groups with %s rules", groups, rules)
         finally:
             db.close()
     except Exception as e:
-        logger.warning(f"Could not create demo normalization rules: {e}")
+        logger.warning("[DATABASE] Could not create demo normalization rules: %s", e)
         # Non-fatal - don't block startup
 
 
@@ -233,14 +233,14 @@ def _migrate_task_schedules(conn) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='task_schedules'"
     ))
     if not result.fetchone():
-        logger.debug("task_schedules table doesn't exist yet, skipping migration")
+        logger.debug("[DATABASE] task_schedules table doesn't exist yet, skipping migration")
         return
 
     # Check if we've already migrated (table has data)
     result = conn.execute(text("SELECT COUNT(*) FROM task_schedules"))
     count = result.fetchone()[0]
     if count > 0:
-        logger.debug(f"task_schedules already has {count} entries, skipping migration")
+        logger.debug("[DATABASE] task_schedules already has %s entries, skipping migration", count)
         return
 
     # Get all scheduled_tasks with non-manual schedules that need migration
@@ -253,10 +253,10 @@ def _migrate_task_schedules(conn) -> None:
     tasks_to_migrate = result.fetchall()
 
     if not tasks_to_migrate:
-        logger.debug("No scheduled tasks need migration to task_schedules")
+        logger.debug("[DATABASE] No scheduled tasks need migration to task_schedules")
         return
 
-    logger.info(f"Migrating {len(tasks_to_migrate)} task schedules to new format")
+    logger.info("[DATABASE] Migrating %s task schedules to new format", len(tasks_to_migrate))
 
     for task in tasks_to_migrate:
         task_id = task[0]
@@ -279,7 +279,7 @@ def _migrate_task_schedules(conn) -> None:
                 "interval_seconds": interval_seconds,
                 "timezone": timezone or "UTC"
             })
-            logger.info(f"Migrated {task_id} interval schedule: every {interval_seconds}s")
+            logger.info("[DATABASE] Migrated %s interval schedule: every %ss", task_id, interval_seconds)
 
         elif schedule_type == "cron":
             # Convert cron to appropriate type based on expression
@@ -296,7 +296,7 @@ def _migrate_task_schedules(conn) -> None:
                     "task_id": task_id,
                     **new_schedule
                 })
-                logger.info(f"Migrated {task_id} cron schedule to {new_schedule['schedule_type']}")
+                logger.info("[DATABASE] Migrated %s cron schedule to %s", task_id, new_schedule['schedule_type'])
             else:
                 # Fallback to daily if cron can't be converted
                 time_str = schedule_time or "03:00"
@@ -311,10 +311,10 @@ def _migrate_task_schedules(conn) -> None:
                     "schedule_time": time_str,
                     "timezone": timezone or "UTC"
                 })
-                logger.info(f"Migrated {task_id} cron to daily at {time_str} (cron conversion fallback)")
+                logger.info("[DATABASE] Migrated %s cron to daily at %s (cron conversion fallback)", task_id, time_str)
 
     conn.commit()
-    logger.info("Task schedule migration complete")
+    logger.info("[DATABASE] Task schedule migration complete")
 
 
 def _convert_cron_to_schedule(cron_expr: str, timezone: str) -> dict:
@@ -430,10 +430,10 @@ def _ensure_alert_methods_table(conn) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='alert_methods'"
     ))
     if result.fetchone():
-        logger.debug("alert_methods table already exists")
+        logger.debug("[DATABASE] alert_methods table already exists")
         return
 
-    logger.info("Creating alert_methods table (database predates v0.8.2)")
+    logger.info("[DATABASE] Creating alert_methods table (database predates v0.8.2)")
     conn.execute(text("""
         CREATE TABLE alert_methods (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -453,7 +453,7 @@ def _ensure_alert_methods_table(conn) -> None:
     conn.execute(text("CREATE INDEX idx_alert_method_type ON alert_methods (method_type)"))
     conn.execute(text("CREATE INDEX idx_alert_method_enabled ON alert_methods (enabled)"))
     conn.commit()
-    logger.info("Created alert_methods table successfully")
+    logger.info("[DATABASE] Created alert_methods table successfully")
 
 
 def _add_alert_sources_column(conn) -> None:
@@ -465,15 +465,15 @@ def _add_alert_sources_column(conn) -> None:
     columns = [row[1] for row in result.fetchall()]
 
     if "alert_sources" in columns:
-        logger.debug("alert_sources column already exists in alert_methods")
+        logger.debug("[DATABASE] alert_sources column already exists in alert_methods")
         return
 
-    logger.info("Adding alert_sources column to alert_methods table")
+    logger.info("[DATABASE] Adding alert_sources column to alert_methods table")
     conn.execute(text(
         "ALTER TABLE alert_methods ADD COLUMN alert_sources TEXT"
     ))
     conn.commit()
-    logger.info("Migration complete: added alert_sources column to alert_methods")
+    logger.info("[DATABASE] Migration complete: added alert_sources column to alert_methods")
 
 
 def _remove_min_interval_seconds_column(conn) -> None:
@@ -490,10 +490,10 @@ def _remove_min_interval_seconds_column(conn) -> None:
     columns = {row[1]: row for row in result.fetchall()}
 
     if "min_interval_seconds" not in columns:
-        logger.debug("min_interval_seconds column already removed from alert_methods")
+        logger.debug("[DATABASE] min_interval_seconds column already removed from alert_methods")
         return
 
-    logger.info("Removing min_interval_seconds column from alert_methods table")
+    logger.info("[DATABASE] Removing min_interval_seconds column from alert_methods table")
 
     # SQLite table recreation to drop the column
     # 1. Create new table without the column
@@ -539,7 +539,7 @@ def _remove_min_interval_seconds_column(conn) -> None:
     conn.execute(text("CREATE INDEX idx_alert_method_enabled ON alert_methods (enabled)"))
 
     conn.commit()
-    logger.info("Migration complete: removed min_interval_seconds column from alert_methods")
+    logger.info("[DATABASE] Migration complete: removed min_interval_seconds column from alert_methods")
 
 
 def _add_task_schedule_parameters_column(conn) -> None:
@@ -551,7 +551,7 @@ def _add_task_schedule_parameters_column(conn) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='task_schedules'"
     ))
     if not result.fetchone():
-        logger.debug("task_schedules table doesn't exist yet, skipping migration")
+        logger.debug("[DATABASE] task_schedules table doesn't exist yet, skipping migration")
         return
 
     # Check which columns already exist
@@ -560,21 +560,21 @@ def _add_task_schedule_parameters_column(conn) -> None:
 
     # Add parameters column if missing
     if "parameters" not in columns:
-        logger.info("Adding parameters column to task_schedules table")
+        logger.info("[DATABASE] Adding parameters column to task_schedules table")
         conn.execute(text(
             "ALTER TABLE task_schedules ADD COLUMN parameters TEXT"
         ))
         conn.commit()
-        logger.info("Migration complete: added parameters column to task_schedules")
+        logger.info("[DATABASE] Migration complete: added parameters column to task_schedules")
 
     # Add last_run_at column if missing
     if "last_run_at" not in columns:
-        logger.info("Adding last_run_at column to task_schedules table")
+        logger.info("[DATABASE] Adding last_run_at column to task_schedules table")
         conn.execute(text(
             "ALTER TABLE task_schedules ADD COLUMN last_run_at DATETIME"
         ))
         conn.commit()
-        logger.info("Migration complete: added last_run_at column to task_schedules")
+        logger.info("[DATABASE] Migration complete: added last_run_at column to task_schedules")
 
 
 def _add_compound_conditions_columns(conn) -> None:
@@ -586,7 +586,7 @@ def _add_compound_conditions_columns(conn) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='normalization_rules'"
     ))
     if not result.fetchone():
-        logger.debug("normalization_rules table doesn't exist yet, skipping migration")
+        logger.debug("[DATABASE] normalization_rules table doesn't exist yet, skipping migration")
         return
 
     # Get current columns
@@ -595,21 +595,21 @@ def _add_compound_conditions_columns(conn) -> None:
 
     # Add conditions column if missing (JSON array of condition objects)
     if "conditions" not in columns:
-        logger.info("Adding conditions column to normalization_rules table")
+        logger.info("[DATABASE] Adding conditions column to normalization_rules table")
         conn.execute(text(
             "ALTER TABLE normalization_rules ADD COLUMN conditions TEXT"
         ))
         conn.commit()
-        logger.info("Migration complete: added conditions column to normalization_rules")
+        logger.info("[DATABASE] Migration complete: added conditions column to normalization_rules")
 
     # Add condition_logic column if missing ("AND" or "OR")
     if "condition_logic" not in columns:
-        logger.info("Adding condition_logic column to normalization_rules table")
+        logger.info("[DATABASE] Adding condition_logic column to normalization_rules table")
         conn.execute(text(
             "ALTER TABLE normalization_rules ADD COLUMN condition_logic VARCHAR(3) DEFAULT 'AND' NOT NULL"
         ))
         conn.commit()
-        logger.info("Migration complete: added condition_logic column to normalization_rules")
+        logger.info("[DATABASE] Migration complete: added condition_logic column to normalization_rules")
 
 
 def _add_tag_group_and_else_columns(conn) -> None:
@@ -621,7 +621,7 @@ def _add_tag_group_and_else_columns(conn) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='normalization_rules'"
     ))
     if not result.fetchone():
-        logger.debug("normalization_rules table doesn't exist yet, skipping migration")
+        logger.debug("[DATABASE] normalization_rules table doesn't exist yet, skipping migration")
         return
 
     # Get current columns
@@ -630,39 +630,39 @@ def _add_tag_group_and_else_columns(conn) -> None:
 
     # Add tag_group_id column if missing
     if "tag_group_id" not in columns:
-        logger.info("Adding tag_group_id column to normalization_rules table")
+        logger.info("[DATABASE] Adding tag_group_id column to normalization_rules table")
         conn.execute(text(
             "ALTER TABLE normalization_rules ADD COLUMN tag_group_id INTEGER REFERENCES tag_groups(id) ON DELETE SET NULL"
         ))
         conn.commit()
-        logger.info("Migration complete: added tag_group_id column to normalization_rules")
+        logger.info("[DATABASE] Migration complete: added tag_group_id column to normalization_rules")
 
     # Add tag_match_position column if missing
     if "tag_match_position" not in columns:
-        logger.info("Adding tag_match_position column to normalization_rules table")
+        logger.info("[DATABASE] Adding tag_match_position column to normalization_rules table")
         conn.execute(text(
             "ALTER TABLE normalization_rules ADD COLUMN tag_match_position VARCHAR(20)"
         ))
         conn.commit()
-        logger.info("Migration complete: added tag_match_position column to normalization_rules")
+        logger.info("[DATABASE] Migration complete: added tag_match_position column to normalization_rules")
 
     # Add else_action_type column if missing
     if "else_action_type" not in columns:
-        logger.info("Adding else_action_type column to normalization_rules table")
+        logger.info("[DATABASE] Adding else_action_type column to normalization_rules table")
         conn.execute(text(
             "ALTER TABLE normalization_rules ADD COLUMN else_action_type VARCHAR(20)"
         ))
         conn.commit()
-        logger.info("Migration complete: added else_action_type column to normalization_rules")
+        logger.info("[DATABASE] Migration complete: added else_action_type column to normalization_rules")
 
     # Add else_action_value column if missing
     if "else_action_value" not in columns:
-        logger.info("Adding else_action_value column to normalization_rules table")
+        logger.info("[DATABASE] Adding else_action_value column to normalization_rules table")
         conn.execute(text(
             "ALTER TABLE normalization_rules ADD COLUMN else_action_value VARCHAR(500)"
         ))
         conn.commit()
-        logger.info("Migration complete: added else_action_value column to normalization_rules")
+        logger.info("[DATABASE] Migration complete: added else_action_value column to normalization_rules")
 
 
 def _populate_builtin_tags(conn) -> None:
@@ -684,12 +684,12 @@ def _populate_builtin_tags(conn) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='tag_groups'"
     ))
     if not result.fetchone():
-        logger.debug("tag_groups table doesn't exist yet, skipping built-in tags population")
+        logger.debug("[DATABASE] tag_groups table doesn't exist yet, skipping built-in tags population")
         return
 
     # Sync built-in tags - adds any missing groups and tags
     # This runs on every startup to ensure new built-in tags are added to existing installations
-    logger.debug("Syncing built-in tag groups and tags")
+    logger.debug("[DATABASE] Syncing built-in tag groups and tags")
 
     # Define built-in tag groups and their tags
     builtin_groups = {
@@ -826,7 +826,7 @@ def _populate_builtin_tags(conn) -> None:
             result = conn.execute(text("SELECT id FROM tag_groups WHERE name = :name"), {"name": group_name})
             group_id = result.fetchone()[0]
             groups_created += 1
-            logger.info(f"Created built-in group '{group_name}'")
+            logger.info("[DATABASE] Created built-in group '%s'", group_name)
 
         # Get existing tags for this group
         result = conn.execute(text("SELECT value FROM tags WHERE group_id = :group_id"), {"group_id": group_id})
@@ -847,9 +847,9 @@ def _populate_builtin_tags(conn) -> None:
     conn.commit()
 
     if groups_created > 0 or tags_added > 0:
-        logger.info(f"Built-in tags sync complete: {groups_created} groups created, {tags_added} tags added")
+        logger.info("[DATABASE] Built-in tags sync complete: %s groups created, %s tags added", groups_created, tags_added)
     else:
-        logger.debug("Built-in tags sync complete: no changes needed")
+        logger.debug("[DATABASE] Built-in tags sync complete: no changes needed")
 
 
 def _convert_normalization_rules_to_editable(conn) -> None:
@@ -866,7 +866,7 @@ def _convert_normalization_rules_to_editable(conn) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='normalization_rule_groups'"
     ))
     if not result.fetchone():
-        logger.debug("normalization_rule_groups table doesn't exist yet, skipping conversion")
+        logger.debug("[DATABASE] normalization_rule_groups table doesn't exist yet, skipping conversion")
         return
 
     # Count how many built-in rules exist
@@ -877,18 +877,18 @@ def _convert_normalization_rules_to_editable(conn) -> None:
     builtin_rules = result.fetchone()[0]
 
     if builtin_groups == 0 and builtin_rules == 0:
-        logger.debug("No built-in normalization rules to convert")
+        logger.debug("[DATABASE] No built-in normalization rules to convert")
         return
 
     # Convert all built-in rule groups to editable
     if builtin_groups > 0:
         conn.execute(text("UPDATE normalization_rule_groups SET is_builtin = 0 WHERE is_builtin = 1"))
-        logger.info(f"Converted {builtin_groups} normalization rule groups from built-in to editable")
+        logger.info("[DATABASE] Converted %s normalization rule groups from built-in to editable", builtin_groups)
 
     # Convert all built-in rules to editable
     if builtin_rules > 0:
         conn.execute(text("UPDATE normalization_rules SET is_builtin = 0 WHERE is_builtin = 1"))
-        logger.info(f"Converted {builtin_rules} normalization rules from built-in to editable")
+        logger.info("[DATABASE] Converted %s normalization rules from built-in to editable", builtin_rules)
 
     conn.commit()
 
@@ -907,7 +907,7 @@ def _fix_tag_group_action_types(conn) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='normalization_rules'"
     ))
     if not result.fetchone():
-        logger.debug("normalization_rules table doesn't exist yet, skipping action type fix")
+        logger.debug("[DATABASE] normalization_rules table doesn't exist yet, skipping action type fix")
         return
 
     # Update prefix rules: remove -> strip_prefix
@@ -933,9 +933,9 @@ def _fix_tag_group_action_types(conn) -> None:
     total_updated = prefix_updated + suffix_updated
     if total_updated > 0:
         conn.commit()
-        logger.info(f"Fixed {total_updated} tag-group rules to use strip_prefix/strip_suffix actions")
+        logger.info("[DATABASE] Fixed %s tag-group rules to use strip_prefix/strip_suffix actions", total_updated)
     else:
-        logger.debug("No tag-group rules needed action type fixes")
+        logger.debug("[DATABASE] No tag-group rules needed action type fixes")
 
 
 def _add_m3u_change_logs_enabled_column(conn) -> None:
@@ -950,7 +950,7 @@ def _add_m3u_change_logs_enabled_column(conn) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='m3u_change_logs'"
     ))
     if not result.fetchone():
-        logger.debug("m3u_change_logs table doesn't exist yet, skipping enabled column migration")
+        logger.debug("[DATABASE] m3u_change_logs table doesn't exist yet, skipping enabled column migration")
         return
 
     # Check if enabled column already exists
@@ -958,14 +958,14 @@ def _add_m3u_change_logs_enabled_column(conn) -> None:
     columns = [row[1] for row in result.fetchall()]
 
     if "enabled" not in columns:
-        logger.info("Adding enabled column to m3u_change_logs")
+        logger.info("[DATABASE] Adding enabled column to m3u_change_logs")
         conn.execute(text(
             "ALTER TABLE m3u_change_logs ADD COLUMN enabled BOOLEAN DEFAULT 0 NOT NULL"
         ))
         conn.commit()
-        logger.info("Migration complete: added enabled column to m3u_change_logs")
+        logger.info("[DATABASE] Migration complete: added enabled column to m3u_change_logs")
     else:
-        logger.debug("m3u_change_logs.enabled column already exists")
+        logger.debug("[DATABASE] m3u_change_logs.enabled column already exists")
 
 
 def _add_m3u_digest_show_detailed_list_column(conn) -> None:
@@ -977,7 +977,7 @@ def _add_m3u_digest_show_detailed_list_column(conn) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='m3u_digest_settings'"
     ))
     if not result.fetchone():
-        logger.debug("m3u_digest_settings table doesn't exist yet, skipping migration")
+        logger.debug("[DATABASE] m3u_digest_settings table doesn't exist yet, skipping migration")
         return
 
     # Check if show_detailed_list column already exists
@@ -985,14 +985,14 @@ def _add_m3u_digest_show_detailed_list_column(conn) -> None:
     columns = [row[1] for row in result.fetchall()]
 
     if "show_detailed_list" not in columns:
-        logger.info("Adding show_detailed_list column to m3u_digest_settings")
+        logger.info("[DATABASE] Adding show_detailed_list column to m3u_digest_settings")
         conn.execute(text(
             "ALTER TABLE m3u_digest_settings ADD COLUMN show_detailed_list BOOLEAN DEFAULT 1 NOT NULL"
         ))
         conn.commit()
-        logger.info("Migration complete: added show_detailed_list column to m3u_digest_settings")
+        logger.info("[DATABASE] Migration complete: added show_detailed_list column to m3u_digest_settings")
     else:
-        logger.debug("m3u_digest_settings.show_detailed_list column already exists")
+        logger.debug("[DATABASE] m3u_digest_settings.show_detailed_list column already exists")
 
 
 def _add_m3u_snapshot_dispatcharr_updated_at_column(conn) -> None:
@@ -1004,7 +1004,7 @@ def _add_m3u_snapshot_dispatcharr_updated_at_column(conn) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='m3u_snapshots'"
     ))
     if not result.fetchone():
-        logger.debug("m3u_snapshots table doesn't exist yet, skipping migration")
+        logger.debug("[DATABASE] m3u_snapshots table doesn't exist yet, skipping migration")
         return
 
     # Check if dispatcharr_updated_at column already exists
@@ -1012,14 +1012,14 @@ def _add_m3u_snapshot_dispatcharr_updated_at_column(conn) -> None:
     columns = [row[1] for row in result.fetchall()]
 
     if "dispatcharr_updated_at" not in columns:
-        logger.info("Adding dispatcharr_updated_at column to m3u_snapshots")
+        logger.info("[DATABASE] Adding dispatcharr_updated_at column to m3u_snapshots")
         conn.execute(text(
             "ALTER TABLE m3u_snapshots ADD COLUMN dispatcharr_updated_at VARCHAR(50)"
         ))
         conn.commit()
-        logger.info("Migration complete: added dispatcharr_updated_at column to m3u_snapshots")
+        logger.info("[DATABASE] Migration complete: added dispatcharr_updated_at column to m3u_snapshots")
     else:
-        logger.debug("m3u_snapshots.dispatcharr_updated_at column already exists")
+        logger.debug("[DATABASE] m3u_snapshots.dispatcharr_updated_at column already exists")
 
 
 def _add_scheduled_task_alert_columns(conn) -> None:
@@ -1031,7 +1031,7 @@ def _add_scheduled_task_alert_columns(conn) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_tasks'"
     ))
     if not result.fetchone():
-        logger.debug("scheduled_tasks table doesn't exist yet, skipping alert columns migration")
+        logger.debug("[DATABASE] scheduled_tasks table doesn't exist yet, skipping alert columns migration")
         return
 
     # Check which columns already exist
@@ -1040,69 +1040,69 @@ def _add_scheduled_task_alert_columns(conn) -> None:
 
     # Add send_alerts column if not exists
     if "send_alerts" not in columns:
-        logger.info("Adding send_alerts column to scheduled_tasks")
+        logger.info("[DATABASE] Adding send_alerts column to scheduled_tasks")
         conn.execute(text(
             "ALTER TABLE scheduled_tasks ADD COLUMN send_alerts BOOLEAN DEFAULT 1 NOT NULL"
         ))
 
     # Add alert_on_success column if not exists
     if "alert_on_success" not in columns:
-        logger.info("Adding alert_on_success column to scheduled_tasks")
+        logger.info("[DATABASE] Adding alert_on_success column to scheduled_tasks")
         conn.execute(text(
             "ALTER TABLE scheduled_tasks ADD COLUMN alert_on_success BOOLEAN DEFAULT 1 NOT NULL"
         ))
 
     # Add alert_on_warning column if not exists
     if "alert_on_warning" not in columns:
-        logger.info("Adding alert_on_warning column to scheduled_tasks")
+        logger.info("[DATABASE] Adding alert_on_warning column to scheduled_tasks")
         conn.execute(text(
             "ALTER TABLE scheduled_tasks ADD COLUMN alert_on_warning BOOLEAN DEFAULT 1 NOT NULL"
         ))
 
     # Add alert_on_error column if not exists
     if "alert_on_error" not in columns:
-        logger.info("Adding alert_on_error column to scheduled_tasks")
+        logger.info("[DATABASE] Adding alert_on_error column to scheduled_tasks")
         conn.execute(text(
             "ALTER TABLE scheduled_tasks ADD COLUMN alert_on_error BOOLEAN DEFAULT 1 NOT NULL"
         ))
 
     # Add show_notifications column if not exists (v0.10.0-0003)
     if "show_notifications" not in columns:
-        logger.info("Adding show_notifications column to scheduled_tasks")
+        logger.info("[DATABASE] Adding show_notifications column to scheduled_tasks")
         conn.execute(text(
             "ALTER TABLE scheduled_tasks ADD COLUMN show_notifications BOOLEAN DEFAULT 1 NOT NULL"
         ))
 
     # Add alert_on_info column if not exists (v0.11.0)
     if "alert_on_info" not in columns:
-        logger.info("Adding alert_on_info column to scheduled_tasks")
+        logger.info("[DATABASE] Adding alert_on_info column to scheduled_tasks")
         conn.execute(text(
             "ALTER TABLE scheduled_tasks ADD COLUMN alert_on_info BOOLEAN DEFAULT 0 NOT NULL"
         ))
 
     # Add send_to_email column if not exists (v0.11.0)
     if "send_to_email" not in columns:
-        logger.info("Adding send_to_email column to scheduled_tasks")
+        logger.info("[DATABASE] Adding send_to_email column to scheduled_tasks")
         conn.execute(text(
             "ALTER TABLE scheduled_tasks ADD COLUMN send_to_email BOOLEAN DEFAULT 1 NOT NULL"
         ))
 
     # Add send_to_discord column if not exists (v0.11.0)
     if "send_to_discord" not in columns:
-        logger.info("Adding send_to_discord column to scheduled_tasks")
+        logger.info("[DATABASE] Adding send_to_discord column to scheduled_tasks")
         conn.execute(text(
             "ALTER TABLE scheduled_tasks ADD COLUMN send_to_discord BOOLEAN DEFAULT 1 NOT NULL"
         ))
 
     # Add send_to_telegram column if not exists (v0.11.0)
     if "send_to_telegram" not in columns:
-        logger.info("Adding send_to_telegram column to scheduled_tasks")
+        logger.info("[DATABASE] Adding send_to_telegram column to scheduled_tasks")
         conn.execute(text(
             "ALTER TABLE scheduled_tasks ADD COLUMN send_to_telegram BOOLEAN DEFAULT 1 NOT NULL"
         ))
 
     conn.commit()
-    logger.debug("scheduled_tasks alert columns migration complete")
+    logger.debug("[DATABASE] scheduled_tasks alert columns migration complete")
 
 
 def _add_bandwidth_inout_columns(conn) -> None:
@@ -1114,7 +1114,7 @@ def _add_bandwidth_inout_columns(conn) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='bandwidth_daily'"
     ))
     if not result.fetchone():
-        logger.debug("bandwidth_daily table doesn't exist yet, skipping in/out columns migration")
+        logger.debug("[DATABASE] bandwidth_daily table doesn't exist yet, skipping in/out columns migration")
         return
 
     # Check which columns already exist
@@ -1123,34 +1123,34 @@ def _add_bandwidth_inout_columns(conn) -> None:
 
     # Add bytes_in column if not exists
     if "bytes_in" not in columns:
-        logger.info("Adding bytes_in column to bandwidth_daily")
+        logger.info("[DATABASE] Adding bytes_in column to bandwidth_daily")
         conn.execute(text(
             "ALTER TABLE bandwidth_daily ADD COLUMN bytes_in INTEGER DEFAULT 0 NOT NULL"
         ))
 
     # Add bytes_out column if not exists
     if "bytes_out" not in columns:
-        logger.info("Adding bytes_out column to bandwidth_daily")
+        logger.info("[DATABASE] Adding bytes_out column to bandwidth_daily")
         conn.execute(text(
             "ALTER TABLE bandwidth_daily ADD COLUMN bytes_out INTEGER DEFAULT 0 NOT NULL"
         ))
 
     # Add peak_bitrate_in column if not exists
     if "peak_bitrate_in" not in columns:
-        logger.info("Adding peak_bitrate_in column to bandwidth_daily")
+        logger.info("[DATABASE] Adding peak_bitrate_in column to bandwidth_daily")
         conn.execute(text(
             "ALTER TABLE bandwidth_daily ADD COLUMN peak_bitrate_in INTEGER DEFAULT 0 NOT NULL"
         ))
 
     # Add peak_bitrate_out column if not exists
     if "peak_bitrate_out" not in columns:
-        logger.info("Adding peak_bitrate_out column to bandwidth_daily")
+        logger.info("[DATABASE] Adding peak_bitrate_out column to bandwidth_daily")
         conn.execute(text(
             "ALTER TABLE bandwidth_daily ADD COLUMN peak_bitrate_out INTEGER DEFAULT 0 NOT NULL"
         ))
 
     conn.commit()
-    logger.debug("bandwidth_daily in/out columns migration complete")
+    logger.debug("[DATABASE] bandwidth_daily in/out columns migration complete")
 
 
 def _add_m3u_digest_discord_webhook_column(conn) -> None:
@@ -1162,7 +1162,7 @@ def _add_m3u_digest_discord_webhook_column(conn) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='m3u_digest_settings'"
     ))
     if not result.fetchone():
-        logger.debug("m3u_digest_settings table doesn't exist yet, skipping migration")
+        logger.debug("[DATABASE] m3u_digest_settings table doesn't exist yet, skipping migration")
         return
 
     # Check if send_to_discord column already exists
@@ -1170,14 +1170,14 @@ def _add_m3u_digest_discord_webhook_column(conn) -> None:
     columns = [row[1] for row in result.fetchall()]
 
     if "send_to_discord" not in columns:
-        logger.info("Adding send_to_discord column to m3u_digest_settings")
+        logger.info("[DATABASE] Adding send_to_discord column to m3u_digest_settings")
         conn.execute(text(
             "ALTER TABLE m3u_digest_settings ADD COLUMN send_to_discord BOOLEAN DEFAULT 0 NOT NULL"
         ))
         conn.commit()
-        logger.info("Migration complete: added send_to_discord column to m3u_digest_settings")
+        logger.info("[DATABASE] Migration complete: added send_to_discord column to m3u_digest_settings")
     else:
-        logger.debug("m3u_digest_settings.send_to_discord column already exists")
+        logger.debug("[DATABASE] m3u_digest_settings.send_to_discord column already exists")
 
 
 def _migrate_user_identities(conn) -> None:
@@ -1194,7 +1194,7 @@ def _migrate_user_identities(conn) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='user_identities'"
     ))
     if not result.fetchone():
-        logger.debug("user_identities table doesn't exist yet, skipping migration")
+        logger.debug("[DATABASE] user_identities table doesn't exist yet, skipping migration")
         return
 
     # Check if users table exists
@@ -1202,14 +1202,14 @@ def _migrate_user_identities(conn) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
     ))
     if not result.fetchone():
-        logger.debug("users table doesn't exist yet, skipping migration")
+        logger.debug("[DATABASE] users table doesn't exist yet, skipping migration")
         return
 
     # Check if we've already migrated (table has data)
     result = conn.execute(text("SELECT COUNT(*) FROM user_identities"))
     count = result.fetchone()[0]
     if count > 0:
-        logger.debug(f"user_identities already has {count} entries, skipping migration")
+        logger.debug("[DATABASE] user_identities already has %s entries, skipping migration", count)
         return
 
     # Get all existing users
@@ -1220,10 +1220,10 @@ def _migrate_user_identities(conn) -> None:
     users = result.fetchall()
 
     if not users:
-        logger.debug("No users to migrate to user_identities")
+        logger.debug("[DATABASE] No users to migrate to user_identities")
         return
 
-    logger.info(f"Migrating {len(users)} users to user_identities table")
+    logger.info("[DATABASE] Migrating %s users to user_identities table", len(users))
 
     migrated_count = 0
     for user in users:
@@ -1244,10 +1244,10 @@ def _migrate_user_identities(conn) -> None:
             })
             migrated_count += 1
         except Exception as e:
-            logger.warning(f"Failed to migrate user {user_id} ({username}): {e}")
+            logger.warning("[DATABASE] Failed to migrate user %s (%s): %s", user_id, username, e)
 
     conn.commit()
-    logger.info(f"Migrated {migrated_count} users to user_identities table")
+    logger.info("[DATABASE] Migrated %s users to user_identities table", migrated_count)
 
 
 def _add_auto_creation_execution_log_column(conn) -> None:
@@ -1259,15 +1259,15 @@ def _add_auto_creation_execution_log_column(conn) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_executions'"
     ))
     if not result.fetchone():
-        logger.debug("auto_creation_executions table doesn't exist yet, skipping")
+        logger.debug("[DATABASE] auto_creation_executions table doesn't exist yet, skipping")
         return
 
     columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_executions)")).fetchall()]
     if "execution_log" not in columns:
-        logger.info("Adding execution_log column to auto_creation_executions")
+        logger.info("[DATABASE] Adding execution_log column to auto_creation_executions")
         conn.execute(text("ALTER TABLE auto_creation_executions ADD COLUMN execution_log TEXT"))
         conn.commit()
-        logger.info("Migration complete: added execution_log column")
+        logger.info("[DATABASE] Migration complete: added execution_log column")
 
 
 def _add_auto_creation_rules_match_count_column(conn) -> None:
@@ -1282,10 +1282,10 @@ def _add_auto_creation_rules_match_count_column(conn) -> None:
 
     columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
     if "match_count" not in columns:
-        logger.info("Adding match_count column to auto_creation_rules")
+        logger.info("[DATABASE] Adding match_count column to auto_creation_rules")
         conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN match_count INTEGER DEFAULT 0"))
         conn.commit()
-        logger.info("Migration complete: added match_count column")
+        logger.info("[DATABASE] Migration complete: added match_count column")
 
 
 def _add_auto_creation_rules_sort_columns(conn) -> None:
@@ -1300,11 +1300,11 @@ def _add_auto_creation_rules_sort_columns(conn) -> None:
 
     columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
     if "sort_field" not in columns:
-        logger.info("Adding sort_field and sort_order columns to auto_creation_rules")
+        logger.info("[DATABASE] Adding sort_field and sort_order columns to auto_creation_rules")
         conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN sort_field TEXT"))
         conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN sort_order TEXT DEFAULT 'asc'"))
         conn.commit()
-        logger.info("Migration complete: added sort_field and sort_order columns")
+        logger.info("[DATABASE] Migration complete: added sort_field and sort_order columns")
 
 
 def _add_auto_creation_rules_normalize_names_column(conn) -> None:
@@ -1319,10 +1319,10 @@ def _add_auto_creation_rules_normalize_names_column(conn) -> None:
 
     columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
     if "normalize_names" not in columns:
-        logger.info("Adding normalize_names column to auto_creation_rules")
+        logger.info("[DATABASE] Adding normalize_names column to auto_creation_rules")
         conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN normalize_names BOOLEAN DEFAULT 0 NOT NULL"))
         conn.commit()
-        logger.info("Migration complete: added normalize_names column")
+        logger.info("[DATABASE] Migration complete: added normalize_names column")
 
 
 def _add_auto_creation_rules_managed_channel_ids_column(conn) -> None:
@@ -1337,10 +1337,10 @@ def _add_auto_creation_rules_managed_channel_ids_column(conn) -> None:
 
     columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
     if "managed_channel_ids" not in columns:
-        logger.info("Adding managed_channel_ids column to auto_creation_rules")
+        logger.info("[DATABASE] Adding managed_channel_ids column to auto_creation_rules")
         conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN managed_channel_ids TEXT"))
         conn.commit()
-        logger.info("Migration complete: added managed_channel_ids column")
+        logger.info("[DATABASE] Migration complete: added managed_channel_ids column")
 
 
 def _add_auto_creation_rules_orphan_action_column(conn) -> None:
@@ -1355,10 +1355,10 @@ def _add_auto_creation_rules_orphan_action_column(conn) -> None:
 
     columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
     if "orphan_action" not in columns:
-        logger.info("Adding orphan_action column to auto_creation_rules")
+        logger.info("[DATABASE] Adding orphan_action column to auto_creation_rules")
         conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN orphan_action VARCHAR(30) DEFAULT 'delete' NOT NULL"))
         conn.commit()
-        logger.info("Migration complete: added orphan_action column")
+        logger.info("[DATABASE] Migration complete: added orphan_action column")
 
 
 def _add_auto_creation_rules_probe_on_sort_column(conn) -> None:
@@ -1373,10 +1373,10 @@ def _add_auto_creation_rules_probe_on_sort_column(conn) -> None:
 
     columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
     if "probe_on_sort" not in columns:
-        logger.info("Adding probe_on_sort column to auto_creation_rules")
+        logger.info("[DATABASE] Adding probe_on_sort column to auto_creation_rules")
         conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN probe_on_sort BOOLEAN DEFAULT 0 NOT NULL"))
         conn.commit()
-        logger.info("Migration complete: added probe_on_sort column")
+        logger.info("[DATABASE] Migration complete: added probe_on_sort column")
 
 
 def _add_stream_stats_consecutive_failures_column(conn) -> None:
@@ -1387,12 +1387,12 @@ def _add_stream_stats_consecutive_failures_column(conn) -> None:
     columns = [row[1] for row in result.fetchall()]
 
     if "consecutive_failures" not in columns:
-        logger.info("Adding consecutive_failures column to stream_stats")
+        logger.info("[DATABASE] Adding consecutive_failures column to stream_stats")
         conn.execute(text(
             "ALTER TABLE stream_stats ADD COLUMN consecutive_failures INTEGER DEFAULT 0 NOT NULL"
         ))
         conn.commit()
-        logger.info("Migration complete: added consecutive_failures column to stream_stats")
+        logger.info("[DATABASE] Migration complete: added consecutive_failures column to stream_stats")
 
 
 def _add_m3u_digest_exclude_patterns_columns(conn) -> None:
@@ -1404,21 +1404,21 @@ def _add_m3u_digest_exclude_patterns_columns(conn) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='m3u_digest_settings'"
     ))
     if not result.fetchone():
-        logger.debug("m3u_digest_settings table doesn't exist yet, skipping migration")
+        logger.debug("[DATABASE] m3u_digest_settings table doesn't exist yet, skipping migration")
         return
 
     result = conn.execute(text("PRAGMA table_info(m3u_digest_settings)"))
     columns = [row[1] for row in result.fetchall()]
 
     if "exclude_group_patterns" not in columns:
-        logger.info("Adding exclude_group_patterns column to m3u_digest_settings")
+        logger.info("[DATABASE] Adding exclude_group_patterns column to m3u_digest_settings")
         conn.execute(text(
             "ALTER TABLE m3u_digest_settings ADD COLUMN exclude_group_patterns TEXT"
         ))
         conn.commit()
 
     if "exclude_stream_patterns" not in columns:
-        logger.info("Adding exclude_stream_patterns column to m3u_digest_settings")
+        logger.info("[DATABASE] Adding exclude_stream_patterns column to m3u_digest_settings")
         conn.execute(text(
             "ALTER TABLE m3u_digest_settings ADD COLUMN exclude_stream_patterns TEXT"
         ))
@@ -1433,17 +1433,17 @@ def _add_auto_creation_executions_streams_excluded_column(conn) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_executions'"
     ))
     if not result.fetchone():
-        logger.debug("auto_creation_executions table doesn't exist yet, skipping")
+        logger.debug("[DATABASE] auto_creation_executions table doesn't exist yet, skipping")
         return
 
     columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_executions)")).fetchall()]
     if "streams_excluded" not in columns:
-        logger.info("Adding streams_excluded column to auto_creation_executions")
+        logger.info("[DATABASE] Adding streams_excluded column to auto_creation_executions")
         conn.execute(text(
             "ALTER TABLE auto_creation_executions ADD COLUMN streams_excluded INTEGER DEFAULT 0 NOT NULL"
         ))
         conn.commit()
-        logger.info("Migration complete: added streams_excluded column")
+        logger.info("[DATABASE] Migration complete: added streams_excluded column")
 
 
 def _perform_maintenance(engine) -> None:
@@ -1463,7 +1463,7 @@ def _perform_maintenance(engine) -> None:
             )
             deleted_count = result.rowcount
             if deleted_count > 0:
-                logger.info(f"Purged {deleted_count} journal entries older than {PURGE_DAYS} days")
+                logger.info("[DATABASE] Purged %s journal entries older than %s days", deleted_count, PURGE_DAYS)
 
             # Purge old bandwidth records (keep 1 year)
             bandwidth_cutoff = datetime.utcnow() - timedelta(days=365)
@@ -1472,22 +1472,22 @@ def _perform_maintenance(engine) -> None:
                 {"cutoff": bandwidth_cutoff.date()}
             )
             if result.rowcount > 0:
-                logger.info(f"Purged {result.rowcount} bandwidth records older than 1 year")
+                logger.info("[DATABASE] Purged %s bandwidth records older than 1 year", result.rowcount)
 
             conn.commit()
 
             # Run VACUUM to reclaim disk space (must be outside transaction)
             conn.execute(text("VACUUM"))
-            logger.info("Database vacuum completed")
+            logger.info("[DATABASE] Database vacuum completed")
 
         except Exception as e:
-            logger.error(f"Database maintenance failed: {e}")
+            logger.exception("[DATABASE] Database maintenance failed: %s", e)
 
 
 def get_session():
     """Get a database session. Use as context manager or close manually."""
     if _SessionLocal is None:
-        logger.error("Attempted to get database session before initialization")
+        logger.error("[DATABASE] Attempted to get database session before initialization")
         raise RuntimeError("Database not initialized. Call init_db() first.")
     return _SessionLocal()
 
@@ -1495,6 +1495,6 @@ def get_session():
 def get_engine():
     """Get the database engine."""
     if _engine is None:
-        logger.error("Attempted to get database engine before initialization")
+        logger.error("[DATABASE] Attempted to get database engine before initialization")
         raise RuntimeError("Database not initialized. Call init_db() first.")
     return _engine

@@ -5,6 +5,7 @@ Extracted from main.py (Phase 3 of v0.13.0 backend refactor).
 """
 import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -18,7 +19,7 @@ from stream_prober import StreamProber, get_prober
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["Stream Stats"])
+router = APIRouter(prefix="/api/stream-stats", tags=["Stream Stats"])
 
 
 # Pydantic models co-located with the router
@@ -73,31 +74,34 @@ class ClearStatsRequest(BaseModel):
 # =============================================================================
 
 
-@router.get("/api/stream-stats")
+@router.get("")
 async def get_all_stream_stats():
     """Get all stream probe statistics."""
+    logger.debug("[STREAM-STATS] GET /api/stream-stats")
     try:
         return StreamProber.get_all_stats()
     except Exception as e:
-        logger.error(f"Failed to get stream stats: {e}")
+        logger.exception("[STREAM-STATS] Failed to get stream stats: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/stream-stats/summary")
+@router.get("/summary")
 async def get_stream_stats_summary():
     """Get summary of stream probe statistics."""
+    logger.debug("[STREAM-STATS] GET /api/stream-stats/summary")
     try:
         return StreamProber.get_stats_summary()
     except Exception as e:
-        logger.error(f"Failed to get stream stats summary: {e}")
+        logger.exception("[STREAM-STATS] Failed to get stream stats summary: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # NOTE: These routes MUST be defined BEFORE /{stream_id} to avoid path parameter matching
 
-@router.get("/api/stream-stats/struck-out")
+@router.get("/struck-out")
 async def get_struck_out_streams():
     """Get streams that have exceeded the strike threshold."""
+    logger.debug("[STREAM-STATS] GET /api/stream-stats/struck-out")
     from models import StreamStats
 
     settings = get_settings()
@@ -120,6 +124,7 @@ async def get_struck_out_streams():
 
         # Find which channels contain these streams (paginated)
         client = get_client()
+        start = time.time()
         all_channels = []
         page = 1
         while True:
@@ -129,6 +134,8 @@ async def get_struck_out_streams():
             if len(all_channels) >= result.get("count", 0) or not page_channels:
                 break
             page += 1
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[STREAM-STATS] Fetched %s channels for struck-out lookup in %.1fms", len(all_channels), elapsed_ms)
 
         stream_channels: dict[int, list[dict]] = {sid: [] for sid in struck_ids}
 
@@ -149,21 +156,23 @@ async def get_struck_out_streams():
 
         return {"streams": result, "threshold": threshold, "enabled": True}
     except Exception as e:
-        logger.exception(f"Failed to get struck-out streams: {e}")
+        logger.exception("[STREAM-STATS] Failed to get struck-out streams: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
 
 
-@router.post("/api/stream-stats/struck-out/remove")
+@router.post("/struck-out/remove")
 async def remove_struck_out_streams(request: RemoveStruckOutRequest):
     """Remove struck-out streams from all channels they belong to."""
+    logger.debug("[STREAM-STATS] POST /api/stream-stats/struck-out/remove - %d streams", len(request.stream_ids))
     from models import StreamStats
 
     client = get_client()
     removed_count = 0
 
     try:
+        start = time.time()
         all_channels = []
         page = 1
         while True:
@@ -181,7 +190,10 @@ async def remove_struck_out_streams(request: RemoveStruckOutRequest):
                 removed_here = len(ch_streams) - len(filtered)
                 await client.update_channel(ch["id"], {"streams": filtered})
                 removed_count += removed_here
-                logger.info(f"Removed {removed_here} struck-out streams from channel {ch['id']} ({ch.get('name')})")
+                logger.info("[STREAM-STATS] Removed %s struck-out streams from channel %s (%s)", removed_here, ch['id'], ch.get('name'))
+
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[STREAM-STATS] Removed struck-out streams from channels in %.1fms", elapsed_ms)
 
         # Reset consecutive_failures for removed streams
         session = get_session()
@@ -199,11 +211,11 @@ async def remove_struck_out_streams(request: RemoveStruckOutRequest):
             "stream_ids": request.stream_ids,
         }
     except Exception as e:
-        logger.exception(f"Failed to remove struck-out streams: {e}")
+        logger.exception("[STREAM-STATS] Failed to remove struck-out streams: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/stream-stats/compute-sort", response_model=ComputeSortResponse)
+@router.post("/compute-sort", response_model=ComputeSortResponse)
 async def compute_sort(request: ComputeSortRequest):
     """Compute sort orders for streams without applying them.
 
@@ -211,6 +223,7 @@ async def compute_sort(request: ComputeSortRequest):
     deprioritize_failed) as the single source of truth.
     Stream IDs come from the frontend (may have staged edits).
     """
+    logger.debug("[STREAM-STATS-SORT] POST /api/stream-stats/compute-sort - mode=%s, %d channels", request.mode, len(request.channels))
     from stream_prober import smart_sort_streams, extract_m3u_account_id
 
     settings = get_settings()
@@ -254,11 +267,14 @@ async def compute_sort(request: ComputeSortRequest):
     if needs_m3u:
         try:
             client = get_client()
+            start_fetch = time.time()
             streams_data = await client.get_streams_by_ids(all_stream_ids)
+            elapsed_ms = (time.time() - start_fetch) * 1000
+            logger.debug("[STREAM-STATS-SORT] Fetched %s streams for M3U priority in %.1fms", len(streams_data), elapsed_ms)
             for s in streams_data:
                 stream_m3u_map[s["id"]] = extract_m3u_account_id(s.get("m3u_account"))
         except Exception as e:
-            logger.warning(f"[COMPUTE-SORT] Failed to fetch M3U data: {e}")
+            logger.warning("[STREAM-STATS-SORT] Failed to fetch M3U data: %s", e)
 
     # Sort each channel
     results = []
@@ -283,13 +299,14 @@ async def compute_sort(request: ComputeSortRequest):
     return ComputeSortResponse(results=results)
 
 
-@router.get("/api/stream-stats/dismissed")
+@router.get("/dismissed")
 async def get_dismissed_stream_stats():
     """Get list of dismissed stream IDs.
 
     Returns stream IDs that have been dismissed (failures acknowledged).
     Used by frontend to filter out dismissed streams from probe results display.
     """
+    logger.debug("[STREAM-STATS] GET /api/stream-stats/dismissed")
     from models import StreamStats
 
     session = get_session()
@@ -300,15 +317,16 @@ async def get_dismissed_stream_stats():
         stream_ids = [s.stream_id for s in dismissed]
         return {"dismissed_stream_ids": stream_ids, "count": len(stream_ids)}
     except Exception as e:
-        logger.error(f"Failed to get dismissed stream stats: {e}")
+        logger.exception("[STREAM-STATS] Failed to get dismissed stream stats: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
 
 
-@router.get("/api/stream-stats/{stream_id}")
+@router.get("/{stream_id}")
 async def get_stream_stats_by_id(stream_id: int):
     """Get probe stats for a specific stream."""
+    logger.debug("[STREAM-STATS] GET /api/stream-stats/%s", stream_id)
     try:
         stats = StreamProber.get_stats_by_stream_id(stream_id)
         if not stats:
@@ -317,7 +335,7 @@ async def get_stream_stats_by_id(stream_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get stream stats for {stream_id}: {e}")
+        logger.exception("[STREAM-STATS] Failed to get stream stats for %s: %s", stream_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -325,34 +343,35 @@ async def get_stream_stats_by_id(stream_id: int):
 from routers.streams import BulkStreamIdsRequest
 
 
-@router.post("/api/stream-stats/by-ids")
+@router.post("/by-ids")
 async def get_stream_stats_by_ids(request: BulkStreamIdsRequest):
     """Get probe stats for multiple streams by their IDs."""
+    logger.debug("[STREAM-STATS] POST /api/stream-stats/by-ids - %d streams", len(request.stream_ids))
     try:
         return StreamProber.get_stats_by_stream_ids(request.stream_ids)
     except Exception as e:
-        logger.error(f"Failed to get stream stats by IDs: {e}")
+        logger.exception("[STREAM-STATS] Failed to get stream stats by IDs: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # NOTE: /probe/bulk and /probe/all MUST be defined BEFORE /probe/{stream_id}
 # to avoid the path parameter matching "bulk" or "all" as a stream_id
-@router.post("/api/stream-stats/probe/bulk")
+@router.post("/probe/bulk")
 async def probe_bulk_streams(request: BulkProbeRequest):
     """Trigger on-demand probe for multiple streams."""
-    logger.info(f"Bulk probe request received for {len(request.stream_ids)} streams: {request.stream_ids}")
+    logger.debug("[STREAM-STATS-PROBE] POST /api/stream-stats/probe/bulk - %d streams", len(request.stream_ids))
 
     prober = get_prober()
-    logger.info(f"get_prober() returned: {prober is not None}")
+    logger.debug("[STREAM-STATS-PROBE] get_prober() returned: %s", prober is not None)
 
     if not prober:
-        logger.error("Stream prober not available - returning 503")
+        logger.error("[STREAM-STATS-PROBE] Stream prober not available - returning 503")
         raise HTTPException(status_code=503, detail="Stream prober not available")
 
     try:
-        logger.debug("Fetching all streams for bulk probe")
+        logger.debug("[STREAM-STATS-PROBE] Fetching all streams for bulk probe")
         all_streams = await prober._fetch_all_streams()
-        logger.info(f"Fetched {len(all_streams)} total streams")
+        logger.debug("[STREAM-STATS-PROBE] Fetched %s total streams", len(all_streams))
 
         stream_map = {s["id"]: s for s in all_streams}
 
@@ -360,23 +379,23 @@ async def probe_bulk_streams(request: BulkProbeRequest):
         for stream_id in request.stream_ids:
             stream = stream_map.get(stream_id)
             if stream:
-                logger.debug(f"Probing stream {stream_id}")
+                logger.debug("[STREAM-STATS-PROBE] Probing stream %s", stream_id)
                 result = await prober.probe_stream(
                     stream_id, stream.get("url"), stream.get("name")
                 )
                 results.append(result)
                 await asyncio.sleep(0.5)  # Rate limiting
             else:
-                logger.warning(f"Stream {stream_id} not found in stream list")
+                logger.warning("[STREAM-STATS-PROBE] Stream %s not found in stream list", stream_id)
 
-        logger.info(f"Bulk probe completed: {len(results)} streams probed")
+        logger.info("[STREAM-STATS-PROBE] Bulk probe completed: %s streams probed", len(results))
         return {"probed": len(results), "results": results}
     except Exception as e:
-        logger.error(f"Bulk probe failed: {e}", exc_info=True)
+        logger.exception("[STREAM-STATS-PROBE] Bulk probe failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/stream-stats/probe/all")
+@router.post("/probe/all")
 async def probe_all_streams_endpoint(request: ProbeAllRequest = ProbeAllRequest()):
     """Trigger probe for all streams (background task).
 
@@ -384,44 +403,45 @@ async def probe_all_streams_endpoint(request: ProbeAllRequest = ProbeAllRequest(
     If channel_groups is empty, probes all groups.
     If stream_ids is provided, probes only those specific streams (useful for re-probing failed streams).
     """
-    logger.info(f"Probe all streams request received with groups filter: {request.channel_groups}, stream_ids: {len(request.stream_ids) if request.stream_ids else 0}")
+    logger.debug("[STREAM-STATS-PROBE] POST /api/stream-stats/probe/all - groups=%s, stream_ids=%d", request.channel_groups, len(request.stream_ids) if request.stream_ids else 0)
 
     prober = get_prober()
-    logger.info(f"get_prober() returned: {prober is not None}")
+    logger.debug("[STREAM-STATS-PROBE] get_prober() returned: %s", prober is not None)
 
     if not prober:
-        logger.error("Stream prober not available - returning 503")
+        logger.error("[STREAM-STATS-PROBE] Stream prober not available - returning 503")
         raise HTTPException(status_code=503, detail="Stream prober not available")
 
     # If a probe is already "in progress" (possibly stuck), reset it first
     if prober._probing_in_progress:
-        logger.warning("Probe state shows in_progress - resetting before starting new probe")
+        logger.warning("[STREAM-STATS-PROBE] Probe state shows in_progress - resetting before starting new probe")
         prober.force_reset_probe_state()
 
     async def run_probe_with_logging():
         """Wrapper to catch and log any errors from the probe task."""
         try:
-            logger.info("[PROBE-TASK] Background probe task starting...")
+            logger.info("[STREAM-STATS-PROBE] Background probe task starting...")
             await prober.probe_all_streams(
                 channel_groups_override=request.channel_groups or None,
                 skip_m3u_refresh=request.skip_m3u_refresh,
                 stream_ids_filter=request.stream_ids or None
             )
-            logger.info("[PROBE-TASK] Background probe task completed successfully")
+            logger.info("[STREAM-STATS-PROBE] Background probe task completed successfully")
         except Exception as e:
-            logger.error(f"[PROBE-TASK] Background probe task failed with error: {e}", exc_info=True)
+            logger.exception("[STREAM-STATS-PROBE] Background probe task failed with error: %s", e)
 
     # Start background task with optional group filter
-    stream_ids_msg = f", stream_ids: {len(request.stream_ids)}" if request.stream_ids else ""
-    logger.info(f"Starting background probe task (groups: {request.channel_groups or 'all'}, skip_m3u_refresh: {request.skip_m3u_refresh}{stream_ids_msg})")
+    stream_ids_msg = ", stream_ids: %s" % len(request.stream_ids) if request.stream_ids else ""
+    logger.info("[STREAM-STATS-PROBE] Starting background probe task (groups: %s, skip_m3u_refresh: %s%s)", request.channel_groups or 'all', request.skip_m3u_refresh, stream_ids_msg)
     asyncio.create_task(run_probe_with_logging())
-    logger.info("Background task created, returning response")
+    logger.debug("[STREAM-STATS-PROBE] Background task created, returning response")
     return {"status": "started", "message": "Background probe started"}
 
 
-@router.get("/api/stream-stats/probe/progress")
+@router.get("/probe/progress")
 async def get_probe_progress():
     """Get current probe all streams progress."""
+    logger.debug("[STREAM-STATS-PROBE] GET /api/stream-stats/probe/progress")
     prober = get_prober()
     if not prober:
         raise HTTPException(status_code=503, detail="Stream prober not available")
@@ -429,9 +449,10 @@ async def get_probe_progress():
     return prober.get_probe_progress()
 
 
-@router.get("/api/stream-stats/probe/results")
+@router.get("/probe/results")
 async def get_probe_results():
     """Get detailed results of the last probe all streams operation."""
+    logger.debug("[STREAM-STATS-PROBE] GET /api/stream-stats/probe/results")
     prober = get_prober()
     if not prober:
         raise HTTPException(status_code=503, detail="Stream prober not available")
@@ -439,9 +460,10 @@ async def get_probe_results():
     return prober.get_probe_results()
 
 
-@router.get("/api/stream-stats/probe/history")
+@router.get("/probe/history")
 async def get_probe_history():
     """Get probe run history (last 5 runs)."""
+    logger.debug("[STREAM-STATS-PROBE] GET /api/stream-stats/probe/history")
     prober = get_prober()
     if not prober:
         raise HTTPException(status_code=503, detail="Stream prober not available")
@@ -449,9 +471,10 @@ async def get_probe_history():
     return prober.get_probe_history()
 
 
-@router.post("/api/stream-stats/probe/cancel")
+@router.post("/probe/cancel")
 async def cancel_probe():
     """Cancel an in-progress probe operation."""
+    logger.debug("[STREAM-STATS-PROBE] POST /api/stream-stats/probe/cancel")
     prober = get_prober()
     if not prober:
         raise HTTPException(status_code=503, detail="Stream prober not available")
@@ -459,9 +482,10 @@ async def cancel_probe():
     return prober.cancel_probe()
 
 
-@router.post("/api/stream-stats/probe/reset")
+@router.post("/probe/reset")
 async def reset_probe_state():
     """Force reset the probe state if it gets stuck."""
+    logger.debug("[STREAM-STATS-PROBE] POST /api/stream-stats/probe/reset")
     prober = get_prober()
     if not prober:
         raise HTTPException(status_code=503, detail="Stream prober not available")
@@ -469,13 +493,14 @@ async def reset_probe_state():
     return prober.force_reset_probe_state()
 
 
-@router.post("/api/stream-stats/dismiss")
+@router.post("/dismiss")
 async def dismiss_stream_stats(request: DismissStatsRequest):
     """Dismiss probe failures for the specified streams.
 
     Marks the streams as 'dismissed' so they don't appear in failed lists.
     The dismissal is cleared automatically when the stream is re-probed.
     """
+    logger.debug("[STREAM-STATS] POST /api/stream-stats/dismiss - %d streams", len(request.stream_ids))
     from models import StreamStats
 
     if not request.stream_ids:
@@ -491,23 +516,24 @@ async def dismiss_stream_stats(request: DismissStatsRequest):
             synchronize_session=False
         )
         session.commit()
-        logger.info(f"Dismissed {updated} stream stats for IDs: {request.stream_ids}")
+        logger.info("[STREAM-STATS] Dismissed %s stream stats for IDs: %s", updated, request.stream_ids)
         return {"dismissed": updated, "stream_ids": request.stream_ids}
     except Exception as e:
         session.rollback()
-        logger.error(f"Failed to dismiss stream stats: {e}")
+        logger.exception("[STREAM-STATS] Failed to dismiss stream stats: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
 
 
-@router.post("/api/stream-stats/clear")
+@router.post("/clear")
 async def clear_stream_stats(request: ClearStatsRequest):
     """Clear (delete) probe stats for the specified streams.
 
     Completely removes the probe history for these streams.
     They will appear as 'pending' (never probed) until re-probed.
     """
+    logger.debug("[STREAM-STATS] POST /api/stream-stats/clear - %d streams", len(request.stream_ids))
     from models import StreamStats
 
     if not request.stream_ids:
@@ -519,69 +545,70 @@ async def clear_stream_stats(request: ClearStatsRequest):
             StreamStats.stream_id.in_(request.stream_ids)
         ).delete(synchronize_session=False)
         session.commit()
-        logger.info(f"Cleared {deleted} stream stats for IDs: {request.stream_ids}")
+        logger.info("[STREAM-STATS] Cleared %s stream stats for IDs: %s", deleted, request.stream_ids)
         return {"cleared": deleted, "stream_ids": request.stream_ids}
     except Exception as e:
         session.rollback()
-        logger.error(f"Failed to clear stream stats: {e}")
+        logger.exception("[STREAM-STATS] Failed to clear stream stats: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
 
 
-@router.post("/api/stream-stats/clear-all")
+@router.post("/clear-all")
 async def clear_all_stream_stats():
     """Clear (delete) all probe stats for all streams.
 
     Completely removes all probe history. All streams will appear as
     'pending' (never probed) until re-probed.
     """
+    logger.debug("[STREAM-STATS] POST /api/stream-stats/clear-all")
     from models import StreamStats
 
     session = get_session()
     try:
         deleted = session.query(StreamStats).delete(synchronize_session=False)
         session.commit()
-        logger.info(f"Cleared all stream stats ({deleted} records)")
+        logger.info("[STREAM-STATS] Cleared all stream stats (%s records)", deleted)
         return {"cleared": deleted}
     except Exception as e:
         session.rollback()
-        logger.error(f"Failed to clear all stream stats: {e}")
+        logger.exception("[STREAM-STATS] Failed to clear all stream stats: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
 
 
-@router.post("/api/stream-stats/probe/{stream_id}")
+@router.post("/probe/{stream_id}")
 async def probe_single_stream(stream_id: int):
     """Trigger on-demand probe for a single stream."""
-    logger.info(f"Single stream probe request received for stream_id={stream_id}")
+    logger.debug("[STREAM-STATS-PROBE] POST /api/stream-stats/probe/%s", stream_id)
 
     prober = get_prober()
-    logger.info(f"get_prober() returned: {prober is not None}")
+    logger.debug("[STREAM-STATS-PROBE] get_prober() returned: %s", prober is not None)
 
     if not prober:
-        logger.error("Stream prober not available - returning 503")
+        logger.error("[STREAM-STATS-PROBE] Stream prober not available - returning 503")
         raise HTTPException(status_code=503, detail="Stream prober not available")
 
     try:
         # Get all streams and find the one we want
-        logger.debug(f"Fetching all streams to find stream {stream_id}")
+        logger.debug("[STREAM-STATS-PROBE] Fetching all streams to find stream %s", stream_id)
         all_streams = await prober._fetch_all_streams()
         stream = next((s for s in all_streams if s["id"] == stream_id), None)
 
         if not stream:
-            logger.warning(f"Stream {stream_id} not found")
+            logger.warning("[STREAM-STATS-PROBE] Stream %s not found", stream_id)
             raise HTTPException(status_code=404, detail="Stream not found")
 
-        logger.info(f"Probing single stream {stream_id}")
+        logger.debug("[STREAM-STATS-PROBE] Probing single stream %s", stream_id)
         result = await prober.probe_stream(
             stream_id, stream.get("url"), stream.get("name")
         )
-        logger.info(f"Single stream probe completed for {stream_id}")
+        logger.info("[STREAM-STATS-PROBE] Single stream probe completed for %s", stream_id)
         return result
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to probe stream {stream_id}: {e}")
+        logger.exception("[STREAM-STATS-PROBE] Failed to probe stream %s: %s", stream_id, e)
         raise HTTPException(status_code=500, detail=str(e))

@@ -98,7 +98,7 @@ class AutoCreationEngine:
             Dict with execution summary and results
         """
         started_at = datetime.utcnow()
-        logger.info(f"Starting auto-creation pipeline (dry_run={dry_run}, triggered_by={triggered_by})")
+        logger.info("[AUTO-CREATE-ENGINE] Starting auto-creation pipeline (dry_run=%s, triggered_by=%s)", dry_run, triggered_by)
 
         # Load existing channels and groups
         await self._load_existing_data()
@@ -106,7 +106,7 @@ class AutoCreationEngine:
         # Load enabled rules
         rules = await self._load_rules(rule_ids)
         if not rules:
-            logger.info("No enabled rules found")
+            logger.info("[AUTO-CREATE-ENGINE] No enabled rules found")
             return {
                 "success": True,
                 "message": "No enabled rules to process",
@@ -116,7 +116,7 @@ class AutoCreationEngine:
 
         # Fetch streams from M3U accounts
         streams = await self._fetch_streams(m3u_account_ids, rules)
-        logger.info(f"Fetched {len(streams)} streams to evaluate against {len(rules)} rules")
+        logger.info("[AUTO-CREATE-ENGINE] Fetched %s streams to evaluate against %s rules", len(streams), len(rules))
 
         # Apply global exclusion filters
         streams, exclusion_log = await self._apply_global_filters(streams)
@@ -168,8 +168,10 @@ class AutoCreationEngine:
         if moved:
             orphan_info += f", {moved} orphans moved"
         logger.info(
-            f"Pipeline completed: {results['streams_matched']}/{results['streams_evaluated']} streams matched, "
-            f"{results['channels_created']} channels created, {results['channels_updated']} updated{orphan_info}"
+            "[AUTO-CREATE-ENGINE] Pipeline completed: %s/%s streams matched, "
+            "%s channels created, %s updated%s",
+            results['streams_matched'], results['streams_evaluated'],
+            results['channels_created'], results['channels_updated'], orphan_info
         )
 
         return {
@@ -229,7 +231,7 @@ class AutoCreationEngine:
             if execution.mode == "dry_run":
                 return {"success": False, "error": "Cannot rollback a dry-run execution"}
 
-            logger.info(f"Rolling back execution {execution_id}")
+            logger.info("[AUTO-CREATE-ENGINE] Rolling back execution %s", execution_id)
 
             # Rollback created entities (in reverse order)
             created = execution.get_created_entities()
@@ -247,7 +249,7 @@ class AutoCreationEngine:
             execution.rolled_back_by = rolled_back_by
             session.commit()
 
-            logger.info(f"Rollback complete: {len(created)} created entities removed, {len(modified)} entities restored")
+            logger.info("[AUTO-CREATE-ENGINE] Rollback complete: %s created entities removed, %s entities restored", len(created), len(modified))
 
             return {
                 "success": True,
@@ -259,7 +261,7 @@ class AutoCreationEngine:
 
         except Exception as e:
             session.rollback()
-            logger.error(f"Rollback failed: {e}")
+            logger.error("[AUTO-CREATE-ENGINE] Rollback failed: %s", e)
             return {"success": False, "error": str(e)}
         finally:
             session.close()
@@ -286,9 +288,9 @@ class AutoCreationEngine:
 
             # get_channel_groups() returns a flat list
             self._existing_groups = await self.client.get_channel_groups() or []
-            logger.debug(f"Loaded {len(self._existing_channels)} channels, {len(self._existing_groups)} groups")
+            logger.debug("[AUTO-CREATE-ENGINE] Loaded %s channels, %s groups", len(self._existing_channels), len(self._existing_groups))
         except Exception as e:
-            logger.error(f"Failed to load existing data: {e}")
+            logger.exception("[AUTO-CREATE-ENGINE] Failed to load existing data: %s", e)
             self._existing_channels = []
             self._existing_groups = []
 
@@ -306,9 +308,12 @@ class AutoCreationEngine:
             rules = query.order_by(AutoCreationRule.priority).all()
             for r in rules:
                 logger.debug(
-                    f"[LoadRules] Rule id={r.id} name={r.name!r} priority={r.priority} "
-                    f"m3u_account_id={r.m3u_account_id} sort_field={r.sort_field} "
-                    f"stop_on_first_match={r.stop_on_first_match}"
+                    "[AUTO-CREATE-ENGINE] Rule id=%s name=%r priority=%s "
+                    "m3u_account_id=%s sort_field=%s "
+                    "stop_on_first_match=%s",
+                    r.id, r.name, r.priority,
+                    r.m3u_account_id, r.sort_field,
+                    r.stop_on_first_match
                 )
             return rules
 
@@ -353,7 +358,7 @@ class AutoCreationEngine:
         all_streams = []
         m3u_accounts = await self.client.get_m3u_accounts() or []
         account_map = {a["id"]: a for a in m3u_accounts}
-        logger.debug(f"[FetchStreams] Accounts to fetch: {accounts_to_fetch}")
+        logger.debug("[AUTO-CREATE-ENGINE] Accounts to fetch: %s", accounts_to_fetch)
 
         # Load stream stats for quality info
         await self._load_stream_stats()
@@ -397,7 +402,7 @@ class AutoCreationEngine:
                         break
                     page += 1
             except Exception as e:
-                logger.error(f"Failed to fetch streams from M3U account {account_id}: {e}")
+                logger.error("[AUTO-CREATE-ENGINE] Failed to fetch streams from M3U account %s: %s", account_id, e)
 
         return all_streams
 
@@ -424,9 +429,9 @@ class AutoCreationEngine:
                 for group_id, gs in all_group_settings.items():
                     if gs.get("auto_channel_sync"):
                         auto_sync_group_ids.add(group_id)
-                logger.debug(f"[GlobalFilter] Found {len(auto_sync_group_ids)} auto-sync group IDs")
+                logger.debug("[AUTO-CREATE-ENGINE] Found %s auto-sync group IDs", len(auto_sync_group_ids))
             except Exception as e:
-                logger.warning(f"[GlobalFilter] Failed to fetch auto-sync groups: {e}")
+                logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch auto-sync groups: %s", e)
 
         # Lowercase terms for case-insensitive matching
         terms_lower = [t.lower() for t in excluded_terms if t]
@@ -460,7 +465,7 @@ class AutoCreationEngine:
                     reason = "Excluded: auto-sync group"
 
             if reason:
-                logger.debug(f"[GlobalFilter] {reason} - stream={stream.stream_name!r} id={stream.stream_id}")
+                logger.debug("[AUTO-CREATE-ENGINE] %s - stream=%r id=%s", reason, stream.stream_name, stream.stream_id)
                 exclusion_log.append({
                     "stream_id": stream.stream_id,
                     "stream_name": stream.stream_name,
@@ -478,15 +483,16 @@ class AutoCreationEngine:
         excluded_count = len(streams) - len(filtered)
         if excluded_count > 0:
             logger.info(
-                f"[GlobalFilter] Excluded {excluded_count} streams "
-                f"({len(streams)} total -> {len(filtered)} remaining)"
+                "[AUTO-CREATE-ENGINE] Excluded %s streams "
+                "(%s total -> %s remaining)",
+                excluded_count, len(streams), len(filtered)
             )
             if terms_lower:
-                logger.info(f"[GlobalFilter]   Terms: {excluded_terms}")
+                logger.info("[AUTO-CREATE-ENGINE]   Terms: %s", excluded_terms)
             if groups_lower:
-                logger.info(f"[GlobalFilter]   Groups: {excluded_groups}")
+                logger.info("[AUTO-CREATE-ENGINE]   Groups: %s", excluded_groups)
             if auto_sync_group_ids:
-                logger.info(f"[GlobalFilter]   Auto-sync groups: {len(auto_sync_group_ids)} groups")
+                logger.info("[AUTO-CREATE-ENGINE]   Auto-sync groups: %s groups", len(auto_sync_group_ids))
 
         return filtered, exclusion_log
 
@@ -544,16 +550,16 @@ class AutoCreationEngine:
 
         prober = get_prober()
         if not prober:
-            logger.warning("[Probe-on-sort] Prober not available, skipping probe step")
+            logger.warning("[AUTO-CREATE-ENGINE] Prober not available, skipping probe step")
             return
 
         count = len(streams_to_probe)
-        logger.info(f"[Probe-on-sort] Probing {count} unprobed stream(s) for quality sorting")
+        logger.info("[AUTO-CREATE-ENGINE] Probing %s unprobed stream(s) for quality sorting", count)
 
         if dry_run:
             results["dry_run_results"].append({
                 "stream_id": None,
-                "stream_name": "[Probe-on-sort]",
+                "stream_name": "[AUTO-CREATE-ENGINE]",
                 "rule_id": None,
                 "rule_name": None,
                 "action": f"Would probe {count} unprobed stream(s) for quality data",
@@ -570,7 +576,7 @@ class AutoCreationEngine:
                 try:
                     await prober.probe_stream(stream_id, url, name)
                 except Exception as e:
-                    logger.warning(f"[Probe-on-sort] Failed to probe stream {stream_id} ({name}): {e}")
+                    logger.warning("[AUTO-CREATE-ENGINE] Failed to probe stream %s (%s): %s", stream_id, name, e)
 
         tasks = [
             probe_one(sid, url, name)
@@ -594,7 +600,7 @@ class AutoCreationEngine:
 
         results["execution_log"].append({
             "stream_id": None,
-            "stream_name": f"[Probe-on-sort]",
+            "stream_name": f"[AUTO-CREATE-ENGINE]",
             "m3u_account_id": None,
             "rules_evaluated": [],
             "actions_executed": [{
@@ -647,8 +653,8 @@ class AutoCreationEngine:
                         channel = await self.client.get_channel(channel_id)
                         if channel and "streams" not in channel:
                             channel["streams"] = await self.client.get_channel_streams(channel_id)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch channel %s for reorder: %s", channel_id, e)
                 if not channel:
                     continue
 
@@ -673,13 +679,13 @@ class AutoCreationEngine:
 
                 # Skip if order didn't change
                 if sorted_streams == current_streams:
-                    logger.info(f"[Stream-reorder] Channel '{channel_name}': order unchanged, skipping")
+                    logger.info("[AUTO-CREATE-ENGINE] Channel '%s': order unchanged, skipping", channel_name)
                     continue
 
                 if dry_run:
                     results["dry_run_results"].append({
                         "stream_id": None,
-                        "stream_name": f"[Stream-reorder] {channel_name}",
+                        "stream_name": f"[AUTO-CREATE-ENGINE] {channel_name}",
                         "rule_id": rule.id,
                         "rule_name": rule.name,
                         "action": f"Would reorder {len(sorted_streams)} streams in '{channel_name}' "
@@ -694,7 +700,7 @@ class AutoCreationEngine:
                         channel["streams"] = sorted_streams
                         results["execution_log"].append({
                             "stream_id": None,
-                            "stream_name": f"[Stream-reorder] {channel_name}",
+                            "stream_name": f"[AUTO-CREATE-ENGINE] {channel_name}",
                             "m3u_account_id": None,
                             "rules_evaluated": [],
                             "actions_executed": [{
@@ -707,12 +713,14 @@ class AutoCreationEngine:
                             }]
                         })
                         logger.info(
-                            f"[Stream-reorder] Reordered {len(sorted_streams)} streams in "
-                            f"'{channel_name}' by smart sort"
+                            "[AUTO-CREATE-ENGINE] Reordered %s streams in "
+                            "'%s' by smart sort",
+                            len(sorted_streams), channel_name
                         )
                     except Exception as e:
                         logger.error(
-                            f"[Stream-reorder] Failed to reorder streams in '{channel_name}': {e}"
+                            "[AUTO-CREATE-ENGINE] Failed to reorder streams in '%s': %s",
+                            channel_name, e
                         )
 
     # =========================================================================
@@ -741,14 +749,19 @@ class AutoCreationEngine:
         # Load user settings once for the entire pipeline run
         settings = get_settings()
         logger.debug(
-            f"[Settings] include_channel_number_in_name={getattr(settings, 'include_channel_number_in_name', False)}, "
-            f"separator={getattr(settings, 'channel_number_separator', '-')!r}, "
-            f"default_profiles={getattr(settings, 'default_channel_profile_ids', [])}, "
-            f"timezone={getattr(settings, 'timezone_preference', 'both')}, "
-            f"auto_rename={getattr(settings, 'auto_rename_channel_number', False)}, "
-            f"sort_priority={getattr(settings, 'stream_sort_priority', [])}, "
-            f"sort_enabled={getattr(settings, 'stream_sort_enabled', {})}, "
-            f"deprioritize_failed={getattr(settings, 'deprioritize_failed_streams', True)}"
+            "[AUTO-CREATE-ENGINE] include_channel_number_in_name=%s, "
+            "separator=%r, default_profiles=%s, "
+            "timezone=%s, auto_rename=%s, "
+            "sort_priority=%s, sort_enabled=%s, "
+            "deprioritize_failed=%s",
+            getattr(settings, 'include_channel_number_in_name', False),
+            getattr(settings, 'channel_number_separator', '-'),
+            getattr(settings, 'default_channel_profile_ids', []),
+            getattr(settings, 'timezone_preference', 'both'),
+            getattr(settings, 'auto_rename_channel_number', False),
+            getattr(settings, 'stream_sort_priority', []),
+            getattr(settings, 'stream_sort_enabled', {}),
+            getattr(settings, 'deprioritize_failed_streams', True)
         )
 
         # Create normalization engine if any rule uses normalize_names
@@ -772,7 +785,7 @@ class AutoCreationEngine:
                 session = get_session()
                 norm_engine = get_normalization_engine(session)
             except Exception as e:
-                logger.warning(f"Failed to initialize normalization engine: {e}")
+                logger.warning("[AUTO-CREATE-ENGINE] Failed to initialize normalization engine: %s", e)
 
         # Initialize evaluator (with normalization engine for normalized_name_in_group conditions)
         evaluator = ConditionEvaluator(self._existing_channels, self._existing_groups,
@@ -785,7 +798,7 @@ class AutoCreationEngine:
                 profiles = await self.client.get_channel_profiles()
                 all_profile_ids = [p["id"] for p in profiles]
             except Exception as e:
-                logger.warning(f"Failed to fetch channel profiles: {e}")
+                logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch channel profiles: %s", e)
 
         # Pre-fetch EPG data if any rule uses assign_epg (for epg_id -> epg_data_id resolution)
         epg_data = []
@@ -796,9 +809,9 @@ class AutoCreationEngine:
         if needs_epg:
             try:
                 epg_data = await self.client.get_epg_data()
-                logger.debug(f"[Engine] Fetched {len(epg_data)} EPG data entries for assign_epg resolution")
+                logger.debug("[AUTO-CREATE-ENGINE] Fetched %s EPG data entries for assign_epg resolution", len(epg_data))
             except Exception as e:
-                logger.warning(f"Failed to fetch EPG data for assign_epg: {e}")
+                logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch EPG data for assign_epg: %s", e)
 
         # Build stream_id -> m3u_account_id map for smart sort M3U priority lookups
         stream_m3u_map = {}
@@ -838,14 +851,16 @@ class AutoCreationEngine:
         # =====================================================================
         # Pass 1: Evaluate all streams against all rules, collect matches
         # =====================================================================
-        logger.info(f"[Pass1] Evaluating {len(streams)} streams against {len(rules)} rules")
+        logger.info("[AUTO-CREATE-ENGINE] Evaluating %s streams against %s rules", len(streams), len(rules))
         matched_entries = []  # list of (stream, winning_rule, losing_rules, stream_rules_log)
 
         for stream in streams:
             results["streams_evaluated"] += 1
             logger.debug(
-                f"[Pass1] Evaluating stream id={stream.stream_id} name={stream.stream_name!r} "
-                f"m3u={stream.m3u_account_id} group={stream.group_name!r}"
+                "[AUTO-CREATE-ENGINE] Evaluating stream id=%s name=%r "
+                "m3u=%s group=%r",
+                stream.stream_id, stream.stream_name,
+                stream.m3u_account_id, stream.group_name
             )
 
             # Track rules that match this stream
@@ -858,8 +873,9 @@ class AutoCreationEngine:
                 # Check if rule applies to this M3U account
                 if rule.m3u_account_id and rule.m3u_account_id != stream.m3u_account_id:
                     logger.debug(
-                        f"[Pass1]   Rule '{rule.name}' skipped: m3u filter "
-                        f"(rule={rule.m3u_account_id} != stream={stream.m3u_account_id})"
+                        "[AUTO-CREATE-ENGINE]   Rule '%s' skipped: m3u filter "
+                        "(rule=%s != stream=%s)",
+                        rule.name, rule.m3u_account_id, stream.m3u_account_id
                     )
                     continue
 
@@ -904,8 +920,10 @@ class AutoCreationEngine:
                 stream_rules_log.append(rule_log)
 
                 logger.debug(
-                    f"[Pass1]   Rule '{rule.name}' (id={rule.id}): matched={matched} "
-                    f"({len(conditions)} conditions in {len(or_groups)} OR-group(s))"
+                    "[AUTO-CREATE-ENGINE]   Rule '%s' (id=%s): matched=%s "
+                    "(%s conditions in %s OR-group(s))",
+                    rule.name, rule.id, matched,
+                    len(conditions), len(or_groups)
                 )
 
                 if matched:
@@ -917,11 +935,11 @@ class AutoCreationEngine:
                     stream_rule_matches[stream.stream_id].append((rule.id, rule.priority))
 
                     if rule.stop_on_first_match:
-                        logger.debug(f"[Pass1]   Rule '{rule.name}' has stop_on_first_match, skipping remaining rules")
+                        logger.debug("[AUTO-CREATE-ENGINE]   Rule '%s' has stop_on_first_match, skipping remaining rules", rule.name)
                         break
 
             if not matching_rules:
-                logger.debug(f"[Pass1] Stream {stream.stream_name!r}: no rules matched")
+                logger.debug("[AUTO-CREATE-ENGINE] Stream %r: no rules matched", stream.stream_name)
                 continue
 
             # Determine winning and losing rules
@@ -929,13 +947,14 @@ class AutoCreationEngine:
             losing_rules = matching_rules[1:] if len(matching_rules) > 1 else []
 
             logger.debug(
-                f"[Pass1] Stream {stream.stream_name!r}: winner='{winning_rule.name}' (id={winning_rule.id})"
-                + (f", losers={[r.name for r in losing_rules]}" if losing_rules else "")
+                "[AUTO-CREATE-ENGINE] Stream %r: winner='%s' (id=%s)%s",
+                stream.stream_name, winning_rule.name, winning_rule.id,
+                (", losers=%s" % [r.name for r in losing_rules]) if losing_rules else ""
             )
 
             matched_entries.append((stream, winning_rule, losing_rules, stream_rules_log))
 
-        logger.info(f"[Pass1] Complete: {len(matched_entries)} streams matched out of {len(streams)} evaluated")
+        logger.info("[AUTO-CREATE-ENGINE] Complete: %s streams matched out of %s evaluated", len(matched_entries), len(streams))
 
         # =====================================================================
         # Pass 1.1: Timezone filter on matched entries
@@ -949,9 +968,10 @@ class AutoCreationEngine:
             filtered_count = before_count - len(matched_entries)
             if filtered_count > 0:
                 logger.info(
-                    f"[Timezone-filter] Filtered {filtered_count} streams "
-                    f"(preference={settings.timezone_preference}), "
-                    f"{len(matched_entries)} remaining"
+                    "[AUTO-CREATE-ENGINE] Filtered %s streams "
+                    "(preference=%s), %s remaining",
+                    filtered_count, settings.timezone_preference,
+                    len(matched_entries)
                 )
 
         # =====================================================================
@@ -972,8 +992,10 @@ class AutoCreationEngine:
             rule = rule_map.get(rule_id)
             if rule and rule.sort_field:
                 logger.debug(
-                    f"[Sort] Sorting {len(entries)} entries for rule '{rule.name}' "
-                    f"by {rule.sort_field} {rule.sort_order or 'asc'}"
+                    "[AUTO-CREATE-ENGINE] Sorting %s entries for rule '%s' "
+                    "by %s %s",
+                    len(entries), rule.name,
+                    rule.sort_field, rule.sort_order or 'asc'
                 )
                 entries.sort(
                     key=lambda e: _sort_key(e[0], rule.sort_field),
@@ -981,7 +1003,7 @@ class AutoCreationEngine:
                 )
             sorted_entries.extend(entries)
 
-        logger.debug(f"[Sort] Total sorted entries: {len(sorted_entries)}")
+        logger.debug("[AUTO-CREATE-ENGINE] Total sorted entries: %s", len(sorted_entries))
 
         # Track channel IDs per rule in sorted order (for Pass 3 renumber + Pass 3.5 stream reorder)
         rule_channel_order = defaultdict(list)  # rule_id -> [channel_id, ...] in sorted order
@@ -989,12 +1011,13 @@ class AutoCreationEngine:
         # =====================================================================
         # Pass 2: Execute actions on sorted matches
         # =====================================================================
-        logger.debug(f"[Pass2] Executing actions for {len(sorted_entries)} matched streams")
+        logger.debug("[AUTO-CREATE-ENGINE] Executing actions for %s matched streams", len(sorted_entries))
         for stream, winning_rule, losing_rules, stream_rules_log in sorted_entries:
             results["streams_matched"] += 1
             logger.debug(
-                f"[Pass2] Stream {stream.stream_name!r} (id={stream.stream_id}): "
-                f"executing rule '{winning_rule.name}' actions"
+                "[AUTO-CREATE-ENGINE] Stream %r (id=%s): "
+                "executing rule '%s' actions",
+                stream.stream_name, stream.stream_id, winning_rule.name
             )
 
             # Track per-rule match counts
@@ -1091,7 +1114,7 @@ class AutoCreationEngine:
         # =====================================================================
         # Pass 3: Re-sort existing channels for rules with sort_field
         # =====================================================================
-        logger.debug("[Pass3] Starting channel renumbering pass")
+        logger.debug("[AUTO-CREATE-ENGINE] Starting channel renumbering pass")
         for rule in rules:
             if not rule.sort_field:
                 continue
@@ -1106,7 +1129,7 @@ class AutoCreationEngine:
             if dry_run:
                 results["dry_run_results"].append({
                     "stream_id": None,
-                    "stream_name": "[Re-sort]",
+                    "stream_name": "[AUTO-CREATE-ENGINE]",
                     "rule_id": rule.id,
                     "rule_name": rule.name,
                     "action": f"Would renumber {len(channel_ids)} channels starting at #{starting_number} "
@@ -1124,7 +1147,7 @@ class AutoCreationEngine:
                     rename_note = f", renamed {rename_count} channel names" if rename_count else ""
                     results["execution_log"].append({
                         "stream_id": None,
-                        "stream_name": f"[Re-sort] Rule '{rule.name}'",
+                        "stream_name": f"[AUTO-CREATE-ENGINE] Rule '{rule.name}'",
                         "m3u_account_id": None,
                         "rules_evaluated": [],
                         "actions_executed": [{
@@ -1137,14 +1160,15 @@ class AutoCreationEngine:
                         }]
                     })
                     logger.info(
-                        f"[Re-sort] Rule '{rule.name}': renumbered {len(channel_ids)} channels "
-                        f"starting at #{starting_number}{rename_note}"
+                        "[AUTO-CREATE-ENGINE] Rule '%s': renumbered %s channels "
+                        "starting at #%s%s",
+                        rule.name, len(channel_ids), starting_number, rename_note
                     )
                 except Exception as e:
-                    logger.error(f"[Re-sort] Rule '{rule.name}': failed to renumber channels: {e}")
+                    logger.error("[AUTO-CREATE-ENGINE] Rule '%s': failed to renumber channels: %s", rule.name, e)
                     results["execution_log"].append({
                         "stream_id": None,
-                        "stream_name": f"[Re-sort] Rule '{rule.name}'",
+                        "stream_name": f"[AUTO-CREATE-ENGINE] Rule '{rule.name}'",
                         "m3u_account_id": None,
                         "rules_evaluated": [],
                         "actions_executed": [{
@@ -1159,7 +1183,7 @@ class AutoCreationEngine:
         # =====================================================================
         # Pass 3.5: Reorder streams within channels by smart sort
         # =====================================================================
-        logger.debug("[Pass3.5] Starting stream reorder within channels")
+        logger.debug("[AUTO-CREATE-ENGINE] Starting stream reorder within channels")
         await self._reorder_channel_streams(
             rules, rule_channel_order, results, dry_run,
             settings=settings, stream_m3u_map=stream_m3u_map
@@ -1168,7 +1192,7 @@ class AutoCreationEngine:
         # =====================================================================
         # Pass 4: Reconcile — clean up orphaned channels
         # =====================================================================
-        logger.debug("[Pass4] Starting orphan reconciliation")
+        logger.debug("[AUTO-CREATE-ENGINE] Starting orphan reconciliation")
         await self._reconcile_orphans(
             rules, rule_channel_order, executor, execution, results, dry_run,
             settings=settings
@@ -1202,8 +1226,9 @@ class AutoCreationEngine:
             for rule in rules:
                 orphan_action = getattr(rule, 'orphan_action', 'delete') or 'delete'
                 logger.debug(
-                    f"[Reconcile] Rule '{rule.name}': orphan_action={orphan_action}, "
-                    f"managed_channel_ids={rule.managed_channel_ids is not None}"
+                    "[AUTO-CREATE-ENGINE] Rule '%s': orphan_action=%s, "
+                    "managed_channel_ids=%s",
+                    rule.name, orphan_action, rule.managed_channel_ids is not None
                 )
 
                 # orphan_action "none" means skip reconciliation entirely for this rule
@@ -1224,16 +1249,19 @@ class AutoCreationEngine:
                         rule.set_managed_channel_ids(list(current_ids))
                         session.merge(rule)
                     logger.info(
-                        f"[Reconcile] Rule '{rule.name}': first run, populated "
-                        f"{len(current_ids)} managed channel IDs"
+                        "[AUTO-CREATE-ENGINE] Rule '%s': first run, populated "
+                        "%s managed channel IDs",
+                        rule.name, len(current_ids)
                     )
                     continue
 
                 orphan_ids = previous_ids - current_ids
                 logger.debug(
-                    f"[Reconcile] Rule '{rule.name}': previous={len(previous_ids)} "
-                    f"current={len(current_ids)} orphans={len(orphan_ids)} "
-                    f"orphan_ids={list(orphan_ids)[:20]}"
+                    "[AUTO-CREATE-ENGINE] Rule '%s': previous=%s "
+                    "current=%s orphans=%s orphan_ids=%s",
+                    rule.name, len(previous_ids),
+                    len(current_ids), len(orphan_ids),
+                    list(orphan_ids)[:20]
                 )
 
                 if not orphan_ids:
@@ -1244,8 +1272,10 @@ class AutoCreationEngine:
                     continue
 
                 logger.info(
-                    f"[Reconcile] Rule '{rule.name}': {len(orphan_ids)} orphaned channels "
-                    f"(previous={len(previous_ids)}, current={len(current_ids)})"
+                    "[AUTO-CREATE-ENGINE] Rule '%s': %s orphaned channels "
+                    "(previous=%s, current=%s)",
+                    rule.name, len(orphan_ids),
+                    len(previous_ids), len(current_ids)
                 )
 
                 # Track groups that may become empty (for delete_and_cleanup_groups)
@@ -1360,11 +1390,13 @@ class AutoCreationEngine:
                                 }]
                             })
                             logger.info(
-                                f"[Reconcile] Rule '{rule.name}': renumbered {len(remaining_channel_ids)} channels "
-                                f"starting at #{starting_number} after orphan cleanup{rename_note}"
+                                "[AUTO-CREATE-ENGINE] Rule '%s': renumbered %s channels "
+                                "starting at #%s after orphan cleanup%s",
+                                rule.name, len(remaining_channel_ids),
+                                starting_number, rename_note
                             )
                         except Exception as e:
-                            logger.error(f"[Reconcile] Rule '{rule.name}': failed to renumber after cleanup: {e}")
+                            logger.error("[AUTO-CREATE-ENGINE] Rule '%s': failed to renumber after cleanup: %s", rule.name, e)
 
                 # Update managed_channel_ids (not during dry run)
                 if not dry_run:
@@ -1374,7 +1406,7 @@ class AutoCreationEngine:
             session.commit()
         except Exception as e:
             session.rollback()
-            logger.error(f"[Reconcile] Failed: {e}")
+            logger.exception("[AUTO-CREATE-ENGINE] Failed to sync managed channel IDs: %s", e)
         finally:
             session.close()
 
@@ -1461,12 +1493,12 @@ class AutoCreationEngine:
         try:
             if entity_type == "channel":
                 await self.client.delete_channel(entity_id)
-                logger.info(f"Deleted channel {entity_id} ({entity.get('name')})")
+                logger.info("[AUTO-CREATE-ENGINE] Deleted channel %s (%s)", entity_id, entity.get('name'))
             elif entity_type == "group":
                 await self.client.delete_channel_group(entity_id)
-                logger.info(f"Deleted group {entity_id} ({entity.get('name')})")
+                logger.info("[AUTO-CREATE-ENGINE] Deleted group %s (%s)", entity_id, entity.get('name'))
         except Exception as e:
-            logger.error(f"Failed to rollback {entity_type} {entity_id}: {e}")
+            logger.error("[AUTO-CREATE-ENGINE] Failed to rollback %s %s: %s", entity_type, entity_id, e)
 
     async def _rollback_modified_entity(self, entity: dict):
         """Rollback a modified entity by restoring its previous state."""
@@ -1477,9 +1509,9 @@ class AutoCreationEngine:
         try:
             if entity_type == "channel" and previous:
                 await self.client.update_channel(entity_id, previous)
-                logger.info(f"Restored channel {entity_id} to previous state")
+                logger.info("[AUTO-CREATE-ENGINE] Restored channel %s to previous state", entity_id)
         except Exception as e:
-            logger.error(f"Failed to restore {entity_type} {entity_id}: {e}")
+            logger.error("[AUTO-CREATE-ENGINE] Failed to restore %s %s: %s", entity_type, entity_id, e)
 
 
 # =============================================================================
@@ -1531,8 +1563,9 @@ def _smart_sort_streams(
     active_criteria = [c for c in sort_priority if sort_enabled.get(c, False)]
 
     logger.info(
-        f"[Stream-reorder] Channel '{channel_name}': smart sort with "
-        f"active_criteria={active_criteria}, deprioritize_failed={deprioritize_failed}"
+        "[AUTO-CREATE-ENGINE] Channel '%s': smart sort with "
+        "active_criteria=%s, deprioritize_failed=%s",
+        channel_name, active_criteria, deprioritize_failed
     )
 
     def get_sort_value(sid: int) -> tuple:
@@ -1592,16 +1625,16 @@ def _smart_sort_streams(
         stats = stats_cache.get(sid)
         sname = stats.get("stream_name", f"Stream {sid}") if stats else f"Stream {sid}"
         sv = get_sort_value(sid)
-        logger.debug(f"[Stream-reorder]   {sname} (id={sid}): sort_tuple={sv}")
+        logger.debug("[AUTO-CREATE-ENGINE]   %s (id=%s): sort_tuple=%s", sname, sid, sv)
 
     sorted_ids = sorted(stream_ids, key=get_sort_value)
 
-    logger.info(f"[Stream-reorder] Channel '{channel_name}' sorted order:")
+    logger.info("[AUTO-CREATE-ENGINE] Channel '%s' sorted order:", channel_name)
     for idx, sid in enumerate(sorted_ids):
         stats = stats_cache.get(sid)
         sname = stats.get("stream_name", f"Stream {sid}") if stats else f"Stream {sid}"
         res = stats.get("resolution", "?") if stats else "?"
-        logger.info(f"[Stream-reorder]   #{idx+1}: {sname} (id={sid}, res={res})")
+        logger.info("[AUTO-CREATE-ENGINE]   #%s: %s (id=%s, res=%s)", idx+1, sname, sid, res)
 
     return sorted_ids
 
@@ -1692,12 +1725,12 @@ def _filter_by_timezone(stream_name: str, preference: str) -> bool:
     if preference == "east":
         keep = suffix != "WEST"
         if not keep:
-            logger.debug(f"[Timezone] Filtering out WEST stream: {stream_name!r}")
+            logger.debug("[AUTO-CREATE-ENGINE] Filtering out WEST stream: %r", stream_name)
         return keep
     if preference == "west":
         keep = suffix != "EAST"
         if not keep:
-            logger.debug(f"[Timezone] Filtering out EAST stream: {stream_name!r}")
+            logger.debug("[AUTO-CREATE-ENGINE] Filtering out EAST stream: %r", stream_name)
         return keep
 
     return True
@@ -1720,18 +1753,19 @@ async def _auto_rename_after_renumber(
     Returns the number of channels renamed.
     """
     if not settings or not getattr(settings, 'auto_rename_channel_number', False):
-        logger.debug("[Auto-rename] Skipped: auto_rename_channel_number is disabled")
+        logger.debug("[AUTO-CREATE-ENGINE] Skipped: auto_rename_channel_number is disabled")
         return 0
     if starting_number is None:
-        logger.debug("[Auto-rename] Skipped: starting_number is None")
+        logger.debug("[AUTO-CREATE-ENGINE] Skipped: starting_number is None")
         return 0
 
-    logger.debug(f"[Auto-rename] Processing {len(channel_ids)} channels starting at #{starting_number}")
+    logger.debug("[AUTO-CREATE-ENGINE] Processing %s channels starting at #%s", len(channel_ids), starting_number)
     renamed = 0
     for idx, channel_id in enumerate(channel_ids):
         try:
             channel = await client.get_channel(channel_id)
-        except Exception:
+        except Exception as e:
+            logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch channel %s for renumbering: %s", channel_id, e)
             continue
 
         old_number = channel.get("channel_number")
@@ -1752,12 +1786,12 @@ async def _auto_rename_after_renumber(
                 try:
                     await client.update_channel(channel_id, {"name": new_name})
                     logger.info(
-                        f"[Auto-rename] Channel {channel_id}: "
-                        f"'{channel_name}' -> '{new_name}'"
+                        "[AUTO-CREATE-ENGINE] Channel %s: '%s' -> '%s'",
+                        channel_id, channel_name, new_name
                     )
                     renamed += 1
                 except Exception as e:
-                    logger.warning(f"[Auto-rename] Failed to rename channel {channel_id}: {e}")
+                    logger.warning("[AUTO-CREATE-ENGINE] Failed to rename channel %s: %s", channel_id, e)
 
     return renamed
 

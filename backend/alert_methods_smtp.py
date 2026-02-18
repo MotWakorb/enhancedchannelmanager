@@ -134,7 +134,7 @@ class SMTPMethod(AlertMethod):
         # Get shared SMTP configuration
         smtp_config = self._get_smtp_config()
         if not smtp_config:
-            logger.error(f"SMTP method {self.name}: Shared SMTP settings not configured. Configure in Settings > Email Settings.")
+            logger.error("[ALERTS-SMTP] SMTP method %s: Shared SMTP settings not configured. Configure in Settings > Email Settings.", self.name)
             return False
 
         smtp_host = smtp_config["smtp_host"]
@@ -145,10 +145,10 @@ class SMTPMethod(AlertMethod):
         # Get recipients from this alert method's config
         to_emails = self.config.get("to_emails")
 
-        logger.debug(f"SMTP method {self.name}: Using shared SMTP ({smtp_host}), to_emails={to_emails}")
+        logger.debug("[ALERTS-SMTP] SMTP method %s: Using shared SMTP (%s), to_emails=%s", self.name, smtp_host, to_emails)
 
         if not to_emails:
-            logger.error(f"SMTP method {self.name}: No recipients configured")
+            logger.error("[ALERTS-SMTP] SMTP method %s: No recipients configured", self.name)
             return False
 
         # Parse to_emails if it's a string
@@ -156,7 +156,7 @@ class SMTPMethod(AlertMethod):
             to_emails = [e.strip() for e in to_emails.split(",") if e.strip()]
 
         if not to_emails:
-            logger.error(f"SMTP method {self.name}: No recipients configured")
+            logger.error("[ALERTS-SMTP] SMTP method %s: No recipients configured", self.name)
             return False
 
         # Build the email
@@ -193,22 +193,22 @@ class SMTPMethod(AlertMethod):
                 if smtp_user and smtp_password:
                     server.login(smtp_user, smtp_password)
 
-                logger.debug(f"SMTP method {self.name}: Sending from={from_email}, to={to_emails}")
+                logger.debug("[ALERTS-SMTP] SMTP method %s: Sending from=%s, to=%s", self.name, from_email, to_emails)
                 server.sendmail(from_email, to_emails, msg.as_string())
-                logger.info(f"SMTP method {self.name}: Email sent to {len(to_emails)} recipient(s)")
+                logger.info("[ALERTS-SMTP] SMTP method %s: Email sent to %s recipient(s)", self.name, len(to_emails))
                 return True
 
             finally:
                 server.quit()
 
         except smtplib.SMTPAuthenticationError as e:
-            logger.error(f"SMTP method {self.name}: Authentication failed: {e}")
+            logger.error("[ALERTS-SMTP] SMTP method %s: Authentication failed: %s", self.name, e)
             return False
         except smtplib.SMTPException as e:
-            logger.error(f"SMTP method {self.name}: SMTP error: {e}")
+            logger.error("[ALERTS-SMTP] SMTP method %s: SMTP error: %s", self.name, e)
             return False
         except Exception as e:
-            logger.error(f"SMTP method {self.name}: Unexpected error: {e}")
+            logger.exception("[ALERTS-SMTP] SMTP method %s: Unexpected error: %s", self.name, e)
             return False
 
     async def test_connection(self) -> tuple[bool, str]:
@@ -288,7 +288,7 @@ class SMTPMethod(AlertMethod):
         # Get shared SMTP configuration
         smtp_config = self._get_smtp_config()
         if not smtp_config:
-            logger.error(f"SMTP method {self.name}: Shared SMTP settings not configured")
+            logger.error("[ALERTS-SMTP] SMTP method %s: Shared SMTP settings not configured", self.name)
             return False
 
         smtp_host = smtp_config["smtp_host"]
@@ -298,14 +298,14 @@ class SMTPMethod(AlertMethod):
 
         to_emails = self.config.get("to_emails")
         if not to_emails:
-            logger.error(f"SMTP method {self.name}: No recipients configured")
+            logger.error("[ALERTS-SMTP] SMTP method %s: No recipients configured", self.name)
             return False
 
         if isinstance(to_emails, str):
             to_emails = [e.strip() for e in to_emails.split(",") if e.strip()]
 
         if not to_emails:
-            logger.error(f"SMTP method {self.name}: No recipients configured")
+            logger.error("[ALERTS-SMTP] SMTP method %s: No recipients configured", self.name)
             return False
 
         # Count by type
@@ -357,16 +357,16 @@ class SMTPMethod(AlertMethod):
                 if smtp_user and smtp_password:
                     server.login(smtp_user, smtp_password)
 
-                logger.debug(f"SMTP method {self.name}: Sending digest with {len(messages)} alerts")
+                logger.debug("[ALERTS-SMTP] SMTP method %s: Sending digest with %s alerts", self.name, len(messages))
                 server.sendmail(from_email, to_emails, msg.as_string())
-                logger.info(f"SMTP method {self.name}: Digest sent with {len(messages)} alerts")
+                logger.info("[ALERTS-SMTP] SMTP method %s: Digest sent with %s alerts", self.name, len(messages))
                 return True
 
             finally:
                 server.quit()
 
         except Exception as e:
-            logger.error(f"SMTP method {self.name}: Failed to send digest: {e}")
+            logger.exception("[ALERTS-SMTP] SMTP method %s: Failed to send digest: %s", self.name, e)
             return False
 
     def _build_html_digest(self, messages: List[AlertMessage], counts: dict) -> str:

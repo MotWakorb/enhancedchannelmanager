@@ -292,7 +292,7 @@ class TaskScheduler(ABC):
 
         # Respect the show_notifications setting
         if not self._show_notifications:
-            logger.debug(f"[{self.task_id}] Skipping progress notification (show_notifications=False)")
+            logger.debug("[%s] Skipping progress notification (show_notifications=False)", self.task_id)
             return
 
         try:
@@ -318,9 +318,9 @@ class TaskScheduler(ABC):
             )
             if result and "id" in result:
                 self._notification_id = result["id"]
-                logger.debug(f"[{self.task_id}] Created progress notification {self._notification_id}")
+                logger.debug("[%s] Created progress notification %s", self.task_id, self._notification_id)
         except Exception as e:
-            logger.warning(f"[{self.task_id}] Failed to create progress notification: {e}")
+            logger.warning("[%s] Failed to create progress notification: %s", self.task_id, e)
 
     async def _update_progress_notification(self, force: bool = False):
         """Update the progress notification (rate-limited unless force=True)."""
@@ -355,7 +355,7 @@ class TaskScheduler(ABC):
                 },
             )
         except Exception as e:
-            logger.warning(f"[{self.task_id}] Failed to update progress notification: {e}")
+            logger.warning("[%s] Failed to update progress notification: %s", self.task_id, e)
 
     async def _finalize_progress_notification(self, result: 'TaskResult'):
         """Finalize the progress notification when task completes."""
@@ -399,7 +399,7 @@ class TaskScheduler(ABC):
             )
             self._notification_id = None
         except Exception as e:
-            logger.warning(f"[{self.task_id}] Failed to finalize progress notification: {e}")
+            logger.warning("[%s] Failed to finalize progress notification: %s", self.task_id, e)
 
     # -------------------------------------------------------------------------
     # Progress Tracking (for use by subclasses)
@@ -540,7 +540,7 @@ class TaskScheduler(ABC):
         )
 
         try:
-            logger.info(f"[{self.task_id}] Starting task: {self.task_name}")
+            logger.info("[%s] Starting task: %s", self.task_id, self.task_name)
             await self.on_start()
 
             # Create progress notification
@@ -557,14 +557,14 @@ class TaskScheduler(ABC):
                 result.message = "Task was cancelled"
                 result.error = "CANCELLED"
                 await self.on_cancel()
-                logger.info(f"[{self.task_id}] Task cancelled")
+                logger.info("[%s] Task cancelled", self.task_id)
             elif result.success:
                 self._status = TaskStatus.COMPLETED
                 await self.on_complete(result)
-                logger.info(f"[{self.task_id}] Task completed successfully: {result.message}")
+                logger.info("[%s] Task completed successfully: %s", self.task_id, result.message)
             else:
                 self._status = TaskStatus.FAILED
-                logger.warning(f"[{self.task_id}] Task failed: {result.message}")
+                logger.warning("[%s] Task failed: %s", self.task_id, result.message)
 
         except Exception as e:
             self._status = TaskStatus.FAILED
@@ -572,7 +572,7 @@ class TaskScheduler(ABC):
             result.message = f"Task failed with error: {str(e)}"
             result.error = str(e)
             result.completed_at = datetime.utcnow()
-            logger.exception(f"[{self.task_id}] Task error: {e}")
+            logger.exception("[%s] Task error: %s", self.task_id, e)
             await self.on_error(e, result)
         finally:
             # Finalize progress notification
@@ -610,7 +610,7 @@ class TaskScheduler(ABC):
                 "message": "Task is not currently running",
             }
 
-        logger.info(f"[{self.task_id}] Cancellation requested")
+        logger.info("[%s] Cancellation requested", self.task_id)
         self._cancel_requested = True
         self._progress.status = "cancelling"
 
@@ -622,7 +622,7 @@ class TaskScheduler(ABC):
     def enable(self):
         """Enable the task for scheduled execution."""
         self._enabled = True
-        logger.info(f"[{self.task_id}] Task enabled")
+        logger.info("[%s] Task enabled", self.task_id)
         if self.schedule_config.schedule_type != ScheduleType.MANUAL:
             self._calculate_next_run()
 
@@ -630,7 +630,7 @@ class TaskScheduler(ABC):
         """Disable the task (will not run on schedule)."""
         self._enabled = False
         self._next_run = None
-        logger.info(f"[{self.task_id}] Task disabled")
+        logger.info("[%s] Task disabled", self.task_id)
 
     # -------------------------------------------------------------------------
     # Schedule Calculation
@@ -673,7 +673,7 @@ class TaskScheduler(ABC):
                 next_run_utc = next_run_local.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
                 return next_run_utc
             except Exception as e:
-                logger.warning(f"[{self.task_id}] Failed to use timezone {self.schedule_config.timezone}: {e}")
+                logger.warning("[%s] Failed to use timezone %s: %s", self.task_id, self.schedule_config.timezone, e)
 
         # UTC fallback
         next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -706,10 +706,10 @@ class TaskScheduler(ABC):
 
             return next_time
         except ImportError:
-            logger.warning(f"[{self.task_id}] croniter not installed, cron scheduling unavailable")
+            logger.warning("[%s] croniter not installed, cron scheduling unavailable", self.task_id)
             return None
         except Exception as e:
-            logger.error(f"[{self.task_id}] Failed to parse cron expression: {e}")
+            logger.error("[%s] Failed to parse cron expression: %s", self.task_id, e)
             return None
 
     def get_seconds_until_next_run(self) -> Optional[int]:
@@ -738,7 +738,7 @@ class TaskScheduler(ABC):
     def clear_history(self):
         """Clear execution history."""
         self._history = []
-        logger.info(f"[{self.task_id}] History cleared")
+        logger.info("[%s] History cleared", self.task_id)
 
     # -------------------------------------------------------------------------
     # Configuration Update
@@ -749,4 +749,4 @@ class TaskScheduler(ABC):
         self.schedule_config = schedule_config
         if self._enabled and schedule_config.schedule_type != ScheduleType.MANUAL:
             self._calculate_next_run()
-        logger.info(f"[{self.task_id}] Schedule updated: {schedule_config.to_dict()}")
+        logger.info("[%s] Schedule updated: %s", self.task_id, schedule_config.to_dict())
