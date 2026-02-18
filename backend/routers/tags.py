@@ -45,6 +45,7 @@ class TestTagsRequest(BaseModel):
 @router.get("/groups")
 async def list_tag_groups():
     """List all tag groups with tag counts."""
+    logger.debug("[TAGS] GET /groups")
     try:
         from models import TagGroup, Tag
         from sqlalchemy import func
@@ -66,13 +67,14 @@ async def list_tag_groups():
         finally:
             session.close()
     except Exception as e:
-        logger.error(f"Failed to list tag groups: {e}")
+        logger.exception("[TAGS] Failed to list tag groups")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/groups")
 async def create_tag_group(request: CreateTagGroupRequest):
     """Create a new tag group."""
+    logger.debug("[TAGS] POST /groups - name=%s", request.name)
     try:
         from models import TagGroup
         session = get_session()
@@ -90,20 +92,21 @@ async def create_tag_group(request: CreateTagGroupRequest):
             session.add(group)
             session.commit()
             session.refresh(group)
-            logger.info(f"Created tag group: id={group.id}, name={group.name}")
+            logger.info("[TAGS] Created tag group id=%s name=%s", group.id, group.name)
             return group.to_dict()
         finally:
             session.close()
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to create tag group: {e}")
+        logger.exception("[TAGS] Failed to create tag group")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/groups/{group_id}")
 async def get_tag_group(group_id: int):
     """Get a tag group with all its tags."""
+    logger.debug("[TAGS] GET /groups/%s", group_id)
     try:
         from models import TagGroup
         session = get_session()
@@ -118,13 +121,14 @@ async def get_tag_group(group_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get tag group {group_id}: {e}")
+        logger.exception("[TAGS] Failed to get tag group %s", group_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.patch("/groups/{group_id}")
 async def update_tag_group(group_id: int, request: UpdateTagGroupRequest):
     """Update a tag group name/description."""
+    logger.debug("[TAGS] PATCH /groups/%s", group_id)
     try:
         from models import TagGroup
         session = get_session()
@@ -152,20 +156,21 @@ async def update_tag_group(group_id: int, request: UpdateTagGroupRequest):
 
             session.commit()
             session.refresh(group)
-            logger.info(f"Updated tag group: id={group.id}, name={group.name}")
+            logger.info("[TAGS] Updated tag group id=%s name=%s", group.id, group.name)
             return group.to_dict()
         finally:
             session.close()
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update tag group {group_id}: {e}")
+        logger.exception("[TAGS] Failed to update tag group %s", group_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/groups/{group_id}")
 async def delete_tag_group(group_id: int):
     """Delete a tag group and all its tags."""
+    logger.debug("[TAGS] DELETE /groups/%s", group_id)
     try:
         from models import TagGroup
         session = get_session()
@@ -180,7 +185,7 @@ async def delete_tag_group(group_id: int):
             group_name = group.name
             session.delete(group)  # Cascade deletes all tags
             session.commit()
-            logger.info(f"Deleted tag group: id={group_id}, name={group_name}")
+            logger.info("[TAGS] Deleted tag group id=%s name=%s", group_id, group_name)
 
             from normalization_engine import invalidate_tag_cache
             invalidate_tag_cache()
@@ -191,13 +196,14 @@ async def delete_tag_group(group_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to delete tag group {group_id}: {e}")
+        logger.exception("[TAGS] Failed to delete tag group %s", group_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/groups/{group_id}/tags")
 async def add_tags_to_group(group_id: int, request: CreateTagsRequest):
     """Add one or more tags to a group."""
+    logger.debug("[TAGS] POST /groups/%s/tags - count=%s", group_id, len(request.tags))
     try:
         from models import TagGroup, Tag
         session = get_session()
@@ -235,7 +241,7 @@ async def add_tags_to_group(group_id: int, request: CreateTagsRequest):
                 created_tags.append(tag_value)
 
             session.commit()
-            logger.info(f"Added {len(created_tags)} tags to group {group_id}, skipped {len(skipped_tags)} duplicates")
+            logger.info("[TAGS] Added %s tags to group %s, skipped %s duplicates", len(created_tags), group_id, len(skipped_tags))
 
             if created_tags:
                 from normalization_engine import invalidate_tag_cache
@@ -251,13 +257,14 @@ async def add_tags_to_group(group_id: int, request: CreateTagsRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to add tags to group {group_id}: {e}")
+        logger.exception("[TAGS] Failed to add tags to group %s", group_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.patch("/groups/{group_id}/tags/{tag_id}")
 async def update_tag(group_id: int, tag_id: int, request: UpdateTagRequest):
     """Update a tag's enabled or case_sensitive status."""
+    logger.debug("[TAGS] PATCH /groups/%s/tags/%s", group_id, tag_id)
     try:
         from models import Tag
         session = get_session()
@@ -276,7 +283,7 @@ async def update_tag(group_id: int, tag_id: int, request: UpdateTagRequest):
 
             session.commit()
             session.refresh(tag)
-            logger.info(f"Updated tag: id={tag.id}, value={tag.value}")
+            logger.info("[TAGS] Updated tag id=%s value=%s", tag.id, tag.value)
 
             from normalization_engine import invalidate_tag_cache
             invalidate_tag_cache()
@@ -287,13 +294,14 @@ async def update_tag(group_id: int, tag_id: int, request: UpdateTagRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update tag {tag_id}: {e}")
+        logger.exception("[TAGS] Failed to update tag %s", tag_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/groups/{group_id}/tags/{tag_id}")
 async def delete_tag(group_id: int, tag_id: int):
     """Delete a tag from a group."""
+    logger.debug("[TAGS] DELETE /groups/%s/tags/%s", group_id, tag_id)
     try:
         from models import Tag
         session = get_session()
@@ -311,7 +319,7 @@ async def delete_tag(group_id: int, tag_id: int):
             tag_value = tag.value
             session.delete(tag)
             session.commit()
-            logger.info(f"Deleted tag: id={tag_id}, value={tag_value}")
+            logger.info("[TAGS] Deleted tag id=%s value=%s", tag_id, tag_value)
 
             from normalization_engine import invalidate_tag_cache
             invalidate_tag_cache()
@@ -322,13 +330,14 @@ async def delete_tag(group_id: int, tag_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to delete tag {tag_id}: {e}")
+        logger.exception("[TAGS] Failed to delete tag %s", tag_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/test")
 async def test_tags(request: TestTagsRequest):
     """Test text against a tag group to find matches."""
+    logger.debug("[TAGS] POST /test - group_id=%s", request.group_id)
     try:
         from models import TagGroup, Tag
         session = get_session()
@@ -374,5 +383,5 @@ async def test_tags(request: TestTagsRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to test tags: {e}")
+        logger.exception("[TAGS] Failed to test tags")
         raise HTTPException(status_code=500, detail=str(e))

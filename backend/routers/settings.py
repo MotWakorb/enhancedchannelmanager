@@ -4,6 +4,7 @@ Settings router — Dispatcharr connection, preferences, and service management 
 Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 """
 import logging
+import time
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -19,7 +20,7 @@ from services.notification_service import create_notification_internal, update_n
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["Settings"])
+router = APIRouter(prefix="/api/settings", tags=["Settings"])
 
 
 class NormalizationTag(BaseModel):
@@ -224,12 +225,12 @@ def _has_discord_alert_method() -> bool:
         return False
 
 
-@router.get("/api/settings")
+@router.get("")
 async def get_current_settings():
     """Get current settings (password masked)."""
-    logger.debug("GET /api/settings - Retrieving current settings")
+    logger.debug("[SETTINGS] GET /api/settings")
     settings = get_settings()
-    logger.info(f"Settings retrieved - configured: {settings.is_configured()}, log level: {settings.backend_log_level}")
+    logger.debug("[SETTINGS] Settings retrieved - configured: %s, log level: %s", settings.is_configured(), settings.backend_log_level)
     return SettingsResponse(
         url=settings.url,
         username=settings.username,
@@ -307,10 +308,10 @@ async def get_current_settings():
     )
 
 
-@router.post("/api/settings")
+@router.post("")
 async def update_settings(request: SettingsRequest):
     """Update Dispatcharr connection settings."""
-    logger.debug(f"POST /api/settings - Updating settings (URL: {request.url}, username: {request.username})")
+    logger.debug("[SETTINGS] POST /api/settings - URL: %s, username: %s", request.url, request.username)
     current_settings = get_settings()
 
     # If password is not provided, keep the existing password
@@ -326,7 +327,7 @@ async def update_settings(request: SettingsRequest):
         request.username != current_settings.username
     )
     if auth_changed and not request.password:
-        logger.warning("Settings update failed: password required when changing URL or username")
+        logger.warning("[SETTINGS] Settings update failed: password required when changing URL or username")
         raise HTTPException(
             status_code=400,
             detail="Password is required when changing URL or username"
@@ -416,7 +417,7 @@ async def update_settings(request: SettingsRequest):
     if server_changed:
         cache = get_cache()
         cache.clear()
-        logger.info(f"Dispatcharr URL changed - cleared all cache entries")
+        logger.info("[SETTINGS] Dispatcharr URL changed - cleared all cache entries")
 
         # Also clear all data tied to the old server
         from models import (
@@ -433,16 +434,20 @@ async def update_settings(request: SettingsRequest):
             connections_deleted = db.query(UniqueClientConnection).delete()
             db.commit()
             logger.info(
-                f"Dispatcharr URL changed - cleared all server-specific data: "
-                f"{changes_deleted} M3U changes, {snapshots_deleted} snapshots, "
-                f"{watch_stats_deleted} watch stats, {hidden_groups_deleted} hidden groups, "
-                f"{bandwidth_deleted} bandwidth records, {popularity_deleted} popularity scores, "
-                f"{connections_deleted} client connections"
+                "[SETTINGS] Dispatcharr URL changed - cleared all server-specific data: "
+                "%s M3U changes, %s snapshots, "
+                "%s watch stats, %s hidden groups, "
+                "%s bandwidth records, %s popularity scores, "
+                "%s client connections",
+                changes_deleted, snapshots_deleted,
+                watch_stats_deleted, hidden_groups_deleted,
+                bandwidth_deleted, popularity_deleted,
+                connections_deleted
             )
 
     # Apply backend log level immediately
     if new_settings.backend_log_level != current_settings.backend_log_level:
-        logger.info(f"Applying new backend log level: {new_settings.backend_log_level}")
+        logger.info("[SETTINGS] Applying new backend log level: %s", new_settings.backend_log_level)
         set_log_level(new_settings.backend_log_level)
 
     # Update prober's parallel probing settings without requiring restart
@@ -456,7 +461,7 @@ async def update_settings(request: SettingsRequest):
                 new_settings.max_concurrent_probes,
                 new_settings.profile_distribution_strategy
             )
-            logger.info("Updated prober parallel probing settings from settings")
+            logger.info("[SETTINGS] Updated prober parallel probing settings from settings")
 
     # Update prober's sort settings without requiring restart
     if (new_settings.stream_sort_priority != current_settings.stream_sort_priority or
@@ -469,18 +474,18 @@ async def update_settings(request: SettingsRequest):
                 new_settings.stream_sort_enabled,
                 new_settings.m3u_account_priorities
             )
-            logger.info("Updated prober sort settings from settings")
+            logger.info("[SETTINGS] Updated prober sort settings from settings")
 
-    logger.info(f"Settings saved successfully - configured: {new_settings.is_configured()}, auth_changed: {auth_changed}, server_changed: {server_changed}")
+    logger.info("[SETTINGS] Settings saved successfully - configured: %s, auth_changed: %s, server_changed: %s", new_settings.is_configured(), auth_changed, server_changed)
     return {"status": "saved", "configured": new_settings.is_configured(), "server_changed": server_changed}
 
 
-@router.post("/api/settings/test")
+@router.post("/test")
 async def test_connection(request: TestConnectionRequest):
     """Test connection to Dispatcharr with provided credentials."""
     import httpx
 
-    logger.debug(f"POST /api/settings/test - Testing connection to {request.url}")
+    logger.debug("[SETTINGS-TEST] POST /api/settings/test - url=%s", request.url)
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             url = request.url.rstrip("/")
@@ -492,26 +497,26 @@ async def test_connection(request: TestConnectionRequest):
                 },
             )
             if response.status_code == 200:
-                logger.info(f"Connection test successful - {url}")
+                logger.info("[SETTINGS-TEST] Connection test successful - %s", url)
                 return {"success": True, "message": "Connection successful"}
             else:
-                logger.warning(f"Connection test failed - {url} - status: {response.status_code}")
+                logger.warning("[SETTINGS-TEST] Connection test failed - %s - status: %s", url, response.status_code)
                 return {
                     "success": False,
                     "message": f"Authentication failed: {response.status_code}",
                 }
     except httpx.ConnectError as e:
-        logger.error(f"Connection test failed - could not connect to {request.url}: {e}")
+        logger.error("[SETTINGS-TEST] Connection test failed - could not connect to %s: %s", request.url, e)
         return {"success": False, "message": "Could not connect to server"}
     except httpx.TimeoutException as e:
-        logger.error(f"Connection test failed - timeout connecting to {request.url}: {e}")
+        logger.error("[SETTINGS-TEST] Connection test failed - timeout connecting to %s: %s", request.url, e)
         return {"success": False, "message": "Connection timed out"}
     except Exception as e:
-        logger.exception(f"Connection test failed - unexpected error: {e}")
+        logger.exception("[SETTINGS-TEST] Connection test failed - unexpected error: %s", e)
         return {"success": False, "message": str(e)}
 
 
-@router.post("/api/settings/test-smtp")
+@router.post("/test-smtp")
 async def test_smtp_connection(request: SMTPTestRequest):
     """Test SMTP connection by sending a test email."""
     import smtplib
@@ -519,7 +524,7 @@ async def test_smtp_connection(request: SMTPTestRequest):
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
 
-    logger.debug(f"POST /api/settings/test-smtp - Testing SMTP to {request.smtp_host}:{request.smtp_port}")
+    logger.debug("[SETTINGS-TEST] POST /api/settings/test-smtp - host=%s:%s", request.smtp_host, request.smtp_port)
 
     if not request.smtp_host:
         return {"success": False, "message": "SMTP host is required"}
@@ -576,36 +581,36 @@ You can now use email features like M3U Digest reports.
                 server.login(request.smtp_user, request.smtp_password)
 
             server.sendmail(request.smtp_from_email, [request.to_email], msg.as_string())
-            logger.info(f"SMTP test email sent successfully to {request.to_email}")
+            logger.info("[SETTINGS-TEST] SMTP test email sent successfully to %s", request.to_email)
             return {"success": True, "message": f"Test email sent to {request.to_email}"}
 
         finally:
             server.quit()
 
     except smtplib.SMTPAuthenticationError as e:
-        logger.error(f"SMTP test failed - authentication error: {e}")
+        logger.error("[SETTINGS-TEST] SMTP test failed - authentication error: %s", e)
         return {"success": False, "message": "Authentication failed - check username and password"}
     except smtplib.SMTPConnectError as e:
-        logger.error(f"SMTP test failed - connection error: {e}")
+        logger.error("[SETTINGS-TEST] SMTP test failed - connection error: %s", e)
         return {"success": False, "message": f"Could not connect to {request.smtp_host}:{request.smtp_port}"}
     except smtplib.SMTPRecipientsRefused as e:
-        logger.error(f"SMTP test failed - recipient refused: {e}")
+        logger.error("[SETTINGS-TEST] SMTP test failed - recipient refused: %s", e)
         return {"success": False, "message": "Recipient email was refused by the server"}
     except TimeoutError:
-        logger.error(f"SMTP test failed - timeout connecting to {request.smtp_host}")
+        logger.error("[SETTINGS-TEST] SMTP test failed - timeout connecting to %s", request.smtp_host)
         return {"success": False, "message": f"Connection timed out to {request.smtp_host}:{request.smtp_port}"}
     except Exception as e:
-        logger.exception(f"SMTP test failed - unexpected error: {e}")
+        logger.exception("[SETTINGS-TEST] SMTP test failed - unexpected error: %s", e)
         return {"success": False, "message": str(e)}
 
 
-@router.post("/api/settings/test-discord")
+@router.post("/test-discord")
 async def test_discord_webhook(request: DiscordTestRequest):
     """Test Discord webhook by sending a test message."""
     import aiohttp
 
     webhook_url = request.webhook_url
-    logger.info(f"POST /api/settings/test-discord - Testing Discord webhook: {webhook_url[:50]}...")
+    logger.debug("[SETTINGS-TEST] POST /api/settings/test-discord")
 
     if not webhook_url:
         return {"success": False, "message": "Webhook URL is required"}
@@ -633,7 +638,7 @@ async def test_discord_webhook(request: DiscordTestRequest):
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as response:
                 if response.status == 204:
-                    logger.info("Discord webhook test successful")
+                    logger.info("[SETTINGS-TEST] Discord webhook test successful")
                     return {"success": True, "message": "Test message sent successfully"}
                 elif response.status == 401:
                     return {"success": False, "message": "Invalid webhook - unauthorized"}
@@ -643,25 +648,25 @@ async def test_discord_webhook(request: DiscordTestRequest):
                     return {"success": False, "message": "Rate limited - try again later"}
                 else:
                     text = await response.text()
-                    logger.error(f"Discord test failed: {response.status} - {text}")
+                    logger.error("[SETTINGS-TEST] Discord test failed: %s - %s", response.status, text)
                     return {"success": False, "message": f"Discord returned error: {response.status}"}
 
     except aiohttp.ClientError as e:
-        logger.error(f"Discord test failed - connection error: {e}")
+        logger.error("[SETTINGS-TEST] Discord test failed - connection error: %s", e)
         return {"success": False, "message": f"Connection error: {str(e)}"}
     except Exception as e:
-        logger.exception(f"Discord test failed - unexpected error: {e}")
+        logger.exception("[SETTINGS-TEST] Discord test failed - unexpected error: %s", e)
         return {"success": False, "message": str(e)}
 
 
-@router.post("/api/settings/test-telegram")
+@router.post("/test-telegram")
 async def test_telegram_bot(request: TelegramTestRequest):
     """Test Telegram bot by sending a test message."""
     import aiohttp
 
     bot_token = request.bot_token
     chat_id = request.chat_id
-    logger.debug("POST /api/settings/test-telegram - Testing Telegram bot")
+    logger.debug("[SETTINGS-TEST] POST /api/settings/test-telegram")
 
     if not bot_token:
         return {"success": False, "message": "Bot token is required"}
@@ -690,7 +695,7 @@ async def test_telegram_bot(request: TelegramTestRequest):
                 data = await response.json()
 
                 if response.status == 200 and data.get("ok"):
-                    logger.info("Telegram bot test successful")
+                    logger.info("[SETTINGS-TEST] Telegram bot test successful")
                     return {"success": True, "message": "Test message sent successfully"}
                 elif response.status == 401:
                     return {"success": False, "message": "Invalid bot token - unauthorized"}
@@ -703,33 +708,34 @@ async def test_telegram_bot(request: TelegramTestRequest):
                     return {"success": False, "message": "Rate limited - try again later"}
                 else:
                     error_desc = data.get("description", f"Status {response.status}")
-                    logger.error(f"Telegram test failed: {error_desc}")
+                    logger.error("[SETTINGS-TEST] Telegram test failed: %s", error_desc)
                     return {"success": False, "message": f"Telegram returned error: {error_desc}"}
 
     except aiohttp.ClientError as e:
-        logger.error(f"Telegram test failed - connection error: {e}")
+        logger.error("[SETTINGS-TEST] Telegram test failed - connection error: %s", e)
         return {"success": False, "message": f"Connection error: {str(e)}"}
     except Exception as e:
-        logger.exception(f"Telegram test failed - unexpected error: {e}")
+        logger.exception("[SETTINGS-TEST] Telegram test failed - unexpected error: %s", e)
         return {"success": False, "message": str(e)}
 
 
-@router.post("/api/settings/restart-services")
+@router.post("/restart-services")
 async def restart_services():
     """Restart background services (bandwidth tracker and stream prober) to apply new settings."""
+    logger.debug("[SETTINGS] POST /api/settings/restart-services")
     settings = get_settings()
 
     # Stop existing tracker
     tracker = get_tracker()
     if tracker:
         await tracker.stop()
-        logger.info("Stopped existing bandwidth tracker")
+        logger.info("[SETTINGS] Stopped existing bandwidth tracker")
 
     # Stop existing stream prober
     prober = get_prober()
     if prober:
         await prober.stop()
-        logger.info("Stopped existing stream prober")
+        logger.info("[SETTINGS] Stopped existing stream prober")
 
     # Start new tracker and prober with current settings
     if settings.is_configured():
@@ -738,7 +744,7 @@ async def restart_services():
             new_tracker = BandwidthTracker(get_client(), poll_interval=settings.stats_poll_interval)
             set_tracker(new_tracker)
             await new_tracker.start()
-            logger.info(f"Restarted bandwidth tracker with {settings.stats_poll_interval}s poll interval, timezone: {settings.user_timezone or 'UTC'}")
+            logger.info("[SETTINGS] Restarted bandwidth tracker with %ss poll interval, timezone: %s", settings.stats_poll_interval, settings.user_timezone or 'UTC')
 
             # Restart stream prober (scheduled probing is controlled by Task Engine)
             new_prober = StreamProber(
@@ -766,7 +772,7 @@ async def restart_services():
                 update_callback=update_notification_internal,
                 delete_by_source_callback=delete_notifications_by_source_internal
             )
-            logger.info("Notification callbacks configured for stream prober")
+            logger.info("[SETTINGS] Notification callbacks configured for stream prober")
             set_prober(new_prober)
 
             # Connect the new prober to the StreamProbeTask
@@ -776,24 +782,25 @@ async def restart_services():
                 stream_probe_task = registry.get_task_instance("stream_probe")
                 if stream_probe_task:
                     stream_probe_task.set_prober(new_prober)
-                    logger.info("Connected new StreamProber to StreamProbeTask")
+                    logger.info("[SETTINGS] Connected new StreamProber to StreamProbeTask")
             except Exception as e:
-                logger.warning(f"Failed to connect prober to task: {e}")
+                logger.warning("[SETTINGS] Failed to connect prober to task: %s", e)
 
             await new_prober.start()
-            logger.info("Restarted stream prober with updated settings")
+            logger.info("[SETTINGS] Restarted stream prober with updated settings")
 
             return {"success": True, "message": "Services restarted with new settings"}
         except Exception as e:
-            logger.error(f"Failed to restart services: {e}")
+            logger.exception("[SETTINGS] Failed to restart services: %s", e)
             return {"success": False, "message": str(e)}
     else:
         return {"success": False, "message": "Settings not configured"}
 
 
-@router.post("/api/settings/reset-stats")
+@router.post("/reset-stats")
 async def reset_stats():
     """Reset all channel/stream statistics. Use when switching Dispatcharr servers."""
+    logger.debug("[SETTINGS] POST /api/settings/reset-stats")
     from models import HiddenChannelGroup, ChannelWatchStats, ChannelBandwidth, StreamStats, ChannelPopularityScore
 
     try:
@@ -806,7 +813,7 @@ async def reset_stats():
             db.commit()
 
             total = hidden + watch + bandwidth + streams + popularity
-            logger.info(f"Reset stats: {hidden} hidden groups, {watch} watch stats, {bandwidth} bandwidth, {streams} stream stats, {popularity} popularity")
+            logger.info("[SETTINGS] Reset stats: %s hidden groups, %s watch stats, %s bandwidth, %s stream stats, %s popularity", hidden, watch, bandwidth, streams, popularity)
 
             return {
                 "success": True,
@@ -820,5 +827,5 @@ async def reset_stats():
                 }
             }
     except Exception as e:
-        logger.error(f"Failed to reset stats: {e}")
+        logger.exception("[SETTINGS] Failed to reset stats: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

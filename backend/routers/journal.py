@@ -27,6 +27,7 @@ async def get_journal_entries(
     user_initiated: Optional[bool] = None,
 ):
     """Query journal entries with filtering and pagination."""
+    logger.debug("[JOURNAL] GET /journal - page=%s category=%s action_type=%s search=%s", page, category, action_type, search)
     from datetime import datetime
 
     # Parse date strings to datetime
@@ -61,11 +62,14 @@ async def get_journal_entries(
 @router.get("/stats")
 async def get_journal_stats():
     """Get summary statistics for the journal."""
+    logger.debug("[JOURNAL] GET /journal/stats")
     return journal.get_stats()
 
 
 @router.delete("/purge")
 async def purge_journal_entries(days: int = 90):
     """Delete journal entries older than the specified number of days."""
+    logger.debug("[JOURNAL] DELETE /journal/purge - days=%s", days)
     deleted_count = journal.purge_old_entries(days=days)
+    logger.info("[JOURNAL] Purged journal entries older than %s days count=%s", days, deleted_count)
     return {"deleted": deleted_count, "days": days}

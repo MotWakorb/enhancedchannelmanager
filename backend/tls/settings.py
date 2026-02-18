@@ -156,7 +156,7 @@ def _ensure_tls_dir() -> bool:
         os.chmod(TLS_DIR, 0o700)
         return True
     except (PermissionError, OSError) as e:
-        logger.warning(f"Cannot create TLS directory {TLS_DIR}: {e}")
+        logger.warning("[TLS-SETTINGS] Cannot create TLS directory %s: %s", TLS_DIR, e)
         return False
 
 
@@ -166,7 +166,7 @@ def _ensure_config_dir() -> bool:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         return True
     except (PermissionError, OSError) as e:
-        logger.warning(f"Cannot create config directory {CONFIG_DIR}: {e}")
+        logger.warning("[TLS-SETTINGS] Cannot create config directory %s: %s", CONFIG_DIR, e)
         return False
 
 
@@ -177,21 +177,21 @@ def load_tls_settings() -> TLSSettings:
     if _cached_tls_settings is not None:
         return _cached_tls_settings
 
-    logger.info(f"Loading TLS settings from {TLS_CONFIG_FILE}")
+    logger.info("[TLS-SETTINGS] Loading TLS settings from %s", TLS_CONFIG_FILE)
 
     if TLS_CONFIG_FILE.exists():
         try:
             data = json.loads(TLS_CONFIG_FILE.read_text())
             _cached_tls_settings = TLSSettings(**data)
             logger.info(
-                f"Loaded TLS settings, enabled: {_cached_tls_settings.enabled}, "
-                f"mode: {_cached_tls_settings.mode}"
+                "[TLS-SETTINGS] Loaded TLS settings, enabled: %s, mode: %s",
+                _cached_tls_settings.enabled, _cached_tls_settings.mode,
             )
             return _cached_tls_settings
         except Exception as e:
-            logger.error(f"Failed to load TLS settings: {e}")
+            logger.error("[TLS-SETTINGS] Failed to load TLS settings: %s", e)
 
-    logger.info("Using default TLS settings (no config file found)")
+    logger.info("[TLS-SETTINGS] Using default TLS settings (no config file found)")
     _cached_tls_settings = TLSSettings()
     return _cached_tls_settings
 
@@ -210,14 +210,14 @@ def save_tls_settings(settings: TLSSettings) -> bool:
         # Restrictive permissions on settings file (contains API tokens)
         os.chmod(TLS_CONFIG_FILE, 0o600)
         _cached_tls_settings = settings
-        logger.info(f"TLS settings saved to {TLS_CONFIG_FILE}")
+        logger.info("[TLS-SETTINGS] TLS settings saved to %s", TLS_CONFIG_FILE)
         return True
     except (PermissionError, OSError) as e:
-        logger.warning(f"Cannot save TLS settings to {TLS_CONFIG_FILE}: {e}")
+        logger.warning("[TLS-SETTINGS] Cannot save TLS settings to %s: %s", TLS_CONFIG_FILE, e)
         _cached_tls_settings = settings
         return False
     except Exception as e:
-        logger.error(f"Failed to save TLS settings: {e}")
+        logger.error("[TLS-SETTINGS] Failed to save TLS settings: %s", e)
         raise
 
 
@@ -225,7 +225,7 @@ def clear_tls_settings_cache() -> None:
     """Clear the cached TLS settings (forces reload)."""
     global _cached_tls_settings
     _cached_tls_settings = None
-    logger.info("TLS settings cache cleared")
+    logger.info("[TLS-SETTINGS] TLS settings cache cleared")
 
 
 def get_tls_settings() -> TLSSettings:

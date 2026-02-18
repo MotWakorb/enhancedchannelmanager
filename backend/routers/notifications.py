@@ -37,6 +37,7 @@ async def get_notifications(
     notification_type: Optional[str] = None,
 ):
     """Get notifications with pagination and filtering."""
+    logger.debug("[NOTIFY] GET /notifications - page=%s unread_only=%s type=%s", page, unread_only, notification_type)
     from models import Notification
 
     session = get_session()
@@ -82,6 +83,7 @@ async def create_notification(request: CreateNotificationRequest):
     Args:
         send_alerts: If True (default), also dispatch to configured alert channels.
     """
+    logger.debug("[NOTIFY] POST /notifications - type=%s source=%s", request.notification_type, request.source)
     if not request.message:
         raise HTTPException(status_code=400, detail="Message is required")
 
@@ -103,12 +105,14 @@ async def create_notification(request: CreateNotificationRequest):
     if result is None:
         raise HTTPException(status_code=500, detail="Failed to create notification")
 
+    logger.info("[NOTIFY] Created notification id=%s type=%s source=%s", result.get("id"), request.notification_type, request.source)
     return result
 
 
 @router.patch("/mark-all-read")
 async def mark_all_notifications_read():
     """Mark all notifications as read."""
+    logger.debug("[NOTIFY] PATCH /notifications/mark-all-read")
     from datetime import datetime
     from models import Notification
 
@@ -119,6 +123,7 @@ async def mark_all_notifications_read():
             synchronize_session=False
         )
         session.commit()
+        logger.info("[NOTIFY] Marked all notifications read count=%s", count)
         return {"marked_read": count}
     finally:
         session.close()
@@ -127,6 +132,7 @@ async def mark_all_notifications_read():
 @router.patch("/{notification_id}")
 async def update_notification(notification_id: int, read: Optional[bool] = None):
     """Update a notification (mark as read/unread)."""
+    logger.debug("[NOTIFY] PATCH /notifications/%s - read=%s", notification_id, read)
     from datetime import datetime
     from models import Notification
 
@@ -142,6 +148,7 @@ async def update_notification(notification_id: int, read: Optional[bool] = None)
 
         session.commit()
         session.refresh(notification)
+        logger.info("[NOTIFY] Updated notification id=%s read=%s", notification_id, read)
         return notification.to_dict()
     finally:
         session.close()
@@ -150,6 +157,7 @@ async def update_notification(notification_id: int, read: Optional[bool] = None)
 @router.delete("/{notification_id}")
 async def delete_notification(notification_id: int):
     """Delete a specific notification."""
+    logger.debug("[NOTIFY] DELETE /notifications/%s", notification_id)
     from models import Notification
 
     session = get_session()
@@ -160,6 +168,7 @@ async def delete_notification(notification_id: int):
 
         session.delete(notification)
         session.commit()
+        logger.info("[NOTIFY] Deleted notification id=%s", notification_id)
         return {"deleted": True}
     finally:
         session.close()
@@ -168,6 +177,7 @@ async def delete_notification(notification_id: int):
 @router.delete("")
 async def clear_all_notifications(read_only: bool = True):
     """Clear notifications. By default only clears read notifications."""
+    logger.debug("[NOTIFY] DELETE /notifications - read_only=%s", read_only)
     from models import Notification
 
     session = get_session()
@@ -178,6 +188,7 @@ async def clear_all_notifications(read_only: bool = True):
 
         count = query.delete(synchronize_session=False)
         session.commit()
+        logger.info("[NOTIFY] Cleared notifications count=%s read_only=%s", count, read_only)
         return {"deleted": count, "read_only": read_only}
     finally:
         session.close()
@@ -186,6 +197,7 @@ async def clear_all_notifications(read_only: bool = True):
 @router.delete("/by-source")
 async def delete_notifications_by_source(source: str, source_id: Optional[str] = None):
     """Delete notifications matching source and optionally source_id."""
+    logger.debug("[NOTIFY] DELETE /notifications/by-source - source=%s source_id=%s", source, source_id)
     from models import Notification
 
     session = get_session()
@@ -196,6 +208,7 @@ async def delete_notifications_by_source(source: str, source_id: Optional[str] =
 
         count = query.delete(synchronize_session=False)
         session.commit()
+        logger.info("[NOTIFY] Deleted notifications by source=%s source_id=%s count=%s", source, source_id, count)
         return {"deleted": count, "source": source, "source_id": source_id}
     finally:
         session.close()

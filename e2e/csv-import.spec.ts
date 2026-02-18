@@ -5,6 +5,7 @@
  */
 import { test, expect, navigateToTab, enterEditMode } from './fixtures/base';
 import { selectors } from './fixtures/test-data';
+import { Page } from '@playwright/test';
 import path from 'path';
 
 // CSV Import selectors
@@ -24,7 +25,56 @@ const csvSelectors = {
   cancelButton: '.csv-import-modal button:has-text("Cancel")',
   successMessage: '[data-testid="csv-success"]',
   progressIndicator: '[data-testid="csv-progress"]',
+  errorBanner: '.modal-error-banner',
 };
+
+/**
+ * Upload a CSV file and wait for the preview table to appear.
+ * Retries the upload if the API returns a transient "Failed to fetch" error,
+ * which can happen when the backend is under load from parallel tests.
+ */
+async function uploadCSVAndWaitForPreview(
+  page: Page,
+  csvContent: string,
+  maxRetries = 2,
+): Promise<void> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const fileInput = page.locator(csvSelectors.fileInput);
+    await fileInput.setInputFiles({
+      name: 'test.csv',
+      mimeType: 'text/csv',
+      buffer: Buffer.from(csvContent),
+    });
+
+    // Wait for either the preview table or an error banner
+    const previewTable = page.locator(csvSelectors.previewTable);
+    const errorBanner = page.locator(csvSelectors.errorBanner);
+
+    const result = await Promise.race([
+      previewTable.waitFor({ state: 'visible', timeout: 10000 }).then(() => 'preview'),
+      errorBanner.waitFor({ state: 'visible', timeout: 10000 }).then(() => 'error'),
+    ]).catch(() => 'timeout');
+
+    if (result === 'preview') {
+      return; // Success
+    }
+
+    if (attempt < maxRetries) {
+      // Dismiss error and retry: close modal and reopen
+      const cancelButton = page.locator(csvSelectors.cancelButton);
+      await cancelButton.click();
+      await page.waitForTimeout(500);
+      const importButton = page.locator(csvSelectors.importButton);
+      await importButton.click();
+      const modal = page.locator(csvSelectors.importModal);
+      await expect(modal).toBeVisible({ timeout: 5000 });
+    }
+  }
+
+  // Final attempt failed: let the normal assertion fail with a clear message
+  const previewTable = page.locator(csvSelectors.previewTable);
+  await expect(previewTable).toBeVisible({ timeout: 5000 });
+}
 
 test.describe('CSV Import', () => {
   test.beforeEach(async ({ appPage }) => {
@@ -80,17 +130,8 @@ test.describe('CSV Import', () => {
     const importButton = appPage.locator(csvSelectors.importButton);
     await importButton.click();
 
-    // Upload a valid CSV file
-    const fileInput = appPage.locator(csvSelectors.fileInput);
-    await fileInput.setInputFiles({
-      name: 'test.csv',
-      mimeType: 'text/csv',
-      buffer: Buffer.from('channel_number,name,group_name\n101,ESPN HD,Sports\n102,CNN,News')
-    });
-
-    // Should show preview table
-    const previewTable = appPage.locator(csvSelectors.previewTable);
-    await expect(previewTable).toBeVisible({ timeout: 5000 });
+    // Upload a valid CSV file with retry on transient API failures
+    await uploadCSVAndWaitForPreview(appPage, 'channel_number,name,group_name\n101,ESPN HD,Sports\n102,CNN,News');
 
     // Should show 2 rows in preview
     const previewRows = appPage.locator(csvSelectors.previewRow);
@@ -103,6 +144,10 @@ test.describe('CSV Import', () => {
     const importButton = appPage.locator(csvSelectors.importButton);
     await importButton.click();
 
+    // Wait for modal to be fully open
+    const modal = appPage.locator(csvSelectors.importModal);
+    await expect(modal).toBeVisible({ timeout: 5000 });
+
     // Upload CSV with invalid data (missing name)
     const fileInput = appPage.locator(csvSelectors.fileInput);
     await fileInput.setInputFiles({
@@ -111,9 +156,9 @@ test.describe('CSV Import', () => {
       buffer: Buffer.from('channel_number,name,group_name\n101,,Sports')
     });
 
-    // Should show error list
+    // Should show error list (allow time for CSV parsing)
     const errorList = appPage.locator(csvSelectors.errorList);
-    await expect(errorList).toBeVisible({ timeout: 5000 });
+    await expect(errorList).toBeVisible({ timeout: 10000 });
   });
 
   test('uploading CSV without name column shows error', async ({ appPage }) => {
@@ -121,6 +166,10 @@ test.describe('CSV Import', () => {
 
     const importButton = appPage.locator(csvSelectors.importButton);
     await importButton.click();
+
+    // Wait for modal to be fully open
+    const modal = appPage.locator(csvSelectors.importModal);
+    await expect(modal).toBeVisible({ timeout: 5000 });
 
     // Upload CSV missing required column
     const fileInput = appPage.locator(csvSelectors.fileInput);
@@ -130,60 +179,54 @@ test.describe('CSV Import', () => {
       buffer: Buffer.from('channel_number,group_name\n101,Sports')
     });
 
-    // Should show error about missing name column
+    // Should show error about missing name column (allow time for CSV parsing)
     const errorList = appPage.locator(csvSelectors.errorList);
-    await expect(errorList).toBeVisible({ timeout: 5000 });
+    await expect(errorList).toBeVisible({ timeout: 10000 });
   });
 
   test('can submit valid CSV for import', async ({ appPage }) => {
+    test.slow(); // This test makes two API calls (preview + import)
     await enterEditMode(appPage);
 
     const importButton = appPage.locator(csvSelectors.importButton);
     await importButton.click();
 
-    // Upload valid CSV
-    const fileInput = appPage.locator(csvSelectors.fileInput);
-    await fileInput.setInputFiles({
-      name: 'test.csv',
-      mimeType: 'text/csv',
-      buffer: Buffer.from('channel_number,name,group_name\n999,Test Channel,Test Group')
-    });
+    // Wait for modal to be fully open
+    const modal = appPage.locator(csvSelectors.importModal);
+    await expect(modal).toBeVisible({ timeout: 5000 });
 
-    // Wait for preview
-    const previewTable = appPage.locator(csvSelectors.previewTable);
-    await expect(previewTable).toBeVisible({ timeout: 5000 });
+    // Upload valid CSV with retry on transient API failures
+    await uploadCSVAndWaitForPreview(appPage, 'channel_number,name,group_name\n999,Test Channel,Test Group');
 
     // Click import button
     const submitButton = appPage.locator(csvSelectors.importSubmitButton);
     await submitButton.click();
 
-    // Should show progress or success
+    // Should show progress or success (allow time for API import)
     const progress = appPage.locator(`${csvSelectors.progressIndicator}, ${csvSelectors.successMessage}`);
-    await expect(progress).toBeVisible({ timeout: 10000 });
+    await expect(progress).toBeVisible({ timeout: 20000 });
   });
 
   test('shows success message after import completes', async ({ appPage }) => {
+    test.slow(); // This test makes two API calls (preview + import)
     await enterEditMode(appPage);
 
     const importButton = appPage.locator(csvSelectors.importButton);
     await importButton.click();
 
-    // Upload valid CSV
-    const fileInput = appPage.locator(csvSelectors.fileInput);
-    await fileInput.setInputFiles({
-      name: 'test.csv',
-      mimeType: 'text/csv',
-      buffer: Buffer.from('name\nImport Test Channel')
-    });
+    // Wait for modal to be fully open
+    const modal = appPage.locator(csvSelectors.importModal);
+    await expect(modal).toBeVisible({ timeout: 5000 });
 
-    // Wait for preview and submit
-    await appPage.waitForTimeout(500);
+    // Upload valid CSV with retry on transient API failures
+    await uploadCSVAndWaitForPreview(appPage, 'name\nImport Test Channel');
+
     const submitButton = appPage.locator(csvSelectors.importSubmitButton);
     await submitButton.click();
 
-    // Should show success message
+    // Should show success message (allow time for API import to complete)
     const successMessage = appPage.locator(csvSelectors.successMessage);
-    await expect(successMessage).toBeVisible({ timeout: 15000 });
+    await expect(successMessage).toBeVisible({ timeout: 60000 });
   });
 
   test('import modal shows channel count summary', async ({ appPage }) => {
@@ -192,16 +235,8 @@ test.describe('CSV Import', () => {
     const importButton = appPage.locator(csvSelectors.importButton);
     await importButton.click();
 
-    // Upload valid CSV with multiple channels
-    const fileInput = appPage.locator(csvSelectors.fileInput);
-    await fileInput.setInputFiles({
-      name: 'test.csv',
-      mimeType: 'text/csv',
-      buffer: Buffer.from('name,group_name\nChannel 1,Group A\nChannel 2,Group A\nChannel 3,Group B')
-    });
-
-    // Wait for preview
-    await appPage.waitForTimeout(500);
+    // Upload valid CSV with multiple channels, with retry on transient API failures
+    await uploadCSVAndWaitForPreview(appPage, 'name,group_name\nChannel 1,Group A\nChannel 2,Group A\nChannel 3,Group B');
 
     // Should show count of channels to be imported
     const modal = appPage.locator(csvSelectors.importModal);

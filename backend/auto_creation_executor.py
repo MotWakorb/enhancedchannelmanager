@@ -173,8 +173,8 @@ class ActionExecutor:
                         self._normalized_name_to_channel.setdefault(
                             result.normalized.lower(), c
                         )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("[AUTO-CREATE-EXEC] Normalization failed for channel '%s': %s", c.get("name", ""), e)
 
         # Pre-populate core-name mapping so merge_streams can fall back
         # to tag-group-based stripping (country prefix + quality suffix)
@@ -187,8 +187,8 @@ class ActionExecutor:
                     core = self._normalization_engine.extract_core_name(stripped)
                     if core:
                         self._core_name_to_channel.setdefault(core.lower(), c)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("[AUTO-CREATE-EXEC] Core name extraction failed for channel '%s': %s", c.get("name", ""), e)
 
         # Index deparenthesized variants of core names so that
         # "Bravo (East)" also matches channel "Bravo East" and vice versa.
@@ -207,8 +207,8 @@ class ActionExecutor:
                     cs = self._normalization_engine.extract_call_sign(c["name"])
                     if cs:
                         self._callsign_to_channel.setdefault(cs, c)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("[AUTO-CREATE-EXEC] Call sign extraction failed for channel '%s': %s", c.get("name", ""), e)
 
         self._logo_cache = {}  # logo_url -> logo_id
 
@@ -237,14 +237,16 @@ class ActionExecutor:
             action = Action.from_dict(action)
 
         logger.debug(
-            f"[Action] Executing action type={action.type} for stream={stream_ctx.stream_name!r} "
-            f"(id={stream_ctx.stream_id}) dry_run={exec_ctx.dry_run} params={action.params}"
+            "[AUTO-CREATE-EXEC] Executing action type=%s for stream=%r "
+            "(id=%s) dry_run=%s params=%s",
+            action.type, stream_ctx.stream_name,
+            stream_ctx.stream_id, exec_ctx.dry_run, action.params
         )
 
         try:
             action_type = ActionType(action.type)
         except ValueError:
-            logger.debug(f"[Action] Unknown action type: {action.type}")
+            logger.debug("[AUTO-CREATE-EXEC] Unknown action type: %s", action.type)
             return ActionResult(
                 success=False,
                 action_type=action.type,
@@ -294,7 +296,7 @@ class ActionExecutor:
         elif action_type == ActionType.LOG_MATCH:
             message = action.params.get("message", "Stream matched rule")
             expanded = TemplateVariables.expand_template(message, template_ctx, exec_ctx.custom_variables)
-            logger.info(f"[AutoCreation] {expanded}")
+            logger.info("[AUTO-CREATE-EXEC] %s", expanded)
             result = ActionResult(
                 success=True,
                 action_type=action.type,
@@ -309,9 +311,12 @@ class ActionExecutor:
             )
 
         logger.debug(
-            f"[Action] Result: type={result.action_type} success={result.success} "
-            f"created={result.created} modified={result.modified} skipped={result.skipped} "
-            f"desc={result.description!r}"
+            "[AUTO-CREATE-EXEC] Result: type=%s success=%s "
+            "created=%s modified=%s skipped=%s "
+            "desc=%r",
+            result.action_type, result.success,
+            result.created, result.modified, result.skipped,
+            result.description
         )
         exec_ctx.add_result(result)
         return result
@@ -348,7 +353,7 @@ class ActionExecutor:
             for var_name, value in exec_ctx.custom_variables.items():
                 ctx[f"var:{var_name}"] = value
 
-        logger.debug(f"[Template] Built context: {ctx}")
+        logger.debug("[AUTO-CREATE-EXEC] Built context: %s", ctx)
         return ctx
 
     # =========================================================================
@@ -366,9 +371,9 @@ class ActionExecutor:
                 original = name
                 name = re.sub(pattern, py_replacement, name)
                 if name != original:
-                    logger.debug(f"[NameTransform] '{original}' -> '{name}' (pattern=/{pattern}/ replacement='{replacement}')")
+                    logger.debug("[AUTO-CREATE-EXEC] '%s' -> '%s' (pattern=/%s/ replacement='%s')", original, name, pattern, replacement)
             except re.error as e:
-                logger.warning(f"Name transform regex error: {e}")
+                logger.warning("[AUTO-CREATE-EXEC] Name transform regex error: %s", e)
         return name.strip()
 
     async def _resolve_logo_id(self, logo_url: str, name_hint: str = "") -> Optional[int]:
@@ -381,7 +386,7 @@ class ActionExecutor:
 
         # Check cache first
         if logo_url in self._logo_cache:
-            logger.debug(f"[Logo] Cache hit for '{logo_url[:60]}' -> id={self._logo_cache[logo_url]}")
+            logger.debug("[AUTO-CREATE-EXEC] Cache hit for '%s' -> id=%s", logo_url[:60], self._logo_cache[logo_url])
             return self._logo_cache[logo_url]
 
         try:
@@ -403,9 +408,9 @@ class ActionExecutor:
                         self._logo_cache[logo_url] = logo_id
                         return logo_id
                 except Exception as search_err:
-                    logger.warning(f"Failed to find existing logo by URL: {search_err}")
+                    logger.warning("[AUTO-CREATE-EXEC] Failed to find existing logo by URL: %s", search_err)
             else:
-                logger.warning(f"Failed to create logo from '{logo_url}': {e}")
+                logger.warning("[AUTO-CREATE-EXEC] Failed to create logo from '%s': %s", logo_url, e)
         return None
 
     def _get_group_name(self, group_id) -> Optional[str]:
@@ -425,7 +430,7 @@ class ActionExecutor:
         params = action.params
         name_template = params.get("name_template", "{stream_name}")
         channel_name = TemplateVariables.expand_template(name_template, template_ctx, exec_ctx.custom_variables)
-        logger.debug(f"[CreateChannel] Template '{name_template}' expanded to '{channel_name}'")
+        logger.debug("[AUTO-CREATE-EXEC] Template '%s' expanded to '%s'", name_template, channel_name)
         channel_name = self._apply_name_transform(channel_name, params)
 
         # Track details for the execution log
@@ -437,23 +442,26 @@ class ActionExecutor:
             try:
                 norm_result = self._normalization_engine.normalize(channel_name)
                 if norm_result.normalized != channel_name:
-                    logger.debug(f"Normalized channel name: '{channel_name}' -> '{norm_result.normalized}'")
+                    logger.debug("[AUTO-CREATE-EXEC] Normalized channel name: '%s' -> '%s'", channel_name, norm_result.normalized)
                     action_details.append(f"Name normalized: '{channel_name}' \u2192 '{norm_result.normalized}'")
                     channel_name = norm_result.normalized
             except Exception as e:
-                logger.warning(f"Failed to normalize channel name '{channel_name}': {e}")
+                logger.warning("[AUTO-CREATE-EXEC] Failed to normalize channel name '%s': %s", channel_name, e)
 
         if_exists = params.get("if_exists", "skip")
         group_id = params.get("group_id") or exec_ctx.current_group_id or rule_target_group_id
         logger.debug(
-            f"[CreateChannel] name='{channel_name}' if_exists={if_exists} "
-            f"group_id={group_id} (param={params.get('group_id')}, "
-            f"exec_ctx={exec_ctx.current_group_id}, rule={rule_target_group_id})"
+            "[AUTO-CREATE-EXEC] name='%s' if_exists=%s "
+            "group_id=%s (param=%s, "
+            "exec_ctx=%s, rule=%s)",
+            channel_name, if_exists,
+            group_id, params.get('group_id'),
+            exec_ctx.current_group_id, rule_target_group_id
         )
 
         # Check if channel already exists (check with original name before number prefix)
         existing = self._find_channel_by_name(channel_name)
-        logger.debug(f"[CreateChannel] Lookup '{channel_name}': {'found id=' + str(existing['id']) if existing else 'not found'}")
+        logger.debug("[AUTO-CREATE-EXEC] Lookup '%s': %s", channel_name, 'found id=' + str(existing['id']) if existing else 'not found')
 
         if existing:
             existing_group_name = self._get_group_name(existing.get("channel_group_id"))
@@ -505,13 +513,13 @@ class ActionExecutor:
 
         # Determine channel number first (needed for name prefix)
         channel_number = self._get_next_channel_number(params.get("channel_number", "auto"))
-        logger.debug(f"[CreateChannel] Channel number: spec={params.get('channel_number', 'auto')} -> {channel_number}")
+        logger.debug("[AUTO-CREATE-EXEC] Channel number: spec=%s -> %s", params.get('channel_number', 'auto'), channel_number)
 
         # Apply channel number in name if setting is enabled
         base_name = channel_name  # Save before prefix for base-name mapping
         channel_name = self._apply_channel_number_in_name(channel_name, channel_number)
         if channel_name != base_name:
-            logger.debug(f"[CreateChannel] Name with number prefix: '{base_name}' -> '{channel_name}'")
+            logger.debug("[AUTO-CREATE-EXEC] Name with number prefix: '%s' -> '%s'", base_name, channel_name)
 
         # Resolve group name for descriptions
         group_name = self._get_group_name(group_id)
@@ -584,7 +592,7 @@ class ActionExecutor:
             )
 
         except Exception as e:
-            logger.error(f"Failed to create channel '{channel_name}': {e}")
+            logger.error("[AUTO-CREATE-EXEC] Failed to create channel '%s': %s", channel_name, e)
             return ActionResult(
                 success=False,
                 action_type=action.type,
@@ -604,12 +612,14 @@ class ActionExecutor:
                     key = (channel_id, s["m3u_account"])
                     self._channel_m3u_counts[key] = self._channel_m3u_counts.get(key, 0) + 1
             logger.debug(
-                f"[MergeStreams] Seeded provider counts for channel {channel_id}: "
-                f"{sum(1 for k in self._channel_m3u_counts if k[0] == channel_id)} providers, "
-                f"{sum(v for k, v in self._channel_m3u_counts.items() if k[0] == channel_id)} streams"
+                "[AUTO-CREATE-EXEC] Seeded provider counts for channel %s: "
+                "%s providers, %s streams",
+                channel_id,
+                sum(1 for k in self._channel_m3u_counts if k[0] == channel_id),
+                sum(v for k, v in self._channel_m3u_counts.items() if k[0] == channel_id)
             )
         except Exception as e:
-            logger.debug(f"[MergeStreams] Failed to fetch streams for channel {channel_id}: {e}")
+            logger.debug("[AUTO-CREATE-EXEC] Failed to fetch streams for channel %s: %s", channel_id, e)
 
     async def _add_stream_to_channel(self, channel: dict, stream_ctx: StreamContext,
                                       exec_ctx: ExecutionContext) -> ActionResult:
@@ -620,8 +630,10 @@ class ActionExecutor:
         # Get current streams
         current_streams = [s["id"] if isinstance(s, dict) else s for s in channel.get("streams", [])]
         logger.debug(
-            f"[MergeStream] Adding stream {stream_ctx.stream_id} ({stream_ctx.stream_name!r}) "
-            f"to channel '{channel_name}' (id={channel_id}), current streams={current_streams}"
+            "[AUTO-CREATE-EXEC] Adding stream %s (%r) "
+            "to channel '%s' (id=%s), current streams=%s",
+            stream_ctx.stream_id, stream_ctx.stream_name,
+            channel_name, channel_id, current_streams
         )
 
         stream_count = len(current_streams)
@@ -647,9 +659,11 @@ class ActionExecutor:
                 prev = self._channel_m3u_counts.get(key, 0)
                 self._channel_m3u_counts[key] = prev + 1
                 logger.debug(
-                    f"[MergeStream] Provider stream count for channel '{channel_name}' "
-                    f"(id={channel_id}), provider {stream_ctx.m3u_account_name} "
-                    f"(id={stream_ctx.m3u_account_id}): {prev} -> {prev + 1}"
+                    "[AUTO-CREATE-EXEC] Provider stream count for channel '%s' "
+                    "(id=%s), provider %s "
+                    "(id=%s): %s -> %s",
+                    channel_name, channel_id, stream_ctx.m3u_account_name,
+                    stream_ctx.m3u_account_id, prev, prev + 1
                 )
 
         if exec_ctx.dry_run:
@@ -694,7 +708,7 @@ class ActionExecutor:
             )
 
         except Exception as e:
-            logger.error(f"Failed to add stream to channel '{channel_name}': {e}")
+            logger.error("[AUTO-CREATE-EXEC] Failed to add stream to channel '%s': %s", channel_name, e)
             return ActionResult(
                 success=False,
                 action_type="merge_stream",
@@ -749,7 +763,7 @@ class ActionExecutor:
             )
 
         except Exception as e:
-            logger.error(f"Failed to update channel '{channel_name}': {e}")
+            logger.error("[AUTO-CREATE-EXEC] Failed to update channel '%s': %s", channel_name, e)
             return ActionResult(
                 success=False,
                 action_type="update_channel",
@@ -767,10 +781,10 @@ class ActionExecutor:
         params = action.params
         name_template = params.get("name_template", "{stream_group}")
         group_name = TemplateVariables.expand_template(name_template, template_ctx, exec_ctx.custom_variables)
-        logger.debug(f"[CreateGroup] Template '{name_template}' expanded to '{group_name}'")
+        logger.debug("[AUTO-CREATE-EXEC] Template '%s' expanded to '%s'", name_template, group_name)
         group_name = self._apply_name_transform(group_name, params)
         if_exists = params.get("if_exists", "use_existing")
-        logger.debug(f"[CreateGroup] name='{group_name}' if_exists={if_exists}")
+        logger.debug("[AUTO-CREATE-EXEC] name='%s' if_exists=%s", group_name, if_exists)
 
         if not group_name:
             return ActionResult(
@@ -839,7 +853,7 @@ class ActionExecutor:
             )
 
         except Exception as e:
-            logger.error(f"Failed to create group '{group_name}': {e}")
+            logger.error("[AUTO-CREATE-EXEC] Failed to create group '%s': %s", group_name, e)
             return ActionResult(
                 success=False,
                 action_type=action.type,
@@ -861,8 +875,10 @@ class ActionExecutor:
         max_streams = params.get("max_streams_per_channel", 0)  # 0 = unlimited
         find_channel_value = params.get("find_channel_value")
         logger.debug(
-            f"[MergeStreams] target={target} find_by={find_channel_by} "
-            f"find_value={find_channel_value} stream={stream_ctx.stream_name!r}"
+            "[AUTO-CREATE-EXEC] target=%s find_by=%s "
+            "find_value=%s stream=%r",
+            target, find_channel_by,
+            find_channel_value, stream_ctx.stream_name
         )
 
         # For existing_channel target, find the channel
@@ -887,9 +903,9 @@ class ActionExecutor:
                         norm_result = self._normalization_engine.normalize(stream_ctx.stream_name)
                         if norm_result.normalized:
                             lookup_name = norm_result.normalized
-                    except Exception:
-                        pass
-                logger.debug(f"[MergeStreams] Auto-lookup by normalized name: '{lookup_name}'")
+                    except Exception as e:
+                        logger.warning("[AUTO-CREATE-EXEC] Normalization failed for stream '%s': %s", stream_ctx.stream_name, e)
+                logger.debug("[AUTO-CREATE-EXEC] Auto-lookup by normalized name: '%s'", lookup_name)
                 channel = self._find_channel_by_name(lookup_name)
 
             # Core-name fallback: strip country prefix + quality suffix using
@@ -898,7 +914,7 @@ class ActionExecutor:
                 try:
                     core_name = self._normalization_engine.extract_core_name(stream_ctx.stream_name)
                     if core_name:
-                        logger.debug(f"[MergeStreams] Core name fallback: '{stream_ctx.stream_name}' -> '{core_name}'")
+                        logger.debug("[AUTO-CREATE-EXEC] Core name fallback: '%s' -> '%s'", stream_ctx.stream_name, core_name)
                         channel = self._core_name_to_channel.get(core_name.lower()) or self._find_channel_by_name(core_name)
 
                         # Sub-step A: Deparenthesize stream core name and retry
@@ -906,7 +922,7 @@ class ActionExecutor:
                             deparen = re.sub(r'\(([^)]+)\)', r'\1', core_name)
                             deparen = re.sub(r'\s+', ' ', deparen).strip()
                             if deparen.lower() != core_name.lower():
-                                logger.debug(f"[MergeStreams] Deparen fallback: '{core_name}' -> '{deparen}'")
+                                logger.debug("[AUTO-CREATE-EXEC] Deparen fallback: '%s' -> '%s'", core_name, deparen)
                                 channel = self._core_name_to_channel.get(deparen.lower()) \
                                           or self._find_channel_by_name(deparen)
 
@@ -927,14 +943,14 @@ class ActionExecutor:
                                             candidates.append(ch_val)
                                 if len(candidates) == 1:
                                     channel = candidates[0]
-                                    logger.debug(f"[MergeStreams] Word-prefix matched '{channel.get('name')}' (id={channel.get('id')})")
+                                    logger.debug("[AUTO-CREATE-EXEC] Word-prefix matched '%s' (id=%s)", channel.get('name'), channel.get('id'))
                                 elif len(candidates) > 1:
-                                    logger.debug(f"[MergeStreams] Word-prefix skipped: {len(candidates)} ambiguous candidates for '{core_name}'")
+                                    logger.debug("[AUTO-CREATE-EXEC] Word-prefix skipped: %s ambiguous candidates for '%s'", len(candidates), core_name)
 
                         if channel:
-                            logger.debug(f"[MergeStreams] Core name matched '{channel.get('name')}' (id={channel.get('id')})")
+                            logger.debug("[AUTO-CREATE-EXEC] Core name matched '%s' (id=%s)", channel.get('name'), channel.get('id'))
                 except Exception as e:
-                    logger.debug(f"[MergeStreams] Core name fallback failed: {e}")
+                    logger.debug("[AUTO-CREATE-EXEC] Core name fallback failed: %s", e)
 
             # Call-sign fallback: match local affiliates by FCC call sign
             # (W/K + 2-3 letters) extracted from both stream and channel names
@@ -942,12 +958,12 @@ class ActionExecutor:
                 try:
                     cs = self._normalization_engine.extract_call_sign(stream_ctx.stream_name)
                     if cs:
-                        logger.debug(f"[MergeStreams] Call sign fallback: '{stream_ctx.stream_name}' -> '{cs}'")
+                        logger.debug("[AUTO-CREATE-EXEC] Call sign fallback: '%s' -> '%s'", stream_ctx.stream_name, cs)
                         channel = self._callsign_to_channel.get(cs)
                         if channel:
-                            logger.debug(f"[MergeStreams] Call sign matched '{channel.get('name')}' (id={channel.get('id')})")
+                            logger.debug("[AUTO-CREATE-EXEC] Call sign matched '%s' (id=%s)", channel.get('name'), channel.get('id'))
                 except Exception as e:
-                    logger.debug(f"[MergeStreams] Call sign fallback failed: {e}")
+                    logger.debug("[AUTO-CREATE-EXEC] Call sign fallback failed: %s", e)
 
             if channel:
                 # Enforce per-provider stream limit if configured
@@ -957,14 +973,17 @@ class ActionExecutor:
                     key = (channel["id"], stream_ctx.m3u_account_id)
                     current_count = self._channel_m3u_counts.get(key, 0)
                     logger.debug(
-                        f"[MergeStreams] Max streams check: channel '{channel['name']}' has "
-                        f"{current_count}/{max_streams} stream(s) from {provider_name}"
+                        "[AUTO-CREATE-EXEC] Max streams check: channel '%s' has "
+                        "%s/%s stream(s) from %s",
+                        channel['name'], current_count, max_streams, provider_name
                     )
                     if current_count >= max_streams:
                         logger.info(
-                            f"[MergeStreams] Skipped stream '{stream_ctx.stream_name}': "
-                            f"channel '{channel['name']}' already has {current_count} stream(s) "
-                            f"from {provider_name} (limit: {max_streams})"
+                            "[AUTO-CREATE-EXEC] Skipped stream '%s': "
+                            "channel '%s' already has %s stream(s) "
+                            "from %s (limit: %s)",
+                            stream_ctx.stream_name, channel['name'],
+                            current_count, provider_name, max_streams
                         )
                         return ActionResult(
                             success=True, action_type=action.type,
@@ -1139,7 +1158,8 @@ class ActionExecutor:
         source_entries = self._epg_data_by_source.get(epg_source_id, [])
         if not source_entries:
             logger.warning(
-                f"[assign_epg] No EPG data entries found for source {epg_source_id}"
+                "[AUTO-CREATE-EXEC] No EPG data entries found for source %s",
+                epg_source_id
             )
             return ActionResult(
                 success=False,
@@ -1153,7 +1173,7 @@ class ActionExecutor:
 
         if not epg_data_entry:
             channel_name = channel.get("name", "unknown")
-            logger.warning(f"[assign_epg] No EPG match for channel '{channel_name}' in source {epg_source_id}")
+            logger.warning("[AUTO-CREATE-EXEC] No EPG match for channel '%s' in source %s", channel_name, epg_source_id)
             return ActionResult(
                 success=False,
                 action_type=action.type,
@@ -1179,8 +1199,10 @@ class ActionExecutor:
             await self.client.update_channel(exec_ctx.current_channel_id, {"epg_data_id": epg_data_id})
 
             logger.debug(
-                f"[assign_epg] Assigned epg_data_id={epg_data_id} (source={epg_source_id}, "
-                f"tvg_id={epg_data_entry.get('tvg_id')}) to channel {exec_ctx.current_channel_id}"
+                "[AUTO-CREATE-EXEC] Assigned epg_data_id=%s (source=%s, "
+                "tvg_id=%s) to channel %s",
+                epg_data_id, epg_source_id,
+                epg_data_entry.get('tvg_id'), exec_ctx.current_channel_id
             )
 
             return ActionResult(
@@ -1193,7 +1215,7 @@ class ActionExecutor:
                 previous_state=previous_state
             )
         except Exception as e:
-            logger.error(f"[assign_epg] Failed to assign EPG: {e}")
+            logger.error("[AUTO-CREATE-EXEC] Failed to assign EPG: %s", e)
             return ActionResult(
                 success=False,
                 action_type=action.type,
@@ -1280,7 +1302,7 @@ class ActionExecutor:
         if channel_tvg_id:
             for entry in source_entries:
                 if entry.get("tvg_id") == channel_tvg_id:
-                    logger.debug(f"[assign_epg] Exact tvg_id match: {channel_tvg_id}")
+                    logger.debug("[AUTO-CREATE-EXEC] Exact tvg_id match: %s", channel_tvg_id)
                     return entry
 
         # Normalize channel name
@@ -1288,7 +1310,7 @@ class ActionExecutor:
         if not norm_channel:
             # Can't match by name, use fallback
             if len(source_entries) == 1:
-                logger.debug(f"[assign_epg] Single entry fallback for '{channel_name}'")
+                logger.debug("[AUTO-CREATE-EXEC] Single entry fallback for '%s'", channel_name)
                 return source_entries[0]
             return None
 
@@ -1336,8 +1358,9 @@ class ActionExecutor:
             exact_matches.sort(key=lambda x: x[2])
             best = exact_matches[0][0]
             logger.debug(
-                f"[assign_epg] Exact name match: '{channel_name}' -> "
-                f"'{best.get('name')}' (tvg_id={best.get('tvg_id')})"
+                "[AUTO-CREATE-EXEC] Exact name match: '%s' -> "
+                "'%s' (tvg_id=%s)",
+                channel_name, best.get('name'), best.get('tvg_id')
             )
             return best
 
@@ -1345,14 +1368,15 @@ class ActionExecutor:
             prefix_matches.sort(key=lambda x: x[2])
             best = prefix_matches[0][0]
             logger.debug(
-                f"[assign_epg] Prefix match: '{channel_name}' -> "
-                f"'{best.get('name')}' (tvg_id={best.get('tvg_id')})"
+                "[AUTO-CREATE-EXEC] Prefix match: '%s' -> "
+                "'%s' (tvg_id=%s)",
+                channel_name, best.get('name'), best.get('tvg_id')
             )
             return best
 
         # 4. Fallback for single-entry sources (dummy EPGs)
         if len(source_entries) == 1:
-            logger.debug(f"[assign_epg] Single entry fallback for '{channel_name}'")
+            logger.debug("[AUTO-CREATE-EXEC] Single entry fallback for '%s'", channel_name)
             return source_entries[0]
 
         return None
@@ -1468,14 +1492,14 @@ class ActionExecutor:
         params = action.params
         var_name = params.get("variable_name", "")
         mode = params.get("variable_mode", "literal")
-        logger.debug(f"[SetVariable] var_name='{var_name}' mode={mode} params={params}")
+        logger.debug("[AUTO-CREATE-EXEC] var_name='%s' mode=%s params=%s", var_name, mode, params)
 
         # Get source value for regex modes
         source_value = ""
         if mode in ("regex_extract", "regex_replace"):
             source_field = params.get("source_field", "stream_name")
             source_value = template_ctx.get(source_field, "")
-            logger.debug(f"[SetVariable] source_field={source_field} source_value={source_value!r}")
+            logger.debug("[AUTO-CREATE-EXEC] source_field=%s source_value=%r", source_field, source_value)
 
         try:
             if mode == "regex_extract":
@@ -1536,7 +1560,7 @@ class ActionExecutor:
             channel_name = channel.get("name", f"ID:{channel_id}")
 
             await self.client.delete_channel(channel_id)
-            logger.info(f"[Reconcile] Deleted orphaned channel {channel_id} ({channel_name})")
+            logger.info("[AUTO-CREATE-EXEC] Deleted orphaned channel %s (%s)", channel_id, channel_name)
 
             return ActionResult(
                 success=True,
@@ -1550,7 +1574,7 @@ class ActionExecutor:
             error_str = str(e)
             # Channel already gone (404) - treat as success
             if "404" in error_str or "not found" in error_str.lower():
-                logger.info(f"[Reconcile] Channel {channel_id} already deleted (404)")
+                logger.info("[AUTO-CREATE-EXEC] Channel %s already deleted (404)", channel_id)
                 return ActionResult(
                     success=True,
                     action_type="remove_channel",
@@ -1558,7 +1582,7 @@ class ActionExecutor:
                     entity_type="channel",
                     entity_id=channel_id,
                 )
-            logger.error(f"[Reconcile] Failed to delete channel {channel_id}: {e}")
+            logger.error("[AUTO-CREATE-EXEC] Failed to delete channel %s: %s", channel_id, e)
             return ActionResult(
                 success=False,
                 action_type="remove_channel",
@@ -1573,7 +1597,7 @@ class ActionExecutor:
             channel_name = channel.get("name", f"ID:{channel_id}")
 
             await self.client.update_channel(channel_id, {"channel_group_id": None})
-            logger.info(f"[Reconcile] Moved orphaned channel {channel_id} ({channel_name}) to Uncategorized")
+            logger.info("[AUTO-CREATE-EXEC] Moved orphaned channel %s (%s) to Uncategorized", channel_id, channel_name)
 
             return ActionResult(
                 success=True,
@@ -1587,7 +1611,7 @@ class ActionExecutor:
         except Exception as e:
             error_str = str(e)
             if "404" in error_str or "not found" in error_str.lower():
-                logger.info(f"[Reconcile] Channel {channel_id} already deleted (404)")
+                logger.info("[AUTO-CREATE-EXEC] Channel %s already deleted (404)", channel_id)
                 return ActionResult(
                     success=True,
                     action_type="move_channel",
@@ -1595,7 +1619,7 @@ class ActionExecutor:
                     entity_type="channel",
                     entity_id=channel_id,
                 )
-            logger.error(f"[Reconcile] Failed to move channel {channel_id}: {e}")
+            logger.error("[AUTO-CREATE-EXEC] Failed to move channel %s: %s", channel_id, e)
             return ActionResult(
                 success=False,
                 action_type="move_channel",
@@ -1634,7 +1658,7 @@ class ActionExecutor:
                 )
 
             await self.client.delete_channel_group(group_id)
-            logger.info(f"[Reconcile] Deleted empty group {group_id} ({group_name})")
+            logger.info("[AUTO-CREATE-EXEC] Deleted empty group %s (%s)", group_id, group_name)
 
             return ActionResult(
                 success=True,
@@ -1654,7 +1678,7 @@ class ActionExecutor:
                     entity_type="group",
                     entity_id=group_id,
                 )
-            logger.error(f"[Reconcile] Failed to delete group {group_id}: {e}")
+            logger.error("[AUTO-CREATE-EXEC] Failed to delete group %s: %s", group_id, e)
             return ActionResult(
                 success=False,
                 action_type="delete_empty_group",
@@ -1681,7 +1705,7 @@ class ActionExecutor:
 
         result = f"{number_str} {separator} {stripped}"
         if result != channel_name:
-            logger.debug(f"[Channel-number-in-name] '{channel_name}' -> '{result}'")
+            logger.debug("[AUTO-CREATE-EXEC] '%s' -> '%s'", channel_name, result)
         return result
 
     async def _assign_default_profiles(self, channel_id: int) -> str:
@@ -1708,11 +1732,11 @@ class ActionExecutor:
                     await self.client.update_profile_channel(pid, channel_id, {"enabled": False})
                     disabled_count += 1
             except Exception as e:
-                logger.warning(f"[Profile-assign] Failed to update profile {pid} for channel {channel_id}: {e}")
+                logger.warning("[AUTO-CREATE-EXEC] Failed to update profile %s for channel %s: %s", pid, channel_id, e)
 
         if enabled_count or disabled_count:
             desc = f"profiles: enabled in {enabled_count}, disabled in {disabled_count}"
-            logger.info(f"[Profile-assign] Channel {channel_id}: {desc}")
+            logger.info("[AUTO-CREATE-EXEC] Channel %s: %s", channel_id, desc)
             return desc
         return ""
 
@@ -1727,20 +1751,20 @@ class ActionExecutor:
         name_lower = name.lower()
         # Check newly created channels first (by exact name)
         if name_lower in self._created_channels:
-            logger.debug(f"[Lookup] '{name}' found in created channels")
+            logger.debug("[AUTO-CREATE-EXEC] '%s' found in created channels", name)
             return self._created_channels[name_lower]
         # Check base-name mapping (base name -> number-prefixed channel)
         if name_lower in self._base_name_to_channel:
-            logger.debug(f"[Lookup] '{name}' found via base-name mapping")
+            logger.debug("[AUTO-CREATE-EXEC] '%s' found via base-name mapping", name)
             return self._base_name_to_channel[name_lower]
         result = self._channel_by_name.get(name_lower)
         if result:
-            logger.debug(f"[Lookup] '{name}' found in existing channels (id={result.get('id')})")
+            logger.debug("[AUTO-CREATE-EXEC] '%s' found in existing channels (id=%s)", name, result.get('id'))
             return result
         # Check normalized-name mapping (normalization-engine-processed channel names)
         if name_lower in self._normalized_name_to_channel:
             result = self._normalized_name_to_channel[name_lower]
-            logger.debug(f"[Lookup] '{name}' found via normalized-name mapping (id={result.get('id')}, name='{result.get('name')}')")
+            logger.debug("[AUTO-CREATE-EXEC] '%s' found via normalized-name mapping (id=%s, name='%s')", name, result.get('id'), result.get('name'))
             return result
         return None
 
@@ -1789,7 +1813,7 @@ class ActionExecutor:
             Next available channel number
         """
         if isinstance(spec, int):
-            logger.debug(f"[ChannelNumber] spec={spec} (int) -> {spec}")
+            logger.debug("[AUTO-CREATE-EXEC] spec=%s (int) -> %s", spec, spec)
             return spec
 
         if isinstance(spec, str):
@@ -1798,7 +1822,7 @@ class ActionExecutor:
                 num = 1
                 while num in self._used_channel_numbers:
                     num += 1
-                logger.debug(f"[ChannelNumber] spec='auto' -> {num} (skipped {num - 1} used numbers)")
+                logger.debug("[AUTO-CREATE-EXEC] spec='auto' -> %s (skipped %s used numbers)", num, num - 1)
                 return num
 
             # Check for range format "min-max"
@@ -1808,16 +1832,16 @@ class ActionExecutor:
                 max_num = int(match.group(2))
                 for num in range(min_num, max_num + 1):
                     if num not in self._used_channel_numbers:
-                        logger.debug(f"[ChannelNumber] spec='{spec}' (range) -> {num}")
+                        logger.debug("[AUTO-CREATE-EXEC] spec='%s' (range) -> %s", spec, num)
                         return num
                 # Range exhausted, use next after max
-                logger.debug(f"[ChannelNumber] spec='{spec}' range exhausted -> {max_num + 1}")
+                logger.debug("[AUTO-CREATE-EXEC] spec='%s' range exhausted -> %s", spec, max_num + 1)
                 return max_num + 1
 
             # Try parsing as int
             try:
                 num = int(spec)
-                logger.debug(f"[ChannelNumber] spec='{spec}' (parsed int) -> {num}")
+                logger.debug("[AUTO-CREATE-EXEC] spec='%s' (parsed int) -> %s", spec, num)
                 return num
             except ValueError:
                 pass
@@ -1826,5 +1850,5 @@ class ActionExecutor:
         num = 1
         while num in self._used_channel_numbers:
             num += 1
-        logger.debug(f"[ChannelNumber] spec={spec!r} (fallback auto) -> {num}")
+        logger.debug("[AUTO-CREATE-EXEC] spec=%r (fallback auto) -> %s", spec, num)
         return num

@@ -7,6 +7,7 @@ import asyncio
 import gzip
 import io
 import logging
+import time
 import xml.etree.ElementTree as ET
 import zlib
 from typing import Optional
@@ -21,7 +22,7 @@ import journal
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["EPG"])
+router = APIRouter(prefix="/api/epg", tags=["EPG"])
 
 # Polling configuration for EPG refresh background tasks
 REFRESH_POLL_INTERVAL_SECONDS = 5
@@ -47,33 +48,46 @@ class BatchLCNRequest(BaseModel):
 # EPG Sources CRUD
 # ---------------------------------------------------------------------------
 
-@router.get("/api/epg/sources")
+@router.get("/sources")
 async def get_epg_sources():
     """List all EPG sources."""
+    logger.debug("[EPG] GET /api/epg/sources")
     client = get_client()
+    start = time.time()
     try:
-        return await client.get_epg_sources()
+        result = await client.get_epg_sources()
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[EPG] Fetched %d EPG sources in %.1fms", len(result), elapsed_ms)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/epg/sources/{source_id}")
+@router.get("/sources/{source_id}")
 async def get_epg_source(source_id: int):
     """Get an EPG source by ID."""
+    logger.debug("[EPG] GET /api/epg/sources/%s", source_id)
     client = get_client()
+    start = time.time()
     try:
-        return await client.get_epg_source(source_id)
+        result = await client.get_epg_source(source_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[EPG] Fetched EPG source id=%s in %.1fms", source_id, elapsed_ms)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/epg/sources")
+@router.post("/sources")
 async def create_epg_source(request: Request):
     """Create an EPG source (including dummy sources)."""
+    logger.debug("[EPG] POST /api/epg/sources")
     client = get_client()
+    start = time.time()
     try:
         data = await request.json()
         result = await client.create_epg_source(data)
+        elapsed_ms = (time.time() - start) * 1000
 
         # Log to journal
         journal.log_entry(
@@ -85,20 +99,24 @@ async def create_epg_source(request: Request):
             after_value={"name": result.get("name"), "url": data.get("url")},
         )
 
+        logger.info("[EPG] Created EPG source id=%s name='%s' in %.1fms", result.get("id"), result.get("name"), elapsed_ms)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.patch("/api/epg/sources/{source_id}")
+@router.patch("/sources/{source_id}")
 async def update_epg_source(source_id: int, request: Request):
     """Update an EPG source."""
+    logger.debug("[EPG] PATCH /api/epg/sources/%s", source_id)
     client = get_client()
+    start = time.time()
     try:
         # Get before state
         before_source = await client.get_epg_source(source_id)
         data = await request.json()
         result = await client.update_epg_source(source_id, data)
+        elapsed_ms = (time.time() - start) * 1000
 
         # Log to journal
         journal.log_entry(
@@ -111,21 +129,25 @@ async def update_epg_source(source_id: int, request: Request):
             after_value=data,
         )
 
+        logger.info("[EPG] Updated EPG source id=%s name='%s' in %.1fms", source_id, result.get("name"), elapsed_ms)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/api/epg/sources/{source_id}")
+@router.delete("/sources/{source_id}")
 async def delete_epg_source(source_id: int):
     """Delete an EPG source."""
+    logger.debug("[EPG] DELETE /api/epg/sources/%s", source_id)
     client = get_client()
+    start = time.time()
     try:
         # Get source info before deleting
         source = await client.get_epg_source(source_id)
         source_name = source.get("name", "Unknown")
 
         await client.delete_epg_source(source_id)
+        elapsed_ms = (time.time() - start) * 1000
 
         # Log to journal
         journal.log_entry(
@@ -137,6 +159,7 @@ async def delete_epg_source(source_id: int):
             before_value={"name": source_name},
         )
 
+        logger.info("[EPG] Deleted EPG source id=%s name='%s' in %.1fms", source_id, source_name, elapsed_ms)
         return {"status": "deleted"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -163,7 +186,7 @@ async def _poll_epg_refresh_completion(source_id: int, source_name: str, initial
         while True:
             elapsed = (datetime.utcnow() - wait_start).total_seconds()
             if elapsed >= EPG_REFRESH_MAX_WAIT_SECONDS:
-                logger.warning(f"[EPG-REFRESH] Timeout waiting for '{source_name}' refresh after {elapsed:.0f}s")
+                logger.warning("[EPG-REFRESH] Timeout waiting for '%s' refresh after %.0fs", source_name, elapsed)
                 await send_alert(
                     title=f"EPG Refresh: {source_name}",
                     message=f"EPG refresh for '{source_name}' timed out after {int(elapsed)}s - refresh may still be in progress",
@@ -181,14 +204,14 @@ async def _poll_epg_refresh_completion(source_id: int, source_name: str, initial
                 current_source = await client.get_epg_source(source_id)
             except Exception as e:
                 # Source may have been deleted during refresh
-                logger.warning(f"[EPG-REFRESH] Could not fetch source {source_id} during polling: {e}")
+                logger.warning("[EPG-REFRESH] Could not fetch source %s during polling: %s", source_id, e)
                 return
 
             current_updated = current_source.get("updated_at") or current_source.get("last_updated")
 
             if current_updated and current_updated != initial_updated:
                 wait_duration = (datetime.utcnow() - wait_start).total_seconds()
-                logger.info(f"[EPG-REFRESH] '{source_name}' refresh complete in {wait_duration:.1f}s")
+                logger.info("[EPG-REFRESH] '%s' refresh complete in %.1fs", source_name, wait_duration)
 
                 journal.log_entry(
                     category="epg",
@@ -211,7 +234,7 @@ async def _poll_epg_refresh_completion(source_id: int, source_name: str, initial
             elif elapsed > 30 and not initial_updated:
                 # After 30 seconds, assume complete if no timestamp field available
                 wait_duration = (datetime.utcnow() - wait_start).total_seconds()
-                logger.info(f"[EPG-REFRESH] '{source_name}' - assuming complete after {wait_duration:.0f}s (no timestamp field)")
+                logger.info("[EPG-REFRESH] '%s' - assuming complete after %.0fs (no timestamp field)", source_name, wait_duration)
 
                 journal.log_entry(
                     category="epg",
@@ -233,32 +256,36 @@ async def _poll_epg_refresh_completion(source_id: int, source_name: str, initial
                 return
 
     except Exception as e:
-        logger.error(f"[EPG-REFRESH] Error polling for '{source_name}' completion: {e}")
+        logger.exception("[EPG-REFRESH] Error polling for '%s' completion: %s", source_name, e)
 
 
-@router.post("/api/epg/sources/{source_id}/refresh")
+@router.post("/sources/{source_id}/refresh")
 async def refresh_epg_source(source_id: int):
     """Trigger refresh for a single EPG source.
 
     Triggers the refresh and spawns a background task to poll for completion.
     Success notification is sent only when refresh actually completes.
     """
+    logger.debug("[EPG-REFRESH] POST /api/epg/sources/%s/refresh", source_id)
     client = get_client()
     try:
         # Get source info and capture initial state for polling
+        start = time.time()
         source = await client.get_epg_source(source_id)
         source_name = source.get("name", "Unknown")
         initial_updated = source.get("updated_at") or source.get("last_updated")
 
         # Trigger the refresh (returns immediately, refresh happens in background)
         result = await client.refresh_epg_source(source_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[EPG-REFRESH] Triggered refresh for source %s in %.1fms", source_id, elapsed_ms)
 
         # Spawn background task to poll for completion and send notification
         asyncio.create_task(
             _poll_epg_refresh_completion(source_id, source_name, initial_updated)
         )
 
-        logger.info(f"[EPG-REFRESH] Triggered refresh for '{source_name}', polling for completion in background")
+        logger.info("[EPG-REFRESH] Triggered refresh for '%s', polling for completion in background", source_name)
         return result
     except Exception as e:
         # Send error notification for trigger failure
@@ -277,12 +304,17 @@ async def refresh_epg_source(source_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/epg/import")
+@router.post("/import")
 async def trigger_epg_import():
     """Trigger EPG data import."""
+    logger.debug("[EPG] POST /api/epg/import")
     client = get_client()
+    start = time.time()
     try:
-        return await client.trigger_epg_import()
+        result = await client.trigger_epg_import()
+        elapsed_ms = (time.time() - start) * 1000
+        logger.info("[EPG] Triggered EPG import in %.1fms", elapsed_ms)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -291,7 +323,7 @@ async def trigger_epg_import():
 # EPG Data
 # ---------------------------------------------------------------------------
 
-@router.get("/api/epg/data")
+@router.get("/data")
 async def get_epg_data(
     page: int = 1,
     page_size: int = 100,
@@ -299,38 +331,53 @@ async def get_epg_data(
     epg_source: Optional[int] = None,
 ):
     """Search EPG data with pagination and filtering."""
+    logger.debug("[EPG] GET /api/epg/data - page=%s page_size=%s search=%s epg_source=%s", page, page_size, search, epg_source)
     client = get_client()
+    start = time.time()
     try:
-        return await client.get_epg_data(
+        result = await client.get_epg_data(
             page=page,
             page_size=page_size,
             search=search,
             epg_source=epg_source,
         )
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[EPG] Fetched EPG data in %.1fms", elapsed_ms)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/epg/data/{data_id}")
+@router.get("/data/{data_id}")
 async def get_epg_data_by_id(data_id: int):
     """Get an individual EPG data entry by ID."""
+    logger.debug("[EPG] GET /api/epg/data/%s", data_id)
     client = get_client()
+    start = time.time()
     try:
-        return await client.get_epg_data_by_id(data_id)
+        result = await client.get_epg_data_by_id(data_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[EPG] Fetched EPG data id=%s in %.1fms", data_id, elapsed_ms)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/epg/grid")
+@router.get("/grid")
 async def get_epg_grid(start: Optional[str] = None, end: Optional[str] = None):
     """Get EPG grid (programs from previous hour + next 24 hours).
 
     Optionally accepts start and end datetime parameters in ISO format.
     Time filtering significantly reduces data size and prevents timeouts.
     """
+    logger.debug("[EPG] GET /api/epg/grid - start=%s end=%s", start, end)
     client = get_client()
+    start_time = time.time()
     try:
-        return await client.get_epg_grid(start=start, end=end)
+        result = await client.get_epg_grid(start=start, end=end)
+        elapsed_ms = (time.time() - start_time) * 1000
+        logger.debug("[EPG] Fetched EPG grid in %.1fms", elapsed_ms)
+        return result
     except httpx.ReadTimeout:
         raise HTTPException(
             status_code=504,
@@ -345,7 +392,7 @@ async def get_epg_grid(start: Optional[str] = None, end: Optional[str] = None):
             )
         raise HTTPException(status_code=e.response.status_code, detail=str(e))
     except Exception as e:
-        logger.exception(f"Error fetching EPG grid: {e}")
+        logger.exception("[EPG] Error fetching EPG grid: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -353,7 +400,7 @@ async def get_epg_grid(start: Optional[str] = None, end: Optional[str] = None):
 # LCN (Logical Channel Number) lookup
 # ---------------------------------------------------------------------------
 
-@router.get("/api/epg/lcn")
+@router.get("/lcn")
 async def get_epg_lcn_by_tvg_id(tvg_id: str):
     """Get LCN (Logical Channel Number) for a TVG-ID from EPG XML sources.
 
@@ -363,10 +410,14 @@ async def get_epg_lcn_by_tvg_id(tvg_id: str):
     Args:
         tvg_id: The TVG-ID to search for (as a query parameter)
     """
+    logger.debug("[EPG-LCN] GET /api/epg/lcn - tvg_id=%s", tvg_id)
     client = get_client()
     try:
         # Get all EPG sources
+        start = time.time()
         sources = await client.get_epg_sources()
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[EPG-LCN] Fetched EPG sources in %.1fms", elapsed_ms)
 
         # Filter to XMLTV sources that have URLs
         xmltv_sources = [
@@ -398,7 +449,7 @@ async def get_epg_lcn_by_tvg_id(tvg_id: str):
                                 lcn = child.text
                                 break
                         if lcn:
-                            logger.info(f"Found LCN {lcn} for {tvg_id} in {source_name}")
+                            logger.info("[EPG-LCN] Found LCN %s for %s in %s", lcn, tvg_id, source_name)
                             return {"tvg_id": tvg_id, "lcn": lcn, "source": source_name}
                     if root is not None:
                         root.clear()
@@ -413,7 +464,7 @@ async def get_epg_lcn_by_tvg_id(tvg_id: str):
                     continue
 
                 try:
-                    logger.info(f"Checking EPG XML from {url} for LCN lookup...")
+                    logger.debug("[EPG-LCN] Checking EPG XML from %s for LCN lookup...", url)
 
                     # Check file size first
                     head_response = await http_client.head(url)
@@ -425,13 +476,13 @@ async def get_epg_lcn_by_tvg_id(tvg_id: str):
                         response = await http_client.get(url)
                         response.raise_for_status()
                         content = response.content
-                        logger.info(f"Downloaded {len(content)} bytes from {url}")
+                        logger.debug("[EPG-LCN] Downloaded %s bytes from %s", len(content), url)
 
                         # Decompress if gzipped
                         if url.endswith('.gz') or response.headers.get('content-encoding') == 'gzip':
                             try:
                                 content = gzip.decompress(content)
-                                logger.info(f"Decompressed to {len(content)} bytes")
+                                logger.debug("[EPG-LCN] Decompressed to %s bytes", len(content))
                             except gzip.BadGzipFile:
                                 pass
 
@@ -440,7 +491,7 @@ async def get_epg_lcn_by_tvg_id(tvg_id: str):
                             return result
                     else:
                         # Large file - stream download first portion and decompress incrementally
-                        logger.info(f"Large file ({file_size} bytes) - streaming first {MAX_STREAM_BYTES//1024//1024}MB...")
+                        logger.debug("[EPG-LCN] Large file (%s bytes) - streaming first %sMB...", file_size, MAX_STREAM_BYTES//1024//1024)
 
                         if url.endswith('.gz'):
                             # For gzipped files, download partial and try to decompress
@@ -451,13 +502,13 @@ async def get_epg_lcn_by_tvg_id(tvg_id: str):
                             # Try range request
                             response = await http_client.get(url, headers=headers)
                             partial_content = response.content
-                            logger.info(f"Downloaded {len(partial_content)} bytes (partial)")
+                            logger.debug("[EPG-LCN] Downloaded %s bytes (partial)", len(partial_content))
 
                             # Decompress with decompobj to handle truncated data
                             decompressor = zlib.decompressobj(zlib.MAX_WBITS | 16)
                             try:
                                 decompressed = decompressor.decompress(partial_content)
-                                logger.info(f"Partially decompressed to {len(decompressed)} bytes")
+                                logger.debug("[EPG-LCN] Partially decompressed to %s bytes", len(decompressed))
 
                                 # Try to parse what we have - look for channel data
                                 # Add closing tag to make it parseable
@@ -471,13 +522,13 @@ async def get_epg_lcn_by_tvg_id(tvg_id: str):
                                 if result:
                                     return result
                             except Exception as e:
-                                logger.warning(f"Failed to decompress partial {url}: {e}")
+                                logger.warning("[EPG-LCN] Failed to decompress partial %s: %s", url, e)
                         else:
                             # Non-gzipped large file - just download first portion
                             headers = {"Range": f"bytes=0-{MAX_STREAM_BYTES}"}
                             response = await http_client.get(url, headers=headers)
                             content = response.content
-                            logger.info(f"Downloaded {len(content)} bytes (partial)")
+                            logger.debug("[EPG-LCN] Downloaded %s bytes (partial)", len(content))
 
                             if b'<programme' in content:
                                 idx = content.find(b'<programme')
@@ -488,13 +539,13 @@ async def get_epg_lcn_by_tvg_id(tvg_id: str):
                                 return result
 
                 except httpx.HTTPError as e:
-                    logger.warning(f"Failed to fetch EPG XML from {url}: {e}")
+                    logger.warning("[EPG-LCN] Failed to fetch EPG XML from %s: %s", url, e)
                     continue
                 except ET.ParseError as e:
-                    logger.warning(f"Failed to parse EPG XML from {url}: {e}")
+                    logger.warning("[EPG-LCN] Failed to parse EPG XML from %s: %s", url, e)
                     continue
                 except Exception as e:
-                    logger.warning(f"Error processing EPG XML from {url}: {e}")
+                    logger.warning("[EPG-LCN] Error processing EPG XML from %s: %s", url, e)
                     continue
 
         # Not found in any source
@@ -506,11 +557,11 @@ async def get_epg_lcn_by_tvg_id(tvg_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching LCN for {tvg_id}: {e}")
+        logger.exception("[EPG-LCN] Error fetching LCN for %s: %s", tvg_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/epg/lcn/batch")
+@router.post("/lcn/batch")
 async def get_epg_lcn_batch(request: BatchLCNRequest):
     """Get LCN (Logical Channel Number) for multiple TVG-IDs from EPG XML sources.
 
@@ -522,6 +573,7 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
 
     Returns a dict mapping tvg_id -> {lcn, source} for found entries.
     """
+    logger.debug("[EPG-LCN] POST /api/epg/lcn/batch - %d items", len(request.items))
     if not request.items:
         return {"results": {}}
 
@@ -536,7 +588,10 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
     client = get_client()
     try:
         # Get all EPG sources
+        start = time.time()
         all_sources = await client.get_epg_sources()
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[EPG-LCN] Fetched EPG sources for batch in %.1fms", elapsed_ms)
 
         # Filter to XMLTV sources that have URLs
         all_xmltv_sources = [
@@ -575,7 +630,7 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
                     break
             return found
 
-        logger.info(f"Batch LCN lookup for {len(request.items)} items across {len(source_to_tvg_ids)} EPG source(s)")
+        logger.debug("[EPG-LCN] Batch LCN lookup for %s items across %s EPG source(s)", len(request.items), len(source_to_tvg_ids))
 
         async with httpx.AsyncClient(timeout=120.0) as http_client:
             # Process each EPG source group
@@ -584,14 +639,14 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
                 if epg_source_id is None:
                     # No EPG source specified - search all sources (fallback)
                     sources_to_search = all_xmltv_sources
-                    logger.info(f"Searching all EPG sources for {len(tvg_ids_for_source)} TVG-ID(s) with no EPG source")
+                    logger.debug("[EPG-LCN] Searching all EPG sources for %s TVG-ID(s) with no EPG source", len(tvg_ids_for_source))
                 else:
                     # Search only the specified EPG source
                     sources_to_search = [s for s in all_xmltv_sources if s.get("id") == epg_source_id]
                     if not sources_to_search:
-                        logger.warning(f"EPG source {epg_source_id} not found or not XMLTV")
+                        logger.warning("[EPG-LCN] EPG source %s not found or not XMLTV", epg_source_id)
                         continue
-                    logger.info(f"Searching EPG source {epg_source_id} for {len(tvg_ids_for_source)} TVG-ID(s)")
+                    logger.debug("[EPG-LCN] Searching EPG source %s for %s TVG-ID(s)", epg_source_id, len(tvg_ids_for_source))
 
                 # Track what we still need to find for this source group
                 remaining = tvg_ids_for_source.copy()
@@ -616,7 +671,7 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
                             response = await http_client.get(url)
                             response.raise_for_status()
                             content = response.content
-                            logger.info(f"Batch LCN: Downloaded {len(content)} bytes from {url}")
+                            logger.info("[EPG-LCN] Batch: Downloaded %s bytes from %s", len(content), url)
 
                             if url.endswith('.gz') or response.headers.get('content-encoding') == 'gzip':
                                 try:
@@ -628,10 +683,10 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
                             results.update(found)
                             remaining -= set(found.keys())
                             if found:
-                                logger.info(f"Batch LCN: Found {len(found)} LCNs in {source.get('name')}")
+                                logger.info("[EPG-LCN] Batch: Found %s LCNs in %s", len(found), source.get('name'))
                         else:
                             # Large file - stream first portion
-                            logger.info(f"Batch LCN: Large file ({file_size} bytes) - streaming...")
+                            logger.info("[EPG-LCN] Batch: Large file (%s bytes) - streaming...", file_size)
 
                             if url.endswith('.gz'):
                                 download_size = min(file_size, MAX_STREAM_BYTES)
@@ -651,9 +706,9 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
                                     results.update(found)
                                     remaining -= set(found.keys())
                                     if found:
-                                        logger.info(f"Batch LCN: Found {len(found)} LCNs in {source.get('name')} (partial)")
+                                        logger.info("[EPG-LCN] Batch: Found %s LCNs in %s (partial)", len(found), source.get('name'))
                                 except Exception as e:
-                                    logger.warning(f"Batch LCN: Failed to decompress partial {url}: {e}")
+                                    logger.warning("[EPG-LCN] Batch: Failed to decompress partial %s: %s", url, e)
                             else:
                                 headers = {"Range": f"bytes=0-{MAX_STREAM_BYTES}"}
                                 response = await http_client.get(url, headers=headers)
@@ -667,21 +722,21 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
                                 results.update(found)
                                 remaining -= set(found.keys())
                                 if found:
-                                    logger.info(f"Batch LCN: Found {len(found)} LCNs in {source.get('name')} (partial)")
+                                    logger.info("[EPG-LCN] Batch: Found %s LCNs in %s (partial)", len(found), source.get('name'))
 
                     except httpx.HTTPError as e:
-                        logger.warning(f"Batch LCN: Failed to fetch {url}: {e}")
+                        logger.warning("[EPG-LCN] Batch: Failed to fetch %s: %s", url, e)
                         continue
                     except ET.ParseError as e:
-                        logger.warning(f"Batch LCN: Failed to parse {url}: {e}")
+                        logger.warning("[EPG-LCN] Batch: Failed to parse %s: %s", url, e)
                         continue
                     except Exception as e:
-                        logger.warning(f"Batch LCN: Error processing {url}: {e}")
+                        logger.warning("[EPG-LCN] Batch: Error processing %s: %s", url, e)
                         continue
 
-        logger.info(f"Batch LCN lookup complete: {len(results)}/{len(request.items)} found")
+        logger.info("[EPG-LCN] Batch LCN lookup complete: %s/%s found", len(results), len(request.items))
         return {"results": results}
 
     except Exception as e:
-        logger.error(f"Batch LCN error: {e}")
+        logger.exception("[EPG-LCN] Batch LCN error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

@@ -165,8 +165,8 @@ class ConditionEvaluator:
                         normalized = result.normalized
                         if normalized:
                             names.add(normalized.lower())
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("[AUTO-CREATE-EVAL] Normalization failed for channel '%s': %s", stripped, e)
             self._channel_names_by_group[gid] = names
 
         # Build global set of all channel names across all groups for normalized_name_exists
@@ -285,8 +285,8 @@ class ConditionEvaluator:
             )
 
         logger.debug(
-            f"[Condition] stream={context.stream_name!r} type={result.condition_type} "
-            f"matched={result.matched} details={result.details}"
+            "[AUTO-CREATE-EVAL] stream=%r type=%s matched=%s details=%s",
+            context.stream_name, result.condition_type, result.matched, result.details
         )
         return result
 
@@ -297,7 +297,7 @@ class ConditionEvaluator:
         try:
             cond_enum = ConditionType(cond_type)
         except ValueError:
-            logger.warning(f"Unknown condition type: {cond_type}")
+            logger.warning("[AUTO-CREATE-EVAL] Unknown condition type: %s", cond_type)
             return EvaluationResult(False, cond_type, f"Unknown condition type: {cond_type}")
 
         # Logical operators
@@ -403,7 +403,7 @@ class ConditionEvaluator:
             return self._evaluate_normalized_name_not_exists(context, cond_type)
 
         # Fallback
-        logger.warning(f"Unhandled condition type: {cond_type}")
+        logger.warning("[AUTO-CREATE-EVAL] Unhandled condition type: %s", cond_type)
         return EvaluationResult(False, cond_type, f"Unhandled condition type")
 
     # =========================================================================
@@ -422,15 +422,16 @@ class ConditionEvaluator:
             if not result.matched:
                 # Short-circuit on first failure
                 logger.debug(
-                    f"[AND] stream={context.stream_name!r} short-circuit fail at "
-                    f"sub-condition {result.condition_type}: {result.details}"
+                    "[AUTO-CREATE-EVAL] AND stream=%r short-circuit fail at "
+                    "sub-condition %s: %s",
+                    context.stream_name, result.condition_type, result.details
                 )
                 return EvaluationResult(
                     False, "and",
                     f"Failed at: {result.condition_type} - {result.details}"
                 )
 
-        logger.debug(f"[AND] stream={context.stream_name!r} all {len(results)} sub-conditions matched")
+        logger.debug("[AUTO-CREATE-EVAL] AND stream=%r all %s sub-conditions matched", context.stream_name, len(results))
         return EvaluationResult(
             True, "and",
             f"All {len(results)} conditions matched"
@@ -446,8 +447,9 @@ class ConditionEvaluator:
             if result.matched:
                 # Short-circuit on first success
                 logger.debug(
-                    f"[OR] stream={context.stream_name!r} short-circuit match at "
-                    f"sub-condition {result.condition_type}: {result.details}"
+                    "[AUTO-CREATE-EVAL] OR stream=%r short-circuit match at "
+                    "sub-condition %s: %s",
+                    context.stream_name, result.condition_type, result.details
                 )
                 return EvaluationResult(
                     True, "or",
@@ -455,7 +457,8 @@ class ConditionEvaluator:
                 )
 
         logger.debug(
-            f"[OR] stream={context.stream_name!r} none of {len(condition.conditions)} sub-conditions matched"
+            "[AUTO-CREATE-EVAL] OR stream=%r none of %s sub-conditions matched",
+            context.stream_name, len(condition.conditions)
         )
         return EvaluationResult(
             False, "or",
@@ -495,7 +498,7 @@ class ConditionEvaluator:
                 f"'{value}' {'matches' if matched else 'does not match'} /{pattern}/"
             )
         except re.error as e:
-            logger.error(f"Invalid regex pattern '{pattern}': {e}")
+            logger.error("[AUTO-CREATE-EVAL] Invalid regex pattern '%s': %s", pattern, e)
             return EvaluationResult(False, cond_type, f"Invalid regex: {e}")
 
     def _evaluate_contains(self, substring: str, value: str, case_sensitive: bool,
@@ -699,7 +702,7 @@ class ConditionEvaluator:
                 result = self._normalization_engine.normalize(stream_name)
                 normalized = result.normalized
             except Exception as e:
-                logger.warning(f"Normalization failed for '{stream_name}': {e}")
+                logger.warning("[AUTO-CREATE-EVAL] Normalization failed for '%s': %s", stream_name, e)
                 normalized = stream_name
         else:
             normalized = stream_name
@@ -732,7 +735,7 @@ class ConditionEvaluator:
                 result = self._normalization_engine.normalize(stream_name)
                 return result.normalized
             except Exception as e:
-                logger.warning(f"Normalization failed for '{stream_name}': {e}")
+                logger.warning("[AUTO-CREATE-EVAL] Normalization failed for '%s': %s", stream_name, e)
                 return stream_name
         return stream_name
 
@@ -784,7 +787,7 @@ def evaluate_conditions(conditions: list, context: StreamContext,
     evaluator = ConditionEvaluator(existing_channels, existing_groups)
 
     if not conditions:
-        logger.debug(f"[evaluate_conditions] stream={context.stream_name!r} no conditions -> True")
+        logger.debug("[AUTO-CREATE-EVAL] stream=%r no conditions -> True", context.stream_name)
         return True
 
     # Group conditions by OR breaks (AND binds tighter than OR)
@@ -796,8 +799,8 @@ def evaluate_conditions(conditions: list, context: StreamContext,
         or_groups[-1].append(cond)
 
     logger.debug(
-        f"[evaluate_conditions] stream={context.stream_name!r} "
-        f"{len(conditions)} conditions in {len(or_groups)} OR-group(s)"
+        "[AUTO-CREATE-EVAL] stream=%r %s conditions in %s OR-group(s)",
+        context.stream_name, len(conditions), len(or_groups)
     )
 
     # Evaluate: any OR-group fully matching = overall match
@@ -810,13 +813,13 @@ def evaluate_conditions(conditions: list, context: StreamContext,
                 break
         if group_matched:
             logger.debug(
-                f"[evaluate_conditions] stream={context.stream_name!r} "
-                f"OR-group {group_idx} matched -> overall True"
+                "[AUTO-CREATE-EVAL] stream=%r OR-group %s matched -> overall True",
+                context.stream_name, group_idx
             )
             return True
 
     logger.debug(
-        f"[evaluate_conditions] stream={context.stream_name!r} "
-        f"no OR-group matched -> overall False"
+        "[AUTO-CREATE-EVAL] stream=%r no OR-group matched -> overall False",
+        context.stream_name
     )
     return False

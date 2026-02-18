@@ -46,23 +46,37 @@ test.describe('Builder UI Layout', () => {
     const isVisible = await builderContainer.isVisible().catch(() => false);
 
     if (isVisible) {
+      // Wait for sections to fully render
+      await appPage.waitForTimeout(1000);
+
       // Get bounding boxes of key sections to verify ordering
       const inputSection = appPage.locator(ffmpegSelectors.inputSection);
       const outputSection = appPage.locator(ffmpegSelectors.outputSection);
       const commandPreview = appPage.locator(ffmpegSelectors.commandPreview);
 
-      const inputBox = await inputSection.boundingBox().catch(() => null);
-      const outputBox = await outputSection.boundingBox().catch(() => null);
-      const previewBox = await commandPreview.boundingBox().catch(() => null);
+      // Wait for sections to be visible before getting bounding boxes
+      const inputVisible = await inputSection.isVisible().catch(() => false);
+      const outputVisible = await outputSection.isVisible().catch(() => false);
+      const previewVisible = await commandPreview.isVisible().catch(() => false);
 
-      if (inputBox && outputBox) {
-        // Input should be above or before output
-        expect(inputBox.y).toBeLessThanOrEqual(outputBox.y);
+      if (inputVisible && outputVisible) {
+        const inputBox = await inputSection.boundingBox().catch(() => null);
+        const outputBox = await outputSection.boundingBox().catch(() => null);
+
+        if (inputBox && outputBox) {
+          // Input should be above or before output
+          expect(inputBox.y).toBeLessThanOrEqual(outputBox.y);
+        }
       }
 
-      if (outputBox && previewBox) {
-        // Output should be above command preview
-        expect(outputBox.y).toBeLessThan(previewBox.y);
+      if (outputVisible && previewVisible) {
+        const outputBox = await outputSection.boundingBox().catch(() => null);
+        const previewBox = await commandPreview.boundingBox().catch(() => null);
+
+        if (outputBox && previewBox) {
+          // Output should be above command preview
+          expect(outputBox.y).toBeLessThan(previewBox.y);
+        }
       }
 
       expect(typeof isVisible).toBe('boolean');

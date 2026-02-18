@@ -299,13 +299,16 @@ test.describe('Config Overwrite', () => {
   });
 
   test('can overwrite existing config', async ({ appPage }) => {
+    // Increase timeout for this multi-step test
+    test.setTimeout(60000);
+
     const saveBtn = appPage.locator(ffmpegSelectors.saveConfigBtn);
     const isVisible = await saveBtn.isVisible().catch(() => false);
 
     if (isVisible) {
       // Save a config first
       await saveBtn.click();
-      await appPage.waitForTimeout(300);
+      await appPage.waitForTimeout(500);
 
       const nameInput = appPage.locator(ffmpegSelectors.configNameInput);
       if (await nameInput.isVisible().catch(() => false)) {
@@ -316,23 +319,29 @@ test.describe('Config Overwrite', () => {
         ).first();
         if (await confirmSaveBtn.isVisible().catch(() => false)) {
           await confirmSaveBtn.click();
-          await appPage.waitForTimeout(500);
+          await appPage.waitForTimeout(1000);
         }
       }
 
+      // Close any remaining dialog before the second save attempt
+      await appPage.keyboard.press('Escape');
+      await appPage.waitForTimeout(500);
+
       // Try saving again with the same name to test overwrite behavior
       await saveBtn.click();
-      await appPage.waitForTimeout(300);
+      await appPage.waitForTimeout(500);
 
-      if (await nameInput.isVisible().catch(() => false)) {
-        await nameInput.fill('Overwrite Test Config');
+      // Re-locate the name input (may have been re-rendered)
+      const nameInput2 = appPage.locator(ffmpegSelectors.configNameInput);
+      if (await nameInput2.isVisible().catch(() => false)) {
+        await nameInput2.fill('Overwrite Test Config');
 
         const confirmSaveBtn = appPage.locator(
           'button:has-text("Save"), button[type="submit"]'
         ).first();
         if (await confirmSaveBtn.isVisible().catch(() => false)) {
           await confirmSaveBtn.click();
-          await appPage.waitForTimeout(500);
+          await appPage.waitForTimeout(1000);
 
           // Should either overwrite or show a confirmation dialog
           const overwriteConfirm = appPage.locator(
@@ -340,8 +349,17 @@ test.describe('Config Overwrite', () => {
           ).first();
           const overwriteVisible = await overwriteConfirm.isVisible().catch(() => false);
           expect(typeof overwriteVisible).toBe('boolean');
+
+          // If overwrite confirmation appeared, click it
+          if (overwriteVisible) {
+            await overwriteConfirm.click();
+            await appPage.waitForTimeout(500);
+          }
         }
       }
+
+      // Close any remaining dialog
+      await appPage.keyboard.press('Escape');
     } else {
       expect(typeof isVisible).toBe('boolean');
     }

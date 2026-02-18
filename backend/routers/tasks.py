@@ -184,31 +184,34 @@ TASK_PARAMETER_SCHEMAS = {
 @router.get("/api/tasks/engine/status", tags=["Tasks"])
 async def get_engine_status():
     """Get task engine status."""
+    logger.debug("[TASKS] GET /api/tasks/engine/status")
     try:
         from task_engine import get_engine
         engine = get_engine()
         return engine.get_status()
     except Exception as e:
-        logger.error(f"Failed to get engine status: {e}")
+        logger.exception("[TASKS] Failed to get engine status: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/api/tasks/history/all", tags=["Tasks"])
 async def get_all_task_history(limit: int = 100, offset: int = 0):
     """Get execution history for all tasks."""
+    logger.debug("[TASKS] GET /api/tasks/history/all - limit=%s offset=%s", limit, offset)
     try:
         from task_engine import get_engine
         engine = get_engine()
         history = engine.get_task_history(task_id=None, limit=limit, offset=offset)
         return {"history": history}
     except Exception as e:
-        logger.error(f"Failed to get all task history: {e}")
+        logger.exception("[TASKS] Failed to get all task history: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/api/tasks/parameter-schemas", tags=["Tasks"])
 async def get_all_task_parameter_schemas():
     """Get parameter schemas for all task types."""
+    logger.debug("[TASKS] GET /api/tasks/parameter-schemas")
     return {"schemas": TASK_PARAMETER_SCHEMAS}
 
 
@@ -263,18 +266,20 @@ async def list_tasks():
         duration_ms = (time.time() - start_time) * 1000
         running_tasks = [t.get('task_id') for t in tasks if t.get('status') == 'running']
         logger.debug(
-            f"[TASKS] Listed {len(tasks)} tasks in {duration_ms:.1f}ms"
-            + (f" - running: {running_tasks}" if running_tasks else "")
+            "[TASKS] Listed %s tasks in %.1fms%s",
+            len(tasks), duration_ms,
+            " - running: %s" % running_tasks if running_tasks else ""
         )
         return {"tasks": tasks}
     except Exception as e:
-        logger.error(f"[TASKS] Failed to list tasks: {e}")
+        logger.exception("[TASKS] Failed to list tasks: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/api/tasks/{task_id}", tags=["Tasks"])
 async def get_task(task_id: str):
     """Get status for a specific task, including all schedules."""
+    logger.debug("[TASKS] GET /api/tasks/%s", task_id)
     try:
         from task_registry import get_registry
         from models import TaskSchedule, ScheduledTask
@@ -322,13 +327,14 @@ async def get_task(task_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get task {task_id}: {e}")
+        logger.exception("[TASKS] Failed to get task %s: %s", task_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.patch("/api/tasks/{task_id}", tags=["Tasks"])
 async def update_task(task_id: str, config: TaskConfigUpdate):
     """Update task configuration."""
+    logger.debug("[TASKS] PATCH /api/tasks/%s", task_id)
     try:
         from task_registry import get_registry
         registry = get_registry()
@@ -360,13 +366,14 @@ async def update_task(task_id: str, config: TaskConfigUpdate):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update task {task_id}: {e}")
+        logger.exception("[TASKS] Failed to update task %s: %s", task_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/api/tasks/{task_id}/run", tags=["Tasks"])
 async def run_task(task_id: str, request: Optional[TaskRunRequest] = None):
     """Manually trigger a task execution."""
+    logger.debug("[TASKS] POST /api/tasks/%s/run", task_id)
     try:
         from task_engine import get_engine
         engine = get_engine()
@@ -380,13 +387,14 @@ async def run_task(task_id: str, request: Optional[TaskRunRequest] = None):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to run task {task_id}: {e}")
+        logger.exception("[TASKS] Failed to run task %s: %s", task_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/api/tasks/{task_id}/cancel", tags=["Tasks"])
 async def cancel_task(task_id: str):
     """Cancel a running task."""
+    logger.debug("[TASKS] POST /api/tasks/%s/cancel", task_id)
     try:
         from task_engine import get_engine
         engine = get_engine()
@@ -397,26 +405,28 @@ async def cancel_task(task_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to cancel task {task_id}: {e}")
+        logger.exception("[TASKS] Failed to cancel task %s: %s", task_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/api/tasks/{task_id}/history", tags=["Tasks"])
 async def get_task_history(task_id: str, limit: int = 50, offset: int = 0):
     """Get execution history for a task."""
+    logger.debug("[TASKS] GET /api/tasks/%s/history - limit=%s offset=%s", task_id, limit, offset)
     try:
         from task_engine import get_engine
         engine = get_engine()
         history = engine.get_task_history(task_id=task_id, limit=limit, offset=offset)
         return {"history": history}
     except Exception as e:
-        logger.error(f"Failed to get history for task {task_id}: {e}")
+        logger.exception("[TASKS] Failed to get history for task %s: %s", task_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/api/tasks/{task_id}/parameter-schema", tags=["Tasks"])
 async def get_task_parameter_schema(task_id: str):
     """Get the parameter schema for a task type."""
+    logger.debug("[TASKS] GET /api/tasks/%s/parameter-schema", task_id)
     schema = TASK_PARAMETER_SCHEMAS.get(task_id)
     if not schema:
         # Return empty schema for tasks without special parameters
@@ -431,17 +441,19 @@ async def get_task_parameter_schema(task_id: str):
 @router.get("/api/cron/presets", tags=["Cron"])
 async def get_cron_presets():
     """Get available cron presets for task scheduling."""
+    logger.debug("[TASKS] GET /api/cron/presets")
     try:
         from cron_parser import get_preset_list
         return {"presets": get_preset_list()}
     except Exception as e:
-        logger.error(f"Failed to get cron presets: {e}")
+        logger.exception("[TASKS] Failed to get cron presets: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/api/cron/validate", tags=["Cron"])
 async def validate_cron(request: CronValidateRequest):
     """Validate a cron expression."""
+    logger.debug("[TASKS] POST /api/cron/validate - expression=%s", request.expression)
     try:
         from cron_parser import validate_cron_expression, describe_cron_expression, get_next_n_run_times
 
@@ -462,7 +474,7 @@ async def validate_cron(request: CronValidateRequest):
             "next_runs": [t.isoformat() + "Z" for t in next_times],
         }
     except Exception as e:
-        logger.error(f"Failed to validate cron expression: {e}")
+        logger.exception("[TASKS] Failed to validate cron expression: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -473,6 +485,7 @@ async def validate_cron(request: CronValidateRequest):
 @router.get("/api/tasks/{task_id}/schedules", tags=["Tasks"])
 async def list_task_schedules(task_id: str):
     """Get all schedules for a task."""
+    logger.debug("[TASKS] GET /api/tasks/%s/schedules", task_id)
     try:
         from models import TaskSchedule, ScheduledTask
         from schedule_calculator import describe_schedule
@@ -494,7 +507,7 @@ async def list_task_schedules(task_id: str):
                     client = get_client()
                     current_groups_data = await client.get_channel_groups()
                 except Exception as e:
-                    logger.debug(f"Could not fetch current groups for validation: {e}")
+                    logger.debug("[TASKS] Could not fetch current groups for validation: %s", e)
 
             result = []
             schedules_fixed = False
@@ -538,7 +551,7 @@ async def list_task_schedules(task_id: str):
                             session.add(schedule)
                             schedules_fixed = True
 
-                            logger.info(f"Auto-removed {len(stale)} stale group(s) from probe schedule {schedule.id}")
+                            logger.info("[TASKS] Auto-removed %s stale group(s) from probe schedule %s", len(stale), schedule.id)
                 result.append(schedule_dict)
 
             # Commit any auto-fixes
@@ -561,13 +574,14 @@ async def list_task_schedules(task_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to list schedules for task {task_id}: {e}")
+        logger.exception("[TASKS] Failed to list schedules for task %s: %s", task_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/api/tasks/{task_id}/schedules", tags=["Tasks"])
 async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
     """Create a new schedule for a task."""
+    logger.debug("[TASKS] POST /api/tasks/%s/schedules - type=%s", task_id, data.schedule_type)
     try:
         from models import TaskSchedule, ScheduledTask
         from schedule_calculator import calculate_next_run, describe_schedule
@@ -636,13 +650,14 @@ async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to create schedule for task {task_id}: {e}")
+        logger.exception("[TASKS] Failed to create schedule for task %s: %s", task_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.patch("/api/tasks/{task_id}/schedules/{schedule_id}", tags=["Tasks"])
 async def update_task_schedule(task_id: str, schedule_id: int, data: TaskScheduleUpdate):
     """Update a task schedule."""
+    logger.debug("[TASKS] PATCH /api/tasks/%s/schedules/%s", task_id, schedule_id)
     try:
         from models import TaskSchedule, ScheduledTask
         from schedule_calculator import calculate_next_run, describe_schedule
@@ -716,13 +731,14 @@ async def update_task_schedule(task_id: str, schedule_id: int, data: TaskSchedul
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update schedule {schedule_id} for task {task_id}: {e}")
+        logger.exception("[TASKS] Failed to update schedule %s for task %s: %s", schedule_id, task_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/api/tasks/{task_id}/schedules/{schedule_id}", tags=["Tasks"])
 async def delete_task_schedule(task_id: str, schedule_id: int):
     """Delete a task schedule."""
+    logger.debug("[TASKS] DELETE /api/tasks/%s/schedules/%s", task_id, schedule_id)
     try:
         from models import TaskSchedule
 
@@ -750,7 +766,7 @@ async def delete_task_schedule(task_id: str, schedule_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to delete schedule {schedule_id} for task {task_id}: {e}")
+        logger.exception("[TASKS] Failed to delete schedule %s for task %s: %s", schedule_id, task_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

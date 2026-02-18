@@ -77,7 +77,7 @@ async def capture_m3u_changes(
         # Fetch stream names for enabled groups (limit to first 50 per group)
         stream_names_by_group = {}
         MAX_STREAM_NAMES = 500
-        logger.info(f"[M3U-CHANGE] Fetching stream names for {len(enabled_group_names)} enabled groups: {enabled_group_names[:5]}{'...' if len(enabled_group_names) > 5 else ''}")
+        logger.info("[M3U-CHANGE] Fetching stream names for %s enabled groups: %s%s", len(enabled_group_names), enabled_group_names[:5], "..." if len(enabled_group_names) > 5 else "")
         for group_name in enabled_group_names:
             try:
                 streams_response = await api_client.get_streams(
@@ -88,13 +88,13 @@ async def capture_m3u_changes(
                 )
                 results = streams_response.get("results", [])
                 stream_names = [s.get("name", "") for s in results]
-                logger.debug(f"[M3U-CHANGE] Group '{group_name}': got {len(results)} streams, {len(stream_names)} names")
+                logger.debug("[M3U-CHANGE] Group '%s': got %s streams, %s names", group_name, len(results), len(stream_names))
                 if stream_names:
                     stream_names_by_group[group_name] = stream_names
             except Exception as e:
-                logger.warning(f"[M3U-CHANGE] Could not fetch streams for group '{group_name}': {e}")
+                logger.warning("[M3U-CHANGE] Could not fetch streams for group '%s': %s", group_name, e)
 
-        logger.info(f"[M3U-CHANGE] Captured stream names for {len(stream_names_by_group)} groups")
+        logger.info("[M3U-CHANGE] Captured stream names for %s groups", len(stream_names_by_group))
 
         # Match up: for each group in this M3U account, get name and stream count
         current_groups = []
@@ -115,8 +115,8 @@ async def capture_m3u_changes(
                 total_streams += stream_count
 
         logger.info(
-            f"[M3U-CHANGE] Capturing state for account {account_id} ({account_name}): "
-            f"{len(current_groups)} groups, {total_streams} streams (all groups from M3U)"
+            "[M3U-CHANGE] Capturing state for account %s (%s): %s groups, %s streams (all groups from M3U)",
+            account_id, account_name, len(current_groups), total_streams
         )
 
         # Use change detector to compare and persist
@@ -135,20 +135,20 @@ async def capture_m3u_changes(
                 # Persist the changes
                 detector.persist_changes(change_set)
                 logger.info(
-                    f"[M3U-CHANGE] Detected and persisted changes for {account_name}: "
-                    f"+{len(change_set.groups_added)} groups, -{len(change_set.groups_removed)} groups, "
-                    f"+{sum(s.count for s in change_set.streams_added)} streams, "
-                    f"-{sum(s.count for s in change_set.streams_removed)} streams"
+                    "[M3U-CHANGE] Detected and persisted changes for %s: +%s groups, -%s groups, +%s streams, -%s streams",
+                    account_name, len(change_set.groups_added), len(change_set.groups_removed),
+                    sum(s.count for s in change_set.streams_added),
+                    sum(s.count for s in change_set.streams_removed)
                 )
                 return change_set.to_dict()
             else:
-                logger.debug(f"[M3U-CHANGE] No changes detected for {account_name}")
+                logger.debug("[M3U-CHANGE] No changes detected for %s", account_name)
                 return None
         finally:
             db.close()
 
     except Exception as e:
-        logger.error(f"[M3U-CHANGE] Failed to capture changes for {account_name}: {e}")
+        logger.error("[M3U-CHANGE] Failed to capture changes for %s: %s", account_name, e)
         return None
 
 
@@ -203,7 +203,7 @@ class M3URefreshTask(TaskScheduler):
         try:
             # Get all M3U accounts
             all_accounts = await client.get_m3u_accounts()
-            logger.info(f"[{self.task_id}] Found {len(all_accounts)} M3U accounts")
+            logger.info("[%s] Found %s M3U accounts", self.task_id, len(all_accounts))
 
             # Filter accounts to refresh
             accounts_to_refresh = []
@@ -259,7 +259,7 @@ class M3URefreshTask(TaskScheduler):
                     initial_account = await client.get_m3u_account(account_id)
                     initial_updated = initial_account.get("updated_at") or initial_account.get("last_refresh")
 
-                    logger.info(f"[{self.task_id}] Triggering M3U refresh for: {account_name}")
+                    logger.info("[%s] Triggering M3U refresh for: %s", self.task_id, account_name)
                     await client.refresh_m3u_account(account_id)
 
                     # Poll until refresh completes or timeout
@@ -270,7 +270,7 @@ class M3URefreshTask(TaskScheduler):
                     while not refresh_complete and not self._cancel_requested:
                         elapsed = (datetime.utcnow() - wait_start).total_seconds()
                         if elapsed >= MAX_WAIT_SECONDS:
-                            logger.warning(f"[{self.task_id}] Timeout waiting for {account_name} refresh")
+                            logger.warning("[%s] Timeout waiting for %s refresh", self.task_id, account_name)
                             break
 
                         await asyncio.sleep(POLL_INTERVAL_SECONDS)
@@ -282,11 +282,11 @@ class M3URefreshTask(TaskScheduler):
                         if current_updated and current_updated != initial_updated:
                             refresh_complete = True
                             wait_duration = (datetime.utcnow() - wait_start).total_seconds()
-                            logger.info(f"[{self.task_id}] {account_name} refresh complete in {wait_duration:.1f}s")
+                            logger.info("[%s] %s refresh complete in %.1fs", self.task_id, account_name, wait_duration)
                         elif elapsed > 30:
                             # After 30 seconds, assume refresh is complete if no timestamp field
                             # (Dispatcharr might not have updated_at on M3U accounts)
-                            logger.info(f"[{self.task_id}] {account_name} - assuming complete after {elapsed:.0f}s")
+                            logger.info("[%s] %s - assuming complete after %.0fs", self.task_id, account_name, elapsed)
                             break
 
                     # Capture M3U changes after successful refresh
@@ -297,7 +297,7 @@ class M3URefreshTask(TaskScheduler):
                     refreshed.append(account_name)
                     self._increment_progress(success_count=1)
                 except Exception as e:
-                    logger.error(f"[{self.task_id}] Failed to refresh {account_name}: {e}")
+                    logger.error("[%s] Failed to refresh %s: %s", self.task_id, account_name, e)
                     failed_count += 1
                     errors.append(f"{account_name}: {str(e)}")
                     self._increment_progress(failed_count=1)
@@ -344,10 +344,11 @@ class M3URefreshTask(TaskScheduler):
                 )
                 if auto_result.get("channels_created", 0) > 0:
                     logger.info(
-                        f"[{self.task_id}] Auto-creation: {auto_result.get('channels_created', 0)} channels created"
+                        "[%s] Auto-creation: %s channels created",
+                        self.task_id, auto_result.get("channels_created", 0)
                     )
             except Exception as e:
-                logger.warning(f"[{self.task_id}] Auto-creation after refresh failed: {e}")
+                logger.warning("[%s] Auto-creation after refresh failed: %s", self.task_id, e)
 
             return TaskResult(
                 success=True,
@@ -361,7 +362,7 @@ class M3URefreshTask(TaskScheduler):
             )
 
         except Exception as e:
-            logger.exception(f"[{self.task_id}] M3U refresh failed: {e}")
+            logger.exception("[%s] M3U refresh failed: %s", self.task_id, e)
             return TaskResult(
                 success=False,
                 message=f"M3U refresh failed: {str(e)}",

@@ -55,7 +55,7 @@ class EPGRefreshTask(TaskScheduler):
 
     def update_config(self, config: dict) -> None:
         """Update EPG refresh configuration."""
-        logger.debug(f"[{self.task_id}] Updating config: {config}")
+        logger.debug("[%s] Updating config: %s", self.task_id, config)
         if "source_ids" in config:
             self.source_ids = config["source_ids"] or []
 
@@ -69,7 +69,7 @@ class EPGRefreshTask(TaskScheduler):
         try:
             # Get all EPG sources
             all_sources = await client.get_epg_sources()
-            logger.info(f"[{self.task_id}] Found {len(all_sources)} EPG sources")
+            logger.info("[%s] Found %s EPG sources", self.task_id, len(all_sources))
 
             # Filter sources to refresh
             sources_to_refresh = []
@@ -77,24 +77,25 @@ class EPGRefreshTask(TaskScheduler):
                 source_name = source.get("name", f"Source {source['id']}")
                 # Skip inactive sources
                 if not source.get("is_active", True):
-                    logger.debug(f"[{self.task_id}] Skipping inactive source: {source_name} (id={source['id']})")
+                    logger.debug("[%s] Skipping inactive source: %s (id=%s)", self.task_id, source_name, source["id"])
                     continue
 
                 # Always skip dummy sources (they refresh automatically with M3U refresh)
                 if source.get("source_type") == "dummy":
-                    logger.debug(f"[{self.task_id}] Skipping dummy source: {source_name} (id={source['id']})")
+                    logger.debug("[%s] Skipping dummy source: %s (id=%s)", self.task_id, source_name, source["id"])
                     continue
 
                 # Filter by source IDs if specified
                 if self.source_ids and source["id"] not in self.source_ids:
-                    logger.debug(f"[{self.task_id}] Skipping source not in filter: {source_name} (id={source['id']})")
+                    logger.debug("[%s] Skipping source not in filter: %s (id=%s)", self.task_id, source_name, source["id"])
                     continue
 
                 sources_to_refresh.append(source)
 
             logger.info(
-                f"[{self.task_id}] {len(sources_to_refresh)} of {len(all_sources)} sources selected for refresh"
-                + (f" (filter: {self.source_ids})" if self.source_ids else "")
+                "[%s] %s of %s sources selected for refresh%s",
+                self.task_id, len(sources_to_refresh), len(all_sources),
+                " (filter: %s)" % self.source_ids if self.source_ids else ""
             )
 
             if not sources_to_refresh:
@@ -134,8 +135,8 @@ class EPGRefreshTask(TaskScheduler):
                     initial_source = await client.get_epg_source(source_id)
                     initial_updated = initial_source.get("updated_at") or initial_source.get("last_updated")
 
-                    logger.info(f"[{self.task_id}] Triggering EPG refresh for: {source_name} (id={source_id})")
-                    logger.debug(f"[{self.task_id}] Initial updated_at for {source_name}: {initial_updated}")
+                    logger.info("[%s] Triggering EPG refresh for: %s (id=%s)", self.task_id, source_name, source_id)
+                    logger.debug("[%s] Initial updated_at for %s: %s", self.task_id, source_name, initial_updated)
                     await client.refresh_epg_source(source_id)
 
                     # Poll until refresh completes or timeout
@@ -147,7 +148,7 @@ class EPGRefreshTask(TaskScheduler):
                     while not refresh_complete and not self._cancel_requested:
                         elapsed = (datetime.utcnow() - wait_start).total_seconds()
                         if elapsed >= MAX_WAIT_SECONDS:
-                            logger.warning(f"[{self.task_id}] Timeout waiting for {source_name} refresh")
+                            logger.warning("[%s] Timeout waiting for %s refresh", self.task_id, source_name)
                             break
 
                         await asyncio.sleep(POLL_INTERVAL_SECONDS)
@@ -157,25 +158,25 @@ class EPGRefreshTask(TaskScheduler):
                         current_source = await client.get_epg_source(source_id)
                         current_updated = current_source.get("updated_at") or current_source.get("last_updated")
                         logger.debug(
-                            f"[{self.task_id}] Poll #{poll_count} for {source_name}: "
-                            f"current_updated={current_updated} elapsed={elapsed:.0f}s"
+                            "[%s] Poll #%s for %s: current_updated=%s elapsed=%.0fs",
+                            self.task_id, poll_count, source_name, current_updated, elapsed
                         )
 
                         if current_updated and current_updated != initial_updated:
                             refresh_complete = True
                             wait_duration = (datetime.utcnow() - wait_start).total_seconds()
-                            logger.info(f"[{self.task_id}] {source_name} refresh complete in {wait_duration:.1f}s")
+                            logger.info("[%s] %s refresh complete in %.1fs", self.task_id, source_name, wait_duration)
                         elif elapsed > 30:
                             # After 30 seconds, assume refresh is complete if no timestamp field
                             # (Dispatcharr might not have updated_at on EPG sources)
-                            logger.info(f"[{self.task_id}] {source_name} - assuming complete after {elapsed:.0f}s")
+                            logger.info("[%s] %s - assuming complete after %.0fs", self.task_id, source_name, elapsed)
                             break
 
                     success_count += 1
                     refreshed.append(source_name)
                     self._increment_progress(success_count=1)
                 except Exception as e:
-                    logger.error(f"[{self.task_id}] Failed to refresh {source_name}: {e}")
+                    logger.error("[%s] Failed to refresh %s: %s", self.task_id, source_name, e)
                     failed_count += 1
                     errors.append(f"{source_name}: {str(e)}")
                     self._increment_progress(failed_count=1)
@@ -188,9 +189,8 @@ class EPGRefreshTask(TaskScheduler):
 
             duration = (datetime.utcnow() - started_at).total_seconds()
             logger.info(
-                f"[{self.task_id}] EPG refresh finished in {duration:.1f}s: "
-                f"{success_count} succeeded, {failed_count} failed, "
-                f"refreshed=[{', '.join(refreshed)}]"
+                "[%s] EPG refresh finished in %.1fs: %s succeeded, %s failed, refreshed=[%s]",
+                self.task_id, duration, success_count, failed_count, ", ".join(refreshed)
             )
 
             # Build result
@@ -231,7 +231,7 @@ class EPGRefreshTask(TaskScheduler):
             )
 
         except Exception as e:
-            logger.exception(f"[{self.task_id}] EPG refresh failed: {e}")
+            logger.exception("[%s] EPG refresh failed: %s", self.task_id, e)
             return TaskResult(
                 success=False,
                 message=f"EPG refresh failed: {str(e)}",

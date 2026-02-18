@@ -18,7 +18,7 @@ from ffmpeg_builder.command_generator import generate_command as ffmpeg_generate
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["FFMPEG Builder"])
+router = APIRouter(prefix="/api/ffmpeg", tags=["FFMPEG Builder"])
 
 
 # =============================================================================
@@ -34,16 +34,18 @@ class FFMPEGProbeRequest(BaseModel):
 # FFMPEG Builder API
 # =============================================================================
 
-@router.get("/api/ffmpeg/capabilities")
+@router.get("/capabilities")
 async def get_ffmpeg_capabilities():
     """Detect system ffmpeg capabilities (codecs, formats, filters, hwaccel)."""
+    logger.debug("[FFMPEG] GET /api/ffmpeg/capabilities")
     caps = ffmpeg_detect_capabilities()
     return caps
 
 
-@router.post("/api/ffmpeg/probe")
+@router.post("/probe")
 async def probe_ffmpeg_source(request: FFMPEGProbeRequest):
     """Probe a media source using ffprobe."""
+    logger.debug("[FFMPEG] POST /api/ffmpeg/probe - path=%s", request.path)
     result = probe_source(request.path, timeout=request.timeout)
     if not result.success:
         raise HTTPException(status_code=400, detail=result.error)
@@ -57,9 +59,10 @@ async def probe_ffmpeg_source(request: FFMPEGProbeRequest):
     }
 
 
-@router.post("/api/ffmpeg/validate")
+@router.post("/validate")
 async def validate_ffmpeg_config_endpoint(request: Request):
     """Validate an FFMPEG builder configuration."""
+    logger.debug("[FFMPEG] POST /api/ffmpeg/validate")
     body = await request.json()
     result = ffmpeg_validate_config(body)
     # Handle both dict (mock in tests) and ValidationResult (real) returns
@@ -73,9 +76,10 @@ async def validate_ffmpeg_config_endpoint(request: Request):
     }
 
 
-@router.post("/api/ffmpeg/generate-command")
+@router.post("/generate-command")
 async def generate_ffmpeg_command_endpoint(request: Request):
     """Generate an annotated ffmpeg command from configuration."""
+    logger.debug("[FFMPEG] POST /api/ffmpeg/generate-command")
     body = await request.json()
     result = ffmpeg_generate_command(body)
     # Handle both dict (mock in tests) and list (real) returns
@@ -115,37 +119,45 @@ def ffmpeg_delete_config(config_id):
     return {"status": "deleted"}
 
 
-@router.get("/api/ffmpeg/configs")
+@router.get("/configs")
 async def list_ffmpeg_configs():
+    logger.debug("[FFMPEG] GET /api/ffmpeg/configs")
     configs = ffmpeg_list_configs()
     return {"configs": configs}
 
 
-@router.post("/api/ffmpeg/configs", status_code=201)
+@router.post("/configs", status_code=201)
 async def create_ffmpeg_config(request: Request):
+    logger.debug("[FFMPEG] POST /api/ffmpeg/configs")
     body = await request.json()
     result = ffmpeg_create_config(body)
+    logger.info("[FFMPEG] Created config")
     return result
 
 
-@router.get("/api/ffmpeg/configs/{config_id}")
+@router.get("/configs/{config_id}")
 async def get_ffmpeg_config(config_id: int):
+    logger.debug("[FFMPEG] GET /api/ffmpeg/configs/%s", config_id)
     result = ffmpeg_get_config(config_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Config not found")
     return result
 
 
-@router.put("/api/ffmpeg/configs/{config_id}")
+@router.put("/configs/{config_id}")
 async def update_ffmpeg_config(config_id: int, request: Request):
+    logger.debug("[FFMPEG] PUT /api/ffmpeg/configs/%s", config_id)
     body = await request.json()
     result = ffmpeg_update_config(config_id, body)
+    logger.info("[FFMPEG] Updated config id=%s", config_id)
     return result
 
 
-@router.delete("/api/ffmpeg/configs/{config_id}")
+@router.delete("/configs/{config_id}")
 async def delete_ffmpeg_config(config_id: int):
+    logger.debug("[FFMPEG] DELETE /api/ffmpeg/configs/%s", config_id)
     result = ffmpeg_delete_config(config_id)
+    logger.info("[FFMPEG] Deleted config id=%s", config_id)
     return result
 
 
@@ -167,29 +179,34 @@ def ffmpeg_delete_job(job_id):
     return {"status": "deleted"}
 
 
-@router.get("/api/ffmpeg/jobs")
+@router.get("/jobs")
 async def list_ffmpeg_jobs():
+    logger.debug("[FFMPEG] GET /api/ffmpeg/jobs")
     jobs = ffmpeg_list_jobs()
     return {"jobs": jobs}
 
 
-@router.post("/api/ffmpeg/jobs", status_code=201)
+@router.post("/jobs", status_code=201)
 async def create_ffmpeg_job_endpoint(request: Request):
+    logger.debug("[FFMPEG] POST /api/ffmpeg/jobs")
     body = await request.json()
     result = ffmpeg_create_job(body)
+    logger.info("[FFMPEG] Created job")
     return result
 
 
-@router.get("/api/ffmpeg/jobs/{job_id}")
+@router.get("/jobs/{job_id}")
 async def get_ffmpeg_job(job_id: str):
+    logger.debug("[FFMPEG] GET /api/ffmpeg/jobs/%s", job_id)
     result = ffmpeg_get_job(job_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return result
 
 
-@router.post("/api/ffmpeg/jobs/{job_id}/cancel")
+@router.post("/jobs/{job_id}/cancel")
 async def cancel_ffmpeg_job(job_id: str):
+    logger.debug("[FFMPEG] POST /api/ffmpeg/jobs/%s/cancel", job_id)
     try:
         result = ffmpeg_cancel_job(job_id)
     except ValueError as exc:
@@ -197,9 +214,11 @@ async def cancel_ffmpeg_job(job_id: str):
     return result
 
 
-@router.delete("/api/ffmpeg/jobs/{job_id}")
+@router.delete("/jobs/{job_id}")
 async def delete_ffmpeg_job(job_id: str):
+    logger.debug("[FFMPEG] DELETE /api/ffmpeg/jobs/%s", job_id)
     result = ffmpeg_delete_job(job_id)
+    logger.info("[FFMPEG] Deleted job id=%s", job_id)
     return result
 
 
@@ -212,15 +231,18 @@ def ffmpeg_update_queue_config(data):
     return data
 
 
-@router.get("/api/ffmpeg/queue-config")
+@router.get("/queue-config")
 async def get_ffmpeg_queue_config():
+    logger.debug("[FFMPEG] GET /api/ffmpeg/queue-config")
     return ffmpeg_get_queue_config()
 
 
-@router.put("/api/ffmpeg/queue-config")
+@router.put("/queue-config")
 async def update_ffmpeg_queue_config(request: Request):
+    logger.debug("[FFMPEG] PUT /api/ffmpeg/queue-config")
     body = await request.json()
     result = ffmpeg_update_queue_config(body)
+    logger.info("[FFMPEG] Updated queue config")
     return result
 
 
@@ -228,22 +250,24 @@ async def update_ffmpeg_queue_config(request: Request):
 # FFMPEG Profiles — save/load user-created FFMPEG Builder profiles
 # ---------------------------------------------------------------------------
 
-@router.get("/api/ffmpeg/profiles", tags=["FFMPEG Profiles"])
+@router.get("/profiles", tags=["FFMPEG Profiles"])
 async def list_ffmpeg_profiles():
     """List all saved FFMPEG profiles."""
+    logger.debug("[FFMPEG] GET /api/ffmpeg/profiles")
     try:
         with get_session() as db:
             from models import FFmpegProfile
             profiles = db.query(FFmpegProfile).order_by(FFmpegProfile.created_at.desc()).all()
             return {"profiles": [p.to_dict() for p in profiles]}
     except Exception as e:
-        logger.exception(f"Failed to list FFMPEG profiles: {e}")
+        logger.exception("[FFMPEG] Failed to list profiles")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/ffmpeg/profiles", tags=["FFMPEG Profiles"])
+@router.post("/profiles", tags=["FFMPEG Profiles"])
 async def create_ffmpeg_profile(request: Request):
     """Save a new FFMPEG profile."""
+    logger.debug("[FFMPEG] POST /api/ffmpeg/profiles")
     try:
         body = await request.json()
         name = body.get("name", "").strip()
@@ -261,18 +285,19 @@ async def create_ffmpeg_profile(request: Request):
             )
             db.add(profile)
             db.commit()
-            logger.info(f"Saved FFMPEG profile: {name} (id={profile.id})")
+            logger.info("[FFMPEG] Created profile id=%s name=%s", profile.id, name)
             return profile.to_dict()
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Failed to save FFMPEG profile: {e}")
+        logger.exception("[FFMPEG] Failed to save profile")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/api/ffmpeg/profiles/{profile_id}", tags=["FFMPEG Profiles"])
+@router.delete("/profiles/{profile_id}", tags=["FFMPEG Profiles"])
 async def delete_ffmpeg_profile(profile_id: int):
     """Delete a saved FFMPEG profile."""
+    logger.debug("[FFMPEG] DELETE /api/ffmpeg/profiles/%s", profile_id)
     try:
         with get_session() as db:
             from models import FFmpegProfile
@@ -282,10 +307,10 @@ async def delete_ffmpeg_profile(profile_id: int):
             name = profile.name
             db.delete(profile)
             db.commit()
-            logger.info(f"Deleted FFMPEG profile: {name} (id={profile_id})")
+            logger.info("[FFMPEG] Deleted profile id=%s name=%s", profile_id, name)
             return {"success": True}
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Failed to delete FFMPEG profile {profile_id}: {e}")
+        logger.exception("[FFMPEG] Failed to delete profile %s", profile_id)
         raise HTTPException(status_code=500, detail=str(e))

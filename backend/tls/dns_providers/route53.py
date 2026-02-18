@@ -126,7 +126,7 @@ class Route53DNS(DNSProvider):
                     if zone["Name"] == zone_name_dot:
                         # Extract zone ID from ARN format "/hostedzone/Z1234567890"
                         zone_id = zone["Id"].replace("/hostedzone/", "")
-                        logger.info(f"Found Route53 hosted zone: {zone_name} ({zone_id})")
+                        logger.info("[TLS-ROUTE53] Found Route53 hosted zone: %s (%s)", zone_name, zone_id)
                         return zone_id
 
             return None
@@ -198,7 +198,7 @@ class Route53DNS(DNSProvider):
             )
 
             change_id = response["ChangeInfo"]["Id"]
-            logger.info(f"Created Route53 TXT record: {name} (change: {change_id})")
+            logger.info("[TLS-ROUTE53] Created Route53 TXT record: %s (change: %s)", name, change_id)
 
             # Wait for the change to propagate
             await self._wait_for_change(change_id)
@@ -244,7 +244,7 @@ class Route53DNS(DNSProvider):
 
             records = response.get("ResourceRecordSets", [])
             if not records or records[0]["Name"] != record_id:
-                logger.warning(f"TXT record not found (already deleted?): {record_id}")
+                logger.warning("[TLS-ROUTE53] TXT record not found (already deleted?): %s", record_id)
                 return True
 
             record = records[0]
@@ -268,14 +268,14 @@ class Route53DNS(DNSProvider):
                 ),
             )
 
-            logger.info(f"Deleted Route53 TXT record: {record_id}")
+            logger.info("[TLS-ROUTE53] Deleted Route53 TXT record: %s", record_id)
             return True
 
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "")
             # Record might already be deleted
             if error_code == "InvalidChangeBatch":
-                logger.warning(f"TXT record not found (already deleted?): {record_id}")
+                logger.warning("[TLS-ROUTE53] TXT record not found (already deleted?): %s", record_id)
                 return True
             error_msg = e.response.get("Error", {}).get("Message", str(e))
             raise DNSProviderError(f"Failed to delete TXT record: {error_msg}")
@@ -307,14 +307,14 @@ class Route53DNS(DNSProvider):
 
             status = response["ChangeInfo"]["Status"]
             if status == "INSYNC":
-                logger.debug(f"Route53 change {change_id} is in sync")
+                logger.debug("[TLS-ROUTE53] Route53 change %s is in sync", change_id)
                 return
 
-            logger.debug(f"Route53 change {change_id} status: {status}")
+            logger.debug("[TLS-ROUTE53] Route53 change %s status: %s", change_id, status)
             await asyncio.sleep(poll_interval)
             elapsed += poll_interval
 
-        logger.warning(f"Route53 change {change_id} did not sync within {timeout}s")
+        logger.warning("[TLS-ROUTE53] Route53 change %s did not sync within %ss", change_id, timeout)
 
     async def create_and_get_zone(
         self,

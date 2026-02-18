@@ -70,13 +70,13 @@ class M3UChangeMonitorTask(TaskScheduler):
         client = get_client()
         started_at = datetime.utcnow()
 
-        logger.info(f"[{self.task_id}] Starting M3U change monitor poll...")
+        logger.info("[%s] Starting M3U change monitor poll...", self.task_id)
         self._set_progress(status="fetching_accounts")
 
         try:
             # Get all M3U accounts
             all_accounts = await client.get_m3u_accounts()
-            logger.debug(f"[{self.task_id}] Found {len(all_accounts)} M3U accounts")
+            logger.debug("[%s] Found %s M3U accounts", self.task_id, len(all_accounts))
 
             # Filter accounts to check
             accounts_to_check = []
@@ -154,7 +154,7 @@ class M3UChangeMonitorTask(TaskScheduler):
                         reason = f"updated_at changed ({latest_snapshot.dispatcharr_updated_at} -> {current_updated_at})"
 
                     if should_capture:
-                        logger.info(f"[{self.task_id}] {account_name}: {reason} - capturing changes")
+                        logger.info("[%s] %s: %s - capturing changes", self.task_id, account_name, reason)
                         self._set_progress(current_item=f"Capturing changes for {account_name}...")
 
                         try:
@@ -168,22 +168,22 @@ class M3UChangeMonitorTask(TaskScheduler):
                             if change_set:
                                 changes_detected += 1
                                 changed_accounts.append(account_name)
-                                logger.info(f"[{self.task_id}] {account_name}: changes detected and logged")
+                                logger.info("[%s] %s: changes detected and logged", self.task_id, account_name)
 
                                 # Send immediate digest if configured
                                 try:
                                     await send_immediate_digest(account_id)
                                 except Exception as e:
-                                    logger.warning(f"[{self.task_id}] Failed to send immediate digest for {account_name}: {e}")
+                                    logger.warning("[%s] Failed to send immediate digest for %s: %s", self.task_id, account_name, e)
                             else:
                                 # No actual content changes, but update the snapshot's dispatcharr timestamp
                                 if latest_snapshot and current_updated_at:
                                     latest_snapshot.dispatcharr_updated_at = current_updated_at
                                     db.commit()
-                                    logger.debug(f"[{self.task_id}] {account_name}: no changes, updated timestamp")
+                                    logger.debug("[%s] %s: no changes, updated timestamp", self.task_id, account_name)
 
                         except Exception as e:
-                            logger.error(f"[{self.task_id}] Failed to capture changes for {account_name}: {e}")
+                            logger.error("[%s] Failed to capture changes for %s: %s", self.task_id, account_name, e)
 
                     accounts_checked += 1
 
@@ -210,8 +210,8 @@ class M3UChangeMonitorTask(TaskScheduler):
 
             if changes_detected > 0:
                 logger.info(
-                    f"[{self.task_id}] Poll complete in {duration:.1f}s: "
-                    f"checked {accounts_checked} accounts, {changes_detected} with changes"
+                    "[%s] Poll complete in %.1fs: checked %s accounts, %s with changes",
+                    self.task_id, duration, accounts_checked, changes_detected
                 )
                 return TaskResult(
                     success=True,
@@ -224,8 +224,8 @@ class M3UChangeMonitorTask(TaskScheduler):
                 )
 
             logger.info(
-                f"[{self.task_id}] Poll complete in {duration:.1f}s: "
-                f"checked {accounts_checked} accounts, no external changes"
+                "[%s] Poll complete in %.1fs: checked %s accounts, no external changes",
+                self.task_id, duration, accounts_checked
             )
             return TaskResult(
                 success=True,
@@ -237,7 +237,7 @@ class M3UChangeMonitorTask(TaskScheduler):
             )
 
         except Exception as e:
-            logger.exception(f"[{self.task_id}] M3U change monitor failed: {e}")
+            logger.exception("[%s] M3U change monitor failed: %s", self.task_id, e)
             return TaskResult(
                 success=False,
                 message=f"M3U change monitor failed: {str(e)}",

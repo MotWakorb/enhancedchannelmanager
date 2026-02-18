@@ -273,11 +273,11 @@ class NormalizationEngine:
                         groups=match.groups()
                     )
             except re.error as e:
-                logger.warning(f"Invalid regex pattern: {e}")
+                logger.warning("[NORMALIZE] Invalid regex pattern: %s", e)
             return RuleMatch(matched=False)
 
         else:
-            logger.warning(f"Unknown condition type: {condition_type}")
+            logger.warning("[NORMALIZE] Unknown condition type: %s", condition_type)
             return RuleMatch(matched=False)
 
     def _match_tag_group(
@@ -454,13 +454,13 @@ class NormalizationEngine:
         elif action_type == "regex_replace":
             # Use regex substitution
             if rule.condition_type != "regex":
-                logger.warning(f"regex_replace requires regex condition in rule {rule.id}")
+                logger.warning("[NORMALIZE] regex_replace requires regex condition in rule %s", rule.id)
                 return text
             try:
                 flags = 0 if case_sensitive else re.IGNORECASE
                 return re.sub(pattern, action_value, text, flags=flags)
             except re.error as e:
-                logger.warning(f"Regex replace error in rule {rule.id}: {e}")
+                logger.warning("[NORMALIZE] Regex replace error in rule %s: %s", rule.id, e)
                 return text
 
         elif action_type == "strip_prefix":
@@ -500,7 +500,7 @@ class NormalizationEngine:
             return text
 
         else:
-            logger.warning(f"Unknown action type: {action_type}")
+            logger.warning("[NORMALIZE] Unknown action type: %s", action_type)
             return text
 
     def _apply_else_action(self, text: str, rule: NormalizationRule) -> str:
@@ -528,7 +528,7 @@ class NormalizationEngine:
         if action_type == "remove":
             # Remove doesn't make sense without a specific match
             # In else context, this would clear the entire text - probably not intended
-            logger.warning(f"Rule {rule.id}: 'remove' as else_action has no effect (no match to remove)")
+            logger.warning("[NORMALIZE] Rule %s: 'remove' as else_action has no effect (no match to remove)", rule.id)
             return text
 
         elif action_type == "replace":
@@ -542,7 +542,7 @@ class NormalizationEngine:
                     flags = 0 if rule.case_sensitive else re.IGNORECASE
                     return re.sub(rule.condition_value, action_value, text, flags=flags)
                 except re.error as e:
-                    logger.warning(f"Regex replace error in else action of rule {rule.id}: {e}")
+                    logger.warning("[NORMALIZE] Regex replace error in else action of rule %s: %s", rule.id, e)
             return text
 
         elif action_type == "strip_prefix":
@@ -557,11 +557,11 @@ class NormalizationEngine:
 
         elif action_type == "normalize_prefix":
             # No specific prefix matched, so can't normalize
-            logger.warning(f"Rule {rule.id}: 'normalize_prefix' as else_action has no effect (no match)")
+            logger.warning("[NORMALIZE] Rule %s: 'normalize_prefix' as else_action has no effect (no match)", rule.id)
             return text
 
         else:
-            logger.warning(f"Unknown else action type: {action_type}")
+            logger.warning("[NORMALIZE] Unknown else action type: %s", action_type)
             return text
 
     def normalize(self, name: str) -> NormalizationResult:
@@ -610,7 +610,7 @@ class NormalizationEngine:
             if current == before_pass:
                 break
 
-            logger.debug(f"Normalization pass {pass_num + 1}: '{before_pass}' -> '{current}'")
+            logger.debug("[NORMALIZE] Normalization pass %s: '%s' -> '%s'", pass_num + 1, before_pass, current)
 
         result.normalized = current
         return result
@@ -638,7 +638,8 @@ class NormalizationEngine:
                         result.transformations.append((rule.id, before, current))
 
                         logger.debug(
-                            f"Rule {rule.id} ({rule.name}): '{before}' -> '{current}'"
+                            "[NORMALIZE] Rule %s (%s): '%s' -> '%s'",
+                            rule.id, rule.name, before, current
                         )
 
                     # Stop processing if rule says so
@@ -656,7 +657,8 @@ class NormalizationEngine:
                         result.transformations.append((rule.id, before, current))
 
                         logger.debug(
-                            f"Rule {rule.id} ({rule.name}) [ELSE]: '{before}' -> '{current}'"
+                            "[NORMALIZE] Rule %s (%s) [ELSE]: '%s' -> '%s'",
+                            rule.id, rule.name, before, current
                         )
 
                     # Stop processing applies to else branch too
@@ -722,7 +724,7 @@ class NormalizationEngine:
             # Track if changed
             if before != current:
                 result.transformations.append(("legacy_tag", before, current))
-                logger.debug(f"Legacy tag '{tag_value}': '{before}' -> '{current}'")
+                logger.debug("[NORMALIZE] Legacy tag '%s': '%s' -> '%s'", tag_value, before, current)
 
         return current
 

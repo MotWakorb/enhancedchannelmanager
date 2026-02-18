@@ -16,7 +16,7 @@ import journal
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["M3U Digest"])
+router = APIRouter(prefix="/api/m3u", tags=["M3U Digest"])
 
 
 # -------------------------------------------------------------------------
@@ -41,7 +41,7 @@ class M3UDigestSettingsUpdate(BaseModel):
 # M3U Change Tracking API
 # -------------------------------------------------------------------------
 
-@router.get("/api/m3u/changes")
+@router.get("/changes")
 async def get_m3u_changes(
     page: int = 1,
     page_size: int = 50,
@@ -67,6 +67,7 @@ async def get_m3u_changes(
         date_from: Filter changes from this date (ISO format)
         date_to: Filter changes until this date (ISO format)
     """
+    logger.debug("[M3U-DIGEST] GET /api/m3u/changes - page=%s m3u_account_id=%s change_type=%s", page, m3u_account_id, change_type)
     from datetime import datetime as dt
     from models import M3UChangeLog
 
@@ -130,7 +131,7 @@ async def get_m3u_changes(
         db.close()
 
 
-@router.get("/api/m3u/changes/summary")
+@router.get("/changes/summary")
 async def get_m3u_changes_summary(
     hours: int = 24,
     m3u_account_id: Optional[int] = None,
@@ -142,6 +143,7 @@ async def get_m3u_changes_summary(
         hours: Look back this many hours (default: 24)
         m3u_account_id: Filter by M3U account ID
     """
+    logger.debug("[M3U-DIGEST] GET /api/m3u/changes/summary - hours=%s m3u_account_id=%s", hours, m3u_account_id)
     from datetime import datetime as dt, timedelta
     from m3u_change_detector import M3UChangeDetector
 
@@ -155,7 +157,7 @@ async def get_m3u_changes_summary(
         db.close()
 
 
-@router.get("/api/m3u/accounts/{account_id}/changes")
+@router.get("/accounts/{account_id}/changes")
 async def get_m3u_account_changes(
     account_id: int,
     page: int = 1,
@@ -171,6 +173,7 @@ async def get_m3u_account_changes(
         page_size: Number of items per page
         change_type: Filter by change type
     """
+    logger.debug("[M3U-DIGEST] GET /api/m3u/accounts/%s/changes - page=%s change_type=%s", account_id, page, change_type)
     from models import M3UChangeLog
 
     db = get_session()
@@ -201,7 +204,7 @@ async def get_m3u_account_changes(
         db.close()
 
 
-@router.get("/api/m3u/snapshots")
+@router.get("/snapshots")
 async def get_m3u_snapshots(
     m3u_account_id: Optional[int] = None,
     limit: int = 10,
@@ -213,6 +216,7 @@ async def get_m3u_snapshots(
         m3u_account_id: Filter by M3U account ID
         limit: Maximum number of snapshots to return
     """
+    logger.debug("[M3U-DIGEST] GET /api/m3u/snapshots - m3u_account_id=%s limit=%s", m3u_account_id, limit)
     from models import M3USnapshot
 
     db = get_session()
@@ -233,9 +237,10 @@ async def get_m3u_snapshots(
 # M3U Digest Settings API
 # -------------------------------------------------------------------------
 
-@router.get("/api/m3u/digest/settings")
+@router.get("/digest/settings")
 async def get_m3u_digest_settings():
     """Get M3U digest email settings."""
+    logger.debug("[M3U-DIGEST] GET /api/m3u/digest/settings")
     from tasks.m3u_digest import get_or_create_digest_settings
 
     db = get_session()
@@ -246,9 +251,10 @@ async def get_m3u_digest_settings():
         db.close()
 
 
-@router.put("/api/m3u/digest/settings")
+@router.put("/digest/settings")
 async def update_m3u_digest_settings(request: M3UDigestSettingsUpdate):
     """Update M3U digest email settings."""
+    logger.debug("[M3U-DIGEST] PUT /api/m3u/digest/settings")
     from tasks.m3u_digest import get_or_create_digest_settings
 
     db = get_session()
@@ -338,9 +344,10 @@ async def update_m3u_digest_settings(request: M3UDigestSettingsUpdate):
         db.close()
 
 
-@router.post("/api/m3u/digest/test")
+@router.post("/digest/test")
 async def send_test_m3u_digest():
     """Send a test M3U digest email."""
+    logger.debug("[M3U-DIGEST] POST /api/m3u/digest/test")
     from tasks.m3u_digest import M3UDigestTask, get_or_create_digest_settings
 
     db = get_session()
@@ -366,7 +373,7 @@ async def send_test_m3u_digest():
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Failed to send test M3U digest: {e}")
+        logger.exception("[M3U-DIGEST] Failed to send test digest")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()

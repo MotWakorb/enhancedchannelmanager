@@ -152,7 +152,9 @@ test.describe('Task Scheduling', () => {
   });
 
   test('schedule shows next run time', async ({ appPage }) => {
-    const nextRun = appPage.locator(':has-text("Next run"), :has-text("next run"), [data-testid*="next-run"]');
+    // Wait for task cards to fully render
+    await appPage.waitForTimeout(500);
+    const nextRun = appPage.locator(':has-text("Next Run"), :has-text("Next run"), :has-text("next run"), [data-testid*="next-run"]');
     const count = await nextRun.count();
     // May or may not be visible
     expect(count).toBeGreaterThanOrEqual(0);
@@ -219,12 +221,15 @@ test.describe('Schedule Editor', () => {
   });
 
   test('schedule editor shows time input for daily schedule', async ({ appPage }) => {
+    // Wait for task cards to render
+    await appPage.waitForTimeout(500);
+
     // Open task modal and look for time input
     const editButton = appPage.locator('button:has-text("Edit")').first();
 
     if ((await editButton.count()) > 0) {
       await editButton.click();
-      await appPage.waitForTimeout(500);
+      await appPage.waitForTimeout(1000);
 
       // Select daily schedule type if available
       const dailyOption = appPage.locator('select option[value="daily"], :has-text("Daily")');
@@ -233,6 +238,9 @@ test.describe('Schedule Editor', () => {
         const timeInput = appPage.locator('input[type="time"], [data-testid*="time"]');
         expect((await timeInput.count()) >= 0).toBeTruthy();
       }
+
+      // Close the modal
+      await appPage.keyboard.press('Escape');
     }
   });
 

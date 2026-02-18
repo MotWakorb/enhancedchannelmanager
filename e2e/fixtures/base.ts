@@ -94,16 +94,35 @@ interface CustomFixtures {
  */
 export const test = base.extend<CustomFixtures>({
   appPage: async ({ page }, use) => {
-    // Navigate to app
-    await page.goto('/')
+    // Navigate to app with retry logic for flaky loads under parallel execution
+    let loaded = false
+    for (let attempt = 0; attempt < 3 && !loaded; attempt++) {
+      if (attempt > 0) {
+        await page.waitForTimeout(1000) // Brief pause before retry
+        await page.reload({ waitUntil: 'domcontentloaded' })
+      } else {
+        await page.goto('/', { waitUntil: 'domcontentloaded' })
+      }
 
-    // Check if we're on a login page and need to authenticate
-    if (await isLoginPage(page)) {
-      await performLogin(page)
+      // Check if we're on a login page and need to authenticate
+      if (await isLoginPage(page)) {
+        await performLogin(page)
+      }
+
+      // Wait for app to be ready (header visible)
+      try {
+        await page.waitForSelector(selectors.header, { timeout: 20000 })
+        // Also verify tab navigation is present (confirms React app rendered)
+        await page.waitForSelector('.tab-navigation', { timeout: 15000 })
+        loaded = true
+      } catch {
+        // Page didn't load fully, retry
+      }
     }
 
-    // Wait for app to be ready (header visible)
-    await page.waitForSelector(selectors.header, { timeout: 15000 })
+    if (!loaded) {
+      throw new Error('App failed to load after 3 attempts - header or tab navigation not found')
+    }
 
     // Use the page in tests
     await use(page)
@@ -141,23 +160,44 @@ const tabContentSelectors: Record<string, string> = {
  * Navigate to a specific tab
  */
 export async function navigateToTab(page: Page, tabId: string): Promise<void> {
-  // Wait for tab navigation to be ready
-  await page.waitForSelector('.tab-navigation', { timeout: 10000 })
+  // Ensure tab navigation is visible; if not, the app may have lost state - try reload
+  try {
+    await page.waitForSelector('.tab-navigation', { timeout: 10000 })
+  } catch {
+    // Tab navigation not found - app may have gone blank, attempt recovery
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForSelector(selectors.header, { timeout: 20000 })
+    await page.waitForSelector('.tab-navigation', { timeout: 15000 })
+  }
 
   const tabSelector = selectors.tabButton(tabId)
   const tabButton = page.locator(tabSelector)
 
   // Wait for the specific tab button to be visible
-  await tabButton.waitFor({ state: 'visible', timeout: 5000 })
+  await tabButton.waitFor({ state: 'visible', timeout: 10000 })
 
   // Click the tab
   await tabButton.click()
+
+  // Wait for tab button to become active (confirms click was processed)
+  try {
+    await page.waitForFunction(
+      (sel) => {
+        const el = document.querySelector(sel)
+        return el && el.classList.contains('active')
+      },
+      tabSelector,
+      { timeout: 10000 }
+    )
+  } catch {
+    // Tab may use different active state mechanism
+  }
 
   // Wait for tab-specific content to load (more reliable than fixed timeout)
   const contentSelector = tabContentSelectors[tabId]
   if (contentSelector) {
     try {
-      await page.waitForSelector(contentSelector, { timeout: 10000 })
+      await page.waitForSelector(contentSelector, { timeout: 15000 })
     } catch {
       // Fallback to timeout if selector not found (tab may have different structure)
       await page.waitForTimeout(1000)

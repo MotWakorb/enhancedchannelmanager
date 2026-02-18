@@ -98,9 +98,9 @@ class CleanupTask(TaskScheduler):
                     ).delete(synchronize_session=False)
                     deleted_counts["probe_failed"] = result
                     session.commit()
-                    logger.info(f"[{self.task_id}] Deleted {result} old failed/pending probe entries")
+                    logger.info("[%s] Deleted %s old failed/pending probe entries", self.task_id, result)
                 except Exception as e:
-                    logger.error(f"[{self.task_id}] Failed to clean probe history: {e}")
+                    logger.error("[%s] Failed to clean probe history: %s", self.task_id, e)
                     errors.append(f"Probe cleanup: {str(e)}")
                     session.rollback()
 
@@ -118,9 +118,9 @@ class CleanupTask(TaskScheduler):
                     ).delete(synchronize_session=False)
                     deleted_counts["task_executions"] = result
                     session.commit()
-                    logger.info(f"[{self.task_id}] Deleted {result} old task execution records")
+                    logger.info("[%s] Deleted %s old task execution records", self.task_id, result)
                 except Exception as e:
-                    logger.error(f"[{self.task_id}] Failed to clean task history: {e}")
+                    logger.error("[%s] Failed to clean task history: %s", self.task_id, e)
                     errors.append(f"Task history cleanup: {str(e)}")
                     session.rollback()
 
@@ -138,9 +138,9 @@ class CleanupTask(TaskScheduler):
                     ).delete(synchronize_session=False)
                     deleted_counts["journal_entries"] = result
                     session.commit()
-                    logger.info(f"[{self.task_id}] Deleted {result} old journal entries")
+                    logger.info("[%s] Deleted %s old journal entries", self.task_id, result)
                 except Exception as e:
-                    logger.error(f"[{self.task_id}] Failed to clean journal: {e}")
+                    logger.error("[%s] Failed to clean journal: %s", self.task_id, e)
                     errors.append(f"Journal cleanup: {str(e)}")
                     session.rollback()
 
@@ -158,9 +158,9 @@ class CleanupTask(TaskScheduler):
                         session.commit()
                         session.execute(text("VACUUM"))
                         deleted_counts["vacuum"] = "completed"
-                        logger.info(f"[{self.task_id}] Database vacuum completed")
+                        logger.info("[%s] Database vacuum completed", self.task_id)
                     except Exception as e:
-                        logger.error(f"[{self.task_id}] Failed to vacuum database: {e}")
+                        logger.error("[%s] Failed to vacuum database: %s", self.task_id, e)
                         errors.append(f"Vacuum: {str(e)}")
 
             finally:
@@ -202,7 +202,7 @@ class CleanupTask(TaskScheduler):
             )
 
         except Exception as e:
-            logger.exception(f"[{self.task_id}] Cleanup failed: {e}")
+            logger.exception("[%s] Cleanup failed: %s", self.task_id, e)
             return TaskResult(
                 success=False,
                 message=f"Cleanup failed: {str(e)}",

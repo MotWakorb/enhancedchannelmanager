@@ -91,7 +91,7 @@ class DispatcharrClient:
             DispatcharrConnectionError: Connection failed
             TimeoutError: Request timed out
         """
-        logger.info(f"Authenticating user '{username}' against Dispatcharr at {self._base_url}")
+        logger.info("[AUTH-DISPATCHARR] Authenticating user '%s' against Dispatcharr at %s", username, self._base_url)
 
         try:
             # Authenticate to get JWT token
@@ -104,11 +104,11 @@ class DispatcharrClient:
             )
 
             if response.status_code == 401:
-                logger.warning(f"Dispatcharr auth failed for user '{username}': Invalid credentials")
+                logger.warning("[AUTH-DISPATCHARR] Dispatcharr auth failed for user '%s': Invalid credentials", username)
                 raise DispatcharrAuthenticationError("Invalid username or password")
 
             if response.status_code != 200:
-                logger.error(f"Dispatcharr auth failed: HTTP {response.status_code}")
+                logger.error("[AUTH-DISPATCHARR] Dispatcharr auth failed: HTTP %s", response.status_code)
                 raise DispatcharrAuthenticationError(
                     f"Authentication failed with status {response.status_code}"
                 )
@@ -117,13 +117,13 @@ class DispatcharrClient:
             access_token = data.get("access")
 
             if not access_token:
-                logger.error("Dispatcharr response missing access token")
+                logger.error("[AUTH-DISPATCHARR] Dispatcharr response missing access token")
                 raise DispatcharrAuthenticationError("Invalid response from Dispatcharr")
 
             # Try to get user info (optional - some Dispatcharr versions may not have this)
             user_info = await self._get_user_info(access_token, username)
 
-            logger.info(f"Successfully authenticated user '{username}' via Dispatcharr")
+            logger.info("[AUTH-DISPATCHARR] Successfully authenticated user '%s' via Dispatcharr", username)
 
             return DispatcharrAuthResult(
                 user_id=user_info.get("id", f"dispatcharr:{username}"),
@@ -133,18 +133,18 @@ class DispatcharrClient:
             )
 
         except httpx.TimeoutException:
-            logger.error(f"Dispatcharr connection timed out: {self._base_url}")
+            logger.error("[AUTH-DISPATCHARR] Dispatcharr connection timed out: %s", self._base_url)
             raise TimeoutError("Connection to Dispatcharr timed out")
 
         except httpx.ConnectError as e:
-            logger.error(f"Cannot connect to Dispatcharr: {e}")
+            logger.error("[AUTH-DISPATCHARR] Cannot connect to Dispatcharr: %s", e)
             raise DispatcharrConnectionError(f"Cannot connect to Dispatcharr: {e}")
 
         except (DispatcharrAuthenticationError, TimeoutError):
             raise
 
         except Exception as e:
-            logger.exception(f"Unexpected error during Dispatcharr auth: {e}")
+            logger.exception("[AUTH-DISPATCHARR] Unexpected error during Dispatcharr auth: %s", e)
             raise DispatcharrAuthError(f"Authentication error: {e}")
 
     async def _get_user_info(self, access_token: str, username: str) -> dict:
@@ -176,10 +176,10 @@ class DispatcharrClient:
                 }
 
             # Endpoint might not exist, fall back to username only
-            logger.debug(f"User info endpoint returned {response.status_code}, using username only")
+            logger.debug("[AUTH-DISPATCHARR] User info endpoint returned %s, using username only", response.status_code)
 
         except Exception as e:
-            logger.debug(f"Could not get user info from Dispatcharr: {e}")
+            logger.debug("[AUTH-DISPATCHARR] Could not get user info from Dispatcharr: %s", e)
 
         # Return minimal info using username
         return {

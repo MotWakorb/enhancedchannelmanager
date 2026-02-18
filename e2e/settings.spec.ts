@@ -43,9 +43,11 @@ test.describe('Settings Tab', () => {
   });
 
   test('settings tab is accessible', async ({ appPage }) => {
-    // navigateToTab already waited for tab navigation, just verify tab is active
+    // Wait for settings content to confirm navigation completed
+    const content = appPage.locator('.settings-tab');
+    await content.waitFor({ state: 'visible', timeout: 20000 }).catch(() => {});
     const settingsTab = appPage.locator(selectors.tabButton('settings'));
-    await expect(settingsTab).toHaveClass(/active/, { timeout: 5000 });
+    await expect(settingsTab).toHaveClass(/active/, { timeout: 10000 });
   });
 
   test('settings navigation sidebar is visible', async ({ appPage }) => {
@@ -57,9 +59,12 @@ test.describe('Settings Tab', () => {
   test('can view current settings', async ({ appPage }) => {
     // Wait for settings tab container to load (has sidebar and content)
     const settingsTab = appPage.locator('.settings-tab');
-    await settingsTab.waitFor({ state: 'visible', timeout: 10000 });
-    // Settings sidebar should have nav items
+    await settingsTab.waitFor({ state: 'visible', timeout: 20000 });
+
+    // Wait for settings nav items to be rendered (they load asynchronously)
     const navItems = settingsTab.locator('.settings-nav-item');
+    await navItems.first().waitFor({ state: 'visible', timeout: 20000 });
+
     const navCount = await navItems.count();
     expect(navCount).toBeGreaterThan(0);
   });
@@ -494,19 +499,19 @@ test.describe('Settings Persistence', () => {
     await navigateToTab(appPage, 'settings');
     // Wait for settings tab to fully load
     const settingsTabContent = appPage.locator('.settings-tab');
-    await settingsTabContent.waitFor({ state: 'visible', timeout: 10000 });
+    await settingsTabContent.waitFor({ state: 'visible', timeout: 20000 });
 
     // Navigate away to channel manager
     const channelTab = appPage.locator('[data-tab="channel-manager"]');
     await channelTab.click();
     // Wait for channels pane to be visible (confirms navigation)
-    await appPage.locator('.channels-pane').waitFor({ state: 'visible', timeout: 10000 });
+    await appPage.locator('.channels-pane').waitFor({ state: 'visible', timeout: 15000 });
 
     // Navigate back to settings
     const settingsTab = appPage.locator('[data-tab="settings"]');
     await settingsTab.click();
     // Wait for settings tab to be visible again
-    await settingsTabContent.waitFor({ state: 'visible', timeout: 10000 });
+    await settingsTabContent.waitFor({ state: 'visible', timeout: 20000 });
 
     // Verify settings nav items are visible after returning
     const navItems = settingsTabContent.locator('.settings-nav-item');

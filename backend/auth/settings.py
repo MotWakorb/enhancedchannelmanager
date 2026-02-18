@@ -107,7 +107,7 @@ def _ensure_config_dir() -> bool:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         return True
     except (PermissionError, OSError) as e:
-        logger.warning(f"Cannot create config directory {CONFIG_DIR}: {e}")
+        logger.warning("[AUTH-SETTINGS] Cannot create config directory %s: %s", CONFIG_DIR, e)
         return False
 
 
@@ -123,7 +123,7 @@ def load_auth_settings() -> AuthSettings:
     if _cached_auth_settings is not None:
         return _cached_auth_settings
 
-    logger.info(f"Loading auth settings from {AUTH_CONFIG_FILE}")
+    logger.info("[AUTH-SETTINGS] Loading auth settings from %s", AUTH_CONFIG_FILE)
 
     if AUTH_CONFIG_FILE.exists():
         try:
@@ -135,12 +135,12 @@ def load_auth_settings() -> AuthSettings:
                 _cached_auth_settings.jwt.secret_key = _generate_secret_key()
                 save_auth_settings(_cached_auth_settings)
 
-            logger.info(f"Loaded auth settings, setup_complete: {_cached_auth_settings.setup_complete}")
+            logger.info("[AUTH-SETTINGS] Loaded auth settings, setup_complete: %s", _cached_auth_settings.setup_complete)
             return _cached_auth_settings
         except Exception as e:
-            logger.error(f"Failed to load auth settings: {e}")
+            logger.error("[AUTH-SETTINGS] Failed to load auth settings: %s", e)
 
-    logger.info("Using default auth settings (no config file found)")
+    logger.info("[AUTH-SETTINGS] Using default auth settings (no config file found)")
     _cached_auth_settings = AuthSettings()
 
     # Generate and persist a secret key for new installations
@@ -163,14 +163,14 @@ def save_auth_settings(settings: AuthSettings) -> bool:
         settings_json = json.dumps(settings.model_dump(), indent=2)
         AUTH_CONFIG_FILE.write_text(settings_json)
         _cached_auth_settings = settings
-        logger.info(f"Auth settings saved to {AUTH_CONFIG_FILE}")
+        logger.info("[AUTH-SETTINGS] Auth settings saved to %s", AUTH_CONFIG_FILE)
         return True
     except (PermissionError, OSError) as e:
-        logger.warning(f"Cannot save auth settings to {AUTH_CONFIG_FILE}: {e}")
+        logger.warning("[AUTH-SETTINGS] Cannot save auth settings to %s: %s", AUTH_CONFIG_FILE, e)
         _cached_auth_settings = settings  # Still cache in memory
         return False
     except Exception as e:
-        logger.error(f"Failed to save auth settings: {e}")
+        logger.error("[AUTH-SETTINGS] Failed to save auth settings: %s", e)
         raise
 
 
@@ -178,7 +178,7 @@ def clear_auth_settings_cache() -> None:
     """Clear the cached auth settings (forces reload)."""
     global _cached_auth_settings
     _cached_auth_settings = None
-    logger.info("Auth settings cache cleared")
+    logger.info("[AUTH-SETTINGS] Auth settings cache cleared")
 
 
 def get_auth_settings() -> AuthSettings:
@@ -200,4 +200,4 @@ def mark_setup_complete() -> None:
     settings = get_auth_settings()
     settings.setup_complete = True
     save_auth_settings(settings)
-    logger.info("Auth setup marked as complete")
+    logger.info("[AUTH-SETTINGS] Auth setup marked as complete")

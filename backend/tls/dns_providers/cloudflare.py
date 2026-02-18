@@ -99,7 +99,7 @@ class CloudflareDNS(DNSProvider):
                 zones = data.get("result", [])
                 if zones:
                     zone_id = zones[0]["id"]
-                    logger.info(f"Found Cloudflare zone: {zone_name} ({zone_id})")
+                    logger.info("[TLS-CLOUDFLARE] Found Cloudflare zone: %s (%s)", zone_name, zone_id)
                     return zone_id
 
             return None
@@ -150,7 +150,7 @@ class CloudflareDNS(DNSProvider):
             )
 
             record_id = data["result"]["id"]
-            logger.info(f"Created Cloudflare TXT record: {name} ({record_id})")
+            logger.info("[TLS-CLOUDFLARE] Created Cloudflare TXT record: %s (%s)", name, record_id)
             return record_id
 
         except DNSProviderError:
@@ -180,13 +180,13 @@ class CloudflareDNS(DNSProvider):
                 "DELETE",
                 f"/zones/{self.zone_id}/dns_records/{record_id}",
             )
-            logger.info(f"Deleted Cloudflare TXT record: {record_id}")
+            logger.info("[TLS-CLOUDFLARE] Deleted Cloudflare TXT record: %s", record_id)
             return True
 
         except DNSProviderError as e:
             # Record might already be deleted
             if "not found" in str(e).lower():
-                logger.warning(f"TXT record not found (already deleted?): {record_id}")
+                logger.warning("[TLS-CLOUDFLARE] TXT record not found (already deleted?): %s", record_id)
                 return True
             raise
         except Exception as e:

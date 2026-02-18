@@ -7,6 +7,7 @@ Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 import asyncio
 import logging
 import re
+import time
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
@@ -21,7 +22,7 @@ import journal
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["M3U"])
+router = APIRouter(prefix="/api/m3u", tags=["M3U"])
 
 # Polling configuration for manual refresh endpoints
 REFRESH_POLL_INTERVAL_SECONDS = 5
@@ -78,7 +79,7 @@ async def _capture_m3u_changes_after_refresh(account_id: int, account_name: str)
         # Fetch stream names for enabled groups (limit to first 50 per group)
         stream_names_by_group = {}
         MAX_STREAM_NAMES = 500
-        logger.info(f"[M3U-CHANGE] Fetching stream names for {len(enabled_group_names)} enabled groups: {enabled_group_names[:5]}{'...' if len(enabled_group_names) > 5 else ''}")
+        logger.info("[M3U-CHANGE] Fetching stream names for %s enabled groups: %s%s", len(enabled_group_names), enabled_group_names[:5], '...' if len(enabled_group_names) > 5 else '')
         for group_name in enabled_group_names:
             try:
                 streams_response = await api_client.get_streams(
@@ -89,13 +90,13 @@ async def _capture_m3u_changes_after_refresh(account_id: int, account_name: str)
                 )
                 results = streams_response.get("results", [])
                 stream_names = [s.get("name", "") for s in results]
-                logger.debug(f"[M3U-CHANGE] Group '{group_name}': got {len(results)} streams, {len(stream_names)} names")
+                logger.debug("[M3U-CHANGE] Group '%s': got %s streams, %s names", group_name, len(results), len(stream_names))
                 if stream_names:
                     stream_names_by_group[group_name] = stream_names
             except Exception as e:
-                logger.warning(f"[M3U-CHANGE] Could not fetch streams for group '{group_name}': {e}")
+                logger.warning("[M3U-CHANGE] Could not fetch streams for group '%s': %s", group_name, e)
 
-        logger.info(f"[M3U-CHANGE] Captured stream names for {len(stream_names_by_group)} groups")
+        logger.info("[M3U-CHANGE] Captured stream names for %s groups", len(stream_names_by_group))
 
         # Match up: for each group in this M3U account, get name and stream count
         current_groups = []
@@ -116,8 +117,10 @@ async def _capture_m3u_changes_after_refresh(account_id: int, account_name: str)
                 total_streams += stream_count
 
         logger.info(
-            f"[M3U-CHANGE] Capturing state for account {account_id} ({account_name}): "
-            f"{len(current_groups)} groups, {total_streams} streams (all groups from M3U)"
+            "[M3U-CHANGE] Capturing state for account %s (%s): "
+            "%s groups, %s streams (all groups from M3U)",
+            account_id, account_name,
+            len(current_groups), total_streams
         )
 
         # Use change detector to compare and persist
@@ -135,18 +138,22 @@ async def _capture_m3u_changes_after_refresh(account_id: int, account_name: str)
                 # Persist the changes
                 detector.persist_changes(change_set)
                 logger.info(
-                    f"[M3U-CHANGE] Detected and persisted changes for {account_name}: "
-                    f"+{len(change_set.groups_added)} groups, -{len(change_set.groups_removed)} groups, "
-                    f"+{sum(s.count for s in change_set.streams_added)} streams, "
-                    f"-{sum(s.count for s in change_set.streams_removed)} streams"
+                    "[M3U-CHANGE] Detected and persisted changes for %s: "
+                    "+%s groups, -%s groups, "
+                    "+%s streams, "
+                    "-%s streams",
+                    account_name,
+                    len(change_set.groups_added), len(change_set.groups_removed),
+                    sum(s.count for s in change_set.streams_added),
+                    sum(s.count for s in change_set.streams_removed)
                 )
             else:
-                logger.debug(f"[M3U-CHANGE] No changes detected for {account_name}")
+                logger.debug("[M3U-CHANGE] No changes detected for %s", account_name)
         finally:
             db.close()
 
     except Exception as e:
-        logger.error(f"[M3U-CHANGE] Failed to capture changes for {account_name}: {e}")
+        logger.exception("[M3U-CHANGE] Failed to capture changes for %s: %s", account_name, e)
 
 
 async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initial_updated):
@@ -165,7 +172,7 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
         while True:
             elapsed = (datetime.utcnow() - wait_start).total_seconds()
             if elapsed >= M3U_REFRESH_MAX_WAIT_SECONDS:
-                logger.warning(f"[M3U-REFRESH] Timeout waiting for '{account_name}' refresh after {elapsed:.0f}s")
+                logger.warning("[M3U-REFRESH] Timeout waiting for '%s' refresh after %.0fs", account_name, elapsed)
                 await send_alert(
                     title=f"M3U Refresh: {account_name}",
                     message=f"M3U refresh for '{account_name}' timed out after {int(elapsed)}s - refresh may still be in progress",
@@ -183,14 +190,14 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 current_account = await client.get_m3u_account(account_id)
             except Exception as e:
                 # Account may have been deleted during refresh
-                logger.warning(f"[M3U-REFRESH] Could not fetch account {account_id} during polling: {e}")
+                logger.warning("[M3U-REFRESH] Could not fetch account %s during polling: %s", account_id, e)
                 return
 
             current_updated = current_account.get("updated_at") or current_account.get("last_refresh")
 
             if current_updated and current_updated != initial_updated:
                 wait_duration = (datetime.utcnow() - wait_start).total_seconds()
-                logger.info(f"[M3U-REFRESH] '{account_name}' refresh complete in {wait_duration:.1f}s")
+                logger.info("[M3U-REFRESH] '%s' refresh complete in %.1fs", account_name, wait_duration)
 
                 # Capture M3U changes after refresh
                 await _capture_m3u_changes_after_refresh(account_id, account_name)
@@ -199,7 +206,7 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 try:
                     await send_immediate_digest(account_id)
                 except Exception as e:
-                    logger.warning(f"[M3U-REFRESH] Failed to send immediate digest for '{account_name}': {e}")
+                    logger.warning("[M3U-REFRESH] Failed to send immediate digest for '%s': %s", account_name, e)
 
                 journal.log_entry(
                     category="m3u",
@@ -222,7 +229,7 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
             elif elapsed > 30 and not initial_updated:
                 # After 30 seconds, assume complete if no timestamp field available
                 wait_duration = (datetime.utcnow() - wait_start).total_seconds()
-                logger.info(f"[M3U-REFRESH] '{account_name}' - assuming complete after {wait_duration:.0f}s (no timestamp field)")
+                logger.info("[M3U-REFRESH] '%s' - assuming complete after %.0fs (no timestamp field)", account_name, wait_duration)
 
                 # Capture M3U changes after refresh
                 await _capture_m3u_changes_after_refresh(account_id, account_name)
@@ -231,7 +238,7 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 try:
                     await send_immediate_digest(account_id)
                 except Exception as e:
-                    logger.warning(f"[M3U-REFRESH] Failed to send immediate digest for '{account_name}': {e}")
+                    logger.warning("[M3U-REFRESH] Failed to send immediate digest for '%s': %s", account_name, e)
 
                 journal.log_entry(
                     category="m3u",
@@ -253,34 +260,43 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 return
 
     except Exception as e:
-        logger.error(f"[M3U-REFRESH] Error polling for '{account_name}' completion: {e}")
+        logger.exception("[M3U-REFRESH] Error polling for '%s' completion: %s", account_name, e)
 
 
 # -------------------------------------------------------------------------
 # M3U Account Management
 # -------------------------------------------------------------------------
 
-@router.get("/api/m3u/accounts/{account_id}")
+@router.get("/accounts/{account_id}")
 async def get_m3u_account(account_id: int):
     """Get a single M3U account by ID."""
+    logger.debug("[M3U] GET /api/m3u/accounts/%s", account_id)
     client = get_client()
+    start = time.time()
     try:
-        return await client.get_m3u_account(account_id)
+        result = await client.get_m3u_account(account_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U] Fetched M3U account id=%s in %.1fms", account_id, elapsed_ms)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/m3u/accounts/{account_id}/stream-metadata")
+@router.get("/accounts/{account_id}/stream-metadata")
 async def get_m3u_stream_metadata(account_id: int):
     """Fetch and parse M3U file to extract stream metadata (tvg-id -> tvc-guide-stationid mapping).
 
     This parses the M3U file directly to get attributes like tvc-guide-stationid
     that Dispatcharr doesn't expose via its API.
     """
+    logger.debug("[M3U] GET /api/m3u/accounts/%s/stream-metadata", account_id)
     client = get_client()
     try:
         # Get the M3U account details
+        start = time.time()
         account = await client.get_m3u_account(account_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U] Fetched M3U account %s in %.1fms", account_id, elapsed_ms)
 
         # Construct the M3U URL based on account type
         account_type = account.get("account_type", "M3U")
@@ -339,24 +355,27 @@ async def get_m3u_stream_metadata(account_id: int):
                     if entry:  # Only add if we have at least one attribute
                         metadata[tvg_id] = entry
 
-        logger.info(f"Parsed M3U metadata for account {account_id}: {len(metadata)} entries with tvg-id")
+        logger.info("[M3U] Parsed M3U metadata for account %s: %s entries with tvg-id", account_id, len(metadata))
         return {"metadata": metadata, "count": len(metadata)}
 
     except httpx.HTTPError as e:
-        logger.error(f"Failed to fetch M3U file for account {account_id}: {e}")
+        logger.error("[M3U] Failed to fetch M3U file for account %s: %s", account_id, e)
         raise HTTPException(status_code=502, detail=f"Failed to fetch M3U file: {str(e)}")
     except Exception as e:
-        logger.error(f"Failed to parse M3U metadata for account {account_id}: {e}")
+        logger.exception("[M3U] Failed to parse M3U metadata for account %s: %s", account_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/m3u/accounts")
+@router.post("/accounts")
 async def create_m3u_account(request: Request):
     """Create a new M3U account."""
+    logger.debug("[M3U] POST /api/m3u/accounts")
     client = get_client()
+    start = time.time()
     try:
         data = await request.json()
         result = await client.create_m3u_account(data)
+        elapsed_ms = (time.time() - start) * 1000
 
         # Log to journal
         journal.log_entry(
@@ -368,18 +387,20 @@ async def create_m3u_account(request: Request):
             after_value={"name": result.get("name"), "server_url": data.get("server_url")},
         )
 
+        logger.info("[M3U] Created M3U account id=%s name='%s' in %.1fms", result.get("id"), result.get("name"), elapsed_ms)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/m3u/upload")
+@router.post("/upload")
 async def upload_m3u_file(file: UploadFile = File(...)):
     """Upload an M3U file and return the path for use with M3U accounts.
 
     The file is saved to /config/m3u_uploads/ directory.
     Returns the full path that can be used as file_path when creating/updating M3U accounts.
     """
+    logger.debug("[M3U] POST /api/m3u/upload - filename=%s", file.filename)
     import aiofiles
     from pathlib import Path
     import uuid
@@ -409,7 +430,7 @@ async def upload_m3u_file(file: UploadFile = File(...)):
         async with aiofiles.open(file_path, 'wb') as f:
             await f.write(content)
 
-        logger.info(f"M3U file uploaded: {file_path} ({len(content)} bytes)")
+        logger.info("[M3U] M3U file uploaded: %s (%s bytes)", file_path, len(content))
 
         # Log to journal
         journal.log_entry(
@@ -425,14 +446,16 @@ async def upload_m3u_file(file: UploadFile = File(...)):
             "size": len(content)
         }
     except Exception as e:
-        logger.error(f"Failed to upload M3U file: {e}")
+        logger.exception("[M3U] Failed to upload M3U file: %s", e)
         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
 
-@router.put("/api/m3u/accounts/{account_id}")
+@router.put("/accounts/{account_id}")
 async def update_m3u_account(account_id: int, request: Request):
     """Update an M3U account (full update)."""
+    logger.debug("[M3U] PUT /api/m3u/accounts/%s", account_id)
     client = get_client()
+    start = time.time()
     try:
         before_account = await client.get_m3u_account(account_id)
         data = await request.json()
@@ -449,19 +472,25 @@ async def update_m3u_account(account_id: int, request: Request):
             after_value={"name": data.get("name")},
         )
 
+        elapsed_ms = (time.time() - start) * 1000
+        logger.info("[M3U] Updated M3U account id=%s name='%s' in %.1fms", account_id, result.get("name"), elapsed_ms)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.patch("/api/m3u/accounts/{account_id}")
+@router.patch("/accounts/{account_id}")
 async def patch_m3u_account(account_id: int, request: Request):
     """Partially update an M3U account (e.g., toggle is_active)."""
+    logger.debug("[M3U] PATCH /api/m3u/accounts/%s", account_id)
     client = get_client()
     try:
+        start = time.time()
         before_account = await client.get_m3u_account(account_id)
         data = await request.json()
         result = await client.patch_m3u_account(account_id, data)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U] Patched M3U account %s in %.1fms", account_id, elapsed_ms)
 
         # Log to journal
         changes = []
@@ -486,7 +515,7 @@ async def patch_m3u_account(account_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/api/m3u/accounts/{account_id}")
+@router.delete("/accounts/{account_id}")
 async def delete_m3u_account(account_id: int, delete_groups: bool = True):
     """Delete an M3U account and optionally its associated channel groups.
 
@@ -494,9 +523,11 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
         account_id: The M3U account ID to delete
         delete_groups: If True (default), also delete channel groups associated with this account
     """
+    logger.debug("[M3U] DELETE /api/m3u/accounts/%s - delete_groups=%s", account_id, delete_groups)
     client = get_client()
     try:
         # Get account info before deleting (includes channel_groups)
+        start = time.time()
         account = await client.get_m3u_account(account_id)
         account_name = account.get("name", "Unknown")
 
@@ -507,16 +538,18 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
                 group_id = group_setting.get("channel_group")
                 if group_id:
                     channel_group_ids.append(group_id)
-            logger.info(f"M3U account '{account_name}' has {len(channel_group_ids)} associated channel groups")
+            logger.info("[M3U] M3U account '%s' has %s associated channel groups", account_name, len(channel_group_ids))
 
         # Delete the M3U account first
         await client.delete_m3u_account(account_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U] Deleted M3U account %s in %.1fms", account_id, elapsed_ms)
 
         # Invalidate caches - streams from this M3U are now gone
         cache = get_cache()
         streams_cleared = cache.invalidate_prefix("streams:")
         groups_cleared = cache.invalidate("channel_groups")
-        logger.info(f"Invalidated cache after M3U deletion: {streams_cleared} stream entries, channel_groups={groups_cleared}")
+        logger.info("[M3U] Invalidated cache after M3U deletion: %s stream entries, channel_groups=%s", streams_cleared, groups_cleared)
 
         # Now delete associated channel groups
         deleted_groups = []
@@ -526,11 +559,11 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
                 try:
                     await client.delete_channel_group(group_id)
                     deleted_groups.append(group_id)
-                    logger.info(f"Deleted channel group {group_id} (was associated with M3U '{account_name}')")
+                    logger.info("[M3U] Deleted channel group %s (was associated with M3U '%s')", group_id, account_name)
                 except Exception as group_err:
                     # Group might have channels or other issues - log but don't fail
                     failed_groups.append({"id": group_id, "error": str(group_err)})
-                    logger.warning(f"Failed to delete channel group {group_id}: {group_err}")
+                    logger.warning("[M3U] Failed to delete channel group %s: %s", group_id, group_err)
 
         # Log to journal
         journal.log_entry(
@@ -563,39 +596,48 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
 # M3U Refresh
 # -------------------------------------------------------------------------
 
-@router.post("/api/m3u/refresh")
+@router.post("/refresh")
 async def refresh_all_m3u_accounts():
     """Trigger refresh for all active M3U accounts."""
+    logger.debug("[M3U-REFRESH] POST /api/m3u/refresh")
     client = get_client()
+    start = time.time()
     try:
-        return await client.refresh_all_m3u_accounts()
+        result = await client.refresh_all_m3u_accounts()
+        elapsed_ms = (time.time() - start) * 1000
+        logger.info("[M3U-REFRESH] Triggered refresh for all M3U accounts in %.1fms", elapsed_ms)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/m3u/refresh/{account_id}")
+@router.post("/refresh/{account_id}")
 async def refresh_m3u_account(account_id: int):
     """Trigger refresh for a single M3U account.
 
     Triggers the refresh and spawns a background task to poll for completion.
     Success notification is sent only when refresh actually completes.
     """
+    logger.debug("[M3U-REFRESH] POST /api/m3u/refresh/%s", account_id)
     client = get_client()
     try:
         # Get account info and capture initial state for polling
+        start = time.time()
         account = await client.get_m3u_account(account_id)
         account_name = account.get("name", "Unknown")
         initial_updated = account.get("updated_at") or account.get("last_refresh")
 
         # Trigger the refresh (returns immediately, refresh happens in background)
         result = await client.refresh_m3u_account(account_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U-REFRESH] Triggered refresh for account %s in %.1fms", account_id, elapsed_ms)
 
         # Spawn background task to poll for completion and send notification
         asyncio.create_task(
             _poll_m3u_refresh_completion(account_id, account_name, initial_updated)
         )
 
-        logger.info(f"[M3U-REFRESH] Triggered refresh for '{account_name}', polling for completion in background")
+        logger.info("[M3U-REFRESH] Triggered refresh for '%s', polling for completion in background", account_name)
         return result
     except Exception as e:
         # Send error notification for trigger failure
@@ -614,12 +656,17 @@ async def refresh_m3u_account(account_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/m3u/accounts/{account_id}/refresh-vod")
+@router.post("/accounts/{account_id}/refresh-vod")
 async def refresh_m3u_vod(account_id: int):
     """Refresh VOD content for an XtreamCodes account."""
+    logger.debug("[M3U-REFRESH] POST /api/m3u/accounts/%s/refresh-vod", account_id)
     client = get_client()
+    start = time.time()
     try:
-        return await client.refresh_m3u_vod(account_id)
+        result = await client.refresh_m3u_vod(account_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.info("[M3U-REFRESH] Triggered VOD refresh for account %s in %.1fms", account_id, elapsed_ms)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -628,44 +675,63 @@ async def refresh_m3u_vod(account_id: int):
 # M3U Filters
 # -------------------------------------------------------------------------
 
-@router.get("/api/m3u/accounts/{account_id}/filters")
+@router.get("/accounts/{account_id}/filters")
 async def get_m3u_filters(account_id: int):
     """Get all filters for an M3U account."""
+    logger.debug("[M3U] GET /api/m3u/accounts/%s/filters", account_id)
     client = get_client()
     try:
-        return await client.get_m3u_filters(account_id)
+        start = time.time()
+        result = await client.get_m3u_filters(account_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U] Fetched filters for account %s in %.1fms", account_id, elapsed_ms)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/m3u/accounts/{account_id}/filters")
+@router.post("/accounts/{account_id}/filters")
 async def create_m3u_filter(account_id: int, request: Request):
     """Create a new filter for an M3U account."""
+    logger.debug("[M3U] POST /api/m3u/accounts/%s/filters", account_id)
     client = get_client()
     try:
         data = await request.json()
-        return await client.create_m3u_filter(account_id, data)
+        start = time.time()
+        result = await client.create_m3u_filter(account_id, data)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U] Created filter for account %s in %.1fms", account_id, elapsed_ms)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/api/m3u/accounts/{account_id}/filters/{filter_id}")
+@router.put("/accounts/{account_id}/filters/{filter_id}")
 async def update_m3u_filter(account_id: int, filter_id: int, request: Request):
     """Update a filter for an M3U account."""
+    logger.debug("[M3U] PUT /api/m3u/accounts/%s/filters/%s", account_id, filter_id)
     client = get_client()
     try:
         data = await request.json()
-        return await client.update_m3u_filter(account_id, filter_id, data)
+        start = time.time()
+        result = await client.update_m3u_filter(account_id, filter_id, data)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U] Updated filter %s for account %s in %.1fms", filter_id, account_id, elapsed_ms)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/api/m3u/accounts/{account_id}/filters/{filter_id}")
+@router.delete("/accounts/{account_id}/filters/{filter_id}")
 async def delete_m3u_filter(account_id: int, filter_id: int):
     """Delete a filter from an M3U account."""
+    logger.debug("[M3U] DELETE /api/m3u/accounts/%s/filters/%s", account_id, filter_id)
     client = get_client()
     try:
+        start = time.time()
         await client.delete_m3u_filter(account_id, filter_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U] Deleted filter %s for account %s in %.1fms", filter_id, account_id, elapsed_ms)
         return {"status": "deleted"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -675,54 +741,78 @@ async def delete_m3u_filter(account_id: int, filter_id: int):
 # M3U Profiles
 # -------------------------------------------------------------------------
 
-@router.get("/api/m3u/accounts/{account_id}/profiles/")
+@router.get("/accounts/{account_id}/profiles/")
 async def get_m3u_profiles(account_id: int):
     """Get all profiles for an M3U account."""
+    logger.debug("[M3U] GET /api/m3u/accounts/%s/profiles", account_id)
     client = get_client()
     try:
-        return await client.get_m3u_profiles(account_id)
+        start = time.time()
+        result = await client.get_m3u_profiles(account_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U] Fetched profiles for account %s in %.1fms", account_id, elapsed_ms)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/m3u/accounts/{account_id}/profiles/")
+@router.post("/accounts/{account_id}/profiles/")
 async def create_m3u_profile(account_id: int, request: Request):
     """Create a new profile for an M3U account."""
+    logger.debug("[M3U] POST /api/m3u/accounts/%s/profiles", account_id)
     client = get_client()
     try:
         data = await request.json()
-        return await client.create_m3u_profile(account_id, data)
+        start = time.time()
+        result = await client.create_m3u_profile(account_id, data)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U] Created profile for account %s in %.1fms", account_id, elapsed_ms)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/m3u/accounts/{account_id}/profiles/{profile_id}/")
+@router.get("/accounts/{account_id}/profiles/{profile_id}/")
 async def get_m3u_profile(account_id: int, profile_id: int):
     """Get a specific profile for an M3U account."""
+    logger.debug("[M3U] GET /api/m3u/accounts/%s/profiles/%s", account_id, profile_id)
     client = get_client()
     try:
-        return await client.get_m3u_profile(account_id, profile_id)
+        start = time.time()
+        result = await client.get_m3u_profile(account_id, profile_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U] Fetched profile %s for account %s in %.1fms", profile_id, account_id, elapsed_ms)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.patch("/api/m3u/accounts/{account_id}/profiles/{profile_id}/")
+@router.patch("/accounts/{account_id}/profiles/{profile_id}/")
 async def update_m3u_profile(account_id: int, profile_id: int, request: Request):
     """Update a profile for an M3U account."""
+    logger.debug("[M3U] PATCH /api/m3u/accounts/%s/profiles/%s", account_id, profile_id)
     client = get_client()
     try:
         data = await request.json()
-        return await client.update_m3u_profile(account_id, profile_id, data)
+        start = time.time()
+        result = await client.update_m3u_profile(account_id, profile_id, data)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U] Updated profile %s for account %s in %.1fms", profile_id, account_id, elapsed_ms)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/api/m3u/accounts/{account_id}/profiles/{profile_id}/")
+@router.delete("/accounts/{account_id}/profiles/{profile_id}/")
 async def delete_m3u_profile(account_id: int, profile_id: int):
     """Delete a profile from an M3U account."""
+    logger.debug("[M3U] DELETE /api/m3u/accounts/%s/profiles/%s", account_id, profile_id)
     client = get_client()
     try:
+        start = time.time()
         await client.delete_m3u_profile(account_id, profile_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U] Deleted profile %s for account %s in %.1fms", profile_id, account_id, elapsed_ms)
         return {"status": "deleted"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -732,12 +822,14 @@ async def delete_m3u_profile(account_id: int, profile_id: int):
 # M3U Group Settings
 # -------------------------------------------------------------------------
 
-@router.patch("/api/m3u/accounts/{account_id}/group-settings")
+@router.patch("/accounts/{account_id}/group-settings")
 async def update_m3u_group_settings(account_id: int, request: Request):
     """Update group settings for an M3U account."""
+    logger.debug("[M3U] PATCH /api/m3u/accounts/%s/group-settings", account_id)
     client = get_client()
     try:
         # Get account info and current group settings before update
+        start = time.time()
         account = await client.get_m3u_account(account_id)
         account_name = account.get("name", "Unknown")
         # Store full settings for each group (all auto-sync related fields)
@@ -756,6 +848,8 @@ async def update_m3u_group_settings(account_id: int, request: Request):
 
         data = await request.json()
         result = await client.update_m3u_group_settings(account_id, data)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U] Updated group settings for account %s in %.1fms", account_id, elapsed_ms)
 
         # Log to journal - compare before/after states for all settings
         group_settings = data.get("group_settings", [])
@@ -862,23 +956,32 @@ async def update_m3u_group_settings(account_id: int, request: Request):
 # Server Groups
 # -------------------------------------------------------------------------
 
-@router.get("/api/m3u/server-groups")
+@router.get("/server-groups")
 async def get_server_groups():
     """Get all server groups."""
+    logger.debug("[M3U] GET /api/m3u/server-groups")
     client = get_client()
     try:
-        return await client.get_server_groups()
+        start = time.time()
+        result = await client.get_server_groups()
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U] Fetched server groups in %.1fms", elapsed_ms)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/m3u/server-groups")
+@router.post("/server-groups")
 async def create_server_group(request: Request):
     """Create a new server group."""
+    logger.debug("[M3U] POST /api/m3u/server-groups")
     client = get_client()
     try:
         data = await request.json()
+        start = time.time()
         result = await client.create_server_group(data)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U] Created server group in %.1fms", elapsed_ms)
 
         # Log to journal
         group_name = data.get("name", "Unknown")
@@ -897,18 +1000,22 @@ async def create_server_group(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.patch("/api/m3u/server-groups/{group_id}")
+@router.patch("/server-groups/{group_id}")
 async def update_server_group(group_id: int, request: Request):
     """Update a server group."""
+    logger.debug("[M3U] PATCH /api/m3u/server-groups/%s", group_id)
     client = get_client()
     try:
         # Get current group info
+        start = time.time()
         groups = await client.get_server_groups()
         before_group = next((g for g in groups if g.get("id") == group_id), {})
         before_name = before_group.get("name", "Unknown")
 
         data = await request.json()
         result = await client.update_server_group(group_id, data)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U] Updated server group %s in %.1fms", group_id, elapsed_ms)
 
         # Log to journal
         new_name = data.get("name", before_name)
@@ -936,17 +1043,21 @@ async def update_server_group(group_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/api/m3u/server-groups/{group_id}")
+@router.delete("/server-groups/{group_id}")
 async def delete_server_group(group_id: int):
     """Delete a server group."""
+    logger.debug("[M3U] DELETE /api/m3u/server-groups/%s", group_id)
     client = get_client()
     try:
         # Get group info before deleting
+        start = time.time()
         groups = await client.get_server_groups()
         group = next((g for g in groups if g.get("id") == group_id), {})
         group_name = group.get("name", "Unknown")
 
         await client.delete_server_group(group_id)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[M3U] Deleted server group %s in %.1fms", group_id, elapsed_ms)
 
         # Log to journal
         journal.log_entry(
