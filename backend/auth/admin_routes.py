@@ -14,7 +14,7 @@ from sqlalchemy import or_
 
 from database import get_session
 from models import User
-from .password import hash_password, validate_password
+from .password import hash_password
 from .dependencies import get_current_active_admin
 from .routes import UserResponse
 

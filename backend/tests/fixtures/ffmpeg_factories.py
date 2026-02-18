@@ -4,9 +4,8 @@ Factory functions for creating FFMPEG Builder test data.
 These factories create test objects (dicts and model instances) for
 FFMPEG-related tests. Following the project's factory pattern from factories.py.
 """
-import json
 from datetime import datetime, timedelta
-from typing import Optional, Any
+from typing import Optional
 
 # Counter for generating unique IDs
 _ffmpeg_counter = {"value": 5000}

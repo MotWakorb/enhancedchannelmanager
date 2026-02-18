@@ -3,7 +3,6 @@ SQLite database setup for the Journal feature.
 Uses SQLAlchemy with async support via aiosqlite.
 """
 import logging
-from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.pool import StaticPool

@@ -394,7 +394,7 @@ export function StreamsPane({
     setIsOpen: setBulkCreateGroupDropdownOpen,
     dropdownRef: bulkCreateGroupDropdownRef,
   } = useDropdown();
-  const [_namingOptionsExpanded, setNamingOptionsExpanded] = useState(false);
+  const [, setNamingOptionsExpanded] = useState(false);
   const [channelGroupExpanded, setChannelGroupExpanded] = useState(false);
   const [timezoneExpanded, setTimezoneExpanded] = useState(false);
 

@@ -18,14 +18,12 @@ from ffmpeg_builder.persistence import (
     search_configs,
     export_config_json,
     import_config_json,
-    SavedConfig,
     ConfigNotFoundError,
     ConfigValidationError,
 )
 
 from tests.fixtures.ffmpeg_factories import (
     create_builder_state,
-    create_saved_config,
 )
 
 

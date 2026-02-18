@@ -4,9 +4,7 @@ Unit tests for the auto-creation engine service.
 Tests the AutoCreationEngine class which orchestrates the entire auto-creation
 pipeline, coordinating rules, streams, and executions.
 """
-import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
-from datetime import datetime
 import asyncio
 
 from auto_creation_engine import (
@@ -638,7 +636,7 @@ class TestAutoCreationEngineExecutionTracking:
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
 
-        execution = asyncio.get_event_loop().run_until_complete(
+        asyncio.get_event_loop().run_until_complete(
             self.engine._create_execution(mode="execute", triggered_by="manual")
         )
 

@@ -7,7 +7,7 @@ These are TDD tests -- they will FAIL until the backend modules are implemented.
 """
 import json
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 
 from ffmpeg_builder.probe import (
     probe_source,

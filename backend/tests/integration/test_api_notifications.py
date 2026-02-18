@@ -5,7 +5,6 @@ These tests use the FastAPI test client with database session overrides
 to test the notification endpoints.
 """
 import pytest
-from datetime import datetime
 
 
 class TestListNotifications:

@@ -5,7 +5,7 @@
  * Shows setup page if first-time setup needed, login page if not authenticated.
  * Also handles public password reset pages.
  */
-import React, { ReactNode, useState, useEffect, useCallback } from 'react';
+import { ReactNode, useState, useEffect, useCallback } from 'react';
 import { useAuth, useAuthRequired } from '../hooks/useAuth';
 import { LoginPage } from './LoginPage';
 import { SetupPage } from './SetupPage';

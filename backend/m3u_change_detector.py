@@ -3,11 +3,10 @@ M3U Change Detection Service.
 
 Compares current M3U state with previous snapshots to detect changes.
 """
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, List, Dict, Set
+from typing import Optional, List, Dict
 
 from sqlalchemy.orm import Session
 

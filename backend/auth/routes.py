@@ -13,7 +13,7 @@ from email.mime.multipart import MIMEMultipart
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from config import get_settings
@@ -29,14 +29,11 @@ from .tokens import (
     TokenExpiredError,
     InvalidTokenError,
     TokenRevokedError,
-    ACCESS_TOKEN_EXPIRE_MINUTES,
-    REFRESH_TOKEN_EXPIRE_DAYS,
 )
-from .settings import get_auth_settings, save_auth_settings, AuthSettings
+from .settings import get_auth_settings, save_auth_settings
 from .dependencies import (
     AuthenticationError,
     get_current_user,
-    get_token_from_request,
     get_refresh_token_from_request,
 )
 

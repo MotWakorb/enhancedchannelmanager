@@ -5,14 +5,11 @@ Tests video filter validation, individual filter generation, filter chain
 composition, and hardware-accelerated filter variants.
 These are TDD tests -- they will FAIL until the backend modules are implemented.
 """
-import pytest
-
 from ffmpeg_builder.video_filters import (
     validate_video_filter,
     validate_video_filter_chain,
     generate_video_filter_flags,
     generate_single_video_filter,
-    KNOWN_VIDEO_FILTERS,
 )
 
 from tests.fixtures.ffmpeg_factories import (

@@ -6,7 +6,7 @@ Scheduled task to refresh M3U accounts (playlists) from providers.
 import asyncio
 import logging
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Optional, Dict
 
 from dispatcharr_client import get_client
 from task_scheduler import TaskScheduler, TaskResult, ScheduleConfig, ScheduleType

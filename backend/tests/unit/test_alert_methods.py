@@ -1,10 +1,9 @@
 """
 Unit tests for the alert_methods module.
 """
-import asyncio
 import json
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -15,7 +14,6 @@ from alert_methods import (
     register_method,
     get_method_types,
     create_method,
-    get_alert_manager,
     send_alert,
     _method_registry,
 )

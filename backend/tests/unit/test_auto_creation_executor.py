@@ -4,7 +4,6 @@ Unit tests for the auto-creation executor service.
 Tests the ActionExecutor class which executes actions against channels, groups,
 and streams with proper rollback tracking.
 """
-import pytest
 from unittest.mock import MagicMock, AsyncMock
 import asyncio
 

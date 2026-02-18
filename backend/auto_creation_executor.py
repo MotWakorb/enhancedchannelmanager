@@ -7,7 +7,6 @@ potential rollback.
 """
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Optional
 import re
 
@@ -1779,7 +1778,7 @@ class ActionExecutor:
                 if regex.search(channel.get("name", "")):
                     return channel
         except re.error:
-            pass
+            logger.debug("[AUTO-CREATE-EXEC] Invalid regex in channel name pattern")
         return None
 
     def _find_channel_by_tvg_id(self, tvg_id: str) -> Optional[dict]:
@@ -1844,7 +1843,7 @@ class ActionExecutor:
                 logger.debug("[AUTO-CREATE-EXEC] spec='%s' (parsed int) -> %s", spec, num)
                 return num
             except ValueError:
-                pass
+                logger.debug("[AUTO-CREATE-EXEC] Non-numeric channel number spec %r, falling back to auto", spec)
 
         # Fallback to auto
         num = 1

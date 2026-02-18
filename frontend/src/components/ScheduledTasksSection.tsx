@@ -52,7 +52,7 @@ function formatSchedule(task: TaskStatus): { summary: string; details: string[] 
   return { summary: 'Not scheduled', details: [] };
 }
 
-function TaskCard({ task, onRunNow, onCancel, onToggleEnabled, onEdit, isRunning }: {
+function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for future use */ onEdit, isRunning }: {
   task: TaskStatus;
   onRunNow: (taskId: string) => void;
   onCancel: (taskId: string) => void;

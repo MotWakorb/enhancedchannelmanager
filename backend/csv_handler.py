@@ -6,7 +6,6 @@ validating channel data, and generating CSV exports.
 """
 import csv
 import io
-import re
 from typing import Any
 from urllib.parse import urlparse
 

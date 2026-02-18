@@ -348,7 +348,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   // UI state
   const [loading, setLoading] = useState(false);
-  const [_testing, setTesting] = useState(false);
 
   // Maintenance state
   const [orphanedGroups, setOrphanedGroups] = useState<{ id: number; name: string; reason?: string }[]>([]);
@@ -381,8 +380,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [originalTimezone, setOriginalTimezone] = useState('');
   const [originalAutoReorder, setOriginalAutoReorder] = useState(false);
   const [originalRefreshM3usBeforeProbe, setOriginalRefreshM3usBeforeProbe] = useState(true);
-  const [_needsRestart, setNeedsRestart] = useState(false);
-  const [_restarting, setRestarting] = useState(false);
+  const [, setNeedsRestart] = useState(false);
+  const [, setRestarting] = useState(false);
 
   // DnD sensors for sort priority
   const sensors = useSensors(
@@ -645,28 +644,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     // Apply theme immediately for preview
     document.documentElement.setAttribute('data-theme', newTheme === 'dark' ? '' : newTheme);
     onThemeChange?.(newTheme);
-  };
-
-  const _handleTest = async () => {
-    if (!url || !username || !password) {
-      notifications.error('URL, username, and password are required to test connection');
-      return;
-    }
-
-    setTesting(true);
-
-    try {
-      const result = await api.testConnection({ url, username, password });
-      if (result.success) {
-        notifications.success(result.message, 'Connection Test');
-      } else {
-        notifications.error(result.message, 'Connection Test');
-      }
-    } catch (err) {
-      notifications.error('Failed to test connection', 'Connection Test');
-    } finally {
-      setTesting(false);
-    }
   };
 
   const handleResetStats = async () => {
@@ -1028,20 +1005,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       notifications.error('Failed to restart services', 'Restart Failed');
     } finally {
       setRestarting(false);
-    }
-  };
-
-  const _handleProbeAllStreams = async () => {
-    setProbingAll(true);
-    setProbeProgress(null);
-    try {
-      // Probe all streams (empty array = all groups)
-      const result = await api.probeAllStreams([]);
-      notifications.info(result.message || 'Background probe started', 'Stream Probe');
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to start probe';
-      notifications.error(errorMessage, 'Stream Probe');
-      setProbingAll(false);
     }
   };
 

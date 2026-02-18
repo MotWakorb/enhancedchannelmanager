@@ -17,7 +17,7 @@ import {
   createMockFFMPEGConfig,
 } from '../../test/mocks/server';
 import { ECMIntegration } from './ECMIntegration';
-import type { FFMPEGChannelProfile, FFMPEGBuilderState } from '../../types/ffmpegBuilder';
+import type { FFMPEGChannelProfile } from '../../types/ffmpegBuilder';
 
 // Setup MSW server
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));

@@ -360,11 +360,10 @@ export function generateCommand(config: FFMPEGBuilderState): GeneratedCommand {
       }
       if (vc.rateControl === 'crf' && vc.crf !== undefined) {
         parts.push(`-crf ${vc.crf}`);
-        let crfQuality: string;
-        if (vc.crf <= 18) crfQuality = 'visually lossless (very high quality)';
-        else if (vc.crf <= 23) crfQuality = 'good quality (recommended for most content)';
-        else if (vc.crf <= 28) crfQuality = 'acceptable quality (saves bandwidth)';
-        else crfQuality = 'low quality (significant compression artifacts)';
+        const crfQuality = vc.crf <= 18 ? 'visually lossless (very high quality)'
+          : vc.crf <= 23 ? 'good quality (recommended for most content)'
+          : vc.crf <= 28 ? 'acceptable quality (saves bandwidth)'
+          : 'low quality (significant compression artifacts)';
         flags.push({ text: `-crf ${vc.crf}`, category: 'video', explanation: `Quality level: ${vc.crf} — ${crfQuality}. The encoder automatically adjusts bandwidth to maintain this quality target. Lower numbers = better picture but more bandwidth, higher numbers = more compression` });
       }
       if (vc.rateControl === 'cbr' && vc.bitrate) {

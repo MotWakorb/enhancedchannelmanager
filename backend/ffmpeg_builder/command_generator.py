@@ -1,9 +1,9 @@
 """Full command generation and annotation from builder state."""
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import List
 
-from ffmpeg_builder.input import generate_input_flags, generate_hwaccel_flags
+from ffmpeg_builder.input import generate_input_flags
 from ffmpeg_builder.output import generate_output_flags
 from ffmpeg_builder.video_codec import generate_video_codec_flags
 from ffmpeg_builder.audio_codec import generate_audio_codec_flags

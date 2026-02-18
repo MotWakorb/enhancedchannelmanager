@@ -1,4 +1,3 @@
-import pytest
 from datetime import datetime, timedelta
 from auto_creation_evaluator import ConditionEvaluator
 

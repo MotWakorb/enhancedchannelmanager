@@ -204,8 +204,7 @@ export const ffmpegHandlers = [
     })
   }),
 
-  http.post(`${API_BASE}/ffmpeg/generate-command`, async ({ request }) => {
-    const _data = await request.json() as { config: object }
+  http.post(`${API_BASE}/ffmpeg/generate-command`, async () => {
     return HttpResponse.json({
       command: 'ffmpeg -i input.mp4 -c:v libx264 -crf 23 -c:a aac -b:a 192k output.mp4',
       annotations: [

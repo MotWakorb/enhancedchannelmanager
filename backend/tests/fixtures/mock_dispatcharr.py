@@ -6,7 +6,6 @@ in integration tests, avoiding external dependencies.
 """
 import json
 from datetime import datetime
-from typing import Optional, Any
 import pytest
 import respx
 from httpx import Response

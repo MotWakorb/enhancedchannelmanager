@@ -2,12 +2,8 @@
 Unit tests for the schedule_calculator module.
 """
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
-
-import pytest
 
 from schedule_calculator import (
-    DAY_NAMES,
     calculate_next_run,
     describe_schedule,
     get_seconds_until,

@@ -162,7 +162,7 @@ def smart_sort_streams(
                         parts = stat.resolution.split('x')
                         if len(parts) == 2:
                             resolution_value = int(parts[1])  # Use height only
-                    except Exception as e:
+                    except (ValueError, IndexError) as e:
                         logger.debug("[STREAM-PROBE] Suppressed resolution parse error: %s", e)
                 # Negate for descending sort (higher values first)
                 sort_values.append(-resolution_value)
@@ -2043,7 +2043,7 @@ class StreamProber:
                                 self._probe_progress_current = probed_count
                                 await self._update_probe_notification()
                             except asyncio.CancelledError:
-                                pass
+                                logger.debug("[STREAM-PROBE] Probe task cancelled")
                             except Exception as e:
                                 logger.error("[STREAM-PROBE] Probe task failed: %s", e)
                                 probed_count += 1
