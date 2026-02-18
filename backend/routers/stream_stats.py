@@ -82,7 +82,7 @@ async def get_all_stream_stats():
         return StreamProber.get_all_stats()
     except Exception as e:
         logger.exception("[STREAM-STATS] Failed to get stream stats: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/summary")
@@ -93,7 +93,7 @@ async def get_stream_stats_summary():
         return StreamProber.get_stats_summary()
     except Exception as e:
         logger.exception("[STREAM-STATS] Failed to get stream stats summary: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # NOTE: These routes MUST be defined BEFORE /{stream_id} to avoid path parameter matching
@@ -157,7 +157,7 @@ async def get_struck_out_streams():
         return {"streams": result, "threshold": threshold, "enabled": True}
     except Exception as e:
         logger.exception("[STREAM-STATS] Failed to get struck-out streams: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         session.close()
 
@@ -212,7 +212,7 @@ async def remove_struck_out_streams(request: RemoveStruckOutRequest):
         }
     except Exception as e:
         logger.exception("[STREAM-STATS] Failed to remove struck-out streams: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/compute-sort", response_model=ComputeSortResponse)
@@ -318,7 +318,7 @@ async def get_dismissed_stream_stats():
         return {"dismissed_stream_ids": stream_ids, "count": len(stream_ids)}
     except Exception as e:
         logger.exception("[STREAM-STATS] Failed to get dismissed stream stats: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         session.close()
 
@@ -336,7 +336,7 @@ async def get_stream_stats_by_id(stream_id: int):
         raise
     except Exception as e:
         logger.exception("[STREAM-STATS] Failed to get stream stats for %s: %s", stream_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # BulkStreamIdsRequest is in routers/streams.py
@@ -351,7 +351,7 @@ async def get_stream_stats_by_ids(request: BulkStreamIdsRequest):
         return StreamProber.get_stats_by_stream_ids(request.stream_ids)
     except Exception as e:
         logger.exception("[STREAM-STATS] Failed to get stream stats by IDs: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # NOTE: /probe/bulk and /probe/all MUST be defined BEFORE /probe/{stream_id}
@@ -392,7 +392,7 @@ async def probe_bulk_streams(request: BulkProbeRequest):
         return {"probed": len(results), "results": results}
     except Exception as e:
         logger.exception("[STREAM-STATS-PROBE] Bulk probe failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/probe/all")
@@ -521,7 +521,7 @@ async def dismiss_stream_stats(request: DismissStatsRequest):
     except Exception as e:
         session.rollback()
         logger.exception("[STREAM-STATS] Failed to dismiss stream stats: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         session.close()
 
@@ -550,7 +550,7 @@ async def clear_stream_stats(request: ClearStatsRequest):
     except Exception as e:
         session.rollback()
         logger.exception("[STREAM-STATS] Failed to clear stream stats: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         session.close()
 
@@ -574,7 +574,7 @@ async def clear_all_stream_stats():
     except Exception as e:
         session.rollback()
         logger.exception("[STREAM-STATS] Failed to clear all stream stats: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         session.close()
 
@@ -611,4 +611,4 @@ async def probe_single_stream(stream_id: int):
         raise
     except Exception as e:
         logger.exception("[STREAM-STATS-PROBE] Failed to probe stream %s: %s", stream_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")

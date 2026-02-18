@@ -261,7 +261,7 @@ async def list_ffmpeg_profiles():
             return {"profiles": [p.to_dict() for p in profiles]}
     except Exception as e:
         logger.exception("[FFMPEG] Failed to list profiles")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/profiles", tags=["FFMPEG Profiles"])
@@ -291,7 +291,7 @@ async def create_ffmpeg_profile(request: Request):
         raise
     except Exception as e:
         logger.exception("[FFMPEG] Failed to save profile")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/profiles/{profile_id}", tags=["FFMPEG Profiles"])
@@ -313,4 +313,4 @@ async def delete_ffmpeg_profile(profile_id: int):
         raise
     except Exception as e:
         logger.exception("[FFMPEG] Failed to delete profile %s", profile_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")

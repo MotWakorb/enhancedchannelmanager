@@ -60,7 +60,7 @@ async def get_epg_sources():
         logger.debug("[EPG] Fetched %d EPG sources in %.1fms", len(result), elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/sources/{source_id}")
@@ -75,7 +75,7 @@ async def get_epg_source(source_id: int):
         logger.debug("[EPG] Fetched EPG source id=%s in %.1fms", source_id, elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/sources")
@@ -102,7 +102,7 @@ async def create_epg_source(request: Request):
         logger.info("[EPG] Created EPG source id=%s name='%s' in %.1fms", result.get("id"), result.get("name"), elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/sources/{source_id}")
@@ -132,7 +132,7 @@ async def update_epg_source(source_id: int, request: Request):
         logger.info("[EPG] Updated EPG source id=%s name='%s' in %.1fms", source_id, result.get("name"), elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/sources/{source_id}")
@@ -162,7 +162,7 @@ async def delete_epg_source(source_id: int):
         logger.info("[EPG] Deleted EPG source id=%s name='%s' in %.1fms", source_id, source_name, elapsed_ms)
         return {"status": "deleted"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +301,7 @@ async def refresh_epg_source(source_id: int):
             )
         except Exception:
             pass  # Don't fail the request if notification fails
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/import")
@@ -316,7 +316,7 @@ async def trigger_epg_import():
         logger.info("[EPG] Triggered EPG import in %.1fms", elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +345,7 @@ async def get_epg_data(
         logger.debug("[EPG] Fetched EPG data in %.1fms", elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/data/{data_id}")
@@ -360,7 +360,7 @@ async def get_epg_data_by_id(data_id: int):
         logger.debug("[EPG] Fetched EPG data id=%s in %.1fms", data_id, elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/grid")
@@ -393,7 +393,7 @@ async def get_epg_grid(start: Optional[str] = None, end: Optional[str] = None):
         raise HTTPException(status_code=e.response.status_code, detail=str(e))
     except Exception as e:
         logger.exception("[EPG] Error fetching EPG grid: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ---------------------------------------------------------------------------
@@ -558,7 +558,7 @@ async def get_epg_lcn_by_tvg_id(tvg_id: str):
         raise
     except Exception as e:
         logger.exception("[EPG-LCN] Error fetching LCN for %s: %s", tvg_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/lcn/batch")
@@ -739,4 +739,4 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
 
     except Exception as e:
         logger.exception("[EPG-LCN] Batch LCN error: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")

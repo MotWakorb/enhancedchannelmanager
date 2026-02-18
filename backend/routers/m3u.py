@@ -279,7 +279,7 @@ async def get_m3u_account(account_id: int):
         logger.debug("[M3U] Fetched M3U account id=%s in %.1fms", account_id, elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/accounts/{account_id}/stream-metadata")
@@ -363,7 +363,7 @@ async def get_m3u_stream_metadata(account_id: int):
         raise HTTPException(status_code=502, detail=f"Failed to fetch M3U file: {str(e)}")
     except Exception as e:
         logger.exception("[M3U] Failed to parse M3U metadata for account %s: %s", account_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/accounts")
@@ -390,7 +390,7 @@ async def create_m3u_account(request: Request):
         logger.info("[M3U] Created M3U account id=%s name='%s' in %.1fms", result.get("id"), result.get("name"), elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/upload")
@@ -476,7 +476,7 @@ async def update_m3u_account(account_id: int, request: Request):
         logger.info("[M3U] Updated M3U account id=%s name='%s' in %.1fms", account_id, result.get("name"), elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/accounts/{account_id}")
@@ -512,7 +512,7 @@ async def patch_m3u_account(account_id: int, request: Request):
 
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/accounts/{account_id}")
@@ -589,7 +589,7 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
             "failed_groups": failed_groups,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # -------------------------------------------------------------------------
@@ -608,7 +608,7 @@ async def refresh_all_m3u_accounts():
         logger.info("[M3U-REFRESH] Triggered refresh for all M3U accounts in %.1fms", elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/refresh/{account_id}")
@@ -653,7 +653,7 @@ async def refresh_m3u_account(account_id: int):
             )
         except Exception:
             pass  # Don't fail the request if notification fails
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/accounts/{account_id}/refresh-vod")
@@ -668,7 +668,7 @@ async def refresh_m3u_vod(account_id: int):
         logger.info("[M3U-REFRESH] Triggered VOD refresh for account %s in %.1fms", account_id, elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # -------------------------------------------------------------------------
@@ -687,7 +687,7 @@ async def get_m3u_filters(account_id: int):
         logger.debug("[M3U] Fetched filters for account %s in %.1fms", account_id, elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/accounts/{account_id}/filters")
@@ -703,7 +703,7 @@ async def create_m3u_filter(account_id: int, request: Request):
         logger.debug("[M3U] Created filter for account %s in %.1fms", account_id, elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.put("/accounts/{account_id}/filters/{filter_id}")
@@ -719,7 +719,7 @@ async def update_m3u_filter(account_id: int, filter_id: int, request: Request):
         logger.debug("[M3U] Updated filter %s for account %s in %.1fms", filter_id, account_id, elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/accounts/{account_id}/filters/{filter_id}")
@@ -734,7 +734,7 @@ async def delete_m3u_filter(account_id: int, filter_id: int):
         logger.debug("[M3U] Deleted filter %s for account %s in %.1fms", filter_id, account_id, elapsed_ms)
         return {"status": "deleted"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # -------------------------------------------------------------------------
@@ -753,7 +753,7 @@ async def get_m3u_profiles(account_id: int):
         logger.debug("[M3U] Fetched profiles for account %s in %.1fms", account_id, elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/accounts/{account_id}/profiles/")
@@ -769,7 +769,7 @@ async def create_m3u_profile(account_id: int, request: Request):
         logger.debug("[M3U] Created profile for account %s in %.1fms", account_id, elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/accounts/{account_id}/profiles/{profile_id}/")
@@ -784,7 +784,7 @@ async def get_m3u_profile(account_id: int, profile_id: int):
         logger.debug("[M3U] Fetched profile %s for account %s in %.1fms", profile_id, account_id, elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/accounts/{account_id}/profiles/{profile_id}/")
@@ -800,7 +800,7 @@ async def update_m3u_profile(account_id: int, profile_id: int, request: Request)
         logger.debug("[M3U] Updated profile %s for account %s in %.1fms", profile_id, account_id, elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/accounts/{account_id}/profiles/{profile_id}/")
@@ -815,7 +815,7 @@ async def delete_m3u_profile(account_id: int, profile_id: int):
         logger.debug("[M3U] Deleted profile %s for account %s in %.1fms", profile_id, account_id, elapsed_ms)
         return {"status": "deleted"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # -------------------------------------------------------------------------
@@ -949,7 +949,7 @@ async def update_m3u_group_settings(account_id: int, request: Request):
 
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # -------------------------------------------------------------------------
@@ -968,7 +968,7 @@ async def get_server_groups():
         logger.debug("[M3U] Fetched server groups in %.1fms", elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/server-groups")
@@ -997,7 +997,7 @@ async def create_server_group(request: Request):
 
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/server-groups/{group_id}")
@@ -1040,7 +1040,7 @@ async def update_server_group(group_id: int, request: Request):
 
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/server-groups/{group_id}")
@@ -1071,4 +1071,4 @@ async def delete_server_group(group_id: int):
 
         return {"status": "deleted"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")

@@ -191,7 +191,7 @@ async def get_engine_status():
         return engine.get_status()
     except Exception as e:
         logger.exception("[TASKS] Failed to get engine status: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/api/tasks/history/all", tags=["Tasks"])
@@ -205,7 +205,7 @@ async def get_all_task_history(limit: int = 100, offset: int = 0):
         return {"history": history}
     except Exception as e:
         logger.exception("[TASKS] Failed to get all task history: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/api/tasks/parameter-schemas", tags=["Tasks"])
@@ -273,7 +273,7 @@ async def list_tasks():
         return {"tasks": tasks}
     except Exception as e:
         logger.exception("[TASKS] Failed to list tasks: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/api/tasks/{task_id}", tags=["Tasks"])
@@ -328,7 +328,7 @@ async def get_task(task_id: str):
         raise
     except Exception as e:
         logger.exception("[TASKS] Failed to get task %s: %s", task_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/api/tasks/{task_id}", tags=["Tasks"])
@@ -367,7 +367,7 @@ async def update_task(task_id: str, config: TaskConfigUpdate):
         raise
     except Exception as e:
         logger.exception("[TASKS] Failed to update task %s: %s", task_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/api/tasks/{task_id}/run", tags=["Tasks"])
@@ -388,7 +388,7 @@ async def run_task(task_id: str, request: Optional[TaskRunRequest] = None):
         raise
     except Exception as e:
         logger.exception("[TASKS] Failed to run task %s: %s", task_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/api/tasks/{task_id}/cancel", tags=["Tasks"])
@@ -406,7 +406,7 @@ async def cancel_task(task_id: str):
         raise
     except Exception as e:
         logger.exception("[TASKS] Failed to cancel task %s: %s", task_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/api/tasks/{task_id}/history", tags=["Tasks"])
@@ -420,7 +420,7 @@ async def get_task_history(task_id: str, limit: int = 50, offset: int = 0):
         return {"history": history}
     except Exception as e:
         logger.exception("[TASKS] Failed to get history for task %s: %s", task_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/api/tasks/{task_id}/parameter-schema", tags=["Tasks"])
@@ -447,7 +447,7 @@ async def get_cron_presets():
         return {"presets": get_preset_list()}
     except Exception as e:
         logger.exception("[TASKS] Failed to get cron presets: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/api/cron/validate", tags=["Cron"])
@@ -475,7 +475,7 @@ async def validate_cron(request: CronValidateRequest):
         }
     except Exception as e:
         logger.exception("[TASKS] Failed to validate cron expression: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # =========================================================================
@@ -575,7 +575,7 @@ async def list_task_schedules(task_id: str):
         raise
     except Exception as e:
         logger.exception("[TASKS] Failed to list schedules for task %s: %s", task_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/api/tasks/{task_id}/schedules", tags=["Tasks"])
@@ -651,7 +651,7 @@ async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
         raise
     except Exception as e:
         logger.exception("[TASKS] Failed to create schedule for task %s: %s", task_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/api/tasks/{task_id}/schedules/{schedule_id}", tags=["Tasks"])
@@ -732,7 +732,7 @@ async def update_task_schedule(task_id: str, schedule_id: int, data: TaskSchedul
         raise
     except Exception as e:
         logger.exception("[TASKS] Failed to update schedule %s for task %s: %s", schedule_id, task_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/api/tasks/{task_id}/schedules/{schedule_id}", tags=["Tasks"])
@@ -767,7 +767,7 @@ async def delete_task_schedule(task_id: str, schedule_id: int):
         raise
     except Exception as e:
         logger.exception("[TASKS] Failed to delete schedule %s for task %s: %s", schedule_id, task_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # -------------------------------------------------------------------------

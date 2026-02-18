@@ -245,7 +245,7 @@ async def get_channels(
         return result
     except Exception as e:
         logger.exception("[CHANNELS] Failed to retrieve channels: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("")
@@ -297,7 +297,7 @@ async def create_channel(request: CreateChannelRequest):
         return result
     except Exception as e:
         logger.exception("[CHANNELS] Channel creation failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +321,7 @@ async def get_logos(
         return result
     except Exception as e:
         logger.exception("[CHANNELS-LOGO] Failed to fetch logos: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/logos/{logo_id}")
@@ -337,7 +337,7 @@ async def get_logo(logo_id: int):
         return result
     except Exception as e:
         logger.exception("[CHANNELS-LOGO] Failed to fetch logo id=%s", logo_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/logos")
@@ -365,7 +365,7 @@ async def create_logo(request: CreateLogoRequest):
             except Exception as search_err:
                 logger.error("[CHANNELS-LOGO] Error searching for existing logo: %s", search_err)
         logger.exception("[CHANNELS-LOGO] Logo creation failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/logos/upload")
@@ -391,7 +391,7 @@ async def upload_logo(request: Request, file: UploadFile = File(...)):
         return result
     except Exception as e:
         logger.exception("[CHANNELS-LOGO] Logo upload failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/logos/{logo_id}")
@@ -407,7 +407,7 @@ async def update_logo(logo_id: int, data: dict):
         return result
     except Exception as e:
         logger.exception("[CHANNELS-LOGO] Failed to update logo id=%s", logo_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/logos/{logo_id}")
@@ -423,7 +423,7 @@ async def delete_logo(logo_id: int):
         return {"success": True}
     except Exception as e:
         logger.exception("[CHANNELS-LOGO] Failed to delete logo id=%s", logo_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ---------------------------------------------------------------------------
@@ -526,7 +526,7 @@ async def export_channels_csv():
         )
     except Exception as e:
         logger.exception("[CHANNELS-CSV] CSV export failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/import-csv")
@@ -853,7 +853,7 @@ async def assign_channel_numbers(request: AssignNumbersRequest):
         return result
     except Exception as e:
         logger.exception("[CHANNELS] Failed to assign channel numbers: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/bulk-commit")
@@ -1476,7 +1476,7 @@ async def clear_auto_created_flag(request: ClearAutoCreatedRequest):
         }
     except Exception as e:
         logger.exception("[CHANNELS] Failed to clear auto_created flags: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ---------------------------------------------------------------------------
@@ -1496,7 +1496,7 @@ async def get_channel(channel_id: int):
         return result
     except Exception as e:
         logger.exception("[CHANNELS] Failed to fetch channel id=%s", channel_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/{channel_id}/streams")
@@ -1512,7 +1512,7 @@ async def get_channel_streams(channel_id: int):
         return result
     except Exception as e:
         logger.exception("[CHANNELS] Failed to fetch streams for channel id=%s", channel_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/{channel_id}")
@@ -1581,7 +1581,7 @@ async def update_channel(channel_id: int, data: dict):
         return result
     except Exception as e:
         logger.exception("[CHANNELS] Failed to update channel %s: %s", channel_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/{channel_id}")
@@ -1613,7 +1613,7 @@ async def delete_channel(channel_id: int):
         return {"success": True}
     except Exception as e:
         logger.exception("[CHANNELS] Failed to delete channel %s: %s", channel_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/{channel_id}/add-stream")
@@ -1653,7 +1653,7 @@ async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
         return channel
     except Exception as e:
         logger.exception("[CHANNELS] Failed to add stream %s to channel %s: %s", request.stream_id, channel_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/{channel_id}/remove-stream")
@@ -1693,7 +1693,7 @@ async def remove_stream_from_channel(channel_id: int, request: RemoveStreamReque
         return channel
     except Exception as e:
         logger.exception("[CHANNELS] Failed to remove stream %s from channel %s: %s", request.stream_id, channel_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/{channel_id}/reorder-streams")
@@ -1726,4 +1726,4 @@ async def reorder_channel_streams(channel_id: int, request: ReorderStreamsReques
         return result
     except Exception as e:
         logger.exception("[CHANNELS] Failed to reorder streams for channel %s: %s", channel_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")

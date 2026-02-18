@@ -68,7 +68,7 @@ async def list_tag_groups():
             session.close()
     except Exception as e:
         logger.exception("[TAGS] Failed to list tag groups")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/groups")
@@ -100,7 +100,7 @@ async def create_tag_group(request: CreateTagGroupRequest):
         raise
     except Exception as e:
         logger.exception("[TAGS] Failed to create tag group")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/groups/{group_id}")
@@ -122,7 +122,7 @@ async def get_tag_group(group_id: int):
         raise
     except Exception as e:
         logger.exception("[TAGS] Failed to get tag group %s", group_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/groups/{group_id}")
@@ -164,7 +164,7 @@ async def update_tag_group(group_id: int, request: UpdateTagGroupRequest):
         raise
     except Exception as e:
         logger.exception("[TAGS] Failed to update tag group %s", group_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/groups/{group_id}")
@@ -197,7 +197,7 @@ async def delete_tag_group(group_id: int):
         raise
     except Exception as e:
         logger.exception("[TAGS] Failed to delete tag group %s", group_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/groups/{group_id}/tags")
@@ -258,7 +258,7 @@ async def add_tags_to_group(group_id: int, request: CreateTagsRequest):
         raise
     except Exception as e:
         logger.exception("[TAGS] Failed to add tags to group %s", group_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/groups/{group_id}/tags/{tag_id}")
@@ -295,7 +295,7 @@ async def update_tag(group_id: int, tag_id: int, request: UpdateTagRequest):
         raise
     except Exception as e:
         logger.exception("[TAGS] Failed to update tag %s", tag_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/groups/{group_id}/tags/{tag_id}")
@@ -331,7 +331,7 @@ async def delete_tag(group_id: int, tag_id: int):
         raise
     except Exception as e:
         logger.exception("[TAGS] Failed to delete tag %s", tag_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/test")
@@ -384,4 +384,4 @@ async def test_tags(request: TestTagsRequest):
         raise
     except Exception as e:
         logger.exception("[TAGS] Failed to test tags")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")

@@ -92,7 +92,7 @@ async def get_streams(
         return result
     except Exception as e:
         logger.exception("[STREAMS] Failed to fetch streams: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/api/stream-groups")
@@ -126,7 +126,7 @@ async def get_stream_groups(bypass_cache: bool = False, m3u_account_id: Optional
         cache.set(cache_key, result)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 class BulkStreamIdsRequest(BaseModel):
@@ -146,7 +146,7 @@ async def get_streams_by_ids(request: BulkStreamIdsRequest):
         return result
     except Exception as e:
         logger.exception("[STREAMS] Failed to get streams by IDs: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/api/providers", tags=["Providers"])
@@ -161,7 +161,7 @@ async def get_providers():
         logger.debug("[STREAMS] Fetched M3U accounts in %.1fms", elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/api/providers/group-settings", tags=["Providers"])
@@ -176,4 +176,4 @@ async def get_all_provider_group_settings():
         logger.debug("[STREAMS] Fetched provider group settings in %.1fms", elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")

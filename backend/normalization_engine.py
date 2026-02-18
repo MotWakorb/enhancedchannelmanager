@@ -479,7 +479,7 @@ class NormalizationEngine:
             if match.match_end == len(text) or match.match_end == len(text.rstrip()):
                 result = text[:match.match_start]
                 # Also strip common separators that might precede
-                result = re.sub(r'[\s:\-|/]+$', '', result)
+                result = result.rstrip(' \t\n\r:-|/')
                 return result.strip()
             return text
 
@@ -490,10 +490,10 @@ class NormalizationEngine:
                 # Extract just the prefix (the matched content)
                 prefix = text[match.match_start:match.match_end]
                 # Remove any trailing separators from prefix
-                prefix = re.sub(r'[\s:\-|/]+$', '', prefix)
+                prefix = prefix.rstrip(' \t\n\r:-|/')
                 # Get the rest of the text
                 rest = text[match.match_end:]
-                rest = re.sub(r'^[\s:\-|/]+', '', rest)
+                rest = rest.lstrip(' \t\n\r:-|/')
                 # Use action_value as the separator format, default to " | "
                 separator = action_value if action_value else " | "
                 return f"{prefix}{separator}{rest}"
@@ -547,12 +547,12 @@ class NormalizationEngine:
 
         elif action_type == "strip_prefix":
             # Strip any leading separators and whitespace
-            result = re.sub(r'^[\s:\-|/]+', '', text)
+            result = text.lstrip(' \t\n\r:-|/')
             return result.strip()
 
         elif action_type == "strip_suffix":
             # Strip any trailing separators and whitespace
-            result = re.sub(r'[\s:\-|/]+$', '', text)
+            result = text.rstrip(' \t\n\r:-|/')
             return result.strip()
 
         elif action_type == "normalize_prefix":
@@ -787,7 +787,7 @@ class NormalizationEngine:
                 if match.matched:
                     if match.match_end == len(current) or match.match_end == len(current.rstrip()):
                         result = current[:match.match_start]
-                        result = re.sub(r'[\s:\-|/]+$', '', result).strip()
+                        result = re.sub(r'[\s:|\-/]+$', '',result).strip()
                         if result:
                             current = result
 
