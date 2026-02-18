@@ -396,7 +396,7 @@ class AutoCreationEngine:
                         break
                     page += 1
             except Exception as e:
-                logger.error("[AUTO-CREATE-ENGINE] Failed to fetch streams from M3U account %s: %s", account_id, e)
+                logger.error("[AUTO-CREATE-ENGINE] Failed to fetch streams from M3U account %s: %s", str(account_id).replace('\n', ''), str(e).replace('\n', ''))
 
         return all_streams
 

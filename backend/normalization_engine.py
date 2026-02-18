@@ -720,7 +720,7 @@ class NormalizationEngine:
             # Track if changed
             if before != current:
                 result.transformations.append(("legacy_tag", before, current))
-                logger.debug("[NORMALIZE] Legacy tag '%s': '%s' -> '%s'", tag_value, before, current)
+                logger.debug("[NORMALIZE] Legacy tag '%s': '%s' -> '%s'", str(tag_value).replace('\n', ''), str(before).replace('\n', ''), str(current).replace('\n', ''))
 
         return current
 

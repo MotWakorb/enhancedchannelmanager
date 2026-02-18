@@ -106,7 +106,8 @@ def smart_sort_streams(
         if stream_sort_enabled.get(criterion, False)
     ]
 
-    logger.info("[STREAM-PROBE-SORT] Channel '%s': Sorting %s streams", channel_name, len(stream_ids))
+    safe_name = str(channel_name).replace('\n', '').replace('\r', '')
+    logger.info("[STREAM-PROBE-SORT] Channel '%s': Sorting %s streams", safe_name, len(stream_ids))
     logger.info("[STREAM-PROBE-SORT] Sort config: priority=%s, enabled=%s", stream_sort_priority, stream_sort_enabled)
     logger.info("[STREAM-PROBE-SORT] Active criteria (in order): %s", active_criteria)
     logger.info("[STREAM-PROBE-SORT] Deprioritize failed streams: %s", deprioritize_failed_streams)
