@@ -5,8 +5,6 @@ Sends notifications to Telegram via Bot API.
 """
 import aiohttp
 import logging
-from typing import Optional
-
 from alert_methods import AlertMethod, AlertMessage, register_method
 
 logger = logging.getLogger(__name__)
@@ -123,12 +121,12 @@ class TelegramBotMethod(AlertMethod):
         bot_token = self.config.get("bot_token")
         chat_id = self.config.get("chat_id")
         logger.debug(
-            f"[Telegram] Sending to {self.name}: type={message.notification_type} "
-            f"title={message.title!r} chat_id={chat_id}"
+            "[ALERTS-TELEGRAM] Sending to %s: type=%s title=%r chat_id=%s",
+            self.name, message.notification_type, message.title, chat_id,
         )
 
         if not bot_token or not chat_id:
-            logger.error(f"Telegram method {self.name}: Missing bot_token or chat_id")
+            logger.error("[ALERTS-TELEGRAM] Telegram method %s: Missing bot_token or chat_id", self.name)
             return False
 
         parse_mode = self.config.get("parse_mode", "HTML")
@@ -162,44 +160,46 @@ class TelegramBotMethod(AlertMethod):
                     result = await response.json()
 
                     if response.status == 200 and result.get("ok"):
-                        logger.debug(f"[Telegram] Message sent successfully to {self.name}")
+                        logger.debug("[ALERTS-TELEGRAM] Message sent successfully to %s", self.name)
                         return True
                     elif response.status == 429:
                         # Rate limited
                         retry_after = result.get("parameters", {}).get("retry_after", "unknown")
                         logger.warning(
-                            f"Telegram method {self.name}: Rate limited, retry after {retry_after}s"
+                            "[ALERTS-TELEGRAM] Telegram method %s: Rate limited, retry after %ss",
+                            self.name, retry_after,
                         )
                         return False
                     else:
                         error_desc = result.get("description", "Unknown error")
                         logger.error(
-                            f"Telegram method {self.name}: Failed with status {response.status}: {error_desc}"
+                            "[ALERTS-TELEGRAM] Telegram method %s: Failed with status %s: %s",
+                            self.name, response.status, error_desc,
                         )
                         return False
 
         except aiohttp.ClientError as e:
-            logger.error(f"Telegram method {self.name}: Connection error: {e}")
+            logger.error("[ALERTS-TELEGRAM] Telegram method %s: Connection error: %s", self.name, e)
             return False
         except Exception as e:
-            logger.error(f"Telegram method {self.name}: Unexpected error: {e}")
+            logger.exception("[ALERTS-TELEGRAM] Telegram method %s: Unexpected error: %s", self.name, e)
             return False
 
     async def test_connection(self) -> tuple[bool, str]:
         """Test the Telegram bot connection."""
-        logger.info(f"[Telegram] Testing connection for method {self.name}")
+        logger.info("[ALERTS-TELEGRAM] Testing connection for method %s", self.name)
         bot_token = self.config.get("bot_token")
         chat_id = self.config.get("chat_id")
 
         if not bot_token:
-            logger.debug(f"[Telegram] Test failed: no bot_token for {self.name}")
+            logger.debug("[ALERTS-TELEGRAM] Test failed: no bot_token for %s", self.name)
             return False, "Bot token not configured"
         if not chat_id:
-            logger.debug(f"[Telegram] Test failed: no chat_id for {self.name}")
+            logger.debug("[ALERTS-TELEGRAM] Test failed: no chat_id for %s", self.name)
             return False, "Chat ID not configured"
 
         # First, verify the bot token by calling getMe
-        logger.debug(f"[Telegram] Verifying bot token via getMe")
+        logger.debug("[ALERTS-TELEGRAM] Verifying bot token via getMe")
         url = f"{self.TELEGRAM_API_BASE}{bot_token}/getMe"
 
         try:
@@ -215,7 +215,7 @@ class TelegramBotMethod(AlertMethod):
                         return False, f"Bot verification failed: {error_desc}"
 
                     bot_username = result.get("result", {}).get("username", "Unknown")
-                    logger.debug(f"[Telegram] Bot verified: @{bot_username}")
+                    logger.debug("[ALERTS-TELEGRAM] Bot verified: @%s", bot_username)
 
             # Send test message
             test_message = AlertMessage(

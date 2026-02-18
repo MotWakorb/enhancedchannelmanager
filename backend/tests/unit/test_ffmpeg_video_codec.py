@@ -5,13 +5,9 @@ Tests video codec validation, software/hardware codec flag generation,
 and stream copy behavior.
 These are TDD tests -- they will FAIL until the backend modules are implemented.
 """
-import pytest
-
 from ffmpeg_builder.video_codec import (
     validate_video_codec,
     generate_video_codec_flags,
-    VideoCodecSettings,
-    KNOWN_VIDEO_CODECS,
 )
 
 from tests.fixtures.ffmpeg_factories import (

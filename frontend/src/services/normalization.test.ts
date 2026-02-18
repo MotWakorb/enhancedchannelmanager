@@ -1,7 +1,7 @@
 /**
  * Unit tests for normalization functionality in API service.
  */
-import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest';
 import { server } from '../test/mocks/server';
 import { http, HttpResponse } from 'msw';
 import {

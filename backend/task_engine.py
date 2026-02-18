@@ -16,7 +16,7 @@ from typing import Optional
 from database import get_session
 from models import TaskExecution
 from task_registry import get_registry
-from task_scheduler import TaskResult, TaskStatus
+from task_scheduler import TaskResult
 from journal import log_entry
 
 logger = logging.getLogger(__name__)
@@ -59,15 +59,15 @@ class TaskEngine:
         self._create_notification_callback = create_callback
         self._update_notification_callback = update_callback
         self._delete_notification_callback = delete_callback
-        logger.info("Task engine notification callbacks configured")
+        logger.info("[TASK-ENGINE] Task engine notification callbacks configured")
 
     async def start(self) -> None:
         """Start the task execution engine."""
         if self._running:
-            logger.warning("Task engine already running")
+            logger.warning("[TASK-ENGINE] Task engine already running")
             return
 
-        logger.info("Starting task execution engine")
+        logger.info("[TASK-ENGINE] Starting task execution engine")
         self._running = True
 
         # Cleanup any stale "running" executions from previous runs
@@ -79,7 +79,7 @@ class TaskEngine:
 
         # Start the scheduler loop
         self._task = asyncio.create_task(self._scheduler_loop())
-        logger.info(f"Task engine started (check_interval={self.check_interval}s, max_concurrent={self.max_concurrent})")
+        logger.info("[TASK-ENGINE] Task engine started (check_interval=%ss, max_concurrent=%s)", self.check_interval, self.max_concurrent)
 
     def _cleanup_stale_executions(self) -> None:
         """Mark any 'running' task executions as 'terminated'.
@@ -101,16 +101,16 @@ class TaskEngine:
             session.close()
 
             if stale_count > 0:
-                logger.info(f"Cleaned up {stale_count} stale 'running' task execution(s) - marked as terminated")
+                logger.info("[TASK-ENGINE] Cleaned up %s stale 'running' task execution(s) - marked as terminated", stale_count)
         except Exception as e:
-            logger.error(f"Failed to cleanup stale executions: {e}")
+            logger.exception("[TASK-ENGINE] Failed to cleanup stale executions: %s", e)
 
     async def stop(self) -> None:
         """Stop the task execution engine."""
         if not self._running:
             return
 
-        logger.info("Stopping task execution engine")
+        logger.info("[TASK-ENGINE] Stopping task execution engine")
         self._running = False
 
         if self._task:
@@ -118,18 +118,18 @@ class TaskEngine:
             try:
                 await self._task
             except asyncio.CancelledError:
-                pass
+                logger.debug("[TASK-ENGINE] Task loop cancelled during shutdown")
             self._task = None
 
         # Wait for active tasks to complete (with timeout)
         if self._active_tasks:
-            logger.info(f"Waiting for {len(self._active_tasks)} active tasks to complete...")
+            logger.info("[TASK-ENGINE] Waiting for %s active tasks to complete...", len(self._active_tasks))
             timeout = 30  # 30 second timeout
             start = datetime.utcnow()
             while self._active_tasks and (datetime.utcnow() - start).total_seconds() < timeout:
                 await asyncio.sleep(1)
 
-        logger.info("Task engine stopped")
+        logger.info("[TASK-ENGINE] Task engine stopped")
 
     @property
     def is_running(self) -> bool:
@@ -173,7 +173,7 @@ class TaskEngine:
         """
         try:
             # Import here to avoid circular imports
-            from main import create_notification_internal
+            from services.notification_service import create_notification_internal
             from models import ScheduledTask
 
             # Check task-level notification and alert settings
@@ -190,24 +190,24 @@ class TaskEngine:
                         # Check if notifications should appear in NotificationCenter
                         if not scheduled_task.show_notifications:
                             should_show_notification = False
-                            logger.debug(f"[{task_id}] NotificationCenter notifications disabled for this task")
+                            logger.debug("[%s] NotificationCenter notifications disabled for this task", task_id)
                         # Check master toggle for external alerts
                         if not scheduled_task.send_alerts:
                             should_send_alert = False
-                            logger.debug(f"[{task_id}] External alerts disabled for this task (send_alerts=False)")
+                            logger.debug("[%s] External alerts disabled for this task (send_alerts=False)", task_id)
                         # Check type-specific toggle
                         elif notification_type == "success" and not scheduled_task.alert_on_success:
                             should_send_alert = False
-                            logger.debug(f"[{task_id}] Success alerts disabled for this task")
+                            logger.debug("[%s] Success alerts disabled for this task", task_id)
                         elif notification_type == "warning" and not scheduled_task.alert_on_warning:
                             should_send_alert = False
-                            logger.debug(f"[{task_id}] Warning alerts disabled for this task")
+                            logger.debug("[%s] Warning alerts disabled for this task", task_id)
                         elif notification_type == "error" and not scheduled_task.alert_on_error:
                             should_send_alert = False
-                            logger.debug(f"[{task_id}] Error alerts disabled for this task")
+                            logger.debug("[%s] Error alerts disabled for this task", task_id)
                         elif notification_type == "info" and not scheduled_task.alert_on_info:
                             should_send_alert = False
-                            logger.debug(f"[{task_id}] Info alerts disabled for this task")
+                            logger.debug("[%s] Info alerts disabled for this task", task_id)
 
                         # Get per-task channel settings
                         if should_send_alert:
@@ -219,11 +219,11 @@ class TaskEngine:
                 finally:
                     session.close()
             except Exception as e:
-                logger.warning(f"[{task_id}] Failed to check task alert settings, defaulting to send: {e}")
+                logger.warning("[%s] Failed to check task alert settings, defaulting to send: %s", task_id, e)
 
             # Skip notification entirely if show_notifications is disabled
             if not should_show_notification:
-                logger.debug(f"[{task_id}] Skipping notification (show_notifications=False)")
+                logger.debug("[%s] Skipping notification (show_notifications=False)", task_id)
                 return
 
             metadata = {
@@ -261,11 +261,11 @@ class TaskEngine:
             )
         except Exception as e:
             # Don't let notification failures affect task execution
-            logger.error(f"Failed to send task notification: {e}")
+            logger.exception("[TASK-ENGINE] Failed to send task notification: %s", e)
 
     async def _scheduler_loop(self) -> None:
         """Main scheduler loop - checks for due tasks and executes them."""
-        logger.info("Scheduler loop started")
+        logger.info("[TASK-ENGINE] Scheduler loop started")
 
         # Initial wait for system to stabilize
         try:
@@ -277,7 +277,7 @@ class TaskEngine:
             try:
                 await self._check_and_run_due_tasks()
             except Exception as e:
-                logger.exception(f"Error in scheduler loop: {e}")
+                logger.exception("[TASK-ENGINE] Error in scheduler loop: %s", e)
 
             # Wait for next check
             try:
@@ -285,7 +285,7 @@ class TaskEngine:
             except asyncio.CancelledError:
                 break
 
-        logger.info("Scheduler loop stopped")
+        logger.info("[TASK-ENGINE] Scheduler loop stopped")
 
     async def _check_and_run_due_tasks(self) -> None:
         """Check for tasks that are due and start them based on their schedules."""
@@ -317,7 +317,7 @@ class TaskEngine:
                 for task_id, triggered_schedules in tasks_to_run.items():
                     # Skip if at max concurrency
                     if len(self._active_tasks) >= self.max_concurrent:
-                        logger.debug(f"Max concurrent tasks reached ({self.max_concurrent}), skipping check")
+                        logger.debug("[TASK-ENGINE] Max concurrent tasks reached (%s), skipping check", self.max_concurrent)
                         break
 
                     # Skip if already running
@@ -336,14 +336,14 @@ class TaskEngine:
                         continue
 
                     # Found a due schedule - run the task
-                    logger.info(f"Task {task_id} is due (via schedule), scheduling execution")
+                    logger.info("[TASK-ENGINE] Task %s is due (via schedule), scheduling execution", task_id)
                     asyncio.create_task(self._execute_task_with_schedules(
                         task_id, triggered_schedules, triggered_by="scheduled"
                     ))
             finally:
                 session.close()
         except Exception as e:
-            logger.error(f"Error checking schedules from database: {e}")
+            logger.exception("[TASK-ENGINE] Error checking schedules from database: %s", e)
 
             # Fallback to legacy behavior (check instance._next_run)
             for task_id in registry.list_task_ids():
@@ -361,7 +361,7 @@ class TaskEngine:
                     continue
 
                 if instance._next_run and instance._next_run <= now:
-                    logger.info(f"Task {task_id} is due (legacy), scheduling execution")
+                    logger.info("[TASK-ENGINE] Task %s is due (legacy), scheduling execution", task_id)
                     asyncio.create_task(self._execute_task(task_id, triggered_by="scheduled"))
 
     async def _execute_task_with_schedules(
@@ -387,7 +387,7 @@ class TaskEngine:
             schedule_parameters = first_schedule.get_parameters()
             schedule_id = first_schedule.id
             if schedule_parameters:
-                logger.info(f"Task {task_id} using parameters from schedule {schedule_id}: {schedule_parameters}")
+                logger.info("[%s] Using parameters from schedule %s: %s", task_id, schedule_id, schedule_parameters)
 
         # Execute the task with parameters
         result = await self._execute_task(task_id, triggered_by, parameters=schedule_parameters, schedule_id=schedule_id)
@@ -416,7 +416,7 @@ class TaskEngine:
                                     day_of_month=db_schedule.day_of_month,
                                     last_run=result.completed_at,
                                 )
-                            logger.debug(f"Updated schedule {db_schedule.id} last_run_at={result.completed_at}, next_run_at={db_schedule.next_run_at}")
+                            logger.debug("[%s] Updated schedule %s last_run_at=%s, next_run_at=%s", task_id, db_schedule.id, result.completed_at, db_schedule.next_run_at)
 
                     # Update parent task's next_run_at (earliest of all enabled schedules)
                     all_schedules = session.query(TaskSchedule).filter(
@@ -438,7 +438,7 @@ class TaskEngine:
                 finally:
                     session.close()
             except Exception as e:
-                logger.error(f"Failed to update schedule next_run_at: {e}")
+                logger.exception("[%s] Failed to update schedule next_run_at: %s", task_id, e)
 
         return result
 
@@ -465,13 +465,13 @@ class TaskEngine:
         instance = registry.get_task_instance(task_id)
 
         if not instance:
-            logger.error(f"Task {task_id} not found")
+            logger.error("[%s] Task not found", task_id)
             return None
 
         # Check if already running
         async with self._lock:
             if task_id in self._active_tasks:
-                logger.warning(f"Task {task_id} is already running")
+                logger.warning("[%s] Task is already running", task_id)
                 return TaskResult(
                     success=False,
                     message="Task is already running",
@@ -494,7 +494,7 @@ class TaskEngine:
             execution_id = execution.id
             session.close()
         except Exception as e:
-            logger.error(f"Failed to create execution record: {e}")
+            logger.exception("[%s] Failed to create execution record: %s", task_id, e)
             execution_id = None
 
         try:
@@ -502,11 +502,11 @@ class TaskEngine:
             if parameters and hasattr(instance, 'update_config'):
                 try:
                     instance.update_config(parameters)
-                    logger.info(f"[{task_id}] Applied schedule parameters: {parameters}")
+                    logger.info("[%s] Applied schedule parameters: %s", task_id, parameters)
                 except Exception as e:
-                    logger.warning(f"[{task_id}] Failed to apply parameters: {e}")
+                    logger.warning("[%s] Failed to apply parameters: %s", task_id, e)
 
-            logger.info(f"[{task_id}] Starting task execution (triggered_by={triggered_by})")
+            logger.info("[%s] Starting task execution (triggered_by=%s)", task_id, triggered_by)
 
             # Get notification settings from database
             show_notifications = True  # Default to true
@@ -524,7 +524,7 @@ class TaskEngine:
                 finally:
                     session.close()
             except Exception as e:
-                logger.warning(f"[{task_id}] Failed to get notification settings: {e}")
+                logger.warning("[%s] Failed to get notification settings: %s", task_id, e)
 
             # Set notification callbacks on the task instance
             if self._create_notification_callback:
@@ -577,7 +577,7 @@ class TaskEngine:
                         session.commit()
                     session.close()
                 except Exception as e:
-                    logger.error(f"Failed to update execution record: {e}")
+                    logger.exception("[%s] Failed to update execution record: %s", task_id, e)
 
             # Update registry
             registry.sync_to_database(task_id)
@@ -696,7 +696,7 @@ class TaskEngine:
             return result
 
         except Exception as e:
-            logger.exception(f"[{task_id}] Task execution failed: {e}")
+            logger.exception("[%s] Task execution failed: %s", task_id, e)
 
             # Determine alert category for granular filtering
             alert_category = "probe_failures" if task_id == "stream_probe" else None
@@ -740,7 +740,7 @@ class TaskEngine:
                         session.commit()
                     session.close()
                 except Exception as db_err:
-                    logger.error(f"Failed to update execution record: {db_err}")
+                    logger.exception("[%s] Failed to update execution record: %s", task_id, db_err)
 
             return TaskResult(
                 success=False,
@@ -779,11 +779,11 @@ class TaskEngine:
                     ).first()
                     if schedule:
                         parameters = schedule.get_parameters()
-                        logger.info(f"Manual run of {task_id} using schedule {schedule_id} parameters: {parameters}")
+                        logger.info("[%s] Manual run using schedule %s parameters: %s", task_id, schedule_id, parameters)
                 finally:
                     session.close()
             except Exception as e:
-                logger.error(f"Failed to load schedule parameters: {e}")
+                logger.exception("[%s] Failed to load schedule parameters: %s", task_id, e)
 
         return await self._execute_task(task_id, triggered_by="manual", parameters=parameters, schedule_id=schedule_id)
 
@@ -850,7 +850,7 @@ class TaskEngine:
             finally:
                 session.close()
         except Exception as e:
-            logger.error(f"Failed to get task history: {e}")
+            logger.exception("[TASK-ENGINE] Failed to get task history: %s", e)
             return []
 
     def purge_old_history(self, days: int = 30) -> int:
@@ -873,12 +873,12 @@ class TaskEngine:
                     TaskExecution.started_at < cutoff
                 ).delete()
                 session.commit()
-                logger.info(f"Purged {result} task execution records older than {days} days")
+                logger.info("[TASK-ENGINE] Purged %s task execution records older than %s days", result, days)
                 return result
             finally:
                 session.close()
         except Exception as e:
-            logger.error(f"Failed to purge history: {e}")
+            logger.exception("[TASK-ENGINE] Failed to purge history: %s", e)
             return 0
 
 

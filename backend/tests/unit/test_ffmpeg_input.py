@@ -4,14 +4,12 @@ Unit tests for the FFMPEG Builder input module.
 Tests input source parsing, validation, and command flag generation.
 These are TDD tests -- they will FAIL until the backend modules are implemented.
 """
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from ffmpeg_builder.input import (
     validate_input_source,
     generate_input_flags,
     generate_hwaccel_flags,
-    InputSource,
 )
 
 from tests.fixtures.ffmpeg_factories import (

@@ -57,14 +57,14 @@ def extract_m3u_account_id(m3u_account):
     Returns:
         The M3U account ID (int) or None
     """
-    logger.debug(f"[M3U-EXTRACT] Raw m3u_account value: {m3u_account!r} (type: {type(m3u_account).__name__})")
+    logger.debug("[STREAM-PROBE-M3U] Raw m3u_account value: %r (type: %s)", m3u_account, type(m3u_account).__name__)
     if m3u_account is None:
         return None
     if isinstance(m3u_account, dict):
         extracted_id = m3u_account.get("id")
-        logger.debug(f"[M3U-EXTRACT] Extracted ID from dict: {extracted_id}")
+        logger.debug("[STREAM-PROBE-M3U] Extracted ID from dict: %s", extracted_id)
         return extracted_id
-    logger.debug(f"[M3U-EXTRACT] Returning direct value: {m3u_account}")
+    logger.debug("[STREAM-PROBE-M3U] Returning direct value: %s", m3u_account)
     return m3u_account
 
 
@@ -106,20 +106,24 @@ def smart_sort_streams(
         if stream_sort_enabled.get(criterion, False)
     ]
 
-    logger.info(f"[SMART-SORT] Channel '{channel_name}': Sorting {len(stream_ids)} streams")
-    logger.info(f"[SMART-SORT] Sort config: priority={stream_sort_priority}, enabled={stream_sort_enabled}")
-    logger.info(f"[SMART-SORT] Active criteria (in order): {active_criteria}")
-    logger.info(f"[SMART-SORT] Deprioritize failed streams: {deprioritize_failed_streams}")
+    safe_name = str(channel_name).replace('\n', '').replace('\r', '')
+    logger.info("[STREAM-PROBE-SORT] Channel '%s': Sorting %s streams", safe_name, len(stream_ids))
+    logger.info("[STREAM-PROBE-SORT] Sort config: priority=%s, enabled=%s", stream_sort_priority, stream_sort_enabled)
+    logger.info("[STREAM-PROBE-SORT] Active criteria (in order): %s", active_criteria)
+    logger.info("[STREAM-PROBE-SORT] Deprioritize failed streams: %s", deprioritize_failed_streams)
 
     # Log each stream's stats before sorting
     for stream_id in stream_ids:
         stat = stats_map.get(stream_id)
         if stat:
-            logger.debug(f"[SMART-SORT]   Stream {stream_id} ({stat.stream_name}): "
-                        f"status={stat.probe_status}, res={stat.resolution}, "
-                        f"bitrate={stat.bitrate}, fps={stat.fps}")
+            logger.debug("[STREAM-PROBE-SORT]   Stream %s (%s): "
+                        "status=%s, res=%s, "
+                        "bitrate=%s, fps=%s",
+                        stream_id, stat.stream_name,
+                        stat.probe_status, stat.resolution,
+                        stat.bitrate, stat.fps)
         else:
-            logger.debug(f"[SMART-SORT]   Stream {stream_id}: NO STATS AVAILABLE")
+            logger.debug("[STREAM-PROBE-SORT]   Stream %s: NO STATS AVAILABLE", stream_id)
 
     def get_sort_value(stream_id: int) -> tuple:
         stat = stats_map.get(stream_id)
@@ -128,12 +132,12 @@ def smart_sort_streams(
         # Deprioritize failed streams if enabled
         if deprioritize_failed_streams:
             if not stat or stat.probe_status in ('failed', 'timeout', 'pending'):
-                logger.debug(f"[SMART-SORT]   {stream_name}: DEPRIORITIZED (status={stat.probe_status if stat else 'no_stats'})")
+                logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (status=%s)", stream_name, stat.probe_status if stat else 'no_stats')
                 # Return tuple with 1 as first element to sort to bottom
                 return (1,) + tuple(0 for _ in active_criteria)
 
         if not stat or stat.probe_status != 'success':
-            logger.debug(f"[SMART-SORT]   {stream_name}: No successful probe data")
+            logger.debug("[STREAM-PROBE-SORT]   %s: No successful probe data", stream_name)
             # Still compute M3U priority for unprobed streams (M3U priority doesn't require probing)
             sort_values = [0]
             for criterion in active_criteria:
@@ -159,8 +163,8 @@ def smart_sort_streams(
                         parts = stat.resolution.split('x')
                         if len(parts) == 2:
                             resolution_value = int(parts[1])  # Use height only
-                    except:
-                        pass
+                    except (ValueError, IndexError) as e:
+                        logger.debug("[STREAM-PROBE] Suppressed resolution parse error: %s", e)
                 # Negate for descending sort (higher values first)
                 sort_values.append(-resolution_value)
 
@@ -175,8 +179,8 @@ def smart_sort_streams(
                 if stat.fps:
                     try:
                         framerate_value = float(stat.fps)
-                    except:
-                        pass
+                    except (ValueError, TypeError) as e:
+                        logger.debug("[STREAM-PROBE] Suppressed fps parse error: %s", e)
                 sort_values.append(-framerate_value)
 
             elif criterion == "m3u_priority":
@@ -196,21 +200,23 @@ def smart_sort_streams(
                 sort_values.append(-audio_channels_value)
 
         m3u_account_id = stream_m3u_map.get(stream_id)
-        logger.debug(f"[SMART-SORT]   {stream_name}: sort_tuple={tuple(sort_values)} "
-                    f"(res={stat.resolution}, br={stat.bitrate}, fps={stat.fps}, m3u={m3u_account_id}, audio_ch={stat.audio_channels})")
+        logger.debug("[STREAM-PROBE-SORT]   %s: sort_tuple=%s "
+                    "(res=%s, br=%s, fps=%s, m3u=%s, audio_ch=%s)",
+                    stream_name, tuple(sort_values),
+                    stat.resolution, stat.bitrate, stat.fps, m3u_account_id, stat.audio_channels)
         return tuple(sort_values)
 
     # Sort stream IDs by their stats
     sorted_ids = sorted(stream_ids, key=get_sort_value)
 
     # Log the final sorted order
-    logger.info(f"[SMART-SORT] Channel '{channel_name}' sorted order:")
+    logger.info("[STREAM-PROBE-SORT] Channel '%s' sorted order:", channel_name)
     for idx, stream_id in enumerate(sorted_ids):
         stat = stats_map.get(stream_id)
         stream_name = stat.stream_name if stat else f"Stream {stream_id}"
         status = stat.probe_status if stat else "no_stats"
         res = stat.resolution if stat else "?"
-        logger.info(f"[SMART-SORT]   #{idx+1}: {stream_name} (id={stream_id}, status={status}, res={res})")
+        logger.info("[STREAM-PROBE-SORT]   #%s: %s (id=%s, status=%s, res=%s)", idx+1, stream_name, stream_id, status, res)
 
     return sorted_ids
 
@@ -257,7 +263,7 @@ class StreamProber:
         self.probe_retry_delay = max(1, min(30, probe_retry_delay))  # Clamp 1-30
         self.deprioritize_failed_streams = deprioritize_failed_streams
         self.stream_fetch_page_limit = stream_fetch_page_limit
-        logger.info(f"[PROBER-INIT] auto_reorder_after_probe={auto_reorder_after_probe}")
+        logger.info("[STREAM-PROBE] auto_reorder_after_probe=%s", auto_reorder_after_probe)
         # Smart Sort configuration
         self.stream_sort_priority = stream_sort_priority or ["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"]
         self.stream_sort_enabled = stream_sort_enabled or {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}
@@ -308,11 +314,11 @@ class StreamProber:
             if PROBE_HISTORY_FILE.exists():
                 with open(PROBE_HISTORY_FILE, 'r') as f:
                     self._probe_history = json.load(f)
-                logger.info(f"Loaded {len(self._probe_history)} probe history entries from {PROBE_HISTORY_FILE}")
+                logger.info("[STREAM-PROBE] Loaded %s probe history entries from %s", len(self._probe_history), PROBE_HISTORY_FILE)
             else:
-                logger.info(f"No probe history file found at {PROBE_HISTORY_FILE}, starting fresh")
+                logger.info("[STREAM-PROBE] No probe history file found at %s, starting fresh", PROBE_HISTORY_FILE)
         except Exception as e:
-            logger.error(f"Failed to load probe history from {PROBE_HISTORY_FILE}: {e}")
+            logger.error("[STREAM-PROBE] Failed to load probe history from %s: %s", PROBE_HISTORY_FILE, e)
             self._probe_history = []
 
     def update_probing_settings(self, parallel_probing_enabled: bool, max_concurrent_probes: int,
@@ -333,9 +339,12 @@ class StreamProber:
         self.parallel_probing_enabled = parallel_probing_enabled
         self.max_concurrent_probes = max(1, min(16, max_concurrent_probes))
         self.profile_distribution_strategy = profile_distribution_strategy
-        logger.info(f"Updated probing settings: parallel_probing_enabled={old_parallel}->{self.parallel_probing_enabled}, "
-                    f"max_concurrent_probes={old_concurrent}->{self.max_concurrent_probes}, "
-                    f"profile_distribution_strategy={old_strategy}->{self.profile_distribution_strategy}")
+        logger.info("[STREAM-PROBE] Updated probing settings: parallel_probing_enabled=%s->%s, "
+                    "max_concurrent_probes=%s->%s, "
+                    "profile_distribution_strategy=%s->%s",
+                    old_parallel, self.parallel_probing_enabled,
+                    old_concurrent, self.max_concurrent_probes,
+                    old_strategy, self.profile_distribution_strategy)
 
     def update_sort_settings(
         self,
@@ -359,9 +368,12 @@ class StreamProber:
         self.stream_sort_priority = stream_sort_priority
         self.stream_sort_enabled = stream_sort_enabled
         self.m3u_account_priorities = m3u_account_priorities
-        logger.info(f"Updated sort settings: priority={old_priority}->{self.stream_sort_priority}, "
-                    f"enabled={old_enabled}->{self.stream_sort_enabled}, "
-                    f"m3u_priorities={old_m3u_priorities}->{self.m3u_account_priorities}")
+        logger.info("[STREAM-PROBE] Updated sort settings: priority=%s->%s, "
+                    "enabled=%s->%s, "
+                    "m3u_priorities=%s->%s",
+                    old_priority, self.stream_sort_priority,
+                    old_enabled, self.stream_sort_enabled,
+                    old_m3u_priorities, self.m3u_account_priorities)
 
     def set_notification_callbacks(self, create_callback, update_callback, delete_by_source_callback=None):
         """Set notification callback functions for probe progress updates.
@@ -374,7 +386,7 @@ class StreamProber:
         self._notification_create_callback = create_callback
         self._notification_update_callback = update_callback
         self._notification_delete_by_source_callback = delete_by_source_callback
-        logger.info("Notification callbacks configured for stream prober")
+        logger.info("[STREAM-PROBE] Notification callbacks configured for stream prober")
 
     async def _create_probe_notification(self, total_streams: int) -> Optional[int]:
         """Create a notification for probe progress.
@@ -392,7 +404,7 @@ class StreamProber:
             if self._notification_delete_by_source_callback:
                 deleted = await self._notification_delete_by_source_callback("stream_probe")
                 if deleted > 0:
-                    logger.info(f"Cleaned up {deleted} existing probe notification(s)")
+                    logger.info("[STREAM-PROBE] Cleaned up %s existing probe notification(s)", deleted)
 
             metadata = {
                 "progress": {
@@ -416,10 +428,10 @@ class StreamProber:
             if result and "id" in result:
                 self._probe_notification_id = result["id"]
                 self._last_notification_update = time.time()
-                logger.debug(f"Created probe notification: {self._probe_notification_id}")
+                logger.debug("[STREAM-PROBE] Created probe notification: %s", self._probe_notification_id)
                 return result["id"]
         except Exception as e:
-            logger.error(f"Failed to create probe notification: {e}")
+            logger.error("[STREAM-PROBE] Failed to create probe notification: %s", e)
         return None
 
     async def _update_probe_notification(self, force: bool = False) -> None:
@@ -460,9 +472,9 @@ class StreamProber:
                 metadata=metadata
             )
             self._last_notification_update = current_time
-            logger.debug(f"Updated probe notification: {self._probe_progress_current}/{self._probe_progress_total}")
+            logger.debug("[STREAM-PROBE] Updated probe notification: %s/%s", self._probe_progress_current, self._probe_progress_total)
         except Exception as e:
-            logger.error(f"Failed to update probe notification: {e}")
+            logger.error("[STREAM-PROBE] Failed to update probe notification: %s", e)
 
     async def _finalize_probe_notification(self) -> None:
         """Update the notification with final probe results, or delete if cancelled."""
@@ -473,7 +485,7 @@ class StreamProber:
             # If cancelled, delete the notification instead of updating it
             if self._probe_cancelled and self._notification_delete_by_source_callback:
                 await self._notification_delete_by_source_callback("stream_probe")
-                logger.info("Deleted probe notification (probe was cancelled)")
+                logger.info("[STREAM-PROBE] Deleted probe notification (probe was cancelled)")
                 return
 
             if not self._notification_update_callback:
@@ -514,9 +526,9 @@ class StreamProber:
                 message=message,
                 metadata=metadata
             )
-            logger.info(f"Finalized probe notification: {message}")
+            logger.info("[STREAM-PROBE] Finalized probe notification: %s", message)
         except Exception as e:
-            logger.error(f"Failed to finalize probe notification: {e}")
+            logger.error("[STREAM-PROBE] Failed to finalize probe notification: %s", e)
         finally:
             self._probe_notification_id = None
 
@@ -528,9 +540,9 @@ class StreamProber:
 
             with open(PROBE_HISTORY_FILE, 'w') as f:
                 json.dump(self._probe_history, f, indent=2)
-            logger.debug(f"Persisted {len(self._probe_history)} probe history entries to {PROBE_HISTORY_FILE}")
+            logger.debug("[STREAM-PROBE] Persisted %s probe history entries to %s", len(self._probe_history), PROBE_HISTORY_FILE)
         except Exception as e:
-            logger.error(f"Failed to persist probe history to {PROBE_HISTORY_FILE}: {e}")
+            logger.error("[STREAM-PROBE] Failed to persist probe history to %s: %s", PROBE_HISTORY_FILE, e)
 
     def _init_account_ramp(self, account_id: int):
         """Initialize ramp-up state for an account if not already present."""
@@ -581,7 +593,7 @@ class StreamProber:
         if state["consecutive_successes"] >= RAMP_SUCCESS_WINDOW:
             state["current_limit"] += RAMP_INCREMENT
             state["consecutive_successes"] = 0
-            logger.info(f"[RAMP-UP] Account {account_id}: ramped to {state['current_limit']} concurrent probes")
+            logger.info("[STREAM-PROBE] Account %s: ramped to %s concurrent probes", account_id, state['current_limit'])
 
     def _is_overload_error(self, error_message: str) -> bool:
         """Check if an error indicates server overload (should trigger ramp-down).
@@ -611,12 +623,15 @@ class StreamProber:
             old_limit = state["current_limit"]
             state["current_limit"] = max(1, old_limit - RAMP_FAILURE_REDUCTION)
             state["hold_until"] = time.time() + RAMP_FAILURE_HOLD_SECONDS
-            logger.warning(f"[RAMP-DOWN] Account {account_id}: overload detected, "
-                           f"limit {old_limit}->{state['current_limit']}, "
-                           f"hold {RAMP_FAILURE_HOLD_SECONDS}s — {error_message[:100]}")
+            logger.warning("[STREAM-PROBE] Account %s: overload detected, "
+                           "limit %s->%s, "
+                           "hold %ss — %s",
+                           account_id, old_limit, state['current_limit'],
+                           RAMP_FAILURE_HOLD_SECONDS, error_message[:100])
         else:
-            logger.debug(f"[RAMP-NODOWN] Account {account_id}: non-overload failure, "
-                         f"no ramp-down — {error_message[:100]}")
+            logger.debug("[STREAM-PROBE] Account %s: non-overload failure, "
+                         "no ramp-down — %s",
+                         account_id, error_message[:100])
 
     async def start(self):
         """Initialize the stream prober (check ffprobe availability).
@@ -624,26 +639,27 @@ class StreamProber:
         Note: Scheduled probing is now handled by the task engine (StreamProbeTask).
         This method only validates that ffprobe is available for on-demand probing.
         """
-        logger.info("StreamProber.start() called")
+        logger.info("[STREAM-PROBE] StreamProber.start() called")
 
         # Check ffprobe availability
         ffprobe_available = check_ffprobe_available()
-        logger.info(f"ffprobe availability check: {ffprobe_available}")
+        logger.info("[STREAM-PROBE] ffprobe availability check: %s", ffprobe_available)
 
         if not ffprobe_available:
-            logger.error("ffprobe not found - stream probing will not be available")
-            logger.warning("Install ffprobe (part of ffmpeg) to enable stream probing")
+            logger.error("[STREAM-PROBE] ffprobe not found - stream probing will not be available")
+            logger.warning("[STREAM-PROBE] Install ffprobe (part of ffmpeg) to enable stream probing")
             return
 
         logger.info(
-            f"StreamProber initialized (batch: {self.probe_batch_size}, timeout: {self.probe_timeout}s)"
+            "[STREAM-PROBE] StreamProber initialized (batch: %s, timeout: %ss)",
+            self.probe_batch_size, self.probe_timeout
         )
 
     async def stop(self):
         """Stop the stream prober and cancel any in-progress probes."""
-        logger.info("StreamProber stopping...")
+        logger.info("[STREAM-PROBE] StreamProber stopping...")
         self._probe_cancelled = True
-        logger.info("StreamProber stopped")
+        logger.info("[STREAM-PROBE] StreamProber stopped")
 
     def cancel_probe(self) -> dict:
         """Cancel an in-progress probe operation.
@@ -654,7 +670,7 @@ class StreamProber:
         if not self._probing_in_progress:
             return {"status": "no_probe_running", "message": "No probe is currently running"}
 
-        logger.info("Cancelling in-progress probe...")
+        logger.info("[STREAM-PROBE] Cancelling in-progress probe...")
         self._probe_cancelled = True
         # The probe loop will detect _probe_cancelled=True and set status to "cancelled"
         return {"status": "cancelling", "message": "Probe cancellation requested"}
@@ -671,7 +687,7 @@ class StreamProber:
         if self._probe_paused:
             return {"status": "already_paused", "message": "Probe is already paused"}
 
-        logger.info("Pausing in-progress probe...")
+        logger.info("[STREAM-PROBE] Pausing in-progress probe...")
         self._probe_paused = True
         return {"status": "paused", "message": "Probe paused"}
 
@@ -687,7 +703,7 @@ class StreamProber:
         if not self._probe_paused:
             return {"status": "not_paused", "message": "Probe is not paused"}
 
-        logger.info("Resuming paused probe...")
+        logger.info("[STREAM-PROBE] Resuming paused probe...")
         self._probe_paused = False
         return {"status": "resumed", "message": "Probe resumed"}
 
@@ -698,7 +714,7 @@ class StreamProber:
             Dict with status of the reset.
         """
         was_in_progress = self._probing_in_progress
-        logger.warning(f"Force resetting probe state (was_in_progress={was_in_progress})")
+        logger.warning("[STREAM-PROBE] Force resetting probe state (was_in_progress=%s)", was_in_progress)
 
         self._probing_in_progress = False
         self._probe_cancelled = True  # Signal any running probe to stop
@@ -718,21 +734,21 @@ class StreamProber:
         Probe a single stream using ffprobe.
         Returns the probe result dict.
         """
-        logger.debug(f"probe_stream() called for stream_id={stream_id}, name={name}, url={'present' if url else 'missing'}")
+        logger.debug("[STREAM-PROBE] probe_stream() called for stream_id=%s, name=%s, url=%s", stream_id, name, 'present' if url else 'missing')
 
         if not url:
-            logger.warning(f"Stream {stream_id} has no URL, marking as failed")
+            logger.warning("[STREAM-PROBE] Stream %s has no URL, marking as failed", stream_id)
             return self._save_probe_result(
                 stream_id, name, None, "failed", "No URL available"
             )
 
         try:
-            logger.debug(f"Running ffprobe for stream {stream_id}")
+            logger.debug("[STREAM-PROBE] Running ffprobe for stream %s", stream_id)
             result = await self._run_ffprobe(url)
-            logger.info(f"Stream {stream_id} ffprobe succeeded")
+            logger.info("[STREAM-PROBE] Stream %s ffprobe succeeded", stream_id)
 
             # Measure actual bitrate by downloading stream data
-            logger.debug(f"Measuring bitrate for stream {stream_id}")
+            logger.debug("[STREAM-PROBE] Measuring bitrate for stream %s", stream_id)
             measured_bitrate = await self._measure_stream_bitrate(url)
 
             # Save probe result with both ffprobe metadata and measured bitrate
@@ -740,7 +756,7 @@ class StreamProber:
                 stream_id, name, result, "success", None, measured_bitrate
             )
         except asyncio.TimeoutError:
-            logger.warning(f"Stream {stream_id} probe timed out after {self.probe_timeout}s")
+            logger.warning("[STREAM-PROBE] Stream %s probe timed out after %ss", stream_id, self.probe_timeout)
             return self._save_probe_result(
                 stream_id,
                 name,
@@ -753,7 +769,7 @@ class StreamProber:
             # Truncate very long error messages
             if len(error_msg) > 500:
                 error_msg = error_msg[:500] + "..."
-            logger.error(f"Stream {stream_id} probe failed: {error_msg}")
+            logger.error("[STREAM-PROBE] Stream %s probe failed: %s", stream_id, error_msg)
             return self._save_probe_result(stream_id, name, None, "failed", error_msg)
 
     async def _run_ffprobe(self, url: str, _retry_attempt: int = 0) -> dict:
@@ -797,7 +813,7 @@ class StreamProber:
             # waste semaphore time.
             transient_patterns = ("5XX", "500", "502", "503", "520", "Input/output error", "Stream ends prematurely", "Connection reset", "Broken pipe")
             if any(p in error_text for p in transient_patterns) and "404" not in error_text and _retry_attempt < self.probe_retry_count:
-                logger.info(f"[PROBE-RETRY] Transient error — retry {_retry_attempt + 1}/{self.probe_retry_count} in {self.probe_retry_delay}s: {url[:80]}...")
+                logger.info("[STREAM-PROBE] Transient error — retry %s/%s in %ss: %s...", _retry_attempt + 1, self.probe_retry_count, self.probe_retry_delay, url[:80])
                 await asyncio.sleep(self.probe_retry_delay)
                 return await self._run_ffprobe(url, _retry_attempt=_retry_attempt + 1)
 
@@ -817,7 +833,7 @@ class StreamProber:
         Returns bitrate in bits per second, or None if measurement fails.
         """
         try:
-            logger.debug(f"Starting bitrate measurement for {self.bitrate_sample_duration}s...")
+            logger.debug("[STREAM-PROBE] Starting bitrate measurement for %ss...", self.bitrate_sample_duration)
 
             bytes_downloaded = 0
             start_time = time.time()
@@ -849,20 +865,20 @@ class StreamProber:
             # Calculate bitrate (bits per second)
             if elapsed > 0:
                 bitrate_bps = int((bytes_downloaded * 8) / elapsed)
-                logger.info(f"Measured bitrate: {bytes_downloaded:,} bytes in {elapsed:.2f}s = {bitrate_bps:,} bps ({bitrate_bps/1000000:.2f} Mbps)")
+                logger.info("[STREAM-PROBE] Measured bitrate: %, bytes in %.2fs = %, bps (%.2f Mbps)", bytes_downloaded, elapsed, bitrate_bps, bitrate_bps/1000000)
                 return bitrate_bps
             else:
-                logger.warning("Bitrate measurement: elapsed time is zero")
+                logger.warning("[STREAM-PROBE] Bitrate measurement: elapsed time is zero")
                 return None
 
         except httpx.HTTPStatusError as e:
-            logger.warning(f"HTTP error during bitrate measurement: {e.response.status_code}")
+            logger.warning("[STREAM-PROBE] HTTP error during bitrate measurement: %s", e.response.status_code)
             return None
         except httpx.TimeoutException:
-            logger.warning(f"Timeout during bitrate measurement")
+            logger.warning("[STREAM-PROBE] Timeout during bitrate measurement")
             return None
         except Exception as e:
-            logger.warning(f"Failed to measure bitrate: {e}")
+            logger.warning("[STREAM-PROBE] Failed to measure bitrate: %s", e)
             return None
 
     def _save_probe_result(
@@ -903,14 +919,14 @@ class StreamProber:
             # Apply measured bitrate if available (overrides ffprobe metadata)
             if measured_bitrate is not None:
                 stats.video_bitrate = measured_bitrate
-                logger.debug(f"Applied measured bitrate: {measured_bitrate} bps")
+                logger.debug("[STREAM-PROBE] Applied measured bitrate: %s bps", measured_bitrate)
 
             session.commit()
             result = stats.to_dict()
-            logger.debug(f"Saved probe result for stream {stream_id}: {status}")
+            logger.debug("[STREAM-PROBE] Saved probe result for stream %s: %s", stream_id, status)
             return result
         except Exception as e:
-            logger.error(f"Failed to save probe result: {e}")
+            logger.error("[STREAM-PROBE] Failed to save probe result: %s", e)
             session.rollback()
             raise
         finally:
@@ -927,10 +943,14 @@ class StreamProber:
         )
         if video_stream:
             # Debug: Log available bitrate fields
-            logger.debug(f"Video stream bitrate fields - bit_rate: {video_stream.get('bit_rate')}, "
-                        f"tags.BPS: {video_stream.get('tags', {}).get('BPS')}, "
-                        f"tags.DURATION: {video_stream.get('tags', {}).get('DURATION')}, "
-                        f"format.bit_rate: {format_info.get('bit_rate')}")
+            logger.debug("[STREAM-PROBE] Video stream bitrate fields - bit_rate: %s, "
+                        "tags.BPS: %s, "
+                        "tags.DURATION: %s, "
+                        "format.bit_rate: %s",
+                        video_stream.get('bit_rate'),
+                        video_stream.get('tags', {}).get('BPS'),
+                        video_stream.get('tags', {}).get('DURATION'),
+                        format_info.get('bit_rate'))
             width = video_stream.get("width")
             height = video_stream.get("height")
             if width and height:
@@ -955,9 +975,9 @@ class StreamProber:
             if video_bit_rate:
                 try:
                     stats.video_bitrate = int(video_bit_rate)
-                    logger.debug(f"Extracted video bitrate: {stats.video_bitrate} bps")
+                    logger.debug("[STREAM-PROBE] Extracted video bitrate: %s bps", stats.video_bitrate)
                 except (ValueError, TypeError):
-                    logger.warning(f"Failed to parse video bitrate: {video_bit_rate}")
+                    logger.warning("[STREAM-PROBE] Failed to parse video bitrate: %s", video_bit_rate)
 
         # Find audio stream
         audio_stream = next(
@@ -976,8 +996,8 @@ class StreamProber:
         if bit_rate:
             try:
                 stats.bitrate = int(bit_rate)
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as e:
+                logger.debug("[STREAM-PROBE] Suppressed bitrate parse error: %s", e)
 
     def _parse_fps(self, video_stream: dict) -> Optional[float]:
         """Parse FPS from various ffprobe fields."""
@@ -988,8 +1008,8 @@ class StreamProber:
                 num, den = r_frame_rate.split("/")
                 if float(den) > 0:
                     return round(float(num) / float(den), 2)
-            except (ValueError, ZeroDivisionError):
-                pass
+            except (ValueError, ZeroDivisionError) as e:
+                logger.debug("[STREAM-PROBE] Suppressed r_frame_rate parse error: %s", e)
 
         # Try avg_frame_rate
         avg_frame_rate = video_stream.get("avg_frame_rate")
@@ -998,8 +1018,8 @@ class StreamProber:
                 num, den = avg_frame_rate.split("/")
                 if float(den) > 0:
                     return round(float(num) / float(den), 2)
-            except (ValueError, ZeroDivisionError):
-                pass
+            except (ValueError, ZeroDivisionError) as e:
+                logger.debug("[STREAM-PROBE] Suppressed avg_frame_rate parse error: %s", e)
 
         return None
 
@@ -1038,12 +1058,13 @@ class StreamProber:
                 page += 1
                 if page > page_limit:
                     logger.warning(
-                        f"[PROBE-MATCH] Pagination limit reached ({page_limit} pages, {len(all_streams)} streams). "
-                        f"Some streams may be missing. Increase 'Stream Fetch Page Limit' in settings if needed."
+                        "[STREAM-PROBE] Pagination limit reached (%s pages, %s streams). "
+                        "Some streams may be missing. Increase 'Stream Fetch Page Limit' in settings if needed.",
+                        page_limit, len(all_streams)
                     )
                     break
             except Exception as e:
-                logger.error(f"Failed to fetch streams page {page}: {e}")
+                logger.error("[STREAM-PROBE] Failed to fetch streams page %s: %s", page, e)
                 break
         return all_streams
 
@@ -1057,7 +1078,7 @@ class StreamProber:
             channel_groups_override: Optional list of channel group names to filter by.
                                     If None or empty, probes all groups.
         """
-        logger.debug(f"[PROBE-FILTER] _fetch_channel_stream_ids called with override={channel_groups_override}")
+        logger.debug("[STREAM-PROBE] _fetch_channel_stream_ids called with override=%s", channel_groups_override)
 
         channel_stream_ids = set()
         stream_to_channels = {}  # stream_id -> list of channel names
@@ -1065,7 +1086,7 @@ class StreamProber:
 
         # Determine which groups to filter by
         groups_to_filter = channel_groups_override or []
-        logger.debug(f"[PROBE-FILTER] groups_to_filter={groups_to_filter}")
+        logger.debug("[STREAM-PROBE] groups_to_filter=%s", groups_to_filter)
 
         # If specific groups are selected, fetch all groups first to filter
         selected_group_ids = set()
@@ -1073,8 +1094,8 @@ class StreamProber:
             try:
                 all_groups = await self.client.get_channel_groups()
                 available_group_names = [g.get("name") for g in all_groups]
-                logger.debug(f"[PROBE-FILTER] Requested groups: {groups_to_filter}")
-                logger.debug(f"[PROBE-FILTER] Available groups: {available_group_names}")
+                logger.debug("[STREAM-PROBE] Requested groups: %s", groups_to_filter)
+                logger.debug("[STREAM-PROBE] Available groups: %s", available_group_names)
 
                 matched_groups = []
                 unmatched_groups = []
@@ -1088,12 +1109,12 @@ class StreamProber:
                     if requested not in [g.get("name") for g in all_groups]:
                         unmatched_groups.append(requested)
 
-                logger.debug(f"[PROBE-FILTER] Matched groups: {matched_groups}")
+                logger.debug("[STREAM-PROBE] Matched groups: %s", matched_groups)
                 if unmatched_groups:
-                    logger.warning(f"[PROBE-FILTER] Requested groups NOT FOUND: {unmatched_groups}")
-                logger.debug(f"[PROBE-FILTER] Filtering to {len(selected_group_ids)} groups")
+                    logger.warning("[STREAM-PROBE] Requested groups NOT FOUND: %s", unmatched_groups)
+                logger.debug("[STREAM-PROBE] Filtering to %s groups", len(selected_group_ids))
             except Exception as e:
-                logger.error(f"Failed to fetch channel groups for filtering: {e}")
+                logger.error("[STREAM-PROBE] Failed to fetch channel groups for filtering: %s", e)
                 # Continue without filtering if we can't fetch groups
 
         page = 1
@@ -1125,12 +1146,12 @@ class StreamProber:
 
                     if not stream_ids:
                         channels_with_no_streams += 1
-                        logger.debug(f"[PROBE-FILTER] Channel '{channel_name}' has no streams, skipping")
+                        logger.debug("[STREAM-PROBE] Channel '%s' has no streams, skipping", channel_name)
                         continue
 
                     channels_included += 1
                     channel_stream_ids.update(stream_ids)
-                    logger.debug(f"[PROBE-FILTER] Including channel '{channel_name}' with {len(stream_ids)} stream(s)")
+                    logger.debug("[STREAM-PROBE] Including channel '%s' with %s stream(s)", channel_name, len(stream_ids))
 
                     # Map each stream to its channel names and track lowest channel number
                     for stream_id in stream_ids:
@@ -1146,25 +1167,25 @@ class StreamProber:
                 if page > 50:  # Safety limit
                     break
             except Exception as e:
-                logger.error(f"Failed to fetch channels page {page}: {e}")
+                logger.error("[STREAM-PROBE] Failed to fetch channels page %s: %s", page, e)
                 break
 
         # Log summary of channel filtering
-        logger.debug(f"[PROBE-FILTER] Channel filtering summary:")
-        logger.debug(f"[PROBE-FILTER]   Total channels seen: {total_channels_seen}")
-        logger.debug(f"[PROBE-FILTER]   Channels included: {channels_included}")
+        logger.debug("[STREAM-PROBE] Channel filtering summary:")
+        logger.debug("[STREAM-PROBE]   Total channels seen: %s", total_channels_seen)
+        logger.debug("[STREAM-PROBE]   Channels included: %s", channels_included)
         if selected_group_ids:
-            logger.debug(f"[PROBE-FILTER]   Channels excluded (wrong group): {channels_excluded_wrong_group}")
+            logger.debug("[STREAM-PROBE]   Channels excluded (wrong group): %s", channels_excluded_wrong_group)
         if channels_with_no_streams > 0:
-            logger.debug(f"[PROBE-FILTER]   Channels with no streams: {channels_with_no_streams}")
-        logger.debug(f"[PROBE-FILTER]   Unique streams to probe: {len(channel_stream_ids)}")
+            logger.debug("[STREAM-PROBE]   Channels with no streams: %s", channels_with_no_streams)
+        logger.debug("[STREAM-PROBE]   Unique streams to probe: %s", len(channel_stream_ids))
 
         # Log excluded channels if there are any (limit to first 20 to avoid log spam)
         if excluded_channel_names:
             sample = excluded_channel_names[:20]
-            logger.debug(f"[PROBE-FILTER] Excluded channels (first 20): {sample}")
+            logger.debug("[STREAM-PROBE] Excluded channels (first 20): %s", sample)
             if len(excluded_channel_names) > 20:
-                logger.debug(f"[PROBE-FILTER] ... and {len(excluded_channel_names) - 20} more")
+                logger.debug("[STREAM-PROBE] ... and %s more", len(excluded_channel_names) - 20)
 
         return channel_stream_ids, stream_to_channels, stream_to_channel_number
 
@@ -1191,7 +1212,7 @@ class StreamProber:
                     counts[account_id] = counts.get(account_id, 0) + 1
             return counts
         except Exception as e:
-            logger.warning(f"Failed to fetch M3U connection counts: {e}")
+            logger.warning("[STREAM-PROBE] Failed to fetch M3U connection counts: %s", e)
             # Return empty dict on failure - allows probes to proceed (fail-open)
             return {}
 
@@ -1222,20 +1243,21 @@ class StreamProber:
                 if profile_id:
                     counts[profile_id] = counts.get(profile_id, 0) + 1
             if channels:
-                logger.info(f"[DISPATCHARR-CONNS] {len(channels)} active channels, "
-                            f"profile connection counts: {counts}")
+                logger.info("[STREAM-PROBE] %s active channels, "
+                            "profile connection counts: %s",
+                            len(channels), counts)
                 # Log channel keys if m3u_profile_id is missing — helps debug
                 # data structure mismatches with different Dispatcharr versions
                 if not counts:
                     sample_keys = list(channels[0].keys())
-                    logger.warning(f"[DISPATCHARR-CONNS] Active channels found but no m3u_profile_id! "
-                                   f"Channel keys: {sample_keys}")
+                    logger.warning("[STREAM-PROBE] Active channels found but no m3u_profile_id! "
+                                   "Channel keys: %s", sample_keys)
             # Cache the result
             self._dispatcharr_conns_cache = counts
             self._dispatcharr_conns_cache_time = now
             return counts
         except Exception as e:
-            logger.warning(f"Failed to fetch profile connection counts: {e}")
+            logger.warning("[STREAM-PROBE] Failed to fetch profile connection counts: %s", e)
             return getattr(self, '_dispatcharr_conns_cache', {})
 
     def _profile_has_capacity(self, profile: dict, dispatcharr_profile_conns: dict,
@@ -1279,7 +1301,7 @@ class StreamProber:
         """
         # Check account-level cap first
         if account_max > 0 and total_account_conns >= account_max:
-            logger.debug(f"[PROFILE-SELECT] Account {account_id}: at account cap ({total_account_conns}/{account_max})")
+            logger.debug("[STREAM-PROBE] Account %s: at account cap (%s/%s)", account_id, total_account_conns, account_max)
             return None
 
         profiles = self._account_profiles.get(account_id, [])
@@ -1294,10 +1316,11 @@ class StreamProber:
                 profile = profiles[idx]
                 if self._profile_has_capacity(profile, dispatcharr_profile_conns, our_profile_conns):
                     self._round_robin_index[account_id] = idx
-                    logger.debug(f"[PROFILE-SELECT] Account {account_id}: round_robin selected profile {profile['id']} "
-                               f"('{profile.get('name', 'unnamed')}', idx={idx})")
+                    logger.debug("[STREAM-PROBE] Account %s: round_robin selected profile %s "
+                               "('%s', idx=%s)",
+                               account_id, profile['id'], profile.get('name', 'unnamed'), idx)
                     return profile
-            logger.debug(f"[PROFILE-SELECT] Account {account_id}: round_robin - all profiles at capacity")
+            logger.debug("[STREAM-PROBE] Account %s: round_robin - all profiles at capacity", account_id)
             return None
 
         elif self.profile_distribution_strategy == "least_loaded":
@@ -1309,8 +1332,9 @@ class StreamProber:
                 profile_max = self._profile_max_streams.get(profile_id, 0)
                 if profile_max == 0:
                     # Unlimited = always best
-                    logger.debug(f"[PROFILE-SELECT] Account {account_id}: least_loaded selected profile {profile_id} "
-                               f"('{profile.get('name', 'unnamed')}', unlimited)")
+                    logger.debug("[STREAM-PROBE] Account %s: least_loaded selected profile %s "
+                               "('%s', unlimited)",
+                               account_id, profile_id, profile.get('name', 'unnamed'))
                     return profile
                 current = dispatcharr_profile_conns.get(profile_id, 0) + our_profile_conns.get(profile_id, 0)
                 headroom = profile_max - current
@@ -1318,20 +1342,22 @@ class StreamProber:
                     best = profile
                     best_headroom = headroom
             if best:
-                logger.debug(f"[PROFILE-SELECT] Account {account_id}: least_loaded selected profile {best['id']} "
-                           f"('{best.get('name', 'unnamed')}', headroom={best_headroom})")
+                logger.debug("[STREAM-PROBE] Account %s: least_loaded selected profile %s "
+                           "('%s', headroom=%s)",
+                           account_id, best['id'], best.get('name', 'unnamed'), best_headroom)
             else:
-                logger.debug(f"[PROFILE-SELECT] Account {account_id}: least_loaded - all profiles at capacity")
+                logger.debug("[STREAM-PROBE] Account %s: least_loaded - all profiles at capacity", account_id)
             return best
 
         else:
             # "fill_first" (default) — iterate in order, pick first with capacity
             for profile in profiles:
                 if self._profile_has_capacity(profile, dispatcharr_profile_conns, our_profile_conns):
-                    logger.debug(f"[PROFILE-SELECT] Account {account_id}: fill_first selected profile {profile['id']} "
-                               f"('{profile.get('name', 'unnamed')}')")
+                    logger.debug("[STREAM-PROBE] Account %s: fill_first selected profile %s "
+                               "('%s')",
+                               account_id, profile['id'], profile.get('name', 'unnamed'))
                     return profile
-            logger.debug(f"[PROFILE-SELECT] Account {account_id}: fill_first - all profiles at capacity")
+            logger.debug("[STREAM-PROBE] Account %s: fill_first - all profiles at capacity", account_id)
             return None
 
     def _rewrite_url_for_profile(self, original_url: str, profile: dict) -> str:
@@ -1356,11 +1382,12 @@ class StreamProber:
         try:
             rewritten = re.sub(search_pattern, replace_pattern, original_url)
             if rewritten != original_url:
-                logger.debug(f"[PROFILE-REWRITE] Profile {profile['id']}: rewrote URL "
-                           f"(pattern: {search_pattern} -> {replace_pattern})")
+                logger.debug("[STREAM-PROBE] Profile %s: rewrote URL "
+                           "(pattern: %s -> %s)",
+                           profile['id'], search_pattern, replace_pattern)
             return rewritten
         except re.error as e:
-            logger.warning(f"[PROFILE-REWRITE] Invalid regex in profile {profile['id']}: {e}")
+            logger.warning("[STREAM-PROBE] Invalid regex in profile %s: %s", profile['id'], e)
             return original_url
 
     async def _auto_reorder_channels(self, channel_groups_override: list[str] = None, stream_to_channels: dict = None) -> list[dict]:
@@ -1373,7 +1400,7 @@ class StreamProber:
         try:
             # Determine which groups to filter by
             groups_to_filter = channel_groups_override or []
-            logger.info(f"[AUTO-REORDER] groups_to_filter={groups_to_filter}")
+            logger.info("[STREAM-PROBE-SORT] groups_to_filter=%s", groups_to_filter)
 
             # Get selected group IDs
             selected_group_ids = set()
@@ -1381,13 +1408,13 @@ class StreamProber:
                 try:
                     all_groups = await self.client.get_channel_groups()
                     available_group_names = [g.get("name") for g in all_groups]
-                    logger.info(f"[AUTO-REORDER] Available groups: {available_group_names[:10]}... (total: {len(all_groups)})")
+                    logger.info("[STREAM-PROBE-SORT] Available groups: %s... (total: %s)", available_group_names[:10], len(all_groups))
                     for group in all_groups:
                         if group.get("name") in groups_to_filter:
                             selected_group_ids.add(group["id"])
-                    logger.info(f"[AUTO-REORDER] Filtering to {len(selected_group_ids)} selected groups (matched: {selected_group_ids})")
+                    logger.info("[STREAM-PROBE-SORT] Filtering to %s selected groups (matched: %s)", len(selected_group_ids), selected_group_ids)
                 except Exception as e:
-                    logger.error(f"Failed to fetch channel groups for auto-reorder: {e}")
+                    logger.error("[STREAM-PROBE] Failed to fetch channel groups for auto-reorder: %s", e)
                     return []
 
             # Fetch all channels and filter by selected groups
@@ -1414,10 +1441,10 @@ class StreamProber:
                     if page > 50:  # Safety limit
                         break
                 except Exception as e:
-                    logger.error(f"Failed to fetch channels page {page} for auto-reorder: {e}")
+                    logger.error("[STREAM-PROBE] Failed to fetch channels page %s for auto-reorder: %s", page, e)
                     break
 
-            logger.info(f"[AUTO-REORDER] Found {len(channels_to_reorder)} channels to potentially reorder")
+            logger.info("[STREAM-PROBE-SORT] Found %s channels to potentially reorder", len(channels_to_reorder))
 
             # For each channel, fetch full details, get stream stats, and reorder
             for channel in channels_to_reorder:
@@ -1430,38 +1457,38 @@ class StreamProber:
                     stream_ids = full_channel.get("streams", [])
 
                     if len(stream_ids) <= 1:
-                        logger.debug(f"[AUTO-REORDER] Channel {channel_id} ({channel_name}) - Skipping, only {len(stream_ids)} streams")
+                        logger.debug("[STREAM-PROBE-SORT] Channel %s (%s) - Skipping, only %s streams", channel_id, channel_name, len(stream_ids))
                         continue  # Skip if 0 or 1 streams
 
-                    logger.info(f"[AUTO-REORDER] Processing channel {channel_id} ({channel_name}) with {len(stream_ids)} streams: {stream_ids}")
+                    logger.info("[STREAM-PROBE-SORT] Processing channel %s (%s) with %s streams: %s", channel_id, channel_name, len(stream_ids), stream_ids)
 
                     # Fetch full stream data to get M3U account mapping
                     streams_data = await self.client.get_streams_by_ids(stream_ids)
                     # Log raw stream data for debugging
                     for s in streams_data:
-                        logger.debug(f"[AUTO-REORDER] Channel {channel_id}: Stream {s['id']} ('{s.get('name', 'Unknown')}') has raw m3u_account={s.get('m3u_account')!r}")
+                        logger.debug("[STREAM-PROBE-SORT] Channel %s: Stream %s ('%s') has raw m3u_account=%r", channel_id, s['id'], s.get('name', 'Unknown'), s.get('m3u_account'))
                     # Extract M3U account IDs (handles both direct ID and nested object formats)
                     stream_m3u_map = {s["id"]: self._extract_m3u_account_id(s.get("m3u_account")) for s in streams_data}
-                    logger.debug(f"[AUTO-REORDER] Channel {channel_id}: Built M3U map for {len(stream_m3u_map)} streams: {stream_m3u_map}")
+                    logger.debug("[STREAM-PROBE-SORT] Channel %s: Built M3U map for %s streams: %s", channel_id, len(stream_m3u_map), stream_m3u_map)
 
                     # Fetch stream stats for this channel's streams (uses get_session and StreamStats imported at top of file)
-                    logger.info(f"[AUTO-REORDER] Channel {channel_id}: Opening database session...")
+                    logger.info("[STREAM-PROBE-SORT] Channel %s: Opening database session...", channel_id)
                     with get_session() as session:
-                        logger.info(f"[AUTO-REORDER] Channel {channel_id}: Querying stats for stream_ids: {stream_ids}")
+                        logger.info("[STREAM-PROBE-SORT] Channel %s: Querying stats for stream_ids: %s", channel_id, stream_ids)
                         stats_records = session.query(StreamStats).filter(
                             StreamStats.stream_id.in_(stream_ids)
                         ).all()
-                        logger.info(f"[AUTO-REORDER] Channel {channel_id}: Query returned {len(stats_records)} records")
+                        logger.info("[STREAM-PROBE-SORT] Channel %s: Query returned %s records", channel_id, len(stats_records))
 
                         # Build stats map
                         stats_map = {stat.stream_id: stat for stat in stats_records}
-                        logger.info(f"[AUTO-REORDER] Channel {channel_id}: Found stats for {len(stats_map)}/{len(stream_ids)} streams")
+                        logger.info("[STREAM-PROBE-SORT] Channel %s: Found stats for %s/%s streams", channel_id, len(stats_map), len(stream_ids))
 
                         # Sort streams using smart sort logic (similar to frontend)
                         sorted_stream_ids = self._smart_sort_streams(stream_ids, stats_map, stream_m3u_map, channel_name)
-                        logger.info(f"[AUTO-REORDER] Channel {channel_id}: Original order: {stream_ids}")
-                        logger.info(f"[AUTO-REORDER] Channel {channel_id}: Sorted order:   {sorted_stream_ids}")
-                        logger.info(f"[AUTO-REORDER] Channel {channel_id}: Order changed: {sorted_stream_ids != stream_ids}")
+                        logger.info("[STREAM-PROBE-SORT] Channel %s: Original order: %s", channel_id, stream_ids)
+                        logger.info("[STREAM-PROBE-SORT] Channel %s: Sorted order:   %s", channel_id, sorted_stream_ids)
+                        logger.info("[STREAM-PROBE-SORT] Channel %s: Order changed: %s", channel_id, sorted_stream_ids != stream_ids)
 
                         # Only update if order changed
                         if sorted_stream_ids != stream_ids:
@@ -1491,18 +1518,18 @@ class StreamProber:
                                 })
 
                             # Debug logging: log the proposed changes
-                            logger.debug(f"[AUTO-REORDER] Channel {channel_id} ({channel_name}) - Proposing reorder:")
+                            logger.debug("[STREAM-PROBE-SORT] Channel %s (%s) - Proposing reorder:", channel_id, channel_name)
                             before_str = [f"{s['name']} (pos={s['position']}, status={s['status']}, res={s['resolution']}, br={s['bitrate']})" for s in streams_before]
                             after_str = [f"{s['name']} (pos={s['position']}, status={s['status']}, res={s['resolution']}, br={s['bitrate']})" for s in streams_after]
-                            logger.debug(f"[AUTO-REORDER]   Before: {before_str}")
-                            logger.debug(f"[AUTO-REORDER]   After:  {after_str}")
+                            logger.debug("[STREAM-PROBE-SORT]   Before: %s", before_str)
+                            logger.debug("[STREAM-PROBE-SORT]   After:  %s", after_str)
 
                             # Execute the reorder
                             try:
                                 await self.client.update_channel(channel_id, {"streams": sorted_stream_ids})
-                                logger.debug(f"[AUTO-REORDER] Successfully reordered channel {channel_id} ({channel_name})")
+                                logger.debug("[STREAM-PROBE-SORT] Successfully reordered channel %s (%s)", channel_id, channel_name)
                             except Exception as update_err:
-                                logger.error(f"[AUTO-REORDER] Failed to update channel {channel_id} ({channel_name}): {update_err}")
+                                logger.error("[STREAM-PROBE-SORT] Failed to update channel %s (%s): %s", channel_id, channel_name, update_err)
                                 raise  # Re-raise to be caught by outer exception handler
 
                             reordered.append({
@@ -1513,14 +1540,14 @@ class StreamProber:
                                 "streams_after": streams_after,
                             })
                         else:
-                            logger.debug(f"[AUTO-REORDER] Channel {channel_id} ({channel_name}) - No reorder needed (already in correct order)")
+                            logger.debug("[STREAM-PROBE-SORT] Channel %s (%s) - No reorder needed (already in correct order)", channel_id, channel_name)
 
                 except Exception as e:
-                    logger.error(f"Failed to reorder channel {channel.get('id', 'unknown')}: {e}")
+                    logger.error("[STREAM-PROBE] Failed to reorder channel %s: %s", channel.get('id', 'unknown'), e)
                     continue
 
         except Exception as e:
-            logger.error(f"Auto-reorder channels failed: {e}")
+            logger.error("[STREAM-PROBE] Auto-reorder channels failed: %s", e)
 
         return reordered
 
@@ -1553,12 +1580,14 @@ class StreamProber:
             stream_ids_filter: Optional list of specific stream IDs to probe.
                               If provided, only these streams will be probed (useful for re-probing failed streams).
         """
-        logger.info(f"[PROBE] probe_all_streams called with channel_groups_override={channel_groups_override}, skip_m3u_refresh={skip_m3u_refresh}, stream_ids_filter={len(stream_ids_filter) if stream_ids_filter else 0}")
-        logger.info(f"[PROBE] Settings: parallel_probing_enabled={self.parallel_probing_enabled}, max_concurrent_probes={self.max_concurrent_probes}, "
-                     f"profile_distribution_strategy={self.profile_distribution_strategy}")
+        logger.info("[STREAM-PROBE] probe_all_streams called with channel_groups_override=%s, skip_m3u_refresh=%s, stream_ids_filter=%s", channel_groups_override, skip_m3u_refresh, len(stream_ids_filter) if stream_ids_filter else 0)
+        logger.info("[STREAM-PROBE] Settings: parallel_probing_enabled=%s, max_concurrent_probes=%s, "
+                     "profile_distribution_strategy=%s",
+                     self.parallel_probing_enabled, self.max_concurrent_probes,
+                     self.profile_distribution_strategy)
 
         if self._probing_in_progress:
-            logger.warning("Probe already in progress")
+            logger.warning("[STREAM-PROBE] Probe already in progress")
             return {"status": "already_running"}
 
         self._probing_in_progress = True
@@ -1582,30 +1611,30 @@ class StreamProber:
             # Refresh M3U accounts if configured AND not explicitly skipped
             # On-demand probes from UI should skip refresh; only scheduled probes refresh
             if self.refresh_m3us_before_probe and not skip_m3u_refresh:
-                logger.info("Refreshing all M3U accounts before probing...")
+                logger.info("[STREAM-PROBE] Refreshing all M3U accounts before probing...")
                 self._probe_progress_status = "refreshing"
                 self._probe_progress_current_stream = "Refreshing M3U accounts..."
                 try:
                     await self.client.refresh_all_m3u_accounts()
-                    logger.info("M3U refresh triggered successfully")
+                    logger.info("[STREAM-PROBE] M3U refresh triggered successfully")
                     # Wait a reasonable amount of time for refresh to complete
                     # Since Dispatcharr doesn't provide refresh status, we wait 60 seconds
                     await asyncio.sleep(60)
-                    logger.info("M3U refresh wait period completed")
+                    logger.info("[STREAM-PROBE] M3U refresh wait period completed")
                 except Exception as e:
-                    logger.warning(f"Failed to refresh M3U accounts: {e}")
-                    logger.info("Continuing with probe despite refresh failure")
+                    logger.warning("[STREAM-PROBE] Failed to refresh M3U accounts: %s", e)
+                    logger.info("[STREAM-PROBE] Continuing with probe despite refresh failure")
             elif skip_m3u_refresh:
-                logger.info("Skipping M3U refresh (on-demand probe)")
+                logger.info("[STREAM-PROBE] Skipping M3U refresh (on-demand probe)")
 
             # Fetch all channel stream IDs and channel mappings
             self._probe_progress_status = "fetching"
-            logger.info(f"Fetching channel stream IDs (override groups: {channel_groups_override})...")
+            logger.info("[STREAM-PROBE] Fetching channel stream IDs (override groups: %s)...", channel_groups_override)
             channel_stream_ids, stream_to_channels, stream_to_channel_number = await self._fetch_channel_stream_ids(channel_groups_override)
-            logger.info(f"Found {len(channel_stream_ids)} unique streams across all channels")
+            logger.info("[STREAM-PROBE] Found %s unique streams across all channels", len(channel_stream_ids))
 
             # Fetch M3U accounts to map account IDs to names and max_streams
-            logger.info("Fetching M3U accounts...")
+            logger.info("[STREAM-PROBE] Fetching M3U accounts...")
             m3u_accounts_map = {}  # id -> name
             m3u_max_streams = {}   # id -> max_streams
             self._profile_to_account_map = {}  # profile_id -> account_id
@@ -1628,35 +1657,37 @@ class StreamProber:
                     self._account_profiles[account_id] = account_profiles
                     # Use the account-level max_streams as the cap
                     m3u_max_streams[account_id] = account.get("max_streams", 0)
-                logger.info(f"Found {len(m3u_accounts_map)} M3U accounts, {len(self._profile_to_account_map)} profiles mapped, "
-                           f"{sum(len(v) for v in self._account_profiles.values())} active profiles")
+                logger.info("[STREAM-PROBE] Found %s M3U accounts, %s profiles mapped, "
+                           "%s active profiles",
+                           len(m3u_accounts_map), len(self._profile_to_account_map),
+                           sum(len(v) for v in self._account_profiles.values()))
             except Exception as e:
-                logger.warning(f"Failed to fetch M3U accounts: {e}")
+                logger.warning("[STREAM-PROBE] Failed to fetch M3U accounts: %s", e)
 
             # Fetch all streams
-            logger.info("Fetching stream details...")
+            logger.info("[STREAM-PROBE] Fetching stream details...")
             all_streams = await self._fetch_all_streams()
-            logger.debug(f"[PROBE-MATCH] Fetched {len(all_streams)} total streams from Dispatcharr")
+            logger.debug("[STREAM-PROBE] Fetched %s total streams from Dispatcharr", len(all_streams))
 
             # Log the stream IDs we're looking for
-            logger.debug(f"[PROBE-MATCH] Looking for {len(channel_stream_ids)} channel stream IDs: {sorted(channel_stream_ids)}")
+            logger.debug("[STREAM-PROBE] Looking for %s channel stream IDs: %s", len(channel_stream_ids), sorted(channel_stream_ids))
 
             # Get all stream IDs from Dispatcharr
             all_stream_ids = {s["id"] for s in all_streams}
-            logger.debug(f"[PROBE-MATCH] Dispatcharr returned {len(all_stream_ids)} unique stream IDs")
+            logger.debug("[STREAM-PROBE] Dispatcharr returned %s unique stream IDs", len(all_stream_ids))
 
             # Find which channel stream IDs are missing from Dispatcharr's stream list
             missing_ids = channel_stream_ids - all_stream_ids
             if missing_ids:
-                logger.warning(f"[PROBE-MATCH] {len(missing_ids)} channel stream IDs NOT FOUND in Dispatcharr streams: {sorted(missing_ids)}")
+                logger.warning("[STREAM-PROBE] %s channel stream IDs NOT FOUND in Dispatcharr streams: %s", len(missing_ids), sorted(missing_ids))
                 # Log which channels reference these missing streams
                 for missing_id in missing_ids:
                     channel_names = stream_to_channels.get(missing_id, ["Unknown"])
-                    logger.warning(f"[PROBE-MATCH]   Missing stream {missing_id} is referenced by channels: {channel_names}")
+                    logger.warning("[STREAM-PROBE]   Missing stream %s is referenced by channels: %s", missing_id, channel_names)
 
             # Filter to only streams that are in channels
             streams_to_probe = [s for s in all_streams if s["id"] in channel_stream_ids]
-            logger.debug(f"[PROBE-MATCH] Matched {len(streams_to_probe)} streams to probe")
+            logger.debug("[STREAM-PROBE] Matched %s streams to probe", len(streams_to_probe))
 
             # If stream_ids_filter is provided, further filter to only those specific streams
             # This is used for re-probing specific failed streams
@@ -1664,7 +1695,7 @@ class StreamProber:
                 stream_ids_filter_set = set(stream_ids_filter)
                 original_count = len(streams_to_probe)
                 streams_to_probe = [s for s in streams_to_probe if s["id"] in stream_ids_filter_set]
-                logger.info(f"[PROBE-FILTER] Filtered to {len(streams_to_probe)} specific streams (from {original_count} channel streams, requested {len(stream_ids_filter)})")
+                logger.info("[STREAM-PROBE] Filtered to %s specific streams (from %s channel streams, requested %s)", len(streams_to_probe), original_count, len(stream_ids_filter))
 
             # Skip recently probed streams if configured
             if self.skip_recently_probed_hours > 0:
@@ -1686,11 +1717,11 @@ class StreamProber:
                     skipped_count = original_count - len(streams_to_probe)
 
                     if skipped_count > 0:
-                        logger.info(f"Skipped {skipped_count} streams that were successfully probed within the last {self.skip_recently_probed_hours} hour(s)")
+                        logger.info("[STREAM-PROBE] Skipped %s streams that were successfully probed within the last %s hour(s)", skipped_count, self.skip_recently_probed_hours)
 
             # Sort streams by their lowest channel number (lowest first)
             streams_to_probe.sort(key=lambda s: stream_to_channel_number.get(s["id"], 999999))
-            logger.info(f"Sorted {len(streams_to_probe)} streams by channel number")
+            logger.info("[STREAM-PROBE] Sorted %s streams by channel number", len(streams_to_probe))
 
             self._probe_progress_total = len(streams_to_probe)
             self._probe_progress_status = "probing"
@@ -1700,21 +1731,24 @@ class StreamProber:
 
             # Log diagnostic info if no streams to probe
             if len(streams_to_probe) == 0:
-                logger.warning(f"[PROBE-DIAGNOSTIC] No streams to probe! channel_stream_ids={len(channel_stream_ids)}, "
-                              f"all_streams={len(all_streams)}, stream_ids_filter={len(stream_ids_filter) if stream_ids_filter else 'None'}, "
-                              f"groups_override={channel_groups_override}")
+                logger.warning("[STREAM-PROBE] No streams to probe! channel_stream_ids=%s, "
+                              "all_streams=%s, stream_ids_filter=%s, "
+                              "groups_override=%s",
+                              len(channel_stream_ids), len(all_streams),
+                              len(stream_ids_filter) if stream_ids_filter else 'None',
+                              channel_groups_override)
             else:
-                logger.info(f"[PROBE-DIAGNOSTIC] Starting probe of {len(streams_to_probe)} streams")
+                logger.info("[STREAM-PROBE] Starting probe of %s streams", len(streams_to_probe))
 
             if self.parallel_probing_enabled:
                 # ========== PARALLEL PROBING MODE ==========
-                logger.info(f"[PROBE-PARALLEL] Starting parallel probe of {len(streams_to_probe)} streams (filtered from {len(all_streams)} total)")
-                logger.info(f"[PROBE-PARALLEL] Rate limit settings: max_concurrent_probes={self.max_concurrent_probes}")
+                logger.info("[STREAM-PROBE] Starting parallel probe of %s streams (filtered from %s total)", len(streams_to_probe), len(all_streams))
+                logger.info("[STREAM-PROBE] Rate limit settings: max_concurrent_probes=%s", self.max_concurrent_probes)
 
                 # Global concurrency limit - max simultaneous probes regardless of M3U account
                 # This prevents system resource exhaustion when probing many streams
                 global_probe_semaphore = asyncio.Semaphore(self.max_concurrent_probes)
-                logger.info(f"[PROBE-PARALLEL] Semaphore created with limit={self.max_concurrent_probes}")
+                logger.info("[STREAM-PROBE] Semaphore created with limit=%s", self.max_concurrent_probes)
 
                 # Track our own probe connections per M3U (separate from Dispatcharr's active connections)
                 # This lets us know how many streams WE are currently probing per M3U
@@ -1742,13 +1776,18 @@ class StreamProber:
 
                     # Log probe details for traceability
                     if selected_profile:
-                        logger.debug(f"[PROBE-STREAM] Stream {stream_id} ({stream_name}): "
-                                     f"strategy={self.profile_distribution_strategy}, "
-                                     f"profile={selected_profile['id']} ('{selected_profile.get('name', 'unnamed')}'), "
-                                     f"url={stream_url}")
+                        logger.debug("[STREAM-PROBE] Stream %s (%s): "
+                                     "strategy=%s, "
+                                     "profile=%s ('%s'), "
+                                     "url=%s",
+                                     stream_id, stream_name,
+                                     self.profile_distribution_strategy,
+                                     selected_profile['id'], selected_profile.get('name', 'unnamed'),
+                                     stream_url)
                     else:
-                        logger.debug(f"[PROBE-STREAM] Stream {stream_id} ({stream_name}): "
-                                     f"no profile (direct URL), url={stream_url}")
+                        logger.debug("[STREAM-PROBE] Stream %s (%s): "
+                                     "no profile (direct URL), url=%s",
+                                     stream_id, stream_name, stream_url)
 
                     # Acquire global semaphore to limit total concurrent probes
                     async with global_probe_semaphore:
@@ -1757,9 +1796,9 @@ class StreamProber:
                             active_probe_count[0] += 1
                             current_count = active_probe_count[0]
                             if current_count > self.max_concurrent_probes:
-                                logger.error(f"[PROBE-PARALLEL] RATE LIMIT EXCEEDED! active={current_count}, limit={self.max_concurrent_probes}")
+                                logger.error("[STREAM-PROBE] RATE LIMIT EXCEEDED! active=%s, limit=%s", current_count, self.max_concurrent_probes)
                             else:
-                                logger.debug(f"[PROBE-PARALLEL] Acquired semaphore: active={current_count}/{self.max_concurrent_probes}, stream={stream_id}")
+                                logger.debug("[STREAM-PROBE] Acquired semaphore: active=%s/%s, stream=%s", current_count, self.max_concurrent_probes, stream_id)
                         try:
                             result = await self.probe_stream(stream_id, stream_url, stream_name)
                             probe_status = result.get("probe_status", "failed")
@@ -1779,7 +1818,7 @@ class StreamProber:
                             # Track concurrent probe count decrement
                             async with active_probe_count_lock:
                                 active_probe_count[0] -= 1
-                                logger.debug(f"[PROBE-PARALLEL] Released semaphore: active={active_probe_count[0]}/{self.max_concurrent_probes}, stream={stream_id}")
+                                logger.debug("[STREAM-PROBE] Released semaphore: active=%s/%s, stream=%s", active_probe_count[0], self.max_concurrent_probes, stream_id)
                             # Release our probe connection (by profile_id or m3u_account_id)
                             release_key = selected_profile["id"] if selected_profile else m3u_account_id
                             if release_key:
@@ -1826,7 +1865,7 @@ class StreamProber:
                         aid = self._profile_to_account_map.get(pid, pid)
                         dispatcharr_connections[aid] = dispatcharr_connections.get(aid, 0) + cnt
                     if dispatcharr_connections:
-                        logger.info(f"[DISPATCHARR-CONNS] Account-level active connections: {dispatcharr_connections}")
+                        logger.info("[STREAM-PROBE] Account-level active connections: %s", dispatcharr_connections)
 
                     # Try to start new probes for streams that have available M3U capacity
                     streams_started_this_round = []
@@ -1912,7 +1951,7 @@ class StreamProber:
                                             else:
                                                 m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
                                                 skip_reason = f"M3U '{m3u_name}' at max connections ({dispatcharr_active}/{effective_max})"
-                                                logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
+                                                logger.info("[STREAM-PROBE] Skipping stream %s (%s): %s", stream_id, stream_name, skip_reason)
                                     else:
                                         # HDHomeRun or no profiles - use account-level logic
                                         if total_account_conns >= effective_max:
@@ -1921,7 +1960,7 @@ class StreamProber:
                                             else:
                                                 m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
                                                 skip_reason = f"M3U '{m3u_name}' at max connections ({dispatcharr_active}/{effective_max})"
-                                                logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
+                                                logger.info("[STREAM-PROBE] Skipping stream %s (%s): %s", stream_id, stream_name, skip_reason)
                             else:
                                 # Unlimited account — still apply ramp-up
                                 self._init_account_ramp(m3u_account_id)
@@ -2005,9 +2044,9 @@ class StreamProber:
                                 self._probe_progress_current = probed_count
                                 await self._update_probe_notification()
                             except asyncio.CancelledError:
-                                pass
+                                logger.debug("[STREAM-PROBE] Probe task cancelled")
                             except Exception as e:
-                                logger.error(f"Probe task failed: {e}")
+                                logger.error("[STREAM-PROBE] Probe task failed: %s", e)
                                 probed_count += 1
                                 self._probe_progress_current = probed_count
                                 await self._update_probe_notification()
@@ -2023,7 +2062,7 @@ class StreamProber:
                         await asyncio.sleep(0.5)
             else:
                 # ========== SEQUENTIAL PROBING MODE ==========
-                logger.info(f"Starting sequential probe of {len(streams_to_probe)} streams (filtered from {len(all_streams)} total)")
+                logger.info("[STREAM-PROBE] Starting sequential probe of %s streams (filtered from %s total)", len(streams_to_probe), len(all_streams))
 
                 for stream in streams_to_probe:
                     if self._probe_cancelled:
@@ -2099,13 +2138,13 @@ class StreamProber:
                                 if not selected_profile:
                                     m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
                                     skip_reason = f"M3U '{m3u_name}' at max connections ({total_account_conns}/{max_streams})"
-                                    logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
+                                    logger.info("[STREAM-PROBE] Skipping stream %s (%s): %s", stream_id, stream_name, skip_reason)
                             else:
                                 # No profiles - use account-level logic
                                 if total_account_conns >= max_streams:
                                     m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
                                     skip_reason = f"M3U '{m3u_name}' at max connections ({total_account_conns}/{max_streams})"
-                                    logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
+                                    logger.info("[STREAM-PROBE] Skipping stream %s (%s): %s", stream_id, stream_name, skip_reason)
 
                     if skip_reason:
                         # Skip this stream - M3U is at capacity
@@ -2125,7 +2164,7 @@ class StreamProber:
                         self._init_account_ramp(m3u_account_id)
                         hold_remaining = self._get_account_hold_remaining(m3u_account_id)
                         if hold_remaining > 0:
-                            logger.debug(f"[RAMP-HOLD] Account {m3u_account_id}: waiting {hold_remaining:.1f}s")
+                            logger.debug("[STREAM-PROBE] Account %s: waiting %.1fs", m3u_account_id, hold_remaining)
                             await asyncio.sleep(hold_remaining)
 
                     result = await self.probe_stream(stream_id, stream_url, stream_name)
@@ -2150,24 +2189,27 @@ class StreamProber:
                     await self._update_probe_notification()
                     await asyncio.sleep(0.5)  # Base rate limiting delay
 
-            logger.info(f"Completed probing {probed_count} streams")
-            logger.info(f"[PROBE-DIAGNOSTIC] Final counts: success={self._probe_progress_success_count}, "
-                       f"failed={self._probe_progress_failed_count}, skipped={self._probe_progress_skipped_count}")
+            logger.info("[STREAM-PROBE] Completed probing %s streams", probed_count)
+            logger.info("[STREAM-PROBE] Final counts: success=%s, "
+                       "failed=%s, skipped=%s",
+                       self._probe_progress_success_count,
+                       self._probe_progress_failed_count,
+                       self._probe_progress_skipped_count)
             self._probe_progress_status = "completed"
             self._probe_progress_current_stream = ""
 
             # Auto-reorder streams if configured
             reordered_channels = []
-            logger.info(f"[AUTO-REORDER] Checking auto_reorder_after_probe setting: {self.auto_reorder_after_probe}")
+            logger.info("[STREAM-PROBE-SORT] Checking auto_reorder_after_probe setting: %s", self.auto_reorder_after_probe)
             if self.auto_reorder_after_probe:
-                logger.info("Auto-reorder is enabled, reordering streams in probed channels...")
+                logger.info("[STREAM-PROBE] Auto-reorder is enabled, reordering streams in probed channels...")
                 self._probe_progress_status = "reordering"
                 self._probe_progress_current_stream = "Reordering streams..."
                 try:
                     reordered_channels = await self._auto_reorder_channels(channel_groups_override, stream_to_channels)
-                    logger.info(f"[AUTO-REORDER] Auto-reordered {len(reordered_channels)} channels")
+                    logger.info("[STREAM-PROBE-SORT] Auto-reordered %s channels", len(reordered_channels))
                 except Exception as e:
-                    logger.error(f"Auto-reorder failed: {e}")
+                    logger.error("[STREAM-PROBE] Auto-reorder failed: %s", e)
 
             # Save to probe history
             self._save_probe_history(start_time, probed_count, reordered_channels=reordered_channels)
@@ -2177,7 +2219,7 @@ class StreamProber:
 
             return {"status": "completed", "probed": probed_count, "reordered_channels": len(reordered_channels)}
         except Exception as e:
-            logger.error(f"Probe all streams failed: {e}")
+            logger.exception("[STREAM-PROBE] Probe all streams failed: %s", e)
             self._probe_progress_status = "failed"
             self._probe_progress_current_stream = ""
 
@@ -2212,7 +2254,7 @@ class StreamProber:
         }
         # Log when probing is in progress for debugging
         if self._probing_in_progress:
-            logger.debug(f"[PROBE-PROGRESS] in_progress=True, status={self._probe_progress_status}, {self._probe_progress_current}/{self._probe_progress_total}")
+            logger.debug("[STREAM-PROBE] in_progress=True, status=%s, %s/%s", self._probe_progress_status, self._probe_progress_current, self._probe_progress_total)
         return progress
 
     def _get_ramp_summary(self) -> dict:
@@ -2278,9 +2320,12 @@ class StreamProber:
         self._probe_history = self._probe_history[:5]
 
         reorder_msg = f", {len(reordered_channels or [])} channels reordered" if reordered_channels else ""
-        logger.info(f"Saved probe history entry: {total} streams, {self._probe_progress_success_count} success, {self._probe_progress_failed_count} failed, {self._probe_progress_skipped_count} skipped{reorder_msg}")
-        logger.info(f"[PROBE-DIAGNOSTIC] History entry stream lists: success_streams={len(history_entry['success_streams'])}, "
-                   f"failed_streams={len(history_entry['failed_streams'])}, skipped_streams={len(history_entry['skipped_streams'])}")
+        logger.info("[STREAM-PROBE] Saved probe history entry: %s streams, %s success, %s failed, %s skipped%s", total, self._probe_progress_success_count, self._probe_progress_failed_count, self._probe_progress_skipped_count, reorder_msg)
+        logger.info("[STREAM-PROBE] History entry stream lists: success_streams=%s, "
+                   "failed_streams=%s, skipped_streams=%s",
+                   len(history_entry['success_streams']),
+                   len(history_entry['failed_streams']),
+                   len(history_entry['skipped_streams']))
 
         # Persist to disk
         self._persist_probe_history()
@@ -2396,7 +2441,7 @@ class StreamProber:
             session.commit()
             return deleted > 0
         except Exception as e:
-            logger.error(f"Failed to delete stats for stream {stream_id}: {e}")
+            logger.error("[STREAM-PROBE] Failed to delete stats for stream %s: %s", stream_id, e)
             session.rollback()
             return False
         finally:
@@ -2415,9 +2460,9 @@ class StreamProber:
             )
             session.commit()
             if deleted > 0:
-                logger.info(f"Purged {deleted} old stream stats")
+                logger.info("[STREAM-PROBE] Purged %s old stream stats", deleted)
         except Exception as e:
-            logger.error(f"Failed to purge old stats: {e}")
+            logger.error("[STREAM-PROBE] Failed to purge old stats: %s", e)
             session.rollback()
         finally:
             session.close()
@@ -2429,7 +2474,7 @@ _prober: Optional[StreamProber] = None
 
 def get_prober() -> Optional[StreamProber]:
     """Get the global prober instance."""
-    logger.debug(f"get_prober() called, returning: {_prober is not None} (instance exists: {_prober is not None})")
+    logger.debug("[STREAM-PROBE] get_prober() called, returning: %s (instance exists: %s)", _prober is not None, _prober is not None)
     return _prober
 
 
@@ -2437,4 +2482,4 @@ def set_prober(prober: StreamProber):
     """Set the global prober instance."""
     global _prober
     _prober = prober
-    logger.info(f"Stream prober instance set: {prober is not None}")
+    logger.info("[STREAM-PROBE] Stream prober instance set: %s", prober is not None)

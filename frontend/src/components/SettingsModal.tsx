@@ -32,8 +32,8 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
   const [connectionVerified, setConnectionVerified] = useState<boolean | null>(null);
 
   // Track original URL/username to detect if auth settings changed
-  const [originalUrl, setOriginalUrl] = useState('');
-  const [originalUsername, setOriginalUsername] = useState('');
+  const [, setOriginalUrl] = useState('');
+  const [, setOriginalUsername] = useState('');
 
   useEffect(() => {
     if (isOpen) {

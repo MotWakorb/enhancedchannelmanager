@@ -4,13 +4,8 @@ Unit tests for TLS certificate management module.
 These tests are designed to run without the josepy dependency
 by importing submodules directly instead of through __init__.py.
 """
-import pytest
 from datetime import datetime, timedelta
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
-import tempfile
-import os
-import sys
+from unittest.mock import patch
 
 # Test TLS settings without needing josepy - import directly from submodule
 from tls.settings import TLSSettings, save_tls_settings, load_tls_settings, clear_tls_settings_cache

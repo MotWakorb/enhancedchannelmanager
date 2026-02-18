@@ -258,7 +258,7 @@ class TestTestAlertMethod:
 
         method = create_alert_method(test_session, name="Test", method_type="discord")
 
-        with patch("main.create_method") as mock_create:
+        with patch("routers.alert_methods.create_method") as mock_create:
             mock_instance = MagicMock()
             mock_instance.test_connection = AsyncMock(return_value=(True, "OK"))
             mock_create.return_value = mock_instance
@@ -279,7 +279,7 @@ class TestTestAlertMethod:
 
         method = create_alert_method(test_session, name="Test", method_type="discord")
 
-        with patch("main.create_method") as mock_create:
+        with patch("routers.alert_methods.create_method") as mock_create:
             mock_instance = MagicMock()
             mock_instance.test_connection = AsyncMock(return_value=(True, "Connection successful"))
             mock_create.return_value = mock_instance

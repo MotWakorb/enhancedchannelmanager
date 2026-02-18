@@ -52,7 +52,7 @@ function formatSchedule(task: TaskStatus): { summary: string; details: string[] 
   return { summary: 'Not scheduled', details: [] };
 }
 
-function TaskCard({ task, onRunNow, onCancel, onToggleEnabled, onEdit, isRunning }: {
+function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for future use */ onEdit, isRunning }: {
   task: TaskStatus;
   onRunNow: (taskId: string) => void;
   onCancel: (taskId: string) => void;
@@ -73,7 +73,7 @@ function TaskCard({ task, onRunNow, onCancel, onToggleEnabled, onEdit, isRunning
   };
 
   return (
-    <div style={{
+    <div data-testid={`task-card-${task.task_id}`} style={{
       backgroundColor: 'var(--bg-secondary)',
       border: '1px solid var(--border-color)',
       borderRadius: '8px',

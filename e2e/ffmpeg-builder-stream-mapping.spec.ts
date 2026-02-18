@@ -9,8 +9,7 @@
  * - Multiple mappings shown in order
  */
 import { test, expect, navigateToTab } from './fixtures/base';
-import { selectors } from './fixtures/test-data';
-import { ffmpegSelectors, ffmpegTestData } from './fixtures/ffmpeg-data';
+import { ffmpegSelectors } from './fixtures/ffmpeg-data';
 
 test.describe('Stream Mapping Section', () => {
   test.beforeEach(async ({ appPage }) => {

@@ -4,12 +4,14 @@ JWT token generation and validation utilities.
 Uses python-jose for JWT handling with HS256 algorithm.
 """
 import hashlib
+import logging
 import secrets
 from datetime import datetime, timedelta
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple
 
 from jose import JWTError, jwt, ExpiredSignatureError
 
+logger = logging.getLogger(__name__)
 
 # Default configuration - used when settings unavailable (e.g., during tests)
 _DEFAULT_SECRET_KEY = secrets.token_urlsafe(32)
@@ -42,8 +44,8 @@ def _get_secret_key() -> str:
     try:
         from .settings import get_jwt_secret_key
         return get_jwt_secret_key()
-    except Exception:
-        # Fallback for tests or when settings not available
+    except Exception as e:
+        logger.warning("[AUTH] JWT secret key unavailable, using default: %s", e)
         return _DEFAULT_SECRET_KEY
 
 
@@ -138,8 +140,8 @@ def decode_token(token: str) -> dict:
         if "sub" in payload:
             try:
                 payload["sub"] = int(payload["sub"])
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as e:
+                logger.debug("[AUTH] Suppressed token sub conversion error: %s", e)
 
         return payload
 

@@ -5,7 +5,7 @@ Defines the structure of conditions and actions used in auto-creation rules.
 Includes validation, parsing, and serialization utilities.
 """
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional, Union
 import re
@@ -121,7 +121,7 @@ class Condition:
         try:
             cond_type = ConditionType(self.type)
         except ValueError:
-            logger.warning(f"[Schema] Unknown condition type: {self.type}")
+            logger.warning("[AUTO-CREATE-SCHEMA] Unknown condition type: %s", self.type)
             errors.append(f"Unknown condition type: {self.type}")
             return errors
 
@@ -197,7 +197,7 @@ class Condition:
                 errors.append(f"{self.type} value should be boolean or omitted")
 
         if errors:
-            logger.warning(f"[Schema] Condition validation errors for type={self.type}: {errors}")
+            logger.warning("[AUTO-CREATE-SCHEMA] Condition validation errors for type=%s: %s", self.type, errors)
         return errors
 
 
@@ -356,7 +356,7 @@ class Action:
         try:
             action_type = ActionType(self.type)
         except ValueError:
-            logger.warning(f"[Schema] Unknown action type: {self.type}")
+            logger.warning("[AUTO-CREATE-SCHEMA] Unknown action type: %s", self.type)
             errors.append(f"Unknown action type: {self.type}")
             return errors
 
@@ -466,7 +466,7 @@ class Action:
                         errors.append("set_variable with mode 'literal' requires a 'template'")
 
         if errors:
-            logger.warning(f"[Schema] Action validation errors for type={self.type}: {errors}")
+            logger.warning("[AUTO-CREATE-SCHEMA] Action validation errors for type=%s: %s", self.type, errors)
         return errors
 
     def _validate_name_transform(self) -> list[str]:
@@ -553,7 +553,7 @@ class TemplateVariables:
                     result = result.replace(placeholder, str(value) if value else "")
         expanded = result.strip()
         if expanded != template:
-            logger.debug(f"[Template] '{template}' -> '{expanded}'")
+            logger.debug("[AUTO-CREATE-SCHEMA] Template '%s' -> '%s'", template, expanded)
         return expanded
 
 
@@ -594,9 +594,9 @@ def validate_rule(conditions: list, actions: list) -> dict:
 
     valid = len(errors) == 0
     if not valid:
-        logger.warning(f"[Schema] Rule validation failed with {len(errors)} error(s): {errors}")
+        logger.warning("[AUTO-CREATE-SCHEMA] Rule validation failed with %s error(s): %s", len(errors), errors)
     else:
-        logger.debug(f"[Schema] Rule validation passed ({len(conditions)} conditions, {len(actions)} actions)")
+        logger.debug("[AUTO-CREATE-SCHEMA] Rule validation passed (%s conditions, %s actions)", len(conditions), len(actions))
     return {
         "valid": valid,
         "errors": errors
@@ -608,10 +608,10 @@ def parse_conditions(conditions_json: str) -> list[Condition]:
     try:
         data = json.loads(conditions_json) if isinstance(conditions_json, str) else conditions_json
         conditions = [Condition.from_dict(c) for c in data]
-        logger.debug(f"[Schema] Parsed {len(conditions)} conditions")
+        logger.debug("[AUTO-CREATE-SCHEMA] Parsed %s conditions", len(conditions))
         return conditions
     except (json.JSONDecodeError, TypeError, KeyError) as e:
-        logger.error(f"[Schema] Failed to parse conditions JSON: {e}")
+        logger.error("[AUTO-CREATE-SCHEMA] Failed to parse conditions JSON: %s", e)
         raise ValueError(f"Invalid conditions JSON: {e}")
 
 
@@ -620,10 +620,10 @@ def parse_actions(actions_json: str) -> list[Action]:
     try:
         data = json.loads(actions_json) if isinstance(actions_json, str) else actions_json
         actions = [Action.from_dict(a) for a in data]
-        logger.debug(f"[Schema] Parsed {len(actions)} actions")
+        logger.debug("[AUTO-CREATE-SCHEMA] Parsed %s actions", len(actions))
         return actions
     except (json.JSONDecodeError, TypeError, KeyError) as e:
-        logger.error(f"[Schema] Failed to parse actions JSON: {e}")
+        logger.error("[AUTO-CREATE-SCHEMA] Failed to parse actions JSON: %s", e)
         raise ValueError(f"Invalid actions JSON: {e}")
 
 

@@ -4,7 +4,7 @@
  * These tests define the expected behavior of the hook BEFORE implementation.
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import {
   server,

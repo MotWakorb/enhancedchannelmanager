@@ -5,21 +5,11 @@ Tests command execution, progress parsing, events, and safety (Spec 1.10).
 These are TDD tests -- they will FAIL until the backend modules are implemented.
 """
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 
 from ffmpeg_builder.execution import (
-    execute_command,
     parse_progress_line,
     FFMPEGExecutor,
-    ExecutionResult,
-    ProgressInfo,
-    ExecutionEvent,
-)
-
-from tests.fixtures.ffmpeg_factories import (
-    create_builder_state,
-    create_ffmpeg_job,
-    create_job_progress,
 )
 
 

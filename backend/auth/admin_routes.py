@@ -14,7 +14,7 @@ from sqlalchemy import or_
 
 from database import get_session
 from models import User
-from .password import hash_password, validate_password
+from .password import hash_password
 from .dependencies import get_current_active_admin
 from .routes import UserResponse
 
@@ -177,7 +177,7 @@ async def admin_create_user(
     session.commit()
     session.refresh(user)
 
-    logger.info(f"Admin {current_admin.username} created user: {user.username}")
+    logger.info("[AUTH-ADMIN] Admin %s created user: %s", current_admin.username, user.username)
 
     return SingleUserResponse(user=UserResponse.model_validate(user))
 
@@ -248,7 +248,7 @@ async def admin_update_user(
     session.commit()
     session.refresh(user)
 
-    logger.info(f"Admin {current_admin.username} updated user: {user.username}")
+    logger.info("[AUTH-ADMIN] Admin %s updated user: %s", current_admin.username, user.username)
 
     return SingleUserResponse(user=UserResponse.model_validate(user))
 
@@ -283,6 +283,6 @@ async def admin_delete_user(
     user.updated_at = datetime.utcnow()
     session.commit()
 
-    logger.info(f"Admin {current_admin.username} deactivated user: {user.username}")
+    logger.info("[AUTH-ADMIN] Admin %s deactivated user: %s", current_admin.username, user.username)
 
     return DeleteUserResponse(message="User deactivated successfully")

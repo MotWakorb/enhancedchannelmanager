@@ -8,7 +8,7 @@ import json
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, func
+from sqlalchemy import Column, Integer, String, Text, DateTime
 from sqlalchemy.orm import Session
 
 from database import Base

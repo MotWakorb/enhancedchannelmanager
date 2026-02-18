@@ -6,7 +6,6 @@ All factories accept a session parameter and commit the created object.
 """
 import json
 from datetime import datetime, date, timedelta
-from typing import Optional, Any
 from sqlalchemy.orm import Session
 
 from models import (

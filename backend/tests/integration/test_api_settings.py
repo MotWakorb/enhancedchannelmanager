@@ -72,7 +72,7 @@ class TestTestConnection:
     @pytest.mark.asyncio
     async def test_test_connection_with_valid_credentials(self, async_client):
         """POST /api/settings/test tests connection with provided credentials."""
-        with patch("main.get_client") as mock_get_client:
+        with patch("routers.settings.get_client") as mock_get_client:
             mock_client = MagicMock()
             mock_client.test_connection = MagicMock(return_value=True)
             mock_get_client.return_value = mock_client
@@ -105,7 +105,7 @@ class TestRestartServices:
     @pytest.mark.asyncio
     async def test_restart_services_reinitializes(self, async_client):
         """POST /api/settings/restart-services restarts background services."""
-        with patch("main.get_settings") as mock_get:
+        with patch("routers.settings.get_settings") as mock_get:
             mock_settings = MagicMock()
             mock_settings.is_configured.return_value = True
             mock_settings.stats_poll_interval = 30
@@ -124,10 +124,10 @@ class TestRestartServices:
             mock_settings.stream_fetch_page_limit = 200
             mock_get.return_value = mock_settings
 
-            with patch("main.get_tracker") as mock_tracker:
+            with patch("routers.settings.get_tracker") as mock_tracker:
                 mock_tracker.return_value = None
 
-                with patch("main.get_prober") as mock_prober:
+                with patch("routers.settings.get_prober") as mock_prober:
                     mock_prober.return_value = None
 
                     response = await async_client.post("/api/settings/restart-services")

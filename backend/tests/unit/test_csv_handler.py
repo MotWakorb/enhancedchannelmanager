@@ -2,7 +2,6 @@
 Unit tests for the csv_handler module.
 Tests CSV parsing, validation, and generation for channel import/export.
 """
-import io
 import pytest
 
 from csv_handler import (
@@ -11,7 +10,6 @@ from csv_handler import (
     generate_csv,
     generate_template,
     CSVParseError,
-    CSVValidationError,
 )
 
 
@@ -400,7 +398,6 @@ class TestGenerateCSV:
         ]
 
         csv_output = generate_csv(channels)
-        lines = csv_output.strip().split("\n")
 
         # Should not contain "None" as a string
         assert "None" not in csv_output
