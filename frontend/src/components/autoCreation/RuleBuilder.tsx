@@ -652,6 +652,13 @@ function ActionTypeSelector({
       ],
     },
     {
+      label: 'Management',
+      types: [
+        { type: 'remove_from_channel' as ActionType, label: 'Remove From Channel' },
+        { type: 'set_stream_priority' as ActionType, label: 'Set Stream Priority' },
+      ],
+    },
+    {
       label: 'Control',
       types: [
         { type: 'skip' as ActionType, label: 'Skip' },

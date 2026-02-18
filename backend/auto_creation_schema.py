@@ -227,6 +227,10 @@ class ActionType(str, Enum):
     # Variables
     SET_VARIABLE = "set_variable"
 
+    # Stream management
+    REMOVE_FROM_CHANNEL = "remove_from_channel"
+    SET_STREAM_PRIORITY = "set_stream_priority"
+
     # Control flow
     SKIP = "skip"
     STOP_PROCESSING = "stop_processing"
@@ -425,6 +429,12 @@ class Action:
             value = self.params.get("value")
             if value is None:
                 errors.append("set_channel_number requires a 'value' ('auto', integer, or 'min-max' range)")
+
+        # Validate set_stream_priority
+        elif action_type == ActionType.SET_STREAM_PRIORITY:
+            priority = self.params.get("priority", "lowest")
+            if priority not in ("lowest", "highest"):
+                errors.append("set_stream_priority.priority must be 'lowest' or 'highest'")
 
         # Validate log_match
         elif action_type == ActionType.LOG_MATCH:

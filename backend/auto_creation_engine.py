@@ -427,8 +427,12 @@ class AutoCreationEngine:
             except Exception as e:
                 logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch auto-sync groups: %s", e)
 
-        # Lowercase terms for case-insensitive matching
+        # Build word-boundary patterns for case-insensitive matching
         terms_lower = [t.lower() for t in excluded_terms if t]
+        terms_with_patterns = [
+            (t, re.compile(r'\b' + re.escape(t) + r'\b'))
+            for t in terms_lower
+        ]
         groups_lower = [g.lower() for g in excluded_groups if g]
 
         filtered = []
@@ -437,11 +441,13 @@ class AutoCreationEngine:
         for stream in streams:
             reason = None
 
-            # Check excluded terms (case-insensitive substring)
+            # Check excluded terms (case-insensitive word-boundary match
+            # against both stream name and group name)
             if terms_lower:
                 name_lower = (stream.stream_name or "").lower()
-                for term in terms_lower:
-                    if term in name_lower:
+                group_lower = (stream.group_name or "").lower()
+                for term, pattern in terms_with_patterns:
+                    if pattern.search(name_lower) or pattern.search(group_lower):
                         reason = f"Excluded: matched term '{term}'"
                         break
 
@@ -829,6 +835,7 @@ class AutoCreationEngine:
             "groups_created": 0,
             "streams_merged": 0,
             "streams_skipped": 0,
+            "streams_removed": 0,
             "channels_removed": 0,
             "channels_moved": 0,
             "created_entities": [],
@@ -1095,6 +1102,7 @@ class AutoCreationEngine:
             results["groups_created"] += exec_ctx.groups_created
             results["streams_merged"] += exec_ctx.streams_merged
             results["streams_skipped"] += exec_ctx.streams_skipped
+            results["streams_removed"] += exec_ctx.streams_removed
             results["created_entities"].extend(exec_ctx.created_entities)
             results["modified_entities"].extend(exec_ctx.modified_entities)
 

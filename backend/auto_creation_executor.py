@@ -55,6 +55,7 @@ class ExecutionContext:
     groups_created: int = 0
     streams_merged: int = 0
     streams_skipped: int = 0
+    streams_removed: int = 0
 
     # Current state (updated during execution)
     current_channel_id: Optional[int] = None  # Channel created/selected for this stream
@@ -86,6 +87,8 @@ class ExecutionContext:
         if result.modified:
             if result.entity_type == "channel":
                 self.channels_updated += 1
+            elif result.entity_type == "stream" and result.action_type == "remove_from_channel":
+                self.streams_removed += 1
             self.modified_entities.append({
                 "type": result.entity_type,
                 "id": result.entity_id,
@@ -279,6 +282,10 @@ class ActionExecutor:
             result = await self._execute_set_channel_number(action, stream_ctx, exec_ctx)
         elif action_type == ActionType.SET_VARIABLE:
             result = await self._execute_set_variable(action, stream_ctx, exec_ctx, template_ctx)
+        elif action_type == ActionType.REMOVE_FROM_CHANNEL:
+            result = await self._execute_remove_from_channel(action, stream_ctx, exec_ctx)
+        elif action_type == ActionType.SET_STREAM_PRIORITY:
+            result = await self._execute_set_stream_priority(action, stream_ctx, exec_ctx)
         elif action_type == ActionType.SKIP:
             result = ActionResult(
                 success=True,
@@ -1544,6 +1551,169 @@ class ActionExecutor:
                 success=False,
                 action_type=action.type,
                 description=f"Regex error in set_variable: {e}",
+                error=str(e)
+            )
+
+    # =========================================================================
+    # Stream Management Actions
+    # =========================================================================
+
+    async def _execute_remove_from_channel(self, action: Action, stream_ctx: StreamContext,
+                                            exec_ctx: ExecutionContext) -> ActionResult:
+        """Execute remove_from_channel action — unassign a stream from its current channel."""
+        if not stream_ctx.channel_id:
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description="Stream not assigned to any channel, skipped",
+                skipped=True
+            )
+
+        channel_id = stream_ctx.channel_id
+        channel = self._channel_by_id.get(channel_id)
+        if not channel:
+            try:
+                channel = await self.client.get_channel(channel_id)
+            except Exception as e:
+                return ActionResult(
+                    success=False,
+                    action_type=action.type,
+                    description=f"Failed to fetch channel {channel_id}",
+                    error=str(e)
+                )
+
+        channel_name = channel.get("name", f"ID:{channel_id}")
+
+        # Get current stream list
+        current_streams = [s["id"] if isinstance(s, dict) else s for s in channel.get("streams", [])]
+        if stream_ctx.stream_id not in current_streams:
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description=f"Stream not in channel '{channel_name}', skipped",
+                skipped=True
+            )
+
+        filtered_streams = [s for s in current_streams if s != stream_ctx.stream_id]
+
+        if exec_ctx.dry_run:
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description=f"Would remove stream from channel '{channel_name}'",
+                entity_type="stream",
+                entity_id=stream_ctx.stream_id,
+                entity_name=stream_ctx.stream_name,
+                modified=True
+            )
+
+        try:
+            previous_state = {"streams": current_streams.copy()}
+            await self.client.update_channel(channel_id, {"streams": filtered_streams})
+            channel["streams"] = filtered_streams
+
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description=f"Removed stream from channel '{channel_name}'",
+                entity_type="stream",
+                entity_id=stream_ctx.stream_id,
+                entity_name=stream_ctx.stream_name,
+                modified=True,
+                previous_state=previous_state
+            )
+        except Exception as e:
+            logger.error("[AUTO-CREATE-EXEC] Failed to remove stream from channel '%s': %s", channel_name, e)
+            return ActionResult(
+                success=False,
+                action_type=action.type,
+                description=f"Failed to remove stream from channel '{channel_name}'",
+                error=str(e)
+            )
+
+    async def _execute_set_stream_priority(self, action: Action, stream_ctx: StreamContext,
+                                            exec_ctx: ExecutionContext) -> ActionResult:
+        """Execute set_stream_priority action — move stream to lowest or highest position."""
+        if not stream_ctx.channel_id:
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description="Stream not assigned to any channel, skipped",
+                skipped=True
+            )
+
+        priority = action.params.get("priority", "lowest")
+        channel_id = stream_ctx.channel_id
+        channel = self._channel_by_id.get(channel_id)
+        if not channel:
+            try:
+                channel = await self.client.get_channel(channel_id)
+            except Exception as e:
+                return ActionResult(
+                    success=False,
+                    action_type=action.type,
+                    description=f"Failed to fetch channel {channel_id}",
+                    error=str(e)
+                )
+
+        channel_name = channel.get("name", f"ID:{channel_id}")
+
+        current_streams = [s["id"] if isinstance(s, dict) else s for s in channel.get("streams", [])]
+        if stream_ctx.stream_id not in current_streams:
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description=f"Stream not in channel '{channel_name}', skipped",
+                skipped=True
+            )
+
+        # Build reordered list
+        without = [s for s in current_streams if s != stream_ctx.stream_id]
+        if priority == "highest":
+            reordered = [stream_ctx.stream_id] + without
+        else:
+            reordered = without + [stream_ctx.stream_id]
+
+        if reordered == current_streams:
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description=f"Stream already at {priority} priority in '{channel_name}', skipped",
+                skipped=True
+            )
+
+        if exec_ctx.dry_run:
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description=f"Would move stream to {priority} priority in channel '{channel_name}'",
+                entity_type="channel",
+                entity_id=channel_id,
+                entity_name=channel_name,
+                modified=True
+            )
+
+        try:
+            previous_state = {"streams": current_streams.copy()}
+            await self.client.update_channel(channel_id, {"streams": reordered})
+            channel["streams"] = reordered
+
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description=f"Moved stream to {priority} priority in channel '{channel_name}'",
+                entity_type="channel",
+                entity_id=channel_id,
+                entity_name=channel_name,
+                modified=True,
+                previous_state=previous_state
+            )
+        except Exception as e:
+            logger.error("[AUTO-CREATE-EXEC] Failed to set stream priority in '%s': %s", channel_name, e)
+            return ActionResult(
+                success=False,
+                action_type=action.type,
+                description=f"Failed to set stream priority in channel '{channel_name}'",
                 error=str(e)
             )
 
