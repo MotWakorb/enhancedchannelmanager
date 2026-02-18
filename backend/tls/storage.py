@@ -241,8 +241,8 @@ class CertificateStorage:
                 cn_attrs = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
                 if cn_attrs:
                     subject_cn = cn_attrs[0].value
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("[TLS] Suppressed subject CN extraction error: %s", e)
 
             # Extract issuer CN
             issuer_cn = ""
@@ -250,8 +250,8 @@ class CertificateStorage:
                 cn_attrs = cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)
                 if cn_attrs:
                     issuer_cn = cn_attrs[0].value
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("[TLS] Suppressed issuer CN extraction error: %s", e)
 
             # Extract domains from SANs
             domains = []
@@ -266,8 +266,8 @@ class CertificateStorage:
                     if isinstance(name, x509.DNSName):
                         if name.value not in domains:
                             domains.append(name.value)
-            except x509.ExtensionNotFound:
-                pass
+            except x509.ExtensionNotFound as e:
+                logger.debug("[TLS] Suppressed SAN extension lookup: %s", e)
 
             return CertificateInfo(
                 subject=subject_cn,

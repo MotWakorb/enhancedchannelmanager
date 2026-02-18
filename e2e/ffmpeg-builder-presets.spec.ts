@@ -7,9 +7,8 @@
  * - Saving custom presets
  * - Preset descriptions and explanations
  */
-import { test, expect, navigateToTab, waitForToast } from './fixtures/base';
-import { selectors, generateTestId } from './fixtures/test-data';
-import { ffmpegSelectors, ffmpegTestData } from './fixtures/ffmpeg-data';
+import { test, expect, navigateToTab } from './fixtures/base';
+import { ffmpegSelectors } from './fixtures/ffmpeg-data';
 
 test.describe('Preset Templates', () => {
   test.beforeEach(async ({ appPage }) => {
@@ -142,10 +141,6 @@ test.describe('Loading Presets', () => {
       // Capture initial video codec value
       const videoCodecSelect = appPage.locator(ffmpegSelectors.videoCodecSelect);
       const initialCodecVisible = await videoCodecSelect.isVisible().catch(() => false);
-      let initialCodecText = '';
-      if (initialCodecVisible) {
-        initialCodecText = await videoCodecSelect.textContent().catch(() => '') || '';
-      }
 
       // Select the Archive HEVC preset which uses libx265
       await presetSelect.click().catch(() => {});

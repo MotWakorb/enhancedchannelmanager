@@ -595,7 +595,6 @@ describe('ActionEditor', () => {
     });
 
     it('updates preview when template changes', async () => {
-      const user = userEvent.setup();
       const { rerender } = render(
         <ActionEditor
           action={{ type: 'create_channel', name_template: '{stream_name}' }}

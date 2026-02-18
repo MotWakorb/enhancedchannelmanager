@@ -1279,7 +1279,7 @@ export async function bulkCreateChannelsFromStreams(
   });
 
   // Handle both old signature (just TimezonePreference) and new signature (BulkCreateOptions)
-  let timezonePreference: TimezonePreference = 'both';
+  let timezonePreference: TimezonePreference;
   let stripCountry = false;
   let keepCountry = false;
   let countrySeparator: NumberSeparator = '|';

@@ -4,13 +4,11 @@
  * These tests define the expected behavior of the component BEFORE implementation.
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {
   server,
-  mockDataStore,
   resetMockDataStore,
-  createMockAutoCreationRule,
 } from '../../test/mocks/server';
 import { RuleBuilder } from './RuleBuilder';
 import type { AutoCreationRule, CreateRuleData } from '../../types/autoCreation';

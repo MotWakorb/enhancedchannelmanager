@@ -7,7 +7,7 @@
  * - Execution history and rollback
  * - YAML import/export
  */
-import { test, expect, navigateToTab, waitForToast, closeModal } from './fixtures/base';
+import { test, expect, navigateToTab, closeModal } from './fixtures/base';
 import { selectors, generateTestId } from './fixtures/test-data';
 
 test.describe('Auto-Creation Tab', () => {
@@ -579,7 +579,6 @@ test.describe('Execution History', () => {
     const count = await executionItems.count();
 
     if (count > 0) {
-      const firstExecution = executionItems.first();
       const detailsButton = appPage.locator(selectors.autoCreationViewDetailsBtn).first();
 
       if (await detailsButton.isVisible()) {

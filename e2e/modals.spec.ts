@@ -21,7 +21,6 @@ import {
   waitForModal,
   closeModal,
   checkModalLayout,
-  assertModalFullyFunctional,
   modalSelectors,
 } from './fixtures/modal-utils'
 

@@ -1,6 +1,5 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import * as api from '../../services/api';
-import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../constants/streamNormalization';
 import { useNotifications } from '../../contexts/NotificationContext';
 import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode, StreamPreviewMode } from '../../services/api';
 import { NormalizationEngineSection } from '../settings/NormalizationEngineSection';
@@ -231,9 +230,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [defaultChannelProfileIds, setDefaultChannelProfileIds] = useState<number[]>([]);
   const [epgAutoMatchThreshold, setEpgAutoMatchThreshold] = useState(80);
   const [customNetworkPrefixes, setCustomNetworkPrefixes] = useState<string[]>([]);
-  const [newPrefixInput, setNewPrefixInput] = useState('');
   const [customNetworkSuffixes, setCustomNetworkSuffixes] = useState<string[]>([]);
-  const [newSuffixInput, setNewSuffixInput] = useState('');
   const [normalizeOnChannelCreate, setNormalizeOnChannelCreate] = useState(false);
 
   const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels']);
@@ -351,7 +348,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   // UI state
   const [loading, setLoading] = useState(false);
-  const [testing, setTesting] = useState(false);
+  const [_testing, setTesting] = useState(false);
 
   // Maintenance state
   const [orphanedGroups, setOrphanedGroups] = useState<{ id: number; name: string; reason?: string }[]>([]);
@@ -384,8 +381,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [originalTimezone, setOriginalTimezone] = useState('');
   const [originalAutoReorder, setOriginalAutoReorder] = useState(false);
   const [originalRefreshM3usBeforeProbe, setOriginalRefreshM3usBeforeProbe] = useState(true);
-  const [needsRestart, setNeedsRestart] = useState(false);
-  const [restarting, setRestarting] = useState(false);
+  const [_needsRestart, setNeedsRestart] = useState(false);
+  const [_restarting, setRestarting] = useState(false);
 
   // DnD sensors for sort priority
   const sensors = useSensors(
@@ -650,7 +647,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     onThemeChange?.(newTheme);
   };
 
-  const handleTest = async () => {
+  const _handleTest = async () => {
     if (!url || !username || !password) {
       notifications.error('URL, username, and password are required to test connection');
       return;
@@ -1034,7 +1031,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
-  const handleProbeAllStreams = async () => {
+  const _handleProbeAllStreams = async () => {
     setProbingAll(true);
     setProbeProgress(null);
     try {

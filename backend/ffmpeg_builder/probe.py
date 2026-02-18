@@ -107,24 +107,24 @@ def parse_probe_output(raw_json: str) -> ProbeResult:
     if dur_str:
         try:
             duration = float(dur_str)
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as e:
+            logger.debug("[FFPROBE] Suppressed duration parse error: %s", e)
 
     bit_rate = None
     br_str = fmt.get("bit_rate")
     if br_str:
         try:
             bit_rate = int(br_str)
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as e:
+            logger.debug("[FFPROBE] Suppressed bit_rate parse error: %s", e)
 
     size = None
     size_str = fmt.get("size")
     if size_str:
         try:
             size = int(size_str)
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as e:
+            logger.debug("[FFPROBE] Suppressed size parse error: %s", e)
 
     return ProbeResult(
         success=True,

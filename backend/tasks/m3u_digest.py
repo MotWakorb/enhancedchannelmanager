@@ -191,15 +191,15 @@ class M3UDigestTask(TaskScheduler):
                 for p in group_patterns_raw:
                     try:
                         group_regexes.append(re.compile(p, re.IGNORECASE))
-                    except re.error:
-                        pass  # Skip invalid patterns (validated on save)
+                    except re.error as e:
+                        logger.debug("[M3U-DIGEST] Suppressed invalid group regex pattern: %s", e)
 
                 stream_regexes = []
                 for p in stream_patterns_raw:
                     try:
                         stream_regexes.append(re.compile(p, re.IGNORECASE))
-                    except re.error:
-                        pass
+                    except re.error as e:
+                        logger.debug("[M3U-DIGEST] Suppressed invalid stream regex pattern: %s", e)
 
                 filtered_changes = []
                 for change in changes:

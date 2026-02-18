@@ -13,7 +13,6 @@ import {
   logout as apiLogout,
   getCurrentUser,
   getAuthStatus,
-  refreshToken,
 } from '../services/api';
 
 // Auth context state

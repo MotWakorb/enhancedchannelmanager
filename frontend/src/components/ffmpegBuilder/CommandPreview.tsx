@@ -360,7 +360,7 @@ export function generateCommand(config: FFMPEGBuilderState): GeneratedCommand {
       }
       if (vc.rateControl === 'crf' && vc.crf !== undefined) {
         parts.push(`-crf ${vc.crf}`);
-        let crfQuality = 'balanced';
+        let crfQuality: string;
         if (vc.crf <= 18) crfQuality = 'visually lossless (very high quality)';
         else if (vc.crf <= 23) crfQuality = 'good quality (recommended for most content)';
         else if (vc.crf <= 28) crfQuality = 'acceptable quality (saves bandwidth)';

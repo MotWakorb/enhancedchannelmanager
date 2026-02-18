@@ -7,8 +7,8 @@
  * - Task execution (Run Now)
  * - Schedule parameters
  */
-import { test, expect, navigateToTab, waitForToast } from './fixtures/base';
-import { selectors, sampleTasks } from './fixtures/test-data';
+import { test, expect, navigateToTab } from './fixtures/base';
+import { selectors } from './fixtures/test-data';
 
 /**
  * Navigate to the Scheduled Tasks section within Settings.

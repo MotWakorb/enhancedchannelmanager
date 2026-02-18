@@ -3,6 +3,10 @@ Authentication module for ECM.
 
 Provides password hashing, JWT tokens, and auth utilities.
 """
+import logging
+
+logger = logging.getLogger(__name__)
+
 from .password import (
     hash_password,
     verify_password,
@@ -40,8 +44,8 @@ try:
         "InvalidTokenError",
         "TokenRevokedError",
     ])
-except ImportError:
-    pass
+except ImportError as e:
+    logger.debug("[AUTH] Suppressed token import error: %s", e)
 
 # Settings imports
 try:
@@ -69,8 +73,8 @@ try:
         "get_jwt_secret_key",
         "mark_setup_complete",
     ])
-except ImportError:
-    pass
+except ImportError as e:
+    logger.debug("[AUTH] Suppressed settings import error: %s", e)
 
 # Dependencies imports
 try:
@@ -96,8 +100,8 @@ try:
         "require_auth_if_enabled",
         "RequireAuthIfEnabled",
     ])
-except ImportError:
-    pass
+except ImportError as e:
+    logger.debug("[AUTH] Suppressed dependencies import error: %s", e)
 
 # Routes imports
 try:
@@ -107,5 +111,5 @@ try:
         "auth_router",
         "admin_router",
     ])
-except ImportError:
-    pass
+except ImportError as e:
+    logger.debug("[AUTH] Suppressed routes import error: %s", e)

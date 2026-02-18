@@ -7,7 +7,7 @@ import hashlib
 import logging
 import secrets
 from datetime import datetime, timedelta
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple
 
 from jose import JWTError, jwt, ExpiredSignatureError
 
@@ -140,8 +140,8 @@ def decode_token(token: str) -> dict:
         if "sub" in payload:
             try:
                 payload["sub"] = int(payload["sub"])
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as e:
+                logger.debug("[AUTH] Suppressed token sub conversion error: %s", e)
 
         return payload
 
