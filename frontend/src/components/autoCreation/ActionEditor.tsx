@@ -195,7 +195,7 @@ export function ActionEditor({
   showValidation = false,
   showPreview = false,
   readonly = false,
-  draggable = false,
+  /* draggable - defined in props but not yet used in the component body */
   compact = false,
   previousActions = [],
   orderNumber,

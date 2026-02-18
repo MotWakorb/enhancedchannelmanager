@@ -77,45 +77,45 @@ async def check_and_renew_certificate() -> tuple[bool, Optional[str]]:
     storage = CertificateStorage(TLS_DIR)
 
     if not storage.has_certificate():
-        logger.info("No certificate found, skipping renewal check")
+        logger.info("[TLS-RENEWAL] No certificate found, skipping renewal check")
         return False, None
 
     info = storage.get_certificate_info()
     if not info or not info.is_valid:
-        logger.warning("Invalid certificate, skipping renewal")
+        logger.warning("[TLS-RENEWAL] Invalid certificate, skipping renewal")
         return False, "Invalid certificate"
 
     days_left = info.days_until_expiry()
-    logger.info(f"Certificate expires in {days_left} days")
+    logger.info("[TLS-RENEWAL] Certificate expires in %s days", days_left)
 
     if days_left > settings.renew_days_before_expiry:
         logger.debug(
-            f"Certificate renewal not needed yet "
-            f"({days_left} days left, threshold is {settings.renew_days_before_expiry})"
+            "[TLS-RENEWAL] Certificate renewal not needed yet (%s days left, threshold is %s)",
+            days_left, settings.renew_days_before_expiry,
         )
         return False, None
 
     logger.info(
-        f"Certificate expires in {days_left} days, initiating renewal "
-        f"(threshold: {settings.renew_days_before_expiry} days)"
+        "[TLS-RENEWAL] Certificate expires in %s days, initiating renewal (threshold: %s days)",
+        days_left, settings.renew_days_before_expiry,
     )
 
     # Attempt renewal
     result = await renew_certificate()
 
     if result.success:
-        logger.info("Certificate renewed successfully")
+        logger.info("[TLS-RENEWAL] Certificate renewed successfully")
 
         # Call renewal callback if set
         if _renewal_callback:
             try:
                 await _renewal_callback()
             except Exception as e:
-                logger.error(f"Renewal callback failed: {e}")
+                logger.error("[TLS-RENEWAL] Renewal callback failed: %s", e)
 
         return True, None
     else:
-        logger.error(f"Certificate renewal failed: {result.error}")
+        logger.error("[TLS-RENEWAL] Certificate renewal failed: %s", result.error)
         return False, result.error
 
 
@@ -193,7 +193,7 @@ async def renew_certificate() -> CertificateResult:
                 )
 
                 # Wait for DNS propagation
-                logger.debug("Waiting for DNS propagation...")
+                logger.debug("[TLS-RENEWAL] Waiting for DNS propagation...")
                 await asyncio.sleep(30)
 
                 # Complete challenge
@@ -206,7 +206,7 @@ async def renew_certificate() -> CertificateResult:
                     provider.zone_id = zone_id
                     await provider.delete_txt_record(record_id)
                 except Exception as e:
-                    logger.warning(f"Failed to delete DNS record: {e}")
+                    logger.warning("[TLS-RENEWAL] Failed to delete DNS record: %s", e)
 
             except Exception as e:
                 error = f"DNS challenge failed: {e}"
@@ -249,7 +249,7 @@ async def renew_certificate() -> CertificateResult:
 
     except Exception as e:
         error = f"Renewal failed: {e}"
-        logger.error(error)
+        logger.error("[TLS-RENEWAL] %s", error)
         settings.last_renewal_error = error
         save_tls_settings(settings)
         return CertificateResult(success=False, error=error)
@@ -266,8 +266,8 @@ async def certificate_renewal_task(check_interval: int = 86400) -> None:
         check_interval: Interval between checks in seconds (default: 24 hours)
     """
     logger.info(
-        f"Certificate renewal task started "
-        f"(checking every {check_interval} seconds)"
+        "[TLS-RENEWAL] Certificate renewal task started (checking every %s seconds)",
+        check_interval,
     )
 
     while True:
@@ -275,15 +275,15 @@ async def certificate_renewal_task(check_interval: int = 86400) -> None:
             renewed, error = await check_and_renew_certificate()
 
             if renewed:
-                logger.info("Certificate was renewed by background task")
+                logger.info("[TLS-RENEWAL] Certificate was renewed by background task")
             elif error:
-                logger.warning(f"Certificate renewal check failed: {error}")
+                logger.warning("[TLS-RENEWAL] Certificate renewal check failed: %s", error)
 
         except asyncio.CancelledError:
-            logger.info("Certificate renewal task cancelled")
+            logger.info("[TLS-RENEWAL] Certificate renewal task cancelled")
             break
         except Exception as e:
-            logger.error(f"Error in certificate renewal task: {e}")
+            logger.exception("[TLS-RENEWAL] Error in certificate renewal task: %s", e)
 
         # Wait before next check
         await asyncio.sleep(check_interval)
@@ -313,20 +313,20 @@ class CertificateRenewalManager:
             check_interval: Interval between checks in seconds
         """
         if self.is_running:
-            logger.warning("Renewal task already running")
+            logger.warning("[TLS-RENEWAL] Renewal task already running")
             return
 
         self._check_interval = check_interval
         self._task = asyncio.create_task(
             certificate_renewal_task(check_interval)
         )
-        logger.info("Certificate renewal manager started")
+        logger.info("[TLS-RENEWAL] Certificate renewal manager started")
 
     def stop(self) -> None:
         """Stop the certificate renewal background task."""
         if self._task and not self._task.done():
             self._task.cancel()
-            logger.info("Certificate renewal manager stopped")
+            logger.info("[TLS-RENEWAL] Certificate renewal manager stopped")
 
     async def trigger_renewal(self) -> CertificateResult:
         """Manually trigger a certificate renewal."""

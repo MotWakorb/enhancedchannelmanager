@@ -6,7 +6,6 @@ They will FAIL initially - implementation makes them pass.
 
 Test Spec: Password Security (v6dxf.8.2)
 """
-import pytest
 import time
 
 

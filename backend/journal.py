@@ -45,9 +45,9 @@ def log_entry(
     try:
         session: Session = get_session()
         logger.debug(
-            f"[Journal] Creating entry: category={category} action={action_type} "
-            f"entity={entity_name!r} (id={entity_id}) user_initiated={user_initiated}"
-            + (f" batch_id={batch_id}" if batch_id else "")
+            "[JOURNAL] Creating entry: category=%s action=%s entity=%r (id=%s) user_initiated=%s%s",
+            category, action_type, entity_name, entity_id, user_initiated,
+            (" batch_id=%s" % batch_id) if batch_id else ""
         )
         entry = JournalEntry(
             timestamp=datetime.utcnow(),
@@ -63,11 +63,11 @@ def log_entry(
         )
         session.add(entry)
         session.commit()
-        logger.debug(f"[Journal] Entry logged: {category}/{action_type} - {entity_name} (id={entry.id})")
+        logger.debug("[JOURNAL] Entry logged: %s/%s - %s (id=%s)", category, action_type, entity_name, entry.id)
         session.close()
         return entry
     except Exception as e:
-        logger.error(f"Failed to log journal entry: {e}")
+        logger.exception("[JOURNAL] Failed to log journal entry: %s", e)
         return None
 
 
@@ -102,8 +102,8 @@ def get_entries(
         filters_applied.append(f"user_initiated={user_initiated}")
 
     logger.debug(
-        f"[Journal] Querying entries: page={page} page_size={page_size} "
-        f"filters=[{', '.join(filters_applied) if filters_applied else 'none'}]"
+        "[JOURNAL] Querying entries: page=%s page_size=%s filters=[%s]",
+        page, page_size, ', '.join(filters_applied) if filters_applied else 'none'
     )
     session: Session = get_session()
     try:
@@ -137,7 +137,7 @@ def get_entries(
         # Get paginated results (newest first)
         entries = query.order_by(desc(JournalEntry.timestamp)).offset(offset).limit(page_size).all()
 
-        logger.info(f"Retrieved {len(entries)} journal entries (total: {total_count}, page {page}/{total_pages})")
+        logger.info("[JOURNAL] Retrieved %s journal entries (total: %s, page %s/%s)", len(entries), total_count, page, total_pages)
         return {
             "count": total_count,
             "page": page,
@@ -146,7 +146,7 @@ def get_entries(
             "results": [entry.to_dict() for entry in entries],
         }
     except Exception as e:
-        logger.exception(f"Failed to query journal entries: {e}")
+        logger.exception("[JOURNAL] Failed to query journal entries: %s", e)
         raise
     finally:
         session.close()
@@ -159,7 +159,7 @@ def get_stats() -> dict[str, Any]:
     Returns:
         Dict with total_entries, by_category, by_action_type, and date_range
     """
-    logger.debug("Calculating journal statistics")
+    logger.debug("[JOURNAL] Calculating journal statistics")
     session: Session = get_session()
     try:
         # Total count
@@ -185,7 +185,7 @@ def get_stats() -> dict[str, Any]:
         oldest = session.query(func.min(JournalEntry.timestamp)).scalar()
         newest = session.query(func.max(JournalEntry.timestamp)).scalar()
 
-        logger.info(f"Journal stats: {total_count} total entries, {len(by_category)} categories, {len(by_action_type)} action types")
+        logger.info("[JOURNAL] Journal stats: %s total entries, %s categories, %s action types", total_count, len(by_category), len(by_action_type))
         return {
             "total_entries": total_count,
             "by_category": by_category,
@@ -196,7 +196,7 @@ def get_stats() -> dict[str, Any]:
             },
         }
     except Exception as e:
-        logger.exception(f"Failed to calculate journal stats: {e}")
+        logger.exception("[JOURNAL] Failed to calculate journal stats: %s", e)
         raise
     finally:
         session.close()
@@ -212,7 +212,7 @@ def purge_old_entries(days: int = 90) -> int:
     Returns:
         Number of entries deleted
     """
-    logger.debug(f"Purging journal entries older than {days} days")
+    logger.debug("[JOURNAL] Purging journal entries older than %s days", days)
     session: Session = get_session()
     try:
         cutoff_date = datetime.utcnow() - timedelta(days=days)
@@ -222,10 +222,10 @@ def purge_old_entries(days: int = 90) -> int:
             .delete()
         )
         session.commit()
-        logger.info(f"Purged {deleted_count} journal entries older than {days} days")
+        logger.info("[JOURNAL] Purged %s journal entries older than %s days", deleted_count, days)
         return deleted_count
     except Exception as e:
-        logger.exception(f"Failed to purge journal entries: {e}")
+        logger.exception("[JOURNAL] Failed to purge journal entries: %s", e)
         session.rollback()
         raise
     finally:

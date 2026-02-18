@@ -1,10 +1,14 @@
 """
 SQLAlchemy ORM models for the Journal and Bandwidth tracking features.
 """
+import json
+import logging
 from datetime import datetime, date
 from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, Date, Float, Index, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
 from database import Base
+
+logger = logging.getLogger(__name__)
 
 
 class JournalEntry(Base):
@@ -734,8 +738,8 @@ class AlertMethod(Base):
         if self.alert_sources:
             try:
                 alert_sources = json.loads(self.alert_sources)
-            except (json.JSONDecodeError, TypeError):
-                pass
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.debug("[MODELS] Suppressed alert_sources JSON parse error: %s", e)
 
         return {
             "id": self.id,

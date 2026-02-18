@@ -13,6 +13,7 @@ Usage (non-interactive):
 
 import argparse
 import getpass
+import logging
 import os
 import sys
 from pathlib import Path
@@ -23,6 +24,8 @@ sys.path.insert(0, "/app")
 import bcrypt
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import StaticPool
+
+logger = logging.getLogger(__name__)
 
 
 # ── Colours ────────────────────────────────────────────────────────────
@@ -125,8 +128,8 @@ def interactive_mode(conn, force: bool = False):
             if 0 <= idx < len(users):
                 target = users[idx]
                 break
-        except ValueError:
-            pass
+        except ValueError as e:
+            logger.debug("[RESET-PASSWORD] Suppressed user selection parse error: %s", e)
 
         # Try as username
         matches = [u for u in users if u["username"] == choice]

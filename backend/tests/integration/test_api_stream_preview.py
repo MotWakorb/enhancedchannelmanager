@@ -14,7 +14,7 @@ class TestStreamPreview:
     @pytest.mark.asyncio
     async def test_stream_preview_no_client_returns_503(self, async_client):
         """GET /api/stream-preview/{id} returns 503 when Dispatcharr not connected."""
-        with patch("main.get_client", return_value=None):
+        with patch("routers.stream_preview.get_client", return_value=None):
             response = await async_client.get("/api/stream-preview/1")
             assert response.status_code == 503
             assert "Not connected" in response.json()["detail"]
@@ -25,8 +25,8 @@ class TestStreamPreview:
         mock_client = MagicMock()
         mock_client.get_stream = AsyncMock(return_value=None)
 
-        with patch("main.get_client", return_value=mock_client):
-            with patch("main.get_settings") as mock_settings:
+        with patch("routers.stream_preview.get_client", return_value=mock_client):
+            with patch("routers.stream_preview.get_settings") as mock_settings:
                 mock_settings.return_value = MagicMock(stream_preview_mode="passthrough")
                 response = await async_client.get("/api/stream-preview/9999")
                 assert response.status_code == 404
@@ -38,8 +38,8 @@ class TestStreamPreview:
         mock_client = MagicMock()
         mock_client.get_stream = AsyncMock(return_value={"id": 1, "name": "Test", "url": None})
 
-        with patch("main.get_client", return_value=mock_client):
-            with patch("main.get_settings") as mock_settings:
+        with patch("routers.stream_preview.get_client", return_value=mock_client):
+            with patch("routers.stream_preview.get_settings") as mock_settings:
                 mock_settings.return_value = MagicMock(stream_preview_mode="passthrough")
                 response = await async_client.get("/api/stream-preview/1")
                 assert response.status_code == 404
@@ -51,8 +51,8 @@ class TestStreamPreview:
         mock_client = MagicMock()
         mock_client.get_stream = AsyncMock(return_value={"id": 1, "name": "Test", "url": "http://example.com/stream.ts"})
 
-        with patch("main.get_client", return_value=mock_client):
-            with patch("main.get_settings") as mock_settings:
+        with patch("routers.stream_preview.get_client", return_value=mock_client):
+            with patch("routers.stream_preview.get_settings") as mock_settings:
                 mock_settings.return_value = MagicMock(stream_preview_mode="invalid_mode")
                 response = await async_client.get("/api/stream-preview/1")
                 assert response.status_code == 400
@@ -72,8 +72,8 @@ class TestStreamPreview:
 
         mock_response.aiter_bytes = mock_aiter_bytes
 
-        with patch("main.get_client", return_value=mock_client):
-            with patch("main.get_settings") as mock_settings:
+        with patch("routers.stream_preview.get_client", return_value=mock_client):
+            with patch("routers.stream_preview.get_settings") as mock_settings:
                 mock_settings.return_value = MagicMock(stream_preview_mode="passthrough")
 
                 # Mock httpx.AsyncClient to return our mocked response
@@ -94,8 +94,8 @@ class TestStreamPreview:
         mock_client = MagicMock()
         mock_client.get_stream = AsyncMock(return_value={"id": 1, "name": "Test", "url": "http://example.com/stream.ts"})
 
-        with patch("main.get_client", return_value=mock_client):
-            with patch("main.get_settings") as mock_settings:
+        with patch("routers.stream_preview.get_client", return_value=mock_client):
+            with patch("routers.stream_preview.get_settings") as mock_settings:
                 mock_settings.return_value = MagicMock(stream_preview_mode="transcode")
 
                 with patch("subprocess.Popen", side_effect=FileNotFoundError("ffmpeg not found")):
@@ -110,7 +110,7 @@ class TestChannelPreview:
     @pytest.mark.asyncio
     async def test_channel_preview_no_client_returns_503(self, async_client):
         """GET /api/channel-preview/{id} returns 503 when Dispatcharr not connected."""
-        with patch("main.get_client", return_value=None):
+        with patch("routers.stream_preview.get_client", return_value=None):
             response = await async_client.get("/api/channel-preview/1")
             assert response.status_code == 503
             assert "Not connected" in response.json()["detail"]
@@ -121,8 +121,8 @@ class TestChannelPreview:
         mock_client = MagicMock()
         mock_client.get_channel = AsyncMock(return_value=None)
 
-        with patch("main.get_client", return_value=mock_client):
-            with patch("main.get_settings") as mock_settings:
+        with patch("routers.stream_preview.get_client", return_value=mock_client):
+            with patch("routers.stream_preview.get_settings") as mock_settings:
                 mock_settings.return_value = MagicMock(stream_preview_mode="passthrough")
                 response = await async_client.get("/api/channel-preview/9999")
                 assert response.status_code == 404
@@ -134,8 +134,8 @@ class TestChannelPreview:
         mock_client = MagicMock()
         mock_client.get_channel = AsyncMock(return_value={"id": 1, "name": "Test", "uuid": None})
 
-        with patch("main.get_client", return_value=mock_client):
-            with patch("main.get_settings") as mock_settings:
+        with patch("routers.stream_preview.get_client", return_value=mock_client):
+            with patch("routers.stream_preview.get_settings") as mock_settings:
                 mock_settings.return_value = MagicMock(stream_preview_mode="passthrough")
                 response = await async_client.get("/api/channel-preview/1")
                 assert response.status_code == 404
@@ -149,8 +149,8 @@ class TestChannelPreview:
         mock_client._ensure_authenticated = AsyncMock()
         mock_client.access_token = "test-token"
 
-        with patch("main.get_client", return_value=mock_client):
-            with patch("main.get_settings") as mock_settings:
+        with patch("routers.stream_preview.get_client", return_value=mock_client):
+            with patch("routers.stream_preview.get_settings") as mock_settings:
                 mock_settings.return_value = MagicMock(
                     stream_preview_mode="invalid_mode",
                     url="http://localhost:5656"
@@ -175,8 +175,8 @@ class TestChannelPreview:
 
         mock_response.aiter_bytes = mock_aiter_bytes
 
-        with patch("main.get_client", return_value=mock_client):
-            with patch("main.get_settings") as mock_settings:
+        with patch("routers.stream_preview.get_client", return_value=mock_client):
+            with patch("routers.stream_preview.get_settings") as mock_settings:
                 mock_settings.return_value = MagicMock(
                     stream_preview_mode="passthrough",
                     url="http://localhost:5656"
@@ -202,8 +202,8 @@ class TestChannelPreview:
         mock_client._ensure_authenticated = AsyncMock()
         mock_client.access_token = "test-token"
 
-        with patch("main.get_client", return_value=mock_client):
-            with patch("main.get_settings") as mock_settings:
+        with patch("routers.stream_preview.get_client", return_value=mock_client):
+            with patch("routers.stream_preview.get_settings") as mock_settings:
                 mock_settings.return_value = MagicMock(
                     stream_preview_mode="transcode",
                     url="http://localhost:5656"
@@ -222,8 +222,8 @@ class TestChannelPreview:
         mock_client._ensure_authenticated = AsyncMock()
         mock_client.access_token = "test-token"
 
-        with patch("main.get_client", return_value=mock_client):
-            with patch("main.get_settings") as mock_settings:
+        with patch("routers.stream_preview.get_client", return_value=mock_client):
+            with patch("routers.stream_preview.get_settings") as mock_settings:
                 mock_settings.return_value = MagicMock(
                     stream_preview_mode="video_only",
                     url="http://localhost:5656"

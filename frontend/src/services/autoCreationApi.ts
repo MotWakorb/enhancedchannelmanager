@@ -17,7 +17,6 @@ import type {
   ConditionSchema,
   ActionSchema,
   TemplateVariableSchema,
-  YAMLExportResponse,
   YAMLImportResponse,
 } from '../types/autoCreation';
 import { fetchJson as _fetchJson, fetchText as _fetchText, buildQuery } from './httpClient';

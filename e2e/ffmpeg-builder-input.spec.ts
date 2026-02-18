@@ -7,9 +7,9 @@
  * - Hardware acceleration options
  * - Explanatory tooltips on input settings
  */
-import { test, expect, navigateToTab, waitForToast } from './fixtures/base';
-import { selectors, generateTestId } from './fixtures/test-data';
-import { ffmpegSelectors, ffmpegTestData } from './fixtures/ffmpeg-data';
+import { test, expect, navigateToTab } from './fixtures/base';
+import { selectors } from './fixtures/test-data';
+import { ffmpegSelectors } from './fixtures/ffmpeg-data';
 
 test.describe('Input Source Section', () => {
   test.beforeEach(async ({ appPage }) => {
@@ -110,10 +110,6 @@ test.describe('Input Type Selection', () => {
     const isVisible = await inputSection.isVisible().catch(() => false);
 
     if (isVisible) {
-      // Get the label text for the path field
-      const pathLabel = inputSection.locator('label:near(input), .field-label, .input-label').first();
-      const initialLabel = await pathLabel.textContent().catch(() => '');
-
       // Try switching input type
       const inputTypeSelect = appPage.locator(ffmpegSelectors.inputTypeSelect);
       if (await inputTypeSelect.isVisible().catch(() => false)) {

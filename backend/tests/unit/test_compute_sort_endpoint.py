@@ -49,7 +49,7 @@ async def test_compute_sort_single_channel_smart(async_client, test_session, see
         {"stream_id": 2, "resolution": "1920x1080", "bitrate": 5000000, "fps": "60"},
     )
 
-    with patch("main.get_settings", return_value=mock_settings):
+    with patch("routers.stream_stats.get_settings", return_value=mock_settings):
         response = await async_client.post("/api/stream-stats/compute-sort", json={
             "channels": [{"channel_id": 10, "stream_ids": [1, 2]}],
             "mode": "smart"
@@ -70,7 +70,7 @@ async def test_compute_sort_already_sorted(async_client, test_session, seed_stre
         {"stream_id": 2, "resolution": "1280x720", "bitrate": 3000000, "fps": "30"},
     )
 
-    with patch("main.get_settings", return_value=mock_settings):
+    with patch("routers.stream_stats.get_settings", return_value=mock_settings):
         response = await async_client.post("/api/stream-stats/compute-sort", json={
             "channels": [{"channel_id": 10, "stream_ids": [1, 2]}],
             "mode": "smart"
@@ -92,7 +92,7 @@ async def test_compute_sort_bulk_channels(async_client, test_session, seed_strea
         {"stream_id": 4, "resolution": "1920x1080", "bitrate": 5000000, "fps": "30"},
     )
 
-    with patch("main.get_settings", return_value=mock_settings):
+    with patch("routers.stream_stats.get_settings", return_value=mock_settings):
         response = await async_client.post("/api/stream-stats/compute-sort", json={
             "channels": [
                 {"channel_id": 10, "stream_ids": [1, 2]},
@@ -124,7 +124,7 @@ async def test_compute_sort_mode_resolution(async_client, test_session, seed_str
         {"stream_id": 2, "resolution": "1920x1080", "bitrate": 3000000},
     )
 
-    with patch("main.get_settings", return_value=mock_settings):
+    with patch("routers.stream_stats.get_settings", return_value=mock_settings):
         response = await async_client.post("/api/stream-stats/compute-sort", json={
             "channels": [{"channel_id": 10, "stream_ids": [1, 2]}],
             "mode": "resolution"
@@ -143,7 +143,7 @@ async def test_compute_sort_mode_bitrate(async_client, test_session, seed_stream
         {"stream_id": 2, "resolution": "1280x720", "bitrate": 8000000},
     )
 
-    with patch("main.get_settings", return_value=mock_settings):
+    with patch("routers.stream_stats.get_settings", return_value=mock_settings):
         response = await async_client.post("/api/stream-stats/compute-sort", json={
             "channels": [{"channel_id": 10, "stream_ids": [1, 2]}],
             "mode": "bitrate"
@@ -162,7 +162,7 @@ async def test_compute_sort_mode_framerate(async_client, test_session, seed_stre
         {"stream_id": 2, "fps": "60"},
     )
 
-    with patch("main.get_settings", return_value=mock_settings):
+    with patch("routers.stream_stats.get_settings", return_value=mock_settings):
         response = await async_client.post("/api/stream-stats/compute-sort", json={
             "channels": [{"channel_id": 10, "stream_ids": [1, 2]}],
             "mode": "framerate"
@@ -181,7 +181,7 @@ async def test_compute_sort_mode_audio_channels(async_client, test_session, seed
         {"stream_id": 3, "audio_channels": 1},
     )
 
-    with patch("main.get_settings", return_value=mock_settings):
+    with patch("routers.stream_stats.get_settings", return_value=mock_settings):
         response = await async_client.post("/api/stream-stats/compute-sort", json={
             "channels": [{"channel_id": 10, "stream_ids": [1, 2, 3]}],
             "mode": "audio_channels"
@@ -206,8 +206,8 @@ async def test_compute_sort_mode_m3u_priority(async_client, test_session, seed_s
         {"id": 2, "m3u_account": 1},   # priority 100
     ])
 
-    with patch("main.get_settings", return_value=mock_settings), \
-         patch("main.get_client", return_value=mock_client):
+    with patch("routers.stream_stats.get_settings", return_value=mock_settings), \
+         patch("routers.stream_stats.get_client", return_value=mock_client):
         response = await async_client.post("/api/stream-stats/compute-sort", json={
             "channels": [{"channel_id": 10, "stream_ids": [1, 2]}],
             "mode": "m3u_priority"
@@ -220,7 +220,7 @@ async def test_compute_sort_mode_m3u_priority(async_client, test_session, seed_s
 @pytest.mark.asyncio
 async def test_compute_sort_empty_channels(async_client, mock_settings):
     """Empty channels list returns empty results."""
-    with patch("main.get_settings", return_value=mock_settings):
+    with patch("routers.stream_stats.get_settings", return_value=mock_settings):
         response = await async_client.post("/api/stream-stats/compute-sort", json={
             "channels": [],
             "mode": "smart"
@@ -233,7 +233,7 @@ async def test_compute_sort_empty_channels(async_client, mock_settings):
 @pytest.mark.asyncio
 async def test_compute_sort_no_stats(async_client, mock_settings):
     """Stream IDs with no StreamStats rows don't crash."""
-    with patch("main.get_settings", return_value=mock_settings):
+    with patch("routers.stream_stats.get_settings", return_value=mock_settings):
         response = await async_client.post("/api/stream-stats/compute-sort", json={
             "channels": [{"channel_id": 10, "stream_ids": [999, 998]}],
             "mode": "smart"
@@ -255,7 +255,7 @@ async def test_compute_sort_respects_deprioritize_failed(async_client, test_sess
         {"stream_id": 2, "resolution": "1920x1080", "probe_status": "failed"},
     )
 
-    with patch("main.get_settings", return_value=mock_settings):
+    with patch("routers.stream_stats.get_settings", return_value=mock_settings):
         response = await async_client.post("/api/stream-stats/compute-sort", json={
             "channels": [{"channel_id": 10, "stream_ids": [2, 1]}],
             "mode": "resolution"
@@ -269,7 +269,7 @@ async def test_compute_sort_respects_deprioritize_failed(async_client, test_sess
 @pytest.mark.asyncio
 async def test_compute_sort_invalid_mode(async_client, mock_settings):
     """Invalid sort mode returns 400."""
-    with patch("main.get_settings", return_value=mock_settings):
+    with patch("routers.stream_stats.get_settings", return_value=mock_settings):
         response = await async_client.post("/api/stream-stats/compute-sort", json={
             "channels": [{"channel_id": 10, "stream_ids": [1, 2]}],
             "mode": "invalid_mode"

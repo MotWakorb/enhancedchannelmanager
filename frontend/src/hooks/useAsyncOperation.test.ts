@@ -1,8 +1,8 @@
 /**
  * Unit tests for useAsyncOperation hook.
  */
-import { describe, it, expect, vi } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { describe, it, expect } from 'vitest';
+import { renderHook, act } from '@testing-library/react';
 import { useAsyncOperation } from './useAsyncOperation';
 
 describe('useAsyncOperation', () => {

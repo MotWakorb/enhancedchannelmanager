@@ -10,13 +10,11 @@ Note: Bandwidth/unique-viewer endpoints require BandwidthTracker which is
 initialized at module load time. Those are better tested via E2E tests.
 """
 import pytest
-from datetime import datetime, date, timedelta
-from unittest.mock import patch, MagicMock
+from datetime import datetime, date
+from unittest.mock import patch
 
 from models import (
     ChannelWatchStats,
-    UniqueClientConnection,
-    ChannelBandwidth,
     ChannelPopularityScore,
 )
 

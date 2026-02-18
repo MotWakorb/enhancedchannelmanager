@@ -4,20 +4,15 @@ Unit tests for the FFMPEG Builder stream mapping module.
 Tests stream mapping validation, flag generation, and default mapping behavior (Spec 1.7).
 These are TDD tests -- they will FAIL until the backend modules are implemented.
 """
-import pytest
-
 from ffmpeg_builder.stream_mapping import (
     validate_stream_mapping,
     validate_stream_mappings,
     generate_map_flags,
     get_default_mappings,
-    StreamMapping,
 )
 
 from tests.fixtures.ffmpeg_factories import (
     create_stream_mapping,
-    create_builder_state,
-    create_input_source,
 )
 
 

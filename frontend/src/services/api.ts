@@ -46,14 +46,12 @@ import type {
   TestTagsResponse,
   // M3U Change Tracking
   M3USnapshot,
-  M3UChangeLog,
   M3UChangesResponse,
   M3UChangeSummary,
   M3UDigestSettings,
   M3UDigestSettingsUpdate,
   M3UChangeType,
   // Authentication
-  User,
   AuthStatus,
   AuthProvidersResponse,
   LoginResponse,
@@ -1279,7 +1277,7 @@ export async function bulkCreateChannelsFromStreams(
   });
 
   // Handle both old signature (just TimezonePreference) and new signature (BulkCreateOptions)
-  let timezonePreference: TimezonePreference = 'both';
+  let timezonePreference: TimezonePreference;
   let stripCountry = false;
   let keepCountry = false;
   let countrySeparator: NumberSeparator = '|';

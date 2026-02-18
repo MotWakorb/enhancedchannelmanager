@@ -21,18 +21,8 @@ os.environ["CONFIG_DIR"] = "/tmp/ecm_test_config"
 Path("/tmp/ecm_test_config").mkdir(parents=True, exist_ok=True)
 
 from database import Base
-from models import (
-    JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup,
-    StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod,
-    TagGroup, Tag, NormalizationRuleGroup, NormalizationRule,
-    M3USnapshot, M3UChangeLog,
-    # v0.11.0 Enhanced Stats models
-    UniqueClientConnection, ChannelBandwidth, ChannelPopularityScore,
-    # v0.11.5 Authentication models
-    User, UserSession, PasswordResetToken,
-)
-# v0.12.5 FFMPEG Builder models
-from ffmpeg_builder.persistence import SavedConfig  # noqa: F401 — registers table
+import models as _models  # noqa: F401 — registers all tables with SQLAlchemy Base
+from ffmpeg_builder import persistence as _persistence  # noqa: F401 — registers table
 # Register SecurityError globally for test specs that reference it without import
 from ffmpeg_builder.execution import SecurityError as _SecurityError  # noqa: F401
 import builtins as _builtins

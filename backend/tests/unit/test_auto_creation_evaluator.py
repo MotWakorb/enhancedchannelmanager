@@ -3,15 +3,12 @@ Unit tests for the auto_creation_evaluator module.
 
 Tests condition evaluation against stream contexts.
 """
-import pytest
-
 from auto_creation_evaluator import (
     ConditionEvaluator,
     StreamContext,
     EvaluationResult,
     evaluate_conditions,
 )
-from auto_creation_schema import Condition
 
 
 class TestStreamContext:

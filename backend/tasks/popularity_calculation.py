@@ -110,7 +110,7 @@ class PopularityCalculationTask(TaskScheduler):
                 message += f", evaluated {rules_evaluated} rules with {actions_executed} actions"
                 details["rules_result"] = rules_result
 
-            logger.info(f"[{self.task_id}] {message}")
+            logger.info("[%s] %s", self.task_id, message)
 
             return TaskResult(
                 success=True,
@@ -124,7 +124,7 @@ class PopularityCalculationTask(TaskScheduler):
             )
 
         except Exception as e:
-            logger.exception(f"[{self.task_id}] Popularity calculation failed: {e}")
+            logger.exception("[%s] Popularity calculation failed: %s", self.task_id, e)
             return TaskResult(
                 success=False,
                 message=f"Popularity calculation failed: {str(e)}",

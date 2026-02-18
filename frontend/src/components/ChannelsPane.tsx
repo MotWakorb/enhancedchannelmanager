@@ -3625,7 +3625,7 @@ export function ChannelsPane({
       setLocalChannels(updatedChannels);
 
       // Stage individual updates for channels that need renaming
-      if (isEditMode && onStageUpdateChannel) {
+      if (onStageUpdateChannel) {
         // Start a batch if there are multiple updates
         if (channelUpdates.length > 1 && onStartBatch) {
           onStartBatch(`Reorder channels within group`);
@@ -3668,8 +3668,6 @@ export function ChannelsPane({
 
         // Get channel numbers from reorderedGroup to determine new assignments
         // Find where the selected channels ended up and what numbers they should get
-        const selectedIds = new Set(selectedInGroup.map(ch => ch.id));
-
         // Calculate updates based on new positions
         const channelUpdates: Array<{ id: number; oldNumber: number; newNumber: number; oldName: string; newName?: string }> = [];
 
@@ -3710,7 +3708,7 @@ export function ChannelsPane({
         setLocalChannels(updatedChannels);
 
         // Stage updates for all affected channels
-        if (isEditMode && onStageUpdateChannel) {
+        if (onStageUpdateChannel) {
           if (channelUpdates.length > 1 && onStartBatch) {
             onStartBatch(`Move ${selectedInGroup.length} channels`);
           }
@@ -3806,7 +3804,7 @@ export function ChannelsPane({
       setLocalChannels(updatedChannels);
 
       // Stage updates for all affected channels
-      if (isEditMode && onStageUpdateChannel) {
+      if (onStageUpdateChannel) {
         // Start a batch if there are multiple updates
         if (channelUpdates.length > 1 && onStartBatch) {
           onStartBatch(`Move channel and shift others`);
@@ -6277,7 +6275,7 @@ export function ChannelsPane({
         {/* Channel List Filter Settings */}
         <div className="filter-settings-dropdown" ref={filterSettingsRef}>
           <button
-            className={`filter-settings-button${channelListFilters?.filterMissingLogo || channelListFilters?.filterMissingTvgId || channelListFilters?.filterMissingEpgData || channelListFilters?.filterMissingGracenote || channelListFilters?.filterFailedStreams || channelListFilters?.filterWorkingStreams || channelListFilters?.filterUnprobedStreams ? ' filter-active' : ''}`}
+            className={`filter-settings-button${channelListFilters?.filterMissingLogo || channelListFilters?.filterMissingTvgId || channelListFilters?.filterMissingEpgData || channelListFilters?.filterMissingGracenote || !channelListFilters?.filterFailedStreams || !channelListFilters?.filterWorkingStreams || !channelListFilters?.filterUnprobedStreams ? ' filter-active' : ''}`}
             onClick={() => setFilterSettingsOpen(!filterSettingsOpen)}
             title="Channel List Filters"
           >

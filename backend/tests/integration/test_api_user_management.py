@@ -8,7 +8,6 @@ Test Spec: User Management (v6dxf.8.4)
 """
 import pytest
 from datetime import datetime, timedelta
-from unittest.mock import patch, MagicMock
 
 
 # =============================================================================

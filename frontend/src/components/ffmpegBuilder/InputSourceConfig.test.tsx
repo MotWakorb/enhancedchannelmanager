@@ -12,7 +12,7 @@ import {
   resetMockDataStore,
 } from '../../test/mocks/server';
 import { InputSourceConfig } from './InputSourceConfig';
-import type { InputSource, HWAccelConfig } from '../../types/ffmpegBuilder';
+import type { InputSource } from '../../types/ffmpegBuilder';
 
 // Setup MSW server
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));

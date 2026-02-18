@@ -5,7 +5,7 @@ These tests use the FastAPI test client with database session overrides
 to test the scheduled tasks endpoints.
 """
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 
 
 class TestListTasks:
@@ -148,7 +148,7 @@ class TestEngineStatus:
     @pytest.mark.asyncio
     async def test_get_engine_status(self, async_client):
         """GET /api/tasks/engine/status returns engine status."""
-        with patch("main.get_engine_status") as mock_status:
+        with patch("routers.tasks.get_engine_status") as mock_status:
             mock_status.return_value = {
                 "running": True,
                 "tasks_running": 0,

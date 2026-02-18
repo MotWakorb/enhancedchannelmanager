@@ -5,7 +5,7 @@
  * BEFORE implementation. They will FAIL until the component is built.
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '../../test/utils/renderWithProviders';
 import {
@@ -14,8 +14,6 @@ import {
 } from '../../test/mocks/server';
 import { PresetTemplates } from './PresetTemplates';
 import type {
-  PresetTemplate,
-  PresetCategory,
   FFMPEGBuilderState,
 } from '../../types/ffmpegBuilder';
 

@@ -13,8 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Literal
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Response
-from fastapi.responses import PlainTextResponse
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 
 from .settings import (
@@ -24,7 +23,6 @@ from .settings import (
     TLS_DIR,
 )
 from .storage import CertificateStorage
-from .challenges import verify_dns_challenge
 from .https_server import https_server_manager
 
 # ACME client and DNS providers require josepy - import conditionally
@@ -351,14 +349,14 @@ async def request_certificate():
                 )
 
                 # Create TXT record
-                logger.debug(f"Creating TXT record: {challenge.txt_record_name} = {challenge.txt_record_value}")
+                logger.debug("[TLS] Creating TXT record: %s = %s", challenge.txt_record_name, challenge.txt_record_value)
                 record_id, zone_id = await provider.create_and_get_zone(
                     challenge.txt_record_name,
                     challenge.txt_record_value,
                 )
 
                 # Wait for DNS propagation
-                logger.debug("Waiting 30s for DNS propagation...")
+                logger.debug("[TLS] Waiting 30s for DNS propagation...")
                 await asyncio.sleep(30)
 
                 # Complete challenge
@@ -371,7 +369,7 @@ async def request_certificate():
                     provider.zone_id = zone_id
                     await provider.delete_txt_record(record_id)
                 except Exception as e:
-                    logger.warning(f"Failed to delete DNS record: {e}")
+                    logger.warning("[TLS] Failed to delete DNS record: %s", e)
 
                 if result.success:
                     # Save certificate
@@ -427,7 +425,7 @@ async def request_certificate():
             )
 
     except Exception as e:
-        logger.error(f"Certificate request failed: {e}")
+        logger.error("[TLS] Certificate request failed: %s", e)
         return CertificateRequestResponse(
             success=False,
             message=f"Certificate request failed: {e}",
@@ -447,7 +445,7 @@ async def complete_dns_challenge():
     settings = get_tls_settings()
 
     # Verify DNS record exists
-    logger.debug("Verifying DNS record...")
+    logger.debug("[TLS] Verifying DNS record...")
 
     # Initialize ACME client
     acme = ACMEClient(
@@ -506,7 +504,7 @@ async def complete_dns_challenge():
             )
 
     except Exception as e:
-        logger.error(f"Challenge completion failed: {e}")
+        logger.error("[TLS] Challenge completion failed: %s", e)
         return CertificateRequestResponse(
             success=False,
             message=f"Challenge failed: {e}",
@@ -581,7 +579,7 @@ async def upload_certificate(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Certificate upload failed: {e}")
+        logger.error("[TLS] Certificate upload failed: %s", e)
         raise HTTPException(500, f"Upload failed: {e}")
 
 
