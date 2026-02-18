@@ -21,14 +21,12 @@ os.environ["CONFIG_DIR"] = "/tmp/ecm_test_config"
 Path("/tmp/ecm_test_config").mkdir(parents=True, exist_ok=True)
 
 from database import Base
-from models import (
+from models import (  # noqa: F401 — registers tables with SQLAlchemy Base
     JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup,
     StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod,
     TagGroup, Tag, NormalizationRuleGroup, NormalizationRule,
     M3USnapshot, M3UChangeLog,
-    # v0.11.0 Enhanced Stats models
     UniqueClientConnection, ChannelBandwidth, ChannelPopularityScore,
-    # v0.11.5 Authentication models
     User, UserSession, PasswordResetToken,
 )
 # v0.12.5 FFMPEG Builder models

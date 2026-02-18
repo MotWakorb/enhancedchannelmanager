@@ -11,7 +11,7 @@ import {
   resetMockDataStore,
 } from '../../test/mocks/server';
 import { RuleBuilder } from './RuleBuilder';
-import type { AutoCreationRule, CreateRuleData } from '../../types/autoCreation';
+import type { AutoCreationRule } from '../../types/autoCreation';
 
 // Setup MSW server
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));

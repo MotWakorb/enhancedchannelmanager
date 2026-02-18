@@ -5,7 +5,7 @@ These tests use the FastAPI test client with database session overrides
 to test the scheduled tasks endpoints.
 """
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 
 
 class TestListTasks:

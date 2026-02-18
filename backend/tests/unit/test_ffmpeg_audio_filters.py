@@ -5,14 +5,10 @@ Tests audio filter validation, individual filter generation, filter chain
 composition, and custom filter passthrough.
 These are TDD tests -- they will FAIL until the backend modules are implemented.
 """
-import pytest
-
 from ffmpeg_builder.audio_filters import (
     validate_audio_filter,
-    validate_audio_filter_chain,
     generate_audio_filter_flags,
     generate_single_audio_filter,
-    KNOWN_AUDIO_FILTERS,
 )
 
 from tests.fixtures.ffmpeg_factories import (

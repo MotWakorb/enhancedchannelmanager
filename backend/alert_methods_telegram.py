@@ -5,8 +5,6 @@ Sends notifications to Telegram via Bot API.
 """
 import aiohttp
 import logging
-from typing import Optional
-
 from alert_methods import AlertMethod, AlertMessage, register_method
 
 logger = logging.getLogger(__name__)

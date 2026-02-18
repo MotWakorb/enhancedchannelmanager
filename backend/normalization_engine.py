@@ -521,10 +521,6 @@ class NormalizationEngine:
         action_type = rule.else_action_type
         action_value = rule.else_action_value or ""
 
-        # For else actions, we operate on the full text
-        # Create a synthetic match covering the full string for actions like replace
-        full_match = RuleMatch(matched=True, match_start=0, match_end=len(text))
-
         if action_type == "remove":
             # Remove doesn't make sense without a specific match
             # In else context, this would clear the entire text - probably not intended

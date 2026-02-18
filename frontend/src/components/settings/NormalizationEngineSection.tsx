@@ -39,7 +39,7 @@ import type {
 import { ModalOverlay } from '../ModalOverlay';
 import './NormalizationEngineSection.css';
 import '../ModalBase.css';
-import { CustomSelect, type SelectOption } from '../CustomSelect';
+import { CustomSelect } from '../CustomSelect';
 
 // Condition type options for dropdowns
 const CONDITION_TYPES: { value: NormalizationConditionType; label: string; description: string }[] = [

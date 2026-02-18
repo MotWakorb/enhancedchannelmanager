@@ -1542,7 +1542,7 @@ def _smart_sort_streams(
                     if len(parts) == 2:
                         return -int(parts[1])
                 except (ValueError, IndexError):
-                    pass
+                    logger.debug("[AUTO-CREATE] Non-numeric resolution %r, using default 0", stats.get("resolution"))
             return 0
         return sorted(stream_ids, key=fallback_key)
 

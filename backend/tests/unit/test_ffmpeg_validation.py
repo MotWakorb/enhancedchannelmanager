@@ -8,12 +8,10 @@ import pytest
 
 from ffmpeg_builder.validation import (
     validate_config,
-    ValidationResult,
 )
 from ffmpeg_builder.command_generator import (
     generate_command,
     annotate_command,
-    AnnotatedCommand,
 )
 
 from tests.fixtures.ffmpeg_factories import (

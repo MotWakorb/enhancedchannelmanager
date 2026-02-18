@@ -6,7 +6,7 @@ Background task to detect M3U playlist changes made outside of ECM
 """
 import logging
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional
 
 from dispatcharr_client import get_client
 from task_scheduler import TaskScheduler, TaskResult, ScheduleConfig, ScheduleType

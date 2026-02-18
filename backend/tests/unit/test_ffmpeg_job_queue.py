@@ -10,15 +10,8 @@ import pytest
 
 from ffmpeg_builder.job_queue import (
     JobQueue,
-    Job,
     JobStatus,
-    JobQueueConfig,
     InvalidTransitionError,
-)
-
-from tests.fixtures.ffmpeg_factories import (
-    create_ffmpeg_job,
-    create_builder_state,
 )
 
 

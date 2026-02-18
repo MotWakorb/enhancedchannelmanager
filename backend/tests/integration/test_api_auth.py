@@ -7,8 +7,6 @@ They will FAIL initially - implementation makes them pass.
 Test Spec: Core Auth Flow (v6dxf.8.1)
 """
 import pytest
-from datetime import datetime, timedelta
-from unittest.mock import patch, MagicMock
 
 
 # =============================================================================

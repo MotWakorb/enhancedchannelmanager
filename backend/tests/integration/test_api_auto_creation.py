@@ -4,8 +4,7 @@ Integration tests for the auto-creation API endpoints.
 Tests the full API workflow for creating, updating, and managing auto-creation rules.
 """
 import pytest
-import json
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 
 from fastapi.testclient import TestClient
 

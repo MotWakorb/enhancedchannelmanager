@@ -463,7 +463,7 @@ class TaskScheduler(ABC):
                 if loop.is_running():
                     asyncio.create_task(self._update_progress_notification())
             except RuntimeError:
-                pass  # No event loop, skip notification
+                logger.debug("[TASK] No event loop available, skipping notification update")
 
     # -------------------------------------------------------------------------
     # Lifecycle Hooks (optional for subclasses to override)

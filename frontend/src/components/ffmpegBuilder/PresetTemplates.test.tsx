@@ -14,8 +14,6 @@ import {
 } from '../../test/mocks/server';
 import { PresetTemplates } from './PresetTemplates';
 import type {
-  PresetTemplate,
-  PresetCategory,
   FFMPEGBuilderState,
 } from '../../types/ffmpegBuilder';
 

@@ -11,7 +11,7 @@ Tests the complete API layer including:
 These are TDD tests -- they will FAIL until the API endpoints are implemented.
 """
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch
 
 from tests.fixtures.ffmpeg_factories import (
     create_builder_state,

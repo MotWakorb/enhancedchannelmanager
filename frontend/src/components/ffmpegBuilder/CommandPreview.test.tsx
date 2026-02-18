@@ -15,13 +15,6 @@ import {
 import { CommandPreview } from './CommandPreview';
 import type {
   FFMPEGBuilderState,
-  InputSource,
-  OutputConfig,
-  VideoCodecSettings,
-  AudioCodecSettings,
-  VideoFilter,
-  StreamMapping,
-  CommandAnnotation,
 } from '../../types/ffmpegBuilder';
 
 // Setup MSW server

@@ -5,7 +5,7 @@ Defines the structure of conditions and actions used in auto-creation rules.
 Includes validation, parsing, and serialization utilities.
 """
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional, Union
 import re

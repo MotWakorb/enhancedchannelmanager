@@ -281,32 +281,6 @@ interface MockPopularityScore {
   created_at: string
 }
 
-interface MockUniqueViewersSummary {
-  period_days: number
-  total_unique_viewers: number
-  today_unique_viewers: number
-  total_connections: number
-  avg_watch_seconds: number
-  top_viewer_ip: string | null
-}
-
-interface MockChannelBandwidthStats {
-  channel_id: string
-  channel_name: string
-  total_bytes: number
-  total_connections: number
-  total_watch_seconds: number
-  avg_bytes_per_connection: number
-}
-
-interface MockChannelUniqueViewers {
-  channel_id: string
-  channel_name: string
-  unique_viewers: number
-  total_connections: number
-  total_watch_seconds: number
-}
-
 interface MockAutoCreationRule {
   id: number
   name: string
@@ -1097,8 +1071,7 @@ export const handlers = [
     })
   }),
 
-  http.post(`${API_BASE}/auto-creation/import/yaml`, async ({ request }) => {
-    const _data = await request.json() as { yaml_content: string }
+  http.post(`${API_BASE}/auto-creation/import/yaml`, async () => {
     // Simulate importing 1 rule
     const newRule = createMockAutoCreationRule({ name: 'Imported Rule' })
     mockDataStore.autoCreationRules.push(newRule)

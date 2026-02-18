@@ -13,8 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Literal
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Response
-from fastapi.responses import PlainTextResponse
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 
 from .settings import (
@@ -24,7 +23,6 @@ from .settings import (
     TLS_DIR,
 )
 from .storage import CertificateStorage
-from .challenges import verify_dns_challenge
 from .https_server import https_server_manager
 
 # ACME client and DNS providers require josepy - import conditionally
