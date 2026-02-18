@@ -485,36 +485,40 @@ async def test_connection(request: TestConnectionRequest):
     """Test connection to Dispatcharr with provided credentials."""
     import httpx
 
-    logger.debug("[SETTINGS-TEST] POST /api/settings/test - url=%s", request.url)
-    # Validate URL scheme to prevent SSRF
-    from urllib.parse import urlparse
+    logger.debug("[SETTINGS-TEST] POST /api/settings/test")
+    # Validate and reconstruct URL from parsed components to prevent SSRF
+    from urllib.parse import urlparse, urlunparse
     parsed = urlparse(request.url)
     if parsed.scheme not in ("http", "https"):
         return {"success": False, "message": "Invalid URL scheme - must be http or https"}
+    if not parsed.hostname:
+        return {"success": False, "message": "Invalid URL - no hostname provided"}
+    # Reconstruct URL from validated components (scheme + netloc only)
+    base_url = urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            url = request.url.rstrip("/")
+            target_url = f"{base_url}/api/accounts/token/"
             response = await client.post(
-                f"{url}/api/accounts/token/",
+                target_url,
                 json={
                     "username": request.username,
                     "password": request.password,
                 },
             )
             if response.status_code == 200:
-                logger.info("[SETTINGS-TEST] Connection test successful - %s", url)
+                logger.info("[SETTINGS-TEST] Connection test successful - %s", parsed.hostname)
                 return {"success": True, "message": "Connection successful"}
             else:
-                logger.warning("[SETTINGS-TEST] Connection test failed - %s - status: %s", url, response.status_code)
+                logger.warning("[SETTINGS-TEST] Connection test failed - %s - status: %s", parsed.hostname, response.status_code)
                 return {
                     "success": False,
                     "message": f"Authentication failed: {response.status_code}",
                 }
     except httpx.ConnectError as e:
-        logger.error("[SETTINGS-TEST] Connection test failed - could not connect to %s: %s", request.url, e)
+        logger.error("[SETTINGS-TEST] Connection test failed - could not connect to %s: %s", parsed.hostname, e)
         return {"success": False, "message": "Could not connect to server"}
     except httpx.TimeoutException as e:
-        logger.error("[SETTINGS-TEST] Connection test failed - timeout connecting to %s: %s", request.url, e)
+        logger.error("[SETTINGS-TEST] Connection test failed - timeout connecting to %s: %s", parsed.hostname, e)
         return {"success": False, "message": "Connection timed out"}
     except Exception as e:
         logger.exception("[SETTINGS-TEST] Connection test failed - unexpected error: %s", e)

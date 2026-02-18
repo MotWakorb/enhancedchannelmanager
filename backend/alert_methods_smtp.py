@@ -145,7 +145,7 @@ class SMTPMethod(AlertMethod):
         # Get recipients from this alert method's config
         to_emails = self.config.get("to_emails")
 
-        logger.debug("[ALERTS-SMTP] SMTP method %s: Using shared SMTP (%s), to_emails=%s", self.name, smtp_host, to_emails)
+        logger.debug("[ALERTS-SMTP] SMTP method %s: Using shared SMTP, recipients configured", self.name)
 
         if not to_emails:
             logger.error("[ALERTS-SMTP] SMTP method %s: No recipients configured", self.name)
@@ -194,7 +194,7 @@ class SMTPMethod(AlertMethod):
                     server.login(_user, _pass)
                 del _user, _pass
 
-                logger.debug("[ALERTS-SMTP] SMTP method %s: Sending from=%s, to=%s", self.name, from_email, to_emails)
+                logger.debug("[ALERTS-SMTP] SMTP method %s: Sending to %s recipient(s)", self.name, len(to_emails))
                 server.sendmail(from_email, to_emails, msg.as_string())
                 logger.info("[ALERTS-SMTP] SMTP method %s: Email sent to %s recipient(s)", self.name, len(to_emails))
                 return True

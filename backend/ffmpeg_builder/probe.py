@@ -29,7 +29,15 @@ class ProbeResult:
 
 
 def _validate_probe_path(path: str) -> Optional[str]:
-    """Validate that a probe path uses an allowed scheme. Returns error message or None."""
+    """Validate a probe path for allowed scheme and safe characters.
+
+    Returns error message or None.
+    """
+    if not path or not isinstance(path, str):
+        return "Empty or invalid path"
+    # Reject null bytes and control characters that could manipulate the subprocess
+    if any(ord(c) < 0x20 and c not in ('\t',) for c in path):
+        return "Path contains invalid control characters"
     from urllib.parse import urlparse
     parsed = urlparse(path)
     # Allow common streaming protocols and local files
@@ -37,6 +45,12 @@ def _validate_probe_path(path: str) -> Optional[str]:
     if parsed.scheme.lower() not in allowed_schemes:
         return f"Unsupported scheme: {parsed.scheme}"
     return None
+
+
+def _sanitize_probe_path(path: str) -> str:
+    """Return a validated copy of path safe for use as an ffprobe argument."""
+    # Strip leading/trailing whitespace and null bytes
+    return path.strip().replace("\x00", "")
 
 
 def probe_source(path: str, timeout: int = DEFAULT_TIMEOUT) -> ProbeResult:
@@ -53,21 +67,23 @@ def probe_source(path: str, timeout: int = DEFAULT_TIMEOUT) -> ProbeResult:
     if error:
         return ProbeResult(success=False, error=error)
 
+    safe_path = _sanitize_probe_path(path)
     cmd = [
         FFPROBE_BIN,
         "-v", "quiet",
         "-print_format", "json",
         "-show_format",
         "-show_streams",
-        path,
+        safe_path,
     ]
 
     try:
-        proc = subprocess.run(
+        proc = subprocess.run(  # noqa: S603 — input validated by _validate_probe_path
             cmd,
             capture_output=True,
             text=True,
             timeout=timeout,
+            shell=False,
         )
     except (TimeoutError, subprocess.TimeoutExpired):
         return ProbeResult(success=False, error=f"Probe timeout after {timeout}s")
