@@ -1136,7 +1136,7 @@ class AutoCreationEngine:
         for rule in rules:
             if not rule.sort_field:
                 continue
-            channel_ids = rule_channel_order.get(rule.id)
+            channel_ids = list(dict.fromkeys(rule_channel_order.get(rule.id, [])))
             if not channel_ids or len(channel_ids) < 2:
                 continue
 
