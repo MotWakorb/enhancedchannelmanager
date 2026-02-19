@@ -1,7 +1,7 @@
 {
   "name": "enhanced-channel-manager",
   "private": true,
-  "version": "0.13.0-0010",
+  "version": "0.13.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -30,7 +30,7 @@
     "@types/react": "^18.2.48",
     "@types/react-dom": "^18.2.18",
     "@vitejs/plugin-react": "^5.1.2",
-    "@vitest/coverage-v8": "^1.3.0",
+    "@vitest/coverage-v8": "^4.0.18",
     "eslint": "^9.39.2",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.0",
@@ -40,6 +40,10 @@
     "typescript": "^5.3.3",
     "typescript-eslint": "^8.55.0",
     "vite": "^7.3.1",
-    "vitest": "^1.3.0"
+    "vitest": "^4.0.18"
+  },
+  "overrides": {
+    "minimatch": ">=10.2.1",
+    "ajv": ">=8.18.0"
   }
 }
