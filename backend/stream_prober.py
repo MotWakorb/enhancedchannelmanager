@@ -423,7 +423,8 @@ class StreamProber:
                 message=f"Stream probe started (0/{total_streams})",
                 source="stream_probe",
                 source_id=str(int(time.time())),
-                metadata=metadata
+                metadata=metadata,
+                send_alerts=False,
             )
             if result and "id" in result:
                 self._probe_notification_id = result["id"]
@@ -527,6 +528,26 @@ class StreamProber:
                 metadata=metadata
             )
             logger.info("[STREAM-PROBE] Finalized probe notification: %s", message)
+
+            # Dispatch to External Alerts (AlertManager) which respects notify_* type filters
+            try:
+                from alert_methods import send_alert
+                alert_metadata = {
+                    "failed_count": self._probe_progress_failed_count,
+                    "success_count": self._probe_progress_success_count,
+                    "skipped_count": self._probe_progress_skipped_count,
+                    "total_count": self._probe_progress_total,
+                }
+                await send_alert(
+                    title="Stream Probe",
+                    message=message,
+                    notification_type=notification_type,
+                    source="stream_probe",
+                    metadata=alert_metadata,
+                    alert_category="probe_failures",
+                )
+            except Exception as alert_err:
+                logger.error("[STREAM-PROBE] Failed to dispatch probe alert: %s", alert_err)
         except Exception as e:
             logger.error("[STREAM-PROBE] Failed to finalize probe notification: %s", e)
         finally:
