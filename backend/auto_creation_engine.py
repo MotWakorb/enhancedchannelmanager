@@ -999,7 +999,7 @@ class AutoCreationEngine:
                     rule.sort_field, rule.sort_order or 'asc'
                 )
                 entries.sort(
-                    key=lambda e: _sort_key(e[0], rule.sort_field),
+                    key=lambda e: _sort_key(e[0], rule.sort_field, getattr(rule, 'sort_regex', None)),
                     reverse=(rule.sort_order == "desc")
                 )
             sorted_entries.extend(entries)
@@ -1649,7 +1649,7 @@ def _natural_sort_key(s: str) -> list:
     return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', s)]
 
 
-def _sort_key(stream: StreamContext, sort_field: str):
+def _sort_key(stream: StreamContext, sort_field: str, sort_regex: str | None = None):
     """Get sort key for a stream based on the sort field."""
     if sort_field == "stream_name":
         return stream.stream_name.lower()
@@ -1659,6 +1659,19 @@ def _sort_key(stream: StreamContext, sort_field: str):
         return (stream.group_name or "").lower()
     elif sort_field == "quality":
         return stream.resolution_height or 0
+    elif sort_field == "stream_name_regex":
+        if sort_regex:
+            try:
+                m = re.search(sort_regex, stream.stream_name)
+            except re.error:
+                return (1, 0, "")
+            if m and m.groups():
+                captured = m.group(1)
+                try:
+                    return (0, float(captured), captured)
+                except (ValueError, TypeError):
+                    return (0, 0, captured)
+        return (1, 0, "")
     return stream.stream_name.lower()
 
 

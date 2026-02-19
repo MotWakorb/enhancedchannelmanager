@@ -42,6 +42,7 @@ class CreateAutoCreationRuleRequest(BaseModel):
     sort_field: Optional[str] = None
     sort_order: str = "asc"
     probe_on_sort: bool = False
+    sort_regex: Optional[str] = None
     normalize_names: bool = False
     orphan_action: str = "delete"
 
@@ -61,6 +62,7 @@ class UpdateAutoCreationRuleRequest(BaseModel):
     sort_field: Optional[str] = None
     sort_order: Optional[str] = None
     probe_on_sort: Optional[bool] = None
+    sort_regex: Optional[str] = None
     normalize_names: Optional[bool] = None
     orphan_action: Optional[str] = None
 
@@ -164,6 +166,7 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
                 sort_field=request.sort_field,
                 sort_order=request.sort_order,
                 probe_on_sort=request.probe_on_sort,
+                sort_regex=request.sort_regex,
                 normalize_names=request.normalize_names,
                 orphan_action=request.orphan_action
             )
@@ -229,6 +232,8 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
                 rule.sort_order = request.sort_order
             if request.probe_on_sort is not None:
                 rule.probe_on_sort = request.probe_on_sort
+            if request.sort_regex is not None:
+                rule.sort_regex = request.sort_regex or None
             if request.normalize_names is not None:
                 rule.normalize_names = request.normalize_names
             if request.orphan_action is not None:
@@ -643,6 +648,7 @@ async def export_auto_creation_rules_yaml():
                     "stop_on_first_match": rule.stop_on_first_match,
                     "sort_field": rule.sort_field,
                     "sort_order": rule.sort_order or "asc",
+                    "sort_regex": rule.sort_regex,
                     "normalize_names": rule.normalize_names or False
                 }
 
@@ -801,6 +807,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         existing.stop_on_first_match = rule_data.get("stop_on_first_match", True)
                         existing.sort_field = rule_data.get("sort_field")
                         existing.sort_order = rule_data.get("sort_order", "asc")
+                        existing.sort_regex = rule_data.get("sort_regex")
                         existing.normalize_names = rule_data.get("normalize_names", False)
                         logger.debug("[AUTO-CREATE-YAML] Rule '%s': updated existing (id=%s), stored actions=%s", rule_name, existing.id, existing.actions)
                         imported.append({"name": existing.name, "action": "updated"})
@@ -826,6 +833,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         stop_on_first_match=rule_data.get("stop_on_first_match", True),
                         sort_field=rule_data.get("sort_field"),
                         sort_order=rule_data.get("sort_order", "asc"),
+                        sort_regex=rule_data.get("sort_regex"),
                         normalize_names=rule_data.get("normalize_names", False)
                     )
                     session.add(rule)
