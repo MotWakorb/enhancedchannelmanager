@@ -37,7 +37,6 @@ test.describe('Stream Loading Performance', () => {
 
     // Stream groups should be rendered (if any exist in the backend)
     // We check for the group header pattern
-    const groupHeaders = streamsPane.locator('.stream-group-header, [class*="group-header"]');
     // Even if no groups exist, the streams pane should be visible and not hung
     const streamsPaneText = await streamsPane.textContent();
     expect(streamsPaneText).toBeDefined();

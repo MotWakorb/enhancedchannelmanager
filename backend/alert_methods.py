@@ -209,13 +209,13 @@ def register_method(method_class: Type[AlertMethod]) -> Type[AlertMethod]:
         raise ValueError(f"Method class {method_class.__name__} must define method_type")
 
     _method_registry[method_class.method_type] = method_class
-    logger.info(f"Registered alert method type: {method_class.method_type}")
+    logger.info("[ALERTS] Registered alert method type: %s", method_class.method_type)
     return method_class
 
 
 def get_method_types() -> List[Dict[str, Any]]:
     """Get list of available method types with their metadata."""
-    logger.debug(f"Getting method types, registry has {len(_method_registry)} types: {list(_method_registry.keys())}")
+    logger.debug("[ALERTS] Getting method types, registry has %s types: %s", len(_method_registry), list(_method_registry.keys()))
     return [
         {
             "type": cls.method_type,
@@ -229,13 +229,13 @@ def get_method_types() -> List[Dict[str, Any]]:
 
 def create_method(method_type: str, method_id: int, name: str, config: Dict[str, Any]) -> Optional[AlertMethod]:
     """Create an alert method instance from type and config."""
-    logger.debug(f"Creating method instance: type={method_type}, id={method_id}, name={name}")
+    logger.debug("[ALERTS] Creating method instance: type=%s, id=%s, name=%s", method_type, method_id, name)
     method_class = _method_registry.get(method_type)
     if not method_class:
-        logger.error(f"Unknown alert method type: {method_type}. Available types: {list(_method_registry.keys())}")
+        logger.error("[ALERTS] Unknown alert method type: %s. Available types: %s", method_type, list(_method_registry.keys()))
         return None
 
-    logger.debug(f"Created method instance: {name} ({method_type})")
+    logger.debug("[ALERTS] Created method instance: %s (%s)", name, method_type)
     return method_class(method_id, name, config)
 
 
@@ -260,13 +260,13 @@ class AlertMethodManager:
         from database import get_session
         from models import AlertMethod as AlertMethodModel
 
-        logger.debug("Loading alert methods from database")
+        logger.debug("[ALERTS] Loading alert methods from database")
         session = get_session()
         try:
             methods = session.query(AlertMethodModel).filter(
                 AlertMethodModel.enabled == True
             ).all()
-            logger.debug(f"Found {len(methods)} enabled methods in database")
+            logger.debug("[ALERTS] Found %s enabled methods in database", len(methods))
 
             self._methods.clear()
             for method_model in methods:
@@ -280,15 +280,15 @@ class AlertMethodManager:
                     )
                     if method:
                         self._methods[method_model.id] = method
-                        logger.debug(f"Loaded alert method: {method_model.name} ({method_model.method_type})")
+                        logger.debug("[ALERTS] Loaded alert method: %s (%s)", method_model.name, method_model.method_type)
                     else:
-                        logger.warning(f"Failed to create method instance for: {method_model.name} ({method_model.method_type})")
+                        logger.warning("[ALERTS] Failed to create method instance for: %s (%s)", method_model.name, method_model.method_type)
                 except Exception as e:
-                    logger.exception(f"Error loading method {method_model.name}: {e}")
+                    logger.exception("[ALERTS] Error loading method %s: %s", method_model.name, e)
 
-            logger.info(f"Loaded {len(self._methods)} alert methods")
+            logger.info("[ALERTS] Loaded %s alert methods", len(self._methods))
         except Exception as e:
-            logger.exception(f"Error loading alert methods: {e}")
+            logger.exception("[ALERTS] Error loading alert methods: %s", e)
         finally:
             session.close()
 
@@ -471,7 +471,7 @@ class AlertMethodManager:
                                 break
 
                         if not channel_enabled:
-                            logger.debug(f"Method {method.name} skipped: channel disabled by task settings")
+                            logger.debug("[ALERTS] Method %s skipped: channel disabled by task settings", method.name)
                             continue
 
                     # Check notification type filter
@@ -483,7 +483,7 @@ class AlertMethodManager:
                     }.get(notification_type, False)
 
                     if not type_enabled:
-                        logger.debug(f"Method {method.name} skipped: {notification_type} not enabled")
+                        logger.debug("[ALERTS] Method %s skipped: %s not enabled", method.name, notification_type)
                         continue
 
                     # Check granular source filtering
@@ -493,7 +493,7 @@ class AlertMethodManager:
                         entity_id,
                         failed_count,
                     ):
-                        logger.debug(f"Method {method.name} skipped: source filter ({alert_category}, entity_id={entity_id})")
+                        logger.debug("[ALERTS] Method %s skipped: source filter (%s, entity_id=%s)", method.name, alert_category, entity_id)
                         continue
 
                     # Add to buffer instead of sending immediately
@@ -501,12 +501,12 @@ class AlertMethodManager:
                         self._alert_buffer[method_id] = []
                     self._alert_buffer[method_id].append(alert_message)
                     results[method_id] = True
-                    logger.debug(f"Alert queued for {method.name}: {title} (buffer size: {len(self._alert_buffer[method_id])})")
+                    logger.debug("[ALERTS] Alert queued for %s: %s (buffer size: %s)", method.name, title, len(self._alert_buffer[method_id]))
 
                 # Schedule flush if not already scheduled
                 if self._alert_buffer and (self._flush_task is None or self._flush_task.done()):
                     self._flush_task = asyncio.create_task(self._schedule_flush())
-                    logger.debug(f"Scheduled digest flush in {self._digest_window}s")
+                    logger.debug("[ALERTS] Scheduled digest flush in %ss", self._digest_window)
 
         finally:
             session.close()
@@ -519,9 +519,9 @@ class AlertMethodManager:
             await asyncio.sleep(self._digest_window)
             await self._flush_buffer()
         except asyncio.CancelledError:
-            logger.debug("Flush task cancelled")
+            logger.debug("[ALERTS] Flush task cancelled")
         except Exception as e:
-            logger.exception(f"Error in scheduled flush: {e}")
+            logger.exception("[ALERTS] Error in scheduled flush: %s", e)
 
     async def _flush_buffer(self) -> Dict[int, bool]:
         """Flush all buffered alerts as digests."""
@@ -534,7 +534,7 @@ class AlertMethodManager:
             if not self._alert_buffer:
                 return results
 
-            logger.info(f"Flushing alert buffer: {sum(len(msgs) for msgs in self._alert_buffer.values())} alerts for {len(self._alert_buffer)} methods")
+            logger.info("[ALERTS] Flushing alert buffer: %s alerts for %s methods", sum(len(msgs) for msgs in self._alert_buffer.values()), len(self._alert_buffer))
 
             session = get_session()
             try:
@@ -544,7 +544,7 @@ class AlertMethodManager:
 
                     method = self._methods.get(method_id)
                     if not method:
-                        logger.warning(f"Method {method_id} not found, skipping {len(messages)} alerts")
+                        logger.warning("[ALERTS] Method %s not found, skipping %s alerts", method_id, len(messages))
                         continue
 
                     method_model = session.query(AlertMethodModel).filter(
@@ -562,12 +562,12 @@ class AlertMethodManager:
                         if success:
                             method_model.last_sent_at = datetime.utcnow()
                             session.commit()
-                            logger.info(f"Digest sent via {method.name}: {len(messages)} alerts")
+                            logger.info("[ALERTS] Digest sent via %s: %s alerts", method.name, len(messages))
                         else:
-                            logger.warning(f"Failed to send digest via {method.name}")
+                            logger.warning("[ALERTS] Failed to send digest via %s", method.name)
 
                     except Exception as e:
-                        logger.error(f"Error sending digest via {method.name}: {e}")
+                        logger.error("[ALERTS] Error sending digest via %s: %s", method.name, e)
                         results[method_id] = False
 
                 # Clear the buffer
@@ -593,10 +593,10 @@ def get_alert_manager() -> AlertMethodManager:
     """Get the global alert method manager."""
     global _manager
     if _manager is None:
-        logger.debug("Initializing global AlertMethodManager")
+        logger.debug("[ALERTS] Initializing global AlertMethodManager")
         _manager = AlertMethodManager()
         _manager.load_methods()
-        logger.debug(f"AlertMethodManager initialized with {len(_manager._methods)} methods")
+        logger.debug("[ALERTS] AlertMethodManager initialized with %s methods", len(_manager._methods))
     return _manager
 
 

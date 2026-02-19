@@ -4,7 +4,7 @@
  * Displayed when no users exist in the system.
  * Allows creating the initial admin account.
  */
-import React, { useState, FormEvent } from 'react';
+import { useState, FormEvent } from 'react';
 import { completeSetup } from '../services/api';
 import './SetupPage.css';
 

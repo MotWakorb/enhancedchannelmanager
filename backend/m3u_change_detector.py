@@ -3,11 +3,10 @@ M3U Change Detection Service.
 
 Compares current M3U state with previous snapshots to detect changes.
 """
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, List, Dict, Set
+from typing import Optional, List, Dict
 
 from sqlalchemy.orm import Session
 
@@ -142,7 +141,7 @@ class M3UChangeDetector:
                 groups_with_names += 1
             enriched_groups.append(group_copy)
 
-        logger.info(f"[M3U-SNAPSHOT-DEBUG] Creating snapshot: {len(groups_data)} groups, {groups_with_names} with stream_names")
+        logger.info("[M3U-CHANGE] Creating snapshot: %s groups, %s with stream_names", len(groups_data), groups_with_names)
 
         snapshot = M3USnapshot(
             m3u_account_id=m3u_account_id,
@@ -157,8 +156,8 @@ class M3UChangeDetector:
         self.db.refresh(snapshot)
 
         logger.info(
-            f"[M3U-SNAPSHOT] Created snapshot {snapshot.id} for account {m3u_account_id}: "
-            f"{len(groups_data)} groups, {total_streams} streams"
+            "[M3U-CHANGE] Created snapshot %s for account %s: %s groups, %s streams",
+            snapshot.id, m3u_account_id, len(groups_data), total_streams
         )
 
         return snapshot
@@ -228,7 +227,7 @@ class M3UChangeDetector:
         if not previous_snapshot:
             # First snapshot - record all groups as "added" to establish baseline
             # Also record streams for groups that have them
-            logger.info(f"[M3U-CHANGE] First snapshot for account {m3u_account_id}, recording initial state as added")
+            logger.info("[M3U-CHANGE] First snapshot for account %s, recording initial state as added", m3u_account_id)
             for group in current_groups:
                 stream_count = group.get("stream_count", 0)
                 enabled = group.get("enabled", False)
@@ -264,8 +263,8 @@ class M3UChangeDetector:
         # Debug: count how many previous groups have stream_names
         prev_groups_with_names = sum(1 for g in prev_groups.values() if g.get("stream_names"))
         curr_groups_with_names = len(stream_names_by_group) if stream_names_by_group else 0
-        logger.info(f"[M3U-CHANGE-DEBUG] Previous snapshot {previous_snapshot.id}: {len(prev_groups)} groups, {prev_groups_with_names} with stream_names")
-        logger.info(f"[M3U-CHANGE-DEBUG] Current state: {len(curr_groups)} groups, {curr_groups_with_names} with stream_names in lookup")
+        logger.info("[M3U-CHANGE] Previous snapshot %s: %s groups, %s with stream_names", previous_snapshot.id, len(prev_groups), prev_groups_with_names)
+        logger.info("[M3U-CHANGE] Current state: %s groups, %s with stream_names in lookup", len(curr_groups), curr_groups_with_names)
 
         prev_group_names = set(prev_groups.keys())
         curr_group_names = set(curr_groups.keys())
@@ -302,8 +301,9 @@ class M3UChangeDetector:
 
             # Debug log for groups with stream count changes
             if curr_count != prev_count:
-                logger.info(f"[M3U-CHANGE-DEBUG] Group '{group_name}': prev_count={prev_count}, curr_count={curr_count}, "
-                           f"prev_names_count={len(prev_stream_names)}, curr_names_count={len(curr_stream_names)}")
+                logger.info("[M3U-CHANGE] Group '%s': prev_count=%s, curr_count=%s, "
+                           "prev_names_count=%s, curr_names_count=%s",
+                           group_name, prev_count, curr_count, len(prev_stream_names), len(curr_stream_names))
 
             if curr_count > prev_count:
                 diff = curr_count - prev_count
@@ -316,7 +316,7 @@ class M3UChangeDetector:
                 else:
                     added_streams = []
 
-                logger.info(f"[M3U-CHANGE-DEBUG] Group '{group_name}': Recording {diff} streams added, {len(added_streams)} names captured")
+                logger.info("[M3U-CHANGE] Group '%s': Recording %s streams added, %s names captured", group_name, diff, len(added_streams))
                 change_set.streams_added.append(StreamChange(
                     group_name=group_name,
                     change_type="streams_added",
@@ -336,7 +336,7 @@ class M3UChangeDetector:
                 else:
                     removed_streams = []
 
-                logger.info(f"[M3U-CHANGE-DEBUG] Group '{group_name}': Recording {diff} streams removed, {len(removed_streams)} names captured")
+                logger.info("[M3U-CHANGE] Group '%s': Recording %s streams removed, %s names captured", group_name, diff, len(removed_streams))
                 change_set.streams_removed.append(StreamChange(
                     group_name=group_name,
                     change_type="streams_removed",
@@ -347,13 +347,14 @@ class M3UChangeDetector:
 
         if change_set.has_changes:
             logger.info(
-                f"[M3U-CHANGE] Detected changes for account {m3u_account_id}: "
-                f"+{len(change_set.groups_added)} groups, -{len(change_set.groups_removed)} groups, "
-                f"+{sum(s.count for s in change_set.streams_added)} streams, "
-                f"-{sum(s.count for s in change_set.streams_removed)} streams"
+                "[M3U-CHANGE] Detected changes for account %s: "
+                "+%s groups, -%s groups, +%s streams, -%s streams",
+                m3u_account_id, len(change_set.groups_added), len(change_set.groups_removed),
+                sum(s.count for s in change_set.streams_added),
+                sum(s.count for s in change_set.streams_removed)
             )
         else:
-            logger.debug(f"[M3U-CHANGE] No changes detected for account {m3u_account_id}")
+            logger.debug("[M3U-CHANGE] No changes detected for account %s", m3u_account_id)
 
         return change_set
 
@@ -432,7 +433,7 @@ class M3UChangeDetector:
 
         self.db.commit()
 
-        logger.info(f"[M3U-CHANGE] Persisted {len(logs)} change log entries for account {change_set.m3u_account_id}")
+        logger.info("[M3U-CHANGE] Persisted %s change log entries for account %s", len(logs), change_set.m3u_account_id)
 
         return logs
 

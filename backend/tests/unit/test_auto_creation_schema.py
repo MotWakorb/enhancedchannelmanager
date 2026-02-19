@@ -4,7 +4,6 @@ Unit tests for the auto_creation_schema module.
 Tests condition/action validation, parsing, and template expansion.
 """
 import pytest
-import json
 
 from auto_creation_schema import (
     Condition,

@@ -59,7 +59,7 @@ class TestCSVExport:
     @pytest.mark.asyncio
     async def test_export_returns_csv(self, async_client):
         """GET /api/channels/export-csv returns CSV content type."""
-        with patch("main.get_client") as mock_get_client:
+        with patch("routers.channels.get_client") as mock_get_client:
             mock_client = MagicMock()
             mock_client.get_channels = AsyncMock(return_value={"results": [], "next": None, "count": 0})
             mock_client.get_channel_groups = AsyncMock(return_value=[])
@@ -74,7 +74,7 @@ class TestCSVExport:
     @pytest.mark.asyncio
     async def test_export_has_content_disposition(self, async_client):
         """GET /api/channels/export-csv has download filename with date."""
-        with patch("main.get_client") as mock_get_client:
+        with patch("routers.channels.get_client") as mock_get_client:
             mock_client = MagicMock()
             mock_client.get_channels = AsyncMock(return_value={"results": [], "next": None, "count": 0})
             mock_client.get_channel_groups = AsyncMock(return_value=[])
@@ -92,7 +92,7 @@ class TestCSVExport:
     @pytest.mark.asyncio
     async def test_export_includes_header_row(self, async_client):
         """Export CSV includes header row even with no channels."""
-        with patch("main.get_client") as mock_get_client:
+        with patch("routers.channels.get_client") as mock_get_client:
             mock_client = MagicMock()
             mock_client.get_channels = AsyncMock(return_value={"results": [], "next": None, "count": 0})
             mock_client.get_channel_groups = AsyncMock(return_value=[])
@@ -108,7 +108,7 @@ class TestCSVExport:
     @pytest.mark.asyncio
     async def test_export_includes_channel_data(self, async_client):
         """Export CSV includes actual channel data."""
-        with patch("main.get_client") as mock_get_client:
+        with patch("routers.channels.get_client") as mock_get_client:
             mock_client = MagicMock()
             mock_client.get_channels = AsyncMock(return_value={
                 "results": [
@@ -141,7 +141,7 @@ class TestCSVExport:
     @pytest.mark.asyncio
     async def test_export_handles_api_error(self, async_client):
         """Export handles Dispatcharr API errors gracefully."""
-        with patch("main.get_client") as mock_get_client:
+        with patch("routers.channels.get_client") as mock_get_client:
             mock_client = MagicMock()
             mock_client.get_channel_groups = AsyncMock(side_effect=Exception("API Error"))
             mock_get_client.return_value = mock_client
@@ -196,7 +196,7 @@ class TestCSVImport:
 
         files = {"file": ("test.csv", csv_content, "text/csv")}
 
-        with patch("main.get_client") as mock_get_client:
+        with patch("routers.channels.get_client") as mock_get_client:
             mock_client = MagicMock()
             # Mock channel group lookup/creation
             mock_client.get_channel_groups = AsyncMock(return_value=[
@@ -222,7 +222,7 @@ CNN,News"""
 
         files = {"file": ("test.csv", csv_content, "text/csv")}
 
-        with patch("main.get_client") as mock_get_client:
+        with patch("routers.channels.get_client") as mock_get_client:
             mock_client = MagicMock()
             mock_client.get_channel_groups = AsyncMock(return_value=[])
             mock_client.create_channel_group = AsyncMock(return_value={"id": 1})
@@ -245,7 +245,7 @@ abc,ESPN HD,Sports
 
         files = {"file": ("test.csv", csv_content, "text/csv")}
 
-        with patch("main.get_client") as mock_get_client:
+        with patch("routers.channels.get_client") as mock_get_client:
             mock_client = MagicMock()
             mock_client.get_channel_groups = AsyncMock(return_value=[
                 {"id": 1, "name": "Sports"}
@@ -269,7 +269,7 @@ ESPN HD,New Sports Group"""
 
         files = {"file": ("test.csv", csv_content, "text/csv")}
 
-        with patch("main.get_client") as mock_get_client:
+        with patch("routers.channels.get_client") as mock_get_client:
             mock_client = MagicMock()
             mock_client.get_channel_groups = AsyncMock(return_value=[])  # No existing groups
             mock_client.create_channel_group = AsyncMock(return_value={"id": 1, "name": "New Sports Group"})
@@ -290,7 +290,7 @@ ESPN HD,SPORTS"""
 
         files = {"file": ("test.csv", csv_content, "text/csv")}
 
-        with patch("main.get_client") as mock_get_client:
+        with patch("routers.channels.get_client") as mock_get_client:
             mock_client = MagicMock()
             # Existing group with different case
             mock_client.get_channel_groups = AsyncMock(return_value=[
@@ -315,7 +315,7 @@ CNN,News"""
 
         files = {"file": ("test.csv", csv_content, "text/csv")}
 
-        with patch("main.get_client") as mock_get_client:
+        with patch("routers.channels.get_client") as mock_get_client:
             mock_client = MagicMock()
             mock_client.get_channel_groups = AsyncMock(return_value=[
                 {"id": 1, "name": "Sports"},
@@ -336,7 +336,7 @@ ESPN HD,https://invalid-url.example.com/logo.png"""
 
         files = {"file": ("test.csv", csv_content, "text/csv")}
 
-        with patch("main.get_client") as mock_get_client:
+        with patch("routers.channels.get_client") as mock_get_client:
             mock_client = MagicMock()
             mock_client.get_channel_groups = AsyncMock(return_value=[])
             mock_client.create_channel = AsyncMock(return_value={"id": 1})

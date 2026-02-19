@@ -9,7 +9,6 @@ import hashlib
 import json
 import logging
 import os
-import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -108,7 +107,7 @@ class ACMEClient:
                 resp = await client.get(self.directory_url)
                 resp.raise_for_status()
                 self.directory = resp.json()
-                logger.info(f"Fetched ACME directory from {self.directory_url}")
+                logger.info("[TLS-ACME] Fetched ACME directory from %s", self.directory_url)
 
             # Load or create account key
             self.account_key = self._load_or_create_account_key()
@@ -119,7 +118,7 @@ class ACMEClient:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to initialize ACME client: {e}")
+            logger.error("[TLS-ACME] Failed to initialize ACME client: %s", e)
             return False
 
     def _load_or_create_account_key(self) -> JWKRSA:
@@ -128,10 +127,10 @@ class ACMEClient:
             try:
                 key_data = self.account_key_path.read_bytes()
                 private_key = serialization.load_pem_private_key(key_data, password=None)
-                logger.info("Loaded existing ACME account key")
+                logger.info("[TLS-ACME] Loaded existing ACME account key")
                 return JWKRSA(key=private_key)
             except Exception as e:
-                logger.warning(f"Failed to load account key, creating new: {e}")
+                logger.warning("[TLS-ACME] Failed to load account key, creating new: %s", e)
 
         # Generate new RSA key for ACME account
         private_key = rsa.generate_private_key(
@@ -150,9 +149,9 @@ class ACMEClient:
                 )
                 self.account_key_path.write_bytes(key_pem)
                 os.chmod(self.account_key_path, 0o600)
-                logger.info(f"Created and saved new ACME account key")
+                logger.info("[TLS-ACME] Created and saved new ACME account key")
             except Exception as e:
-                logger.warning(f"Failed to save account key: {e}")
+                logger.warning("[TLS-ACME] Failed to save account key: %s", e)
 
         return JWKRSA(key=private_key)
 
@@ -268,7 +267,7 @@ class ACMEClient:
 
         # httpx lowercases header names when converting to dict
         self.account_url = headers.get("location")
-        logger.info(f"ACME account registered/retrieved: {self.account_url}")
+        logger.info("[TLS-ACME] ACME account registered/retrieved: %s", self.account_url)
 
     async def request_certificate(
         self,
@@ -290,7 +289,7 @@ class ACMEClient:
                 await self.initialize()
 
             # Step 1: Create new order
-            logger.debug(f"Creating certificate order for {domain}")
+            logger.debug("[TLS-ACME] Creating certificate order for %s", domain)
             order_payload = {
                 "identifiers": [{"type": "dns", "value": domain}],
             }
@@ -342,7 +341,8 @@ class ACMEClient:
                 self._pending_challenges[token] = challenge_info
 
                 logger.debug(
-                    f"DNS-01 challenge prepared for {domain}, token={token}"
+                    "[TLS-ACME] DNS-01 challenge prepared for %s, token=%s",
+                    domain, token,
                 )
 
                 # Return challenge info for external handling
@@ -354,7 +354,7 @@ class ACMEClient:
             )
 
         except Exception as e:
-            logger.error(f"Failed to request certificate: {e}")
+            logger.error("[TLS-ACME] Failed to request certificate: %s", e)
             return CertificateResult(success=False, error=str(e))
 
     def get_pending_challenge(self, token: str) -> Optional[ChallengeInfo]:
@@ -407,7 +407,7 @@ class ACMEClient:
                 )
 
             # Respond to challenge (tell ACME server we're ready)
-            logger.debug(f"Responding to DNS-01 challenge for {domain}")
+            logger.debug("[TLS-ACME] Responding to DNS-01 challenge for %s", domain)
             await self._acme_request(challenge_info.challenge_url, {})
 
             # Poll for authorization status
@@ -416,7 +416,7 @@ class ACMEClient:
                 auth, _ = await self._acme_request(challenge_info.auth_url, None)
 
                 if auth["status"] == "valid":
-                    logger.debug(f"Authorization valid for {domain}")
+                    logger.debug("[TLS-ACME] Authorization valid for %s", domain)
                     break
                 elif auth["status"] == "invalid":
                     # Get challenge error
@@ -465,7 +465,7 @@ class ACMEClient:
             csr_b64 = jose.json_util.encode_b64jose(csr_der)
 
             # Finalize order
-            logger.debug("Finalizing certificate order")
+            logger.debug("[TLS-ACME] Finalizing certificate order")
             finalize_payload = {"csr": csr_b64}
             order, _ = await self._acme_request(challenge_info.finalize_url, finalize_payload)
 
@@ -520,7 +520,7 @@ class ACMEClient:
                 if v.domain != domain
             }
 
-            logger.info(f"Certificate issued for {domain}, expires {expires_at}")
+            logger.info("[TLS-ACME] Certificate issued for %s, expires %s", domain, expires_at)
 
             return CertificateResult(
                 success=True,
@@ -532,7 +532,7 @@ class ACMEClient:
             )
 
         except Exception as e:
-            logger.error(f"Failed to complete certificate request: {e}")
+            logger.error("[TLS-ACME] Failed to complete certificate request: %s", e)
             return CertificateResult(success=False, error=str(e))
 
     def _get_thumbprint(self) -> str:
@@ -571,9 +571,9 @@ class ACMEClient:
             payload = {"certificate": cert_b64}
             await self._acme_request(self.directory["revokeCert"], payload)
 
-            logger.info("Certificate revoked successfully")
+            logger.info("[TLS-ACME] Certificate revoked successfully")
             return True
 
         except Exception as e:
-            logger.error(f"Failed to revoke certificate: {e}")
+            logger.error("[TLS-ACME] Failed to revoke certificate: %s", e)
             return False

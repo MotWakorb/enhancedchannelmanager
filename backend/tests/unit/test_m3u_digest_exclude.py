@@ -4,9 +4,7 @@ Tests for M3U digest exclude pattern filtering.
 Verifies that group and stream exclude regex patterns correctly filter
 changes out of the digest before rendering/sending.
 """
-import json
 import re
-import pytest
 
 from models import M3UChangeLog, M3UDigestSettings
 
@@ -143,14 +141,14 @@ class TestExcludeFilterLogic:
             try:
                 group_regexes.append(re.compile(p, re.IGNORECASE))
             except re.error:
-                pass
+                continue  # Skip invalid regex patterns
 
         stream_regexes = []
         for p in stream_patterns_raw:
             try:
                 stream_regexes.append(re.compile(p, re.IGNORECASE))
             except re.error:
-                pass
+                continue  # Skip invalid regex patterns
 
         filtered = []
         for change in changes:

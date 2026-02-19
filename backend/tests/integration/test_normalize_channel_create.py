@@ -54,7 +54,7 @@ class TestCreateChannelWithNormalize:
     @pytest.mark.asyncio
     async def test_create_channel_accepts_normalize_flag(self, async_client):
         """POST /api/channels accepts normalize flag without error."""
-        with patch("main.get_client") as mock_get_client:
+        with patch("routers.channels.get_client") as mock_get_client:
             mock_client = MagicMock()
             # Mock the create_channel to return a valid channel
             mock_client.create_channel = AsyncMock(return_value={
@@ -80,7 +80,7 @@ class TestCreateChannelWithNormalize:
     @pytest.mark.asyncio
     async def test_create_channel_accepts_normalize_false(self, async_client):
         """POST /api/channels accepts normalize=False flag."""
-        with patch("main.get_client") as mock_get_client:
+        with patch("routers.channels.get_client") as mock_get_client:
             mock_client = MagicMock()
             mock_client.create_channel = AsyncMock(return_value={
                 "id": 2,
@@ -106,7 +106,7 @@ class TestBulkCommitWithNormalize:
     @pytest.mark.asyncio
     async def test_bulk_commit_accepts_normalize_flag_on_create_channel(self, async_client):
         """POST /api/channels/bulk-commit accepts normalize flag on createChannel operations."""
-        with patch("main.get_client") as mock_get_client:
+        with patch("routers.channels.get_client") as mock_get_client:
             mock_client = MagicMock()
             mock_client.create_channel = AsyncMock(return_value={
                 "id": 10,

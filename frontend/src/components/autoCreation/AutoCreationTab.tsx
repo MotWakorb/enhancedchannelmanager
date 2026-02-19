@@ -42,6 +42,10 @@ function getActionCategory(action: ActionLogEntry): string | null {
     return 'skipped';
   } else if (action.type === 'update_channel') {
     return 'updated';
+  } else if (action.type === 'remove_from_channel') {
+    return 'removed';
+  } else if (action.type === 'set_stream_priority') {
+    return 'updated';
   } else if ((action as any).action === 'excluded' || desc.includes('excluded:')) {
     return 'excluded';
   } else if (['assign_logo', 'assign_tvg_id', 'assign_epg', 'assign_profile', 'set_channel_number'].includes(action.type)) {
@@ -866,6 +870,7 @@ export function AutoCreationTab() {
           { key: 'created', label: 'Created', icon: 'add_circle' },
           { key: 'merged', label: 'Merged', icon: 'merge' },
           { key: 'updated', label: 'Updated', icon: 'edit' },
+          { key: 'removed', label: 'Removed', icon: 'link_off' },
           { key: 'excluded', label: 'Excluded', icon: 'block' },
           { key: 'skipped', label: 'Skipped', icon: 'skip_next' },
           { key: 'assigned', label: 'Assigned', icon: 'label' },

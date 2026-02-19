@@ -62,7 +62,7 @@ class PopularityCalculator:
         # Validate weights sum to 1.0
         weight_sum = sum(self.weights.values())
         if abs(weight_sum - 1.0) > 0.001:
-            logger.warning(f"Weights sum to {weight_sum}, normalizing to 1.0")
+            logger.warning("[POPULARITY] Weights sum to %s, normalizing to 1.0", weight_sum)
             for key in self.weights:
                 self.weights[key] /= weight_sum
 
@@ -77,7 +77,7 @@ class PopularityCalculator:
             - channels_created: number of new score records created
             - top_channels: list of top 10 channels by score
         """
-        logger.info(f"Starting popularity calculation (period: {self.period_days} days)")
+        logger.info("[POPULARITY] Starting popularity calculation (period: %s days)", self.period_days)
 
         # Gather metrics for current and previous periods
         today = get_current_date()
@@ -94,7 +94,7 @@ class PopularityCalculator:
             previous_metrics = self._gather_metrics(session, previous_start, previous_end)
 
             if not current_metrics:
-                logger.info("No channel data found for scoring")
+                logger.info("[POPULARITY] No channel data found for scoring")
                 return {
                     "channels_scored": 0,
                     "channels_updated": 0,
@@ -178,8 +178,9 @@ class PopularityCalculator:
             ]
 
             logger.info(
-                f"Popularity calculation complete: {len(scores)} channels scored, "
-                f"{channels_updated} updated, {channels_created} created"
+                "[POPULARITY] Popularity calculation complete: %s channels scored, "
+                "%s updated, %s created",
+                len(scores), channels_updated, channels_created
             )
 
             return {
@@ -190,7 +191,7 @@ class PopularityCalculator:
             }
 
         except Exception as e:
-            logger.error(f"Popularity calculation failed: {e}")
+            logger.exception("[POPULARITY] Popularity calculation failed: %s", e)
             session.rollback()
             raise
         finally:

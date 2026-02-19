@@ -1,8 +1,8 @@
 /**
  * E2E tests for Alert Methods.
  */
-import { test, expect, navigateToTab, waitForToast, closeModal } from './fixtures/base';
-import { selectors, sampleAlertMethods } from './fixtures/test-data';
+import { test, expect, navigateToTab, closeModal } from './fixtures/base';
+import { selectors } from './fixtures/test-data';
 
 test.describe('Alert Methods', () => {
   test.beforeEach(async ({ appPage }) => {

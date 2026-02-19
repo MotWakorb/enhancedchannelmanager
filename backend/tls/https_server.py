@@ -73,7 +73,7 @@ class HTTPSServerManager:
         """
         async with self._lock:
             if self.is_running:
-                logger.debug("HTTPS server already running")
+                logger.debug("[TLS-SERVER] HTTPS server already running")
                 return True, None
 
             settings = get_tls_settings()
@@ -100,7 +100,7 @@ class HTTPSServerManager:
                 cmd = self._get_uvicorn_command(self._port, cert_path, key_path)
                 env = self._get_subprocess_env()
 
-                logger.info(f"Starting HTTPS server on port {self._port}")
+                logger.info("[TLS-SERVER] Starting HTTPS server on port %s", self._port)
 
                 # Start subprocess
                 # Set working directory to /app where main.py is located
@@ -123,15 +123,15 @@ class HTTPSServerManager:
                 if self._process.poll() is not None:
                     # Process died
                     exit_code = self._process.returncode
-                    logger.error(f"HTTPS server failed to start (exit code: {exit_code})")
+                    logger.error("[TLS-SERVER] HTTPS server failed to start (exit code: %s)", exit_code)
                     self._process = None
                     return False, f"Server failed to start (exit code: {exit_code})"
 
-                logger.info(f"HTTPS server started successfully on port {self._port} (PID: {self._process.pid})")
+                logger.info("[TLS-SERVER] HTTPS server started successfully on port %s (PID: %s)", self._port, self._process.pid)
                 return True, None
 
             except Exception as e:
-                logger.error(f"Failed to start HTTPS server: {e}")
+                logger.error("[TLS-SERVER] Failed to start HTTPS server: %s", e)
                 self._process = None
                 return False, str(e)
 
@@ -144,11 +144,11 @@ class HTTPSServerManager:
         """
         async with self._lock:
             if not self.is_running:
-                logger.debug("HTTPS server not running")
+                logger.debug("[TLS-SERVER] HTTPS server not running")
                 return False
 
             try:
-                logger.info(f"Stopping HTTPS server (PID: {self._process.pid})")
+                logger.info("[TLS-SERVER] Stopping HTTPS server (PID: %s)", self._process.pid)
 
                 # Send SIGTERM for graceful shutdown
                 os.killpg(os.getpgid(self._process.pid), signal.SIGTERM)
@@ -158,16 +158,16 @@ class HTTPSServerManager:
                     self._process.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     # Force kill if it doesn't respond
-                    logger.warning("HTTPS server didn't stop gracefully, forcing kill")
+                    logger.warning("[TLS-SERVER] HTTPS server didn't stop gracefully, forcing kill")
                     os.killpg(os.getpgid(self._process.pid), signal.SIGKILL)
                     self._process.wait(timeout=5)
 
-                logger.info("HTTPS server stopped")
+                logger.info("[TLS-SERVER] HTTPS server stopped")
                 self._process = None
                 return True
 
             except Exception as e:
-                logger.error(f"Error stopping HTTPS server: {e}")
+                logger.error("[TLS-SERVER] Error stopping HTTPS server: %s", e)
                 self._process = None
                 return False
 
@@ -209,23 +209,23 @@ async def start_https_if_configured() -> None:
     # Don't start HTTPS subprocess from within the HTTPS subprocess
     # (prevents recursive spawning)
     if is_https_subprocess():
-        logger.debug("Running as HTTPS subprocess, skipping HTTPS server spawn")
+        logger.debug("[TLS-SERVER] Running as HTTPS subprocess, skipping HTTPS server spawn")
         return
 
     settings = get_tls_settings()
 
     if not settings.enabled:
-        logger.debug("TLS not enabled, HTTPS server not started")
+        logger.debug("[TLS-SERVER] TLS not enabled, HTTPS server not started")
         return
 
     storage = CertificateStorage(TLS_DIR)
     if not storage.has_certificate():
-        logger.warning("TLS enabled but no certificate found, HTTPS server not started")
+        logger.warning("[TLS-SERVER] TLS enabled but no certificate found, HTTPS server not started")
         return
 
     success, error = await https_server_manager.start()
     if not success:
-        logger.warning(f"Failed to start HTTPS server: {error}")
+        logger.warning("[TLS-SERVER] Failed to start HTTPS server: %s", error)
 
 
 async def stop_https_server() -> None:

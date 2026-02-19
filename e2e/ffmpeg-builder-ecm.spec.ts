@@ -7,8 +7,7 @@
  * - Assigning profiles to channels/groups
  */
 import { test, expect, navigateToTab } from './fixtures/base';
-import { selectors, generateTestId } from './fixtures/test-data';
-import { ffmpegSelectors, ffmpegTestData, generateConfigName } from './fixtures/ffmpeg-data';
+import { ffmpegSelectors, generateConfigName } from './fixtures/ffmpeg-data';
 
 test.describe('ECM Integration', () => {
   test.beforeEach(async ({ appPage }) => {

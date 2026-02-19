@@ -23,8 +23,9 @@ A comprehensive guide to using Enhanced Channel Manager for IPTV channel managem
 15. [Authentication & Users](#authentication--users)
 16. [CLI Tools](#cli-tools)
 17. [Keyboard Shortcuts](#keyboard-shortcuts)
-18. [Tips & Best Practices](#tips--best-practices)
-19. [Screenshot Checklist](#screenshot-checklist)
+18. [Debug Logging](#debug-logging)
+19. [Tips & Best Practices](#tips--best-practices)
+20. [Screenshot Checklist](#screenshot-checklist)
 
 ---
 
@@ -1429,6 +1430,195 @@ Interactive mode displays a table of all users showing username, email, admin st
 | `Ctrl+Click` / `Cmd+Click` | Toggle selection |
 | `Escape` | Clear selection / Close menu |
 | `Enter` | Save inline edit |
+
+---
+
+## Debug Logging
+
+ECM uses structured log prefixes in square brackets to identify which subsystem produced each log message. When you enable debug logging (Settings > General > Log Level), these tags help you quickly filter and understand log output.
+
+### How to Read Log Lines
+
+Each log line follows this format:
+
+```
+2026-02-19 00:48:40,031 - auto_creation_engine - INFO - [AUTO-CREATE-ENGINE] Evaluating 15771 streams against 1 rules
+^                         ^                      ^      ^                    ^
+timestamp                 Python module           level  subsystem tag        message
+```
+
+The **subsystem tag** (e.g., `[AUTO-CREATE-ENGINE]`) tells you exactly which part of ECM generated the message. Use these tags to filter logs with `grep` or your log viewer.
+
+### Log Prefix Reference
+
+#### Core Infrastructure
+
+| Prefix | Description |
+|-|-|
+| `[MAIN]` | App startup, shutdown, middleware, WebSocket lifecycle |
+| `[DATABASE]` | Database connections, schema migrations, queries |
+| `[CONFIG]` | Configuration loading from environment variables |
+| `[CACHE]` | In-memory cache operations (hits, misses, evictions) |
+| `[REQUEST]` | HTTP request timing (method, path, duration, status) |
+| `[SLOW-REQUEST]` | Requests exceeding the slow-request threshold |
+| `[RAPID-POLLING]` | Detects clients polling the same endpoint too frequently |
+| `[VALIDATION-ERROR]` | Request validation failures (malformed input) |
+
+#### Authentication
+
+| Prefix | Description |
+|-|-|
+| `[AUTH]` | Login, logout, token validation, session management |
+| `[AUTH-ADMIN]` | Admin user creation, deletion, password changes |
+| `[AUTH-DISPATCHARR]` | Dispatcharr SSO/OAuth authentication provider |
+| `[AUTH-SETTINGS]` | Auth configuration changes (provider type, credentials) |
+| `[RESET-PASSWORD]` | Password reset flow |
+
+#### Dispatcharr Integration
+
+| Prefix | Description |
+|-|-|
+| `[DISPATCHARR]` | All Dispatcharr API requests (auth, token refresh, endpoints) |
+
+#### M3U Management
+
+| Prefix | Description |
+|-|-|
+| `[M3U]` | M3U account management (add, update, delete, refresh) |
+| `[M3U-REFRESH]` | M3U data refresh operations |
+| `[M3U-CHANGE]` | Detecting changes between M3U refreshes (new/removed streams) |
+| `[M3U-DIGEST]` | M3U content digest computation and change detection |
+
+#### Channels & Groups
+
+| Prefix | Description |
+|-|-|
+| `[CHANNELS]` | Individual channel CRUD operations |
+| `[CHANNELS-BULK]` | Bulk channel operations (mass update, delete, reorder) |
+| `[CHANNELS-CSV]` | CSV import and export of channel data |
+| `[CHANNELS-LOGO]` | Logo fetching and assignment to channels |
+| `[GROUPS]` | Channel group CRUD and reordering |
+| `[GROUPS-ORPHAN]` | Handling channels not assigned to any group |
+
+#### Streams
+
+| Prefix | Description |
+|-|-|
+| `[STREAMS]` | Stream listing and management |
+| `[PREVIEW]` | Stream preview and test playback |
+| `[BANDWIDTH]` | Per-stream bandwidth usage tracking |
+| `[POPULARITY]` | Stream popularity scoring and rankings |
+
+#### EPG
+
+| Prefix | Description |
+|-|-|
+| `[EPG]` | EPG source management (add, update, delete) |
+| `[EPG-REFRESH]` | EPG data refresh operations |
+| `[EPG-LCN]` | Logical channel number assignment from EPG data |
+
+#### Auto-Creation Pipeline
+
+| Prefix | Description |
+|-|-|
+| `[AUTO-CREATE]` | Auto-creation rule management (CRUD via API) |
+| `[AUTO-CREATE-ENGINE]` | Core pipeline — stream fetching, rule matching, sorting, execution |
+| `[AUTO-CREATE-EVAL]` | Per-condition evaluation (which streams match which rules) |
+| `[AUTO-CREATE-EXEC]` | Action execution (channel creation, merging, priority changes) |
+| `[AUTO-CREATE-SCHEMA]` | Rule schema validation (conditions and actions) |
+| `[AUTO-CREATE-YAML]` | YAML import and export of auto-creation rules |
+| `[AUTO-CREATION]` | Background task wrapper for scheduled auto-creation runs |
+
+#### Stream Probing & Stats
+
+| Prefix | Description |
+|-|-|
+| `[STREAM-PROBE]` | Active probing of stream URLs for health and metadata |
+| `[STREAM-PROBE-M3U]` | M3U-specific stream probe operations |
+| `[STREAM-PROBE-SORT]` | Sorting and prioritizing probe results |
+| `[STREAM-STATS]` | Stream statistics API endpoints |
+| `[STREAM-STATS-PROBE]` | Probe-based statistics collection |
+| `[STREAM-STATS-SORT]` | Sorting streams by statistics data |
+
+#### Normalization
+
+| Prefix | Description |
+|-|-|
+| `[NORMALIZE]` | Name normalization rule evaluation and application |
+| `[NORMALIZE-MIGRATE]` | Normalization rule format migration on startup |
+
+#### FFmpeg
+
+| Prefix | Description |
+|-|-|
+| `[FFMPEG]` | FFmpeg profile and preset management |
+| `[FFMPEG-EXEC]` | FFmpeg process execution |
+| `[FFPROBE]` | Running ffprobe to inspect stream metadata |
+
+#### Notifications & Alerts
+
+| Prefix | Description |
+|-|-|
+| `[NOTIFY]` | Notification API endpoints |
+| `[NOTIFY-SVC]` | Core notification dispatch service |
+| `[ALERTS]` | Alert method registry and dispatch |
+| `[ALERTS-SMTP]` | Email (SMTP) alert delivery |
+| `[ALERTS-TELEGRAM]` | Telegram alert delivery |
+| `[ALERTS-DISCORD]` | Discord webhook alert delivery |
+
+#### Tasks & Scheduling
+
+| Prefix | Description |
+|-|-|
+| `[TASKS]` | Task management API endpoints |
+| `[TASK-ENGINE]` | Background task execution engine |
+| `[TASK-REGISTRY]` | Registry of available task types |
+| `[TASK-SCHEDULER]` | Task scheduling and next-run calculation |
+| `[CRON]` | Cron expression parsing for task schedules |
+| `[SCHEDULER]` | Schedule calculation (next run times) |
+
+#### TLS / HTTPS
+
+| Prefix | Description |
+|-|-|
+| `[TLS]` | TLS certificate API and storage |
+| `[TLS-ACME]` | ACME (Let's Encrypt) certificate issuance |
+| `[TLS-RENEWAL]` | Automatic certificate renewal |
+| `[TLS-SERVER]` | HTTPS server lifecycle |
+| `[TLS-STORAGE]` | Certificate storage on disk |
+| `[TLS-SETTINGS]` | TLS configuration management |
+| `[TLS-ROUTE53]` | AWS Route53 DNS challenge for ACME |
+| `[TLS-CLOUDFLARE]` | Cloudflare DNS challenge for ACME |
+
+#### Other
+
+| Prefix | Description |
+|-|-|
+| `[SETTINGS]` | Application settings CRUD |
+| `[SETTINGS-TEST]` | Testing connectivity for configured integrations |
+| `[PROFILES]` | FFmpeg/stream profile management |
+| `[TAGS]` | Channel tag management |
+| `[STATS]` | Aggregate statistics endpoints |
+| `[JOURNAL]` | Audit and activity journal logging |
+| `[MODELS]` | SQLAlchemy model events |
+
+### Filtering Logs
+
+To view logs from a specific subsystem, use `grep` with the tag:
+
+```bash
+# View only auto-creation engine logs
+docker logs ecm-ecm-1 2>&1 | grep "\[AUTO-CREATE-ENGINE\]"
+
+# View all authentication-related logs
+docker logs ecm-ecm-1 2>&1 | grep "\[AUTH"
+
+# View slow requests
+docker logs ecm-ecm-1 2>&1 | grep "\[SLOW-REQUEST\]"
+
+# Follow logs in real time, filtered
+docker logs -f ecm-ecm-1 2>&1 | grep "\[M3U\]"
+```
 
 ---
 

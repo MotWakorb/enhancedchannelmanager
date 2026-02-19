@@ -1,6 +1,6 @@
 """Audio filter validation, generation, and chain composition."""
 
-from typing import Dict, List
+from typing import List
 
 from ffmpeg_builder.common import ValidationResult
 

@@ -1,0 +1,10 @@
+name: "ECM CodeQL Configuration"
+
+# Log injection (py/log-injection) is mitigated at runtime by a custom
+# LogRecord factory in backend/log_utils.py that sanitizes all log arguments,
+# escaping newlines and carriage returns before they reach the formatter.
+# CodeQL's static analysis cannot trace through Python's logging framework
+# internals, so we exclude this query to avoid false positives.
+query-filters:
+  - exclude:
+      id: py/log-injection

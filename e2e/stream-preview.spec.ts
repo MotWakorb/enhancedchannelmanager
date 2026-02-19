@@ -8,7 +8,7 @@
  * - Alternative options (VLC, M3U, Copy URL)
  * - Close functionality
  */
-import { test, expect, navigateToTab, closeModal } from './fixtures/base';
+import { test, expect, navigateToTab } from './fixtures/base';
 import { selectors } from './fixtures/test-data';
 
 // Extended selectors for stream preview

@@ -4,7 +4,7 @@
  * Tests channel viewing, editing, and reordering functionality.
  */
 import { test, expect, navigateToTab, enterEditMode, exitEditMode, cancelEditMode } from './fixtures/base';
-import { selectors, sampleChannels, sampleChannelGroups } from './fixtures/test-data';
+import { selectors } from './fixtures/test-data';
 
 test.describe('Channel Manager Tab', () => {
   test.beforeEach(async ({ appPage }) => {
@@ -316,10 +316,7 @@ test.describe('Channel Reordering', () => {
       const channelItems = appPage.locator(selectors.channelItem);
       const count = await channelItems.count();
 
-      let firstChannelText = '';
       if (count >= 2) {
-        firstChannelText = await channelItems.nth(0).textContent() || '';
-
         // Attempt to reorder
         await channelItems.nth(0).dragTo(channelItems.nth(1));
         await appPage.waitForTimeout(300);

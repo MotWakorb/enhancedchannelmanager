@@ -8,8 +8,7 @@
  * - Annotated command explanations
  * - Tooltip explanations for individual flags
  */
-import { test, expect, navigateToTab, waitForToast } from './fixtures/base';
-import { selectors, generateTestId } from './fixtures/test-data';
+import { test, expect, navigateToTab } from './fixtures/base';
 import { ffmpegSelectors, ffmpegTestData } from './fixtures/ffmpeg-data';
 
 test.describe('Command Preview', () => {

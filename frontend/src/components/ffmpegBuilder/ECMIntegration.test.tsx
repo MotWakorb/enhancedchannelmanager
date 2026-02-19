@@ -8,7 +8,7 @@
  * deleting profiles that link saved FFMPEG configs to channels/groups.
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {
   server,
@@ -17,7 +17,7 @@ import {
   createMockFFMPEGConfig,
 } from '../../test/mocks/server';
 import { ECMIntegration } from './ECMIntegration';
-import type { FFMPEGChannelProfile, FFMPEGBuilderState } from '../../types/ffmpegBuilder';
+import type { FFMPEGChannelProfile } from '../../types/ffmpegBuilder';
 
 // Setup MSW server
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));

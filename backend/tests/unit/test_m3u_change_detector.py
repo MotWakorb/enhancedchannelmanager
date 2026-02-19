@@ -8,9 +8,7 @@ Tests the core change detection logic including:
 - Change detection algorithms
 - Persistence of change logs
 """
-import pytest
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
 
 from m3u_change_detector import (
     GroupChange,
@@ -18,7 +16,7 @@ from m3u_change_detector import (
     M3UChangeSet,
     M3UChangeDetector,
 )
-from models import M3USnapshot, M3UChangeLog
+from models import M3UChangeLog
 
 
 class TestGroupChange:

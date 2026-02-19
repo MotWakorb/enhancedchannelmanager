@@ -4,13 +4,9 @@ Unit tests for the FFMPEG Builder audio codec module.
 Tests audio codec validation, flag generation, and stream copy behavior.
 These are TDD tests -- they will FAIL until the backend modules are implemented.
 """
-import pytest
-
 from ffmpeg_builder.audio_codec import (
     validate_audio_codec,
     generate_audio_codec_flags,
-    AudioCodecSettings,
-    KNOWN_AUDIO_CODECS,
 )
 
 from tests.fixtures.ffmpeg_factories import (

@@ -6,7 +6,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import * as api from '../../services/api';
-import type { TLSStatus, TLSSettings } from '../../types';
+import type { TLSStatus } from '../../types';
 import { useNotifications } from '../../contexts/NotificationContext';
 import './TLSSettingsSection.css';
 

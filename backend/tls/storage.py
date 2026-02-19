@@ -70,7 +70,7 @@ class CertificateStorage:
             os.chmod(self.tls_dir, 0o700)
             return True
         except (PermissionError, OSError) as e:
-            logger.error(f"Failed to create TLS directory: {e}")
+            logger.error("[TLS-STORAGE] Failed to create TLS directory: %s", e)
             return False
 
     def save_certificate(
@@ -103,7 +103,7 @@ class CertificateStorage:
             # Validate cert/key pair before saving
             validation = self.validate_pair(cert_pem, key_pem)
             if not validation.is_valid:
-                logger.error(f"Certificate validation failed: {validation.validation_error}")
+                logger.error("[TLS-STORAGE] Certificate validation failed: %s", validation.validation_error)
                 return False
 
             # Write certificate (readable by web server)
@@ -126,11 +126,11 @@ class CertificateStorage:
                 self.fullchain_path.write_bytes(fullchain)
                 os.chmod(self.fullchain_path, 0o644)
 
-            logger.info(f"Certificate saved to {self.cert_path}")
+            logger.info("[TLS-STORAGE] Certificate saved to %s", self.cert_path)
             return True
 
         except Exception as e:
-            logger.error(f"Failed to save certificate: {e}")
+            logger.error("[TLS-STORAGE] Failed to save certificate: %s", e)
             return False
 
     def load_certificate(self) -> tuple[Optional[bytes], Optional[bytes]]:
@@ -148,7 +148,7 @@ class CertificateStorage:
             key_pem = self.key_path.read_bytes()
             return cert_pem, key_pem
         except Exception as e:
-            logger.error(f"Failed to load certificate: {e}")
+            logger.error("[TLS-STORAGE] Failed to load certificate: %s", e)
             return None, None
 
     def get_certificate_info(self) -> Optional[CertificateInfo]:
@@ -218,7 +218,7 @@ class CertificateStorage:
             return info
 
         except Exception as e:
-            logger.error(f"Certificate validation failed: {e}")
+            logger.error("[TLS-STORAGE] Certificate validation failed: %s", e)
             return CertificateInfo(
                 subject="",
                 issuer="",
@@ -241,8 +241,8 @@ class CertificateStorage:
                 cn_attrs = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
                 if cn_attrs:
                     subject_cn = cn_attrs[0].value
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("[TLS] Suppressed subject CN extraction error: %s", e)
 
             # Extract issuer CN
             issuer_cn = ""
@@ -250,8 +250,8 @@ class CertificateStorage:
                 cn_attrs = cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)
                 if cn_attrs:
                     issuer_cn = cn_attrs[0].value
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("[TLS] Suppressed issuer CN extraction error: %s", e)
 
             # Extract domains from SANs
             domains = []
@@ -266,8 +266,8 @@ class CertificateStorage:
                     if isinstance(name, x509.DNSName):
                         if name.value not in domains:
                             domains.append(name.value)
-            except x509.ExtensionNotFound:
-                pass
+            except x509.ExtensionNotFound as e:
+                logger.debug("[TLS] Suppressed SAN extension lookup: %s", e)
 
             return CertificateInfo(
                 subject=subject_cn,
@@ -280,7 +280,7 @@ class CertificateStorage:
             )
 
         except Exception as e:
-            logger.error(f"Failed to parse certificate: {e}")
+            logger.error("[TLS-STORAGE] Failed to parse certificate: %s", e)
             return CertificateInfo(
                 subject="",
                 issuer="",
@@ -310,10 +310,10 @@ class CertificateStorage:
             ]:
                 if path.exists():
                     path.unlink()
-                    logger.info(f"Deleted {path}")
+                    logger.info("[TLS-STORAGE] Deleted %s", path)
             return True
         except Exception as e:
-            logger.error(f"Failed to delete certificate: {e}")
+            logger.error("[TLS-STORAGE] Failed to delete certificate: %s", e)
             return False
 
     def save_acme_account(self, account_data: dict) -> bool:
@@ -325,10 +325,10 @@ class CertificateStorage:
             account_json = json.dumps(account_data, indent=2)
             self.acme_account_path.write_text(account_json)
             os.chmod(self.acme_account_path, 0o600)
-            logger.info(f"ACME account saved to {self.acme_account_path}")
+            logger.info("[TLS-STORAGE] ACME account saved to %s", self.acme_account_path)
             return True
         except Exception as e:
-            logger.error(f"Failed to save ACME account: {e}")
+            logger.error("[TLS-STORAGE] Failed to save ACME account: %s", e)
             return False
 
     def load_acme_account(self) -> Optional[dict]:
@@ -339,7 +339,7 @@ class CertificateStorage:
         try:
             return json.loads(self.acme_account_path.read_text())
         except Exception as e:
-            logger.error(f"Failed to load ACME account: {e}")
+            logger.error("[TLS-STORAGE] Failed to load ACME account: %s", e)
             return None
 
     def has_certificate(self) -> bool:

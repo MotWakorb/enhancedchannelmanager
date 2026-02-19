@@ -1,8 +1,6 @@
 """Input source validation and flag generation."""
 
-import os
-import re
-from typing import Dict, List, Optional
+from typing import Dict, List
 from urllib.parse import urlparse
 
 from ffmpeg_builder.common import ValidationResult
@@ -45,7 +43,6 @@ def validate_input_source(source: dict) -> ValidationResult:
 def generate_input_flags(source: dict) -> List[str]:
     """Generate ffmpeg input flags from an input source dict."""
     flags: List[str] = []
-    source_type = source.get("type", "file")
     path = source.get("path", "")
 
     # HW accel flags come first

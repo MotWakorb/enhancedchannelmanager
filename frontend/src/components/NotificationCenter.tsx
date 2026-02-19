@@ -59,7 +59,17 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
     try {
       setLoading(true);
       const response = await api.getNotifications({ page_size: 20 });
-      setNotifications(response.notifications);
+      // Pin active task/probe notifications to the top
+      const sorted = [...response.notifications].sort((a, b) => {
+        const aActive = isProgressNotification(a) && getProbeProgress(a) &&
+          (isProbeActive(getProbeProgress(a)!.status) || getProbeProgress(a)!.status === 'paused');
+        const bActive = isProgressNotification(b) && getProbeProgress(b) &&
+          (isProbeActive(getProbeProgress(b)!.status) || getProbeProgress(b)!.status === 'paused');
+        if (aActive && !bActive) return -1;
+        if (!aActive && bActive) return 1;
+        return 0; // preserve API order within each group
+      });
+      setNotifications(sorted);
       setUnreadCount(response.unread_count);
     } catch (err) {
       console.error('Failed to load notifications:', err);

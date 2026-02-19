@@ -41,10 +41,10 @@ class TaskRegistry:
             raise ValueError(f"Task class {task_class.__name__} has no task_id defined")
 
         if task_class.task_id in self._tasks:
-            logger.warning(f"Task {task_class.task_id} already registered, replacing")
+            logger.warning("[TASK-REGISTRY] Task %s already registered, replacing", task_class.task_id)
 
         self._tasks[task_class.task_id] = task_class
-        logger.debug(f"Registered task: {task_class.task_id} ({task_class.task_name})")
+        logger.debug("[TASK-REGISTRY] Registered task: %s (%s)", task_class.task_id, task_class.task_name)
 
     def unregister(self, task_id: str) -> bool:
         """
@@ -60,7 +60,7 @@ class TaskRegistry:
             del self._tasks[task_id]
             if task_id in self._instances:
                 del self._instances[task_id]
-            logger.debug(f"Unregistered task: {task_id}")
+            logger.debug("[TASK-REGISTRY] Unregistered task: %s", task_id)
             return True
         return False
 
@@ -108,7 +108,7 @@ class TaskRegistry:
 
         This should be called on startup to restore saved configurations.
         """
-        logger.info("Syncing tasks from database")
+        logger.info("[TASK-REGISTRY] Syncing tasks from database")
 
         try:
             session = get_session()
@@ -131,13 +131,13 @@ class TaskRegistry:
                         instance._next_run = db_task.next_run_at
 
                         self._instances[db_task.task_id] = instance
-                        logger.debug(f"Loaded task config from DB: {db_task.task_id}")
+                        logger.debug("[TASK-REGISTRY] Loaded task config from DB: %s", db_task.task_id)
 
                         # Ensure non-manual tasks have a TaskSchedule entry
                         if instance.schedule_config.schedule_type != ScheduleType.MANUAL:
                             self._create_default_task_schedule(session, instance)
                     else:
-                        logger.warning(f"Task {db_task.task_id} in DB but not registered")
+                        logger.warning("[TASK-REGISTRY] Task %s in DB but not registered", db_task.task_id)
 
                 # Create instances for registered tasks not in DB
                 for task_id, task_class in self._tasks.items():
@@ -145,15 +145,15 @@ class TaskRegistry:
                         self._instances[task_id] = task_class()
                         # Save to database with defaults
                         self._save_task_to_db(session, self._instances[task_id])
-                        logger.debug(f"Created default config for task: {task_id}")
+                        logger.debug("[TASK-REGISTRY] Created default config for task: %s", task_id)
 
                 session.commit()
                 self._initialized = True
-                logger.info(f"Synced {len(self._instances)} tasks from database")
+                logger.info("[TASK-REGISTRY] Synced %s tasks from database", len(self._instances))
             finally:
                 session.close()
         except Exception as e:
-            logger.exception(f"Failed to sync tasks from database: {e}")
+            logger.exception("[TASK-REGISTRY] Failed to sync tasks from database: %s", e)
             # Create instances without DB config
             for task_id, task_class in self._tasks.items():
                 if task_id not in self._instances:
@@ -177,11 +177,11 @@ class TaskRegistry:
                     for instance in self._instances.values():
                         self._save_task_to_db(session, instance)
                 session.commit()
-                logger.debug(f"Synced task(s) to database: {task_id or 'all'}")
+                logger.debug("[TASK-REGISTRY] Synced task(s) to database: %s", task_id or "all")
             finally:
                 session.close()
         except Exception as e:
-            logger.exception(f"Failed to sync task to database: {e}")
+            logger.exception("[TASK-REGISTRY] Failed to sync task to database: %s", e)
 
     def _save_task_to_db(self, session, instance: TaskScheduler) -> None:
         """Save a single task instance to the database."""
@@ -267,7 +267,7 @@ class TaskRegistry:
             next_run_at=next_run,
         )
         session.add(task_schedule)
-        logger.info(f"Created default TaskSchedule for {instance.task_id}: {task_schedule_type}")
+        logger.info("[TASK-REGISTRY] Created default TaskSchedule for %s: %s", instance.task_id, task_schedule_type)
 
     # -------------------------------------------------------------------------
     # Task Configuration API
@@ -379,11 +379,11 @@ class TaskRegistry:
                         if show_notifications is not None:
                             db_task.show_notifications = show_notifications
                         session.commit()
-                        logger.debug(f"Updated alert config for {task_id}")
+                        logger.debug("[TASK-REGISTRY] Updated alert config for %s", task_id)
                 finally:
                     session.close()
             except Exception as e:
-                logger.error(f"Failed to update alert config for {task_id}: {e}")
+                logger.error("[TASK-REGISTRY] Failed to update alert config for %s: %s", task_id, e)
 
         # Persist schedule config to database
         self.sync_to_database(task_id)

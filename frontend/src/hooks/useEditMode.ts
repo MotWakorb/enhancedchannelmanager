@@ -1319,10 +1319,6 @@ export function useEditMode({
       summaryParts.push(`${opCounts.renameGroup} group rename${opCounts.renameGroup !== 1 ? 's' : ''}`);
     }
 
-    const operationSummary = summaryParts.length > 0
-      ? summaryParts.join(', ')
-      : 'No operations';
-
     try {
       // Build bulk operations using helper
       const { bulkOperations, groupsToCreate } = buildBulkOperations(consolidatedOps);

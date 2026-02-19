@@ -88,6 +88,8 @@ export type ActionType =
   | 'assign_profile'
   | 'set_channel_number'
   | 'set_variable'
+  | 'remove_from_channel'
+  | 'set_stream_priority'
   | 'skip'
   | 'stop_processing'
   | 'log_match';
@@ -124,6 +126,8 @@ export interface Action {
   pattern?: string;
   replacement?: string;
   template?: string;
+  // Stream priority
+  priority?: 'lowest' | 'highest';
 }
 
 /**
@@ -133,7 +137,7 @@ export interface ActionSchema {
   type: ActionType;
   label: string;
   description: string;
-  category: 'creation' | 'assignment' | 'control';
+  category: 'creation' | 'assignment' | 'management' | 'control';
   params: ActionParamSchema[];
 }
 
@@ -193,6 +197,7 @@ export interface AutoCreationRule {
   sort_field?: string | null;
   sort_order?: 'asc' | 'desc';
   probe_on_sort?: boolean;
+  sort_regex?: string | null;
   normalize_names?: boolean;
   orphan_action?: 'delete' | 'move_uncategorized' | 'delete_and_cleanup_groups' | 'none';
   last_run_at?: string;
@@ -218,6 +223,7 @@ export interface CreateRuleData {
   sort_field?: string | null;
   sort_order?: string;
   probe_on_sort?: boolean;
+  sort_regex?: string | null;
   normalize_names?: boolean;
   orphan_action?: string;
 }
@@ -393,6 +399,7 @@ export interface RunPipelineResponse {
   streams_merged: number;
   streams_skipped: number;
   streams_excluded: number;
+  streams_removed: number;
   channels_removed: number;
   channels_moved: number;
   created_entities: CreatedEntity[];
