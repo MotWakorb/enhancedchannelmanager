@@ -219,6 +219,7 @@ class ActionExecutor:
         for c in self.existing_channels:
             if c.get("channel_number"):
                 self._used_channel_numbers.add(c["channel_number"])
+        self._channel_assigned_numbers = {}  # channel_id -> number (set_channel_number dedup)
 
     async def execute(self, action: Action | dict, stream_ctx: StreamContext,
                       exec_ctx: ExecutionContext, rule_target_group_id: int = None,
@@ -577,6 +578,7 @@ class ActionExecutor:
             if base_name.lower() != channel_name.lower():
                 self._base_name_to_channel[base_name.lower()] = new_channel
             self._used_channel_numbers.add(channel_number)
+            self._channel_assigned_numbers[new_channel["id"]] = channel_number
             exec_ctx.current_channel_id = new_channel["id"]
 
             # Assign default channel profiles if configured
@@ -1452,9 +1454,24 @@ class ActionExecutor:
             )
 
         value = action.params.get("value", "auto")
+
+        # Reuse the number if this channel was already assigned one this run
+        # (avoids consuming extra numbers when multiple streams merge into same channel)
+        existing_number = self._channel_assigned_numbers.get(exec_ctx.current_channel_id)
+        if existing_number is not None:
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description=f"Channel already numbered #{existing_number} this run",
+                entity_type="channel",
+                entity_id=exec_ctx.current_channel_id,
+                skipped=True
+            )
+
         channel_number = self._get_next_channel_number(value)
 
         if exec_ctx.dry_run:
+            self._channel_assigned_numbers[exec_ctx.current_channel_id] = channel_number
             return ActionResult(
                 success=True,
                 action_type=action.type,
@@ -1470,6 +1487,7 @@ class ActionExecutor:
 
             await self.client.update_channel(exec_ctx.current_channel_id, {"channel_number": channel_number})
             self._used_channel_numbers.add(channel_number)
+            self._channel_assigned_numbers[exec_ctx.current_channel_id] = channel_number
 
             return ActionResult(
                 success=True,
@@ -1982,8 +2000,11 @@ class ActionExecutor:
             Next available channel number
         """
         if isinstance(spec, int):
-            logger.debug("[AUTO-CREATE-EXEC] spec=%s (int) -> %s", spec, spec)
-            return spec
+            num = spec
+            while num in self._used_channel_numbers:
+                num += 1
+            logger.debug("[AUTO-CREATE-EXEC] spec=%s (int) -> %s", spec, num)
+            return num
 
         if isinstance(spec, str):
             if spec == "auto":
@@ -2007,9 +2028,11 @@ class ActionExecutor:
                 logger.debug("[AUTO-CREATE-EXEC] spec='%s' range exhausted -> %s", spec, max_num + 1)
                 return max_num + 1
 
-            # Try parsing as int
+            # Try parsing as int — auto-increment from this starting number
             try:
                 num = int(spec)
+                while num in self._used_channel_numbers:
+                    num += 1
                 logger.debug("[AUTO-CREATE-EXEC] spec='%s' (parsed int) -> %s", spec, num)
                 return num
             except ValueError:

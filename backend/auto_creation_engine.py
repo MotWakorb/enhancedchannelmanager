@@ -1370,7 +1370,7 @@ class AutoCreationEngine:
                             })
 
                 # Renumber remaining channels to close gaps
-                remaining_channel_ids = rule_channel_order.get(rule.id, [])
+                remaining_channel_ids = list(dict.fromkeys(rule_channel_order.get(rule.id, [])))
                 # Filter out orphans to keep only current channels in their sorted order
                 remaining_channel_ids = [cid for cid in remaining_channel_ids if cid not in orphan_ids]
                 starting_number = _get_rule_starting_number(rule)
