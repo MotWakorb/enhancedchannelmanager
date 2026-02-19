@@ -46,6 +46,7 @@ import { PreviewStreamModal } from './PreviewStreamModal';
 import { CSVImportModal } from './CSVImportModal';
 import { exportChannelsToCSV, downloadCSVTemplate } from '../services/api';
 import './ChannelsPane.css';
+import './ModalBase.css';
 
 interface ChannelsPaneProps {
   channelGroups: ChannelGroup[];
@@ -1128,6 +1129,7 @@ export function ChannelsPane({
   const renumberAllGroupsModal = useModal();
   const [renumberAllStartingNumber, setRenumberAllStartingNumber] = useState<string>('1');
   const [renumberAllUpdateNames, setRenumberAllUpdateNames] = useState<boolean>(true);
+  const [renumberAllGroupOverrides, setRenumberAllGroupOverrides] = useState<Record<string, string>>({});
 
   // Hidden groups state
   const hiddenGroupsModal = useModal();
@@ -4438,12 +4440,12 @@ export function ChannelsPane({
   // Renumber All Groups preview memo
   const renumberAllGroupsPreview = useMemo(() => {
     if (!renumberAllGroupsModal.isOpen) {
-      return { groups: [] as { name: string; count: number; from: number; to: number }[], totalChannels: 0 };
+      return { groups: [] as { key: string; name: string; count: number; from: number; to: number; hasOverride: boolean }[], totalChannels: 0 };
     }
 
     const startNum = parseInt(renumberAllStartingNumber, 10);
     if (isNaN(startNum) || startNum < 1) {
-      return { groups: [] as { name: string; count: number; from: number; to: number }[], totalChannels: 0 };
+      return { groups: [] as { key: string; name: string; count: number; from: number; to: number; hasOverride: boolean }[], totalChannels: 0 };
     }
 
     // Build channel lists per group from localChannels (unfiltered), sorted by current channel_number
@@ -4458,28 +4460,35 @@ export function ChannelsPane({
       arr.sort((a, b) => (a.channel_number ?? 9999) - (b.channel_number ?? 9999))
     );
 
-    const groups: { name: string; count: number; from: number; to: number }[] = [];
-    let currentNum = startNum;
-
-    // Named groups in sorted order, skipping auto-sync
+    // Collect group keys in order
+    const groupEntries: { key: string; name: string; channels: Channel[] }[] = [];
     for (const group of sortedChannelGroups) {
       if (autoSyncRelatedGroups.has(group.id)) continue;
       const chs = channelsByGroupId[String(group.id)];
       if (!chs || chs.length === 0) continue;
-      groups.push({ name: group.name, count: chs.length, from: currentNum, to: currentNum + chs.length - 1 });
-      currentNum += chs.length;
+      groupEntries.push({ key: String(group.id), name: group.name, channels: chs });
     }
-
-    // Ungrouped channels last
     const ungrouped = channelsByGroupId['ungrouped'];
     if (ungrouped && ungrouped.length > 0) {
-      groups.push({ name: 'Ungrouped', count: ungrouped.length, from: currentNum, to: currentNum + ungrouped.length - 1 });
-      currentNum += ungrouped.length;
+      groupEntries.push({ key: 'ungrouped', name: 'Ungrouped', channels: ungrouped });
     }
 
-    const totalChannels = currentNum - startNum;
+    // Compute per-group ranges respecting overrides
+    const groups: { key: string; name: string; count: number; from: number; to: number; hasOverride: boolean }[] = [];
+    let currentNum = startNum;
+
+    for (const entry of groupEntries) {
+      const overrideVal = renumberAllGroupOverrides[entry.key];
+      const overrideNum = overrideVal ? parseInt(overrideVal, 10) : NaN;
+      const hasOverride = !isNaN(overrideNum) && overrideNum >= 1;
+      const groupStart = hasOverride ? overrideNum : currentNum;
+      groups.push({ key: entry.key, name: entry.name, count: entry.channels.length, from: groupStart, to: groupStart + entry.channels.length - 1, hasOverride });
+      currentNum = groupStart + entry.channels.length;
+    }
+
+    const totalChannels = groupEntries.reduce((sum, e) => sum + e.channels.length, 0);
     return { groups, totalChannels };
-  }, [renumberAllGroupsModal.isOpen, renumberAllStartingNumber, localChannels, sortedChannelGroups, autoSyncRelatedGroups]);
+  }, [renumberAllGroupsModal.isOpen, renumberAllStartingNumber, renumberAllGroupOverrides, localChannels, sortedChannelGroups, autoSyncRelatedGroups]);
 
   const handleRenumberAllGroupsConfirm = () => {
     if (!onStageUpdateChannel) return;
@@ -4498,41 +4507,52 @@ export function ChannelsPane({
       arr.sort((a, b) => (a.channel_number ?? 9999) - (b.channel_number ?? 9999))
     );
 
-    // Build ordered list of channels to renumber
-    const orderedChannels: Channel[] = [];
+    // Collect group entries in order
+    const groupEntries: { key: string; channels: Channel[] }[] = [];
     for (const group of sortedChannelGroups) {
       if (autoSyncRelatedGroups.has(group.id)) continue;
       const chs = channelsByGroupId[String(group.id)];
-      if (chs) orderedChannels.push(...chs);
+      if (chs && chs.length > 0) groupEntries.push({ key: String(group.id), channels: chs });
     }
     const ungrouped = channelsByGroupId['ungrouped'];
-    if (ungrouped) orderedChannels.push(...ungrouped);
+    if (ungrouped && ungrouped.length > 0) groupEntries.push({ key: 'ungrouped', channels: ungrouped });
 
-    if (orderedChannels.length === 0) return;
+    if (groupEntries.length === 0) return;
 
     // Start batch for single undo
     if (onStartBatch) {
-      onStartBatch(`Renumber all groups: ${orderedChannels.length} channels starting at ${startNum}`);
+      onStartBatch(`Renumber all groups: channels across ${groupEntries.length} groups`);
     }
 
-    orderedChannels.forEach((channel, index) => {
-      const newNumber = startNum + index;
-      if (channel.channel_number === newNumber) return; // Skip if already correct
-
-      let updates: Partial<Channel> = { channel_number: newNumber };
-
-      if (renumberAllUpdateNames && channel.channel_number !== null) {
-        const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
-        if (newName && newName !== channel.name) {
-          updates.name = newName;
-        }
+    let currentNum = startNum;
+    for (const entry of groupEntries) {
+      // Check for per-group override
+      const overrideVal = renumberAllGroupOverrides[entry.key];
+      const overrideNum = overrideVal ? parseInt(overrideVal, 10) : NaN;
+      if (!isNaN(overrideNum) && overrideNum >= 1) {
+        currentNum = overrideNum;
       }
 
-      const description = updates.name
-        ? `Renumber "${channel.name}" → "${updates.name}" to ch.${newNumber}`
-        : `Renumber ch.${channel.channel_number ?? '?'} → ${newNumber}`;
-      onStageUpdateChannel(channel.id, updates, description);
-    });
+      for (const channel of entry.channels) {
+        const newNumber = currentNum;
+        currentNum++;
+        if (channel.channel_number === newNumber) continue;
+
+        const updates: Partial<Channel> = { channel_number: newNumber };
+
+        if (renumberAllUpdateNames && channel.channel_number !== null) {
+          const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
+          if (newName && newName !== channel.name) {
+            updates.name = newName;
+          }
+        }
+
+        const description = updates.name
+          ? `Renumber "${channel.name}" → "${updates.name}" to ch.${newNumber}`
+          : `Renumber ch.${channel.channel_number ?? '?'} → ${newNumber}`;
+        onStageUpdateChannel(channel.id, updates, description);
+      }
+    }
 
     if (onEndBatch) {
       onEndBatch();
@@ -4541,6 +4561,7 @@ export function ChannelsPane({
     renumberAllGroupsModal.close();
     setRenumberAllStartingNumber('1');
     setRenumberAllUpdateNames(true);
+    setRenumberAllGroupOverrides({});
   };
 
   const handleMassRenumberConfirm = (shiftConflicts: boolean) => {
@@ -5133,6 +5154,7 @@ export function ChannelsPane({
                 onRenumberAllGroups={() => {
                   setRenumberAllStartingNumber('1');
                   setRenumberAllUpdateNames(true);
+                  setRenumberAllGroupOverrides({});
                   renumberAllGroupsModal.open();
                 }}
                 onSortByMode={handleSortSelectedStreamsByMode}
@@ -6135,7 +6157,7 @@ export function ChannelsPane({
                   </span>
                 )}
               </div>
-              <label className="mass-renumber-checkbox">
+              <label className="modal-checkbox-label">
                 <input
                   type="checkbox"
                   checked={massRenumberUpdateNames}
@@ -6236,19 +6258,35 @@ export function ChannelsPane({
 
       {/* Renumber All Groups Modal */}
       {renumberAllGroupsModal.isOpen && (
-        <div className="modal-overlay">
-          <div className="modal-content renumber-all-groups-dialog" onClick={(e) => e.stopPropagation()}>
-            <h3>Renumber All Groups</h3>
+        <div className="modal-overlay" onClick={() => {
+          renumberAllGroupsModal.close();
+          setRenumberAllStartingNumber('1');
+          setRenumberAllUpdateNames(true);
+          setRenumberAllGroupOverrides({});
+        }}>
+          <div className="modal-container modal-md" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>
+                <span className="material-icons">format_list_numbered</span>
+                Renumber All Groups
+              </h2>
+              <button className="modal-close-btn" onClick={() => {
+                renumberAllGroupsModal.close();
+                setRenumberAllStartingNumber('1');
+                setRenumberAllUpdateNames(true);
+                setRenumberAllGroupOverrides({});
+              }}>
+                <span className="material-icons">close</span>
+              </button>
+            </div>
 
-            <div className="mass-renumber-info">
-              <p>
+            <div className="modal-body">
+              <p className="modal-description">
                 Assign sequential numbers across <strong>{renumberAllGroupsPreview.groups.length} group{renumberAllGroupsPreview.groups.length !== 1 ? 's' : ''}</strong> ({renumberAllGroupsPreview.totalChannels} channel{renumberAllGroupsPreview.totalChannels !== 1 ? 's' : ''}).
                 {autoSyncRelatedGroups.size > 0 && ' Auto-sync groups excluded.'}
               </p>
-            </div>
 
-            <div className="mass-renumber-options">
-              <div className="mass-renumber-field">
+              <div className="modal-form-group">
                 <label htmlFor="renumber-all-start">Starting Channel Number</label>
                 <input
                   id="renumber-all-start"
@@ -6256,11 +6294,11 @@ export function ChannelsPane({
                   min="1"
                   value={renumberAllStartingNumber}
                   onChange={(e) => setRenumberAllStartingNumber(e.target.value)}
-                  className="mass-renumber-input"
                   autoFocus
                 />
               </div>
-              <label className="mass-renumber-checkbox">
+
+              <label className="modal-checkbox-label">
                 <input
                   type="checkbox"
                   checked={renumberAllUpdateNames}
@@ -6268,36 +6306,56 @@ export function ChannelsPane({
                 />
                 Update channel numbers in names
               </label>
+
+              {renumberAllGroupsPreview.groups.length > 0 && (
+                <div className="renumber-all-preview">
+                  <label>Preview</label>
+                  <ul className="renumber-all-preview-list">
+                    {renumberAllGroupsPreview.groups.map((g) => (
+                      <li key={g.key}>
+                        <span className="renumber-all-group-name">{g.name}</span>
+                        <span className="renumber-all-group-count">{g.count} ch</span>
+                        <input
+                          type="number"
+                          min="1"
+                          className="renumber-all-group-start"
+                          value={renumberAllGroupOverrides[g.key] ?? ''}
+                          placeholder={String(g.from)}
+                          onChange={(e) => {
+                            setRenumberAllGroupOverrides(prev => {
+                              const next = { ...prev };
+                              if (e.target.value === '') {
+                                delete next[g.key];
+                              } else {
+                                next[g.key] = e.target.value;
+                              }
+                              return next;
+                            });
+                          }}
+                          title="Custom starting number for this group"
+                        />
+                        <span className="renumber-all-group-range">{g.from}–{g.to}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
 
-            {renumberAllGroupsPreview.groups.length > 0 && (
-              <div className="renumber-all-preview">
-                <label>Preview</label>
-                <ul className="renumber-all-preview-list">
-                  {renumberAllGroupsPreview.groups.map((g, i) => (
-                    <li key={i}>
-                      <span className="renumber-all-group-name">{g.name}</span>
-                      <span className="renumber-all-group-count">{g.count} ch</span>
-                      <span className="renumber-all-group-range">{g.from}–{g.to}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            <div className="modal-actions">
+            <div className="modal-footer">
               <button
-                className="modal-btn cancel"
+                className="modal-btn modal-btn-secondary"
                 onClick={() => {
                   renumberAllGroupsModal.close();
                   setRenumberAllStartingNumber('1');
                   setRenumberAllUpdateNames(true);
+                  setRenumberAllGroupOverrides({});
                 }}
               >
                 Cancel
               </button>
               <button
-                className="modal-btn primary"
+                className="modal-btn modal-btn-primary"
                 onClick={handleRenumberAllGroupsConfirm}
                 disabled={
                   !renumberAllStartingNumber ||
@@ -6306,6 +6364,7 @@ export function ChannelsPane({
                   renumberAllGroupsPreview.totalChannels === 0
                 }
               >
+                <span className="material-icons">format_list_numbered</span>
                 Renumber All
               </button>
             </div>
