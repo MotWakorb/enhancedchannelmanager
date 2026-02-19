@@ -10,8 +10,8 @@ import { test, expect, navigateToTab } from './fixtures/base';
 test.describe('Task Notification Settings', () => {
   test.beforeEach(async ({ appPage }) => {
     await navigateToTab(appPage, 'settings');
-    // Navigate to Scheduled Tasks subsection
-    const scheduledTasksNav = appPage.locator('li').filter({ hasText: 'Scheduled Tasks' });
+    // Navigate to Scheduled Tasks subsection via the settings sidebar nav
+    const scheduledTasksNav = appPage.locator('.settings-nav-item').filter({ hasText: 'Scheduled Tasks' });
     await scheduledTasksNav.click();
     await appPage.waitForTimeout(500);
   });
@@ -33,10 +33,10 @@ test.describe('Task Notification Settings', () => {
     await appPage.locator('body').click({ position: { x: 10, y: 10 } });
     await appPage.waitForTimeout(300);
 
-    // Step 2: Find Database Cleanup task and click Edit
-    // The task name is in a generic element, find the row containing "Database Cleanup"
-    const taskRow = appPage.locator('div').filter({ hasText: /^Database Cleanup/ }).first();
-    const editButton = appPage.locator('button:has-text("Edit")').nth(3); // Database Cleanup is the 4th task (0-indexed)
+    // Step 2: Find Database Cleanup task card and click its Edit button
+    // Each task card has a data-testid attribute like "task-card-{task_id}"
+    const taskCard = appPage.locator('[data-testid="task-card-cleanup"]');
+    const editButton = taskCard.locator('button:has-text("Edit")');
 
     await editButton.click();
     await appPage.waitForTimeout(500);
@@ -63,8 +63,8 @@ test.describe('Task Notification Settings', () => {
     await appPage.waitForTimeout(1000);
 
     // Step 5: Run the Database Cleanup task
-    // Find Run Now button for Database Cleanup (4th task)
-    const runButton = appPage.locator('button:has-text("Run Now")').nth(3); // Database Cleanup is 4th task with Run Now button (0=EPG, 1=M3U, 2=M3U Change Monitor, 3=Database Cleanup)
+    const taskCardForRun = appPage.locator('[data-testid="task-card-cleanup"]');
+    const runButton = taskCardForRun.locator('button:has-text("Run Now")');
     await runButton.click();
 
     // Wait for task to complete (Database Cleanup should be fast)
@@ -86,8 +86,9 @@ test.describe('Task Notification Settings', () => {
     await appPage.locator('body').click({ position: { x: 10, y: 10 } });
     await appPage.waitForTimeout(300);
 
-    // Re-open task editor (4th edit button)
-    await editButton.click();
+    // Re-open task editor for Database Cleanup
+    const taskCardReopen = appPage.locator('[data-testid="task-card-cleanup"]');
+    await taskCardReopen.locator('button:has-text("Edit")').click();
     await appPage.waitForTimeout(500);
 
     // Re-check the checkbox
@@ -119,8 +120,9 @@ test.describe('Task Notification Settings', () => {
     await appPage.locator('body').click({ position: { x: 10, y: 10 } });
     await appPage.waitForTimeout(300);
 
-    // Step 2: Find Database Cleanup task and click Edit (4th edit button)
-    const editButton = appPage.locator('button:has-text("Edit")').nth(3);
+    // Step 2: Find Database Cleanup task card and click its Edit button
+    const taskCard = appPage.locator('[data-testid="task-card-cleanup"]');
+    const editButton = taskCard.locator('button:has-text("Edit")');
     await editButton.click();
     await appPage.waitForTimeout(500);
 
@@ -140,8 +142,9 @@ test.describe('Task Notification Settings', () => {
     await saveButton.click();
     await appPage.waitForTimeout(1000);
 
-    // Step 5: Run the task (3rd Run Now button = Database Cleanup)
-    const runButton = appPage.locator('button:has-text("Run Now")').nth(3); // Database Cleanup
+    // Step 5: Run the Database Cleanup task
+    const taskCardForRun = appPage.locator('[data-testid="task-card-cleanup"]');
+    const runButton = taskCardForRun.locator('button:has-text("Run Now")');
     await runButton.click();
 
     // Wait for task to complete

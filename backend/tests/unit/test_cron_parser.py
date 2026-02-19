@@ -2,9 +2,6 @@
 Unit tests for the cron_parser module.
 """
 from datetime import datetime
-from unittest.mock import patch
-
-import pytest
 
 from cron_parser import (
     CRON_PRESETS,

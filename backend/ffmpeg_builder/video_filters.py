@@ -1,6 +1,6 @@
 """Video filter validation, generation, and chain composition."""
 
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from ffmpeg_builder.common import ValidationResult
 

@@ -109,7 +109,8 @@ def get_next_run_time(
                 try:
                     tz = ZoneInfo(timezone)
                     base_time = datetime.now(tz)
-                except Exception:
+                except Exception as e:
+                    logger.warning("[CRON] Invalid timezone '%s', falling back to UTC: %s", timezone, e)
                     base_time = datetime.utcnow()
             else:
                 base_time = datetime.utcnow()
@@ -123,10 +124,10 @@ def get_next_run_time(
 
         return next_time
     except ImportError:
-        logger.warning("croniter not installed, cannot calculate next run time")
+        logger.warning("[CRON] croniter not installed, cannot calculate next run time")
         return None
     except Exception as e:
-        logger.error(f"Failed to calculate next run time for '{expression}': {e}")
+        logger.error("[CRON] Failed to calculate next run time for '%s': %s", expression, e)
         return None
 
 
@@ -159,7 +160,8 @@ def get_next_n_run_times(
                 try:
                     tz = ZoneInfo(timezone)
                     base_time = datetime.now(tz)
-                except Exception:
+                except Exception as e:
+                    logger.warning("[CRON] Invalid timezone '%s', falling back to UTC: %s", timezone, e)
                     base_time = datetime.utcnow()
             else:
                 base_time = datetime.utcnow()
@@ -175,10 +177,10 @@ def get_next_n_run_times(
 
         return times
     except ImportError:
-        logger.warning("croniter not installed, cannot calculate run times")
+        logger.warning("[CRON] croniter not installed, cannot calculate run times")
         return []
     except Exception as e:
-        logger.error(f"Failed to calculate run times for '{expression}': {e}")
+        logger.error("[CRON] Failed to calculate run times for '%s': %s", expression, e)
         return []
 
 

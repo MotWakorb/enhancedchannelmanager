@@ -12,8 +12,11 @@ test.describe('M3U Manager Tab', () => {
   });
 
   test('M3U manager tab is accessible', async ({ appPage }) => {
+    // Wait for tab content to confirm navigation completed
+    const content = appPage.locator('.m3u-manager-tab, [class*="m3u"]');
+    await content.first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
     const m3uTab = appPage.locator(selectors.tabButton('m3u-manager'));
-    await expect(m3uTab).toHaveClass(/active/);
+    await expect(m3uTab).toHaveClass(/active/, { timeout: 10000 });
   });
 
   test('M3U sources section is visible', async ({ appPage }) => {

@@ -83,10 +83,9 @@ class StreamProbeTask(TaskScheduler):
         if "max_concurrent" in config:
             self._max_concurrent_override = config["max_concurrent"]
 
-        logger.info(f"[{self.task_id}] Config updated: channel_groups={self._channel_groups}, "
-                   f"auto_sync_groups={self._auto_sync_groups}, "
-                   f"batch_size={self._batch_size_override}, timeout={self._timeout_override}, "
-                   f"max_concurrent={self._max_concurrent_override}")
+        logger.info("[%s] Config updated: channel_groups=%s, auto_sync_groups=%s, batch_size=%s, timeout=%s, max_concurrent=%s",
+                   self.task_id, self._channel_groups, self._auto_sync_groups,
+                   self._batch_size_override, self._timeout_override, self._max_concurrent_override)
 
     def set_prober(self, prober):
         """Set the StreamProber instance to delegate to.
@@ -97,7 +96,7 @@ class StreamProbeTask(TaskScheduler):
         self._prober = prober
         # Clear cached channel groups - will be set by schedule parameters on next run
         self._channel_groups = None
-        logger.info(f"[{self.task_id}] Prober updated, cleared channel groups cache")
+        logger.info("[%s] Prober updated, cleared channel groups cache", self.task_id)
 
     def set_channel_groups(self, groups: list[str]):
         """Set channel groups to filter by for this run."""
@@ -147,13 +146,13 @@ class StreamProbeTask(TaskScheduler):
             # Apply schedule parameter overrides if set
             if self._timeout_override is not None:
                 self._prober.probe_timeout = self._timeout_override
-                logger.info(f"[{self.task_id}] Using schedule timeout: {self._timeout_override}s")
+                logger.info("[%s] Using schedule timeout: %ss", self.task_id, self._timeout_override)
             if self._batch_size_override is not None:
                 self._prober.probe_batch_size = self._batch_size_override
-                logger.info(f"[{self.task_id}] Using schedule batch_size: {self._batch_size_override}")
+                logger.info("[%s] Using schedule batch_size: %s", self.task_id, self._batch_size_override)
             if self._max_concurrent_override is not None:
                 self._prober.max_concurrent_probes = max(1, min(16, self._max_concurrent_override))
-                logger.info(f"[{self.task_id}] Using schedule max_concurrent: {self._prober.max_concurrent_probes}")
+                logger.info("[%s] Using schedule max_concurrent: %s", self.task_id, self._prober.max_concurrent_probes)
 
             # Determine channel groups to use
             # None = not configured (probe everything), [] = explicitly empty (probe nothing)
@@ -161,7 +160,7 @@ class StreamProbeTask(TaskScheduler):
 
             if self._auto_sync_groups:
                 # Auto-sync mode: always probe ALL current groups, ignore stored list
-                logger.info(f"[{self.task_id}] Auto-sync enabled, probing all current groups")
+                logger.info("[%s] Auto-sync enabled, probing all current groups", self.task_id)
                 channel_groups = None  # None = probe everything
             elif channel_groups:
                 # Fixed-list mode: validate stored IDs/names against current groups
@@ -181,16 +180,16 @@ class StreamProbeTask(TaskScheduler):
                         stale_count = len(channel_groups) - len(valid_groups)
 
                     if stale_count:
-                        logger.warning(f"[{self.task_id}] Skipping {stale_count} stale group(s) (will be auto-removed on next schedule load)")
+                        logger.warning("[%s] Skipping %s stale group(s) (will be auto-removed on next schedule load)", self.task_id, stale_count)
 
                     # Use validated group names; if all were stale, keep empty list
                     # (empty = probe nothing, not probe everything)
                     channel_groups = valid_groups
                 except Exception as e:
-                    logger.warning(f"[{self.task_id}] Failed to validate channel groups: {e}")
+                    logger.warning("[%s] Failed to validate channel groups: %s", self.task_id, e)
 
             # Start the probe in background so we can poll for progress
-            logger.info(f"[{self.task_id}] Starting stream probe (groups: {channel_groups})")
+            logger.info("[%s] Starting stream probe (groups: %s)", self.task_id, channel_groups)
 
             import asyncio
             # Run probe_all_streams as a background task
@@ -292,7 +291,7 @@ class StreamProbeTask(TaskScheduler):
             )
 
         except Exception as e:
-            logger.exception(f"[{self.task_id}] Stream probe failed: {e}")
+            logger.exception("[%s] Stream probe failed: %s", self.task_id, e)
             return TaskResult(
                 success=False,
                 message=f"Stream probe failed: {str(e)}",

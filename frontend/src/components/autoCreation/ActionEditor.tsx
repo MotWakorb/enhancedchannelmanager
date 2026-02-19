@@ -56,7 +56,7 @@ const ACTION_TYPES: {
   type: ActionType;
   label: string;
   description: string;
-  category: 'creation' | 'assignment' | 'control' | 'variables';
+  category: 'creation' | 'assignment' | 'management' | 'variables' | 'control';
   hasNameTemplate?: boolean;
   hasIfExists?: boolean;
   hasTarget?: boolean;
@@ -66,6 +66,7 @@ const ACTION_TYPES: {
   hasChannelNumbering?: boolean;
   hasNameTransform?: boolean;
   hasVariableConfig?: boolean;
+  hasPriority?: boolean;
 }[] = [
   // Creation actions
   { type: 'create_channel', label: 'Create Channel', description: 'Create a new channel for the stream', category: 'creation', hasNameTemplate: true, hasIfExists: true, hasChannelNumbering: true, hasNameTransform: true },
@@ -79,6 +80,9 @@ const ACTION_TYPES: {
   { type: 'set_channel_number', label: 'Set Channel Number', description: 'Set the channel number', category: 'assignment', hasValue: true },
   // Variables
   { type: 'set_variable', label: 'Set Variable', description: 'Define a reusable variable from stream data', category: 'variables', hasVariableConfig: true },
+  // Management actions
+  { type: 'remove_from_channel', label: 'Remove From Channel', description: 'Remove this stream from its current channel', category: 'management' },
+  { type: 'set_stream_priority', label: 'Set Stream Priority', description: 'Move stream to lowest or highest priority in its channel', category: 'management', hasPriority: true },
   // Control actions
   { type: 'skip', label: 'Skip', description: 'Skip this stream (do not process)', category: 'control' },
   { type: 'stop_processing', label: 'Stop Processing', description: 'Stop processing further rules', category: 'control' },
@@ -89,6 +93,7 @@ const ACTION_CATEGORIES = [
   { id: 'creation', label: 'Creation' },
   { id: 'assignment', label: 'Assignment' },
   { id: 'variables', label: 'Variables' },
+  { id: 'management', label: 'Management' },
   { id: 'control', label: 'Control' },
 ] as const;
 
@@ -195,7 +200,7 @@ export function ActionEditor({
   showValidation = false,
   showPreview = false,
   readonly = false,
-  draggable = false,
+  /* draggable - defined in props but not yet used in the component body */
   compact = false,
   previousActions = [],
   orderNumber,
@@ -325,6 +330,9 @@ export function ActionEditor({
     if (newType === 'set_variable') {
       newAction.variable_mode = 'regex_extract';
       newAction.source_field = 'stream_name';
+    }
+    if (newType === 'set_stream_priority') {
+      newAction.priority = 'lowest';
     }
 
     onChange(newAction);
@@ -914,6 +922,22 @@ export function ActionEditor({
             {epgSources.length === 0 && (
               <span className="field-hint">No EPG sources configured. Add sources in the EPG Manager tab.</span>
             )}
+          </div>
+        )}
+
+        {/* Priority Selector for set_stream_priority */}
+        {actionDef?.hasPriority && (
+          <div className="action-field">
+            <label>Priority Position</label>
+            <CustomSelect
+              value={action.priority || 'lowest'}
+              onChange={val => onChange({ ...action, priority: val as 'lowest' | 'highest' })}
+              options={[
+                { value: 'lowest', label: 'Lowest (last)' },
+                { value: 'highest', label: 'Highest (first)' },
+              ]}
+              disabled={readonly}
+            />
           </div>
         )}
       </div>

@@ -1,7 +1,6 @@
 """Full configuration validation for the FFMPEG builder."""
 
 import re
-from typing import Optional
 
 from ffmpeg_builder.common import ValidationResult
 from ffmpeg_builder.input import validate_input_source

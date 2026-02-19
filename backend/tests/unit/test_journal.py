@@ -8,8 +8,6 @@ import json
 from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 
-import pytest
-
 
 class TestLogEntry:
     """Tests for log_entry() function."""

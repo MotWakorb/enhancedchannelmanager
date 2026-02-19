@@ -191,15 +191,15 @@ class M3UDigestTask(TaskScheduler):
                 for p in group_patterns_raw:
                     try:
                         group_regexes.append(re.compile(p, re.IGNORECASE))
-                    except re.error:
-                        pass  # Skip invalid patterns (validated on save)
+                    except re.error as e:
+                        logger.debug("[M3U-DIGEST] Suppressed invalid group regex pattern: %s", e)
 
                 stream_regexes = []
                 for p in stream_patterns_raw:
                     try:
                         stream_regexes.append(re.compile(p, re.IGNORECASE))
-                    except re.error:
-                        pass
+                    except re.error as e:
+                        logger.debug("[M3U-DIGEST] Suppressed invalid stream regex pattern: %s", e)
 
                 filtered_changes = []
                 for change in changes:
@@ -226,7 +226,8 @@ class M3UDigestTask(TaskScheduler):
             # Check threshold
             if len(changes) < settings.min_changes_threshold and not force:
                 logger.info(
-                    f"[{self.task_id}] Only {len(changes)} changes, below threshold of {settings.min_changes_threshold}"
+                    "[%s] Only %s changes, below threshold of %s",
+                    self.task_id, len(changes), settings.min_changes_threshold
                 )
                 return TaskResult(
                     success=True,
@@ -362,7 +363,7 @@ This is a test email from Enhanced Channel Manager.
                 )
 
         except Exception as e:
-            logger.exception(f"[{self.task_id}] M3U digest failed: {e}")
+            logger.exception("[%s] M3U digest failed: %s", self.task_id, e)
             return TaskResult(
                 success=False,
                 message=f"M3U digest failed: {str(e)}",
@@ -394,7 +395,7 @@ This is a test email from Enhanced Channel Manager.
         # First, try shared SMTP settings
         settings = get_settings()
         if settings.is_smtp_configured():
-            logger.info(f"[{self.task_id}] Using shared SMTP settings")
+            logger.info("[%s] Using shared SMTP settings", self.task_id)
             smtp_config = {
                 "smtp_host": settings.smtp_host,
                 "smtp_port": settings.smtp_port,
@@ -414,7 +415,7 @@ This is a test email from Enhanced Channel Manager.
             )
             if success:
                 return True
-            logger.warning(f"[{self.task_id}] Shared SMTP failed, trying alert methods")
+            logger.warning("[%s] Shared SMTP failed, trying alert methods", self.task_id)
 
         # Fall back to SMTP alert methods
         try:
@@ -429,12 +430,12 @@ This is a test email from Enhanced Channel Manager.
             ]
 
             if not smtp_methods:
-                logger.warning(f"[{self.task_id}] No enabled SMTP alert methods found")
+                logger.warning("[%s] No enabled SMTP alert methods found", self.task_id)
                 return False
 
             # Use the first enabled SMTP method
             smtp_method = smtp_methods[0]
-            logger.info(f"[{self.task_id}] Using SMTP alert method: {smtp_method.name}")
+            logger.info("[%s] Using SMTP alert method: %s", self.task_id, smtp_method.name)
 
             success = await self._send_custom_email_with_config(
                 smtp_method.config,
@@ -446,7 +447,7 @@ This is a test email from Enhanced Channel Manager.
             return success
 
         except Exception as e:
-            logger.error(f"[{self.task_id}] Failed to send digest email: {e}")
+            logger.error("[%s] Failed to send digest email: %s", self.task_id, e)
             return False
 
     async def _send_custom_email_with_config(
@@ -470,7 +471,7 @@ This is a test email from Enhanced Channel Manager.
             from_name = config.get("from_name", "ECM M3U Digest")
 
             if not all([smtp_host, from_email]):
-                logger.error(f"[{self.task_id}] Missing SMTP configuration")
+                logger.error("[%s] Missing SMTP configuration", self.task_id)
                 return False
 
             # Build the email
@@ -504,11 +505,11 @@ This is a test email from Enhanced Channel Manager.
             server.sendmail(from_email, recipients, msg.as_string())
             server.quit()
 
-            logger.info(f"[{self.task_id}] Sent digest email to {len(recipients)} recipients")
+            logger.info("[%s] Sent digest email to %s recipients", self.task_id, len(recipients))
             return True
 
         except Exception as e:
-            logger.error(f"[{self.task_id}] SMTP error: {e}")
+            logger.error("[%s] SMTP error: %s", self.task_id, e)
             return False
 
     async def _send_digest_discord(
@@ -551,20 +552,20 @@ This is a test email from Enhanced Channel Manager.
                     if method:
                         config = json.loads(method.config) if isinstance(method.config, str) else method.config
                         webhook_url = config.get("webhook_url")
-                        logger.info(f"[{self.task_id}] Using Discord webhook from alert method '{method.name}'")
+                        logger.info("[%s] Using Discord webhook from alert method '%s'", self.task_id, method.name)
                 finally:
                     db.close()
             except Exception as e:
-                logger.warning(f"[{self.task_id}] Failed to look up Discord alert method: {e}")
+                logger.warning("[%s] Failed to look up Discord alert method: %s", self.task_id, e)
 
         if not webhook_url:
-            logger.warning(f"[{self.task_id}] No Discord webhook configured (checked General Settings and Alert Methods)")
+            logger.warning("[%s] No Discord webhook configured (checked General Settings and Alert Methods)", self.task_id)
             return False
 
         # Validate webhook URL format
         if not webhook_url.startswith("https://discord.com/api/webhooks/") and \
            not webhook_url.startswith("https://discordapp.com/api/webhooks/"):
-            logger.error(f"[{self.task_id}] Invalid Discord webhook URL format")
+            logger.error("[%s] Invalid Discord webhook URL format", self.task_id)
             return False
 
         try:
@@ -586,16 +587,16 @@ This is a test email from Enhanced Channel Manager.
                         timeout=aiohttp.ClientTimeout(total=10),
                     ) as response:
                         if response.status == 204:
-                            logger.info(f"[{self.task_id}] Discord test message sent successfully")
+                            logger.info("[%s] Discord test message sent successfully", self.task_id)
                             return True
                         else:
                             text = await response.text()
-                            logger.error(f"[{self.task_id}] Discord webhook failed: {response.status} - {text}")
+                            logger.error("[%s] Discord webhook failed: %s - %s", self.task_id, response.status, text)
                             return False
 
                 # Send actual digest content - may be multiple messages
                 if not discord_content:
-                    logger.warning(f"[{self.task_id}] No Discord content to send")
+                    logger.warning("[%s] No Discord content to send", self.task_id)
                     return False
 
                 for i, chunk in enumerate(discord_content):
@@ -610,11 +611,11 @@ This is a test email from Enhanced Channel Manager.
                         timeout=aiohttp.ClientTimeout(total=10),
                     ) as response:
                         if response.status == 204:
-                            logger.debug(f"[{self.task_id}] Discord message {i+1}/{len(discord_content)} sent")
+                            logger.debug("[%s] Discord message %s/%s sent", self.task_id, i + 1, len(discord_content))
                         elif response.status == 429:
                             # Rate limited - wait and retry
                             retry_after = int(response.headers.get("Retry-After", 1))
-                            logger.warning(f"[{self.task_id}] Discord rate limited, waiting {retry_after}s")
+                            logger.warning("[%s] Discord rate limited, waiting %ss", self.task_id, retry_after)
                             import asyncio
                             await asyncio.sleep(retry_after)
                             # Retry this message
@@ -624,11 +625,11 @@ This is a test email from Enhanced Channel Manager.
                                 timeout=aiohttp.ClientTimeout(total=10),
                             ) as retry_response:
                                 if retry_response.status != 204:
-                                    logger.error(f"[{self.task_id}] Discord retry failed: {retry_response.status}")
+                                    logger.error("[%s] Discord retry failed: %s", self.task_id, retry_response.status)
                                     return False
                         else:
                             text = await response.text()
-                            logger.error(f"[{self.task_id}] Discord webhook failed: {response.status} - {text}")
+                            logger.error("[%s] Discord webhook failed: %s - %s", self.task_id, response.status, text)
                             return False
 
                     # Small delay between messages to avoid rate limiting
@@ -636,14 +637,14 @@ This is a test email from Enhanced Channel Manager.
                         import asyncio
                         await asyncio.sleep(0.5)
 
-                logger.info(f"[{self.task_id}] Sent {len(discord_content)} Discord message(s)")
+                logger.info("[%s] Sent %s Discord message(s)", self.task_id, len(discord_content))
                 return True
 
         except aiohttp.ClientError as e:
-            logger.error(f"[{self.task_id}] Discord connection error: {e}")
+            logger.error("[%s] Discord connection error: %s", self.task_id, e)
             return False
         except Exception as e:
-            logger.error(f"[{self.task_id}] Discord unexpected error: {e}")
+            logger.exception("[%s] Discord unexpected error: %s", self.task_id, e)
             return False
 
 

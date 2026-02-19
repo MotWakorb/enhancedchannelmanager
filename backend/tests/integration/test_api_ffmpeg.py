@@ -11,7 +11,7 @@ Tests the complete API layer including:
 These are TDD tests -- they will FAIL until the API endpoints are implemented.
 """
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch
 
 from tests.fixtures.ffmpeg_factories import (
     create_builder_state,
@@ -34,7 +34,7 @@ class TestCapabilitiesAPI:
     async def test_get_capabilities_returns_200(self, async_client):
         """GET /api/ffmpeg/capabilities returns 200."""
         caps = create_capabilities()
-        with patch("main.ffmpeg_detect_capabilities", return_value=caps):
+        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
             response = await async_client.get("/api/ffmpeg/capabilities")
         assert response.status_code == 200
 
@@ -42,7 +42,7 @@ class TestCapabilitiesAPI:
     async def test_capabilities_has_version(self, async_client):
         """GET /api/ffmpeg/capabilities response includes version string."""
         caps = create_capabilities(version="6.1")
-        with patch("main.ffmpeg_detect_capabilities", return_value=caps):
+        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
             response = await async_client.get("/api/ffmpeg/capabilities")
         assert response.status_code == 200
         data = response.json()
@@ -53,7 +53,7 @@ class TestCapabilitiesAPI:
     async def test_capabilities_has_encoders(self, async_client):
         """GET /api/ffmpeg/capabilities response includes encoders list."""
         caps = create_capabilities()
-        with patch("main.ffmpeg_detect_capabilities", return_value=caps):
+        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
             response = await async_client.get("/api/ffmpeg/capabilities")
         assert response.status_code == 200
         data = response.json()
@@ -66,7 +66,7 @@ class TestCapabilitiesAPI:
     async def test_capabilities_has_decoders(self, async_client):
         """GET /api/ffmpeg/capabilities response includes decoders list."""
         caps = create_capabilities()
-        with patch("main.ffmpeg_detect_capabilities", return_value=caps):
+        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
             response = await async_client.get("/api/ffmpeg/capabilities")
         assert response.status_code == 200
         data = response.json()
@@ -79,7 +79,7 @@ class TestCapabilitiesAPI:
     async def test_capabilities_has_formats(self, async_client):
         """GET /api/ffmpeg/capabilities response includes formats list."""
         caps = create_capabilities()
-        with patch("main.ffmpeg_detect_capabilities", return_value=caps):
+        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
             response = await async_client.get("/api/ffmpeg/capabilities")
         assert response.status_code == 200
         data = response.json()
@@ -92,7 +92,7 @@ class TestCapabilitiesAPI:
     async def test_capabilities_has_filters(self, async_client):
         """GET /api/ffmpeg/capabilities response includes filters list."""
         caps = create_capabilities()
-        with patch("main.ffmpeg_detect_capabilities", return_value=caps):
+        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
             response = await async_client.get("/api/ffmpeg/capabilities")
         assert response.status_code == 200
         data = response.json()
@@ -104,7 +104,7 @@ class TestCapabilitiesAPI:
     async def test_capabilities_has_hwaccels(self, async_client):
         """GET /api/ffmpeg/capabilities response includes hwaccels list."""
         caps = create_capabilities()
-        with patch("main.ffmpeg_detect_capabilities", return_value=caps):
+        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
             response = await async_client.get("/api/ffmpeg/capabilities")
         assert response.status_code == 200
         data = response.json()
@@ -116,7 +116,7 @@ class TestCapabilitiesAPI:
     async def test_hwaccels_include_cuda_status(self, async_client):
         """Hardware acceleration list includes CUDA availability status."""
         caps = create_capabilities()
-        with patch("main.ffmpeg_detect_capabilities", return_value=caps):
+        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
             response = await async_client.get("/api/ffmpeg/capabilities")
         assert response.status_code == 200
         data = response.json()
@@ -129,7 +129,7 @@ class TestCapabilitiesAPI:
     async def test_hwaccels_include_qsv_status(self, async_client):
         """Hardware acceleration list includes QSV availability status."""
         caps = create_capabilities()
-        with patch("main.ffmpeg_detect_capabilities", return_value=caps):
+        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
             response = await async_client.get("/api/ffmpeg/capabilities")
         assert response.status_code == 200
         data = response.json()
@@ -142,7 +142,7 @@ class TestCapabilitiesAPI:
     async def test_hwaccels_include_vaapi_status(self, async_client):
         """Hardware acceleration list includes VAAPI availability status."""
         caps = create_capabilities()
-        with patch("main.ffmpeg_detect_capabilities", return_value=caps):
+        with patch("routers.ffmpeg.ffmpeg_detect_capabilities", return_value=caps):
             response = await async_client.get("/api/ffmpeg/capabilities")
         assert response.status_code == 200
         data = response.json()
@@ -165,7 +165,7 @@ class TestValidationAPI:
         """POST /api/ffmpeg/validate with valid config returns 200."""
         state = create_builder_state()
         result = create_validation_result(valid=True)
-        with patch("main.ffmpeg_validate_config", return_value=result):
+        with patch("routers.ffmpeg.ffmpeg_validate_config", return_value=result):
             response = await async_client.post("/api/ffmpeg/validate", json=state)
         assert response.status_code == 200
         data = response.json()
@@ -179,7 +179,7 @@ class TestValidationAPI:
             valid=True,
             command="ffmpeg -i input.mp4 -c:v libx264 -crf 23 output.mp4",
         )
-        with patch("main.ffmpeg_validate_config", return_value=result):
+        with patch("routers.ffmpeg.ffmpeg_validate_config", return_value=result):
             response = await async_client.post("/api/ffmpeg/validate", json=state)
         assert response.status_code == 200
         data = response.json()
@@ -196,7 +196,7 @@ class TestValidationAPI:
             errors=["Input source is required"],
             command="",
         )
-        with patch("main.ffmpeg_validate_config", return_value=result):
+        with patch("routers.ffmpeg.ffmpeg_validate_config", return_value=result):
             response = await async_client.post("/api/ffmpeg/validate", json=state)
         assert response.status_code == 200
         data = response.json()
@@ -212,7 +212,7 @@ class TestValidationAPI:
             valid=True,
             warnings=["VP9 codec in MP4 container may cause compatibility issues"],
         )
-        with patch("main.ffmpeg_validate_config", return_value=result):
+        with patch("routers.ffmpeg.ffmpeg_validate_config", return_value=result):
             response = await async_client.post("/api/ffmpeg/validate", json=state)
         assert response.status_code == 200
         data = response.json()
@@ -229,7 +229,7 @@ class TestValidationAPI:
             errors=["Input source is required"],
             command="",
         )
-        with patch("main.ffmpeg_validate_config", return_value=result):
+        with patch("routers.ffmpeg.ffmpeg_validate_config", return_value=result):
             response = await async_client.post("/api/ffmpeg/validate", json=state)
         assert response.status_code == 200
         data = response.json()
@@ -246,7 +246,7 @@ class TestValidationAPI:
             errors=["Output path is required"],
             command="",
         )
-        with patch("main.ffmpeg_validate_config", return_value=result):
+        with patch("routers.ffmpeg.ffmpeg_validate_config", return_value=result):
             response = await async_client.post("/api/ffmpeg/validate", json=state)
         assert response.status_code == 200
         data = response.json()
@@ -283,7 +283,7 @@ class TestGenerateCommandAPI:
                 },
             ],
         }
-        with patch("main.ffmpeg_generate_command", return_value=mock_result):
+        with patch("routers.ffmpeg.ffmpeg_generate_command", return_value=mock_result):
             response = await async_client.post("/api/ffmpeg/generate-command", json=state)
         assert response.status_code == 200
         data = response.json()
@@ -317,7 +317,7 @@ class TestGenerateCommandAPI:
                 },
             ],
         }
-        with patch("main.ffmpeg_generate_command", return_value=mock_result):
+        with patch("routers.ffmpeg.ffmpeg_generate_command", return_value=mock_result):
             response = await async_client.post("/api/ffmpeg/generate-command", json=state)
         assert response.status_code == 200
         data = response.json()
@@ -346,7 +346,7 @@ class TestGenerateCommandAPI:
                 },
             ],
         }
-        with patch("main.ffmpeg_generate_command", return_value=mock_result):
+        with patch("routers.ffmpeg.ffmpeg_generate_command", return_value=mock_result):
             response = await async_client.post("/api/ffmpeg/generate-command", json=state)
         assert response.status_code == 200
         data = response.json()
@@ -376,7 +376,7 @@ class TestGenerateCommandAPI:
                 },
             ],
         }
-        with patch("main.ffmpeg_generate_command", return_value=mock_result):
+        with patch("routers.ffmpeg.ffmpeg_generate_command", return_value=mock_result):
             response = await async_client.post("/api/ffmpeg/generate-command", json=state)
         assert response.status_code == 200
         data = response.json()
@@ -397,7 +397,7 @@ class TestSavedConfigsAPI:
     @pytest.mark.asyncio
     async def test_list_configs_returns_200(self, async_client):
         """GET /api/ffmpeg/configs returns 200 with a list."""
-        with patch("main.ffmpeg_list_configs", return_value=[]):
+        with patch("routers.ffmpeg.ffmpeg_list_configs", return_value=[]):
             response = await async_client.get("/api/ffmpeg/configs")
         assert response.status_code == 200
         data = response.json()
@@ -408,7 +408,7 @@ class TestSavedConfigsAPI:
     async def test_create_config_returns_201(self, async_client):
         """POST /api/ffmpeg/configs creates a saved config and returns 201."""
         saved = create_saved_config(name="My Transcode Preset")
-        with patch("main.ffmpeg_create_config", return_value=saved):
+        with patch("routers.ffmpeg.ffmpeg_create_config", return_value=saved):
             response = await async_client.post(
                 "/api/ffmpeg/configs",
                 json={
@@ -427,7 +427,7 @@ class TestSavedConfigsAPI:
         """GET /api/ffmpeg/configs/{id} returns a single saved config."""
         saved = create_saved_config(name="Lookup Config")
         config_id = saved["id"]
-        with patch("main.ffmpeg_get_config", return_value=saved):
+        with patch("routers.ffmpeg.ffmpeg_get_config", return_value=saved):
             response = await async_client.get(f"/api/ffmpeg/configs/{config_id}")
         assert response.status_code == 200
         data = response.json()
@@ -439,7 +439,7 @@ class TestSavedConfigsAPI:
         """PUT /api/ffmpeg/configs/{id} updates a saved config."""
         saved = create_saved_config(name="Updated Config")
         config_id = saved["id"]
-        with patch("main.ffmpeg_update_config", return_value=saved):
+        with patch("routers.ffmpeg.ffmpeg_update_config", return_value=saved):
             response = await async_client.put(
                 f"/api/ffmpeg/configs/{config_id}",
                 json={
@@ -456,7 +456,7 @@ class TestSavedConfigsAPI:
     async def test_delete_config(self, async_client):
         """DELETE /api/ffmpeg/configs/{id} deletes a saved config."""
         config_id = 42
-        with patch("main.ffmpeg_delete_config", return_value={"status": "deleted"}):
+        with patch("routers.ffmpeg.ffmpeg_delete_config", return_value={"status": "deleted"}):
             response = await async_client.delete(f"/api/ffmpeg/configs/{config_id}")
         assert response.status_code == 200
         data = response.json()
@@ -465,7 +465,7 @@ class TestSavedConfigsAPI:
     @pytest.mark.asyncio
     async def test_get_nonexistent_config_returns_404(self, async_client):
         """GET /api/ffmpeg/configs/{id} returns 404 for unknown ID."""
-        with patch("main.ffmpeg_get_config", return_value=None):
+        with patch("routers.ffmpeg.ffmpeg_get_config", return_value=None):
             response = await async_client.get("/api/ffmpeg/configs/99999")
         assert response.status_code == 404
 
@@ -481,7 +481,7 @@ class TestJobsAPI:
     @pytest.mark.asyncio
     async def test_list_jobs_returns_200(self, async_client):
         """GET /api/ffmpeg/jobs returns 200 with a list."""
-        with patch("main.ffmpeg_list_jobs", return_value=[]):
+        with patch("routers.ffmpeg.ffmpeg_list_jobs", return_value=[]):
             response = await async_client.get("/api/ffmpeg/jobs")
         assert response.status_code == 200
         data = response.json()
@@ -492,7 +492,7 @@ class TestJobsAPI:
     async def test_create_job_returns_201(self, async_client):
         """POST /api/ffmpeg/jobs creates a job and returns 201."""
         job = create_ffmpeg_job(name="Transcode Job", status="queued")
-        with patch("main.ffmpeg_create_job", return_value=job):
+        with patch("routers.ffmpeg.ffmpeg_create_job", return_value=job):
             response = await async_client.post(
                 "/api/ffmpeg/jobs",
                 json={
@@ -511,7 +511,7 @@ class TestJobsAPI:
         """GET /api/ffmpeg/jobs/{id} returns a single job."""
         job = create_ffmpeg_job(name="Lookup Job", status="running")
         job_id = job["id"]
-        with patch("main.ffmpeg_get_job", return_value=job):
+        with patch("routers.ffmpeg.ffmpeg_get_job", return_value=job):
             response = await async_client.get(f"/api/ffmpeg/jobs/{job_id}")
         assert response.status_code == 200
         data = response.json()
@@ -523,7 +523,7 @@ class TestJobsAPI:
         """POST /api/ffmpeg/jobs/{id}/cancel cancels a queued job."""
         job = create_ffmpeg_job(name="Cancel Me", status="cancelled")
         job_id = job["id"]
-        with patch("main.ffmpeg_cancel_job", return_value=job):
+        with patch("routers.ffmpeg.ffmpeg_cancel_job", return_value=job):
             response = await async_client.post(f"/api/ffmpeg/jobs/{job_id}/cancel")
         assert response.status_code == 200
         data = response.json()
@@ -534,7 +534,7 @@ class TestJobsAPI:
         """POST /api/ffmpeg/jobs/{id}/cancel returns 400 for a completed job."""
         job_id = "job-completed-123"
         with patch(
-            "main.ffmpeg_cancel_job",
+            "routers.ffmpeg.ffmpeg_cancel_job",
             side_effect=ValueError("Cannot cancel a completed job"),
         ):
             response = await async_client.post(f"/api/ffmpeg/jobs/{job_id}/cancel")
@@ -547,7 +547,7 @@ class TestJobsAPI:
     async def test_delete_job(self, async_client):
         """DELETE /api/ffmpeg/jobs/{id} deletes a job record."""
         job_id = "job-delete-456"
-        with patch("main.ffmpeg_delete_job", return_value={"status": "deleted"}):
+        with patch("routers.ffmpeg.ffmpeg_delete_job", return_value={"status": "deleted"}):
             response = await async_client.delete(f"/api/ffmpeg/jobs/{job_id}")
         assert response.status_code == 200
         data = response.json()
@@ -570,7 +570,7 @@ class TestQueueConfigAPI:
             "default_priority": "normal",
             "auto_start": True,
         }
-        with patch("main.ffmpeg_get_queue_config", return_value=mock_config):
+        with patch("routers.ffmpeg.ffmpeg_get_queue_config", return_value=mock_config):
             response = await async_client.get("/api/ffmpeg/queue-config")
         assert response.status_code == 200
         data = response.json()
@@ -584,7 +584,7 @@ class TestQueueConfigAPI:
             "default_priority": "high",
             "auto_start": False,
         }
-        with patch("main.ffmpeg_update_queue_config", return_value=updated):
+        with patch("routers.ffmpeg.ffmpeg_update_queue_config", return_value=updated):
             response = await async_client.put(
                 "/api/ffmpeg/queue-config",
                 json={"max_concurrent": 4, "default_priority": "high", "auto_start": False},
@@ -601,7 +601,7 @@ class TestQueueConfigAPI:
             "default_priority": "normal",
             "auto_start": True,
         }
-        with patch("main.ffmpeg_get_queue_config", return_value=mock_config):
+        with patch("routers.ffmpeg.ffmpeg_get_queue_config", return_value=mock_config):
             response = await async_client.get("/api/ffmpeg/queue-config")
         assert response.status_code == 200
         data = response.json()

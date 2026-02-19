@@ -4497,3 +4497,67 @@
   color: #22c55e;
 }
 
+/* Renumber All Groups Dialog */
+.renumber-all-groups-dialog {
+  min-width: 450px;
+  max-width: 550px;
+}
+
+.renumber-all-preview {
+  margin-bottom: 1.25rem;
+}
+
+.renumber-all-preview > label {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5rem;
+}
+
+.renumber-all-preview-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.5rem;
+  background-color: var(--bg-secondary);
+  border-radius: 4px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.renumber-all-preview-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.375rem 0.5rem;
+  color: var(--button-text);
+  font-size: 0.85rem;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.renumber-all-preview-list li:last-child {
+  border-bottom: none;
+}
+
+.renumber-all-group-name {
+  flex: 1;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.renumber-all-group-count {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.renumber-all-group-range {
+  font-weight: 600;
+  color: var(--accent-primary);
+  white-space: nowrap;
+}
+

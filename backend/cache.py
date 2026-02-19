@@ -30,7 +30,7 @@ class Cache:
         self._default_ttl = default_ttl
         self._hits = 0
         self._misses = 0
-        logger.debug(f"Cache initialized with TTL: {default_ttl}s")
+        logger.debug("[CACHE] Cache initialized with TTL: %ss", default_ttl)
 
     def get(self, key: str, ttl: int | None = None) -> Any | None:
         """
@@ -46,7 +46,7 @@ class Cache:
         entry = self._cache.get(key)
         if entry is None:
             self._misses += 1
-            logger.debug(f"Cache miss for key '{key}'")
+            logger.debug("[CACHE] Cache miss for key '%s'", key)
             return None
 
         effective_ttl = ttl if ttl is not None else self._default_ttl
@@ -54,12 +54,12 @@ class Cache:
 
         if age > effective_ttl:
             self._misses += 1
-            logger.debug(f"Cache expired for key '{key}' (age: {age:.1f}s, ttl: {effective_ttl}s)")
+            logger.debug("[CACHE] Cache expired for key '%s' (age: %.1fs, ttl: %ss)", key, age, effective_ttl)
             del self._cache[key]
             return None
 
         self._hits += 1
-        logger.debug(f"Cache hit for key '{key}' (age: {age:.1f}s)")
+        logger.debug("[CACHE] Cache hit for key '%s' (age: %.1fs)", key, age)
         return entry.data
 
     def set(self, key: str, value: Any) -> None:
@@ -71,7 +71,7 @@ class Cache:
             value: Value to cache
         """
         self._cache[key] = CacheEntry(data=value, cached_at=time.time())
-        logger.debug(f"Cached value for key '{key}'")
+        logger.debug("[CACHE] Cached value for key '%s'", key)
 
     def invalidate(self, key: str) -> bool:
         """
@@ -85,7 +85,7 @@ class Cache:
         """
         if key in self._cache:
             del self._cache[key]
-            logger.debug(f"Invalidated cache for key '{key}'")
+            logger.debug("[CACHE] Invalidated cache for key '%s'", key)
             return True
         return False
 
@@ -103,7 +103,7 @@ class Cache:
         for key in keys_to_remove:
             del self._cache[key]
         if keys_to_remove:
-            logger.debug(f"Invalidated {len(keys_to_remove)} cache entries with prefix '{prefix}'")
+            logger.debug("[CACHE] Invalidated %s cache entries with prefix '%s'", len(keys_to_remove), prefix)
         return len(keys_to_remove)
 
     def clear(self) -> int:
@@ -115,7 +115,7 @@ class Cache:
         """
         count = len(self._cache)
         self._cache.clear()
-        logger.info(f"Cleared entire cache ({count} entries)")
+        logger.info("[CACHE] Cleared entire cache (%s entries)", count)
         return count
 
     def stats(self) -> dict:
@@ -144,7 +144,7 @@ class Cache:
             "entries": entries,
         }
 
-        logger.info(f"Cache stats: {len(self._cache)} entries, hit rate: {hit_rate:.1f}% ({self._hits}/{total_requests})")
+        logger.info("[CACHE] Cache stats: %s entries, hit rate: %.1f%% (%s/%s)", len(self._cache), hit_rate, self._hits, total_requests)
         return stats
 
 

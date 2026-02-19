@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, StreamGroupInfo, M3UAccount, ChannelGroup, ChannelProfile, M3UGroupSetting } from '../types';
 import { useSelection, useExpandCollapse } from '../hooks';
-import { detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, normalizeStreamNamesWithBackend, type TimezonePreference, type NumberSeparator, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
+import { detectRegionalVariants, filterStreamsByTimezone, normalizeStreamNamesWithBackend, type TimezonePreference, type NumberSeparator, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
@@ -394,7 +394,7 @@ export function StreamsPane({
     setIsOpen: setBulkCreateGroupDropdownOpen,
     dropdownRef: bulkCreateGroupDropdownRef,
   } = useDropdown();
-  const [namingOptionsExpanded, setNamingOptionsExpanded] = useState(false);
+  const [, setNamingOptionsExpanded] = useState(false);
   const [channelGroupExpanded, setChannelGroupExpanded] = useState(false);
   const [timezoneExpanded, setTimezoneExpanded] = useState(false);
 
@@ -1076,25 +1076,6 @@ export function StreamsPane({
     return detectRegionalVariants(streamsToCreate);
   }, [streamsToCreate]);
 
-  // Detect if streams have country prefixes (US, UK, CA, etc.)
-  const hasCountryPrefixes = useMemo(() => {
-    return detectCountryPrefixes(streamsToCreate);
-  }, [streamsToCreate]);
-
-  // Detect if streams have network prefixes (CHAMP, PPV, etc. + custom)
-  const hasNetworkPrefixes = useMemo(() => {
-    return detectNetworkPrefixes(streamsToCreate, channelDefaults?.customNetworkPrefixes);
-  }, [streamsToCreate, channelDefaults?.customNetworkPrefixes]);
-
-  // Detect if streams have network suffixes (ENGLISH, LIVE, BACKUP, etc. + custom)
-  const hasNetworkSuffixes = useMemo(() => {
-    return detectNetworkSuffixes(streamsToCreate, channelDefaults?.customNetworkSuffixes);
-  }, [streamsToCreate, channelDefaults?.customNetworkSuffixes]);
-
-  // Get unique country prefixes for display
-  const uniqueCountryPrefixes = useMemo(() => {
-    return getUniqueCountryPrefixes(streamsToCreate);
-  }, [streamsToCreate]);
 
   // Compute stream stats for the modal display
   // Applies timezone filtering when a preference is selected

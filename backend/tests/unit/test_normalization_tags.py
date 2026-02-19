@@ -5,7 +5,7 @@ Tests the _match_tag_group method and tag-based rule processing.
 """
 import pytest
 
-from normalization_engine import NormalizationEngine, RuleMatch, _tag_group_cache
+from normalization_engine import NormalizationEngine, _tag_group_cache
 
 
 class TestTagGroupMatching:
@@ -399,7 +399,6 @@ class TestSuperscriptConversion:
     def test_tag_with_superscript_stored_as_ascii(self, engine, test_session):
         """Tags stored with superscripts are converted to ASCII for matching."""
         from tests.fixtures.factories import create_tag_group, create_tag
-        from normalization_engine import convert_superscripts
 
         group = create_tag_group(test_session, name="Quality Tags")
         # Store tag as superscript (simulating user input)

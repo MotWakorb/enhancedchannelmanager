@@ -11,7 +11,6 @@
  * - Explainer/tooltip visibility
  */
 import { test, expect, navigateToTab } from './fixtures/base';
-import { selectors, generateTestId } from './fixtures/test-data';
 import { ffmpegSelectors, ffmpegTestData, generateConfigName } from './fixtures/ffmpeg-data';
 
 test.describe('Basic Transcode Flow', () => {

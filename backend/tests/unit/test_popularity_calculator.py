@@ -8,9 +8,8 @@ Tests the popularity scoring algorithm including:
 - Trend calculation
 - Ranking assignment
 """
-import pytest
 from datetime import datetime, date, timedelta
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from models import (
     ChannelWatchStats,

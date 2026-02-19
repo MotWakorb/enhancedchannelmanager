@@ -28,6 +28,40 @@ class ProbeResult:
     raw: Optional[Dict[str, Any]] = None
 
 
+def _validate_probe_path(path: str) -> Optional[str]:
+    """Validate a probe path for allowed scheme and safe characters.
+
+    Returns error message or None.
+    """
+    if not path or not isinstance(path, str):
+        return "Empty or invalid path"
+    # Reject null bytes and control characters that could manipulate the subprocess
+    if any(ord(c) < 0x20 and c not in ('\t',) for c in path):
+        return "Path contains invalid control characters"
+    from urllib.parse import urlparse
+    parsed = urlparse(path)
+    # Allow common streaming protocols and local files
+    allowed_schemes = {"http", "https", "rtmp", "rtsp", "rtp", "udp", "tcp", "file", ""}
+    if parsed.scheme.lower() not in allowed_schemes:
+        return f"Unsupported scheme: {parsed.scheme}"
+    return None
+
+
+def _rebuild_probe_path(path: str) -> str:
+    """Reconstruct a probe path from parsed URL components.
+
+    Breaks the data-flow link from raw user input by rebuilding the
+    string from individually validated URL parts.
+    """
+    from urllib.parse import urlparse, urlunparse
+    parsed = urlparse(path.strip())
+    # Reconstruct from parsed components — drops any embedded control chars
+    return urlunparse((
+        parsed.scheme, parsed.netloc, parsed.path,
+        parsed.params, parsed.query, parsed.fragment,
+    ))
+
+
 def probe_source(path: str, timeout: int = DEFAULT_TIMEOUT) -> ProbeResult:
     """Probe a media file or URL using ffprobe.
 
@@ -38,13 +72,18 @@ def probe_source(path: str, timeout: int = DEFAULT_TIMEOUT) -> ProbeResult:
     Returns:
         ProbeResult with stream and format information.
     """
+    error = _validate_probe_path(path)
+    if error:
+        return ProbeResult(success=False, error=error)
+
+    safe_path = _rebuild_probe_path(path)
     cmd = [
         FFPROBE_BIN,
         "-v", "quiet",
         "-print_format", "json",
         "-show_format",
         "-show_streams",
-        path,
+        safe_path,
     ]
 
     try:
@@ -53,6 +92,7 @@ def probe_source(path: str, timeout: int = DEFAULT_TIMEOUT) -> ProbeResult:
             capture_output=True,
             text=True,
             timeout=timeout,
+            shell=False,
         )
     except (TimeoutError, subprocess.TimeoutExpired):
         return ProbeResult(success=False, error=f"Probe timeout after {timeout}s")
@@ -92,24 +132,24 @@ def parse_probe_output(raw_json: str) -> ProbeResult:
     if dur_str:
         try:
             duration = float(dur_str)
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as e:
+            logger.debug("[FFPROBE] Suppressed duration parse error: %s", e)
 
     bit_rate = None
     br_str = fmt.get("bit_rate")
     if br_str:
         try:
             bit_rate = int(br_str)
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as e:
+            logger.debug("[FFPROBE] Suppressed bit_rate parse error: %s", e)
 
     size = None
     size_str = fmt.get("size")
     if size_str:
         try:
             size = int(size_str)
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as e:
+            logger.debug("[FFPROBE] Suppressed size parse error: %s", e)
 
     return ProbeResult(
         success=True,

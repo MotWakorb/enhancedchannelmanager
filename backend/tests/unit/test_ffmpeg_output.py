@@ -5,13 +5,10 @@ Tests output configuration validation and command flag generation.
 These are TDD tests -- they will FAIL until the backend modules are implemented.
 """
 import pytest
-from unittest.mock import patch
 
 from ffmpeg_builder.output import (
     validate_output_config,
     generate_output_flags,
-    OutputConfig,
-    VALID_FORMATS,
 )
 
 from tests.fixtures.ffmpeg_factories import create_output_config

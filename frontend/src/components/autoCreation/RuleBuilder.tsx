@@ -30,13 +30,14 @@ export function RuleBuilder({
   const id = useId();
   const [name, setName] = useState(rule?.name || '');
   const [description, setDescription] = useState(rule?.description || '');
-  const [priority, setPriority] = useState(rule?.priority ?? 0);
+  const [priority, ] = useState(rule?.priority ?? 0);
   const [enabled, setEnabled] = useState(rule?.enabled ?? true);
   const [runOnRefresh, setRunOnRefresh] = useState(rule?.run_on_refresh ?? false);
   const [stopOnFirstMatch, setStopOnFirstMatch] = useState(rule?.stop_on_first_match ?? true);
   const [sortField, setSortField] = useState(rule?.sort_field || '');
   const [sortOrder, setSortOrder] = useState(rule?.sort_order || 'asc');
   const [probeOnSort, setProbeOnSort] = useState(rule?.probe_on_sort ?? false);
+  const [sortRegex, setSortRegex] = useState(rule?.sort_regex || '');
   const [normalizeNames, setNormalizeNames] = useState(rule?.normalize_names ?? false);
   const [orphanAction, setOrphanAction] = useState(rule?.orphan_action || 'delete');
   const [conditions, setConditions] = useState<Condition[]>(rule?.conditions || []);
@@ -153,6 +154,7 @@ export function RuleBuilder({
         sort_field: sortField || null,
         sort_order: sortOrder,
         probe_on_sort: probeOnSort,
+        sort_regex: sortRegex || null,
         normalize_names: normalizeNames,
         orphan_action: orphanAction,
       });
@@ -329,6 +331,7 @@ export function RuleBuilder({
                   { value: 'stream_name_natural', label: 'Stream Name (Natural)' },
                   { value: 'group_name', label: 'Group Name' },
                   { value: 'quality', label: 'Quality (Resolution)' },
+                  { value: 'stream_name_regex', label: 'Stream Name (Regex)' },
                 ]}
                 value={sortField}
                 onChange={setSortField}
@@ -345,6 +348,23 @@ export function RuleBuilder({
                 />
               )}
             </div>
+            {sortField === 'stream_name_regex' && (
+              <div className="form-field" style={{ marginTop: '8px' }}>
+                <label>Sort Regex Pattern</label>
+                <input
+                  type="text"
+                  className="action-input"
+                  value={sortRegex}
+                  onChange={e => setSortRegex(e.target.value)}
+                  placeholder="(\d{4}-\d{2}-\d{2})"
+                  disabled={isLoading}
+                />
+                <p className="form-hint">
+                  Enter a regex with a capture group. Streams are sorted by the first captured group.
+                  Example: (\d{"{4}"}-\d{"{2}"}-\d{"{2}"}) captures dates like 2024-03-09
+                </p>
+              </div>
+            )}
             {sortField === 'quality' && (
               <div className="checkbox-group">
                 <label className="checkbox-option">
@@ -649,6 +669,13 @@ function ActionTypeSelector({
       label: 'Variables',
       types: [
         { type: 'set_variable' as ActionType, label: 'Set Variable' },
+      ],
+    },
+    {
+      label: 'Management',
+      types: [
+        { type: 'remove_from_channel' as ActionType, label: 'Remove From Channel' },
+        { type: 'set_stream_priority' as ActionType, label: 'Set Stream Priority' },
       ],
     },
     {

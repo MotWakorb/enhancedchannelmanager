@@ -5,7 +5,7 @@
  * - AuthProvider: Wrap app to provide auth context
  * - useAuth: Hook to access auth state and methods
  */
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import type { User, AuthStatus } from '../types';
 import {
   login as apiLogin,
@@ -13,7 +13,6 @@ import {
   logout as apiLogout,
   getCurrentUser,
   getAuthStatus,
-  refreshToken,
 } from '../services/api';
 
 // Auth context state

@@ -169,7 +169,7 @@ _cached_settings: DispatcharrSettings | None = None
 def ensure_config_dir():
     """Ensure config directory exists."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Ensured config directory exists: {CONFIG_DIR}")
+    logger.info("[CONFIG] Ensured config directory exists: %s", CONFIG_DIR)
 
 
 def _migrate_normalization_settings(data: dict) -> dict:
@@ -184,7 +184,7 @@ def _migrate_normalization_settings(data: dict) -> dict:
     new_tags = data.get("custom_normalization_tags", [])
 
     if (old_prefixes or old_suffixes) and not new_tags:
-        logger.info(f"Migrating {len(old_prefixes)} prefixes and {len(old_suffixes)} suffixes to normalization_tags")
+        logger.info("[CONFIG] Migrating %s prefixes and %s suffixes to normalization_tags", len(old_prefixes), len(old_suffixes))
         migrated_tags = []
 
         # Convert prefixes to new format
@@ -199,7 +199,7 @@ def _migrate_normalization_settings(data: dict) -> dict:
 
         if migrated_tags:
             data["custom_normalization_tags"] = migrated_tags
-            logger.info(f"Migrated {len(migrated_tags)} tags to custom_normalization_tags")
+            logger.info("[CONFIG] Migrated %s tags to custom_normalization_tags", len(migrated_tags))
 
     return data
 
@@ -211,8 +211,8 @@ def load_settings() -> DispatcharrSettings:
     if _cached_settings is not None:
         return _cached_settings
 
-    logger.info(f"Loading settings from {CONFIG_FILE}")
-    logger.info(f"Config file exists: {CONFIG_FILE.exists()}")
+    logger.info("[CONFIG] Loading settings from %s", CONFIG_FILE)
+    logger.info("[CONFIG] Config file exists: %s", CONFIG_FILE.exists())
 
     if CONFIG_FILE.exists():
         try:
@@ -220,12 +220,12 @@ def load_settings() -> DispatcharrSettings:
             # Apply migrations
             data = _migrate_normalization_settings(data)
             _cached_settings = DispatcharrSettings(**data)
-            logger.info(f"Loaded settings successfully, configured: {_cached_settings.is_configured()}")
+            logger.info("[CONFIG] Loaded settings successfully, configured: %s", _cached_settings.is_configured())
             return _cached_settings
         except Exception as e:
-            logger.error(f"Failed to load settings from {CONFIG_FILE}: {e}")
+            logger.exception("[CONFIG] Failed to load settings from %s: %s", CONFIG_FILE, e)
 
-    logger.info("Using default settings (no config file found or failed to parse)")
+    logger.info("[CONFIG] Using default settings (no config file found or failed to parse)")
     _cached_settings = DispatcharrSettings()
     return _cached_settings
 
@@ -240,16 +240,16 @@ def save_settings(settings: DispatcharrSettings) -> None:
         settings_json = json.dumps(settings.model_dump(), indent=2)
         CONFIG_FILE.write_text(settings_json)
         _cached_settings = settings
-        logger.info(f"Settings saved successfully to {CONFIG_FILE}")
+        logger.info("[CONFIG] Settings saved successfully to %s", CONFIG_FILE)
 
         # Verify the save worked
         if CONFIG_FILE.exists():
             saved_data = CONFIG_FILE.read_text()
-            logger.info(f"Verified settings file exists, size: {len(saved_data)} bytes")
+            logger.info("[CONFIG] Verified settings file exists, size: %s bytes", len(saved_data))
         else:
-            logger.error(f"Settings file does not exist after save!")
+            logger.error("[CONFIG] Settings file does not exist after save!")
     except Exception as e:
-        logger.error(f"Failed to save settings to {CONFIG_FILE}: {e}")
+        logger.exception("[CONFIG] Failed to save settings to %s: %s", CONFIG_FILE, e)
         raise
 
 
@@ -257,7 +257,7 @@ def clear_settings_cache() -> None:
     """Clear the cached settings (forces reload)."""
     global _cached_settings
     _cached_settings = None
-    logger.info("Settings cache cleared")
+    logger.info("[CONFIG] Settings cache cleared")
 
 
 def get_settings() -> DispatcharrSettings:
@@ -267,16 +267,16 @@ def get_settings() -> DispatcharrSettings:
 
 def log_config_status():
     """Log the current configuration status for debugging."""
-    logger.info(f"CONFIG_DIR: {CONFIG_DIR}")
-    logger.info(f"CONFIG_FILE: {CONFIG_FILE}")
-    logger.info(f"CONFIG_DIR exists: {CONFIG_DIR.exists()}")
-    logger.info(f"CONFIG_FILE exists: {CONFIG_FILE.exists()}")
+    logger.info("[CONFIG] CONFIG_DIR: %s", CONFIG_DIR)
+    logger.info("[CONFIG] CONFIG_FILE: %s", CONFIG_FILE)
+    logger.info("[CONFIG] CONFIG_DIR exists: %s", CONFIG_DIR.exists())
+    logger.info("[CONFIG] CONFIG_FILE exists: %s", CONFIG_FILE.exists())
     if CONFIG_DIR.exists():
         try:
             contents = list(CONFIG_DIR.iterdir())
-            logger.info(f"CONFIG_DIR contents: {contents}")
+            logger.info("[CONFIG] CONFIG_DIR contents: %s", contents)
         except Exception as e:
-            logger.error(f"Failed to list CONFIG_DIR: {e}")
+            logger.exception("[CONFIG] Failed to list CONFIG_DIR: %s", e)
 
 
 def get_log_level_from_env() -> str:
@@ -291,7 +291,7 @@ def set_log_level(level: str) -> None:
     # Validate log level
     valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
     if level_upper not in valid_levels:
-        logger.warning(f"Invalid log level '{level}', using INFO")
+        logger.warning("[CONFIG] Invalid log level '%s', using INFO", level)
         level_upper = "INFO"
 
     # Get numeric level
@@ -305,4 +305,4 @@ def set_log_level(level: str) -> None:
         logger_obj = logging.getLogger(logger_name)
         logger_obj.setLevel(numeric_level)
 
-    logger.info(f"Log level set to {level_upper}")
+    logger.info("[CONFIG] Log level set to %s", level_upper)

@@ -936,7 +936,7 @@ function App() {
 
   // Lightweight reset: clear streams and refresh group metadata.
   // Actual stream data loads per-group on demand via loadStreamGroup().
-  const resetStreams = async (bypassCache: boolean = false) => {
+  const resetStreams = async (_bypassCache: boolean = false) => {
     setLoadingStates(prev => ({ ...prev, streams: true }));
     try {
       // Clear all loaded streams and group tracking
@@ -1552,16 +1552,16 @@ function App() {
       channelGroupId: number | null,
       newGroupName?: string,
       timezonePreference?: api.TimezonePreference,
-      stripCountryPrefix?: boolean,
+      _stripCountryPrefix?: boolean,
       addChannelNumber?: boolean,
       numberSeparator?: api.NumberSeparator,
       keepCountryPrefix?: boolean,
       countrySeparator?: api.NumberSeparator,
       prefixOrder?: api.PrefixOrder,
-      stripNetworkPrefix?: boolean,
-      customNetworkPrefixes?: string[],
-      stripNetworkSuffix?: boolean,
-      customNetworkSuffixes?: string[],
+      _stripNetworkPrefix?: boolean,
+      _customNetworkPrefixes?: string[],
+      _stripNetworkSuffix?: boolean,
+      _customNetworkSuffixes?: string[],
       profileIds?: number[],
       pushDownOnConflict?: boolean,
       normalize?: boolean

@@ -37,11 +37,11 @@ class DiscordWebhookMethod(AlertMethod):
         """Send a message to Discord via webhook."""
         webhook_url = self.config.get("webhook_url")
         logger.debug(
-            f"[Discord] Sending to {self.name}: type={message.notification_type} "
-            f"title={message.title!r}"
+            "[ALERTS-DISCORD] Sending to %s: type=%s title=%r",
+            self.name, message.notification_type, message.title,
         )
         if not webhook_url:
-            logger.error(f"Discord method {self.name}: No webhook URL configured")
+            logger.error("[ALERTS-DISCORD] Discord method %s: No webhook URL configured", self.name)
             return False
 
         # Build Discord embed
@@ -96,41 +96,43 @@ class DiscordWebhookMethod(AlertMethod):
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as response:
                     if response.status == 204:
-                        logger.debug(f"[Discord] Message sent successfully to {self.name}")
+                        logger.debug("[ALERTS-DISCORD] Message sent successfully to %s", self.name)
                         return True
                     elif response.status == 429:
                         # Rate limited
                         retry_after = response.headers.get("Retry-After", "unknown")
                         logger.warning(
-                            f"Discord method {self.name}: Rate limited, retry after {retry_after}s"
+                            "[ALERTS-DISCORD] Discord method %s: Rate limited, retry after %ss",
+                            self.name, retry_after,
                         )
                         return False
                     else:
                         text = await response.text()
                         logger.error(
-                            f"Discord method {self.name}: Failed with status {response.status}: {text}"
+                            "[ALERTS-DISCORD] Discord method %s: Failed with status %s: %s",
+                            self.name, response.status, text,
                         )
                         return False
 
         except aiohttp.ClientError as e:
-            logger.error(f"Discord method {self.name}: Connection error: {e}")
+            logger.error("[ALERTS-DISCORD] Discord method %s: Connection error: %s", self.name, e)
             return False
         except Exception as e:
-            logger.error(f"Discord method {self.name}: Unexpected error: {e}")
+            logger.exception("[ALERTS-DISCORD] Discord method %s: Unexpected error: %s", self.name, e)
             return False
 
     async def test_connection(self) -> tuple[bool, str]:
         """Test the Discord webhook by sending a test message."""
-        logger.info(f"[Discord] Testing connection for method {self.name}")
+        logger.info("[ALERTS-DISCORD] Testing connection for method %s", self.name)
         webhook_url = self.config.get("webhook_url")
         if not webhook_url:
-            logger.debug(f"[Discord] Test failed: no webhook_url for {self.name}")
+            logger.debug("[ALERTS-DISCORD] Test failed: no webhook_url for %s", self.name)
             return False, "No webhook URL configured"
 
         # Validate webhook URL format
         if not webhook_url.startswith("https://discord.com/api/webhooks/") and \
            not webhook_url.startswith("https://discordapp.com/api/webhooks/"):
-            logger.debug(f"[Discord] Test failed: invalid webhook URL format for {self.name}")
+            logger.debug("[ALERTS-DISCORD] Test failed: invalid webhook URL format for %s", self.name)
             return False, "Invalid Discord webhook URL format"
 
         # Send a test message

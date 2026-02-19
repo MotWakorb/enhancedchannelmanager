@@ -265,8 +265,10 @@ interface BulkActionsDropdownProps {
   onFetchLCN: () => void;
   onNormalize: () => void;
   onRenumber: () => void;
+  onRenumberAllGroups: () => void;
   onSortByMode: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => void;
   onProbe: () => void;
+  hasSelection: boolean;
   bulkEPGLoading: boolean;
   bulkLCNLoading: boolean;
   bulkSortingByQuality: boolean;
@@ -279,8 +281,10 @@ const BulkActionsDropdown = memo(function BulkActionsDropdown({
   onFetchLCN,
   onNormalize,
   onRenumber,
+  onRenumberAllGroups,
   onSortByMode,
   onProbe,
+  hasSelection,
   bulkEPGLoading,
   bulkLCNLoading,
   bulkSortingByQuality,
@@ -330,100 +334,113 @@ const BulkActionsDropdown = memo(function BulkActionsDropdown({
       {isOpen && (
         <div className="bulk-actions-menu">
           <button
-            className={`bulk-actions-item${bulkEPGLoading ? ' disabled' : ''}`}
-            onClick={() => !bulkEPGLoading && handleItemClick(onAssignEPG)}
-          >
-            <span className={`material-icons${bulkEPGLoading ? ' spinning' : ''}`}>
-              {bulkEPGLoading ? 'sync' : 'live_tv'}
-            </span>
-            <span>Assign EPG</span>
-          </button>
-          <button
-            className={`bulk-actions-item${bulkLCNLoading ? ' disabled' : ''}`}
-            onClick={() => !bulkLCNLoading && handleItemClick(onFetchLCN)}
-          >
-            <span className={`material-icons${bulkLCNLoading ? ' spinning' : ''}`}>
-              {bulkLCNLoading ? 'sync' : 'confirmation_number'}
-            </span>
-            <span>Fetch Gracenote IDs</span>
-          </button>
-          <button
             className="bulk-actions-item"
-            onClick={() => handleItemClick(onNormalize)}
+            onClick={() => handleItemClick(onRenumberAllGroups)}
           >
-            <span className="material-icons">text_format</span>
-            <span>Normalize Names</span>
+            <span className="material-icons">format_list_numbered</span>
+            <span>Renumber All Groups</span>
           </button>
-          <button
-            className="bulk-actions-item"
-            onClick={() => handleItemClick(onRenumber)}
-          >
-            <span className="material-icons">tag</span>
-            <span>Renumber</span>
-          </button>
-          <div className="bulk-actions-divider" />
-          <div className="bulk-actions-section-label">Sort Streams</div>
-          {anySortEnabled && (
-            <button className="bulk-actions-item" onClick={() => handleSortClick('smart')}>
-              <span className="material-icons">auto_awesome</span>
-              <span>Smart Sort</span>
-            </button>
+          {hasSelection && (
+            <>
+              <div className="bulk-actions-divider" />
+              <div className="bulk-actions-section-label">Selection</div>
+              <button
+                className={`bulk-actions-item${bulkEPGLoading ? ' disabled' : ''}`}
+                onClick={() => !bulkEPGLoading && handleItemClick(onAssignEPG)}
+              >
+                <span className={`material-icons${bulkEPGLoading ? ' spinning' : ''}`}>
+                  {bulkEPGLoading ? 'sync' : 'live_tv'}
+                </span>
+                <span>Assign EPG</span>
+              </button>
+              <button
+                className={`bulk-actions-item${bulkLCNLoading ? ' disabled' : ''}`}
+                onClick={() => !bulkLCNLoading && handleItemClick(onFetchLCN)}
+              >
+                <span className={`material-icons${bulkLCNLoading ? ' spinning' : ''}`}>
+                  {bulkLCNLoading ? 'sync' : 'confirmation_number'}
+                </span>
+                <span>Fetch Gracenote IDs</span>
+              </button>
+              <button
+                className="bulk-actions-item"
+                onClick={() => handleItemClick(onNormalize)}
+              >
+                <span className="material-icons">text_format</span>
+                <span>Normalize Names</span>
+              </button>
+              <button
+                className="bulk-actions-item"
+                onClick={() => handleItemClick(onRenumber)}
+              >
+                <span className="material-icons">tag</span>
+                <span>Renumber</span>
+              </button>
+              <div className="bulk-actions-divider" />
+              <div className="bulk-actions-section-label">Sort Streams</div>
+              {anySortEnabled && (
+                <button className="bulk-actions-item" onClick={() => handleSortClick('smart')}>
+                  <span className="material-icons">auto_awesome</span>
+                  <span>Smart Sort</span>
+                </button>
+              )}
+              {sortEnabled.resolution && (
+                <button
+                  className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
+                  onClick={() => !bulkSortingByQuality && handleSortClick('resolution')}
+                >
+                  <span className="material-icons">aspect_ratio</span>
+                  <span>By Resolution</span>
+                </button>
+              )}
+              {sortEnabled.bitrate && (
+                <button
+                  className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
+                  onClick={() => !bulkSortingByQuality && handleSortClick('bitrate')}
+                >
+                  <span className="material-icons">speed</span>
+                  <span>By Bitrate</span>
+                </button>
+              )}
+              {sortEnabled.framerate && (
+                <button
+                  className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
+                  onClick={() => !bulkSortingByQuality && handleSortClick('framerate')}
+                >
+                  <span className="material-icons">slow_motion_video</span>
+                  <span>By Framerate</span>
+                </button>
+              )}
+              {sortEnabled.m3u_priority && (
+                <button
+                  className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
+                  onClick={() => !bulkSortingByQuality && handleSortClick('m3u_priority')}
+                >
+                  <span className="material-icons">low_priority</span>
+                  <span>By M3U Priority</span>
+                </button>
+              )}
+              {sortEnabled.audio_channels && (
+                <button
+                  className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
+                  onClick={() => !bulkSortingByQuality && handleSortClick('audio_channels')}
+                >
+                  <span className="material-icons">surround_sound</span>
+                  <span>By Audio Channels</span>
+                </button>
+              )}
+              <div className="bulk-actions-divider" />
+              <button
+                className={`bulk-actions-item${probingChannels ? ' disabled' : ''}`}
+                onClick={() => !probingChannels && handleItemClick(onProbe)}
+              >
+                <span className={`material-icons${probingChannels ? ' spinning' : ''}`}>
+                  {probingChannels ? 'sync' : 'speed'}
+                </span>
+                <span>Probe Streams</span>
+              </button>
+            </>
           )}
-          {sortEnabled.resolution && (
-            <button
-              className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
-              onClick={() => !bulkSortingByQuality && handleSortClick('resolution')}
-            >
-              <span className="material-icons">aspect_ratio</span>
-              <span>By Resolution</span>
-            </button>
-          )}
-          {sortEnabled.bitrate && (
-            <button
-              className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
-              onClick={() => !bulkSortingByQuality && handleSortClick('bitrate')}
-            >
-              <span className="material-icons">speed</span>
-              <span>By Bitrate</span>
-            </button>
-          )}
-          {sortEnabled.framerate && (
-            <button
-              className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
-              onClick={() => !bulkSortingByQuality && handleSortClick('framerate')}
-            >
-              <span className="material-icons">slow_motion_video</span>
-              <span>By Framerate</span>
-            </button>
-          )}
-          {sortEnabled.m3u_priority && (
-            <button
-              className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
-              onClick={() => !bulkSortingByQuality && handleSortClick('m3u_priority')}
-            >
-              <span className="material-icons">low_priority</span>
-              <span>By M3U Priority</span>
-            </button>
-          )}
-          {sortEnabled.audio_channels && (
-            <button
-              className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
-              onClick={() => !bulkSortingByQuality && handleSortClick('audio_channels')}
-            >
-              <span className="material-icons">surround_sound</span>
-              <span>By Audio Channels</span>
-            </button>
-          )}
-          <div className="bulk-actions-divider" />
-          <button
-            className={`bulk-actions-item${probingChannels ? ' disabled' : ''}`}
-            onClick={() => !probingChannels && handleItemClick(onProbe)}
-          >
-            <span className={`material-icons${probingChannels ? ' spinning' : ''}`}>
-              {probingChannels ? 'sync' : 'speed'}
-            </span>
-            <span>Probe Streams</span>
-          </button>
         </div>
       )}
     </div>
@@ -1106,6 +1123,11 @@ export function ChannelsPane({
   const [massRenumberStartingNumber, setMassRenumberStartingNumber] = useState<string>('');
   const [massRenumberChannels, setMassRenumberChannels] = useState<Channel[]>([]);
   const [massRenumberUpdateNames, setMassRenumberUpdateNames] = useState<boolean>(true);
+
+  // Renumber All Groups modal state
+  const renumberAllGroupsModal = useModal();
+  const [renumberAllStartingNumber, setRenumberAllStartingNumber] = useState<string>('1');
+  const [renumberAllUpdateNames, setRenumberAllUpdateNames] = useState<boolean>(true);
 
   // Hidden groups state
   const hiddenGroupsModal = useModal();
@@ -3625,7 +3647,7 @@ export function ChannelsPane({
       setLocalChannels(updatedChannels);
 
       // Stage individual updates for channels that need renaming
-      if (isEditMode && onStageUpdateChannel) {
+      if (onStageUpdateChannel) {
         // Start a batch if there are multiple updates
         if (channelUpdates.length > 1 && onStartBatch) {
           onStartBatch(`Reorder channels within group`);
@@ -3668,8 +3690,6 @@ export function ChannelsPane({
 
         // Get channel numbers from reorderedGroup to determine new assignments
         // Find where the selected channels ended up and what numbers they should get
-        const selectedIds = new Set(selectedInGroup.map(ch => ch.id));
-
         // Calculate updates based on new positions
         const channelUpdates: Array<{ id: number; oldNumber: number; newNumber: number; oldName: string; newName?: string }> = [];
 
@@ -3710,7 +3730,7 @@ export function ChannelsPane({
         setLocalChannels(updatedChannels);
 
         // Stage updates for all affected channels
-        if (isEditMode && onStageUpdateChannel) {
+        if (onStageUpdateChannel) {
           if (channelUpdates.length > 1 && onStartBatch) {
             onStartBatch(`Move ${selectedInGroup.length} channels`);
           }
@@ -3806,7 +3826,7 @@ export function ChannelsPane({
       setLocalChannels(updatedChannels);
 
       // Stage updates for all affected channels
-      if (isEditMode && onStageUpdateChannel) {
+      if (onStageUpdateChannel) {
         // Start a batch if there are multiple updates
         if (channelUpdates.length > 1 && onStartBatch) {
           onStartBatch(`Move channel and shift others`);
@@ -4415,6 +4435,114 @@ export function ChannelsPane({
     return { hasConflicts: conflicts.length > 0, conflicts, shiftRequired };
   }, [massRenumberModal.isOpen, massRenumberChannels, massRenumberStartingNumber, localChannels]);
 
+  // Renumber All Groups preview memo
+  const renumberAllGroupsPreview = useMemo(() => {
+    if (!renumberAllGroupsModal.isOpen) {
+      return { groups: [] as { name: string; count: number; from: number; to: number }[], totalChannels: 0 };
+    }
+
+    const startNum = parseInt(renumberAllStartingNumber, 10);
+    if (isNaN(startNum) || startNum < 1) {
+      return { groups: [] as { name: string; count: number; from: number; to: number }[], totalChannels: 0 };
+    }
+
+    // Build channel lists per group from localChannels (unfiltered), sorted by current channel_number
+    const channelsByGroupId: Record<string, Channel[]> = {};
+    localChannels.forEach(ch => {
+      const key = ch.channel_group_id !== null ? String(ch.channel_group_id) : 'ungrouped';
+      if (!channelsByGroupId[key]) channelsByGroupId[key] = [];
+      channelsByGroupId[key].push(ch);
+    });
+    // Sort channels within each group by channel_number
+    Object.values(channelsByGroupId).forEach(arr =>
+      arr.sort((a, b) => (a.channel_number ?? 9999) - (b.channel_number ?? 9999))
+    );
+
+    const groups: { name: string; count: number; from: number; to: number }[] = [];
+    let currentNum = startNum;
+
+    // Named groups in sorted order, skipping auto-sync
+    for (const group of sortedChannelGroups) {
+      if (autoSyncRelatedGroups.has(group.id)) continue;
+      const chs = channelsByGroupId[String(group.id)];
+      if (!chs || chs.length === 0) continue;
+      groups.push({ name: group.name, count: chs.length, from: currentNum, to: currentNum + chs.length - 1 });
+      currentNum += chs.length;
+    }
+
+    // Ungrouped channels last
+    const ungrouped = channelsByGroupId['ungrouped'];
+    if (ungrouped && ungrouped.length > 0) {
+      groups.push({ name: 'Ungrouped', count: ungrouped.length, from: currentNum, to: currentNum + ungrouped.length - 1 });
+      currentNum += ungrouped.length;
+    }
+
+    const totalChannels = currentNum - startNum;
+    return { groups, totalChannels };
+  }, [renumberAllGroupsModal.isOpen, renumberAllStartingNumber, localChannels, sortedChannelGroups, autoSyncRelatedGroups]);
+
+  const handleRenumberAllGroupsConfirm = () => {
+    if (!onStageUpdateChannel) return;
+
+    const startNum = parseInt(renumberAllStartingNumber, 10);
+    if (isNaN(startNum) || startNum < 1) return;
+
+    // Build channel lists per group from localChannels (unfiltered)
+    const channelsByGroupId: Record<string, Channel[]> = {};
+    localChannels.forEach(ch => {
+      const key = ch.channel_group_id !== null ? String(ch.channel_group_id) : 'ungrouped';
+      if (!channelsByGroupId[key]) channelsByGroupId[key] = [];
+      channelsByGroupId[key].push(ch);
+    });
+    Object.values(channelsByGroupId).forEach(arr =>
+      arr.sort((a, b) => (a.channel_number ?? 9999) - (b.channel_number ?? 9999))
+    );
+
+    // Build ordered list of channels to renumber
+    const orderedChannels: Channel[] = [];
+    for (const group of sortedChannelGroups) {
+      if (autoSyncRelatedGroups.has(group.id)) continue;
+      const chs = channelsByGroupId[String(group.id)];
+      if (chs) orderedChannels.push(...chs);
+    }
+    const ungrouped = channelsByGroupId['ungrouped'];
+    if (ungrouped) orderedChannels.push(...ungrouped);
+
+    if (orderedChannels.length === 0) return;
+
+    // Start batch for single undo
+    if (onStartBatch) {
+      onStartBatch(`Renumber all groups: ${orderedChannels.length} channels starting at ${startNum}`);
+    }
+
+    orderedChannels.forEach((channel, index) => {
+      const newNumber = startNum + index;
+      if (channel.channel_number === newNumber) return; // Skip if already correct
+
+      let updates: Partial<Channel> = { channel_number: newNumber };
+
+      if (renumberAllUpdateNames && channel.channel_number !== null) {
+        const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
+        if (newName && newName !== channel.name) {
+          updates.name = newName;
+        }
+      }
+
+      const description = updates.name
+        ? `Renumber "${channel.name}" → "${updates.name}" to ch.${newNumber}`
+        : `Renumber ch.${channel.channel_number ?? '?'} → ${newNumber}`;
+      onStageUpdateChannel(channel.id, updates, description);
+    });
+
+    if (onEndBatch) {
+      onEndBatch();
+    }
+
+    renumberAllGroupsModal.close();
+    setRenumberAllStartingNumber('1');
+    setRenumberAllUpdateNames(true);
+  };
+
   const handleMassRenumberConfirm = (shiftConflicts: boolean) => {
     if (!onStageUpdateChannel || massRenumberChannels.length === 0) return;
 
@@ -4916,25 +5044,6 @@ export function ChannelsPane({
             <div className="selection-info">
               <span className="selection-count">{selectedChannelIds.size} selected</span>
               <div className="selection-actions">
-                <BulkActionsDropdown
-                  onAssignEPG={() => {
-                    setBulkEPGLoading(true);
-                    setTimeout(() => bulkEPGModal.open(), 50);
-                  }}
-                  onFetchLCN={() => {
-                    setBulkLCNLoading(true);
-                    setTimeout(() => bulkLCNModal.open(), 50);
-                  }}
-                  onNormalize={() => normalizeModal.open()}
-                  onRenumber={handleMassRenumberClick}
-                  onSortByMode={handleSortSelectedStreamsByMode}
-                  onProbe={handleBulkProbe}
-                  bulkEPGLoading={bulkEPGLoading}
-                  bulkLCNLoading={bulkLCNLoading}
-                  bulkSortingByQuality={bulkSortingByQuality}
-                  probingChannels={probingChannels.size > 0}
-                  sortEnabled={channelDefaults?.streamSortEnabled}
-                />
                 <button
                   className="bulk-action-btn bulk-action-btn--danger"
                   onClick={handleBulkDeleteClick}
@@ -5009,6 +5118,31 @@ export function ChannelsPane({
                 showLabel={false}
                 className="sort-all-quality-btn-wrapper"
                 enabledCriteria={channelDefaults?.streamSortEnabled}
+              />
+              <BulkActionsDropdown
+                onAssignEPG={() => {
+                  setBulkEPGLoading(true);
+                  setTimeout(() => bulkEPGModal.open(), 50);
+                }}
+                onFetchLCN={() => {
+                  setBulkLCNLoading(true);
+                  setTimeout(() => bulkLCNModal.open(), 50);
+                }}
+                onNormalize={() => normalizeModal.open()}
+                onRenumber={handleMassRenumberClick}
+                onRenumberAllGroups={() => {
+                  setRenumberAllStartingNumber('1');
+                  setRenumberAllUpdateNames(true);
+                  renumberAllGroupsModal.open();
+                }}
+                onSortByMode={handleSortSelectedStreamsByMode}
+                onProbe={handleBulkProbe}
+                hasSelection={selectedChannelIds.size > 0}
+                bulkEPGLoading={bulkEPGLoading}
+                bulkLCNLoading={bulkLCNLoading}
+                bulkSortingByQuality={bulkSortingByQuality}
+                probingChannels={probingChannels.size > 0}
+                sortEnabled={channelDefaults?.streamSortEnabled}
               />
             </>
           )}
@@ -6100,6 +6234,85 @@ export function ChannelsPane({
         </div>
       )}
 
+      {/* Renumber All Groups Modal */}
+      {renumberAllGroupsModal.isOpen && (
+        <div className="modal-overlay">
+          <div className="modal-content renumber-all-groups-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>Renumber All Groups</h3>
+
+            <div className="mass-renumber-info">
+              <p>
+                Assign sequential numbers across <strong>{renumberAllGroupsPreview.groups.length} group{renumberAllGroupsPreview.groups.length !== 1 ? 's' : ''}</strong> ({renumberAllGroupsPreview.totalChannels} channel{renumberAllGroupsPreview.totalChannels !== 1 ? 's' : ''}).
+                {autoSyncRelatedGroups.size > 0 && ' Auto-sync groups excluded.'}
+              </p>
+            </div>
+
+            <div className="mass-renumber-options">
+              <div className="mass-renumber-field">
+                <label htmlFor="renumber-all-start">Starting Channel Number</label>
+                <input
+                  id="renumber-all-start"
+                  type="number"
+                  min="1"
+                  value={renumberAllStartingNumber}
+                  onChange={(e) => setRenumberAllStartingNumber(e.target.value)}
+                  className="mass-renumber-input"
+                  autoFocus
+                />
+              </div>
+              <label className="mass-renumber-checkbox">
+                <input
+                  type="checkbox"
+                  checked={renumberAllUpdateNames}
+                  onChange={(e) => setRenumberAllUpdateNames(e.target.checked)}
+                />
+                Update channel numbers in names
+              </label>
+            </div>
+
+            {renumberAllGroupsPreview.groups.length > 0 && (
+              <div className="renumber-all-preview">
+                <label>Preview</label>
+                <ul className="renumber-all-preview-list">
+                  {renumberAllGroupsPreview.groups.map((g, i) => (
+                    <li key={i}>
+                      <span className="renumber-all-group-name">{g.name}</span>
+                      <span className="renumber-all-group-count">{g.count} ch</span>
+                      <span className="renumber-all-group-range">{g.from}–{g.to}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="modal-actions">
+              <button
+                className="modal-btn cancel"
+                onClick={() => {
+                  renumberAllGroupsModal.close();
+                  setRenumberAllStartingNumber('1');
+                  setRenumberAllUpdateNames(true);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="modal-btn primary"
+                onClick={handleRenumberAllGroupsConfirm}
+                disabled={
+                  !renumberAllStartingNumber ||
+                  isNaN(parseInt(renumberAllStartingNumber, 10)) ||
+                  parseInt(renumberAllStartingNumber, 10) < 1 ||
+                  renumberAllGroupsPreview.totalChannels === 0
+                }
+              >
+                Renumber All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Channel Profiles Modal */}
       <ChannelProfilesListModal
         isOpen={profilesModal.isOpen}
@@ -6277,7 +6490,7 @@ export function ChannelsPane({
         {/* Channel List Filter Settings */}
         <div className="filter-settings-dropdown" ref={filterSettingsRef}>
           <button
-            className={`filter-settings-button${channelListFilters?.filterMissingLogo || channelListFilters?.filterMissingTvgId || channelListFilters?.filterMissingEpgData || channelListFilters?.filterMissingGracenote || channelListFilters?.filterFailedStreams || channelListFilters?.filterWorkingStreams || channelListFilters?.filterUnprobedStreams ? ' filter-active' : ''}`}
+            className={`filter-settings-button${channelListFilters?.filterMissingLogo || channelListFilters?.filterMissingTvgId || channelListFilters?.filterMissingEpgData || channelListFilters?.filterMissingGracenote || !channelListFilters?.filterFailedStreams || !channelListFilters?.filterWorkingStreams || !channelListFilters?.filterUnprobedStreams ? ' filter-active' : ''}`}
             onClick={() => setFilterSettingsOpen(!filterSettingsOpen)}
             title="Channel List Filters"
           >

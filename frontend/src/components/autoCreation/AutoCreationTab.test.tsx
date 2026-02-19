@@ -3,7 +3,7 @@
  *
  * These tests define the expected behavior of the main auto-creation tab BEFORE implementation.
  */
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -674,7 +674,6 @@ describe('AutoCreationTab', () => {
 
   describe('keyboard navigation', () => {
     it('supports keyboard navigation in rules list', async () => {
-      const user = userEvent.setup();
       mockDataStore.autoCreationRules.push(
         createMockAutoCreationRule({ name: 'Rule 1' }),
         createMockAutoCreationRule({ name: 'Rule 2' })

@@ -37,7 +37,7 @@ class DispatcharrClient:
 
     async def _login(self) -> None:
         """Authenticate and obtain JWT tokens."""
-        logger.debug(f"Authenticating to Dispatcharr at {self.base_url}")
+        logger.debug("[DISPATCHARR] Authenticating to Dispatcharr at %s", self.base_url)
         try:
             response = await self._client.post(
                 f"{self.base_url}/api/accounts/token/",
@@ -50,22 +50,22 @@ class DispatcharrClient:
             data = response.json()
             self.access_token = data["access"]
             self.refresh_token = data.get("refresh")
-            logger.info(f"Successfully authenticated to Dispatcharr - username: {self.settings.username}")
+            logger.info("[DISPATCHARR] Successfully authenticated to Dispatcharr - username: %s", self.settings.username)
         except httpx.HTTPStatusError as e:
-            logger.error(f"Authentication failed - status: {e.response.status_code}")
+            logger.error("[DISPATCHARR] Authentication failed - status: %s", e.response.status_code)
             raise
         except Exception as e:
-            logger.exception(f"Authentication error: {e}")
+            logger.exception("[DISPATCHARR] Authentication error: %s", e)
             raise
 
     async def _refresh_access_token(self) -> None:
         """Refresh the access token using the refresh token."""
         if not self.refresh_token:
-            logger.debug("No refresh token available, performing full login")
+            logger.debug("[DISPATCHARR] No refresh token available, performing full login")
             await self._login()
             return
 
-        logger.debug("Refreshing access token")
+        logger.debug("[DISPATCHARR] Refreshing access token")
         response = await self._client.post(
             f"{self.base_url}/api/accounts/token/refresh/",
             json={"refresh": self.refresh_token},
@@ -73,10 +73,10 @@ class DispatcharrClient:
         if response.status_code == 200:
             data = response.json()
             self.access_token = data["access"]
-            logger.debug("Access token refreshed successfully")
+            logger.debug("[DISPATCHARR] Access token refreshed successfully")
         else:
             # Refresh token expired, do full login
-            logger.warning(f"Refresh token expired (status: {response.status_code}), performing full login")
+            logger.warning("[DISPATCHARR] Refresh token expired (status: %s), performing full login", response.status_code)
             await self._login()
 
     async def _request(
@@ -86,7 +86,7 @@ class DispatcharrClient:
         **kwargs,
     ) -> httpx.Response:
         """Make an authenticated request with automatic token refresh."""
-        logger.debug(f"API request: {method} {path}")
+        logger.debug("[DISPATCHARR] API request: %s %s", method, path)
         await self._ensure_authenticated()
 
         headers = kwargs.pop("headers", {})
@@ -96,7 +96,7 @@ class DispatcharrClient:
         request_timeout = kwargs.pop("timeout", None)
         if request_timeout is None and path == "/api/epg/grid/":
             request_timeout = 120.0  # 2 minutes for filtered EPG grid data
-            logger.debug(f"Using extended timeout ({request_timeout}s) for EPG grid request")
+            logger.debug("[DISPATCHARR] Using extended timeout (%ss) for EPG grid request", request_timeout)
 
         try:
             response = await self._client.request(
@@ -109,7 +109,7 @@ class DispatcharrClient:
 
             # If unauthorized, try refreshing token and retry
             if response.status_code == 401:
-                logger.debug(f"Got 401, refreshing token and retrying: {method} {path}")
+                logger.debug("[DISPATCHARR] Got 401, refreshing token and retrying: %s %s", method, path)
                 await self._refresh_access_token()
                 headers["Authorization"] = f"Bearer {self.access_token}"
                 response = await self._client.request(
@@ -121,13 +121,13 @@ class DispatcharrClient:
                 )
 
             if response.status_code >= 400:
-                logger.warning(f"API request failed: {method} {path} - status: {response.status_code}")
+                logger.warning("[DISPATCHARR] API request failed: %s %s - status: %s", method, path, response.status_code)
             else:
-                logger.debug(f"API request successful: {method} {path} - status: {response.status_code}")
+                logger.debug("[DISPATCHARR] API request successful: %s %s - status: %s", method, path, response.status_code)
 
             return response
         except Exception as e:
-            logger.exception(f"API request error: {method} {path} - {e}")
+            logger.exception("[DISPATCHARR] API request error: %s %s - %s", method, path, e)
             raise
 
     # -------------------------------------------------------------------------
@@ -287,9 +287,9 @@ class DispatcharrClient:
         response.raise_for_status()
         result = response.json()
         # Debug logging to see what M3U account data we're getting
-        logger.debug(f"[API-DEBUG] get_streams_by_ids returned {len(result)} streams")
+        logger.debug("[DISPATCHARR] get_streams_by_ids returned %s streams", len(result))
         for stream in result:
-            logger.debug(f"[API-DEBUG]   Stream {stream.get('id')}: name='{stream.get('name', 'Unknown')[:50]}', m3u_account={stream.get('m3u_account')!r}")
+            logger.debug("[DISPATCHARR]   Stream %s: name='%s', m3u_account=%r", stream.get('id'), stream.get('name', 'Unknown')[:50], stream.get('m3u_account'))
         return result
 
     async def get_stream_groups(self) -> list:
@@ -356,9 +356,9 @@ class DispatcharrClient:
         response = await self._request("GET", "/api/m3u/accounts/")
         response.raise_for_status()
         accounts = response.json()
-        logger.debug(f"Dispatcharr returned {len(accounts)} M3U accounts")
+        logger.debug("[DISPATCHARR] Dispatcharr returned %s M3U accounts", len(accounts))
         for account in accounts:
-            logger.debug(f"  M3U Account: id={account.get('id')}, name={account.get('name')}, server_url={account.get('server_url')}")
+            logger.debug("[DISPATCHARR]   M3U Account: id=%s, name=%s, server_url=%s", account.get('id'), account.get('name'), account.get('server_url'))
         return accounts
 
     async def get_all_m3u_group_settings(self) -> dict:
@@ -368,14 +368,14 @@ class DispatcharrClient:
         When multiple accounts have settings for the same group, prefer the one with auto_channel_sync enabled.
         """
         accounts = await self.get_m3u_accounts()
-        logger.info(f"get_all_m3u_group_settings: Processing {len(accounts)} M3U accounts")
+        logger.info("[DISPATCHARR] get_all_m3u_group_settings: Processing %s M3U accounts", len(accounts))
         all_settings = {}
         total_groups_found = 0
         for account in accounts:
             # channel_groups is embedded in the account response
             channel_groups = account.get("channel_groups", [])
             total_groups_found += len(channel_groups)
-            logger.info(f"  Account {account.get('id')}: {account.get('name')} has {len(channel_groups)} channel_groups")
+            logger.info("[DISPATCHARR]   Account %s: %s has %s channel_groups", account.get('id'), account.get('name'), len(channel_groups))
             for setting in channel_groups:
                 channel_group_id = setting.get("channel_group")
                 if channel_group_id:
@@ -391,8 +391,8 @@ class DispatcharrClient:
                         all_settings[channel_group_id] = new_setting
                     elif new_setting.get("auto_channel_sync") and not existing.get("auto_channel_sync"):
                         all_settings[channel_group_id] = new_setting
-        logger.info(f"  Total channel_groups entries across all accounts: {total_groups_found}")
-        logger.info(f"  Unique channel group IDs extracted: {len(all_settings)}")
+        logger.info("[DISPATCHARR]   Total channel_groups entries across all accounts: %s", total_groups_found)
+        logger.info("[DISPATCHARR]   Unique channel group IDs extracted: %s", len(all_settings))
         return all_settings
 
     async def get_m3u_account(self, account_id: int) -> dict:
@@ -828,16 +828,16 @@ class DispatcharrClient:
         data = response.json()
 
         # DEBUG: Log the response structure to understand what we're getting
-        logger.debug(f"EPG grid response type: {type(data)}")
+        logger.debug("[DISPATCHARR] EPG grid response type: %s", type(data))
         if isinstance(data, dict):
-            logger.debug(f"EPG grid response keys: {data.keys()}")
-            logger.debug(f"EPG grid data length: {len(data.get('data', []))} items")
+            logger.debug("[DISPATCHARR] EPG grid response keys: %s", data.keys())
+            logger.debug("[DISPATCHARR] EPG grid data length: %s items", len(data.get('data', [])))
             if data.get('data') and len(data.get('data', [])) > 0:
-                logger.debug(f"EPG grid first item sample: {data['data'][0]}")
+                logger.debug("[DISPATCHARR] EPG grid first item sample: %s", data['data'][0])
         elif isinstance(data, list):
-            logger.debug(f"EPG grid list length: {len(data)} items")
+            logger.debug("[DISPATCHARR] EPG grid list length: %s items", len(data))
             if data and len(data) > 0:
-                logger.debug(f"EPG grid first item sample: {data[0]}")
+                logger.debug("[DISPATCHARR] EPG grid first item sample: %s", data[0])
 
         # Dispatcharr returns {"data": [...]}
         if isinstance(data, dict):

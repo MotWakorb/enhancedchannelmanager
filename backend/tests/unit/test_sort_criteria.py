@@ -6,9 +6,7 @@ Tests the _smart_sort_streams method with focus on:
 - Audio channels sorting
 - Edge cases and backwards compatibility
 """
-import pytest
 from unittest.mock import MagicMock, Mock
-from datetime import datetime
 
 # Import the StreamProber class
 import sys

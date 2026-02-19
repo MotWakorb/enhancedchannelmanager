@@ -4,11 +4,13 @@ FFMPEG command execution module.
 Provides a subprocess-based executor with progress parsing, event emission,
 timeout handling, cancellation, and security checks.
 """
-import os
+import logging
 import re
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -182,8 +184,8 @@ class FFMPEGExecutor:
         try:
             proc.terminate()
             proc.kill()
-        except OSError:
-            pass
+        except OSError as e:
+            logger.debug("[FFMPEG-EXEC] Suppressed process cleanup error: %s", e)
 
     def run(self, command: List[str], timeout: Optional[int] = None) -> ExecutionResult:
         """Run an ffmpeg command.
