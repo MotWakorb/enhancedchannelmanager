@@ -100,6 +100,8 @@ Define what happens when conditions match:
 - **Create Channel** - Template-based naming with variables (`{stream_name}`, `{stream_group}`, `{quality}`, `{provider}`, etc.)
 - **Create Group** - Automatically create channel groups with template naming
 - **Merge Streams** - Combine multiple streams into a single channel with quality preference ordering, optional per-provider stream limit, and multi-stage auto-lookup (exact name → core-name fallback → call sign fallback → deparen/word-prefix matching)
+- **Remove From Channel** - Remove a stream from its current channel during auto-creation
+- **Set Stream Priority** - Set stream priority/weight within a channel
 - **Assign Logo/EPG/Profile** - Automatically assign channel metadata
 - **Set Channel Number** - Auto-assign or specify channel numbering (including ranges)
 - **Set Variable** - Define reusable variables with regex extraction for use in templates
@@ -118,7 +120,8 @@ Define what happens when conditions match:
 #### Smart Stream Handling
 - **Quality-Based Sorting** - Sort streams within channels by resolution (highest first)
 - **Probe on Sort** - Optionally probe unprobed streams for resolution data before sorting
-- **Multi-Criteria Sort** - Sort by stream name, natural name, group, or quality
+- **Multi-Criteria Sort** - Sort by stream name, natural name, group, quality, or stream name (regex)
+- **Stream Name (Regex) Sort** - Sort matched streams by a regex capture group extracted from the stream name (e.g., sort by date pattern `(\d{4}-\d{2}-\d{2})`)
 - **Auto-Find Channels** - Merge streams action with `target: auto` automatically finds existing channels using a multi-stage lookup: normalized name → core-name fallback (stripping tags) → call sign fallback → deparen and word-prefix matching. For example, "US: Discovery" finds channel "113 | Discovery", and "ESPN (East)" finds "ESPN"
 - **User Settings Integration** - Honors channel numbering, default profile, timezone preference, and auto-rename settings
 
@@ -370,6 +373,7 @@ A unique workflow that lets you stage changes locally before committing to the s
 
 - **Alphabetical Sorting** - Sort channels within a group A-Z
 - **Sequential Renumbering** - Assign sequential numbers starting from any value
+- **Renumber All Groups** - Bulk renumber channels across all groups at once from the group management dropdown
 - **Smart Name Sorting** - Option to ignore channel numbers in names when sorting (e.g., "101 | Sports Channel" sorts as "Sports Channel")
 - **Preview** - See the result before applying
 - **Batch Undo** - Entire sort/renumber operation undoes as one action
@@ -654,6 +658,7 @@ In-app notification system accessible from the header:
 
 - **Notification Bell** - Shows unread count badge
 - **Notification History** - View past notifications with timestamps
+- **Active Task Pinning** - Running tasks and stream probes stay pinned to the top of the notification list until they complete
 - **Mark as Read** - Mark individual or all notifications as read
 - **Delete Notifications** - Clear individual or all notifications
 - **Notification Types** - Info, Success, Warning, Error with color coding
@@ -842,14 +847,17 @@ Major auto-creation enhancements, stream health management, and probing reliabil
 - **Auto-Sync Channel Persistence** - Channels remain visible in ECM when auto-channel-sync is disabled in Dispatcharr
 - **"Provider" Renamed to "M3U Account"** - Consistent terminology throughout the UI
 
-### v0.13.0 - Backend Refactor
-Split the monolithic main.py (~10,800 lines) into domain-focused router modules:
-- **Phase 0** - Write full test suite against the monolith (unit, integration, E2E)
-- **Phase 1** - Extract notification service
-- **Phase 2** - Simple leaf routers (cache, health, TLS, journal)
-- **Phase 3** - Medium-complexity routers (EPG, logos, profiles)
-- **Phase 4** - Large routers (channels, streams, M3U, auto-creation, stats)
-- **Phase 5** - Clean up main.py to thin orchestration layer
+### ~~v0.13.0 - Backend Refactor & Auto-Creation Enhancements~~ ✅ Implemented
+Backend modular architecture, new auto-creation actions, and reliability fixes:
+- **Modular Router Architecture** - Split monolithic main.py into 20 domain-focused API routers under `backend/routers/`
+- **Security Hardening** - Global log injection sanitizer (CWE-117), CodeQL fixes for stack-trace-exposure, polynomial-redos, dead code
+- **Remove From Channel Action** - Remove a stream from its current channel during auto-creation
+- **Set Stream Priority Action** - Set stream priority/weight within a channel
+- **Stream Name (Regex) Sort** - Sort matched streams by a regex capture group (e.g., date patterns)
+- **Renumber All Groups** - Bulk renumber channels across all groups at once
+- **Active Notification Pinning** - Running tasks and probes stay pinned to top of notification list
+- **Probe Alert Filtering** - Stream probe alerts now respect notification type filter settings
+- **Channel Number Deduplication** - Fixed merged streams consuming extra channel number slots during renumber
 
 ### v0.14.0 - Enhanced Dummy EPG
 Enhanced template engine for dummy EPG generation:
@@ -886,6 +894,7 @@ Generate M3U playlists and XMLTV EPG from managed channels with cloud distributi
 
 ### Backend
 - Python with FastAPI
+- 20 modular API routers under `backend/routers/`
 - Proxy to Dispatcharr API
 - Health check endpoint
 - CORS support
