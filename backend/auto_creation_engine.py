@@ -112,6 +112,22 @@ class AutoCreationEngine:
         streams = await self._fetch_streams(m3u_account_ids, rules)
         logger.info("[AUTO-CREATE-ENGINE] Fetched %s streams to evaluate against %s rules", len(streams), len(rules))
 
+        # Enrich streams with channel_id from existing channels
+        # (Dispatcharr stream API doesn't return channel association)
+        stream_to_channel = {}
+        for ch in (self._existing_channels or []):
+            ch_id = ch.get("id")
+            for s in ch.get("streams", []):
+                sid = s["id"] if isinstance(s, dict) else s
+                stream_to_channel[sid] = (ch_id, ch.get("name"))
+        enriched = 0
+        for ctx in streams:
+            if not ctx.channel_id and ctx.stream_id in stream_to_channel:
+                ctx.channel_id, ctx.channel_name = stream_to_channel[ctx.stream_id]
+                enriched += 1
+        if enriched:
+            logger.info("[AUTO-CREATE-ENGINE] Enriched %s streams with channel associations", enriched)
+
         # Apply global exclusion filters
         streams, exclusion_log = await self._apply_global_filters(streams)
 
