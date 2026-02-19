@@ -316,6 +316,7 @@ class TestAutoCreationYAMLAPI:
         mock_rule.get_actions.return_value = [{"type": "skip"}]
         mock_rule.sort_field = None
         mock_rule.sort_order = None
+        mock_rule.sort_regex = None
         mock_rule.normalize_names = False
         mock_db_session.query.return_value.order_by.return_value.all.return_value = [mock_rule]
 

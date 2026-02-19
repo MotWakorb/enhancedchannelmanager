@@ -183,6 +183,9 @@ def _run_migrations(engine) -> None:
             # Add probe_on_sort column to auto_creation_rules (v0.12.0 - Quality probing)
             _add_auto_creation_rules_probe_on_sort_column(conn)
 
+            # Add sort_regex column to auto_creation_rules (v0.13.0 - Regex sort)
+            _add_auto_creation_rules_sort_regex_column(conn)
+
             # Add consecutive_failures column to stream_stats (v0.12.5 - Strike rule)
             _add_stream_stats_consecutive_failures_column(conn)
 
@@ -1376,6 +1379,24 @@ def _add_auto_creation_rules_probe_on_sort_column(conn) -> None:
         conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN probe_on_sort BOOLEAN DEFAULT 0 NOT NULL"))
         conn.commit()
         logger.info("[DATABASE] Migration complete: added probe_on_sort column")
+
+
+def _add_auto_creation_rules_sort_regex_column(conn) -> None:
+    """Add sort_regex column to auto_creation_rules table."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_rules'"
+    ))
+    if not result.fetchone():
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
+    if "sort_regex" not in columns:
+        logger.info("[DATABASE] Adding sort_regex column to auto_creation_rules")
+        conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN sort_regex TEXT"))
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: added sort_regex column")
 
 
 def _add_stream_stats_consecutive_failures_column(conn) -> None:
