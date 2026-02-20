@@ -4,7 +4,6 @@ Cloudflare DNS provider for ACME DNS-01 challenges.
 import logging
 import re
 from typing import Optional
-from urllib.parse import urlencode
 
 import httpx
 
@@ -58,17 +57,17 @@ class CloudflareDNS(DNSProvider):
         if not any(endpoint.startswith(p) for p in self._ALLOWED_PREFIXES):
             raise DNSProviderError("Disallowed API endpoint")
 
-        url = f"{self.BASE_URL}{endpoint}"
-        if params:
-            url = f"{url}?{urlencode(params)}"
-
-        async with httpx.AsyncClient() as client:
+        # Use httpx base_url to keep the host fixed and untainted
+        async with httpx.AsyncClient(
+            base_url=self.BASE_URL,
+            headers=self._headers,
+            timeout=30.0,
+        ) as client:
             resp = await client.request(
                 method,
-                url,
-                headers=self._headers,
+                endpoint,
+                params=params,
                 json=json,
-                timeout=30.0,
             )
 
             data = resp.json()

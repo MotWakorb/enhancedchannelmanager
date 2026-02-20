@@ -179,9 +179,11 @@ def interactive_mode(conn, force: bool = False):
             continue
 
         if not force:
-            error = validate_password(password, username)
-            if error:
-                print(f"{RED}{error}{NC}")
+            # Check strength separately from error display to avoid
+            # data-flow from password → printed output
+            fail_code = _check_password_strength(password, username)
+            if fail_code >= 0:
+                print(f"{RED}Password does not meet requirements.{NC}")
                 continue
 
         confirm = getpass.getpass("Confirm password: ")
@@ -214,9 +216,11 @@ def cli_mode(conn, username: str, password: str, force: bool = False):
 
     # Validate password
     if not force:
-        error = validate_password(password, username)
-        if error:
-            print(f"{RED}Error: {error}{NC}", file=sys.stderr)
+        # Check strength separately from error display to avoid
+        # data-flow from password → printed output
+        fail_code = _check_password_strength(password, username)
+        if fail_code >= 0:
+            print(f"{RED}Error: Password does not meet requirements.{NC}", file=sys.stderr)
             sys.exit(1)
 
     # Reset
