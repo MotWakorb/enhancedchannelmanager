@@ -45,12 +45,12 @@ class TestGetJournalEntries:
     @pytest.mark.asyncio
     async def test_returns_entries(self, async_client, test_session):
         """Returns journal entries ordered by newest first."""
-        _old = _create_journal_entry(
+        _create_journal_entry(
             test_session,
             timestamp=datetime.utcnow() - timedelta(hours=2),
             entity_name="Old Entry",
         )
-        _new = _create_journal_entry(
+        _create_journal_entry(
             test_session,
             timestamp=datetime.utcnow(),
             entity_name="New Entry",

@@ -26,11 +26,10 @@ from services.notification_service import (
     update_notification_internal,
     delete_notifications_by_source_internal,
 )
-# Import alert method implementations to register their handlers
+# Import alert method implementations to register their handlers (side-effect imports)
 import alert_methods_discord  # noqa: F401
 import alert_methods_smtp  # noqa: F401
 import alert_methods_telegram  # noqa: F401
-_alert_registrations = (alert_methods_discord, alert_methods_smtp, alert_methods_telegram)
 
 # Configure logging
 # Start with environment variable, will be updated from settings in startup

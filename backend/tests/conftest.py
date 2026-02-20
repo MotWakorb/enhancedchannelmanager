@@ -20,13 +20,15 @@ os.environ["CONFIG_DIR"] = "/tmp/ecm_test_config"
 # Ensure test config directory exists
 Path("/tmp/ecm_test_config").mkdir(parents=True, exist_ok=True)
 
-from database import Base
-import models as _models  # noqa: F401 — registers all tables with SQLAlchemy Base
-from ffmpeg_builder import persistence as _persistence  # noqa: F401 — registers table
+import database
+import models  # noqa: F401 — registers all tables with SQLAlchemy Base
+from ffmpeg_builder import persistence  # noqa: F401 — registers table
 # Register SecurityError globally for test specs that reference it without import
-from ffmpeg_builder.execution import SecurityError as _SecurityError  # noqa: F401
+from ffmpeg_builder.execution import SecurityError as _SecurityError
 import builtins as _builtins
 _builtins.SecurityError = _SecurityError
+# Reference side-effect imports so static analysis sees them as used
+assert models and persistence
 
 
 @pytest.fixture(scope="function")
@@ -39,10 +41,10 @@ def test_engine():
         echo=False,
     )
     # Create all tables
-    Base.metadata.create_all(bind=engine)
+    database.Base.metadata.create_all(bind=engine)
     yield engine
     # Cleanup
-    Base.metadata.drop_all(bind=engine)
+    database.Base.metadata.drop_all(bind=engine)
     engine.dispose()
 
 
@@ -77,7 +79,6 @@ async def async_client(test_session, test_engine):
     Also patches database module internals for endpoints that call get_session() directly.
     """
     from httpx import AsyncClient, ASGITransport
-    import database
     from main import app
 
     # Override the get_session dependency with a function that yields test_session

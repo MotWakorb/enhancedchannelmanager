@@ -428,7 +428,7 @@ class TestSendTestDigest:
     @pytest.mark.asyncio
     async def test_executes_digest(self, async_client, test_session):
         """Executes digest when targets are configured."""
-        _settings = _create_digest_settings(test_session, send_to_discord=True)
+        _create_digest_settings(test_session, send_to_discord=True)
 
         mock_result = MagicMock()
         mock_result.success = True
