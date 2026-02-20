@@ -143,17 +143,13 @@ describe('useAutoCreationRules', () => {
 
       const { result } = renderHook(() => useAutoCreationRules());
 
-      let createdRule: AutoCreationRule | undefined;
       await act(async () => {
-        createdRule = await result.current.createRule({
+        await expect(result.current.createRule({
           name: 'Invalid Rule',
           conditions: [],
           actions: [],
-        });
+        })).rejects.toThrow();
       });
-
-      expect(createdRule).toBeUndefined();
-      expect(result.current.error).toBeTruthy();
     });
 
     it('sets loading state during creation', async () => {
@@ -197,16 +193,12 @@ describe('useAutoCreationRules', () => {
       expect(result.current.rules.find(r => r.id === existingRule.id)?.name).toBe('Updated Name');
     });
 
-    it('returns undefined when updating non-existent rule', async () => {
+    it('throws when updating non-existent rule', async () => {
       const { result } = renderHook(() => useAutoCreationRules());
 
-      let updatedRule: AutoCreationRule | undefined;
       await act(async () => {
-        updatedRule = await result.current.updateRule(99999, { name: 'Not Found' });
+        await expect(result.current.updateRule(99999, { name: 'Not Found' })).rejects.toThrow();
       });
-
-      expect(updatedRule).toBeUndefined();
-      expect(result.current.error).toBeTruthy();
     });
 
     it('updates rule in local state optimistically', async () => {
@@ -243,26 +235,20 @@ describe('useAutoCreationRules', () => {
 
       expect(result.current.rules).toHaveLength(2);
 
-      let success: boolean = false;
       await act(async () => {
-        success = await result.current.deleteRule(rule1.id);
+        await result.current.deleteRule(rule1.id);
       });
 
-      expect(success).toBe(true);
       expect(result.current.rules).toHaveLength(1);
       expect(result.current.rules.find(r => r.id === rule1.id)).toBeUndefined();
     });
 
-    it('returns false when deleting non-existent rule', async () => {
+    it('throws when deleting non-existent rule', async () => {
       const { result } = renderHook(() => useAutoCreationRules());
 
-      let success: boolean = true;
       await act(async () => {
-        success = await result.current.deleteRule(99999);
+        await expect(result.current.deleteRule(99999)).rejects.toThrow();
       });
-
-      expect(success).toBe(false);
-      expect(result.current.error).toBeTruthy();
     });
   });
 
@@ -470,15 +456,12 @@ describe('useAutoCreationRules', () => {
       expect(result.current.rules).toHaveLength(2);
     });
 
-    it('returns undefined when duplicating non-existent rule', async () => {
+    it('throws when duplicating non-existent rule', async () => {
       const { result } = renderHook(() => useAutoCreationRules());
 
-      let duplicate: AutoCreationRule | undefined;
       await act(async () => {
-        duplicate = await result.current.duplicateRule(99999);
+        await expect(result.current.duplicateRule(99999)).rejects.toThrow('Rule not found');
       });
-
-      expect(duplicate).toBeUndefined();
     });
   });
 

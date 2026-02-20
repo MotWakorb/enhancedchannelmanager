@@ -4,7 +4,6 @@ Settings router — Dispatcharr connection, preferences, and service management 
 Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 """
 import logging
-import time
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException

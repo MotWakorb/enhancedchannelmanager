@@ -19,11 +19,9 @@ from .storage import CertificateStorage, CertificateInfo
 # ACME client requires josepy - import conditionally
 try:
     from .acme_client import ACMEClient, CertificateResult
-    _acme_available = True
 except ImportError:
     ACMEClient = None  # type: ignore
     CertificateResult = None  # type: ignore
-    _acme_available = False
 
 __all__ = [
     "TLSSettings",

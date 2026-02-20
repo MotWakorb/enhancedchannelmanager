@@ -851,14 +851,8 @@ export function ActionEditor({
                 id={`${id}-value`}
                 type="text"
                 className="action-input"
-                value={action.value || action.channel_number || ''}
-                onChange={e => {
-                  if (action.type === 'set_channel_number') {
-                    onChange({ ...action, channel_number: e.target.value });
-                  } else {
-                    onChange({ ...action, value: e.target.value });
-                  }
-                }}
+                value={action.value || ''}
+                onChange={e => onChange({ ...action, value: e.target.value })}
                 placeholder={
                   action.type === 'assign_logo' ? 'https://example.com/logo.png or {template}'
                     : action.type === 'set_channel_number' ? '101 or {auto}'

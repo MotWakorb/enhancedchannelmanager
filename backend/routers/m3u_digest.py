@@ -87,13 +87,13 @@ async def get_m3u_changes(
                 date_from_dt = dt.fromisoformat(date_from.replace("Z", "+00:00"))
                 query = query.filter(M3UChangeLog.change_time >= date_from_dt)
             except ValueError:
-                pass
+                pass  # Invalid date format from client; ignore filter
         if date_to:
             try:
                 date_to_dt = dt.fromisoformat(date_to.replace("Z", "+00:00"))
                 query = query.filter(M3UChangeLog.change_time <= date_to_dt)
             except ValueError:
-                pass
+                pass  # Invalid date format from client; ignore filter
 
         # Get total count
         total = query.count()

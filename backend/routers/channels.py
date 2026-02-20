@@ -713,7 +713,8 @@ async def import_channels_csv(file: UploadFile = File(...)):
                         logos_from_epg += 1
                         logger.debug("[CHANNELS-CSV] Row %s: Assigned EPG logo to channel '%s'", row_num, row['name'])
                     except Exception as le:
-                        warnings.append(f"Row {row_num}: Failed to assign EPG logo: {le}")
+                        logger.warning("[CHANNELS-CSV] Row %s: Failed to assign EPG logo: %s", row_num, le)
+                        warnings.append(f"Row {row_num}: Failed to assign EPG logo")
 
             # Handle stream linking if stream_urls provided
             stream_urls_str = row.get("stream_urls", "").strip()

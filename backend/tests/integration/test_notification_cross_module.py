@@ -7,7 +7,7 @@ Tests: Verify notification_service CRUD works through real DB,
 """
 import pytest
 from datetime import datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from models import Notification
 

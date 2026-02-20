@@ -312,8 +312,8 @@ async def trigger_epg_import():
     start = time.time()
     try:
         result = await client.trigger_epg_import()
-    except Exception:
-        logger.exception("[EPG] EPG import failed")
+    except Exception as e:
+        logger.error("[EPG] EPG import failed: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
     elapsed_ms = (time.time() - start) * 1000
     logger.info("[EPG] Triggered EPG import in %.1fms", elapsed_ms)
@@ -485,7 +485,7 @@ async def get_epg_lcn_by_tvg_id(tvg_id: str):
                                 content = gzip.decompress(content)
                                 logger.debug("[EPG-LCN] Decompressed to %s bytes", len(content))
                             except gzip.BadGzipFile:
-                                pass
+                                pass  # Not actually gzipped despite extension/header; use raw content
 
                         result = await parse_xml_for_lcn(content, source.get("name"))
                         if result:
@@ -678,7 +678,7 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
                                 try:
                                     content = gzip.decompress(content)
                                 except gzip.BadGzipFile:
-                                    pass
+                                    pass  # Not actually gzipped despite extension/header; use raw content
 
                             found = parse_xml_for_lcns(content, source.get("name"), remaining)
                             results.update(found)
