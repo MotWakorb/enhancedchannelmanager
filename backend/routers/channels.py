@@ -643,7 +643,8 @@ async def import_channels_csv(file: UploadFile = File(...)):
                         groups_created += 1
                         logger.info("[CHANNELS-CSV] Created channel group: %s", group_name)
                     except Exception as ge:
-                        warnings.append(f"Row {row_num}: Failed to create group '{group_name}': {ge}")
+                        logger.warning("[CHANNELS-CSV] Row %s: Failed to create group '%s': %s", row_num, group_name, ge)
+                        warnings.append(f"Row {row_num}: Failed to create group '{group_name}'")
 
             # Build channel data
             channel_data = {
