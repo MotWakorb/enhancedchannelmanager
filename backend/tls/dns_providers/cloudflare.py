@@ -2,7 +2,9 @@
 Cloudflare DNS provider for ACME DNS-01 challenges.
 """
 import logging
+import re
 from typing import Optional
+from urllib.parse import urlencode
 
 import httpx
 
@@ -39,20 +41,26 @@ class CloudflareDNS(DNSProvider):
     # Allowed Cloudflare API path prefixes
     _ALLOWED_PREFIXES = ("/user/", "/zones")
 
+    # Only allow safe path characters in API endpoints
+    _SAFE_PATH_RE = re.compile(r"^/[a-zA-Z0-9/_\-.]+$")
+
     async def _request(
         self,
         method: str,
         endpoint: str,
         json: dict = None,
+        params: dict = None,
     ) -> dict:
         """Make an API request to Cloudflare."""
-        # Validate endpoint to prevent SSRF
-        if not endpoint.startswith("/") or "://" in endpoint:
-            raise DNSProviderError(f"Invalid API endpoint: {endpoint}")
+        # Validate endpoint to prevent SSRF — must be a clean path
+        if not self._SAFE_PATH_RE.match(endpoint):
+            raise DNSProviderError("Invalid API endpoint format")
         if not any(endpoint.startswith(p) for p in self._ALLOWED_PREFIXES):
-            raise DNSProviderError(f"Disallowed API endpoint: {endpoint}")
+            raise DNSProviderError("Disallowed API endpoint")
 
         url = f"{self.BASE_URL}{endpoint}"
+        if params:
+            url = f"{url}?{urlencode(params)}"
 
         async with httpx.AsyncClient() as client:
             resp = await client.request(
@@ -102,7 +110,8 @@ class CloudflareDNS(DNSProvider):
                 zone_name = ".".join(parts[i:])
                 data = await self._request(
                     "GET",
-                    f"/zones?name={zone_name}",
+                    "/zones",
+                    params={"name": zone_name},
                 )
 
                 zones = data.get("result", [])

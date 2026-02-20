@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import type { TabId } from '../components/TabNavigation';
 
 export type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'appearance' | 'email' | 'scheduled-tasks' | 'auto-creation' | 'm3u-digest' | 'maintenance' | 'linked-accounts' | 'auth-settings' | 'user-management' | 'tls-settings';
@@ -66,8 +66,6 @@ export interface UseHashRouteReturn {
 
 export function useHashRoute(): UseHashRouteReturn {
   const [route, setRoute] = useState<HashRoute>(() => parseHash(window.location.hash));
-  // Guard callback — set by App.tsx to intercept tab changes (edit mode check)
-  const guardRef = useRef<((newTab: TabId, proceed: () => void) => boolean) | null>(null);
 
   // Update URL hash without triggering popstate
   const setHash = useCallback((tab: TabId, settingsPage?: SettingsPage | null) => {
