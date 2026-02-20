@@ -235,7 +235,8 @@ async def configure_tls(request: TLSConfigureRequest):
                 if success:
                     https_message = f" HTTPS server started on port {settings.https_port}."
                 else:
-                    https_message = f" Warning: Failed to start HTTPS server: {error}"
+                    logger.warning("[TLS] Failed to start HTTPS server after settings update: %s", error)
+                    https_message = " Warning: Failed to start HTTPS server. Check logs for details."
             else:
                 https_message = " HTTPS server already running."
         else:
@@ -312,7 +313,8 @@ async def request_certificate():
                 if success:
                     https_msg = f" HTTPS server started on port {settings.https_port}."
                 else:
-                    https_msg = f" Warning: HTTPS server failed to start: {error}"
+                    logger.warning("[TLS] HTTPS server failed to start after cert request: %s", error)
+                    https_msg = " Warning: HTTPS server failed to start. Check logs for details."
 
             return CertificateRequestResponse(
                 success=True,
@@ -396,7 +398,8 @@ async def request_certificate():
                         if start_success:
                             https_msg = f" HTTPS server started on port {settings.https_port}."
                         else:
-                            https_msg = f" Warning: HTTPS server failed to start: {start_error}"
+                            logger.warning("[TLS] HTTPS server failed to start: %s", start_error)
+                            https_msg = " Warning: HTTPS server failed to start. Check logs for details."
 
                     return CertificateRequestResponse(
                         success=True,
@@ -490,7 +493,8 @@ async def complete_dns_challenge():
                 if start_success:
                     https_msg = f" HTTPS server started on port {settings.https_port}."
                 else:
-                    https_msg = f" Warning: HTTPS server failed to start: {start_error}"
+                    logger.warning("[TLS] HTTPS server failed to start: %s", start_error)
+                    https_msg = " Warning: HTTPS server failed to start. Check logs for details."
 
             return CertificateRequestResponse(
                 success=True,
@@ -565,7 +569,8 @@ async def upload_certificate(
         if start_success:
             https_msg = f" HTTPS server started on port {settings.https_port}."
         else:
-            https_msg = f" Warning: HTTPS server failed to start: {start_error}"
+            logger.warning("[TLS] HTTPS server failed to start: %s", start_error)
+            https_msg = " Warning: HTTPS server failed to start. Check logs for details."
 
         return {
             "success": True,
@@ -617,7 +622,8 @@ async def trigger_renewal():
             if restart_success:
                 https_msg = " HTTPS server restarted with new certificate."
             else:
-                https_msg = f" Warning: HTTPS server restart failed: {restart_error}"
+                logger.warning("[TLS] HTTPS server restart failed after renewal: %s", restart_error)
+                https_msg = " Warning: HTTPS server restart failed. Check logs for details."
 
         return {
             "success": True,
@@ -659,7 +665,8 @@ async def start_https_server():
     if success:
         return {"success": True, "message": f"HTTPS server started on port {settings.https_port}"}
     else:
-        return {"success": False, "message": f"Failed to start HTTPS server: {error}"}
+        logger.warning("[TLS] Failed to start HTTPS server: %s", error)
+        return {"success": False, "message": "Failed to start HTTPS server. Check logs for details."}
 
 
 @router.post("/https/stop")
@@ -696,7 +703,8 @@ async def restart_https_server():
     if success:
         return {"success": True, "message": f"HTTPS server restarted on port {settings.https_port}"}
     else:
-        return {"success": False, "message": f"Failed to restart HTTPS server: {error}"}
+        logger.warning("[TLS] Failed to restart HTTPS server: %s", error)
+        return {"success": False, "message": "Failed to restart HTTPS server. Check logs for details."}
 
 
 @router.get("/https/status")
@@ -777,7 +785,8 @@ async def test_dns_provider(request: DNSProviderTestRequest):
         # Verify credentials
         valid, error = await provider.verify_credentials()
         if not valid:
-            return {"success": False, "message": f"Invalid credentials: {error}"}
+            logger.warning("[TLS] DNS provider credential verification failed: %s", error)
+            return {"success": False, "message": "Invalid credentials. Verify your API token and permissions."}
 
         # Try to get zone if domain provided
         if request.domain:
@@ -797,10 +806,12 @@ async def test_dns_provider(request: DNSProviderTestRequest):
         return {"success": True, "message": "Credentials valid"}
 
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, "Invalid provider configuration")
     except DNSProviderError as e:
-        return {"success": False, "message": str(e)}
+        logger.warning("[TLS] DNS provider test failed: %s", e)
+        return {"success": False, "message": "DNS provider test failed. Check API token and zone configuration."}
     except Exception as e:
-        return {"success": False, "message": f"Test failed: {e}"}
+        logger.error("[TLS] DNS provider test unexpected error: %s", e)
+        return {"success": False, "message": "DNS provider test failed unexpectedly. Check logs for details."}
 
 
