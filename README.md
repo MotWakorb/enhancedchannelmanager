@@ -859,6 +859,18 @@ Backend modular architecture, new auto-creation actions, and reliability fixes:
 - **Probe Alert Filtering** - Stream probe alerts now respect notification type filter settings
 - **Channel Number Deduplication** - Fixed merged streams consuming extra channel number slots during renumber
 
+### ~~v0.13.1 - Security, Stability & UX~~ ✅ Implemented
+Security hardening, bug fixes, and navigation improvements:
+- **URL Hash Routing** - Active tab and settings sub-page persist in the URL for bookmarks, refresh, and browser back/forward
+- **Renumber All Groups Enhancement** - Per-group starting number overrides in the modal
+- **CodeQL Security Fixes** - ~65 code scanning alerts resolved across frontend and backend
+- **Info Exposure Fixes** - Internal error details no longer leaked in HTTP responses (channels CSV import, TLS routes)
+- **SSRF Prevention** - Cloudflare API endpoint validation
+- **Certificate Permission Tightening** - TLS cert files restricted to 0o640
+- **Logo URL Sanitization** - Preview URLs restricted to safe schemes only
+- **Auto-Creation Bug Fixes** - Fixed set_channel_number action validation, rule save errors now show toast instead of crashing
+- **Sort Field Reset Fix** - sort_field and sort_regex can now be cleared back to defaults
+
 ### v0.14.0 - Enhanced Dummy EPG
 Enhanced template engine for dummy EPG generation:
 - **Text Transforms** - Apply transforms to template variables (uppercase, title case, etc.)
