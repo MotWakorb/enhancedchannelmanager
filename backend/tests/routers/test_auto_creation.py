@@ -9,9 +9,9 @@ Mocks: auto_creation_engine, auto_creation_schema, get_client(), get_session().
 import json
 import pytest
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
-from models import AutoCreationRule, AutoCreationExecution, AutoCreationConflict
+from models import AutoCreationRule, AutoCreationExecution
 
 
 def _create_rule(session, **overrides):

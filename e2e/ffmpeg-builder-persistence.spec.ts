@@ -151,7 +151,7 @@ test.describe('Loading Config', () => {
 
       // Also look for config items or an empty-state message
       const configItems = appPage.locator(ffmpegSelectors.configItem);
-      const itemCount = await configItems.count();
+      const _itemCount = await configItems.count();
 
       const emptyState = appPage.locator(
         'text=No saved, text=no configurations, text=empty, .empty-state'

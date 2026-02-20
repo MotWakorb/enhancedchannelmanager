@@ -312,8 +312,6 @@ class DispatcharrClient:
         then query each group with page_size=1 to get just the count from the
         paginated response. This is much faster than loading all stream data.
         """
-        import asyncio
-
         # First, get all group names (fast)
         group_names = await self.get_stream_groups()
 

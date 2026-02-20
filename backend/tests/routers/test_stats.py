@@ -6,7 +6,7 @@ Tests: 15 endpoints covering channel stats, activity, bandwidth,
 Mocks: get_client(), BandwidthTracker, PopularityCalculator.
 """
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 
 class TestChannelStats:
