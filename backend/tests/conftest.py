@@ -78,7 +78,6 @@ async def async_client(test_session, test_engine):
     """
     from httpx import AsyncClient, ASGITransport
     import database
-    from database import get_session
     from main import app
 
     # Override the get_session dependency with a function that yields test_session
@@ -89,7 +88,7 @@ async def async_client(test_session, test_engine):
             pass  # Don't close - the test_session fixture handles cleanup
 
     # Use FastAPI's dependency_overrides
-    app.dependency_overrides[get_session] = override_get_session
+    app.dependency_overrides[database.get_session] = override_get_session
 
     # Also patch database module internals for endpoints that call get_session() directly
     # (rather than using Depends(get_session))

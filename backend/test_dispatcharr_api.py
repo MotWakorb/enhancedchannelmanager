@@ -36,7 +36,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 import httpx
 
@@ -1885,7 +1885,7 @@ class DispatcharrAPITester:
                         await self._timed_request("DELETE", f"{endpoint}/{resource_id}/")
                         ids.remove(resource_id)
                     except Exception:
-                        pass
+                        pass  # Best-effort cleanup; ignore failures deleting test resources
 
     # =========================================================================
     # Run All Tests

@@ -39,7 +39,6 @@ class JournalEntry(Base):
 
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
-        import json
         return {
             "id": self.id,
             "timestamp": self.timestamp.isoformat() + "Z" if self.timestamp else None,
@@ -264,7 +263,6 @@ class ScheduledTask(Base):
 
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
-        import json
         return {
             "id": self.id,
             "task_id": self.task_id,
@@ -364,14 +362,12 @@ class TaskSchedule(Base):
         if not self.parameters:
             return {}
         try:
-            import json
             return json.loads(self.parameters)
         except (ValueError, TypeError):
             return {}
 
     def set_parameters(self, params: dict) -> None:
         """Set parameters from dictionary."""
-        import json
         self.parameters = json.dumps(params) if params else None
 
     def get_parameter(self, key: str, default=None):
@@ -439,7 +435,6 @@ class TaskExecution(Base):
 
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
-        import json
         return {
             "id": self.id,
             "task_id": self.task_id,
@@ -497,7 +492,6 @@ class Notification(Base):
 
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
-        import json
         return {
             "id": self.id,
             "type": self.type,
@@ -642,7 +636,6 @@ class NormalizationRule(Base):
         if not self.conditions:
             return []
         try:
-            import json
             return json.loads(self.conditions)
         except (json.JSONDecodeError, TypeError):
             return []
@@ -720,7 +713,6 @@ class AlertMethod(Base):
         By default, sensitive config values are masked.
         Set include_sensitive=True to include actual values.
         """
-        import json
         config = json.loads(self.config) if self.config else {}
 
         # Mask sensitive fields unless explicitly requested
@@ -869,14 +861,12 @@ class M3USnapshot(Base):
         if not self.groups_data:
             return {"groups": []}
         try:
-            import json
             return json.loads(self.groups_data)
         except (ValueError, TypeError):
             return {"groups": []}
 
     def set_groups_data(self, data: dict) -> None:
         """Set groups_data from dictionary."""
-        import json
         self.groups_data = json.dumps(data) if data else None
 
     def to_dict(self) -> dict:
@@ -929,14 +919,12 @@ class M3UChangeLog(Base):
         if not self.stream_names:
             return []
         try:
-            import json
             return json.loads(self.stream_names)
         except (ValueError, TypeError):
             return []
 
     def set_stream_names(self, names: list) -> None:
         """Set stream_names from list."""
-        import json
         self.stream_names = json.dumps(names) if names else None
 
     def to_dict(self) -> dict:
@@ -993,14 +981,12 @@ class M3UDigestSettings(Base):
         if not self.email_recipients:
             return []
         try:
-            import json
             return json.loads(self.email_recipients)
         except (ValueError, TypeError):
             return []
 
     def set_email_recipients(self, emails: list) -> None:
         """Set email_recipients from list."""
-        import json
         self.email_recipients = json.dumps(emails) if emails else None
 
     def get_exclude_group_patterns(self) -> list:
@@ -1008,14 +994,12 @@ class M3UDigestSettings(Base):
         if not self.exclude_group_patterns:
             return []
         try:
-            import json
             return json.loads(self.exclude_group_patterns)
         except (ValueError, TypeError):
             return []
 
     def set_exclude_group_patterns(self, patterns: list) -> None:
         """Set exclude_group_patterns from list."""
-        import json
         self.exclude_group_patterns = json.dumps(patterns) if patterns else None
 
     def get_exclude_stream_patterns(self) -> list:
@@ -1023,14 +1007,12 @@ class M3UDigestSettings(Base):
         if not self.exclude_stream_patterns:
             return []
         try:
-            import json
             return json.loads(self.exclude_stream_patterns)
         except (ValueError, TypeError):
             return []
 
     def set_exclude_stream_patterns(self, patterns: list) -> None:
         """Set exclude_stream_patterns from list."""
-        import json
         self.exclude_stream_patterns = json.dumps(patterns) if patterns else None
 
     def to_dict(self) -> dict:
@@ -1472,14 +1454,12 @@ class AutoCreationRule(Base):
         if not self.conditions:
             return []
         try:
-            import json
             return json.loads(self.conditions)
         except (ValueError, TypeError):
             return []
 
     def set_conditions(self, conditions: list) -> None:
         """Set conditions from list."""
-        import json
         self.conditions = json.dumps(conditions) if conditions else "[]"
 
     def get_actions(self) -> list:
@@ -1487,14 +1467,12 @@ class AutoCreationRule(Base):
         if not self.actions:
             return []
         try:
-            import json
             return json.loads(self.actions)
         except (ValueError, TypeError):
             return []
 
     def set_actions(self, actions: list) -> None:
         """Set actions from list."""
-        import json
         self.actions = json.dumps(actions) if actions else "[]"
 
     def get_last_run_stats(self) -> dict:
@@ -1502,14 +1480,12 @@ class AutoCreationRule(Base):
         if not self.last_run_stats:
             return {}
         try:
-            import json
             return json.loads(self.last_run_stats)
         except (ValueError, TypeError):
             return {}
 
     def set_last_run_stats(self, stats: dict) -> None:
         """Set last_run_stats from dict."""
-        import json
         self.last_run_stats = json.dumps(stats) if stats else None
 
     def get_managed_channel_ids(self) -> list[int]:
@@ -1517,14 +1493,12 @@ class AutoCreationRule(Base):
         if not self.managed_channel_ids:
             return []
         try:
-            import json
             return json.loads(self.managed_channel_ids)
         except (ValueError, TypeError):
             return []
 
     def set_managed_channel_ids(self, ids: list[int]) -> None:
         """Set managed_channel_ids from list of ints."""
-        import json
         self.managed_channel_ids = json.dumps(sorted(set(ids))) if ids else None
 
     def to_dict(self) -> dict:
@@ -1633,19 +1607,16 @@ class AutoCreationExecution(Base):
         if not self.created_entities:
             return []
         try:
-            import json
             return json.loads(self.created_entities)
         except (ValueError, TypeError):
             return []
 
     def set_created_entities(self, entities: list) -> None:
         """Set created_entities from list."""
-        import json
         self.created_entities = json.dumps(entities) if entities else None
 
     def add_created_entity(self, entity_type: str, entity_id: int, name: str = None, extra: dict = None) -> None:
         """Add a created entity to the tracking list."""
-        import json
         entities = self.get_created_entities()
         entity = {"type": entity_type, "id": entity_id}
         if name:
@@ -1660,19 +1631,16 @@ class AutoCreationExecution(Base):
         if not self.modified_entities:
             return []
         try:
-            import json
             return json.loads(self.modified_entities)
         except (ValueError, TypeError):
             return []
 
     def set_modified_entities(self, entities: list) -> None:
         """Set modified_entities from list."""
-        import json
         self.modified_entities = json.dumps(entities) if entities else None
 
     def add_modified_entity(self, entity_type: str, entity_id: int, previous_state: dict, name: str = None) -> None:
         """Add a modified entity to the tracking list with its previous state for rollback."""
-        import json
         entities = self.get_modified_entities()
         entity = {"type": entity_type, "id": entity_id, "previous": previous_state}
         if name:
@@ -1685,14 +1653,12 @@ class AutoCreationExecution(Base):
         if not self.dry_run_results:
             return []
         try:
-            import json
             return json.loads(self.dry_run_results)
         except (ValueError, TypeError):
             return []
 
     def set_dry_run_results(self, results: list) -> None:
         """Set dry_run_results from list."""
-        import json
         self.dry_run_results = json.dumps(results) if results else None
 
     def get_execution_log(self) -> list:
@@ -1700,14 +1666,12 @@ class AutoCreationExecution(Base):
         if not self.execution_log:
             return []
         try:
-            import json
             return json.loads(self.execution_log)
         except (ValueError, TypeError):
             return []
 
     def set_execution_log(self, log: list) -> None:
         """Set execution_log from list."""
-        import json
         self.execution_log = json.dumps(log) if log else None
 
     def to_dict(self, include_entities: bool = False, include_log: bool = False) -> dict:
@@ -1796,14 +1760,12 @@ class AutoCreationConflict(Base):
         if not self.losing_rule_ids:
             return []
         try:
-            import json
             return json.loads(self.losing_rule_ids)
         except (ValueError, TypeError):
             return []
 
     def set_losing_rule_ids(self, rule_ids: list) -> None:
         """Set losing_rule_ids from list."""
-        import json
         self.losing_rule_ids = json.dumps(rule_ids) if rule_ids else None
 
     def get_details(self) -> dict:
@@ -1811,14 +1773,12 @@ class AutoCreationConflict(Base):
         if not self.details:
             return {}
         try:
-            import json
             return json.loads(self.details)
         except (ValueError, TypeError):
             return {}
 
     def set_details(self, details: dict) -> None:
         """Set details from dict."""
-        import json
         self.details = json.dumps(details) if details else None
 
     def to_dict(self) -> dict:
@@ -1859,7 +1819,6 @@ class FFmpegProfile(Base):
 
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
-        import json
         return {
             "id": self.id,
             "name": self.name,

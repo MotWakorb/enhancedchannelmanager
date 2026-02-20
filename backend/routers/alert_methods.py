@@ -112,7 +112,7 @@ async def list_alert_methods():
                 try:
                     alert_sources = json.loads(m.alert_sources)
                 except (json.JSONDecodeError, TypeError):
-                    pass
+                    pass  # Malformed alert_sources JSON; fall back to None
             result.append({
                 "id": m.id,
                 "name": m.name,
@@ -223,7 +223,7 @@ async def get_alert_method(method_id: int):
             try:
                 alert_sources = json.loads(method.alert_sources)
             except (json.JSONDecodeError, TypeError):
-                pass
+                pass  # Malformed alert_sources JSON; fall back to None
         return {
             "id": method.id,
             "name": method.name,

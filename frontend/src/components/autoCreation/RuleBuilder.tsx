@@ -151,10 +151,10 @@ export function RuleBuilder({
         actions,
         run_on_refresh: runOnRefresh,
         stop_on_first_match: stopOnFirstMatch,
-        sort_field: sortField || null,
+        sort_field: sortField || '',
         sort_order: sortOrder,
         probe_on_sort: probeOnSort,
-        sort_regex: sortRegex || null,
+        sort_regex: sortRegex || '',
         normalize_names: normalizeNames,
         orphan_action: orphanAction,
       });

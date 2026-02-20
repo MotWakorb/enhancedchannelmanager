@@ -254,7 +254,7 @@ describe('ActionEditor', () => {
     it('renders channel number input', () => {
       render(
         <ActionEditor
-          action={{ type: 'set_channel_number', channel_number: '101' }}
+          action={{ type: 'set_channel_number', value: '101' }}
           onChange={vi.fn()}
           onRemove={vi.fn()}
         />

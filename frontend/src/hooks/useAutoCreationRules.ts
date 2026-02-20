@@ -22,13 +22,13 @@ export interface UseAutoCreationRulesResult {
   /** Fetch all rules */
   fetchRules: () => Promise<void>;
   /** Create a new rule */
-  createRule: (data: CreateRuleData) => Promise<AutoCreationRule | undefined>;
+  createRule: (data: CreateRuleData) => Promise<AutoCreationRule>;
   /** Update an existing rule */
-  updateRule: (id: number, data: UpdateRuleData) => Promise<AutoCreationRule | undefined>;
+  updateRule: (id: number, data: UpdateRuleData) => Promise<AutoCreationRule>;
   /** Delete a rule */
-  deleteRule: (id: number) => Promise<boolean>;
+  deleteRule: (id: number) => Promise<void>;
   /** Toggle rule enabled state */
-  toggleRule: (id: number) => Promise<AutoCreationRule | undefined>;
+  toggleRule: (id: number) => Promise<AutoCreationRule>;
   /** Get a rule by ID from local state */
   getRule: (id: number) => AutoCreationRule | undefined;
   /** Get rules sorted by priority */
@@ -38,7 +38,7 @@ export interface UseAutoCreationRulesResult {
   /** Reorder rules (update priorities) */
   reorderRules: (orderedIds: number[]) => Promise<void>;
   /** Duplicate a rule */
-  duplicateRule: (id: number) => Promise<AutoCreationRule | undefined>;
+  duplicateRule: (id: number) => Promise<AutoCreationRule>;
   /** Set error manually */
   setError: (error: string | null) => void;
   /** Clear error */
@@ -67,61 +67,56 @@ export function useAutoCreationRules(
     }
   }, []);
 
-  const createRule = useCallback(async (data: CreateRuleData): Promise<AutoCreationRule | undefined> => {
+  const createRule = useCallback(async (data: CreateRuleData): Promise<AutoCreationRule> => {
     setLoading(true);
-    setError(null);
     try {
       const newRule = await api.createAutoCreationRule(data);
       setRules(prev => [...prev, newRule]);
       return newRule;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create rule');
-      return undefined;
+      const message = err instanceof Error ? err.message : 'Failed to create rule';
+      throw new Error(message);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  const updateRule = useCallback(async (id: number, data: UpdateRuleData): Promise<AutoCreationRule | undefined> => {
+  const updateRule = useCallback(async (id: number, data: UpdateRuleData): Promise<AutoCreationRule> => {
     setLoading(true);
-    setError(null);
     try {
       const updatedRule = await api.updateAutoCreationRule(id, data);
       setRules(prev => prev.map(r => r.id === id ? updatedRule : r));
       return updatedRule;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update rule');
-      return undefined;
+      const message = err instanceof Error ? err.message : 'Failed to update rule';
+      throw new Error(message);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  const deleteRule = useCallback(async (id: number): Promise<boolean> => {
+  const deleteRule = useCallback(async (id: number): Promise<void> => {
     setLoading(true);
-    setError(null);
     try {
       await api.deleteAutoCreationRule(id);
       setRules(prev => prev.filter(r => r.id !== id));
-      return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete rule');
-      return false;
+      const message = err instanceof Error ? err.message : 'Failed to delete rule';
+      throw new Error(message);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  const toggleRule = useCallback(async (id: number): Promise<AutoCreationRule | undefined> => {
+  const toggleRule = useCallback(async (id: number): Promise<AutoCreationRule> => {
     setLoading(true);
-    setError(null);
     try {
       const toggledRule = await api.toggleAutoCreationRule(id);
       setRules(prev => prev.map(r => r.id === id ? toggledRule : r));
       return toggledRule;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to toggle rule');
-      return undefined;
+      const message = err instanceof Error ? err.message : 'Failed to toggle rule';
+      throw new Error(message);
     } finally {
       setLoading(false);
     }
@@ -141,7 +136,6 @@ export function useAutoCreationRules(
 
   const reorderRules = useCallback(async (orderedIds: number[]): Promise<void> => {
     setLoading(true);
-    setError(null);
     try {
       // Update each rule's priority based on position in orderedIds
       const updates = orderedIds.map((id, index) =>
@@ -163,17 +157,17 @@ export function useAutoCreationRules(
           .filter((r): r is AutoCreationRule => r !== null);
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to reorder rules');
+      const message = err instanceof Error ? err.message : 'Failed to reorder rules';
+      throw new Error(message);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  const duplicateRule = useCallback(async (id: number): Promise<AutoCreationRule | undefined> => {
+  const duplicateRule = useCallback(async (id: number): Promise<AutoCreationRule> => {
     const originalRule = rules.find(r => r.id === id);
     if (!originalRule) {
-      setError('Rule not found');
-      return undefined;
+      throw new Error('Rule not found');
     }
 
     // Find a unique priority: max + 1 to avoid duplicates
@@ -193,7 +187,6 @@ export function useAutoCreationRules(
     };
 
     const newRule = await createRule(duplicateData);
-    if (!newRule) return undefined;
 
     // Reorder so the duplicate appears right after the original
     const sorted = [...rules, newRule].sort((a, b) => a.priority - b.priority);

@@ -20,7 +20,21 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
   const [file, setFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrlRaw] = useState<string | null>(null);
+
+  // Sanitize preview URLs to prevent XSS via data: or javascript: URIs
+  const setPreviewUrl = useCallback((url: string | null) => {
+    if (url === null) {
+      setPreviewUrlRaw(null);
+      return;
+    }
+    // Allow blob: (local file previews), http(s):, and data:image/* only
+    if (url.startsWith('blob:') || url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:image/')) {
+      setPreviewUrlRaw(url);
+    } else {
+      setPreviewUrlRaw(null);
+    }
+  }, []);
 
   // Drag & drop state
   const [isDragging, setIsDragging] = useState(false);

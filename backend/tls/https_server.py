@@ -48,13 +48,24 @@ class HTTPSServerManager:
 
     def _get_uvicorn_command(self, port: int, cert_path: Path, key_path: Path) -> list[str]:
         """Build the uvicorn command for HTTPS server."""
+        # Validate inputs to prevent command injection
+        if not isinstance(port, int) or not (1 <= port <= 65535):
+            raise ValueError(f"Invalid port: {port}")
+        cert_resolved = cert_path.resolve()
+        key_resolved = key_path.resolve()
+        tls_dir_resolved = TLS_DIR.resolve()
+        if not str(cert_resolved).startswith(str(tls_dir_resolved)):
+            raise ValueError("Certificate path outside TLS directory")
+        if not str(key_resolved).startswith(str(tls_dir_resolved)):
+            raise ValueError("Key path outside TLS directory")
+
         return [
             sys.executable, "-m", "uvicorn",
             "main:app",
             "--host", "0.0.0.0",
             "--port", str(port),
-            "--ssl-keyfile", str(key_path),
-            "--ssl-certfile", str(cert_path),
+            "--ssl-keyfile", str(key_resolved),
+            "--ssl-certfile", str(cert_resolved),
         ]
 
     def _get_subprocess_env(self) -> dict:

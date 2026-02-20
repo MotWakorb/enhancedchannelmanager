@@ -7,7 +7,7 @@ import {
   type TabId,
 } from './components';
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
-import { useChangeHistory, useEditMode } from './hooks';
+import { useChangeHistory, useEditMode, useHashRoute } from './hooks';
 import * as api from './services/api';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress } from './types';
 import packageJson from '../package.json';
@@ -190,8 +190,8 @@ function App() {
   const [showExitDialog, setShowExitDialog] = useState(false);
   const [commitProgress, setCommitProgress] = useState<CommitProgress | null>(null);
 
-  // Tab navigation state
-  const [activeTab, setActiveTab] = useState<TabId>('channel-manager');
+  // Tab navigation state (hash-based routing)
+  const { activeTab, settingsPage, setHash, setSettingsPage } = useHashRoute();
   const [pendingTabChange, setPendingTabChange] = useState<TabId | null>(null);
 
   // Stream group drop trigger (for opening bulk create modal from channels pane)
@@ -398,10 +398,10 @@ function App() {
     clearHistory();
     // Switch to pending tab if there was one
     if (pendingTabChange) {
-      setActiveTab(pendingTabChange);
+      setHash(pendingTabChange);
       setPendingTabChange(null);
     }
-  }, [commit, clearHistory, pendingTabChange]);
+  }, [commit, clearHistory, pendingTabChange, setHash]);
 
   const handleDiscardChanges = useCallback(() => {
     discard();
@@ -411,10 +411,10 @@ function App() {
     clearHistory();
     // Switch to pending tab if there was one
     if (pendingTabChange) {
-      setActiveTab(pendingTabChange);
+      setHash(pendingTabChange);
       setPendingTabChange(null);
     }
-  }, [discard, clearHistory, pendingTabChange]);
+  }, [discard, clearHistory, pendingTabChange, setHash]);
 
   const handleKeepEditing = useCallback(() => {
     setShowExitDialog(false);
@@ -436,17 +436,17 @@ function App() {
       setSelectedChannelIds(new Set());
     }
 
-    setActiveTab(newTab);
-  }, [isEditMode, stagedOperationCount, rawExitEditMode]);
+    setHash(newTab);
+  }, [isEditMode, stagedOperationCount, rawExitEditMode, setHash]);
 
   // Listen for task editor navigation events from NotificationCenter
   useEffect(() => {
     const handler = () => {
-      setActiveTab('settings');
+      setHash('settings', 'scheduled-tasks');
     };
     window.addEventListener('ecm:open-task-editor', handler);
     return () => window.removeEventListener('ecm:open-task-editor', handler);
-  }, []);
+  }, [setHash]);
 
   // Check settings and load initial data
   useEffect(() => {
@@ -2325,7 +2325,7 @@ function App() {
           {activeTab === 'journal' && <JournalTab />}
           {activeTab === 'stats' && <StatsTab />}
           {activeTab === 'ffmpeg-builder' && <FFMPEGBuilderTab />}
-          {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} onProbeComplete={loadChannels} />}
+          {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} onProbeComplete={loadChannels} initialSettingsPage={settingsPage} onSettingsPageChange={setSettingsPage} />}
         </Suspense>
       </main>
 

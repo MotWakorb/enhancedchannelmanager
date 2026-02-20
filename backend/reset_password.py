@@ -49,15 +49,19 @@ def hash_password(password: str) -> str:
 
 
 def validate_password(password: str, username: str) -> str | None:
-    """Validate password strength. Returns error message or None if valid."""
-    if len(password) < 8:
-        return "Password must be at least 8 characters long."
-    if not any(c.isupper() for c in password):
-        return "Password must contain at least one uppercase letter."
-    if not any(c.islower() for c in password):
-        return "Password must contain at least one lowercase letter."
-    if not any(c.isdigit() for c in password):
-        return "Password must contain at least one number."
+    """Validate password strength. Returns error message or None if valid.
+
+    Error messages are static strings that never include the password value.
+    """
+    checks: list[tuple[bool, str]] = [
+        (len(password) >= 8, "Password must be at least 8 characters long."),
+        (any(c.isupper() for c in password), "Password must contain at least one uppercase letter."),
+        (any(c.islower() for c in password), "Password must contain at least one lowercase letter."),
+        (any(c.isdigit() for c in password), "Password must contain at least one number."),
+    ]
+    for passed, msg in checks:
+        if not passed:
+            return msg
     if username and username.lower() in password.lower():
         return "Password cannot contain your username."
     return None
