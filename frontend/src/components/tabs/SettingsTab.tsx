@@ -184,12 +184,29 @@ interface SettingsTabProps {
   onThemeChange?: (theme: Theme) => void;
   channelProfiles?: ChannelProfile[];
   onProbeComplete?: () => void;
+  initialSettingsPage?: SettingsPage | null;
+  onSettingsPageChange?: (page: SettingsPage) => void;
 }
 
-type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'appearance' | 'email' | 'scheduled-tasks' | 'auto-creation' | 'm3u-digest' | 'maintenance' | 'linked-accounts' | 'auth-settings' | 'user-management' | 'tls-settings';
+import type { SettingsPage } from '../../hooks';
 
-export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete }: SettingsTabProps) {
-  const [activePage, setActivePage] = useState<SettingsPage>('general');
+export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete, initialSettingsPage, onSettingsPageChange }: SettingsTabProps) {
+  const [activePage, setActivePageInternal] = useState<SettingsPage>(initialSettingsPage || 'general');
+
+  // Wrap setActivePage to also notify parent for hash routing
+  const setActivePage = (page: SettingsPage) => {
+    setActivePageInternal(page);
+    onSettingsPageChange?.(page);
+  };
+
+  // Sync with external initialSettingsPage changes (e.g., browser back/forward)
+  useEffect(() => {
+    if (initialSettingsPage && initialSettingsPage !== activePage) {
+      setActivePageInternal(initialSettingsPage);
+    }
+    // Only re-run when initialSettingsPage changes, not activePage
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialSettingsPage]);
   const notifications = useNotifications();
   const { user } = useAuth();
   const restartToastIdRef = useRef<string | null>(null);

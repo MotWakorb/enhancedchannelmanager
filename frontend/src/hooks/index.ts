@@ -11,3 +11,5 @@ export { useAutoCreationRules } from './useAutoCreationRules';
 export type { UseAutoCreationRulesOptions, UseAutoCreationRulesResult } from './useAutoCreationRules';
 export { useAutoCreationExecution } from './useAutoCreationExecution';
 export type { UseAutoCreationExecutionOptions, UseAutoCreationExecutionResult } from './useAutoCreationExecution';
+export { useHashRoute } from './useHashRoute';
+export type { UseHashRouteReturn, SettingsPage } from './useHashRoute';
