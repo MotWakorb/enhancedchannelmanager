@@ -359,7 +359,7 @@ class TestListTaskSchedules:
     @pytest.mark.asyncio
     async def test_returns_schedules(self, async_client, test_session):
         """Returns schedules for a task."""
-        task = _create_scheduled_task(test_session, task_id="stream_probe")
+        _task = _create_scheduled_task(test_session, task_id="stream_probe")
         _create_task_schedule(test_session, task_id="stream_probe", name="Morning Probe")
 
         mock_describe = MagicMock(return_value="Daily at 03:00 UTC")

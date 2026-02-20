@@ -37,12 +37,12 @@ async def get_journal_entries(
         try:
             date_from_dt = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
         except ValueError:
-            pass
+            pass  # Invalid date format from client; ignore filter
     if date_to:
         try:
             date_to_dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
         except ValueError:
-            pass
+            pass  # Invalid date format from client; ignore filter
 
     # Validate page_size
     page_size = min(max(page_size, 1), 200)

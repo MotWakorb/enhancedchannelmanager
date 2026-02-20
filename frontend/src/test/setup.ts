@@ -68,6 +68,7 @@ Object.defineProperty(window, 'matchMedia', {
 
 // Mock ResizeObserver (used by some UI components)
 class ResizeObserverMock {
+  constructor(_callback?: ResizeObserverCallback) {}
   observe = vi.fn()
   unobserve = vi.fn()
   disconnect = vi.fn()

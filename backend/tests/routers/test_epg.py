@@ -6,7 +6,7 @@ Tests: 12 endpoints covering EPG sources CRUD, refresh, import,
 Mocks: get_client() to isolate from Dispatcharr.
 """
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 
 class TestGetEPGSources:

@@ -6,7 +6,7 @@ Tests: 26 M3U endpoints covering account CRUD, refresh, filters,
 Mocks: get_client() to isolate from Dispatcharr.
 """
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 
 class TestGetM3UAccount:

@@ -6,7 +6,7 @@ Tests: 10 channel-group endpoints covering group CRUD, hide/restore,
 Mocks: get_client() for Dispatcharr API, get_session() via conftest for HiddenChannelGroup.
 """
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from models import HiddenChannelGroup
 

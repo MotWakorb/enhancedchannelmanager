@@ -3,8 +3,6 @@ E2E tests for EPG, streams, providers, and profile endpoints.
 
 Endpoints: /api/epg/*, /api/streams/*, /api/providers/*, /api/*-profiles/*
 """
-from tests.e2e.conftest import skip_if_not_api
-
 
 class TestEPGSources:
     """Tests for /api/epg endpoints."""

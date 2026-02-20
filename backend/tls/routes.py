@@ -29,13 +29,12 @@ from .https_server import https_server_manager
 try:
     from .acme_client import ACMEClient
     from .dns_providers import get_dns_provider, DNSProviderError
-    from .renewal import renewal_manager, renew_certificate
+    from .renewal import renew_certificate
     _acme_available = True
 except ImportError:
     ACMEClient = None  # type: ignore
     get_dns_provider = None  # type: ignore
     DNSProviderError = Exception
-    renewal_manager = None  # type: ignore
     renew_certificate = None  # type: ignore
     _acme_available = False
 
