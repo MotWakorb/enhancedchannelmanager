@@ -12,6 +12,16 @@ from .base import DNSProvider, DNSProviderError
 
 logger = logging.getLogger(__name__)
 
+# Cloudflare zone/record IDs are hex strings
+_CF_ID_RE = re.compile(r"^[a-f0-9]{32}$")
+
+
+def _validate_cf_id(value: str, label: str) -> str:
+    """Validate a Cloudflare ID (zone_id or record_id) is a 32-char hex string."""
+    if not _CF_ID_RE.match(value):
+        raise DNSProviderError(f"Invalid {label} format")
+    return value
+
 
 class CloudflareDNS(DNSProvider):
     """
@@ -37,54 +47,30 @@ class CloudflareDNS(DNSProvider):
             "Content-Type": "application/json",
         }
 
-    # Allowed Cloudflare API path prefixes
-    _ALLOWED_PREFIXES = ("/user/", "/zones")
-
-    # Only allow safe path characters in API endpoints
-    _SAFE_PATH_RE = re.compile(r"^/[a-zA-Z0-9/_\-.]+$")
-
-    async def _request(
-        self,
-        method: str,
-        endpoint: str,
-        json: dict = None,
-        params: dict = None,
-    ) -> dict:
-        """Make an API request to Cloudflare."""
-        # Validate endpoint to prevent SSRF — must be a clean path
-        if not self._SAFE_PATH_RE.match(endpoint):
-            raise DNSProviderError("Invalid API endpoint format")
-        if not any(endpoint.startswith(p) for p in self._ALLOWED_PREFIXES):
-            raise DNSProviderError("Disallowed API endpoint")
-
-        # Use httpx base_url to keep the host fixed and untainted
-        async with httpx.AsyncClient(
+    def _client(self) -> httpx.AsyncClient:
+        """Create an httpx client with fixed base URL."""
+        return httpx.AsyncClient(
             base_url=self.BASE_URL,
             headers=self._headers,
             timeout=30.0,
-        ) as client:
-            resp = await client.request(
-                method,
-                endpoint,
-                params=params,
-                json=json,
+        )
+
+    def _parse_response(self, data: dict) -> dict:
+        """Check Cloudflare response for errors."""
+        if not data.get("success", False):
+            errors = data.get("errors", [])
+            error_msg = "; ".join(
+                e.get("message", "Unknown error") for e in errors
             )
-
-            data = resp.json()
-
-            if not data.get("success", False):
-                errors = data.get("errors", [])
-                error_msg = "; ".join(
-                    e.get("message", "Unknown error") for e in errors
-                )
-                raise DNSProviderError(f"Cloudflare API error: {error_msg}")
-
-            return data
+            raise DNSProviderError(f"Cloudflare API error: {error_msg}")
+        return data
 
     async def verify_credentials(self) -> tuple[bool, Optional[str]]:
         """Verify that the API token is valid."""
         try:
-            await self._request("GET", "/user/tokens/verify")
+            async with self._client() as client:
+                resp = await client.get("/user/tokens/verify")
+                self._parse_response(resp.json())
             return True, None
         except DNSProviderError as e:
             return False, str(e)
@@ -105,19 +91,17 @@ class CloudflareDNS(DNSProvider):
         try:
             # Try progressively shorter domain parts
             parts = domain.split(".")
-            for i in range(len(parts) - 1):
-                zone_name = ".".join(parts[i:])
-                data = await self._request(
-                    "GET",
-                    "/zones",
-                    params={"name": zone_name},
-                )
+            async with self._client() as client:
+                for i in range(len(parts) - 1):
+                    zone_name = ".".join(parts[i:])
+                    resp = await client.get("/zones", params={"name": zone_name})
+                    data = self._parse_response(resp.json())
 
-                zones = data.get("result", [])
-                if zones:
-                    zone_id = zones[0]["id"]
-                    logger.info("[TLS-CLOUDFLARE] Found Cloudflare zone: %s (%s)", zone_name, zone_id)
-                    return zone_id
+                    zones = data.get("result", [])
+                    if zones:
+                        zone_id = zones[0]["id"]
+                        logger.info("[TLS-CLOUDFLARE] Found Cloudflare zone: %s (%s)", zone_name, zone_id)
+                        return zone_id
 
             return None
 
@@ -151,20 +135,23 @@ class CloudflareDNS(DNSProvider):
         if not zone_id:
             raise DNSProviderError(f"Could not find zone for domain: {domain}")
 
+        # Validate zone_id format before using in URL path
+        safe_zone_id = _validate_cf_id(zone_id, "zone_id")
+
         # Cloudflare minimum TTL is 60 seconds (or 1 for automatic)
         ttl = max(60, ttl)
 
         try:
-            data = await self._request(
-                "POST",
-                f"/zones/{zone_id}/dns_records",
-                json={
+            # Build path from validated components only
+            path = f"/zones/{safe_zone_id}/dns_records"
+            async with self._client() as client:
+                resp = await client.post(path, json={
                     "type": "TXT",
                     "name": name,
                     "content": value,
                     "ttl": ttl,
-                },
-            )
+                })
+                data = self._parse_response(resp.json())
 
             record_id = data["result"]["id"]
             logger.info("[TLS-CLOUDFLARE] Created Cloudflare TXT record: %s (%s)", name, record_id)
@@ -192,11 +179,15 @@ class CloudflareDNS(DNSProvider):
                 "Save zone_id after create_txt_record."
             )
 
+        # Validate IDs before using in URL path
+        safe_zone_id = _validate_cf_id(self.zone_id, "zone_id")
+        safe_record_id = _validate_cf_id(record_id, "record_id")
+
         try:
-            await self._request(
-                "DELETE",
-                f"/zones/{self.zone_id}/dns_records/{record_id}",
-            )
+            path = f"/zones/{safe_zone_id}/dns_records/{safe_record_id}"
+            async with self._client() as client:
+                resp = await client.delete(path)
+                self._parse_response(resp.json())
             logger.info("[TLS-CLOUDFLARE] Deleted Cloudflare TXT record: %s", record_id)
             return True
 
