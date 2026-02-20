@@ -349,7 +349,7 @@ async def get_stream_stats_by_ids(request: BulkStreamIdsRequest):
     try:
         return StreamProber.get_stats_by_stream_ids(request.stream_ids)
     except Exception as e:
-        logger.exception("[STREAM-STATS] Failed to get stream stats by IDs: %s", e)
+        logger.error("[STREAM-STATS] Failed to get stream stats by IDs: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

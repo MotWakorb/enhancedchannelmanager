@@ -106,9 +106,9 @@ class CertificateStorage:
                 logger.error("[TLS-STORAGE] Certificate validation failed: %s", validation.validation_error)
                 return False
 
-            # Write certificate (readable by owner + group only)
+            # Write certificate (owner-only access)
             self.cert_path.write_bytes(cert_pem)
-            os.chmod(self.cert_path, 0o640)
+            os.chmod(self.cert_path, 0o600)
 
             # Write private key (restricted permissions)
             self.key_path.write_bytes(key_pem)
@@ -119,12 +119,12 @@ class CertificateStorage:
                 if isinstance(chain_pem, str):
                     chain_pem = chain_pem.encode("utf-8")
                 self.chain_path.write_bytes(chain_pem)
-                os.chmod(self.chain_path, 0o640)
+                os.chmod(self.chain_path, 0o600)
 
                 # Create fullchain (cert + chain)
                 fullchain = cert_pem + b"\n" + chain_pem
                 self.fullchain_path.write_bytes(fullchain)
-                os.chmod(self.fullchain_path, 0o640)
+                os.chmod(self.fullchain_path, 0o600)
 
             logger.info("[TLS-STORAGE] Certificate saved to %s", self.cert_path)
             return True

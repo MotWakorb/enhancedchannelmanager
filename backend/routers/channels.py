@@ -540,7 +540,8 @@ async def import_channels_csv(file: UploadFile = File(...)):
         content = await file.read()
         csv_content = content.decode("utf-8")
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to read file: {e}")
+        logger.warning("[CHANNELS-CSV] Failed to read uploaded file: %s", e)
+        raise HTTPException(status_code=400, detail="Failed to read file")
 
     # Parse CSV
     try:
@@ -566,8 +567,8 @@ async def import_channels_csv(file: UploadFile = File(...)):
         logger.debug("[CHANNELS-CSV] Fetched channel groups in %.1fms", elapsed_ms)
         group_map = {g["name"].lower(): g for g in existing_groups}
     except Exception as e:
-        logger.exception("[CHANNELS-CSV] Failed to fetch channel groups: %s", e)
-        raise HTTPException(status_code=500, detail=f"Failed to fetch channel groups: {e}")
+        logger.error("[CHANNELS-CSV] Failed to fetch channel groups: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to fetch channel groups")
 
     # Build URL -> stream ID lookup for stream linking
     stream_url_to_id = {}
