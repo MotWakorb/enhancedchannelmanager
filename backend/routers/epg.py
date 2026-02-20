@@ -312,8 +312,8 @@ async def trigger_epg_import():
     start = time.time()
     try:
         result = await client.trigger_epg_import()
-    except Exception:
-        logger.exception("[EPG] EPG import failed")
+    except Exception as e:
+        logger.error("[EPG] EPG import failed: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
     elapsed_ms = (time.time() - start) * 1000
     logger.info("[EPG] Triggered EPG import in %.1fms", elapsed_ms)

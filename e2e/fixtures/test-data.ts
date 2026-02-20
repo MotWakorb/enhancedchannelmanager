@@ -3,6 +3,12 @@
  *
  * Provides mock data factories and constants for consistent testing.
  */
+import { randomBytes } from 'crypto'
+
+let _testIdCounter = 0
+function nextTestId(): number {
+  return ++_testIdCounter
+}
 
 // =============================================================================
 // Test Credentials
@@ -77,7 +83,7 @@ export interface MockChannel {
 }
 
 export function createMockChannel(overrides: Partial<MockChannel> = {}): MockChannel {
-  const id = overrides.id ?? Math.floor(Math.random() * 10000)
+  const id = overrides.id ?? nextTestId()
   return {
     id,
     uuid: `channel-uuid-${id}`,
@@ -108,7 +114,7 @@ export interface MockChannelGroup {
 }
 
 export function createMockChannelGroup(overrides: Partial<MockChannelGroup> = {}): MockChannelGroup {
-  const id = overrides.id ?? Math.floor(Math.random() * 10000)
+  const id = overrides.id ?? nextTestId()
   return {
     id,
     name: overrides.name ?? `Group ${id}`,
@@ -140,7 +146,7 @@ export interface MockScheduledTask {
 }
 
 export function createMockTask(overrides: Partial<MockScheduledTask> = {}): MockScheduledTask {
-  const id = overrides.id ?? Math.floor(Math.random() * 10000)
+  const id = overrides.id ?? nextTestId()
   return {
     id,
     task_id: overrides.task_id ?? `task_${id}`,
@@ -197,7 +203,7 @@ export interface MockAlertMethod {
 }
 
 export function createMockAlertMethod(overrides: Partial<MockAlertMethod> = {}): MockAlertMethod {
-  const id = overrides.id ?? Math.floor(Math.random() * 10000)
+  const id = overrides.id ?? nextTestId()
   return {
     id,
     name: overrides.name ?? `Alert ${id}`,
@@ -240,7 +246,7 @@ export interface MockNotification {
 }
 
 export function createMockNotification(overrides: Partial<MockNotification> = {}): MockNotification {
-  const id = overrides.id ?? Math.floor(Math.random() * 10000)
+  const id = overrides.id ?? nextTestId()
   return {
     id,
     type: overrides.type ?? 'info',
@@ -360,5 +366,5 @@ export function sleep(ms: number): Promise<void> {
  * Generate a unique test ID for data isolation
  */
 export function generateTestId(): string {
-  return `test-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+  return `test-${Date.now()}-${randomBytes(4).toString('hex')}`
 }

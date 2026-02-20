@@ -36,6 +36,9 @@ class CloudflareDNS(DNSProvider):
             "Content-Type": "application/json",
         }
 
+    # Allowed Cloudflare API path prefixes
+    _ALLOWED_PREFIXES = ("/user/", "/zones")
+
     async def _request(
         self,
         method: str,
@@ -43,6 +46,12 @@ class CloudflareDNS(DNSProvider):
         json: dict = None,
     ) -> dict:
         """Make an API request to Cloudflare."""
+        # Validate endpoint to prevent SSRF
+        if not endpoint.startswith("/") or "://" in endpoint:
+            raise DNSProviderError(f"Invalid API endpoint: {endpoint}")
+        if not any(endpoint.startswith(p) for p in self._ALLOWED_PREFIXES):
+            raise DNSProviderError(f"Disallowed API endpoint: {endpoint}")
+
         url = f"{self.BASE_URL}{endpoint}"
 
         async with httpx.AsyncClient() as client:
