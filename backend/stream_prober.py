@@ -786,12 +786,9 @@ class StreamProber:
                 f"Probe timed out after {self.probe_timeout}s"
             )
         except Exception as e:
-            error_msg = str(e)
-            # Truncate very long error messages
-            if len(error_msg) > 500:
-                error_msg = error_msg[:500] + "..."
-            logger.error("[STREAM-PROBE] Stream %s probe failed: %s", stream_id, error_msg)
-            return self._save_probe_result(stream_id, name, None, "failed", error_msg)
+            logger.error("[STREAM-PROBE] Stream %s probe failed: %s", stream_id, e)
+            # Return generic error to client; details stay in server logs
+            return self._save_probe_result(stream_id, name, None, "failed", "Probe failed")
 
     async def _run_ffprobe(self, url: str, _retry_attempt: int = 0) -> dict:
         """Run ffprobe and parse JSON output."""

@@ -739,7 +739,8 @@ class DispatcharrClient:
                 await self.refresh_epg_source(source["id"])
                 refreshed.append(source["name"])
             except Exception as e:
-                errors.append(f"{source['name']}: {str(e)}")
+                logger.error("[DISPATCHARR] EPG refresh failed for %s: %s", source['name'], e)
+                errors.append(source['name'])
 
         if errors:
             return {

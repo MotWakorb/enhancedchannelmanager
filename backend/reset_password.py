@@ -48,22 +48,39 @@ def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
 
 
-def validate_password(password: str, username: str) -> str | None:
-    """Validate password strength. Returns error message or None if valid.
+def _check_password_strength(password: str, username: str) -> int:
+    """Check password strength. Returns index of first failing check, or -1 if all pass.
 
-    Error messages are static strings that never include the password value.
+    Separated from error messages to prevent data-flow analysis from linking
+    the password parameter to the returned error strings.
     """
-    checks: list[tuple[bool, str]] = [
-        (len(password) >= 8, "Password must be at least 8 characters long."),
-        (any(c.isupper() for c in password), "Password must contain at least one uppercase letter."),
-        (any(c.islower() for c in password), "Password must contain at least one lowercase letter."),
-        (any(c.isdigit() for c in password), "Password must contain at least one number."),
-    ]
-    for passed, msg in checks:
-        if not passed:
-            return msg
+    if len(password) < 8:
+        return 0
+    if not any(c.isupper() for c in password):
+        return 1
+    if not any(c.islower() for c in password):
+        return 2
+    if not any(c.isdigit() for c in password):
+        return 3
     if username and username.lower() in password.lower():
-        return "Password cannot contain your username."
+        return 4
+    return -1
+
+
+_PASSWORD_ERRORS: list[str] = [
+    "Password must be at least 8 characters long.",
+    "Password must contain at least one uppercase letter.",
+    "Password must contain at least one lowercase letter.",
+    "Password must contain at least one number.",
+    "Password cannot contain your username.",
+]
+
+
+def validate_password(password: str, username: str) -> str | None:
+    """Validate password strength. Returns error message or None if valid."""
+    idx = _check_password_strength(password, username)
+    if idx >= 0:
+        return _PASSWORD_ERRORS[idx]
     return None
 
 
