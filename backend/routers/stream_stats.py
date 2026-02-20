@@ -388,7 +388,7 @@ async def probe_bulk_streams(request: BulkProbeRequest):
             else:
                 logger.warning("[STREAM-STATS-PROBE] Stream %s not found in stream list", stream_id)
     except Exception as e:
-        logger.exception("[STREAM-STATS-PROBE] Bulk probe failed: %s", e)
+        logger.error("[STREAM-STATS-PROBE] Bulk probe failed: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
     logger.info("[STREAM-STATS-PROBE] Bulk probe completed: %s streams probed", len(results))
@@ -608,7 +608,7 @@ async def probe_single_stream(stream_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("[STREAM-STATS-PROBE] Failed to probe stream %s: %s", stream_id, e)
+        logger.error("[STREAM-STATS-PROBE] Failed to probe stream %s: %s", stream_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
     logger.info("[STREAM-STATS-PROBE] Single stream probe completed for %s", stream_id)
