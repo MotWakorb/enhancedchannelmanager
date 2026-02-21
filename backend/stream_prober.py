@@ -1741,6 +1741,12 @@ class StreamProber:
             streams_to_probe.sort(key=lambda s: stream_to_channel_number.get(s["id"], 999999))
             logger.info("[STREAM-PROBE] Sorted %s streams by channel number", len(streams_to_probe))
 
+            # Apply batch size limit after filtering out recently probed streams
+            # This ensures the batch only contains streams that will actually be probed
+            if self.probe_batch_size > 0 and len(streams_to_probe) > self.probe_batch_size:
+                logger.info("[STREAM-PROBE] Limiting batch to %s streams (from %s eligible)", self.probe_batch_size, len(streams_to_probe))
+                streams_to_probe = streams_to_probe[:self.probe_batch_size]
+
             self._probe_progress_total = len(streams_to_probe)
             self._probe_progress_status = "probing"
 
