@@ -6,6 +6,16 @@
  */
 import { logger } from '../utils/logger';
 
+/** Extract a human-readable message from a FastAPI error detail field. */
+function extractDetail(detail: unknown): string {
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    // FastAPI validation errors: [{loc: [...], msg: "...", type: "..."}]
+    return detail.map((e: Record<string, unknown>) => e.msg || JSON.stringify(e)).join('; ');
+  }
+  return JSON.stringify(detail);
+}
+
 /**
  * Build a query string from an object of parameters.
  * Filters out undefined/null values and converts to string.
@@ -97,12 +107,16 @@ export async function fetchJson<T>(url: string, options?: RequestInit, logPrefix
           let errorDetail = retryResponse.statusText;
           try {
             const errorBody = await retryResponse.json();
-            if (errorBody.detail) errorDetail = errorBody.detail;
+            if (errorBody.detail) errorDetail = extractDetail(errorBody.detail);
           } catch { /* not JSON */ }
           logger.error(`${logPrefix} error after retry: ${method} ${url} - ${retryResponse.status} ${errorDetail}`);
           throw new Error(errorDetail);
         }
 
+        if (retryResponse.status === 204) {
+          logger.info(`${logPrefix} success (after refresh): ${method} ${url} - ${retryResponse.status}`);
+          return undefined as T;
+        }
         const data = await retryResponse.json();
         logger.info(`${logPrefix} success (after refresh): ${method} ${url} - ${retryResponse.status}`);
         return data;
@@ -114,13 +128,19 @@ export async function fetchJson<T>(url: string, options?: RequestInit, logPrefix
       try {
         const errorBody = await response.json();
         if (errorBody.detail) {
-          errorDetail = errorBody.detail;
+          errorDetail = extractDetail(errorBody.detail);
         }
       } catch {
         // Response body isn't JSON or couldn't be parsed
       }
       logger.error(`${logPrefix} error: ${method} ${url} - ${response.status} ${errorDetail}`);
       throw new Error(errorDetail);
+    }
+
+    // 204 No Content has no body to parse
+    if (response.status === 204) {
+      logger.info(`${logPrefix} success: ${method} ${url} - ${response.status}`);
+      return undefined as T;
     }
 
     const data = await response.json();
@@ -159,7 +179,7 @@ export async function fetchText(url: string, options?: RequestInit, logPrefix = 
           let errorDetail = retryResponse.statusText;
           try {
             const errorBody = await retryResponse.json();
-            if (errorBody.detail) errorDetail = errorBody.detail;
+            if (errorBody.detail) errorDetail = extractDetail(errorBody.detail);
           } catch { /* not JSON */ }
           logger.error(`${logPrefix} error after retry: ${method} ${url} - ${retryResponse.status} ${errorDetail}`);
           throw new Error(errorDetail);
@@ -176,7 +196,7 @@ export async function fetchText(url: string, options?: RequestInit, logPrefix = 
       try {
         const errorBody = await response.json();
         if (errorBody.detail) {
-          errorDetail = errorBody.detail;
+          errorDetail = extractDetail(errorBody.detail);
         }
       } catch {
         // Response body isn't JSON

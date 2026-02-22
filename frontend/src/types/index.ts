@@ -577,7 +577,7 @@ export interface TestTagsResponse {
 export type NormalizationConditionType = 'always' | 'contains' | 'starts_with' | 'ends_with' | 'regex' | 'tag_group';
 
 // Action types for normalization rules
-export type NormalizationActionType = 'remove' | 'replace' | 'regex_replace' | 'strip_prefix' | 'strip_suffix' | 'normalize_prefix';
+export type NormalizationActionType = 'remove' | 'replace' | 'regex_replace' | 'strip_prefix' | 'strip_suffix' | 'normalize_prefix' | 'capitalize';
 
 // Tag match position for tag_group conditions
 export type TagMatchPosition = 'prefix' | 'suffix' | 'contains';
@@ -1343,4 +1343,219 @@ export interface DNSProviderTestResponse {
   success: boolean;
   message: string;
   zone_id?: string;
+}
+
+// =============================================================================
+// Enhanced Dummy EPG Types (v0.14.0)
+// =============================================================================
+
+// A single substitution pair in a profile
+export interface SubstitutionPair {
+  find: string;
+  replace: string;
+  is_regex: boolean;
+  enabled: boolean;
+}
+
+// Substitution step result (from preview)
+export interface SubstitutionStep {
+  find: string;
+  replace: string;
+  is_regex: boolean;
+  before: string;
+  after: string;
+  changed?: boolean;
+}
+
+// Pattern variant for multi-variant support
+export interface PatternVariant {
+  name: string;
+  title_pattern: string | null;
+  time_pattern: string | null;
+  date_pattern: string | null;
+  title_template: string | null;
+  description_template: string | null;
+  channel_logo_url_template: string | null;
+  program_poster_url_template: string | null;
+  pattern_builder_examples: string | null;
+  upcoming_title_template: string | null;
+  upcoming_description_template: string | null;
+  ended_title_template: string | null;
+  ended_description_template: string | null;
+  fallback_title_template: string | null;
+  fallback_description_template: string | null;
+}
+
+// Dummy EPG profile configuration
+export interface DummyEPGProfile {
+  id: number;
+  name: string;
+  enabled: boolean;
+  name_source: 'channel' | 'stream';
+  stream_index: number;
+  title_pattern: string | null;
+  time_pattern: string | null;
+  date_pattern: string | null;
+  substitution_pairs: SubstitutionPair[];
+  title_template: string | null;
+  description_template: string | null;
+  upcoming_title_template: string | null;
+  upcoming_description_template: string | null;
+  ended_title_template: string | null;
+  ended_description_template: string | null;
+  fallback_title_template: string | null;
+  fallback_description_template: string | null;
+  event_timezone: string;
+  output_timezone: string | null;
+  program_duration: number;
+  categories: string | null;
+  channel_logo_url_template: string | null;
+  program_poster_url_template: string | null;
+  tvg_id_template: string;
+  include_date_tag: boolean;
+  include_live_tag: boolean;
+  include_new_tag: boolean;
+  pattern_builder_examples: string | null;
+  pattern_variants: PatternVariant[];
+  channel_group_ids: number[];
+  last_generated_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  // Included in list responses
+  group_count?: number;
+}
+
+// Request to create a profile
+export interface DummyEPGProfileCreateRequest {
+  name: string;
+  enabled?: boolean;
+  name_source?: 'channel' | 'stream';
+  stream_index?: number;
+  title_pattern?: string;
+  time_pattern?: string;
+  date_pattern?: string;
+  substitution_pairs?: SubstitutionPair[];
+  title_template?: string;
+  description_template?: string;
+  upcoming_title_template?: string;
+  upcoming_description_template?: string;
+  ended_title_template?: string;
+  ended_description_template?: string;
+  fallback_title_template?: string;
+  fallback_description_template?: string;
+  event_timezone?: string;
+  output_timezone?: string;
+  program_duration?: number;
+  categories?: string;
+  channel_logo_url_template?: string;
+  program_poster_url_template?: string;
+  tvg_id_template?: string;
+  include_date_tag?: boolean;
+  include_live_tag?: boolean;
+  include_new_tag?: boolean;
+  pattern_builder_examples?: string;
+  pattern_variants?: PatternVariant[];
+  channel_group_ids?: number[];
+}
+
+// Request to update a profile (partial)
+export interface DummyEPGProfileUpdateRequest {
+  name?: string;
+  enabled?: boolean;
+  name_source?: 'channel' | 'stream';
+  stream_index?: number;
+  title_pattern?: string | null;
+  time_pattern?: string | null;
+  date_pattern?: string | null;
+  substitution_pairs?: SubstitutionPair[];
+  title_template?: string | null;
+  description_template?: string | null;
+  upcoming_title_template?: string | null;
+  upcoming_description_template?: string | null;
+  ended_title_template?: string | null;
+  ended_description_template?: string | null;
+  fallback_title_template?: string | null;
+  fallback_description_template?: string | null;
+  event_timezone?: string;
+  output_timezone?: string | null;
+  program_duration?: number;
+  categories?: string | null;
+  channel_logo_url_template?: string | null;
+  program_poster_url_template?: string | null;
+  tvg_id_template?: string;
+  include_date_tag?: boolean;
+  include_live_tag?: boolean;
+  include_new_tag?: boolean;
+  pattern_builder_examples?: string | null;
+  pattern_variants?: PatternVariant[];
+  channel_group_ids?: number[];
+}
+
+// Preview request (no DB)
+export interface DummyEPGPreviewRequest {
+  sample_name: string;
+  substitution_pairs?: SubstitutionPair[];
+  title_pattern?: string;
+  time_pattern?: string;
+  date_pattern?: string;
+  title_template?: string;
+  description_template?: string;
+  upcoming_title_template?: string;
+  upcoming_description_template?: string;
+  ended_title_template?: string;
+  ended_description_template?: string;
+  fallback_title_template?: string;
+  fallback_description_template?: string;
+  event_timezone?: string;
+  output_timezone?: string;
+  program_duration?: number;
+  channel_logo_url_template?: string;
+  program_poster_url_template?: string;
+  pattern_variants?: PatternVariant[];
+}
+
+// Batch preview request
+export interface DummyEPGBatchPreviewRequest {
+  sample_names: string[];
+  substitution_pairs?: SubstitutionPair[];
+  title_pattern?: string;
+  time_pattern?: string;
+  date_pattern?: string;
+  title_template?: string;
+  description_template?: string;
+  upcoming_title_template?: string;
+  upcoming_description_template?: string;
+  ended_title_template?: string;
+  ended_description_template?: string;
+  fallback_title_template?: string;
+  fallback_description_template?: string;
+  event_timezone?: string;
+  output_timezone?: string;
+  program_duration?: number;
+  channel_logo_url_template?: string;
+  program_poster_url_template?: string;
+  pattern_variants?: PatternVariant[];
+}
+
+// Preview result
+export interface DummyEPGPreviewResult {
+  original_name: string;
+  substituted_name: string;
+  substitution_steps: SubstitutionStep[];
+  matched: boolean;
+  matched_variant: string | null;
+  groups: Record<string, string> | null;
+  time_variables: Record<string, string> | null;
+  rendered: {
+    title: string;
+    description: string;
+    upcoming_title: string;
+    upcoming_description: string;
+    ended_title: string;
+    ended_description: string;
+    fallback_title: string;
+    fallback_description: string;
+    channel_logo_url: string;
+    program_poster_url: string;
+  };
 }

@@ -66,6 +66,7 @@ const ACTION_TYPES: { value: NormalizationActionType; label: string; description
   { value: 'replace', label: 'Replace', description: 'Replace matched text with value' },
   { value: 'regex_replace', label: 'Regex Replace', description: 'Replace using regex substitution' },
   { value: 'normalize_prefix', label: 'Normalize Prefix', description: 'Standardize prefix format' },
+  { value: 'capitalize', label: 'Capitalize', description: 'Change text capitalization' },
 ];
 
 // Sample stream names for testing
@@ -1259,13 +1260,25 @@ export function NormalizationEngineSection() {
 
                 <div className="modal-form-group">
                   <label>Replacement Value</label>
-                  <input
-                    type="text"
-                    value={ruleEditor.actionValue}
-                    onChange={(e) => setRuleEditor((prev) => ({ ...prev, actionValue: e.target.value }))}
-                    placeholder="Leave empty to remove"
-                    disabled={!['replace', 'regex_replace', 'normalize_prefix'].includes(ruleEditor.actionType)}
-                  />
+                  {ruleEditor.actionType === 'capitalize' ? (
+                    <select
+                      value={ruleEditor.actionValue || 'title'}
+                      onChange={(e) => setRuleEditor((prev) => ({ ...prev, actionValue: e.target.value }))}
+                    >
+                      <option value="title">Title Case</option>
+                      <option value="upper">UPPERCASE</option>
+                      <option value="lower">lowercase</option>
+                      <option value="sentence">Sentence case</option>
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value={ruleEditor.actionValue}
+                      onChange={(e) => setRuleEditor((prev) => ({ ...prev, actionValue: e.target.value }))}
+                      placeholder="Leave empty to remove"
+                      disabled={!['replace', 'regex_replace', 'normalize_prefix'].includes(ruleEditor.actionType)}
+                    />
+                  )}
                 </div>
               </div>
 
@@ -1324,13 +1337,25 @@ export function NormalizationEngineSection() {
 
                       <div className="modal-form-group">
                         <label>Else Replacement Value</label>
-                        <input
-                          type="text"
-                          value={ruleEditor.elseActionValue}
-                          onChange={(e) => setRuleEditor((prev) => ({ ...prev, elseActionValue: e.target.value }))}
-                          placeholder="Leave empty to remove"
-                          disabled={!['replace', 'regex_replace', 'normalize_prefix'].includes(ruleEditor.elseActionType)}
-                        />
+                        {ruleEditor.elseActionType === 'capitalize' ? (
+                          <select
+                            value={ruleEditor.elseActionValue || 'title'}
+                            onChange={(e) => setRuleEditor((prev) => ({ ...prev, elseActionValue: e.target.value }))}
+                          >
+                            <option value="title">Title Case</option>
+                            <option value="upper">UPPERCASE</option>
+                            <option value="lower">lowercase</option>
+                            <option value="sentence">Sentence case</option>
+                          </select>
+                        ) : (
+                          <input
+                            type="text"
+                            value={ruleEditor.elseActionValue}
+                            onChange={(e) => setRuleEditor((prev) => ({ ...prev, elseActionValue: e.target.value }))}
+                            placeholder="Leave empty to remove"
+                            disabled={!['replace', 'regex_replace', 'normalize_prefix'].includes(ruleEditor.elseActionType)}
+                          />
+                        )}
                       </div>
                     </div>
                   </div>

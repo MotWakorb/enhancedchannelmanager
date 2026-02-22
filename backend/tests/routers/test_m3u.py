@@ -91,6 +91,7 @@ class TestDeleteM3UAccount:
         """Deletes an M3U account."""
         mock_client = AsyncMock()
         mock_client.get_m3u_account.return_value = {"id": 1, "name": "IPTV"}
+        mock_client.get_m3u_accounts.return_value = [{"id": 1, "name": "IPTV", "channel_groups": []}]
         mock_client.delete_m3u_account.return_value = None
 
         with patch("routers.m3u.get_client", return_value=mock_client), \
@@ -98,6 +99,64 @@ class TestDeleteM3UAccount:
             response = await async_client.delete("/api/m3u/accounts/1")
 
         assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_skips_shared_groups(self, async_client):
+        """Does not delete channel groups referenced by other M3U accounts."""
+        mock_client = AsyncMock()
+        mock_client.get_m3u_account.return_value = {
+            "id": 1, "name": "IPTV-1",
+            "channel_groups": [
+                {"channel_group": 10},  # shared with account 2
+                {"channel_group": 20},  # orphaned
+            ],
+        }
+        mock_client.get_m3u_accounts.return_value = [
+            {"id": 1, "name": "IPTV-1", "channel_groups": [{"channel_group": 10}, {"channel_group": 20}]},
+            {"id": 2, "name": "IPTV-2", "channel_groups": [{"channel_group": 10}]},
+        ]
+        mock_client.delete_m3u_account.return_value = None
+        mock_client.delete_channel_group.return_value = None
+
+        with patch("routers.m3u.get_client", return_value=mock_client), \
+             patch("routers.m3u.journal"):
+            response = await async_client.delete("/api/m3u/accounts/1")
+
+        assert response.status_code == 200
+        data = response.json()
+        # Group 20 is orphaned → deleted; Group 10 is shared → skipped
+        assert 20 in data["deleted_groups"]
+        assert 10 in data["skipped_groups"]
+        assert 10 not in data["deleted_groups"]
+        # Only group 20 should have been deleted
+        mock_client.delete_channel_group.assert_called_once_with(20)
+
+    @pytest.mark.asyncio
+    async def test_cleans_up_linked_accounts(self, async_client):
+        """Removes deleted account from linked_m3u_accounts in settings."""
+        from config import DispatcharrSettings
+        mock_client = AsyncMock()
+        mock_client.get_m3u_account.return_value = {"id": 2, "name": "IPTV-2"}
+        mock_client.get_m3u_accounts.return_value = [{"id": 2, "name": "IPTV-2", "channel_groups": []}]
+        mock_client.delete_m3u_account.return_value = None
+
+        mock_settings = DispatcharrSettings(
+            url="http://test", username="test",
+            linked_m3u_accounts=[[1, 2, 3], [4, 5]],
+        )
+        saved = {}
+        def fake_save(s):
+            saved["settings"] = s
+
+        with patch("routers.m3u.get_client", return_value=mock_client), \
+             patch("routers.m3u.journal"), \
+             patch("routers.m3u.get_settings", return_value=mock_settings), \
+             patch("routers.m3u.save_settings", side_effect=fake_save):
+            response = await async_client.delete("/api/m3u/accounts/2")
+
+        assert response.status_code == 200
+        # Account 2 removed from link group [1, 2, 3] → [1, 3]; [4, 5] untouched
+        assert saved["settings"].linked_m3u_accounts == [[1, 3], [4, 5]]
 
 
 class TestRefreshAll:

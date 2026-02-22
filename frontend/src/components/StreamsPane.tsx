@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, StreamGroupInfo, M3UAccount, ChannelGroup, ChannelProfile, M3UGroupSetting } from '../types';
 import { useSelection, useExpandCollapse } from '../hooks';
-import { detectRegionalVariants, filterStreamsByTimezone, normalizeStreamNamesWithBackend, type TimezonePreference, type NumberSeparator, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
+import { detectRegionalVariants, filterStreamsByTimezone, normalizeStreamNamesWithBackend, stripQualitySuffixes, type TimezonePreference, type NumberSeparator, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
@@ -1085,7 +1085,23 @@ export function StreamsPane({
     const filteredStreams = filterStreamsByTimezone(streamsToCreate, bulkCreateTimezone);
     const streamCount = filteredStreams.length;
     const excludedCount = streamsToCreate.length - filteredStreams.length;
-    return { streamCount, excludedCount, filteredStreams };
+
+    // Compute deduplicated channel count by grouping streams with the same name
+    // (after quality suffix stripping). This mirrors the dedup logic in handleBulkCreateFromGroup.
+    const channelMap = new Map<string, { name: string; streams: Stream[] }>();
+    for (const stream of filteredStreams) {
+      const groupingKey = stripQualitySuffixes(stream.name);
+      const existing = channelMap.get(groupingKey);
+      if (existing) {
+        existing.streams.push(stream);
+      } else {
+        channelMap.set(groupingKey, { name: stream.name, streams: [stream] });
+      }
+    }
+    const channelCount = channelMap.size;
+    const mergedCount = streamCount - channelCount;
+
+    return { streamCount, channelCount, mergedCount, excludedCount, filteredStreams, channelMap };
   }, [streamsToCreate, bulkCreateTimezone]);
 
   // Update normalize default when prop changes
@@ -1350,7 +1366,7 @@ export function StreamsPane({
     // Check for conflicts before proceeding (use floor for conflict check since it checks integer ranges)
     if (onCheckConflicts && !useSeparateMode) {
       const startingNum = Math.floor(parseFloat(bulkCreateStartingNumber));
-      const conflictCount = onCheckConflicts(startingNum, bulkCreateStats.streamCount);
+      const conflictCount = onCheckConflicts(startingNum, bulkCreateStats.channelCount);
       if (conflictCount > 0) {
         // Calculate end-of-sequence number (highest existing + 1)
         const highestNumber = onGetHighestChannelNumber ? onGetHighestChannelNumber() : 0;
@@ -1371,7 +1387,7 @@ export function StreamsPane({
     bulkCreateGroupStartNumbers,
     bulkCreateGroups,
     bulkCreateStartingNumber,
-    bulkCreateStats.streamCount,
+    bulkCreateStats.channelCount,
     onBulkCreateFromGroup,
     onCheckConflicts,
     onGetHighestChannelNumber,
@@ -2112,7 +2128,15 @@ export function StreamsPane({
               <div className="bulk-create-info">
                 <span className="material-icons">info</span>
                 <span>
-                  <strong>{bulkCreateStats.streamCount}</strong> stream{bulkCreateStats.streamCount !== 1 ? 's' : ''} selected
+                  {bulkCreateStats.mergedCount > 0 ? (
+                    <>
+                      <strong>{bulkCreateStats.streamCount}</strong> stream{bulkCreateStats.streamCount !== 1 ? 's' : ''} → <strong>{bulkCreateStats.channelCount}</strong> channel{bulkCreateStats.channelCount !== 1 ? 's' : ''} ({bulkCreateStats.mergedCount} duplicate{bulkCreateStats.mergedCount !== 1 ? 's' : ''} merged)
+                    </>
+                  ) : (
+                    <>
+                      <strong>{bulkCreateStats.streamCount}</strong> stream{bulkCreateStats.streamCount !== 1 ? 's' : ''} selected
+                    </>
+                  )}
                   {bulkCreateStats.excludedCount > 0 && (
                     <span className="excluded-info"> ({bulkCreateStats.excludedCount} excluded by timezone filter)</span>
                   )}
@@ -2139,7 +2163,7 @@ export function StreamsPane({
                         const startNum = parseFloat(bulkCreateStartingNumber);
                         const hasDecimal = bulkCreateStartingNumber.includes('.');
                         const increment = hasDecimal ? 0.1 : 1;
-                        const endNum = startNum + (bulkCreateStats.streamCount - 1) * increment;
+                        const endNum = startNum + (bulkCreateStats.channelCount - 1) * increment;
                         // Format end number to match decimal places of start
                         const endNumStr = hasDecimal ? endNum.toFixed(1) : Math.floor(endNum).toString();
                         return `Channels ${bulkCreateStartingNumber} - ${endNumStr}`;
@@ -2583,9 +2607,9 @@ export function StreamsPane({
                 </div>
               ) : (
                 <div className="bulk-create-preview">
-                  <label>Streams (first 10)</label>
+                  <label>Channels (first 10)</label>
                   <div className="preview-list">
-                    {bulkCreateStats.filteredStreams.slice(0, 10).map((stream, idx) => {
+                    {Array.from(bulkCreateStats.channelMap.entries()).slice(0, 10).map(([key, { name, streams }], idx) => {
                       // Support decimal channel numbers (e.g., 38.1, 38.2, 38.3)
                       let num: string | number = '?';
                       if (bulkCreateStartingNumber) {
@@ -2598,15 +2622,18 @@ export function StreamsPane({
                         }
                       }
                       return (
-                        <div key={stream.id} className="preview-item">
+                        <div key={key} className="preview-item">
                           <span className="preview-number">{num}</span>
-                          <span className="preview-name">{stream.name}</span>
+                          <span className="preview-name">{name}</span>
+                          {streams.length > 1 && (
+                            <span className="preview-merge-badge">{streams.length} streams</span>
+                          )}
                         </div>
                       );
                     })}
-                    {bulkCreateStats.filteredStreams.length > 10 && (
+                    {bulkCreateStats.channelCount > 10 && (
                       <div className="preview-more">
-                        ... and {bulkCreateStats.filteredStreams.length - 10} more
+                        ... and {bulkCreateStats.channelCount - 10} more
                       </div>
                     )}
                   </div>
@@ -2639,7 +2666,7 @@ export function StreamsPane({
                 ) : (
                   <>
                     <span className="material-icons">add</span>
-                    {isManualEntry ? 'Create Channel' : `Create ${bulkCreateStats.streamCount} Channels`}
+                    {isManualEntry ? 'Create Channel' : `Create ${bulkCreateStats.channelCount} Channels`}
                   </>
                 )}
               </button>
@@ -2669,7 +2696,7 @@ export function StreamsPane({
                 <span className="material-icons">vertical_align_bottom</span>
                 <div className="conflict-option-text">
                   <strong>Push channels down</strong>
-                  <span>Insert at {bulkCreateStartingNumber} and shift existing channels by {bulkCreateStats.streamCount}</span>
+                  <span>Insert at {bulkCreateStartingNumber} and shift existing channels by {bulkCreateStats.channelCount}</span>
                 </div>
               </button>
               <button

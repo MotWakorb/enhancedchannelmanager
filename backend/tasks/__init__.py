@@ -12,6 +12,7 @@ from tasks.cleanup import CleanupTask
 from tasks.stream_probe import StreamProbeTask
 from tasks.popularity_calculation import PopularityCalculationTask
 from tasks.auto_creation import AutoCreationTask
+from tasks.dummy_epg_refresh import DummyEPGRefreshTask
 
 __all__ = [
     "EPGRefreshTask",
@@ -21,4 +22,5 @@ __all__ = [
     "StreamProbeTask",
     "PopularityCalculationTask",
     "AutoCreationTask",
+    "DummyEPGRefreshTask",
 ]

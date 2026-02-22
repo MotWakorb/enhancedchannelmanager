@@ -1828,3 +1828,201 @@ class FFmpegProfile(Base):
 
     def __repr__(self):
         return f"<FFmpegProfile(id={self.id}, name={self.name})>"
+
+
+# =============================================================================
+# Enhanced Dummy EPG Models (v0.14.0)
+# =============================================================================
+
+class DummyEPGProfile(Base):
+    """
+    Configuration profile for ECM-native EPG generation.
+
+    Each profile defines regex patterns, substitution pairs, and templates
+    for generating XMLTV data from channel/stream names. Channel groups are
+    assigned via channel_group_ids; at XMLTV generation time, group IDs
+    are resolved to channels from Dispatcharr.
+    """
+    __tablename__ = "dummy_epg_profiles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=False)
+    enabled = Column(Boolean, default=True, nullable=False)
+
+    # Name source configuration
+    name_source = Column(String(20), default="channel", nullable=False)  # "channel" or "stream"
+    stream_index = Column(Integer, default=1, nullable=False)
+
+    # Pattern configuration (regex with named groups)
+    title_pattern = Column(String(500), nullable=True)
+    time_pattern = Column(String(500), nullable=True)
+    date_pattern = Column(String(500), nullable=True)
+
+    # Substitution pairs: JSON array of {find, replace, is_regex, enabled}
+    substitution_pairs = Column(Text, nullable=True)
+
+    # Output templates
+    title_template = Column(String(500), nullable=True)
+    description_template = Column(Text, nullable=True)
+
+    # Upcoming/Ended templates
+    upcoming_title_template = Column(String(500), nullable=True)
+    upcoming_description_template = Column(Text, nullable=True)
+    ended_title_template = Column(String(500), nullable=True)
+    ended_description_template = Column(Text, nullable=True)
+
+    # Fallback templates
+    fallback_title_template = Column(String(500), nullable=True)
+    fallback_description_template = Column(Text, nullable=True)
+
+    # EPG settings
+    event_timezone = Column(String(50), default="US/Eastern", nullable=False)
+    output_timezone = Column(String(50), nullable=True)
+    program_duration = Column(Integer, default=180, nullable=False)  # minutes
+    categories = Column(String(500), nullable=True)  # comma-separated
+    channel_logo_url_template = Column(String(500), nullable=True)
+    program_poster_url_template = Column(String(500), nullable=True)
+    tvg_id_template = Column(String(255), default="ecm-{channel_number}", nullable=False)
+
+    # EPG tags
+    include_date_tag = Column(Boolean, default=False, nullable=False)
+    include_live_tag = Column(Boolean, default=False, nullable=False)
+    include_new_tag = Column(Boolean, default=False, nullable=False)
+
+    # Pattern Builder state (JSON — examples + annotations for visual builder)
+    pattern_builder_examples = Column(Text, nullable=True)
+
+    # Multi-variant pattern support (JSON array of variant objects)
+    pattern_variants = Column(Text, nullable=True)
+
+    # Channel group assignment (JSON array of group IDs)
+    channel_group_ids = Column(Text, nullable=True)
+
+    # Timestamps
+    last_generated_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_dummy_epg_profile_enabled", enabled),
+    )
+
+    def get_substitution_pairs(self) -> list:
+        """Parse substitution_pairs JSON into list."""
+        if not self.substitution_pairs:
+            return []
+        try:
+            return json.loads(self.substitution_pairs)
+        except (ValueError, TypeError):
+            return []
+
+    def set_substitution_pairs(self, pairs: list) -> None:
+        """Set substitution_pairs from list."""
+        self.substitution_pairs = json.dumps(pairs) if pairs else None
+
+    def get_pattern_variants(self) -> list:
+        """Parse pattern_variants JSON into list."""
+        if not self.pattern_variants:
+            return []
+        try:
+            return json.loads(self.pattern_variants)
+        except (ValueError, TypeError):
+            return []
+
+    def set_pattern_variants(self, variants: list) -> None:
+        """Set pattern_variants from list."""
+        self.pattern_variants = json.dumps(variants) if variants else None
+
+    def get_channel_group_ids(self) -> list:
+        """Parse channel_group_ids JSON into list."""
+        if not self.channel_group_ids:
+            return []
+        try:
+            return json.loads(self.channel_group_ids)
+        except (ValueError, TypeError):
+            return []
+
+    def set_channel_group_ids(self, ids: list) -> None:
+        """Set channel_group_ids from list."""
+        self.channel_group_ids = json.dumps(ids) if ids else None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        result = {
+            "id": self.id,
+            "name": self.name,
+            "enabled": self.enabled,
+            "name_source": self.name_source,
+            "stream_index": self.stream_index,
+            "title_pattern": self.title_pattern,
+            "time_pattern": self.time_pattern,
+            "date_pattern": self.date_pattern,
+            "substitution_pairs": self.get_substitution_pairs(),
+            "title_template": self.title_template,
+            "description_template": self.description_template,
+            "upcoming_title_template": self.upcoming_title_template,
+            "upcoming_description_template": self.upcoming_description_template,
+            "ended_title_template": self.ended_title_template,
+            "ended_description_template": self.ended_description_template,
+            "fallback_title_template": self.fallback_title_template,
+            "fallback_description_template": self.fallback_description_template,
+            "event_timezone": self.event_timezone,
+            "output_timezone": self.output_timezone,
+            "program_duration": self.program_duration,
+            "categories": self.categories,
+            "channel_logo_url_template": self.channel_logo_url_template,
+            "program_poster_url_template": self.program_poster_url_template,
+            "tvg_id_template": self.tvg_id_template,
+            "include_date_tag": self.include_date_tag,
+            "include_live_tag": self.include_live_tag,
+            "include_new_tag": self.include_new_tag,
+            "pattern_builder_examples": self.pattern_builder_examples,
+            "pattern_variants": self.get_pattern_variants(),
+            "channel_group_ids": self.get_channel_group_ids(),
+            "last_generated_at": self.last_generated_at.isoformat() + "Z" if self.last_generated_at else None,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+        return result
+
+    def __repr__(self):
+        return f"<DummyEPGProfile(id={self.id}, name={self.name}, enabled={self.enabled})>"
+
+
+class DummyEPGChannelAssignment(Base):
+    """
+    Links a Dispatcharr channel to a DummyEPGProfile.
+
+    Each channel can be assigned to one profile. The tvg_id_override
+    allows per-channel customization of the tvg-id used in XMLTV output.
+    """
+    __tablename__ = "dummy_epg_channel_assignments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    profile_id = Column(Integer, ForeignKey("dummy_epg_profiles.id", ondelete="CASCADE"), nullable=False)
+    channel_id = Column(Integer, nullable=False)  # Dispatcharr channel ID
+    channel_name = Column(String(255), nullable=False)  # Cached for display
+    tvg_id_override = Column(String(255), nullable=True)  # Optional per-channel tvg-id
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("profile_id", "channel_id", name="uq_dummy_epg_profile_channel"),
+        Index("idx_dummy_epg_channel_id", channel_id),
+        Index("idx_dummy_epg_profile_id", profile_id),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "profile_id": self.profile_id,
+            "channel_id": self.channel_id,
+            "channel_name": self.channel_name,
+            "tvg_id_override": self.tvg_id_override,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f"<DummyEPGChannelAssignment(id={self.id}, profile_id={self.profile_id}, channel_id={self.channel_id})>"

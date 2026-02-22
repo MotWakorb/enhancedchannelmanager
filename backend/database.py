@@ -52,7 +52,7 @@ def init_db() -> None:
         _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
         # Import models to register them with Base
-        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, AutoCreationRule, AutoCreationExecution, AutoCreationConflict, FFmpegProfile  # noqa: F401
+        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, AutoCreationRule, AutoCreationExecution, AutoCreationConflict, FFmpegProfile, DummyEPGProfile, DummyEPGChannelAssignment  # noqa: F401
 
         # Create all tables
         Base.metadata.create_all(bind=_engine)
@@ -194,6 +194,15 @@ def _run_migrations(engine) -> None:
 
             # Add streams_excluded column to auto_creation_executions (v0.12.5 - Global exclusion filters)
             _add_auto_creation_executions_streams_excluded_column(conn)
+
+            # Add pattern_builder_examples column to dummy_epg_profiles (v0.14.0 - Visual Pattern Builder)
+            _add_dummy_epg_profiles_pattern_builder_column(conn)
+
+            # Add pattern_variants column to dummy_epg_profiles (v0.14.0 - Multi-variant patterns)
+            _add_dummy_epg_profiles_pattern_variants_column(conn)
+
+            # Add channel_group_ids column to dummy_epg_profiles (v0.14.0 - Group-based assignment)
+            _add_dummy_epg_profiles_channel_group_ids_column(conn)
 
             logger.debug("[DATABASE] All migrations complete - schema is up to date")
     except Exception as e:
@@ -1464,6 +1473,69 @@ def _add_auto_creation_executions_streams_excluded_column(conn) -> None:
         ))
         conn.commit()
         logger.info("[DATABASE] Migration complete: added streams_excluded column")
+
+
+def _add_dummy_epg_profiles_pattern_builder_column(conn) -> None:
+    """Add pattern_builder_examples column to dummy_epg_profiles table (v0.14.0 - Visual Pattern Builder)."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='dummy_epg_profiles'"
+    ))
+    if not result.fetchone():
+        logger.debug("[DATABASE] dummy_epg_profiles table doesn't exist yet, skipping")
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(dummy_epg_profiles)")).fetchall()]
+    if "pattern_builder_examples" not in columns:
+        logger.info("[DATABASE] Adding pattern_builder_examples column to dummy_epg_profiles")
+        conn.execute(text(
+            "ALTER TABLE dummy_epg_profiles ADD COLUMN pattern_builder_examples TEXT"
+        ))
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: added pattern_builder_examples column")
+
+
+def _add_dummy_epg_profiles_pattern_variants_column(conn) -> None:
+    """Add pattern_variants column to dummy_epg_profiles table (v0.14.0 - Multi-variant patterns)."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='dummy_epg_profiles'"
+    ))
+    if not result.fetchone():
+        logger.debug("[DATABASE] dummy_epg_profiles table doesn't exist yet, skipping")
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(dummy_epg_profiles)")).fetchall()]
+    if "pattern_variants" not in columns:
+        logger.info("[DATABASE] Adding pattern_variants column to dummy_epg_profiles")
+        conn.execute(text(
+            "ALTER TABLE dummy_epg_profiles ADD COLUMN pattern_variants TEXT"
+        ))
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: added pattern_variants column")
+
+
+def _add_dummy_epg_profiles_channel_group_ids_column(conn) -> None:
+    """Add channel_group_ids column to dummy_epg_profiles table (v0.14.0 - Group-based assignment)."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='dummy_epg_profiles'"
+    ))
+    if not result.fetchone():
+        logger.debug("[DATABASE] dummy_epg_profiles table doesn't exist yet, skipping")
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(dummy_epg_profiles)")).fetchall()]
+    if "channel_group_ids" not in columns:
+        logger.info("[DATABASE] Adding channel_group_ids column to dummy_epg_profiles")
+        conn.execute(text(
+            "ALTER TABLE dummy_epg_profiles ADD COLUMN channel_group_ids TEXT"
+        ))
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: added channel_group_ids column")
 
 
 def _perform_maintenance(engine) -> None:

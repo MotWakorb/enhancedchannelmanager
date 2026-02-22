@@ -346,6 +346,12 @@ export function ActionEditor({
     setShowVariables(false);
   };
 
+  const handleInsertValueVariable = (variable: string) => {
+    const currentValue = action.value || '';
+    onChange({ ...action, value: currentValue + variable });
+    setShowVariables(false);
+  };
+
   // Generate preview text
   const getPreviewText = (): string => {
     if (!action.name_template) return '';
@@ -872,6 +878,24 @@ export function ActionEditor({
                 </button>
               )}
             </div>
+
+            {showVariables && (
+              <div className="variables-dropdown">
+                <div className="variables-hint">Template variables - click to insert:</div>
+                {TEMPLATE_VARIABLES.map(v => (
+                  <button
+                    key={v.name}
+                    type="button"
+                    className="variable-option"
+                    onClick={() => handleInsertValueVariable(v.name)}
+                  >
+                    <span className="variable-name">{v.name}</span>
+                    <span className="variable-desc">{v.description}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
             <span className="field-hint">Template variables allowed</span>
           </div>
         )}

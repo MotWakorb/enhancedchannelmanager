@@ -576,6 +576,44 @@ describe('ActionEditor', () => {
         expect.objectContaining({ name_template: '{stream_name}' })
       );
     });
+
+    it('shows template variables dropdown for value actions', async () => {
+      const user = userEvent.setup();
+      render(
+        <ActionEditor
+          action={{ type: 'assign_logo' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          previousActions={[{ type: 'create_channel', name_template: '{stream_name}' }]}
+        />
+      );
+
+      await user.click(screen.getByRole('button', { name: /show variables/i }));
+
+      expect(screen.getByText(/{stream_name}/)).toBeInTheDocument();
+      expect(screen.getByText(/{tvg_id}/)).toBeInTheDocument();
+    });
+
+    it('inserts variable into value field when clicked', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <ActionEditor
+          action={{ type: 'assign_logo', value: '' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+          previousActions={[{ type: 'create_channel', name_template: '{stream_name}' }]}
+        />
+      );
+
+      await user.click(screen.getByRole('button', { name: /show variables/i }));
+      await user.click(screen.getByText(/{stream_name}/));
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ value: '{stream_name}' })
+      );
+    });
   });
 
   describe('template preview', () => {

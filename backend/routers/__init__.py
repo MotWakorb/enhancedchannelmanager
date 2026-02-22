@@ -23,6 +23,7 @@ from routers.m3u import router as m3u_router
 from routers.m3u_digest import router as m3u_digest_router
 from routers.channels import router as channels_router
 from routers.channel_groups import router as channel_groups_router
+from routers.dummy_epg import router as dummy_epg_router
 
 all_routers = [
     tasks_router,
@@ -45,4 +46,5 @@ all_routers = [
     m3u_digest_router,
     channels_router,
     channel_groups_router,
+    dummy_epg_router,
 ]

@@ -503,6 +503,7 @@ export function M3UManagerTab({
 
   const handleGroupsSaved = () => {
     loadData();
+    onAccountsChange?.();  // Reload providers + stream groups in parent
   };
 
   const handleManageFilters = (account: M3UAccount) => {
@@ -630,6 +631,7 @@ export function M3UManagerTab({
 
       // Reload data to show updated state
       await loadData();
+      onAccountsChange?.();  // Reload providers + stream groups in parent
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to sync groups', 'M3U Manager');
     } finally {

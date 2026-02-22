@@ -237,7 +237,7 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
             <input
               id="logoName"
               type="text"
-              placeholder="ESPN, Fox Sports, CNN..."
+              placeholder="Sports Channel, News 24, Movie HD..."
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
