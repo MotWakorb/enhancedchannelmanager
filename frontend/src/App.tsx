@@ -2300,7 +2300,7 @@ function App() {
               channelProfiles={channelProfiles}
               streamProfiles={streamProfiles}
               onChannelGroupsChange={loadChannelGroups}
-              onAccountsChange={loadProviders}
+              onAccountsChange={() => { loadProviders(); loadStreamGroups(); }}
               hideM3uUrls={hideM3uUrls}
             />
           )}

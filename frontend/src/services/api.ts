@@ -85,6 +85,13 @@ import type {
   CertificateRequestResponse,
   DNSProviderTestRequest,
   DNSProviderTestResponse,
+  // Dummy EPG
+  DummyEPGProfile,
+  DummyEPGProfileCreateRequest,
+  DummyEPGProfileUpdateRequest,
+  DummyEPGPreviewRequest,
+  DummyEPGPreviewResult,
+  DummyEPGBatchPreviewRequest,
 } from '../types';
 import { logger } from '../utils/logger';
 import { fetchJson, buildQuery } from './httpClient';
@@ -3254,6 +3261,102 @@ export async function testDNSProvider(data: DNSProviderTestRequest): Promise<DNS
  */
 export async function testHTTPChallenge(): Promise<{ success: boolean; message: string }> {
   return fetchJson(`${API_BASE}/tls/test-http-challenge`, {
+    credentials: 'include',
+  });
+}
+
+// =============================================================================
+// Dummy EPG (v0.14.0)
+// =============================================================================
+
+/**
+ * List all Dummy EPG profiles.
+ */
+export async function getDummyEPGProfiles(): Promise<DummyEPGProfile[]> {
+  return fetchJson(`${API_BASE}/dummy-epg/profiles`, { credentials: 'include' });
+}
+
+/**
+ * Get a single Dummy EPG profile with channel assignments.
+ */
+export async function getDummyEPGProfile(profileId: number): Promise<DummyEPGProfile> {
+  return fetchJson(`${API_BASE}/dummy-epg/profiles/${profileId}`, { credentials: 'include' });
+}
+
+/**
+ * Create a Dummy EPG profile.
+ */
+export async function createDummyEPGProfile(data: DummyEPGProfileCreateRequest): Promise<DummyEPGProfile> {
+  return fetchJson(`${API_BASE}/dummy-epg/profiles`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+    credentials: 'include',
+  });
+}
+
+/**
+ * Update a Dummy EPG profile (partial).
+ */
+export async function updateDummyEPGProfile(profileId: number, data: DummyEPGProfileUpdateRequest): Promise<DummyEPGProfile> {
+  return fetchJson(`${API_BASE}/dummy-epg/profiles/${profileId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+    credentials: 'include',
+  });
+}
+
+/**
+ * Delete a Dummy EPG profile (cascades assignments).
+ */
+export async function deleteDummyEPGProfile(profileId: number): Promise<void> {
+  await fetchJson(`${API_BASE}/dummy-epg/profiles/${profileId}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  });
+}
+
+/**
+ * Preview EPG pipeline (no DB).
+ */
+export async function previewDummyEPG(data: DummyEPGPreviewRequest): Promise<DummyEPGPreviewResult> {
+  return fetchJson(`${API_BASE}/dummy-epg/preview`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+    credentials: 'include',
+  });
+}
+
+/**
+ * Batch preview EPG pipeline (no DB).
+ */
+export async function previewDummyEPGBatch(data: DummyEPGBatchPreviewRequest): Promise<DummyEPGPreviewResult[]> {
+  return fetchJson(`${API_BASE}/dummy-epg/preview/batch`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+    credentials: 'include',
+  });
+}
+
+/**
+ * Get combined XMLTV URL for all enabled profiles.
+ */
+export function getDummyEPGXmltvUrl(): string {
+  return `${window.location.origin}${API_BASE}/dummy-epg/xmltv`;
+}
+
+/**
+ * Get XMLTV URL for a single profile.
+ */
+export function getDummyEPGProfileXmltvUrl(profileId: number): string {
+  return `${window.location.origin}${API_BASE}/dummy-epg/xmltv/${profileId}`;
+}
+
+/**
+ * Force regeneration of XMLTV cache.
+ */
+export async function regenerateDummyEPG(): Promise<{ status: string; profiles: number; channels: number }> {
+  return fetchJson(`${API_BASE}/dummy-epg/generate`, {
+    method: 'POST',
     credentials: 'include',
   });
 }

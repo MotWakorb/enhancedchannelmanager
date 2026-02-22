@@ -409,3 +409,118 @@ class TestSuperscriptConversion:
 
         # Tag should be converted to HD
         assert any(tag_value == "HD" for tag_value, _ in tags)
+
+
+class TestCapitalizeAction:
+    """Tests for the capitalize action type."""
+
+    @pytest.fixture
+    def engine(self, test_session):
+        return NormalizationEngine(test_session)
+
+    def test_title_case(self, engine):
+        from models import NormalizationRule
+        rule = NormalizationRule(
+            id=1, group_id=1, name="Title Case",
+            condition_type="always", action_type="capitalize", action_value="title"
+        )
+        result = engine._apply_action("ATLANTA HAWKS", rule, None)
+        assert result == "Atlanta Hawks"
+
+    def test_upper_case(self, engine):
+        from models import NormalizationRule
+        rule = NormalizationRule(
+            id=1, group_id=1, name="Upper Case",
+            condition_type="always", action_type="capitalize", action_value="upper"
+        )
+        result = engine._apply_action("atlanta hawks", rule, None)
+        assert result == "ATLANTA HAWKS"
+
+    def test_lower_case(self, engine):
+        from models import NormalizationRule
+        rule = NormalizationRule(
+            id=1, group_id=1, name="Lower Case",
+            condition_type="always", action_type="capitalize", action_value="lower"
+        )
+        result = engine._apply_action("ATLANTA HAWKS", rule, None)
+        assert result == "atlanta hawks"
+
+    def test_sentence_case(self, engine):
+        from models import NormalizationRule
+        rule = NormalizationRule(
+            id=1, group_id=1, name="Sentence Case",
+            condition_type="always", action_type="capitalize", action_value="sentence"
+        )
+        result = engine._apply_action("ATLANTA HAWKS", rule, None)
+        assert result == "Atlanta hawks"
+
+    def test_title_case_preserves_acronyms(self, engine):
+        from models import NormalizationRule
+        rule = NormalizationRule(
+            id=1, group_id=1, name="Title Case Acronyms",
+            condition_type="always", action_type="capitalize", action_value="title"
+        )
+        result = engine._apply_action("US: ESPN HD", rule, None)
+        assert result == "US: ESPN HD"
+
+    def test_title_case_mixed_acronyms_and_words(self, engine):
+        from models import NormalizationRule
+        rule = NormalizationRule(
+            id=1, group_id=1, name="Title Case Mixed",
+            condition_type="always", action_type="capitalize", action_value="title"
+        )
+        result = engine._apply_action("US: ATLANTA HAWKS HD", rule, None)
+        assert result == "US: Atlanta Hawks HD"
+
+    def test_default_is_title(self, engine):
+        from models import NormalizationRule
+        rule = NormalizationRule(
+            id=1, group_id=1, name="Default",
+            condition_type="always", action_type="capitalize", action_value=""
+        )
+        result = engine._apply_action("ATLANTA HAWKS", rule, None)
+        assert result == "Atlanta Hawks"
+
+    def test_else_capitalize_title(self, engine):
+        from models import NormalizationRule
+        rule = NormalizationRule(
+            id=1, group_id=1, name="Else Title",
+            condition_type="contains", condition_value="NOMATCH",
+            action_type="remove",
+            else_action_type="capitalize", else_action_value="title"
+        )
+        result = engine._apply_else_action("ATLANTA HAWKS", rule)
+        assert result == "Atlanta Hawks"
+
+    def test_else_capitalize_upper(self, engine):
+        from models import NormalizationRule
+        rule = NormalizationRule(
+            id=1, group_id=1, name="Else Upper",
+            condition_type="contains", condition_value="NOMATCH",
+            action_type="remove",
+            else_action_type="capitalize", else_action_value="upper"
+        )
+        result = engine._apply_else_action("atlanta hawks", rule)
+        assert result == "ATLANTA HAWKS"
+
+    def test_else_capitalize_lower(self, engine):
+        from models import NormalizationRule
+        rule = NormalizationRule(
+            id=1, group_id=1, name="Else Lower",
+            condition_type="contains", condition_value="NOMATCH",
+            action_type="remove",
+            else_action_type="capitalize", else_action_value="lower"
+        )
+        result = engine._apply_else_action("ATLANTA HAWKS", rule)
+        assert result == "atlanta hawks"
+
+    def test_else_capitalize_sentence(self, engine):
+        from models import NormalizationRule
+        rule = NormalizationRule(
+            id=1, group_id=1, name="Else Sentence",
+            condition_type="contains", condition_value="NOMATCH",
+            action_type="remove",
+            else_action_type="capitalize", else_action_value="sentence"
+        )
+        result = engine._apply_else_action("ATLANTA HAWKS", rule)
+        assert result == "Atlanta hawks"

@@ -13,7 +13,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 
 from cache import get_cache
-from config import CONFIG_DIR
+from config import CONFIG_DIR, get_settings, save_settings
 from database import get_session
 from dispatcharr_client import get_client
 from alert_methods import send_alert
@@ -521,7 +521,8 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
 
     Args:
         account_id: The M3U account ID to delete
-        delete_groups: If True (default), also delete channel groups associated with this account
+        delete_groups: If True (default), also delete orphaned channel groups
+                       (groups not referenced by any other M3U account)
     """
     logger.debug("[M3U] DELETE /api/m3u/accounts/%s - delete_groups=%s", account_id, delete_groups)
     client = get_client()
@@ -533,12 +534,28 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
 
         # Extract channel group IDs associated with this M3U account
         channel_group_ids = []
+        shared_group_ids = set()
         if delete_groups:
             for group_setting in account.get("channel_groups", []):
                 group_id = group_setting.get("channel_group")
                 if group_id:
                     channel_group_ids.append(group_id)
             logger.info("[M3U] M3U account '%s' has %s associated channel groups", account_name, len(channel_group_ids))
+
+            # Check which groups are shared with other M3U accounts
+            if channel_group_ids:
+                all_accounts = await client.get_m3u_accounts()
+                group_id_set = set(channel_group_ids)
+                for other_account in all_accounts:
+                    if other_account.get("id") == account_id:
+                        continue
+                    for gs in other_account.get("channel_groups", []):
+                        gid = gs.get("channel_group")
+                        if gid in group_id_set:
+                            shared_group_ids.add(gid)
+                if shared_group_ids:
+                    logger.info("[M3U] %s groups shared with other accounts, will not delete: %s",
+                                len(shared_group_ids), sorted(shared_group_ids))
 
         # Delete the M3U account first
         await client.delete_m3u_account(account_id)
@@ -551,19 +568,41 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
         groups_cleared = cache.invalidate("channel_groups")
         logger.info("[M3U] Invalidated cache after M3U deletion: %s stream entries, channel_groups=%s", streams_cleared, groups_cleared)
 
-        # Now delete associated channel groups
+        # Only delete orphaned groups (not referenced by any other account)
         deleted_groups = []
         failed_groups = []
+        skipped_groups = []
         if delete_groups and channel_group_ids:
             for group_id in channel_group_ids:
+                if group_id in shared_group_ids:
+                    skipped_groups.append(group_id)
+                    logger.info("[M3U] Skipped deletion of shared channel group %s", group_id)
+                    continue
                 try:
                     await client.delete_channel_group(group_id)
                     deleted_groups.append(group_id)
-                    logger.info("[M3U] Deleted channel group %s (was associated with M3U '%s')", group_id, account_name)
+                    logger.info("[M3U] Deleted orphaned channel group %s (was associated with M3U '%s')", group_id, account_name)
                 except Exception as group_err:
                     # Group might have channels or other issues - log but don't fail
                     failed_groups.append({"id": group_id, "error": str(group_err)})
                     logger.warning("[M3U] Failed to delete channel group %s: %s", group_id, group_err)
+
+        # Clean up linked_m3u_accounts in settings
+        try:
+            settings = get_settings()
+            if settings.linked_m3u_accounts:
+                cleaned = []
+                for link_group in settings.linked_m3u_accounts:
+                    filtered = [aid for aid in link_group if aid != account_id]
+                    # Only keep groups with 2+ accounts
+                    if len(filtered) >= 2:
+                        cleaned.append(filtered)
+                if cleaned != settings.linked_m3u_accounts:
+                    settings.linked_m3u_accounts = cleaned
+                    save_settings(settings)
+                    logger.info("[M3U] Cleaned up linked_m3u_accounts after deleting account %s", account_id)
+        except Exception as settings_err:
+            logger.warning("[M3U] Failed to clean up linked_m3u_accounts: %s", settings_err)
 
         # Log to journal
         journal.log_entry(
@@ -572,13 +611,15 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
             entity_id=account_id,
             entity_name=account_name,
             description=f"Deleted M3U account '{account_name}'" +
-                       (f" and {len(deleted_groups)} channel groups" if deleted_groups else ""),
+                       (f" and {len(deleted_groups)} orphaned channel groups" if deleted_groups else "") +
+                       (f" (kept {len(skipped_groups)} shared groups)" if skipped_groups else ""),
             before_value={
                 "name": account_name,
                 "channel_groups": channel_group_ids,
             },
             after_value={
                 "deleted_groups": deleted_groups,
+                "skipped_groups": skipped_groups,
                 "failed_groups": failed_groups,
             } if channel_group_ids else None,
         )
@@ -586,6 +627,7 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
         return {
             "status": "deleted",
             "deleted_groups": deleted_groups,
+            "skipped_groups": skipped_groups,
             "failed_groups": failed_groups,
         }
     except Exception as e:

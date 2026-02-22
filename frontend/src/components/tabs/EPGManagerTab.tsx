@@ -19,6 +19,7 @@ import { CSS } from '@dnd-kit/utilities';
 import type { EPGSource, EPGSourceType } from '../../types';
 import * as api from '../../services/api';
 import { DummyEPGSourceModal } from '../DummyEPGSourceModal';
+import { DummyEPGManagerSection } from '../DummyEPGManagerSection';
 import { CustomSelect } from '../CustomSelect';
 import { ModalOverlay } from '../ModalOverlay';
 import { useNotifications } from '../../contexts/NotificationContext';
@@ -798,6 +799,9 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
         onClose={() => setDummyModalOpen(false)}
         onSave={handleSaveDummySource}
       />
+
+      {/* ECM Native Dummy EPG Profiles */}
+      <DummyEPGManagerSection />
     </div>
   );
 }

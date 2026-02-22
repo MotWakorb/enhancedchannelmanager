@@ -874,6 +874,16 @@ button.group-selection-checkbox {
   cursor: help;
 }
 
+.preview-merge-badge {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.35rem;
+  background-color: #22d3ee22;
+  border-radius: var(--radius-md);
+  color: #22d3ee;
+  white-space: nowrap;
+  margin-left: 0.25rem;
+}
+
 /* Timezone preference styling */
 .timezone-info {
   display: flex;

@@ -499,6 +499,26 @@ class NormalizationEngine:
                 return f"{prefix}{separator}{rest}"
             return text
 
+        elif action_type == "capitalize":
+            mode = action_value.lower() if action_value else "title"
+            if mode == "upper":
+                return text.upper()
+            elif mode == "lower":
+                return text.lower()
+            elif mode == "sentence":
+                return text[0].upper() + text[1:].lower() if text else text
+            else:
+                # Smart title case: preserve short all-caps words (likely acronyms)
+                words = text.split()
+                result = []
+                for word in words:
+                    alpha = ''.join(c for c in word if c.isalpha())
+                    if alpha.isupper() and len(alpha) <= 4:
+                        result.append(word)
+                    else:
+                        result.append(word.title())
+                return ' '.join(result)
+
         else:
             logger.warning("[NORMALIZE] Unknown action type: %s", action_type)
             return text
@@ -555,6 +575,26 @@ class NormalizationEngine:
             # No specific prefix matched, so can't normalize
             logger.warning("[NORMALIZE] Rule %s: 'normalize_prefix' as else_action has no effect (no match)", rule.id)
             return text
+
+        elif action_type == "capitalize":
+            mode = action_value.lower() if action_value else "title"
+            if mode == "upper":
+                return text.upper()
+            elif mode == "lower":
+                return text.lower()
+            elif mode == "sentence":
+                return text[0].upper() + text[1:].lower() if text else text
+            else:
+                # Smart title case: preserve short all-caps words (likely acronyms)
+                words = text.split()
+                result = []
+                for word in words:
+                    alpha = ''.join(c for c in word if c.isalpha())
+                    if alpha.isupper() and len(alpha) <= 4:
+                        result.append(word)
+                    else:
+                        result.append(word.title())
+                return ' '.join(result)
 
         else:
             logger.warning("[NORMALIZE] Unknown else action type: %s", action_type)

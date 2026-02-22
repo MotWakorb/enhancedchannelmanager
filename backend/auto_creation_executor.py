@@ -272,9 +272,9 @@ class ActionExecutor:
             result = await self._execute_merge_streams(action, stream_ctx, exec_ctx, template_ctx,
                                                          normalize_names=normalize_names)
         elif action_type == ActionType.ASSIGN_LOGO:
-            result = await self._execute_assign_logo(action, stream_ctx, exec_ctx)
+            result = await self._execute_assign_logo(action, stream_ctx, exec_ctx, template_ctx)
         elif action_type == ActionType.ASSIGN_TVG_ID:
-            result = await self._execute_assign_tvg_id(action, stream_ctx, exec_ctx)
+            result = await self._execute_assign_tvg_id(action, stream_ctx, exec_ctx, template_ctx)
         elif action_type == ActionType.ASSIGN_EPG:
             result = await self._execute_assign_epg(action, stream_ctx, exec_ctx)
         elif action_type == ActionType.ASSIGN_PROFILE:
@@ -1025,7 +1025,8 @@ class ActionExecutor:
     # =========================================================================
 
     async def _execute_assign_logo(self, action: Action, stream_ctx: StreamContext,
-                                    exec_ctx: ExecutionContext) -> ActionResult:
+                                    exec_ctx: ExecutionContext,
+                                    template_ctx: dict) -> ActionResult:
         """Execute assign_logo action."""
         if not exec_ctx.current_channel_id:
             return ActionResult(
@@ -1036,7 +1037,10 @@ class ActionExecutor:
             )
 
         value = action.params.get("value", "from_stream")
-        logo_url = stream_ctx.logo_url if value == "from_stream" else value
+        if value == "from_stream":
+            logo_url = stream_ctx.logo_url
+        else:
+            logo_url = TemplateVariables.expand_template(value, template_ctx, exec_ctx.custom_variables)
 
         if not logo_url:
             return ActionResult(
@@ -1080,7 +1084,8 @@ class ActionExecutor:
             )
 
     async def _execute_assign_tvg_id(self, action: Action, stream_ctx: StreamContext,
-                                      exec_ctx: ExecutionContext) -> ActionResult:
+                                      exec_ctx: ExecutionContext,
+                                      template_ctx: dict) -> ActionResult:
         """Execute assign_tvg_id action."""
         if not exec_ctx.current_channel_id:
             return ActionResult(
@@ -1091,7 +1096,10 @@ class ActionExecutor:
             )
 
         value = action.params.get("value", "from_stream")
-        tvg_id = stream_ctx.tvg_id if value == "from_stream" else value
+        if value == "from_stream":
+            tvg_id = stream_ctx.tvg_id
+        else:
+            tvg_id = TemplateVariables.expand_template(value, template_ctx, exec_ctx.custom_variables)
 
         if not tvg_id:
             return ActionResult(
