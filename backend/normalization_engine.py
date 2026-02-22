@@ -458,7 +458,9 @@ class NormalizationEngine:
                 return text
             try:
                 flags = 0 if case_sensitive else re.IGNORECASE
-                return re.sub(pattern, action_value, text, flags=flags)
+                # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
+                py_replacement = re.sub(r'\$(\d+)', r'\\\1', action_value)
+                return re.sub(pattern, py_replacement, text, flags=flags)
             except re.error as e:
                 logger.warning("[NORMALIZE] Regex replace error in rule %s: %s", rule.id, e)
                 return text
@@ -556,7 +558,9 @@ class NormalizationEngine:
             if rule.condition_value:
                 try:
                     flags = 0 if rule.case_sensitive else re.IGNORECASE
-                    return re.sub(rule.condition_value, action_value, text, flags=flags)
+                    # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
+                    py_replacement = re.sub(r'\$(\d+)', r'\\\1', action_value)
+                    return re.sub(rule.condition_value, py_replacement, text, flags=flags)
                 except re.error as e:
                     logger.warning("[NORMALIZE] Regex replace error in else action of rule %s: %s", rule.id, e)
             return text
