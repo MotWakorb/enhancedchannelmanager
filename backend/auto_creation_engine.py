@@ -1680,14 +1680,14 @@ def _sort_key(stream: StreamContext, sort_field: str, sort_regex: str | None = N
             try:
                 m = re.search(sort_regex, stream.stream_name)
             except re.error:
-                return (1, 0, "")
+                return (-1, 0, "")
             if m and m.groups():
                 captured = m.group(1)
                 try:
                     return (0, float(captured), captured)
                 except (ValueError, TypeError):
                     return (0, 0, captured)
-        return (1, 0, "")
+        return (-1, 0, "")
     return stream.stream_name.lower()
 
 
