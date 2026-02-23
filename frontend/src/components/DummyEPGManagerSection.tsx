@@ -4,8 +4,11 @@ import * as api from '../services/api';
 import { copyToClipboard } from '../utils/clipboard';
 import { DummyEPGProfileModal } from './DummyEPGProfileModal';
 import { ImportDummyEPGModal } from './ImportDummyEPGModal';
+import { ModalOverlay } from './ModalOverlay';
 import { useNotifications } from '../contexts/NotificationContext';
+import { useModal } from '../hooks/useModal';
 import './DummyEPGManagerSection.css';
+import './ModalBase.css';
 
 /** Map an ECM DummyEPGProfile to Dispatcharr custom_properties for an XMLTV EPG source. */
 function mapProfileToCustomProperties(profile: DummyEPGProfile): DummyEPGCustomProperties {
@@ -35,7 +38,11 @@ function mapProfileToCustomProperties(profile: DummyEPGProfile): DummyEPGCustomP
   };
 }
 
-export const DummyEPGManagerSection = memo(function DummyEPGManagerSection() {
+interface DummyEPGManagerSectionProps {
+  onSourcesChanged?: () => void;
+}
+
+export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onSourcesChanged }: DummyEPGManagerSectionProps) {
   const notifications = useNotifications();
   const [profiles, setProfiles] = useState<DummyEPGProfile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,6 +54,15 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection() {
   const [editingProfile, setEditingProfile] = useState<DummyEPGProfile | null>(null);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [importData, setImportData] = useState<Partial<DummyEPGProfile> | null>(null);
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [exportYaml, setExportYaml] = useState('');
+  const [showImportYamlDialog, setShowImportYamlDialog] = useState(false);
+  const [importYaml, setImportYaml] = useState('');
+  const [importYamlLoading, setImportYamlLoading] = useState(false);
+  const [importYamlError, setImportYamlError] = useState<string | null>(null);
+  const deleteModal = useModal();
+  const [profileToDelete, setProfileToDelete] = useState<DummyEPGProfile | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const loadProfiles = useCallback(async () => {
     try {
@@ -78,16 +94,30 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection() {
     }
   };
 
-  const handleDeleteProfile = async (profile: DummyEPGProfile) => {
-    if (!confirm(`Delete profile "${profile.name}"?`)) {
-      return;
-    }
+  const handleDeleteProfile = (profile: DummyEPGProfile) => {
+    setProfileToDelete(profile);
+    deleteModal.open();
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!profileToDelete) return;
+    setDeleting(true);
     try {
-      await api.deleteDummyEPGProfile(profile.id);
+      await api.deleteDummyEPGProfile(profileToDelete.id);
       await loadProfiles();
+      deleteModal.close();
+      setProfileToDelete(null);
+      onSourcesChanged?.();
     } catch (err) {
       notifications.error('Failed to delete profile', 'Dummy EPG');
+    } finally {
+      setDeleting(false);
     }
+  };
+
+  const handleCancelDelete = () => {
+    deleteModal.close();
+    setProfileToDelete(null);
   };
 
   const handleToggleEnabled = async (profile: DummyEPGProfile) => {
@@ -134,6 +164,33 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection() {
     setProfileModalOpen(true);
   };
 
+  const handleExport = useCallback(async () => {
+    try {
+      const yaml = await api.exportDummyEPGProfilesYAML();
+      setExportYaml(yaml);
+      setShowExportDialog(true);
+    } catch {
+      notifications.error('Failed to export profiles', 'Dummy EPG');
+    }
+  }, []);
+
+  const handleImportYaml = async () => {
+    setImportYamlLoading(true);
+    setImportYamlError(null);
+    try {
+      const result = await api.importDummyEPGProfilesYAML(importYaml);
+      const importedCount = result.imported.length;
+      await loadProfiles();
+      setImportYaml('');
+      setShowImportYamlDialog(false);
+      notifications.success(`Imported ${importedCount} profile${importedCount !== 1 ? 's' : ''}`, 'Dummy EPG');
+    } catch (err) {
+      setImportYamlError(err instanceof Error ? err.message : 'Import failed');
+    } finally {
+      setImportYamlLoading(false);
+    }
+  };
+
   const addProfileToDispatcharr = async (profile: DummyEPGProfile): Promise<boolean> => {
     const full = await api.getDummyEPGProfile(profile.id);
     const url = api.getDummyEPGProfileXmltvUrl(profile.id);
@@ -153,6 +210,7 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection() {
     try {
       await addProfileToDispatcharr(profile);
       notifications.success(`"${profile.name}" added to Dispatcharr`, 'Dummy EPG');
+      onSourcesChanged?.();
     } catch (err) {
       notifications.error(`Failed to add "${profile.name}" to Dispatcharr`, 'Dummy EPG');
     } finally {
@@ -183,6 +241,7 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection() {
     } else {
       notifications.warning(`Added ${added}, failed ${failed} profile${failed !== 1 ? 's' : ''}`, 'Dummy EPG');
     }
+    if (added > 0) onSourcesChanged?.();
   };
 
   if (loading) {
@@ -232,6 +291,16 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection() {
               </button>
             </>
           )}
+          {profiles.length > 0 && (
+            <button className="btn-secondary" onClick={handleExport}>
+              <span className="material-icons">upload</span>
+              Export
+            </button>
+          )}
+          <button className="btn-secondary" onClick={() => { setImportYaml(''); setImportYamlError(null); setShowImportYamlDialog(true); }}>
+            <span className="material-icons">download</span>
+            Import YAML
+          </button>
           <button className="btn-secondary" onClick={() => setImportModalOpen(true)}>
             <span className="material-icons">download</span>
             Import from Dispatcharr
@@ -341,6 +410,135 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection() {
         onClose={() => setImportModalOpen(false)}
         onImport={handleImport}
       />
+
+      {/* Delete Confirmation Dialog */}
+      {deleteModal.isOpen && profileToDelete && (
+        <ModalOverlay onClose={handleCancelDelete} role="dialog" aria-modal="true">
+          <div className="modal-container modal-sm">
+            <div className="modal-header">
+              <h2>Delete Profile</h2>
+              <button className="modal-close-btn" onClick={handleCancelDelete} aria-label="Close">
+                <span className="material-icons">close</span>
+              </button>
+            </div>
+            <div className="modal-body">
+              <p>
+                Are you sure you want to delete <strong>{profileToDelete.name}</strong>?
+              </p>
+              <p style={{ color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
+                This will also remove the matching Dispatcharr EPG source if one exists.
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button className="modal-btn modal-btn-secondary" onClick={handleCancelDelete} disabled={deleting}>
+                Cancel
+              </button>
+              <button className="modal-btn modal-btn-danger" onClick={handleConfirmDelete} disabled={deleting}>
+                {deleting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
+
+      {/* Export Dialog */}
+      {showExportDialog && (
+        <ModalOverlay onClose={() => setShowExportDialog(false)} role="dialog" aria-modal="true">
+          <div className="modal-container modal-xxl">
+            <div className="modal-header">
+              <h2>Export Profiles (YAML)</h2>
+              <button
+                className="modal-close-btn"
+                onClick={() => setShowExportDialog(false)}
+                aria-label="Close"
+              >
+                <span className="material-icons">close</span>
+              </button>
+            </div>
+            <div className="modal-body">
+              <textarea
+                className="dep-export-textarea"
+                value={exportYaml}
+                readOnly
+                rows={20}
+                aria-label="Exported YAML"
+              />
+            </div>
+            <div className="modal-footer modal-footer-spread">
+              <button
+                className="btn-secondary"
+                onClick={async () => {
+                  const success = await copyToClipboard(exportYaml, 'YAML profiles');
+                  if (success) {
+                    notifications.success('Copied YAML to clipboard', 'Dummy EPG');
+                  } else {
+                    notifications.error('Failed to copy to clipboard. Please check browser permissions.', 'Dummy EPG');
+                  }
+                }}
+              >
+                <span className="material-icons">content_copy</span>
+                Copy to Clipboard
+              </button>
+              <button
+                className="btn-primary"
+                onClick={() => setShowExportDialog(false)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
+
+      {/* Import YAML Dialog */}
+      {showImportYamlDialog && (
+        <ModalOverlay onClose={() => setShowImportYamlDialog(false)} role="dialog" aria-modal="true">
+          <div className="modal-container modal-md">
+            <div className="modal-header">
+              <h2>Import Profiles (YAML)</h2>
+              <button
+                className="modal-close-btn"
+                onClick={() => setShowImportYamlDialog(false)}
+                aria-label="Close"
+              >
+                <span className="material-icons">close</span>
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="modal-form-group">
+                <label htmlFor="import-yaml">YAML Content</label>
+                <textarea
+                  id="import-yaml"
+                  value={importYaml}
+                  onChange={e => setImportYaml(e.target.value)}
+                  placeholder="Paste YAML content here..."
+                  rows={10}
+                  aria-label="YAML content"
+                />
+              </div>
+              {importYamlError && (
+                <div className="import-error">{importYamlError}</div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button
+                className="btn-secondary"
+                onClick={() => setShowImportYamlDialog(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                onClick={handleImportYaml}
+                disabled={!importYaml.trim() || importYamlLoading}
+                aria-label="Import"
+              >
+                {importYamlLoading ? 'Importing...' : 'Import'}
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
 
     </div>
   );
