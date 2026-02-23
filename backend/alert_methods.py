@@ -387,6 +387,10 @@ class AlertMethodManager:
             if not config.get("enabled", True):
                 return False
             min_failures = config.get("min_failures", 1)
+            # Always send success notifications (probe complete with no failures);
+            # only apply min_failures threshold to warning/error notifications
+            if failed_count == 0:
+                return True
             return failed_count >= min_failures
 
         # Unknown category, send the alert
