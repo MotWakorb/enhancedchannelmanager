@@ -1576,13 +1576,67 @@ class StreamProber:
         stream_m3u_map: dict[int, int] = None,
         channel_name: str = "unknown"
     ) -> list[int]:
-        """Sort stream IDs using smart sort logic. Delegates to module-level function."""
-        return smart_sort_streams(
+        """
+        Sort stream IDs using smart sort logic, then apply enhanced stream features.
+        
+        Steps:
+        1. Smart Sort (quality-based)
+        2. Provider Diversification (if enabled)
+        3. Account Stream Limits (if enabled)
+        """
+        # Step 1: Apply smart sort (quality-based)
+        sorted_ids = smart_sort_streams(
             stream_ids, stats_map, stream_m3u_map or {},
             self.stream_sort_priority, self.stream_sort_enabled,
             self.m3u_account_priorities, self.deprioritize_failed_streams,
             channel_name
         )
+        
+        # Step 2: Apply enhanced stream features if enabled
+        try:
+            from enhanced_features_config import get_enhanced_features_config
+            from stream_diversification import apply_provider_diversification
+            from account_stream_limits import apply_account_stream_limits
+            
+            config = get_enhanced_features_config()
+            
+            # Apply Provider Diversification
+            if config.provider_diversification.enabled:
+                logger.info(
+                    "[STREAM-PROBE-ENHANCED] Applying provider diversification (%s) to channel '%s'",
+                    config.provider_diversification.mode, channel_name
+                )
+                sorted_ids = apply_provider_diversification(
+                    stream_ids=sorted_ids,
+                    stream_m3u_map=stream_m3u_map or {},
+                    enabled=True,
+                    mode=config.provider_diversification.mode,
+                    m3u_account_priorities=self.m3u_account_priorities,
+                    channel_name=channel_name
+                )
+            
+            # Apply Account Stream Limits
+            if config.account_stream_limits.enabled:
+                logger.info(
+                    "[STREAM-PROBE-ENHANCED] Applying account stream limits to channel '%s'",
+                    channel_name
+                )
+                sorted_ids = apply_account_stream_limits(
+                    stream_ids=sorted_ids,
+                    stream_m3u_map=stream_m3u_map or {},
+                    enabled=True,
+                    global_limit=config.account_stream_limits.global_limit,
+                    account_limits=config.account_stream_limits.account_limits,
+                    channel_name=channel_name
+                )
+                
+        except Exception as e:
+            logger.warning(
+                "[STREAM-PROBE-ENHANCED] Failed to apply enhanced stream features: %s",
+                e
+            )
+        
+        return sorted_ids
 
     async def probe_all_streams(self, channel_groups_override: list[str] = None, skip_m3u_refresh: bool = False, stream_ids_filter: list[int] = None):
         """Probe all streams that are in channels (runs in background).
@@ -1740,12 +1794,6 @@ class StreamProber:
             # Sort streams by their lowest channel number (lowest first)
             streams_to_probe.sort(key=lambda s: stream_to_channel_number.get(s["id"], 999999))
             logger.info("[STREAM-PROBE] Sorted %s streams by channel number", len(streams_to_probe))
-
-            # Apply batch size limit after filtering out recently probed streams
-            # This ensures the batch only contains streams that will actually be probed
-            if self.probe_batch_size > 0 and len(streams_to_probe) > self.probe_batch_size:
-                logger.info("[STREAM-PROBE] Limiting batch to %s streams (from %s eligible)", self.probe_batch_size, len(streams_to_probe))
-                streams_to_probe = streams_to_probe[:self.probe_batch_size]
 
             self._probe_progress_total = len(streams_to_probe)
             self._probe_progress_status = "probing"

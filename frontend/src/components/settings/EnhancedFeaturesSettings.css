@@ -1,0 +1,246 @@
+.enhanced-settings {
+  padding: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.enhanced-settings-loading {
+  padding: 48px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.enhanced-settings-header {
+  margin-bottom: 32px;
+}
+
+.enhanced-settings-header h2 {
+  margin: 0 0 8px 0;
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.enhanced-settings-description {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.enhanced-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin-bottom: 24px;
+  overflow: hidden;
+}
+
+.enhanced-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.enhanced-card-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.enhanced-card-title .material-icons {
+  font-size: 24px;
+  color: var(--primary-color);
+}
+
+.enhanced-card-title h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.enhanced-card-body {
+  padding: 24px;
+}
+
+.enhanced-card-description {
+  margin: 0 0 20px 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.enhanced-form-group {
+  margin-bottom: 20px;
+}
+
+.enhanced-form-group:last-child {
+  margin-bottom: 0;
+}
+
+.enhanced-form-group label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 500;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.enhanced-form-group input[type="number"],
+.enhanced-form-group select {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 14px;
+  transition: border-color 0.2s;
+}
+
+.enhanced-form-group input[type="number"]:focus,
+.enhanced-form-group select:focus {
+  outline: none;
+  border-color: var(--primary-color);
+}
+
+.enhanced-help-text {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.enhanced-toggle {
+  position: relative;
+  display: inline-block;
+  width: 48px;
+  height: 26px;
+}
+
+.enhanced-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.enhanced-toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--bg-tertiary);
+  transition: 0.3s;
+  border-radius: 26px;
+}
+
+.enhanced-toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 20px;
+  width: 20px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: 0.3s;
+  border-radius: 50%;
+}
+
+.enhanced-toggle input:checked + .enhanced-toggle-slider {
+  background-color: var(--primary-color);
+}
+
+.enhanced-toggle input:checked + .enhanced-toggle-slider:before {
+  transform: translateX(22px);
+}
+
+.enhanced-account-limits-table {
+  margin-top: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.enhanced-account-limits-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.enhanced-account-limits-table thead {
+  background: var(--bg-tertiary);
+}
+
+.enhanced-account-limits-table th {
+  padding: 12px 16px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.enhanced-account-limits-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+
+.enhanced-account-limits-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.enhanced-account-limits-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.enhanced-account-limits-table input[type="number"] {
+  width: 120px;
+  padding: 6px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.enhanced-account-limits-table input[type="number"]:focus {
+  outline: none;
+  border-color: var(--primary-color);
+}
+
+.enhanced-settings-footer {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.enhanced-btn {
+  padding: 10px 24px;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.enhanced-btn-primary {
+  background: var(--primary-color);
+  color: white;
+}
+
+.enhanced-btn-primary:hover:not(:disabled) {
+  background: var(--primary-color-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.enhanced-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

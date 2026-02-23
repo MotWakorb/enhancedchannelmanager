@@ -8,6 +8,7 @@ import { AuthSettingsSection } from '../settings/AuthSettingsSection';
 import { UserManagementSection } from '../settings/UserManagementSection';
 import { LinkedAccountsSection } from '../settings/LinkedAccountsSection';
 import { TLSSettingsSection } from '../settings/TLSSettingsSection';
+import { EnhancedFeaturesSettings } from '../settings/EnhancedFeaturesSettings';
 import { useAuth } from '../../hooks/useAuth';
 import type { ChannelProfile, M3UDigestSettings, M3UDigestFrequency } from '../../types';
 import { logger } from '../../utils/logger';
@@ -3851,6 +3852,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Channel Defaults
           </li>
           <li
+            className={`settings-nav-item ${activePage === 'enhanced-features' ? 'active' : ''}`}
+            onClick={() => setActivePage('enhanced-features')}
+          >
+            <span className="material-icons">auto_awesome</span>
+            Enhanced Features
+          </li>
+          <li
             className={`settings-nav-item ${activePage === 'normalization' ? 'active' : ''}`}
             onClick={() => setActivePage('normalization')}
           >
@@ -3945,6 +3953,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       <div className="settings-content">
         {activePage === 'general' && renderGeneralPage()}
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
+        {activePage === 'enhanced-features' && <EnhancedFeaturesSettings />}
         {activePage === 'normalization' && renderNormalizationPage()}
         {activePage === 'tag-engine' && <TagEngineSection />}
         {activePage === 'appearance' && renderAppearancePage()}

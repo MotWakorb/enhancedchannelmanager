@@ -132,6 +132,10 @@ from routers import all_routers
 for _router in all_routers:
     app.include_router(_router)
 
+# Include enhanced stream features router
+from routers.enhanced_features import router as enhanced_features_router
+app.include_router(enhanced_features_router)
+
 
 # ============================================================================
 # Request Timing and Rate Tracking Middleware (for CPU diagnostics)

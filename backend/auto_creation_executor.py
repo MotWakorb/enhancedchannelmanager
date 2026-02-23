@@ -13,6 +13,14 @@ import re
 from auto_creation_schema import Action, ActionType, TemplateVariables
 from auto_creation_evaluator import StreamContext
 
+# Enhanced stream features integration
+try:
+    from enhanced_features_config import get_enhanced_features_config
+    from stream_diversification import apply_provider_diversification
+    from account_stream_limits import apply_account_stream_limits
+    ENHANCED_AVAILABLE = True
+except ImportError:
+    ENHANCED_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -697,6 +705,12 @@ class ActionExecutor:
 
             # Add stream
             new_streams = current_streams + [stream_ctx.stream_id]
+            
+            # Apply enhanced stream features to reorder streams if enabled
+            new_streams = await self._apply_enhanced_features_to_channel(
+                channel_id, channel_name, new_streams
+            )
+
             await self.client.update_channel(channel_id, {"streams": new_streams})
 
             # Update cached channel so subsequent merges see the full list
@@ -723,6 +737,97 @@ class ActionExecutor:
                 description=f"Failed to add stream to channel",
                 error=str(e)
             )
+
+    async def _apply_enhanced_features_to_channel(
+        self, channel_id: int, channel_name: str, stream_ids: list[int]
+    ) -> list[int]:
+        """
+        Apply enhanced stream features to channel streams.
+        
+        Order of operations:
+        1. Quality Sort (handled by Stream Prober, not here)
+        2. Provider Diversification (if enabled)
+        3. Account Stream Limits (if enabled)
+        
+        Args:
+            channel_id: Channel ID
+            channel_name: Channel name for logging
+            stream_ids: List of stream IDs to process
+            
+        Returns:
+            Reordered/filtered list of stream IDs
+        """
+        if not ENHANCED_AVAILABLE:
+            return stream_ids
+            
+        try:
+            config = get_enhanced_features_config()
+            
+            # Build stream_m3u_map from all streams
+            stream_m3u_map = {}
+            try:
+                all_streams = await self.client.get_streams()
+                for stream in all_streams:
+                    stream_id = stream.get("id")
+                    m3u_account = stream.get("m3u_account")
+                    if stream_id and m3u_account:
+                        # Handle both direct ID and nested object
+                        if isinstance(m3u_account, dict):
+                            stream_m3u_map[stream_id] = m3u_account.get("id")
+                        else:
+                            stream_m3u_map[stream_id] = m3u_account
+            except Exception as e:
+                logger.warning(
+                    "[AUTO-CREATE-EXEC-ENHANCED] Failed to build stream_m3u_map: %s", e
+                )
+            
+            # Get M3U account priorities if needed
+            m3u_account_priorities = {}
+            if config.m3u_priority.mode != "disabled":
+                m3u_account_priorities = {
+                    str(k): v for k, v in config.m3u_priority.account_priorities.items()
+                }
+            
+            # Apply Provider Diversification
+            if config.provider_diversification.enabled:
+                logger.info(
+                    "[AUTO-CREATE-EXEC-ENHANCED] Applying provider diversification (%s) "
+                    "to channel '%s' (id=%s)",
+                    config.provider_diversification.mode, channel_name, channel_id
+                )
+                stream_ids = apply_provider_diversification(
+                    stream_ids=stream_ids,
+                    stream_m3u_map=stream_m3u_map,
+                    enabled=True,
+                    mode=config.provider_diversification.mode,
+                    m3u_account_priorities=m3u_account_priorities,
+                    channel_name=channel_name
+                )
+            
+            # Apply Account Stream Limits
+            if config.account_stream_limits.enabled:
+                logger.info(
+                    "[AUTO-CREATE-EXEC-ENHANCED] Applying account stream limits "
+                    "to channel '%s' (id=%s)",
+                    channel_name, channel_id
+                )
+                stream_ids = apply_account_stream_limits(
+                    stream_ids=stream_ids,
+                    stream_m3u_map=stream_m3u_map,
+                    enabled=True,
+                    global_limit=config.account_stream_limits.global_limit,
+                    account_limits=config.account_stream_limits.account_limits,
+                    channel_name=channel_name
+                )
+                
+        except Exception as e:
+            logger.warning(
+                "[AUTO-CREATE-EXEC-ENHANCED] Failed to apply enhanced features "
+                "to channel '%s': %s",
+                channel_name, e
+            )
+        
+        return stream_ids
 
     async def _update_channel(self, channel: dict, stream_ctx: StreamContext,
                                exec_ctx: ExecutionContext, params: dict) -> ActionResult:
