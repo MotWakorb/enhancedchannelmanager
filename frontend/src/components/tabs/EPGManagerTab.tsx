@@ -451,6 +451,17 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
     loadSources();
   }, [loadSources]);
 
+  // Poll while any source is in a transitional state (fetching/parsing)
+  useEffect(() => {
+    const hasTransitional = [...sources, ...dummySources].some(
+      s => s.status === 'fetching' || s.status === 'parsing'
+    );
+    if (!hasTransitional) return;
+    const interval = setInterval(loadSources, 2000);
+    const timeout = setTimeout(() => clearInterval(interval), 300000);
+    return () => { clearInterval(interval); clearTimeout(timeout); };
+  }, [sources, dummySources, loadSources]);
+
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
 
@@ -801,7 +812,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       />
 
       {/* ECM Native Dummy EPG Profiles */}
-      <DummyEPGManagerSection />
+      <DummyEPGManagerSection onSourcesChanged={loadSources} />
     </div>
   );
 }

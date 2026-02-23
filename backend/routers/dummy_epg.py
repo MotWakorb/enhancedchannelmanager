@@ -114,6 +114,12 @@ class ProfileUpdateRequest(BaseModel):
     channel_group_ids: Optional[list[int]] = None
 
 
+class ImportYAMLRequest(BaseModel):
+    """Request to import profiles from YAML."""
+    yaml_content: str
+    overwrite: bool = False
+
+
 class PreviewRequest(BaseModel):
     sample_name: str
     substitution_pairs: list[SubstitutionPairModel] = []
@@ -338,6 +344,18 @@ async def delete_profile(profile_id: int, db: Session = Depends(get_session)):
             logger.warning("[DUMMY-EPG] Profile not found: %s", profile_id)
             raise HTTPException(status_code=404, detail="Profile not found")
 
+        # Best-effort: clean up matching Dispatcharr EPG source(s)
+        try:
+            client = get_client()
+            epg_sources = await client.get_epg_sources()
+            suffix = f"/dummy-epg/xmltv/{profile_id}"
+            for src in epg_sources:
+                if (src.get("url") or "").endswith(suffix):
+                    await client.delete_epg_source(src["id"])
+                    logger.info("[DUMMY-EPG] Deleted Dispatcharr EPG source id=%s for profile %s", src["id"], profile_id)
+        except Exception as e:
+            logger.warning("[DUMMY-EPG] Could not clean up Dispatcharr EPG source for profile %s: %s", profile_id, e)
+
         db.delete(profile)
         db.commit()
 
@@ -423,7 +441,11 @@ def _resolve_group_assignments(channel_group_ids: list, channel_map: dict) -> li
 
 
 async def _fetch_all_channels() -> dict:
-    """Fetch all channels from Dispatcharr (paginated) and return {id: channel_dict}."""
+    """Fetch all channels from Dispatcharr (paginated) and return {id: channel_dict}.
+
+    Stream IDs (ints) in each channel's 'streams' field are resolved to
+    full stream dicts so that generate_channel_xml can access stream names.
+    """
     client = get_client()
     all_channels = []
     page = 1
@@ -434,7 +456,30 @@ async def _fetch_all_channels() -> dict:
         if not resp.get("next"):
             break
         page += 1
-    return {ch["id"]: ch for ch in all_channels}
+
+    channel_map = {ch["id"]: ch for ch in all_channels}
+
+    # Resolve stream IDs to stream dicts (API returns ints)
+    all_stream_ids = set()
+    for ch in all_channels:
+        for s in ch.get("streams", []):
+            if isinstance(s, int):
+                all_stream_ids.add(s)
+    if all_stream_ids:
+        try:
+            stream_details = await client.get_streams_by_ids(list(all_stream_ids))
+            stream_by_id = {s["id"]: s for s in stream_details}
+            for ch in channel_map.values():
+                raw = ch.get("streams", [])
+                if raw and isinstance(raw[0], int):
+                    ch["streams"] = [
+                        stream_by_id.get(sid, {"id": sid, "name": f"Stream {sid}"})
+                        for sid in raw
+                    ]
+        except Exception as e:
+            logger.warning("[DUMMY-EPG] Failed to resolve stream names: %s", e)
+
+    return channel_map
 
 
 @router.get("/xmltv")
@@ -570,3 +615,193 @@ async def force_regenerate(db: Session = Depends(get_session)):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
+
+
+@router.get("/profiles/export/yaml")
+async def export_dummy_epg_profiles_yaml():
+    """Export all Dummy EPG profiles as YAML.
+
+    Includes portable channel_group_names alongside numeric IDs
+    so profiles can be shared between ECM instances.
+    """
+    import yaml
+    from datetime import datetime as dt
+    from fastapi.responses import PlainTextResponse
+    from models import DummyEPGProfile
+
+    logger.debug("[DUMMY-EPG] GET /profiles/export/yaml")
+    db = get_session()
+    try:
+        profiles = db.query(DummyEPGProfile).order_by(DummyEPGProfile.name).all()
+
+        # Build group id→name lookup for portable export
+        client = get_client()
+        group_id_to_name = {}
+        try:
+            groups = await client.get_channel_groups()
+            group_id_to_name = {g["id"]: g["name"] for g in groups}
+        except Exception as e:
+            logger.warning("[DUMMY-EPG] Could not fetch channel groups for YAML export: %s", e)
+
+        # Fields to exclude from export (runtime/internal only)
+        exclude_keys = {"id", "created_at", "updated_at", "last_generated_at"}
+
+        export_profiles = []
+        for profile in profiles:
+            d = profile.to_dict()
+            # Remove runtime fields
+            profile_dict = {k: v for k, v in d.items() if k not in exclude_keys}
+            # Add portable group names
+            group_ids = d.get("channel_group_ids", []) or []
+            profile_dict["channel_group_names"] = [
+                group_id_to_name[gid] for gid in group_ids if gid in group_id_to_name
+            ]
+            export_profiles.append(profile_dict)
+
+        export_data = {
+            "version": 1,
+            "exported_at": dt.utcnow().isoformat() + "Z",
+            "profiles": export_profiles,
+        }
+
+        yaml_str = yaml.dump(export_data, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        return PlainTextResponse(
+            content=yaml_str,
+            media_type="text/yaml",
+            headers={"Content-Disposition": "attachment; filename=dummy_epg_profiles.yaml"},
+        )
+    except Exception as e:
+        logger.warning("[DUMMY-EPG] Failed to export profiles as YAML: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@router.post("/profiles/import/yaml")
+async def import_dummy_epg_profiles_yaml(request: ImportYAMLRequest):
+    """Import Dummy EPG profiles from YAML.
+
+    Resolves portable channel_group_names to local channel_group_ids.
+    """
+    import yaml
+
+    logger.debug("[DUMMY-EPG] POST /profiles/import/yaml - overwrite=%s", request.overwrite)
+    try:
+        # Parse YAML
+        try:
+            data = yaml.safe_load(request.yaml_content)
+        except yaml.YAMLError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
+
+        # Accept both {"profiles": [...]} and a bare list
+        if isinstance(data, list):
+            data = {"profiles": data}
+
+        if not data or "profiles" not in data:
+            raise HTTPException(status_code=400, detail="YAML must contain a 'profiles' array or be a list of profiles")
+
+        # Build group name→id lookup (case-insensitive)
+        client = get_client()
+        group_name_to_id = {}
+        try:
+            groups = await client.get_channel_groups()
+            group_name_to_id = {g["name"].lower(): g["id"] for g in groups}
+        except Exception as e:
+            logger.warning("[DUMMY-EPG] Could not fetch channel groups for YAML import: %s", e)
+
+        from models import DummyEPGProfile
+
+        db = get_session()
+        try:
+            imported = []
+            errors = []
+
+            for i, profile_data in enumerate(data["profiles"]):
+                profile_name = profile_data.get("name", f"Profile {i}")
+
+                # Resolve channel_group_names → channel_group_ids
+                if profile_data.get("channel_group_names") and not profile_data.get("channel_group_ids"):
+                    resolved_ids = []
+                    for gname in profile_data["channel_group_names"]:
+                        gid = group_name_to_id.get(gname.lower())
+                        if gid:
+                            resolved_ids.append(gid)
+                    if resolved_ids:
+                        profile_data["channel_group_ids"] = resolved_ids
+
+                # Strip portable-only fields
+                profile_data.pop("channel_group_names", None)
+
+                # Validate: name is required
+                if not profile_data.get("name"):
+                    errors.append({
+                        "profile_index": i,
+                        "profile_name": profile_name,
+                        "errors": ["Profile name is required"],
+                    })
+                    continue
+
+                # Check for duplicate
+                existing = db.query(DummyEPGProfile).filter(
+                    DummyEPGProfile.name == profile_data["name"]
+                ).first()
+
+                if existing:
+                    if request.overwrite:
+                        _apply_profile_fields(existing, profile_data)
+                        imported.append({"name": existing.name, "action": "updated"})
+                    else:
+                        errors.append({
+                            "profile_index": i,
+                            "profile_name": profile_name,
+                            "errors": ["Profile with this name already exists"],
+                        })
+                        continue
+                else:
+                    profile = DummyEPGProfile(name=profile_data["name"])
+                    _apply_profile_fields(profile, profile_data)
+                    db.add(profile)
+                    imported.append({"name": profile.name, "action": "created"})
+
+            db.commit()
+            cache.invalidate_prefix("dummy_epg_xmltv")
+
+            logger.info("[DUMMY-EPG] Imported %s profiles from YAML", len(imported))
+            return {
+                "success": True,
+                "imported": imported,
+                "errors": errors,
+            }
+        finally:
+            db.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("[DUMMY-EPG] Failed to import profiles from YAML: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _apply_profile_fields(profile, data: dict):
+    """Apply profile fields from a dict to a DummyEPGProfile model instance."""
+    simple_fields = [
+        "name", "enabled", "name_source", "stream_index",
+        "title_pattern", "time_pattern", "date_pattern",
+        "title_template", "description_template",
+        "upcoming_title_template", "upcoming_description_template",
+        "ended_title_template", "ended_description_template",
+        "fallback_title_template", "fallback_description_template",
+        "event_timezone", "output_timezone", "program_duration",
+        "categories", "channel_logo_url_template", "program_poster_url_template",
+        "tvg_id_template", "include_date_tag", "include_live_tag", "include_new_tag",
+        "pattern_builder_examples",
+    ]
+    for field in simple_fields:
+        if field in data:
+            setattr(profile, field, data[field])
+
+    if "substitution_pairs" in data and data["substitution_pairs"]:
+        profile.set_substitution_pairs(data["substitution_pairs"])
+    if "pattern_variants" in data and data["pattern_variants"]:
+        profile.set_pattern_variants(data["pattern_variants"])
+    if "channel_group_ids" in data and data["channel_group_ids"] is not None:
+        profile.set_channel_group_ids(data["channel_group_ids"])

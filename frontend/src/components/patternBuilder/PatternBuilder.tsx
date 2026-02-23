@@ -4,7 +4,7 @@
  * Manages state, composes child components, and emits pattern changes
  * back to the parent (DummyEPGProfileModal).
  */
-import { useState, useCallback, useEffect, useMemo, memo } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo, memo } from 'react';
 import type { Annotation, Example, PatternBuilderState, PatternBuilderProps, VariableType } from './types';
 import { AnnotationCanvas } from './AnnotationCanvas';
 import { AnnotationPopover } from './AnnotationPopover';
@@ -51,8 +51,11 @@ export const PatternBuilder = memo(function PatternBuilder({
     editingAnnotation?: Annotation;
   } | null>(null);
 
-  // Load persisted builder state on mount
+  // Load persisted builder state on initial data
+  const initializedRef = useRef(false);
   useEffect(() => {
+    if (initializedRef.current) return;
+
     resetVariableColors();
 
     if (builderExamples) {
@@ -62,6 +65,7 @@ export const PatternBuilder = memo(function PatternBuilder({
           setExamples(state.examples);
           setActiveIndex(state.activeExampleIndex || 0);
           setMode('visual');
+          initializedRef.current = true;
           return;
         }
       } catch { /* ignore parse errors */ }
@@ -70,9 +74,10 @@ export const PatternBuilder = memo(function PatternBuilder({
     // If we have regex patterns but no builder state, try to reverse-parse
     if (titlePattern || timePattern || datePattern) {
       setMode('advanced');
+      initializedRef.current = true;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run only on mount
+  }, [builderExamples]); // Re-run until initial data arrives
 
   // Persist builder state whenever examples change
   useEffect(() => {
