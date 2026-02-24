@@ -417,6 +417,9 @@ class Action:
             epg_id = self.params.get("epg_id")
             if epg_id is None or not isinstance(epg_id, int):
                 errors.append("assign_epg requires an 'epg_id' (integer)")
+            set_tvg_id = self.params.get("set_tvg_id")
+            if set_tvg_id is not None and not isinstance(set_tvg_id, bool):
+                errors.append("assign_epg.set_tvg_id must be a boolean")
 
         # Validate assign_profile
         elif action_type == ActionType.ASSIGN_PROFILE:

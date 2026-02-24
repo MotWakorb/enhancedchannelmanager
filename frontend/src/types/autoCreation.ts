@@ -126,6 +126,8 @@ export interface Action {
   pattern?: string;
   replacement?: string;
   template?: string;
+  // EPG assignment
+  set_tvg_id?: boolean;
   // Stream priority
   priority?: 'lowest' | 'highest';
 }
@@ -199,6 +201,7 @@ export interface AutoCreationRule {
   probe_on_sort?: boolean;
   sort_regex?: string | null;
   normalize_names?: boolean;
+  skip_struck_streams?: boolean;
   orphan_action?: 'delete' | 'move_uncategorized' | 'delete_and_cleanup_groups' | 'none';
   last_run_at?: string;
   match_count: number;
@@ -225,6 +228,7 @@ export interface CreateRuleData {
   probe_on_sort?: boolean;
   sort_regex?: string | null;
   normalize_names?: boolean;
+  skip_struck_streams?: boolean;
   orphan_action?: string;
 }
 

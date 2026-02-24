@@ -225,6 +225,17 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                     alert_category="m3u_refresh",
                     entity_id=account_id,
                 )
+
+                # Run auto-creation rules if any have run_on_refresh=True
+                try:
+                    from tasks.auto_creation import run_auto_creation_after_refresh
+                    await run_auto_creation_after_refresh(
+                        m3u_account_ids=[account_id],
+                        triggered_by="m3u_refresh",
+                    )
+                except Exception as e:
+                    logger.warning("[M3U-REFRESH] Auto-creation after refresh failed: %s", e)
+
                 return
             elif elapsed > 30 and not initial_updated:
                 # After 30 seconds, assume complete if no timestamp field available
@@ -257,6 +268,17 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                     alert_category="m3u_refresh",
                     entity_id=account_id,
                 )
+
+                # Run auto-creation rules if any have run_on_refresh=True
+                try:
+                    from tasks.auto_creation import run_auto_creation_after_refresh
+                    await run_auto_creation_after_refresh(
+                        m3u_account_ids=[account_id],
+                        triggered_by="m3u_refresh",
+                    )
+                except Exception as e:
+                    logger.warning("[M3U-REFRESH] Auto-creation after refresh failed: %s", e)
+
                 return
 
     except Exception as e:

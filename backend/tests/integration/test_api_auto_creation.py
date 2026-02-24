@@ -318,6 +318,7 @@ class TestAutoCreationYAMLAPI:
         mock_rule.sort_order = None
         mock_rule.sort_regex = None
         mock_rule.normalize_names = False
+        mock_rule.skip_struck_streams = False
         mock_db_session.query.return_value.order_by.return_value.all.return_value = [mock_rule]
 
         response = test_client.get("/api/auto-creation/export/yaml")

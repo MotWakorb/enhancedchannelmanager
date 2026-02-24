@@ -44,6 +44,9 @@ const isProbeActive = (status: ProbeProgress['status']): boolean => {
   return ['probing', 'fetching', 'refreshing', 'reordering', 'starting', 'fetching_sources', 'fetching_accounts', 'building_digest', 'sending_email', 'sending_discord'].includes(status);
 };
 
+// Sources that should auto-show toasts when new notifications arrive
+const TOAST_SOURCES = new Set(['auto_creation']);
+
 export function NotificationCenter({ onNotificationClick }: NotificationCenterProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -53,6 +56,10 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
   const panelRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const toasts = useNotifications();
+  const toastsRef = useRef(toasts);
+  toastsRef.current = toasts;
+  const seenNotificationIds = useRef<Set<number>>(new Set());
+  const initialLoadDone = useRef(false);
 
   // Load notifications
   const loadNotifications = useCallback(async () => {
@@ -69,6 +76,25 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
         if (!aActive && bActive) return 1;
         return 0; // preserve API order within each group
       });
+
+      // Show toasts for new notifications from opted-in sources
+      if (initialLoadDone.current) {
+        for (const n of response.notifications) {
+          if (!seenNotificationIds.current.has(n.id) && n.source && TOAST_SOURCES.has(n.source)) {
+            const t = toastsRef.current;
+            const toastMethod = n.type === 'error' ? t.error
+              : n.type === 'warning' ? t.warning
+              : n.type === 'success' ? t.success
+              : t.info;
+            toastMethod(n.message, n.title || undefined);
+          }
+        }
+      }
+
+      // Track all seen IDs
+      seenNotificationIds.current = new Set(response.notifications.map(n => n.id));
+      initialLoadDone.current = true;
+
       setNotifications(sorted);
       setUnreadCount(response.unread_count);
     } catch (err) {
@@ -86,14 +112,26 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
     });
   }, [notifications]);
 
-  // Load on mount and periodically - faster when probe is running
+  // Check if auto-creation is in progress (has "Starting" but no completion yet within 2 minutes)
+  const hasActiveAutoCreation = useMemo(() => {
+    const autoCreationNotifs = notifications.filter(n => n.source === 'auto_creation');
+    if (autoCreationNotifs.length === 0) return false;
+    const latest = autoCreationNotifs[0]; // sorted by newest first from API
+    const isStarting = latest.title?.includes('Starting');
+    if (!isStarting) return false;
+    // Only consider active if within last 2 minutes
+    const age = Date.now() - new Date(latest.created_at).getTime();
+    return age < 120_000;
+  }, [notifications]);
+
+  // Load on mount and periodically - faster when probe or auto-creation is running
   useEffect(() => {
     loadNotifications();
-    // Poll every 2 seconds when probe is running, otherwise every 30 seconds
-    const pollInterval = hasActiveProbe ? 2000 : 30000;
+    // Poll every 2 seconds when probe is running, 5s for auto-creation, otherwise every 30 seconds
+    const pollInterval = hasActiveProbe ? 2000 : hasActiveAutoCreation ? 5000 : 30000;
     const interval = setInterval(loadNotifications, pollInterval);
     return () => clearInterval(interval);
-  }, [loadNotifications, hasActiveProbe]);
+  }, [loadNotifications, hasActiveProbe, hasActiveAutoCreation]);
 
   // Close panel when clicking outside
   useEffect(() => {

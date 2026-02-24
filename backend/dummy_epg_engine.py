@@ -478,7 +478,7 @@ def generate_channel_xml(
     # Base groups for template rendering (always available)
     base_groups = {
         "channel_name": channel_name,
-        "channel_number": str(channel_number) if channel_number is not None else "",
+        "channel_number": str(int(channel_number)) if channel_number is not None else "",
         "channel_id": str(channel_id),
         "original_name": source_name,
         "substituted_name": substituted_name,
@@ -668,7 +668,7 @@ def generate_xmltv(
                 tvg_id_template = profile.get("tvg_id_template", "ecm-{channel_number}")
                 tvg_id_groups = {
                     "channel_id": str(ch_id),
-                    "channel_number": str(ch_number) if ch_number is not None else str(ch_id),
+                    "channel_number": str(int(ch_number)) if ch_number is not None else str(ch_id),
                     "channel_name": ch_name,
                 }
                 tvg_id = render_template(tvg_id_template, tvg_id_groups)

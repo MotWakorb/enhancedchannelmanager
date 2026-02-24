@@ -237,10 +237,23 @@ async def run_auto_creation_after_refresh(
             return {"success": True, "message": "No auto-creation rules to run on refresh"}
 
         rule_ids = [r.id for r in rules_to_run]
+        rule_names = [r.name for r in rules_to_run]
         logger.info("[AUTO-CREATION] Running %s rules after M3U refresh", len(rule_ids))
 
     finally:
         session.close()
+
+    from services.notification_service import create_notification_internal
+
+    # Notify: starting
+    await create_notification_internal(
+        notification_type="info",
+        title="Auto-Creation: Starting",
+        message=f"Running {len(rule_ids)} rule{'s' if len(rule_ids) != 1 else ''} after M3U refresh: {', '.join(rule_names)}",
+        source="auto_creation",
+        source_id="m3u_refresh",
+        send_alerts=False,
+    )
 
     # Get or initialize engine
     client = get_client()
@@ -263,13 +276,48 @@ async def run_auto_creation_after_refresh(
             rule_ids=rule_ids,
         )
 
+        created = result.get("channels_created", 0)
+        updated = result.get("channels_updated", 0)
+        matched = result.get("streams_matched", 0)
+        evaluated = result.get("streams_evaluated", 0)
+
         logger.info(
             "[AUTO-CREATION] Post-refresh pipeline: %s channels created, %s updated",
-            result.get("channels_created", 0), result.get("channels_updated", 0)
+            created, updated
+        )
+
+        # Notify: completed
+        parts = []
+        if created:
+            parts.append(f"{created} created")
+        if updated:
+            parts.append(f"{updated} updated")
+        title = f"Auto-Creation: {', '.join(parts)}" if parts else "Auto-Creation: No changes"
+        ntype = "success" if parts else "info"
+
+        await create_notification_internal(
+            notification_type=ntype,
+            title=title,
+            message=f"Ran {len(rule_ids)} rules after M3U refresh. "
+                    f"{matched}/{evaluated} streams matched.",
+            source="auto_creation",
+            source_id="m3u_refresh",
+            send_alerts=False,
         )
 
         return result
 
     except Exception as e:
         logger.exception("[AUTO-CREATION] Post-refresh pipeline failed: %s", e)
+
+        # Notify: failed
+        await create_notification_internal(
+            notification_type="error",
+            title="Auto-Creation: Failed",
+            message=f"Auto-creation after M3U refresh failed: {e}",
+            source="auto_creation",
+            source_id="m3u_refresh",
+            send_alerts=False,
+        )
+
         return {"success": False, "error": str(e)}

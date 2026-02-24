@@ -39,6 +39,7 @@ export function RuleBuilder({
   const [probeOnSort, setProbeOnSort] = useState(rule?.probe_on_sort ?? false);
   const [sortRegex, setSortRegex] = useState(rule?.sort_regex || '');
   const [normalizeNames, setNormalizeNames] = useState(rule?.normalize_names ?? false);
+  const [skipStruckStreams, setSkipStruckStreams] = useState(rule?.skip_struck_streams ?? false);
   const [orphanAction, setOrphanAction] = useState(rule?.orphan_action || 'delete');
   const [conditions, setConditions] = useState<Condition[]>(rule?.conditions || []);
   const [actions, setActions] = useState<Action[]>(rule?.actions || []);
@@ -156,6 +157,7 @@ export function RuleBuilder({
         probe_on_sort: probeOnSort,
         sort_regex: sortRegex || '',
         normalize_names: normalizeNames,
+        skip_struck_streams: skipStruckStreams,
         orphan_action: orphanAction,
       });
     } finally {
@@ -316,6 +318,16 @@ export function RuleBuilder({
                   aria-label="Normalize channel names"
                 />
                 <span>Normalize names</span>
+              </label>
+              <label className="checkbox-item">
+                <input
+                  type="checkbox"
+                  checked={skipStruckStreams}
+                  onChange={e => setSkipStruckStreams(e.target.checked)}
+                  disabled={isLoading}
+                  aria-label="Skip struck-out streams"
+                />
+                <span>Skip struck-out streams</span>
               </label>
             </div>
           </div>

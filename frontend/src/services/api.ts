@@ -94,7 +94,7 @@ import type {
   DummyEPGBatchPreviewRequest,
 } from '../types';
 import { logger } from '../utils/logger';
-import { fetchJson, buildQuery } from './httpClient';
+import { fetchJson, fetchText, buildQuery } from './httpClient';
 import {
   type TimezonePreference,
   type NumberSeparator,
@@ -3347,6 +3347,29 @@ export function getDummyEPGXmltvUrl(): string {
  */
 export function getDummyEPGProfileXmltvUrl(profileId: number): string {
   return `${window.location.origin}${API_BASE}/dummy-epg/xmltv/${profileId}`;
+}
+
+/**
+ * Export all Dummy EPG profiles as YAML.
+ */
+export async function exportDummyEPGProfilesYAML(): Promise<string> {
+  return fetchText(`${API_BASE}/dummy-epg/profiles/export/yaml`);
+}
+
+/**
+ * Import Dummy EPG profiles from YAML.
+ */
+export async function importDummyEPGProfilesYAML(
+  yamlContent: string,
+  overwrite?: boolean
+): Promise<{ success: boolean; imported: { name: string; action: string }[]; errors: { profile_index: number; profile_name: string; errors: string[] }[] }> {
+  return fetchJson(`${API_BASE}/dummy-epg/profiles/import/yaml`, {
+    method: 'POST',
+    body: JSON.stringify({
+      yaml_content: yamlContent,
+      overwrite: overwrite ?? false,
+    }),
+  });
 }
 
 /**
