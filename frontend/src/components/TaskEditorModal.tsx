@@ -124,7 +124,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
     const defaults: Record<string, unknown> = {};
 
     // For stream_probe: default to all groups with channels selected
-    // and use settings for batch_size, timeout, max_concurrent
+    // and use settings for timeout, max_concurrent
     if (task.task_id === 'stream_probe') {
       const allGroupsWithChannels = channelGroups
         .filter(g => g.channel_count > 0)
@@ -135,7 +135,6 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
 
       // Use settings values as defaults for numeric parameters
       if (settings) {
-        defaults['batch_size'] = settings.stream_probe_batch_size;
         defaults['timeout'] = settings.stream_probe_timeout;
         defaults['max_concurrent'] = settings.max_concurrent_probes;
       }

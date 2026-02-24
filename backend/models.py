@@ -306,7 +306,7 @@ class TaskSchedule(Base):
 
     Each schedule can have task-specific parameters stored as JSON.
     For example, a StreamProber schedule might have:
-    {"channel_groups": ["Sports", "News"], "batch_size": 10, "timeout": 30}
+    {"channel_groups": ["Sports", "News"], "timeout": 30, "max_concurrent": 8}
     """
     __tablename__ = "task_schedules"
 

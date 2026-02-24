@@ -337,13 +337,12 @@ async def startup_event():
         # Note: Scheduled probing is now controlled by the Task Engine (StreamProbeTask)
         try:
             logger.debug(
-                "[MAIN] Initializing stream prober (batch: %s, timeout: %ss)",
-                settings.stream_probe_batch_size, settings.stream_probe_timeout
+                "[MAIN] Initializing stream prober (timeout: %ss, max_concurrent: %s)",
+                settings.stream_probe_timeout, settings.max_concurrent_probes
             )
             prober = StreamProber(
                 get_client(),
                 probe_timeout=settings.stream_probe_timeout,
-                probe_batch_size=settings.stream_probe_batch_size,
                 user_timezone=settings.user_timezone,
                 bitrate_sample_duration=settings.bitrate_sample_duration,
                 parallel_probing_enabled=settings.parallel_probing_enabled,

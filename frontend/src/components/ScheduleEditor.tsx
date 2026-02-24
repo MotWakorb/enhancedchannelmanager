@@ -427,10 +427,10 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
           <h4 className="section-title">Task Parameters</h4>
           {parameterSchema.map((param) => (
             <div key={param.name} className="form-group">
-              {/* Show note before batch_size for stream_probe */}
-              {taskId === 'stream_probe' && param.name === 'batch_size' && (
+              {/* Show note before timeout for stream_probe */}
+              {taskId === 'stream_probe' && param.name === 'timeout' && (
                 <p className="parameters-note">
-                  Batch Size, Timeout, and Max Concurrent are optional overrides for the global settings in Settings → Maintenance.
+                  Timeout and Max Concurrent are optional overrides for the global settings in Settings → Maintenance.
                 </p>
               )}
               <label>{param.label}</label>
