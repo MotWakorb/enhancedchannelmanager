@@ -48,7 +48,7 @@ def send_password_reset_email(to_email: str, reset_token: str, base_url: str) ->
     Args:
         to_email: Recipient email address.
         reset_token: The raw reset token to include in the link.
-        base_url: The base URL of the application (e.g., http://localhost:6100).
+        base_url: The base URL of the application (e.g., http://localhost:6100 by default).
 
     Returns:
         True if email was sent successfully, False otherwise.
