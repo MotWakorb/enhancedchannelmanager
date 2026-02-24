@@ -803,7 +803,6 @@ export interface SettingsResponse {
   frontend_log_level: string;  // Frontend log level (DEBUG, INFO, WARN, ERROR)
   vlc_open_behavior: string;  // VLC open behavior: "protocol_only", "m3u_fallback", "m3u_only"
   // Stream probe settings (scheduled probing is controlled by Task Engine)
-  stream_probe_batch_size: number;  // Streams to probe per scheduled cycle
   stream_probe_timeout: number;  // Timeout in seconds for each probe
   stream_probe_schedule_time: string;  // Time of day to run probes (HH:MM, 24h format)
   bitrate_sample_duration: number;  // Duration in seconds to sample stream for bitrate (10, 20, or 30)
@@ -887,7 +886,6 @@ export async function saveSettings(settings: {
   frontend_log_level?: string;  // Optional - Frontend log level, defaults to INFO
   vlc_open_behavior?: string;  // Optional - VLC open behavior: "protocol_only", "m3u_fallback", "m3u_only"
   // Stream probe settings (scheduled probing is controlled by Task Engine)
-  stream_probe_batch_size?: number;  // Optional - streams per scheduled cycle, defaults to 10
   stream_probe_timeout?: number;  // Optional - timeout in seconds, defaults to 30
   stream_probe_schedule_time?: string;  // Optional - time of day for probes (HH:MM), defaults to "03:00"
   bitrate_sample_duration?: number;  // Optional - duration in seconds to sample stream for bitrate (10, 20, or 30), defaults to 10

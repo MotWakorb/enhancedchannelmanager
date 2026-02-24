@@ -313,7 +313,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [telegramTesting, setTelegramTesting] = useState(false);
 
   // Stream probe settings (scheduled probing is controlled by Task Engine)
-  const [streamProbeBatchSize, setStreamProbeBatchSize] = useState(10);
   const [streamProbeTimeout, setStreamProbeTimeout] = useState(30);
   const [bitrateSampleDuration, setBitrateSampleDuration] = useState(10);
   const [parallelProbingEnabled, setParallelProbingEnabled] = useState(true);
@@ -611,7 +610,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       }
       setLinkedM3UAccounts(settings.linked_m3u_accounts ?? []);
       // Stream probe settings (scheduled probing is controlled by Task Engine)
-      setStreamProbeBatchSize(settings.stream_probe_batch_size ?? 10);
       setStreamProbeTimeout(settings.stream_probe_timeout ?? 30);
       setBitrateSampleDuration(settings.bitrate_sample_duration ?? 10);
       setParallelProbingEnabled(settings.parallel_probing_enabled ?? true);
@@ -737,7 +735,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         auto_creation_exclude_auto_sync_groups: autoCreationExcludeAutoSyncGroups,
         linked_m3u_accounts: linkedM3UAccounts,
         // Stream probe settings (scheduled probing is controlled by Task Engine)
-        stream_probe_batch_size: streamProbeBatchSize,
         stream_probe_timeout: streamProbeTimeout,
         bitrate_sample_duration: bitrateSampleDuration,
         parallel_probing_enabled: parallelProbingEnabled,
@@ -3047,20 +3044,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </p>
 
         <div className="settings-group" style={{ marginTop: '1rem' }}>
-            <div className="form-group-vertical">
-              <label htmlFor="probeBatchSize">Batch size</label>
-              <span className="form-description">Streams to probe per scheduled cycle (1-{totalStreamCount})</span>
-              <input
-                id="probeBatchSize"
-                type="number"
-                min="1"
-                max={totalStreamCount}
-                value={streamProbeBatchSize}
-                onChange={(e) => setStreamProbeBatchSize(e.target.value === '' ? 10 : parseInt(e.target.value))}
-                onBlur={() => setStreamProbeBatchSize(Math.max(1, Math.min(totalStreamCount, streamProbeBatchSize || 10)))}
-              />
-            </div>
-
             <div className="form-group-vertical">
               <label htmlFor="probeTimeout">Probe timeout (seconds)</label>
               <span className="form-description">Timeout for each probe attempt (5-120 seconds)</span>

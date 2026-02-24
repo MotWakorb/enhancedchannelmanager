@@ -102,15 +102,6 @@ TASK_PARAMETER_SCHEMAS = {
                 "source": "channel_groups",  # Tells UI to fetch from channel groups API
             },
             {
-                "name": "batch_size",
-                "type": "number",
-                "label": "Batch Size",
-                "description": "Number of streams to probe per batch",
-                "default": 10,
-                "min": 1,
-                "max": 100,
-            },
-            {
                 "name": "timeout",
                 "type": "number",
                 "label": "Timeout (seconds)",

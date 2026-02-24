@@ -67,7 +67,6 @@ class DispatcharrSettings(BaseModel):
     vlc_open_behavior: str = "m3u_fallback"
     # Stream probe settings - uses ffprobe to gather stream metadata
     # Note: Scheduled probing is now controlled by the Task Engine (StreamProbeTask)
-    stream_probe_batch_size: int = 10  # Streams to probe per scheduled cycle
     stream_probe_timeout: int = 30  # Timeout in seconds for each probe
     stream_probe_schedule_time: str = "03:00"  # Time of day to run probes (HH:MM, 24h format, user's local time)
     bitrate_sample_duration: int = 10  # Duration in seconds to sample stream for bitrate measurement (10, 20, or 30)

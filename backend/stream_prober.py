@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 # Default configuration
 DEFAULT_PROBE_TIMEOUT = 30  # seconds
-DEFAULT_PROBE_BATCH_SIZE = 10  # streams per cycle
 BITRATE_SAMPLE_DURATION = 8  # seconds to sample stream for bitrate measurement
 
 # Per-account ramp-up configuration
@@ -231,7 +230,6 @@ class StreamProber:
         self,
         client,
         probe_timeout: int = DEFAULT_PROBE_TIMEOUT,
-        probe_batch_size: int = DEFAULT_PROBE_BATCH_SIZE,
         user_timezone: str = "",  # IANA timezone name
         bitrate_sample_duration: int = 10,  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
         parallel_probing_enabled: bool = True,  # Probe streams from different M3Us simultaneously
@@ -250,7 +248,6 @@ class StreamProber:
     ):
         self.client = client
         self.probe_timeout = probe_timeout
-        self.probe_batch_size = probe_batch_size
         self.user_timezone = user_timezone
         self.bitrate_sample_duration = bitrate_sample_duration
         self.parallel_probing_enabled = parallel_probing_enabled
@@ -672,8 +669,8 @@ class StreamProber:
             return
 
         logger.info(
-            "[STREAM-PROBE] StreamProber initialized (batch: %s, timeout: %ss)",
-            self.probe_batch_size, self.probe_timeout
+            "[STREAM-PROBE] StreamProber initialized (timeout: %ss, max_concurrent: %s)",
+            self.probe_timeout, self.max_concurrent_probes
         )
 
     async def stop(self):
@@ -1740,12 +1737,6 @@ class StreamProber:
             # Sort streams by their lowest channel number (lowest first)
             streams_to_probe.sort(key=lambda s: stream_to_channel_number.get(s["id"], 999999))
             logger.info("[STREAM-PROBE] Sorted %s streams by channel number", len(streams_to_probe))
-
-            # Apply batch size limit after filtering out recently probed streams
-            # This ensures the batch only contains streams that will actually be probed
-            if self.probe_batch_size > 0 and len(streams_to_probe) > self.probe_batch_size:
-                logger.info("[STREAM-PROBE] Limiting batch to %s streams (from %s eligible)", self.probe_batch_size, len(streams_to_probe))
-                streams_to_probe = streams_to_probe[:self.probe_batch_size]
 
             self._probe_progress_total = len(streams_to_probe)
             self._probe_progress_status = "probing"

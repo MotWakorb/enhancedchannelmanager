@@ -47,7 +47,6 @@ class StreamProbeTask(TaskScheduler):
         # Schedule parameter overrides
         self._channel_groups: Optional[list] = None  # None = not configured (probe all), [] = explicitly empty (probe nothing)
         self._auto_sync_groups: bool = False  # Probe all current groups at runtime
-        self._batch_size_override: Optional[int] = None
         self._timeout_override: Optional[int] = None
         self._max_concurrent_override: Optional[int] = None
 
@@ -56,7 +55,6 @@ class StreamProbeTask(TaskScheduler):
         return {
             "channel_groups": self._channel_groups,
             "auto_sync_groups": self._auto_sync_groups,
-            "batch_size": self._batch_size_override,
             "timeout": self._timeout_override,
             "max_concurrent": self._max_concurrent_override,
         }
@@ -66,7 +64,6 @@ class StreamProbeTask(TaskScheduler):
 
         Supported parameters:
         - channel_groups: list[str] - which channel groups to probe
-        - batch_size: int - number of streams per batch
         - timeout: int - probe timeout in seconds
         - max_concurrent: int - max concurrent probe operations
         """
@@ -76,16 +73,14 @@ class StreamProbeTask(TaskScheduler):
             self._channel_groups = val if val is not None else []
         if "auto_sync_groups" in config:
             self._auto_sync_groups = bool(config["auto_sync_groups"])
-        if "batch_size" in config:
-            self._batch_size_override = config["batch_size"]
         if "timeout" in config:
             self._timeout_override = config["timeout"]
         if "max_concurrent" in config:
             self._max_concurrent_override = config["max_concurrent"]
 
-        logger.info("[%s] Config updated: channel_groups=%s, auto_sync_groups=%s, batch_size=%s, timeout=%s, max_concurrent=%s",
+        logger.info("[%s] Config updated: channel_groups=%s, auto_sync_groups=%s, timeout=%s, max_concurrent=%s",
                    self.task_id, self._channel_groups, self._auto_sync_groups,
-                   self._batch_size_override, self._timeout_override, self._max_concurrent_override)
+                   self._timeout_override, self._max_concurrent_override)
 
     def set_prober(self, prober):
         """Set the StreamProber instance to delegate to.
@@ -139,7 +134,6 @@ class StreamProbeTask(TaskScheduler):
 
         # Save original prober settings so we can restore them after
         original_timeout = self._prober.probe_timeout
-        original_batch_size = self._prober.probe_batch_size
         original_max_concurrent = self._prober.max_concurrent_probes
 
         try:
@@ -147,9 +141,6 @@ class StreamProbeTask(TaskScheduler):
             if self._timeout_override is not None:
                 self._prober.probe_timeout = self._timeout_override
                 logger.info("[%s] Using schedule timeout: %ss", self.task_id, self._timeout_override)
-            if self._batch_size_override is not None:
-                self._prober.probe_batch_size = self._batch_size_override
-                logger.info("[%s] Using schedule batch_size: %s", self.task_id, self._batch_size_override)
             if self._max_concurrent_override is not None:
                 self._prober.max_concurrent_probes = max(1, min(16, self._max_concurrent_override))
                 logger.info("[%s] Using schedule max_concurrent: %s", self.task_id, self._prober.max_concurrent_probes)
@@ -302,12 +293,10 @@ class StreamProbeTask(TaskScheduler):
         finally:
             # Restore original prober settings
             self._prober.probe_timeout = original_timeout
-            self._prober.probe_batch_size = original_batch_size
             self._prober.max_concurrent_probes = original_max_concurrent
 
             # Clear all schedule parameter overrides
             self._channel_groups = None
             self._auto_sync_groups = False
-            self._batch_size_override = None
             self._timeout_override = None
             self._max_concurrent_override = None
