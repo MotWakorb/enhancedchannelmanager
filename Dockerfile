@@ -65,8 +65,9 @@ ENV CONFIG_DIR=/config
 ENV ECM_PORT=6100
 ENV ECM_HTTPS_PORT=6143
 
-# Expose ports (HTTP on ECM_PORT, HTTPS on ECM_HTTPS_PORT when TLS enabled)
-EXPOSE $ECM_PORT $ECM_HTTPS_PORT
+# Expose ports (HTTP on 6100, HTTPS on 6143 when TLS enabled)
+# Note: These are defaults; actual ports are configurable at runtime via ENV.
+EXPOSE 6100 6143
 
 # Add healthcheck
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

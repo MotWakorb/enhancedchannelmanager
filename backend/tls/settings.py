@@ -67,6 +67,10 @@ class TLSSettings(BaseModel):
     last_renewal_error: Optional[str] = None
 
     # HTTPS port for TLS connections (HTTP always stays on 6100 as fallback)
+    # Precedence:
+    # 1. Saved config in tls_settings.json
+    # 2. ECM_HTTPS_PORT environment variable (read at module import time)
+    # 3. Default value 6143
     https_port: int = int(os.environ.get("ECM_HTTPS_PORT", 6143))
 
     @field_validator("domain")
