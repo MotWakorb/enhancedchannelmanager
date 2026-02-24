@@ -65,11 +65,11 @@ ENV CONFIG_DIR=/config
 ENV ECM_PORT=6100
 ENV ECM_HTTPS_PORT=6143
 
-# Expose ports (HTTP on 6100, HTTPS on 6143 when TLS enabled)
-# Note: These are defaults; actual ports are configurable at runtime via ENV.
+# Expose default ports (HTTP: 6100, HTTPS: 6143)
+# Note: Actual ports are configurable at runtime via ECM_PORT and ECM_HTTPS_PORT.
 EXPOSE 6100 6143
 
-# Add healthcheck
+# Add healthcheck (respects runtime ECM_PORT)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD python -c "import urllib.request, os; port = os.environ.get('ECM_PORT', '6100'); urllib.request.urlopen(f'http://localhost:{port}/api/health')" || exit 1
 
