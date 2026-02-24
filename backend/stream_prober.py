@@ -421,7 +421,7 @@ class StreamProber:
                 source="stream_probe",
                 source_id=str(int(time.time())),
                 metadata=metadata,
-                send_alerts=False,
+                send_alerts=True,
             )
             if result and "id" in result:
                 self._probe_notification_id = result["id"]
