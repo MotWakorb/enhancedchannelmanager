@@ -105,18 +105,21 @@ check_filesystem() {
 check_network() {
     print_info "Checking network configuration..."
 
-    # Check if port 6100 (HTTP) is available
-    if ! netstat -tuln 2>/dev/null | grep -q ":6100 "; then
-        print_success "Port 6100 (HTTP) is available"
+    ECM_PORT=${ECM_PORT:-6100}
+
+    # Check if port HTTP is available
+    if ! netstat -tuln 2>/dev/null | grep -q ":${ECM_PORT} "; then
+        print_success "Port ${ECM_PORT} (HTTP) is available"
     else
-        print_warning "Port 6100 (HTTP) is already in use"
+        print_warning "Port ${ECM_PORT} (HTTP) is already in use"
     fi
 
-    # Check if port 6143 (HTTPS) is available
-    if ! netstat -tuln 2>/dev/null | grep -q ":6143 "; then
-        print_success "Port 6143 (HTTPS) is available"
+    # Check if port (HTTPS) is available
+    ECM_HTTPS_PORT=${ECM_HTTPS_PORT:-6143}
+    if ! netstat -tuln 2>/dev/null | grep -q ":${ECM_HTTPS_PORT} "; then
+        print_success "Port ${ECM_HTTPS_PORT} (HTTPS) is available"
     else
-        print_warning "Port 6143 (HTTPS) is already in use"
+        print_warning "Port ${ECM_HTTPS_PORT} (HTTPS) is already in use"
     fi
 
     return 0
@@ -157,7 +160,8 @@ check_tls_config() {
 
     if [ -f "$TLS_CONFIG" ]; then
         TLS_ENABLED=$(python3 -c "import json; print(json.load(open('$TLS_CONFIG')).get('enabled', False))" 2>/dev/null || echo "False")
-        HTTPS_PORT=$(python3 -c "import json; print(json.load(open('$TLS_CONFIG')).get('https_port', 6143))" 2>/dev/null || echo "6143")
+        ECM_HTTPS_PORT=${ECM_HTTPS_PORT:-6143}
+        HTTPS_PORT=$(python3 -c "import json; print(json.load(open('$TLS_CONFIG')).get('https_port', $ECM_HTTPS_PORT))" 2>/dev/null || echo "$ECM_HTTPS_PORT")
 
         if [ "$TLS_ENABLED" = "True" ] && [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
             print_success "TLS enabled with valid certificates"
@@ -173,15 +177,16 @@ check_tls_config() {
 }
 
 print_startup_info() {
+    ECM_PORT=${ECM_PORT:-6100}
     echo ""
     echo "${GREEN}════════════════════════════════════════════════════════════${NC}"
     echo "${GREEN}  All preflight checks passed!${NC}"
     echo "${GREEN}════════════════════════════════════════════════════════════${NC}"
     echo ""
     print_info "Starting Enhanced Channel Manager..."
-    print_info "HTTP Server: http://0.0.0.0:6100"
+    print_info "HTTP Server: http://0.0.0.0:${ECM_PORT}"
     print_info "HTTPS Server: Managed by application (if TLS enabled)"
-    print_info "Health Check: http://0.0.0.0:6100/api/health"
+    print_info "Health Check: http://0.0.0.0:${ECM_PORT}/api/health"
     echo ""
 }
 
@@ -213,7 +218,8 @@ run_preflight_checks
 check_tls_config
 
 # Switch to non-root user and run the application
-# HTTP server runs as main process on port 6100
+# HTTP server runs as main process on port ECM_PORT (default 6100)
 # HTTPS server is managed by the application as a subprocess (if TLS enabled)
 cd /app
-exec gosu appuser uvicorn main:app --host 0.0.0.0 --port 6100
+ECM_PORT=${ECM_PORT:-6100}
+exec gosu appuser uvicorn main:app --host 0.0.0.0 --port ${ECM_PORT}

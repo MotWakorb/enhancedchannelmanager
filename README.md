@@ -925,17 +925,20 @@ services:
   ecm:
     image: ghcr.io/motwakorb/enhancedchannelmanager:latest
     ports:
-      - "6100:6100"   # HTTP (always available)
-      - "6143:6143"   # HTTPS (when TLS is enabled)
+      - "6100:6100"   # HTTP (configurable via ECM_PORT)
+      - "6143:6143"   # HTTPS (configurable via ECM_HTTPS_PORT)
     volumes:
       - ./config:/config
+    environment:
+      - ECM_PORT=6100
+      - ECM_HTTPS_PORT=6143
 ```
 
 The Dispatcharr URL can be configured through the Settings modal in the UI, which persists to the config volume.
 
 **Port Configuration:**
-- **Port 6100** - HTTP interface (always available as fallback)
-- **Port 6143** - HTTPS interface (when TLS is configured in Settings → TLS Certificates)
+- **ECM_PORT** (default: 6100) - HTTP interface (always available as fallback)
+- **ECM_HTTPS_PORT** (default: 6143) - HTTPS interface (when TLS is configured in Settings → TLS Certificates)
 
 ### Development
 
