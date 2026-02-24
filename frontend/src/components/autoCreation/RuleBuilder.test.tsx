@@ -302,7 +302,7 @@ describe('RuleBuilder', () => {
 
       // Add action
       await user.click(screen.getByRole('button', { name: /add action/i }));
-      await user.click(screen.getByText(/skip/i));
+      await user.click(screen.getByRole('button', { name: /^skip$/i }));
 
       // Save
       await user.click(screen.getByRole('button', { name: /save/i }));

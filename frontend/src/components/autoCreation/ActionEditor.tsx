@@ -940,6 +940,16 @@ export function ActionEditor({
             {epgSources.length === 0 && (
               <span className="field-hint">No EPG sources configured. Add sources in the EPG Manager tab.</span>
             )}
+            <label className="transform-toggle">
+              <input
+                type="checkbox"
+                checked={action.set_tvg_id ?? false}
+                onChange={e => onChange({ ...action, set_tvg_id: e.target.checked })}
+                disabled={readonly}
+              />
+              Set TVG-ID from matched EPG entry
+            </label>
+            <span className="field-hint">Also sets the channel&apos;s tvg_id to the matched EPG data entry&apos;s tvg_id</span>
           </div>
         )}
 

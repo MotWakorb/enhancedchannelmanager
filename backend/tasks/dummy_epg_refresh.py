@@ -20,6 +20,45 @@ POLL_INTERVAL_SECONDS = 5
 MAX_WAIT_SECONDS = 300
 
 
+async def wait_for_epg_source_refresh(
+    client,
+    source_id: int,
+    source_name: str,
+    poll_interval: int = POLL_INTERVAL_SECONDS,
+    max_wait: int = MAX_WAIT_SECONDS,
+) -> bool:
+    """Poll until a Dispatcharr EPG source finishes refreshing.
+
+    Returns True if refresh completed, False on timeout.
+    Reusable by both DummyEPGRefreshTask and auto-creation Pass 5.
+    """
+    initial_source = await client.get_epg_source(source_id)
+    initial_updated = initial_source.get("updated_at") or initial_source.get("last_updated")
+
+    logger.info("[DUMMY-EPG] Triggering refresh for: %s (id=%s)", source_name, source_id)
+    await client.refresh_epg_source(source_id)
+
+    from datetime import datetime as _dt
+    wait_start = _dt.utcnow()
+    while True:
+        elapsed = (_dt.utcnow() - wait_start).total_seconds()
+        if elapsed >= max_wait:
+            logger.warning("[DUMMY-EPG] Timeout waiting for %s after %.0fs", source_name, elapsed)
+            return False
+
+        await asyncio.sleep(poll_interval)
+
+        current_source = await client.get_epg_source(source_id)
+        current_updated = current_source.get("updated_at") or current_source.get("last_updated")
+
+        if current_updated and current_updated != initial_updated:
+            logger.info("[DUMMY-EPG] %s refresh complete", source_name)
+            return True
+        elif elapsed > 30:
+            logger.info("[DUMMY-EPG] %s — assuming complete after %.0fs", source_name, elapsed)
+            return True
+
+
 @register_task
 class DummyEPGRefreshTask(TaskScheduler):
     """
@@ -76,13 +115,33 @@ class DummyEPGRefreshTask(TaskScheduler):
                 page += 1
             channel_map = {ch["id"]: ch for ch in all_channels}
 
+            # Resolve stream IDs to stream dicts (API returns ints)
+            all_stream_ids = set()
+            for ch in all_channels:
+                for s in ch.get("streams", []):
+                    if isinstance(s, int):
+                        all_stream_ids.add(s)
+            if all_stream_ids:
+                try:
+                    stream_details = await client.get_streams_by_ids(list(all_stream_ids))
+                    stream_by_id = {s["id"]: s for s in stream_details}
+                    for ch in channel_map.values():
+                        raw = ch.get("streams", [])
+                        if raw and isinstance(raw[0], int):
+                            ch["streams"] = [
+                                stream_by_id.get(sid, {"id": sid, "name": f"Stream {sid}"})
+                                for sid in raw
+                            ]
+                except Exception as e:
+                    logger.warning("[%s] Failed to resolve stream names: %s", self.task_id, e)
+
             # Resolve group IDs to channel assignments
             def _resolve(group_ids):
                 group_set = set(group_ids)
                 return [
                     {"channel_id": ch_id, "channel_name": ch.get("name", "")}
                     for ch_id, ch in channel_map.items()
-                    if ch.get("channel_group_id") in group_set
+                    if (ch.get("channel_group_id") or ch.get("channel_group")) in group_set
                 ]
 
             # Generate combined XMLTV

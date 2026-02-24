@@ -126,3 +126,24 @@
   display: flex;
   gap: 0.25rem;
 }
+
+/* Export textarea */
+.dep-export-textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px;
+  background: var(--input-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
+  font-family: monospace;
+  font-size: 13px;
+  resize: vertical;
+  min-height: 400px;
+}
+
+.dep-export-textarea:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}

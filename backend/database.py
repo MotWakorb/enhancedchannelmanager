@@ -176,6 +176,9 @@ def _run_migrations(engine) -> None:
             # Add normalize_names column to auto_creation_rules (v0.12.0)
             _add_auto_creation_rules_normalize_names_column(conn)
 
+            # Add skip_struck_streams column to auto_creation_rules (v0.14.0)
+            _add_auto_creation_rules_skip_struck_streams_column(conn)
+
             # Add managed_channel_ids and orphan_action columns to auto_creation_rules (v0.12.0 - Reconciliation)
             _add_auto_creation_rules_managed_channel_ids_column(conn)
             _add_auto_creation_rules_orphan_action_column(conn)
@@ -1334,6 +1337,24 @@ def _add_auto_creation_rules_normalize_names_column(conn) -> None:
         conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN normalize_names BOOLEAN DEFAULT 0 NOT NULL"))
         conn.commit()
         logger.info("[DATABASE] Migration complete: added normalize_names column")
+
+
+def _add_auto_creation_rules_skip_struck_streams_column(conn) -> None:
+    """Add skip_struck_streams column to auto_creation_rules table."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_rules'"
+    ))
+    if not result.fetchone():
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
+    if "skip_struck_streams" not in columns:
+        logger.info("[DATABASE] Adding skip_struck_streams column to auto_creation_rules")
+        conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN skip_struck_streams BOOLEAN DEFAULT 0 NOT NULL"))
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: added skip_struck_streams column")
 
 
 def _add_auto_creation_rules_managed_channel_ids_column(conn) -> None:

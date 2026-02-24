@@ -71,6 +71,7 @@ class AutoCreationEngine:
         self._existing_channels = None
         self._existing_groups = None
         self._stream_stats_cache = {}
+        self._struck_stream_ids = set()
 
     async def run_pipeline(
         self,
@@ -523,6 +524,19 @@ class AutoCreationEngine:
             self._stream_stats_cache = {
                 s.stream_id: s.to_dict() for s in stats
             }
+
+            # Load struck stream IDs (consecutive_failures >= strike_threshold)
+            threshold = get_settings().strike_threshold
+            if threshold > 0:
+                struck = session.query(StreamStats.stream_id).filter(
+                    StreamStats.consecutive_failures >= threshold
+                ).all()
+                self._struck_stream_ids = {s[0] for s in struck}
+                if self._struck_stream_ids:
+                    logger.info("[AUTO-CREATE-ENGINE] Loaded %s struck stream IDs (threshold=%s)",
+                                len(self._struck_stream_ids), threshold)
+            else:
+                self._struck_stream_ids = set()
         finally:
             session.close()
 
@@ -816,8 +830,9 @@ class AutoCreationEngine:
             except Exception as e:
                 logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch channel profiles: %s", e)
 
-        # Pre-fetch EPG data if any rule uses assign_epg (for epg_id -> epg_data_id resolution)
+        # Pre-fetch EPG data and sources if any rule uses assign_epg
         epg_data = []
+        epg_sources = []
         needs_epg = any(
             a.get("type") == "assign_epg" if isinstance(a, dict) else getattr(a, "type", "") == "assign_epg"
             for r in rules for a in r.get_actions()
@@ -828,6 +843,11 @@ class AutoCreationEngine:
                 logger.debug("[AUTO-CREATE-ENGINE] Fetched %s EPG data entries for assign_epg resolution", len(epg_data))
             except Exception as e:
                 logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch EPG data for assign_epg: %s", e)
+            try:
+                epg_sources = await self.client.get_epg_sources()
+                logger.debug("[AUTO-CREATE-ENGINE] Fetched %s EPG sources", len(epg_sources))
+            except Exception as e:
+                logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch EPG sources: %s", e)
 
         # Build stream_id -> m3u_account_id map for smart sort M3U priority lookups
         stream_m3u_map = {}
@@ -839,7 +859,8 @@ class AutoCreationEngine:
             normalization_engine=norm_engine,
             settings=settings,
             all_profile_ids=all_profile_ids,
-            epg_data=epg_data
+            epg_data=epg_data,
+            epg_sources=epg_sources
         )
 
         # Results tracking
@@ -1030,6 +1051,13 @@ class AutoCreationEngine:
         # =====================================================================
         logger.debug("[AUTO-CREATE-ENGINE] Executing actions for %s matched streams", len(sorted_entries))
         for stream, winning_rule, losing_rules, stream_rules_log in sorted_entries:
+            # Skip struck-out streams if the winning rule has skip_struck_streams enabled
+            if getattr(winning_rule, 'skip_struck_streams', False) and stream.stream_id in self._struck_stream_ids:
+                logger.info("[AUTO-CREATE-ENGINE] Skipping struck stream %r (id=%s) for rule '%s'",
+                            stream.stream_name, stream.stream_id, winning_rule.name)
+                results["streams_skipped_struck"] = results.get("streams_skipped_struck", 0) + 1
+                continue
+
             results["streams_matched"] += 1
             logger.debug(
                 "[AUTO-CREATE-ENGINE] Stream %r (id=%s): "
@@ -1216,7 +1244,396 @@ class AutoCreationEngine:
             settings=settings
         )
 
+        # =====================================================================
+        # Pass 5: Dummy EPG refresh + retry deferred assign_epg
+        # =====================================================================
+        if executor._deferred_epg_assignments:
+            logger.info(
+                "[AUTO-CREATE-ENGINE] Pass 5: %s deferred EPG assignments to retry",
+                len(executor._deferred_epg_assignments)
+            )
+            await self._refresh_dummy_epg_and_retry(executor, results, epg_sources, dry_run)
+
         return results
+
+    # =========================================================================
+    # Pass 5: Dummy EPG Refresh + Retry Deferred Assignments
+    # =========================================================================
+
+    async def _refresh_dummy_epg_and_retry(
+        self, executor, results: dict, epg_sources: list, dry_run: bool
+    ):
+        """
+        Refresh dummy EPG sources and retry deferred assign_epg actions.
+
+        Steps reported (both dry-run and live):
+        1. Auto-add target group IDs to dummy EPG profiles if missing
+        2. Regenerate XMLTV cache
+        3. Refresh each Dispatcharr EPG source + poll for completion
+        4. Re-fetch EPG data
+        5. Retry each deferred assign_epg action
+        """
+        from database import get_session
+        from models import DummyEPGProfile
+
+        # Collect unique dummy source IDs and target group IDs from deferred list
+        dummy_source_ids = set()
+        target_group_ids = set()
+        for channel_id, action, stream_ctx, exec_ctx in executor._deferred_epg_assignments:
+            epg_source_id = action.params.get("epg_id")
+            if epg_source_id is not None:
+                dummy_source_ids.add(epg_source_id)
+            channel = executor._channel_by_id.get(channel_id, {})
+            # Dispatcharr API returns "channel_group", executor payload uses "channel_group_id"
+            gid = channel.get("channel_group_id") or channel.get("channel_group")
+            if gid:
+                target_group_ids.add(gid)
+
+        logger.info(
+            "[AUTO-CREATE-ENGINE] Pass 5: dummy sources=%s, target groups=%s",
+            dummy_source_ids, target_group_ids
+        )
+
+        # Build source lookup
+        source_by_id = {s["id"]: s for s in epg_sources}
+
+        # Match dummy source IDs to profile IDs via URL pattern
+        import re as _re
+        profile_ids_to_update = set()
+        for src_id in dummy_source_ids:
+            src = source_by_id.get(src_id)
+            if not src:
+                continue
+            url = src.get("url", "")
+            m = _re.search(r'/api/dummy-epg/xmltv/(\d+)', url)
+            if m:
+                profile_ids_to_update.add(int(m.group(1)))
+            else:
+                profile_ids_to_update = None
+                break
+
+        # Resolve profile names for reporting
+        profile_names = {}
+        db = get_session()
+        try:
+            if profile_ids_to_update is None:
+                profiles = db.query(DummyEPGProfile).filter(
+                    DummyEPGProfile.enabled == True  # noqa: E712
+                ).all()
+            else:
+                profiles = db.query(DummyEPGProfile).filter(
+                    DummyEPGProfile.id.in_(profile_ids_to_update),
+                    DummyEPGProfile.enabled == True  # noqa: E712
+                ).all()
+
+            for profile in profiles:
+                profile_names[profile.id] = profile.name
+                existing_groups = set(profile.get_channel_group_ids())
+                missing = target_group_ids - existing_groups
+
+                # Step 1: Auto-add target groups to profiles
+                if missing and target_group_ids:
+                    group_names = [
+                        executor._group_by_id.get(gid, {}).get("name", f"ID:{gid}")
+                        for gid in missing
+                    ]
+                    step1_desc = (
+                        f"Add groups {group_names} to dummy EPG profile "
+                        f"'{profile.name}' (id={profile.id})"
+                    )
+                    if dry_run:
+                        results["dry_run_results"].append({
+                            "stream_id": None,
+                            "stream_name": "[Pass 5] Update Profile Groups",
+                            "rule_id": None,
+                            "rule_name": None,
+                            "action": f"Would {step1_desc.lower()}",
+                            "would_create": False,
+                            "would_modify": True
+                        })
+                    else:
+                        updated = list(existing_groups | target_group_ids)
+                        profile.set_channel_group_ids(updated)
+                        db.merge(profile)
+                        logger.info("[AUTO-CREATE-ENGINE] Pass 5: %s", step1_desc)
+
+                    results["execution_log"].append({
+                        "stream_id": None,
+                        "stream_name": "[Pass 5] Update Profile Groups",
+                        "m3u_account_id": None,
+                        "rules_evaluated": [],
+                        "actions_executed": [{
+                            "type": "update_epg_profile",
+                            "description": ("Would " if dry_run else "") + step1_desc,
+                            "success": True,
+                            "entity_id": profile.id,
+                            "error": None
+                        }]
+                    })
+
+            if not dry_run:
+                db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.error("[AUTO-CREATE-ENGINE] Pass 5: failed to update profile groups: %s", e)
+        finally:
+            db.close()
+
+        # Step 2: Regenerate XMLTV cache
+        profile_label = ", ".join(
+            f"'{profile_names.get(pid, pid)}'" for pid in (profile_ids_to_update or profile_names.keys())
+        ) or "all enabled profiles"
+        step2_desc = f"Regenerate XMLTV cache for {profile_label}"
+
+        if dry_run:
+            results["dry_run_results"].append({
+                "stream_id": None,
+                "stream_name": "[Pass 5] Regenerate XMLTV",
+                "rule_id": None,
+                "rule_name": None,
+                "action": f"Would regenerate XMLTV cache for {profile_label}",
+                "would_create": False,
+                "would_modify": True
+            })
+        else:
+            try:
+                from tasks.dummy_epg_refresh import DummyEPGRefreshTask
+                task = DummyEPGRefreshTask()
+                profile_count = await task._regenerate_xmltv()
+                step2_desc = f"Regenerated XMLTV cache for {profile_count} profiles"
+                logger.info("[AUTO-CREATE-ENGINE] Pass 5: %s", step2_desc)
+            except Exception as e:
+                logger.exception("[AUTO-CREATE-ENGINE] Pass 5: failed to regenerate XMLTV: %s", e)
+                results["execution_log"].append({
+                    "stream_id": None,
+                    "stream_name": "[Pass 5] Regenerate XMLTV",
+                    "m3u_account_id": None,
+                    "rules_evaluated": [],
+                    "actions_executed": [{
+                        "type": "regenerate_xmltv",
+                        "description": f"Failed to regenerate XMLTV: {e}",
+                        "success": False,
+                        "entity_id": None,
+                        "error": str(e)
+                    }]
+                })
+                return
+
+        results["execution_log"].append({
+            "stream_id": None,
+            "stream_name": "[Pass 5] Regenerate XMLTV",
+            "m3u_account_id": None,
+            "rules_evaluated": [],
+            "actions_executed": [{
+                "type": "regenerate_xmltv",
+                "description": ("Would regenerate" if dry_run else "Regenerated")
+                               + f" XMLTV cache for {profile_label}",
+                "success": True,
+                "entity_id": None,
+                "error": None
+            }]
+        })
+
+        # Step 3: Refresh each Dispatcharr EPG source
+        for src_id in dummy_source_ids:
+            src = source_by_id.get(src_id)
+            source_name = src.get("name", f"Source {src_id}") if src else f"Source {src_id}"
+            source_url = src.get("url", "") if src else ""
+
+            if dry_run:
+                results["dry_run_results"].append({
+                    "stream_id": None,
+                    "stream_name": f"[Pass 5] Refresh EPG Source",
+                    "rule_id": None,
+                    "rule_name": None,
+                    "action": f"Would refresh Dispatcharr EPG source '{source_name}' (id={src_id})",
+                    "would_create": False,
+                    "would_modify": True
+                })
+            else:
+                try:
+                    from tasks.dummy_epg_refresh import wait_for_epg_source_refresh
+                    await wait_for_epg_source_refresh(
+                        self.client, src_id, source_name,
+                        poll_interval=3, max_wait=120
+                    )
+                except Exception as e:
+                    logger.error(
+                        "[AUTO-CREATE-ENGINE] Pass 5: failed to refresh source %s: %s",
+                        source_name, e
+                    )
+
+            results["execution_log"].append({
+                "stream_id": None,
+                "stream_name": f"[Pass 5] Refresh EPG Source",
+                "m3u_account_id": None,
+                "rules_evaluated": [],
+                "actions_executed": [{
+                    "type": "refresh_epg_source",
+                    "description": ("Would refresh" if dry_run else "Refreshed")
+                                   + f" EPG source '{source_name}' (id={src_id})",
+                    "success": True,
+                    "entity_id": src_id,
+                    "error": None
+                }]
+            })
+
+        # Step 4: Re-fetch EPG data
+        if dry_run:
+            results["dry_run_results"].append({
+                "stream_id": None,
+                "stream_name": "[Pass 5] Reload EPG Data",
+                "rule_id": None,
+                "rule_name": None,
+                "action": "Would re-fetch EPG data from Dispatcharr",
+                "would_create": False,
+                "would_modify": False
+            })
+            results["execution_log"].append({
+                "stream_id": None,
+                "stream_name": "[Pass 5] Reload EPG Data",
+                "m3u_account_id": None,
+                "rules_evaluated": [],
+                "actions_executed": [{
+                    "type": "reload_epg_data",
+                    "description": "Would re-fetch EPG data from Dispatcharr",
+                    "success": True,
+                    "entity_id": None,
+                    "error": None
+                }]
+            })
+        else:
+            try:
+                new_epg_data = await self.client.get_epg_data()
+                executor.reload_epg_data(new_epg_data)
+                logger.info("[AUTO-CREATE-ENGINE] Pass 5: reloaded %s EPG data entries", len(new_epg_data))
+                results["execution_log"].append({
+                    "stream_id": None,
+                    "stream_name": "[Pass 5] Reload EPG Data",
+                    "m3u_account_id": None,
+                    "rules_evaluated": [],
+                    "actions_executed": [{
+                        "type": "reload_epg_data",
+                        "description": f"Reloaded {len(new_epg_data)} EPG data entries",
+                        "success": True,
+                        "entity_id": None,
+                        "error": None
+                    }]
+                })
+            except Exception as e:
+                logger.error("[AUTO-CREATE-ENGINE] Pass 5: failed to re-fetch EPG data: %s", e)
+                return
+
+        # Step 5: Retry each deferred assign_epg
+        # Snapshot and clear to prevent re-deferring into the same list during retry
+        deferred_snapshot = list(executor._deferred_epg_assignments)
+        executor._deferred_epg_assignments.clear()
+
+        retry_success = 0
+        retry_failed = 0
+        from auto_creation_schema import Action
+        for channel_id, action, stream_ctx, exec_ctx in deferred_snapshot:
+            epg_source_id = action.params.get("epg_id")
+            src = source_by_id.get(epg_source_id)
+            source_name = src.get("name", f"Source {epg_source_id}") if src else f"Source {epg_source_id}"
+            channel = executor._channel_by_id.get(channel_id, {})
+            channel_name = channel.get("name", f"Channel {channel_id}")
+
+            if dry_run:
+                results["dry_run_results"].append({
+                    "stream_id": stream_ctx.stream_id,
+                    "stream_name": f"[Pass 5 Retry] {stream_ctx.stream_name}",
+                    "rule_id": None,
+                    "rule_name": None,
+                    "action": f"Would retry assign_epg from '{source_name}' "
+                              f"(id={epg_source_id}) to channel '{channel_name}'",
+                    "would_create": False,
+                    "would_modify": True
+                })
+                results["execution_log"].append({
+                    "stream_id": stream_ctx.stream_id,
+                    "stream_name": f"[Pass 5 Retry] {stream_ctx.stream_name}",
+                    "m3u_account_id": stream_ctx.m3u_account_id,
+                    "rules_evaluated": [],
+                    "actions_executed": [{
+                        "type": "assign_epg",
+                        "description": f"Would retry assign_epg from '{source_name}' "
+                                       f"(id={epg_source_id}) to channel '{channel_name}'",
+                        "success": True,
+                        "entity_id": channel_id,
+                        "error": None
+                    }]
+                })
+                retry_success += 1
+            else:
+                action_obj = Action.from_dict(
+                    action.to_dict() if hasattr(action, 'to_dict')
+                    else (action if isinstance(action, dict)
+                          else {"type": action.type, **action.params})
+                )
+                retry_result = await executor._execute_assign_epg(action_obj, stream_ctx, exec_ctx)
+                if retry_result.success and not retry_result.deferred:
+                    retry_success += 1
+                else:
+                    retry_failed += 1
+                    logger.warning(
+                        "[AUTO-CREATE-ENGINE] Pass 5: retry failed for channel %s: %s",
+                        channel_id, retry_result.error or retry_result.description
+                    )
+
+                results["execution_log"].append({
+                    "stream_id": stream_ctx.stream_id,
+                    "stream_name": f"[Pass 5 Retry] {stream_ctx.stream_name}",
+                    "m3u_account_id": stream_ctx.m3u_account_id,
+                    "rules_evaluated": [],
+                    "actions_executed": [{
+                        "type": retry_result.action_type,
+                        "description": retry_result.description,
+                        "success": retry_result.success,
+                        "entity_id": retry_result.entity_id,
+                        "error": retry_result.error
+                    }]
+                })
+
+        # Summary
+        total = retry_success + retry_failed
+        if dry_run:
+            summary_desc = f"Would refresh dummy EPG and retry {total} deferred EPG assignments"
+        else:
+            summary_desc = (
+                f"Refreshed dummy EPG and retried {total} deferred assignments "
+                f"({retry_success} succeeded, {retry_failed} failed)"
+            )
+
+        results["execution_log"].append({
+            "stream_id": None,
+            "stream_name": "[Pass 5] Summary",
+            "m3u_account_id": None,
+            "rules_evaluated": [],
+            "actions_executed": [{
+                "type": "dummy_epg_refresh",
+                "description": summary_desc,
+                "success": retry_failed == 0,
+                "entity_id": None,
+                "error": None
+            }]
+        })
+
+        if dry_run:
+            results["dry_run_results"].append({
+                "stream_id": None,
+                "stream_name": "[Pass 5] Summary",
+                "rule_id": None,
+                "rule_name": None,
+                "action": summary_desc,
+                "would_create": False,
+                "would_modify": False
+            })
+
+        logger.info(
+            "[AUTO-CREATE-ENGINE] Pass 5 complete: %s succeeded, %s failed",
+            retry_success, retry_failed
+        )
 
     # =========================================================================
     # Pass 4: Reconciliation

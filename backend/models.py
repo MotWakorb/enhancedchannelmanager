@@ -1425,6 +1425,9 @@ class AutoCreationRule(Base):
     # Normalization - apply normalization engine rules to channel names
     normalize_names = Column(Boolean, default=False, nullable=False)
 
+    # Strike filtering - skip streams that have been struck out (consecutive_failures >= strike_threshold)
+    skip_struck_streams = Column(Boolean, default=False, nullable=False)
+
     # Tracking
     last_run_at = Column(DateTime, nullable=True)
     last_run_stats = Column(Text, nullable=True)  # JSON: {matched: 10, created: 5, skipped: 5, errors: 0}
@@ -1520,6 +1523,7 @@ class AutoCreationRule(Base):
             "probe_on_sort": self.probe_on_sort or False,
             "sort_regex": self.sort_regex,
             "normalize_names": self.normalize_names or False,
+            "skip_struck_streams": self.skip_struck_streams or False,
             "orphan_action": self.orphan_action or "delete",
             "last_run_at": self.last_run_at.isoformat() + "Z" if self.last_run_at else None,
             "last_run_stats": self.get_last_run_stats(),

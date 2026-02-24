@@ -44,6 +44,7 @@ class CreateAutoCreationRuleRequest(BaseModel):
     probe_on_sort: bool = False
     sort_regex: Optional[str] = None
     normalize_names: bool = False
+    skip_struck_streams: bool = False
     orphan_action: str = "delete"
 
 
@@ -64,6 +65,7 @@ class UpdateAutoCreationRuleRequest(BaseModel):
     probe_on_sort: Optional[bool] = None
     sort_regex: Optional[str] = None
     normalize_names: Optional[bool] = None
+    skip_struck_streams: Optional[bool] = None
     orphan_action: Optional[str] = None
 
 
@@ -168,6 +170,7 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
                 probe_on_sort=request.probe_on_sort,
                 sort_regex=request.sort_regex,
                 normalize_names=request.normalize_names,
+                skip_struck_streams=request.skip_struck_streams,
                 orphan_action=request.orphan_action
             )
             session.add(rule)
@@ -236,6 +239,8 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
                 rule.sort_regex = request.sort_regex or None
             if request.normalize_names is not None:
                 rule.normalize_names = request.normalize_names
+            if request.skip_struck_streams is not None:
+                rule.skip_struck_streams = request.skip_struck_streams
             if request.orphan_action is not None:
                 rule.orphan_action = request.orphan_action
 
@@ -399,7 +404,8 @@ async def duplicate_auto_creation_rule(rule_id: int):
                 stop_on_first_match=rule.stop_on_first_match,
                 sort_field=rule.sort_field,
                 sort_order=rule.sort_order,
-                normalize_names=rule.normalize_names
+                normalize_names=rule.normalize_names,
+                skip_struck_streams=rule.skip_struck_streams
             )
             session.add(new_rule)
             session.commit()
@@ -649,7 +655,8 @@ async def export_auto_creation_rules_yaml():
                     "sort_field": rule.sort_field,
                     "sort_order": rule.sort_order or "asc",
                     "sort_regex": rule.sort_regex,
-                    "normalize_names": rule.normalize_names or False
+                    "normalize_names": rule.normalize_names or False,
+                    "skip_struck_streams": rule.skip_struck_streams or False
                 }
 
                 # Add group_name to actions that have group_id
@@ -809,6 +816,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         existing.sort_order = rule_data.get("sort_order", "asc")
                         existing.sort_regex = rule_data.get("sort_regex")
                         existing.normalize_names = rule_data.get("normalize_names", False)
+                        existing.skip_struck_streams = rule_data.get("skip_struck_streams", False)
                         logger.debug("[AUTO-CREATE-YAML] Rule '%s': updated existing (id=%s), stored actions=%s", rule_name, existing.id, existing.actions)
                         imported.append({"name": existing.name, "action": "updated"})
                     else:
@@ -834,7 +842,8 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         sort_field=rule_data.get("sort_field"),
                         sort_order=rule_data.get("sort_order", "asc"),
                         sort_regex=rule_data.get("sort_regex"),
-                        normalize_names=rule_data.get("normalize_names", False)
+                        normalize_names=rule_data.get("normalize_names", False),
+                        skip_struck_streams=rule_data.get("skip_struck_streams", False)
                     )
                     session.add(rule)
                     logger.debug("[AUTO-CREATE-YAML] Rule '%s': created new, stored actions=%s", rule_name, rule.actions)

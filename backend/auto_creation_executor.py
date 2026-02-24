@@ -32,6 +32,7 @@ class ActionResult:
     previous_state: Optional[dict] = None  # For rollback
     error: Optional[str] = None
     details: list[str] = field(default_factory=list)  # Additional context (normalization, group, etc.)
+    deferred: bool = False  # True if action will be retried after EPG refresh
 
 
 @dataclass
@@ -112,7 +113,7 @@ class ActionExecutor:
 
     def __init__(self, client, existing_channels: list = None, existing_groups: list = None,
                  normalization_engine=None, settings=None, all_profile_ids: list = None,
-                 epg_data: list = None):
+                 epg_data: list = None, epg_sources: list = None):
         """
         Initialize the executor.
 
@@ -124,6 +125,7 @@ class ActionExecutor:
             settings: DispatcharrSettings instance for channel naming/profile defaults
             all_profile_ids: All channel profile IDs (for default profile assignment)
             epg_data: EPG data entries from Dispatcharr (for assign_epg resolution)
+            epg_sources: EPG source dicts from Dispatcharr (for dummy EPG detection)
         """
         self.client = client
         self.existing_channels = existing_channels or []
@@ -139,6 +141,16 @@ class ActionExecutor:
             if src_id is not None:
                 self._epg_data_by_source.setdefault(src_id, []).append(entry)
 
+        # Identify dummy EPG sources (URL contains /api/dummy-epg/xmltv)
+        self._dummy_epg_source_ids: set[int] = set()
+        for src in (epg_sources or []):
+            url = src.get("url") or ""
+            if "/api/dummy-epg/xmltv" in url:
+                self._dummy_epg_source_ids.add(src["id"])
+
+        # Deferred EPG assignments (populated when dummy source has no data yet)
+        self._deferred_epg_assignments: list[tuple] = []  # (channel_id, action, stream_ctx, exec_ctx)
+
         # Build lookup indices
         self._channel_by_id = {c["id"]: c for c in self.existing_channels}
         self._channel_by_name = {c["name"].lower(): c for c in self.existing_channels}
@@ -149,6 +161,7 @@ class ActionExecutor:
         self._created_channels = {}  # name.lower() -> channel dict
         self._base_name_to_channel = {}  # base_name.lower() -> channel dict (for number-prefixed lookups)
         self._created_groups = {}  # name.lower() -> group dict
+        self._next_dry_run_id = -1  # Unique negative IDs for dry-run simulated entities
 
         # Track streams per (channel_id, m3u_account_id) for max_streams_per_channel limit.
         # Lazily seeded per-channel via _ensure_channel_m3u_counts() because the
@@ -536,13 +549,19 @@ class ActionExecutor:
         if exec_ctx.dry_run:
             # Track simulated channel so subsequent streams in this run
             # see it as existing (matches execute-mode behavior)
-            simulated = {"id": -1, "name": channel_name, "channel_number": channel_number,
+            dry_id = self._next_dry_run_id
+            self._next_dry_run_id -= 1
+            simulated = {"id": dry_id, "name": channel_name, "channel_number": channel_number,
                          "channel_group_id": group_id, "streams": [stream_ctx.stream_id]}
+            if stream_ctx.tvg_id:
+                simulated["tvg_id"] = stream_ctx.tvg_id
             self._created_channels[channel_name.lower()] = simulated
+            self._channel_by_id[dry_id] = simulated
             # Map base name to prefixed channel so subsequent lookups by base name merge correctly
             if base_name.lower() != channel_name.lower():
                 self._base_name_to_channel[base_name.lower()] = simulated
             self._used_channel_numbers.add(channel_number)
+            exec_ctx.current_channel_id = dry_id
             return ActionResult(
                 success=True,
                 action_type=action.type,
@@ -574,6 +593,7 @@ class ActionExecutor:
 
             # Track the new channel
             self._created_channels[channel_name.lower()] = new_channel
+            self._channel_by_id[new_channel["id"]] = new_channel
             # Map base name to prefixed channel so subsequent lookups by base name merge correctly
             if base_name.lower() != channel_name.lower():
                 self._base_name_to_channel[base_name.lower()] = new_channel
@@ -730,6 +750,8 @@ class ActionExecutor:
         channel_id = channel["id"]
         channel_name = channel["name"]
 
+        exec_ctx.current_channel_id = channel_id
+
         if exec_ctx.dry_run:
             return ActionResult(
                 success=True,
@@ -756,8 +778,6 @@ class ActionExecutor:
 
             if updates:
                 await self.client.update_channel(channel_id, updates)
-
-            exec_ctx.current_channel_id = channel_id
 
             return ActionResult(
                 success=True,
@@ -1110,6 +1130,10 @@ class ActionExecutor:
             )
 
         if exec_ctx.dry_run:
+            # Update simulated channel so subsequent actions (e.g. assign_epg) can use the tvg_id
+            simulated = self._channel_by_id.get(exec_ctx.current_channel_id)
+            if simulated is not None:
+                simulated["tvg_id"] = tvg_id
             return ActionResult(
                 success=True,
                 action_type=action.type,
@@ -1173,6 +1197,24 @@ class ActionExecutor:
         # Resolve EPG source ID -> epg_data_id
         source_entries = self._epg_data_by_source.get(epg_source_id, [])
         if not source_entries:
+            # For dummy EPG sources, defer instead of failing — Pass 5 will refresh and retry
+            if epg_source_id in self._dummy_epg_source_ids:
+                logger.info(
+                    "[AUTO-CREATE-EXEC] Deferring assign_epg for dummy source %s "
+                    "(channel %s) — will retry after EPG refresh",
+                    epg_source_id, exec_ctx.current_channel_id
+                )
+                self._deferred_epg_assignments.append(
+                    (exec_ctx.current_channel_id, action, stream_ctx, exec_ctx)
+                )
+                return ActionResult(
+                    success=True,
+                    action_type=action.type,
+                    description=f"Deferred: will assign EPG from dummy source {epg_source_id} after refresh",
+                    entity_type="channel",
+                    entity_id=exec_ctx.current_channel_id,
+                    deferred=True
+                )
             logger.warning(
                 "[AUTO-CREATE-EXEC] No EPG data entries found for source %s",
                 epg_source_id
@@ -1198,12 +1240,18 @@ class ActionExecutor:
             )
 
         epg_data_id = epg_data_entry["id"]
+        set_tvg_id = action.params.get("set_tvg_id", False)
+        epg_tvg_id = epg_data_entry.get("tvg_id")
 
         if exec_ctx.dry_run:
+            desc = f"Would assign EPG data {epg_data_id} (source {epg_source_id}) to channel"
+            if set_tvg_id and epg_tvg_id:
+                channel["tvg_id"] = epg_tvg_id
+                desc += f" and set tvg_id to '{epg_tvg_id}'"
             return ActionResult(
                 success=True,
                 action_type=action.type,
-                description=f"Would assign EPG data {epg_data_id} (source {epg_source_id}) to channel",
+                description=desc,
                 entity_type="channel",
                 entity_id=exec_ctx.current_channel_id,
                 modified=True
@@ -1211,8 +1259,12 @@ class ActionExecutor:
 
         try:
             previous_state = {"epg_data_id": channel.get("epg_data_id")}
+            payload = {"epg_data_id": epg_data_id}
+            if set_tvg_id and epg_tvg_id:
+                previous_state["tvg_id"] = channel.get("tvg_id")
+                payload["tvg_id"] = epg_tvg_id
 
-            await self.client.update_channel(exec_ctx.current_channel_id, {"epg_data_id": epg_data_id})
+            await self.client.update_channel(exec_ctx.current_channel_id, payload)
 
             logger.debug(
                 "[AUTO-CREATE-EXEC] Assigned epg_data_id=%s (source=%s, "
@@ -1238,6 +1290,18 @@ class ActionExecutor:
                 description="Failed to assign EPG",
                 error=str(e)
             )
+
+    def reload_epg_data(self, epg_data: list):
+        """Rebuild EPG data lookup from fresh data (called by engine in Pass 5)."""
+        self._epg_data_by_source.clear()
+        for entry in (epg_data or []):
+            src_id = entry.get("epg_source")
+            if src_id is not None:
+                self._epg_data_by_source.setdefault(src_id, []).append(entry)
+        logger.info(
+            "[AUTO-CREATE-EXEC] Reloaded EPG data: %s sources, %s total entries",
+            len(self._epg_data_by_source), len(epg_data or [])
+        )
 
     # =========================================================================
     # EPG Matching (mirrors frontend epgMatching.ts logic)

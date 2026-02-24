@@ -888,6 +888,71 @@ class TestActionExecutorPropertyActions:
         assert result.success is False
         assert "Missing epg_id" in result.error
 
+    def test_assign_epg_with_set_tvg_id(self):
+        """Assign EPG with set_tvg_id sends both epg_data_id and tvg_id."""
+        epg_data = [{"id": 42, "tvg_id": "ESPN.US", "epg_source": 5}]
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            epg_data=epg_data
+        )
+
+        action = {"type": "assign_epg", "epg_id": 5, "set_tvg_id": True}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is True
+        self.client.update_channel.assert_called_with(
+            1, {"epg_data_id": 42, "tvg_id": "ESPN.US"}
+        )
+
+    def test_assign_epg_without_set_tvg_id(self):
+        """Assign EPG without set_tvg_id only sends epg_data_id (existing behavior)."""
+        epg_data = [{"id": 42, "tvg_id": "ESPN.US", "epg_source": 5}]
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            epg_data=epg_data
+        )
+
+        action = {"type": "assign_epg", "epg_id": 5}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is True
+        self.client.update_channel.assert_called_with(1, {"epg_data_id": 42})
+
+    def test_assign_epg_set_tvg_id_dry_run(self):
+        """Dry run with set_tvg_id updates simulated channel and description."""
+        epg_data = [{"id": 42, "tvg_id": "ESPN.US", "epg_source": 5}]
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            epg_data=epg_data
+        )
+
+        action = {"type": "assign_epg", "epg_id": 5, "set_tvg_id": True}
+        exec_ctx = ExecutionContext(dry_run=True)
+        exec_ctx.current_channel_id = 1
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is True
+        assert "set tvg_id to 'ESPN.US'" in result.description
+        # Simulated channel should be updated
+        assert executor._channel_by_id[1]["tvg_id"] == "ESPN.US"
+        self.client.update_channel.assert_not_called()
+
     def test_assign_profile(self):
         """Assign stream profile."""
         action = {"type": "assign_profile", "profile_id": 3}  # Params at top level
@@ -1374,3 +1439,109 @@ class TestSetVariable:
 
         assert exec_ctx.custom_variables["region"] == "US"
         assert exec_ctx.custom_variables["label"] == "Region: US"
+
+
+class TestDeferredEPGAssignment:
+    """Tests for deferred EPG assignment (dummy EPG sources)."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.client = MagicMock()
+        self.client.update_channel = AsyncMock()
+
+        self.channels = [
+            {"id": 1, "name": "ESPN", "logo_url": None, "tvg_id": None},
+        ]
+        self.stream_ctx = StreamContext(
+            stream_id=201,
+            stream_name="ESPN HD",
+            m3u_account_id=1,
+            tvg_id="ESPN.US",
+        )
+
+    def test_assign_epg_dummy_source_no_data_defers(self):
+        """assign_epg on dummy source with no data → deferred (not failed)."""
+        epg_sources = [
+            {"id": 9, "name": "ECM Dummy", "url": "http://localhost:6100/api/dummy-epg/xmltv/1"}
+        ]
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            epg_data=[],  # No data yet
+            epg_sources=epg_sources,
+        )
+
+        action = {"type": "assign_epg", "epg_id": 9}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is True
+        assert result.deferred is True
+        assert "Deferred" in result.description
+        assert len(executor._deferred_epg_assignments) == 1
+
+    def test_assign_epg_non_dummy_source_no_data_fails(self):
+        """assign_epg on non-dummy source with no data → still fails."""
+        epg_sources = [
+            {"id": 5, "name": "XMLTV Provider", "url": "http://example.com/epg.xml"}
+        ]
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            epg_data=[],
+            epg_sources=epg_sources,
+        )
+
+        action = {"type": "assign_epg", "epg_id": 5}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is False
+        assert result.deferred is False
+        assert "No EPG data entries" in result.description
+
+    def test_reload_epg_data_enables_retry(self):
+        """After reload_epg_data(), deferred retry succeeds."""
+        epg_sources = [
+            {"id": 9, "name": "ECM Dummy", "url": "http://localhost:6100/api/dummy-epg/xmltv/1"}
+        ]
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            epg_data=[],
+            epg_sources=epg_sources,
+        )
+
+        action = {"type": "assign_epg", "epg_id": 9}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        # First attempt: deferred
+        result1 = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+        assert result1.deferred is True
+
+        # Simulate EPG refresh — reload with data
+        executor.reload_epg_data([
+            {"id": 42, "tvg_id": "espn", "epg_source": 9}
+        ])
+
+        # Retry: should succeed now
+        from auto_creation_schema import Action
+        action_obj = Action.from_dict(action)
+        result2 = asyncio.get_event_loop().run_until_complete(
+            executor._execute_assign_epg(action_obj, self.stream_ctx, exec_ctx)
+        )
+
+        assert result2.success is True
+        assert result2.deferred is False
+        self.client.update_channel.assert_called_with(1, {"epg_data_id": 42})
