@@ -571,3 +571,13 @@ if os.path.exists(static_dir):
         if os.path.exists(index_path):
             return FileResponse(index_path)
         return {"detail": "Frontend not built"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    # Support ECM_PORT for direct invocation consistency with entrypoint.sh
+    # via the centralized settings module
+    settings = get_settings()
+    port = settings.http_port
+    logger.info("[MAIN] Starting uvicorn on port %s (from settings/ECM_PORT)", port)
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

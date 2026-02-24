@@ -137,6 +137,14 @@ class DispatcharrSettings(BaseModel):
     auto_creation_excluded_terms: list[str] = []  # Terms that exclude streams by name (case-insensitive substring)
     auto_creation_excluded_groups: list[str] = []  # M3U group names to exclude (case-insensitive exact match)
     auto_creation_exclude_auto_sync_groups: bool = False  # Exclude streams in Dispatcharr auto-sync groups
+
+    # HTTP port for the main interface
+    # Precedence:
+    # 1. Saved config in settings.json (if added)
+    # 2. ECM_PORT environment variable (read at module import time)
+    # 3. Default value 6100
+    http_port: int = int(os.environ.get("ECM_PORT", 6100))
+
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)
 

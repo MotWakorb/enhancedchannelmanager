@@ -1,6 +1,10 @@
 #!/bin/sh
 set -e
 
+# Default ports
+ECM_PORT=${ECM_PORT:-6100}
+ECM_HTTPS_PORT=${ECM_HTTPS_PORT:-6143}
+
 # Colors for output
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -105,8 +109,6 @@ check_filesystem() {
 check_network() {
     print_info "Checking network configuration..."
 
-    ECM_PORT=${ECM_PORT:-6100}
-
     # Check if port HTTP is available
     if ! netstat -tuln 2>/dev/null | grep -q ":${ECM_PORT} "; then
         print_success "Port ${ECM_PORT} (HTTP) is available"
@@ -115,7 +117,6 @@ check_network() {
     fi
 
     # Check if port (HTTPS) is available
-    ECM_HTTPS_PORT=${ECM_HTTPS_PORT:-6143}
     if ! netstat -tuln 2>/dev/null | grep -q ":${ECM_HTTPS_PORT} "; then
         print_success "Port ${ECM_HTTPS_PORT} (HTTPS) is available"
     else
@@ -160,7 +161,6 @@ check_tls_config() {
 
     if [ -f "$TLS_CONFIG" ]; then
         TLS_ENABLED=$(python3 -c "import json; print(json.load(open('$TLS_CONFIG')).get('enabled', False))" 2>/dev/null || echo "False")
-        ECM_HTTPS_PORT=${ECM_HTTPS_PORT:-6143}
         HTTPS_PORT=$(python3 -c "import json; print(json.load(open('$TLS_CONFIG')).get('https_port', $ECM_HTTPS_PORT))" 2>/dev/null || echo "$ECM_HTTPS_PORT")
 
         if [ "$TLS_ENABLED" = "True" ] && [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
@@ -177,7 +177,6 @@ check_tls_config() {
 }
 
 print_startup_info() {
-    ECM_PORT=${ECM_PORT:-6100}
     echo ""
     echo "${GREEN}════════════════════════════════════════════════════════════${NC}"
     echo "${GREEN}  All preflight checks passed!${NC}"
@@ -221,5 +220,4 @@ check_tls_config
 # HTTP server runs as main process on port ECM_PORT (default 6100)
 # HTTPS server is managed by the application as a subprocess (if TLS enabled)
 cd /app
-ECM_PORT=${ECM_PORT:-6100}
 exec gosu appuser uvicorn main:app --host 0.0.0.0 --port ${ECM_PORT}
