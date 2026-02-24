@@ -187,6 +187,20 @@ class TaskEngine:
                         ScheduledTask.task_id == task_id
                     ).first()
                     if scheduled_task:
+                        logger.info(
+                            "[%s] Alert settings: type=%s send_alerts=%s on_success=%s on_warning=%s on_error=%s on_info=%s "
+                            "to_email=%s to_discord=%s to_telegram=%s show_notifications=%s",
+                            task_id, notification_type,
+                            scheduled_task.send_alerts,
+                            scheduled_task.alert_on_success,
+                            scheduled_task.alert_on_warning,
+                            scheduled_task.alert_on_error,
+                            scheduled_task.alert_on_info,
+                            scheduled_task.send_to_email,
+                            scheduled_task.send_to_discord,
+                            scheduled_task.send_to_telegram,
+                            scheduled_task.show_notifications,
+                        )
                         # Check if notifications should appear in NotificationCenter
                         if not scheduled_task.show_notifications:
                             should_show_notification = False
@@ -221,11 +235,6 @@ class TaskEngine:
             except Exception as e:
                 logger.warning("[%s] Failed to check task alert settings, defaulting to send: %s", task_id, e)
 
-            # Skip notification entirely if show_notifications is disabled
-            if not should_show_notification:
-                logger.debug("[%s] Skipping notification (show_notifications=False)", task_id)
-                return
-
             metadata = {
                 "task_id": task_id,
                 "task_name": task_name,
@@ -247,6 +256,26 @@ class TaskEngine:
                         if len(failed_streams) > 10:
                             failed_names.append(f"... and {len(failed_streams) - 10} more")
                         metadata["failed_items"] = ", ".join(failed_names)
+
+            # Dispatch external alerts even if in-app notifications are disabled
+            if not should_show_notification and should_send_alert:
+                logger.info("[%s] In-app notifications disabled, dispatching external alerts only", task_id)
+                from services.notification_service import _dispatch_to_alert_channels
+                asyncio.create_task(
+                    _dispatch_to_alert_channels(
+                        title=title,
+                        message=message,
+                        notification_type=notification_type,
+                        source="task",
+                        metadata=metadata,
+                        alert_category=alert_category,
+                        channel_settings=channel_settings,
+                    )
+                )
+                return
+            elif not should_show_notification:
+                logger.debug("[%s] Skipping notification and alerts (both disabled)", task_id)
+                return
 
             await create_notification_internal(
                 notification_type=notification_type,

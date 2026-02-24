@@ -216,6 +216,14 @@ async def _dispatch_to_alert_channels(
     send_discord = channel_settings.get("send_to_discord", True) if channel_settings else True
     send_telegram = channel_settings.get("send_to_telegram", True) if channel_settings else True
 
+    logger.info(
+        "[NOTIFY-SVC] Dispatching alerts: type=%s title=%s channels=[email=%s(configured=%s) discord=%s(configured=%s) telegram=%s(configured=%s)]",
+        notification_type, alert_title,
+        send_email, settings.is_smtp_configured(),
+        send_discord, settings.is_discord_configured(),
+        send_telegram, settings.is_telegram_configured(),
+    )
+
     # Format message with type indicator
     type_emoji = {"info": "ℹ️", "success": "✅", "warning": "⚠️", "error": "❌"}.get(notification_type, "📢")
 
