@@ -505,6 +505,12 @@ class ActionExecutor:
         """Execute create_channel action."""
         params = action.params
         name_template = params.get("name_template", "{stream_name}")
+        
+        # If the stream was NOT matched by an EPG condition, use the fallback template if provided
+        if not stream_ctx.matched_by_epg and params.get("name_template_fallback"):
+            name_template = params.get("name_template_fallback")
+            logger.debug("[AUTO-CREATE-EXEC] Stream not matched by EPG, using fallback template: '%s'", name_template)
+        
         channel_name = TemplateVariables.expand_template(name_template, template_ctx, exec_ctx.custom_variables)
         logger.debug("[AUTO-CREATE-EXEC] Template '%s' expanded to '%s'", name_template, channel_name)
         channel_name = self._apply_name_transform(channel_name, params)
@@ -884,6 +890,12 @@ class ActionExecutor:
         """Execute create_group action."""
         params = action.params
         name_template = params.get("name_template", "{stream_group}")
+        
+        # If the stream was NOT matched by an EPG condition, use the fallback template if provided
+        if not stream_ctx.matched_by_epg and params.get("name_template_fallback"):
+            name_template = params.get("name_template_fallback")
+            logger.debug("[AUTO-CREATE-EXEC] Stream not matched by EPG, using fallback group template: '%s'", name_template)
+        
         group_name = TemplateVariables.expand_template(name_template, template_ctx, exec_ctx.custom_variables)
         logger.debug("[AUTO-CREATE-EXEC] Template '%s' expanded to '%s'", name_template, group_name)
         group_name = self._apply_name_transform(group_name, params)

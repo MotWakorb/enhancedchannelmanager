@@ -43,6 +43,7 @@ class StreamContext:
     
     # The specific program that triggered a condition match
     epg_match: Optional[dict] = None
+    matched_by_epg: bool = False
 
     # Provider info
     m3u_account_id: Optional[int] = None
@@ -309,6 +310,17 @@ class ConditionEvaluator:
         if result.matched and result.matched_data:
             if "program" in result.matched_data:
                 context.epg_match = result.matched_data["program"]
+            
+            # If the result came from an EPG field, mark it
+            if result.condition_type in (
+                ConditionType.EPG_TITLE_CONTAINS, ConditionType.EPG_TITLE_MATCHES,
+                ConditionType.EPG_DESC_CONTAINS, ConditionType.EPG_DESC_MATCHES,
+                ConditionType.EPG_ANY_CONTAINS, ConditionType.EPG_ANY_MATCHES,
+                ConditionType.EPG_SOURCE_IS, # EPG_SOURCE_IS will set matched_data if it finds a 'now' program
+            ) or (result.condition_type in (
+                ConditionType.ANY_FIELD_CONTAINS, ConditionType.ANY_FIELD_MATCHES
+            ) and "program" in result.matched_data):
+                context.matched_by_epg = True
 
         # Apply negation if specified
         if condition.negate:
