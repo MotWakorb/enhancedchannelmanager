@@ -6,7 +6,7 @@ import { useState, useEffect, useId } from 'react';
 import type { Condition, ConditionType } from '../../types/autoCreation';
 import { CustomSelect } from '../CustomSelect';
 import type { SelectOption } from '../CustomSelect';
-import { getM3UAccounts, getChannelGroups } from '../../services/api';
+import { getM3UAccounts, getChannelGroups, getEPGSources } from '../../services/api';
 import './ConditionEditor.css';
 
 // ============================================================================
@@ -68,6 +68,17 @@ const FIELDS: FieldDef[] = [
   { id: 'stream_name', label: 'Stream Name', category: 'stream', operators: TEXT_OPS },
   { id: 'stream_group', label: 'Stream Group', category: 'stream', operators: TEXT_OPS },
   { id: 'tvg_id', label: 'TVG-ID', category: 'stream', operators: [...EXISTS_OPS, ...TEXT_OPS] },
+  { id: 'epg_title', label: 'EPG Title (Today)', category: 'stream', operators: TEXT_OPS },
+  { id: 'epg_desc', label: 'EPG Description (Today)', category: 'stream', operators: TEXT_OPS },
+  { id: 'epg_any', label: 'EPG Today (Title & Description)', category: 'stream', operators: TEXT_OPS },
+  {
+    id: 'epg_source', label: 'EPG Source', category: 'stream',
+    operators: [
+      { id: 'is', label: 'Is', valueType: 'select' },
+      { id: 'is_not', label: 'Is Not', valueType: 'select' },
+    ],
+  },
+  { id: 'any_field', label: 'Any Field (Name/EPG Today)', category: 'stream', operators: TEXT_OPS },
   {
     id: 'provider', label: 'M3U Account', category: 'stream',
     operators: [
@@ -173,6 +184,46 @@ function buildCondition(
         default: type = 'tvg_id_exists'; value = true; break;
       }
       break;
+    case 'epg_title':
+      switch (operator) {
+        case 'does_not_contain': type = 'epg_title_contains'; value = userValue; negate = true; break;
+        case 'begins_with': type = 'epg_title_matches'; value = `^${escapeRegex(String(userValue))}`; break;
+        case 'ends_with': type = 'epg_title_matches'; value = `${escapeRegex(String(userValue))}$`; break;
+        case 'matches': type = 'epg_title_matches'; value = userValue; break;
+        default: type = 'epg_title_contains'; value = userValue; break;
+      }
+      break;
+    case 'epg_desc':
+      switch (operator) {
+        case 'does_not_contain': type = 'epg_desc_contains'; value = userValue; negate = true; break;
+        case 'begins_with': type = 'epg_desc_matches'; value = `^${escapeRegex(String(userValue))}`; break;
+        case 'ends_with': type = 'epg_desc_matches'; value = `${escapeRegex(String(userValue))}$`; break;
+        case 'matches': type = 'epg_desc_matches'; value = userValue; break;
+        default: type = 'epg_desc_contains'; value = userValue; break;
+      }
+      break;
+    case 'epg_any':
+      switch (operator) {
+        case 'does_not_contain': type = 'epg_any_contains'; value = userValue; negate = true; break;
+        case 'begins_with': type = 'epg_any_matches'; value = `^${escapeRegex(String(userValue))}`; break;
+        case 'ends_with': type = 'epg_any_matches'; value = `${escapeRegex(String(userValue))}$`; break;
+        case 'matches': type = 'epg_any_matches'; value = userValue; break;
+        default: type = 'epg_any_contains'; value = userValue; break;
+      }
+      break;
+    case 'epg_source':
+      type = 'epg_source_is'; value = userValue;
+      if (operator === 'is_not') negate = true;
+      break;
+    case 'any_field':
+      switch (operator) {
+        case 'does_not_contain': type = 'any_field_contains'; value = userValue; negate = true; break;
+        case 'begins_with': type = 'any_field_matches'; value = `^${escapeRegex(String(userValue))}`; break;
+        case 'ends_with': type = 'any_field_matches'; value = `${escapeRegex(String(userValue))}$`; break;
+        case 'matches': type = 'any_field_matches'; value = userValue; break;
+        default: type = 'any_field_contains'; value = userValue; break;
+      }
+      break;
     case 'provider':
       type = 'provider_is'; value = userValue;
       if (operator === 'is_not') negate = true;
@@ -261,6 +312,29 @@ function parseCondition(condition: Condition): { field: string; operator: string
         if (lit !== null) return { field: 'tvg_id', operator: 'does_not_contain', displayValue: lit };
       }
       return detectRegexOp('tvg_id', String(value ?? ''), false);
+
+    case 'epg_title_contains':
+      return { field: 'epg_title', operator: negate ? 'does_not_contain' : 'contains', displayValue: String(value ?? '') };
+    case 'epg_title_matches':
+      return detectRegexOp('epg_title', String(value ?? ''), true);
+
+    case 'epg_desc_contains':
+      return { field: 'epg_desc', operator: negate ? 'does_not_contain' : 'contains', displayValue: String(value ?? '') };
+    case 'epg_desc_matches':
+      return detectRegexOp('epg_desc', String(value ?? ''), true);
+
+    case 'epg_any_contains':
+      return { field: 'epg_any', operator: negate ? 'does_not_contain' : 'contains', displayValue: String(value ?? '') };
+    case 'epg_any_matches':
+      return detectRegexOp('epg_any', String(value ?? ''), true);
+
+    case 'epg_source_is':
+      return { field: 'epg_source', operator: negate ? 'is_not' : 'is', displayValue: String(value ?? '') };
+
+    case 'any_field_contains':
+      return { field: 'any_field', operator: negate ? 'does_not_contain' : 'contains', displayValue: String(value ?? '') };
+    case 'any_field_matches':
+      return detectRegexOp('any_field', String(value ?? ''), true);
 
     case 'logo_exists':
       return { field: 'logo', operator: (negate || value === false) ? 'does_not_exist' : 'exists', displayValue: '' };
@@ -462,6 +536,13 @@ export function ConditionEditor({
     ).catch(() => setProviderOptions([]));
   }, []);
 
+  const [epgSources, setEpgSources] = useState<{id: number, name: string}[]>([]);
+  useEffect(() => {
+    getEPGSources().then(sources =>
+      setEpgSources(sources.map(s => ({ id: s.id, name: s.name })))
+    ).catch(() => setEpgSources([]));
+  }, []);
+
   const [groupOptions, setGroupOptions] = useState<SelectOption[]>([]);
   useEffect(() => {
     getChannelGroups().then(groups =>
@@ -566,13 +647,22 @@ export function ConditionEditor({
               <label htmlFor={`${id}-value`} className="sr-only">Value</label>
               {isSelect ? (
                 <CustomSelect
-                  options={currentField === 'provider' ? providerOptions : currentField === 'normalized_match_group' ? groupOptions : (operatorDef?.selectOptions ?? [])}
+                  options={
+                    currentField === 'provider' ? providerOptions : 
+                    currentField === 'epg_source' ? epgSources.map(s => ({ value: String(s.id), label: s.name })) :
+                    currentField === 'normalized_match_group' ? groupOptions : 
+                    (operatorDef?.selectOptions ?? [])
+                  }
                   value={String(displayValue ?? '')}
                   onChange={(val) => handleValueChange(Number(val))}
-                  placeholder={currentField === 'normalized_match_group' ? "Select group..." : "Select..."}
+                  placeholder={
+                    currentField === 'normalized_match_group' ? "Select group..." : 
+                    currentField === 'epg_source' ? "Select source..." :
+                    "Select..."
+                  }
                   disabled={readonly}
                   className="condition-value-select"
-                  searchable={currentField === 'provider' || currentField === 'normalized_match_group'}
+                  searchable={currentField === 'provider' || currentField === 'normalized_match_group' || currentField === 'epg_source'}
                 />
               ) : isNumber ? (
                 <input

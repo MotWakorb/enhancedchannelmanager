@@ -8,7 +8,7 @@ existing channels in the system.
 import re
 import logging
 from typing import Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from auto_creation_schema import Condition, ConditionType
 
@@ -33,6 +33,16 @@ class StreamContext:
     tvg_id: Optional[str] = None
     tvg_name: Optional[str] = None
     logo_url: Optional[str] = None
+
+    # EPG info (current program)
+    epg_title: Optional[str] = None
+    epg_description: Optional[str] = None
+    
+    # Raw program list for the day (to find specific matches for templates)
+    epg_programs: list[dict] = field(default_factory=list)
+    
+    # The specific program that triggered a condition match
+    epg_match: Optional[dict] = None
 
     # Provider info
     m3u_account_id: Optional[int] = None
@@ -105,6 +115,7 @@ class EvaluationResult:
     matched: bool
     condition_type: str
     details: Optional[str] = None  # Human-readable explanation
+    matched_data: Optional[dict] = None  # Captured data (e.g. the specific program)
 
     def __bool__(self):
         return self.matched
@@ -260,13 +271,15 @@ class ConditionEvaluator:
                 return match.group(0)
         return re.sub(pattern, replace_match, text)
 
-    def evaluate(self, condition: Condition | dict, context: StreamContext) -> EvaluationResult:
+    def evaluate(self, condition: Condition | dict, context: StreamContext, 
+                 all_rule_conditions: list = None) -> EvaluationResult:
         """
         Evaluate a condition against a stream context.
 
         Args:
             condition: Condition object or dict to evaluate
             context: StreamContext with stream data
+            all_rule_conditions: All conditions in the current rule (to look for filters)
 
         Returns:
             EvaluationResult indicating if condition matched
@@ -274,7 +287,28 @@ class ConditionEvaluator:
         if isinstance(condition, dict):
             condition = Condition.from_dict(condition)
 
-        result = self._evaluate_condition(condition, context)
+        # Check for EPG Source filter in other conditions of the same rule
+        source_filter = None
+        if all_rule_conditions:
+            for c_data in all_rule_conditions:
+                # Handle both dict and object
+                c_type = c_data.get("type") if isinstance(c_data, dict) else getattr(c_data, "type", None)
+                c_negate = c_data.get("negate", False) if isinstance(c_data, dict) else getattr(c_data, "negate", False)
+                c_value = c_data.get("value") if isinstance(c_data, dict) else getattr(c_data, "value", None)
+                
+                if c_type == ConditionType.EPG_SOURCE_IS and not c_negate:
+                    try:
+                        source_filter = int(c_value)
+                        break
+                    except (ValueError, TypeError):
+                        continue
+
+        result = self._evaluate_condition(condition, context, source_filter=source_filter)
+
+        # Capture matched data if available
+        if result.matched and result.matched_data:
+            if "program" in result.matched_data:
+                context.epg_match = result.matched_data["program"]
 
         # Apply negation if specified
         if condition.negate:
@@ -290,7 +324,47 @@ class ConditionEvaluator:
         )
         return result
 
-    def _evaluate_condition(self, condition: Condition, context: StreamContext) -> EvaluationResult:
+    def _evaluate_epg_field(self, field_name: str, pattern: str, is_regex: bool, 
+                            case_sensitive: bool, context: StreamContext, 
+                            cond_type: str, source_id: int = None) -> EvaluationResult:
+        """Evaluate a field against daily programs and capture the matching program."""
+        if not context.epg_programs:
+            return EvaluationResult(False, cond_type, "No EPG data for today")
+
+        pattern = self._expand_date_placeholders(pattern, allow_ranges=not is_regex)
+        
+        # We search individual programs to find WHICH ONE matched
+        for prog in context.epg_programs:
+            # Filter by EPG source if specified
+            if source_id is not None and prog.get("source") != source_id:
+                continue
+
+            value = prog.get(field_name) or ""
+            matched = False
+            
+            if is_regex:
+                try:
+                    flags = 0 if case_sensitive else re.IGNORECASE
+                    matched = bool(re.search(pattern, value, flags))
+                except re.error as e:
+                    return EvaluationResult(False, cond_type, f"Invalid regex: {e}")
+            else:
+                if case_sensitive:
+                    matched = pattern in value
+                else:
+                    matched = pattern.lower() in value.lower()
+            
+            if matched:
+                return EvaluationResult(
+                    True, cond_type,
+                    f"Program '{prog.get('title')}' matched {pattern}",
+                    matched_data={"program": prog}
+                )
+        
+        return EvaluationResult(False, cond_type, f"No program scheduled for today matched '{pattern}'")
+
+    def _evaluate_condition(self, condition: Condition, context: StreamContext, 
+                            source_filter: int = None) -> EvaluationResult:
         """Internal evaluation logic."""
         cond_type = condition.type
 
@@ -340,6 +414,84 @@ class ConditionEvaluator:
         elif cond_enum == ConditionType.TVG_ID_MATCHES:
             return self._evaluate_regex(condition.value, context.tvg_id or "",
                                         condition.case_sensitive, cond_type)
+
+        # EPG conditions
+        elif cond_enum == ConditionType.EPG_TITLE_CONTAINS:
+            logger.debug("[AUTO-CREATE-EVAL] Checking EPG title contains '%s' in today's programs (source=%s)", condition.value, source_filter)
+            return self._evaluate_epg_field("title", condition.value, False, condition.case_sensitive, context, cond_type, source_id=source_filter)
+        elif cond_enum == ConditionType.EPG_TITLE_MATCHES:
+            logger.debug("[AUTO-CREATE-EVAL] Checking EPG title matches /%s/ in today's programs (source=%s)", condition.value, source_filter)
+            return self._evaluate_epg_field("title", condition.value, True, condition.case_sensitive, context, cond_type, source_id=source_filter)
+        elif cond_enum == ConditionType.EPG_DESC_CONTAINS:
+            logger.debug("[AUTO-CREATE-EVAL] Checking EPG description contains '%s' in today's programs (source=%s)", condition.value, source_filter)
+            return self._evaluate_epg_field("description", condition.value, False, condition.case_sensitive, context, cond_type, source_id=source_filter)
+        elif cond_enum == ConditionType.EPG_DESC_MATCHES:
+            logger.debug("[AUTO-CREATE-EVAL] Checking EPG description matches /%s/ in today's programs (source=%s)", condition.value, source_filter)
+            return self._evaluate_epg_field("description", condition.value, True, condition.case_sensitive, context, cond_type, source_id=source_filter)
+
+        # EPG multi-field search (Title & Description)
+        elif cond_enum == ConditionType.EPG_ANY_CONTAINS:
+            # Check EPG Title
+            title_res = self._evaluate_epg_field("title", condition.value, False, condition.case_sensitive, context, cond_type, source_id=source_filter)
+            if title_res.matched:
+                return title_res
+            # Check EPG Description
+            desc_res = self._evaluate_epg_field("description", condition.value, False, condition.case_sensitive, context, cond_type, source_id=source_filter)
+            return desc_res
+
+        elif cond_enum == ConditionType.EPG_ANY_MATCHES:
+            # Check EPG Title
+            title_res = self._evaluate_epg_field("title", condition.value, True, condition.case_sensitive, context, cond_type, source_id=source_filter)
+            if title_res.matched:
+                return title_res
+            # Check EPG Description
+            desc_res = self._evaluate_epg_field("description", condition.value, True, condition.case_sensitive, context, cond_type, source_id=source_filter)
+            return desc_res
+
+        # EPG Source Condition
+        elif cond_enum == ConditionType.EPG_SOURCE_IS:
+            # Match if there are ANY programs from this source today for this tvg_id
+            if not context.epg_programs:
+                return EvaluationResult(False, cond_type, "No EPG data for today")
+            
+            try:
+                expected_source = int(condition.value)
+                for prog in context.epg_programs:
+                    if prog.get("source") == expected_source:
+                        return EvaluationResult(True, cond_type, f"EPG source {expected_source} has programs today for this channel")
+            except (ValueError, TypeError):
+                return EvaluationResult(False, cond_type, "Invalid source ID")
+            
+            return EvaluationResult(False, cond_type, f"EPG source {condition.value} has no programs today for this channel")
+
+        # Multi-field search (Name, Title & Description)
+        elif cond_enum == ConditionType.ANY_FIELD_CONTAINS:
+            # Check Stream Name
+            name_res = self._evaluate_contains(condition.value, context.stream_name, condition.case_sensitive, cond_type)
+            # Check EPG Title
+            title_res = self._evaluate_epg_field("title", condition.value, False, condition.case_sensitive, context, cond_type, source_id=source_filter)
+            if title_res.matched:
+                return title_res
+            # Check EPG Description
+            desc_res = self._evaluate_epg_field("description", condition.value, False, condition.case_sensitive, context, cond_type, source_id=source_filter)
+            if desc_res.matched:
+                return desc_res
+            # Fallback to name result
+            return name_res
+
+        elif cond_enum == ConditionType.ANY_FIELD_MATCHES:
+            # Check Stream Name
+            name_res = self._evaluate_regex(condition.value, context.stream_name, condition.case_sensitive, cond_type)
+            # Check EPG Title
+            title_res = self._evaluate_epg_field("title", condition.value, True, condition.case_sensitive, context, cond_type, source_id=source_filter)
+            if title_res.matched:
+                return title_res
+            # Check EPG Description
+            desc_res = self._evaluate_epg_field("description", condition.value, True, condition.case_sensitive, context, cond_type, source_id=source_filter)
+            if desc_res.matched:
+                return desc_res
+            # Fallback to name result
+            return name_res
 
         # Logo condition
         elif cond_enum == ConditionType.LOGO_EXISTS:

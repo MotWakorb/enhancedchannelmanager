@@ -101,6 +101,36 @@ class ExecutionContext:
             self.streams_skipped += 1
 
 
+from datetime import datetime
+
+def _parse_epg_date(date_str: str) -> str:
+    """Parse EPG date string to readable format (HH:MM).
+    Handles both ISO (2026-02-24T21:30:00Z) and XMLTV (20260224213000 +0000) formats.
+    """
+    if not date_str or not isinstance(date_str, str):
+        return ""
+    try:
+        # Clean up string for fromisoformat
+        clean_str = date_str.replace('Z', '+00:00')
+        
+        # Try parsing as ISO format (common from APIs)
+        try:
+            dt = datetime.fromisoformat(clean_str)
+            return dt.strftime("%H:%M")
+        except (ValueError, TypeError):
+            pass
+
+        # Fallback to manual slice for raw XMLTV format (YYYYMMDDHHMMSS)
+        # 20260224213000 -> 21:30
+        if len(date_str) >= 12 and date_str[0:2] == "20": # Basic sanity check for year 20xx
+            hh = date_str[8:10]
+            mm = date_str[10:12]
+            return f"{hh}:{mm}"
+            
+        return date_str
+    except Exception:
+        return date_str
+
 class ActionExecutor:
     """
     Executes actions against the Dispatcharr API.
@@ -153,13 +183,22 @@ class ActionExecutor:
 
         # Build lookup indices
         self._channel_by_id = {c["id"]: c for c in self.existing_channels}
-        self._channel_by_name = {c["name"].lower(): c for c in self.existing_channels}
+        
+        # Index channels by name (case-insensitive) -> list of channels
+        # (allows same name in different groups)
+        self._channel_by_name: dict[str, list[dict]] = {}
+        for c in self.existing_channels:
+            name_key = c["name"].lower()
+            if name_key not in self._channel_by_name:
+                self._channel_by_name[name_key] = []
+            self._channel_by_name[name_key].append(c)
+
         self._group_by_id = {g["id"]: g for g in self.existing_groups}
         self._group_by_name = {g["name"].lower(): g for g in self.existing_groups}
 
         # Track newly created entities during this execution
-        self._created_channels = {}  # name.lower() -> channel dict
-        self._base_name_to_channel = {}  # base_name.lower() -> channel dict (for number-prefixed lookups)
+        self._created_channels: dict[str, list[dict]] = {}  # name.lower() -> list of channels
+        self._base_name_to_channel: dict[str, list[dict]] = {}  # base_name.lower() -> list of channels
         self._created_groups = {}  # name.lower() -> group dict
         self._next_dry_run_id = -1  # Unique negative IDs for dry-run simulated entities
 
@@ -174,54 +213,67 @@ class ActionExecutor:
         for c in self.existing_channels:
             stripped = _num_prefix.sub('', c["name"])
             if stripped != c["name"]:
-                self._base_name_to_channel.setdefault(stripped.lower(), c)
+                stripped_key = stripped.lower()
+                if stripped_key not in self._base_name_to_channel:
+                    self._base_name_to_channel[stripped_key] = []
+                self._base_name_to_channel[stripped_key].append(c)
 
         # Pre-populate normalized-name mapping so merge_streams auto-lookup
         # can find channels the same way normalized_name_in_group does
-        self._normalized_name_to_channel: dict[str, dict] = {}
+        self._normalized_name_to_channel: dict[str, list[dict]] = {}
         if self._normalization_engine:
             for c in self.existing_channels:
                 stripped = _num_prefix.sub('', c["name"])
                 try:
                     result = self._normalization_engine.normalize(stripped)
                     if result.normalized and result.normalized.lower() != stripped.lower():
-                        self._normalized_name_to_channel.setdefault(
-                            result.normalized.lower(), c
-                        )
+                        norm_key = result.normalized.lower()
+                        if norm_key not in self._normalized_name_to_channel:
+                            self._normalized_name_to_channel[norm_key] = []
+                        self._normalized_name_to_channel[norm_key].append(c)
                 except Exception as e:
                     logger.warning("[AUTO-CREATE-EXEC] Normalization failed for channel '%s': %s", c.get("name", ""), e)
 
         # Pre-populate core-name mapping so merge_streams can fall back
         # to tag-group-based stripping (country prefix + quality suffix)
         # even when normalization rules are disabled.
-        self._core_name_to_channel: dict[str, dict] = {}
+        self._core_name_to_channel: dict[str, list[dict]] = {}
         if self._normalization_engine:
             for c in self.existing_channels:
                 stripped = _num_prefix.sub('', c["name"])
                 try:
                     core = self._normalization_engine.extract_core_name(stripped)
                     if core:
-                        self._core_name_to_channel.setdefault(core.lower(), c)
+                        core_key = core.lower()
+                        if core_key not in self._core_name_to_channel:
+                            self._core_name_to_channel[core_key] = []
+                        self._core_name_to_channel[core_key].append(c)
                 except Exception as e:
                     logger.warning("[AUTO-CREATE-EXEC] Core name extraction failed for channel '%s': %s", c.get("name", ""), e)
 
         # Index deparenthesized variants of core names so that
         # "Bravo (East)" also matches channel "Bravo East" and vice versa.
-        for core_key, ch_val in list(self._core_name_to_channel.items()):
+        for core_key, channels in list(self._core_name_to_channel.items()):
             deparen = re.sub(r'\(([^)]+)\)', r'\1', core_key)
             deparen = re.sub(r'\s+', ' ', deparen).strip()
             if deparen != core_key:
-                self._core_name_to_channel.setdefault(deparen, ch_val)
+                if deparen not in self._core_name_to_channel:
+                    self._core_name_to_channel[deparen] = []
+                for c in channels:
+                    if c not in self._core_name_to_channel[deparen]:
+                        self._core_name_to_channel[deparen].append(c)
 
         # Pre-populate call-sign mapping so merge_streams can match
         # local affiliates by FCC call sign (W/K + 2-3 letters).
-        self._callsign_to_channel: dict[str, dict] = {}
+        self._callsign_to_channel: dict[str, list[dict]] = {}
         if self._normalization_engine:
             for c in self.existing_channels:
                 try:
                     cs = self._normalization_engine.extract_call_sign(c["name"])
                     if cs:
-                        self._callsign_to_channel.setdefault(cs, c)
+                        if cs not in self._callsign_to_channel:
+                            self._callsign_to_channel[cs] = []
+                        self._callsign_to_channel[cs].append(c)
                 except Exception as e:
                     logger.warning("[AUTO-CREATE-EXEC] Call sign extraction failed for channel '%s': %s", c.get("name", ""), e)
 
@@ -366,6 +418,10 @@ class ActionExecutor:
             TemplateVariables.PROVIDER: stream_ctx.m3u_account_name or "",
             TemplateVariables.PROVIDER_ID: stream_ctx.m3u_account_id or "",
             TemplateVariables.NORMALIZED_NAME: stream_ctx.normalized_name or stream_ctx.stream_name,
+            TemplateVariables.EPG_MATCH_TITLE: stream_ctx.epg_match.get("title", "") if stream_ctx.epg_match else "",
+            TemplateVariables.EPG_MATCH_DESC: stream_ctx.epg_match.get("description", "") if stream_ctx.epg_match else "",
+            TemplateVariables.EPG_MATCH_START: _parse_epg_date(stream_ctx.epg_match.get("start", "")) if stream_ctx.epg_match else "",
+            TemplateVariables.EPG_MATCH_STOP: _parse_epg_date(stream_ctx.epg_match.get("stop", "")) if stream_ctx.epg_match else "",
         }
 
         # Add custom variables with var: prefix
@@ -480,7 +536,9 @@ class ActionExecutor:
         )
 
         # Check if channel already exists (check with original name before number prefix)
-        existing = self._find_channel_by_name(channel_name)
+        # Pass group_id so we only match channels ALREADY in this target group.
+        # This allows duplicate channel names in different groups.
+        existing = self._find_channel_by_name(channel_name, group_id=group_id)
         logger.debug("[AUTO-CREATE-EXEC] Lookup '%s': %s", channel_name, 'found id=' + str(existing['id']) if existing else 'not found')
 
         if existing:
@@ -555,11 +613,21 @@ class ActionExecutor:
                          "channel_group_id": group_id, "streams": [stream_ctx.stream_id]}
             if stream_ctx.tvg_id:
                 simulated["tvg_id"] = stream_ctx.tvg_id
-            self._created_channels[channel_name.lower()] = simulated
+            
+            name_key = channel_name.lower()
+            if name_key not in self._created_channels:
+                self._created_channels[name_key] = []
+            self._created_channels[name_key].append(simulated)
+            
             self._channel_by_id[dry_id] = simulated
+            
             # Map base name to prefixed channel so subsequent lookups by base name merge correctly
-            if base_name.lower() != channel_name.lower():
-                self._base_name_to_channel[base_name.lower()] = simulated
+            if base_name.lower() != name_key:
+                base_key = base_name.lower()
+                if base_key not in self._base_name_to_channel:
+                    self._base_name_to_channel[base_key] = []
+                self._base_name_to_channel[base_key].append(simulated)
+            
             self._used_channel_numbers.add(channel_number)
             exec_ctx.current_channel_id = dry_id
             return ActionResult(
@@ -592,11 +660,19 @@ class ActionExecutor:
             new_channel = await self.client.create_channel(channel_data)
 
             # Track the new channel
-            self._created_channels[channel_name.lower()] = new_channel
+            name_key = channel_name.lower()
+            if name_key not in self._created_channels:
+                self._created_channels[name_key] = []
+            self._created_channels[name_key].append(new_channel)
+            
             self._channel_by_id[new_channel["id"]] = new_channel
+            
             # Map base name to prefixed channel so subsequent lookups by base name merge correctly
-            if base_name.lower() != channel_name.lower():
-                self._base_name_to_channel[base_name.lower()] = new_channel
+            if base_name.lower() != name_key:
+                base_key = base_name.lower()
+                if base_key not in self._base_name_to_channel:
+                    self._base_name_to_channel[base_key] = []
+                self._base_name_to_channel[base_key].append(new_channel)
             self._used_channel_numbers.add(channel_number)
             self._channel_assigned_numbers[new_channel["id"]] = channel_number
             exec_ctx.current_channel_id = new_channel["id"]
@@ -915,11 +991,12 @@ class ActionExecutor:
 
             if find_channel_by == "name_exact":
                 expanded_name = TemplateVariables.expand_template(find_channel_value or "", template_ctx, exec_ctx.custom_variables)
-                channel = self._find_channel_by_name(expanded_name)
+                channel = self._find_channel_by_name(expanded_name, group_id=exec_ctx.current_group_id)
             elif find_channel_by == "name_regex":
-                channel = self._find_channel_by_regex(find_channel_value)
+                # Regex search stays global for now, but prioritizes current group if possible (logic in _find_channel_by_regex)
+                channel = self._find_channel_by_regex(find_channel_value, group_id=exec_ctx.current_group_id)
             elif find_channel_by == "tvg_id":
-                channel = self._find_channel_by_tvg_id(find_channel_value or stream_ctx.tvg_id)
+                channel = self._find_channel_by_tvg_id(find_channel_value or stream_ctx.tvg_id, group_id=exec_ctx.current_group_id)
 
             # Auto-fallback: if no find_channel_by was specified and target is "auto",
             # try to find by normalized stream name (strips prefixes, applies normalization)
@@ -933,8 +1010,8 @@ class ActionExecutor:
                             lookup_name = norm_result.normalized
                     except Exception as e:
                         logger.warning("[AUTO-CREATE-EXEC] Normalization failed for stream '%s': %s", stream_ctx.stream_name, e)
-                logger.debug("[AUTO-CREATE-EXEC] Auto-lookup by normalized name: '%s'", lookup_name)
-                channel = self._find_channel_by_name(lookup_name)
+                logger.debug("[AUTO-CREATE-EXEC] Auto-lookup by normalized name: '%s' (group_id=%s)", lookup_name, exec_ctx.current_group_id)
+                channel = self._find_channel_by_name(lookup_name, group_id=exec_ctx.current_group_id)
 
             # Core-name fallback: strip country prefix + quality suffix using
             # tag groups directly (works even when normalization rules are disabled)
@@ -942,17 +1019,19 @@ class ActionExecutor:
                 try:
                     core_name = self._normalization_engine.extract_core_name(stream_ctx.stream_name)
                     if core_name:
-                        logger.debug("[AUTO-CREATE-EXEC] Core name fallback: '%s' -> '%s'", stream_ctx.stream_name, core_name)
-                        channel = self._core_name_to_channel.get(core_name.lower()) or self._find_channel_by_name(core_name)
+                        logger.debug("[AUTO-CREATE-EXEC] Core name fallback: '%s' -> '%s' (group_id=%s)", stream_ctx.stream_name, core_name, exec_ctx.current_group_id)
+                        # Check core name mapping (currently global, but we filter by group)
+                        channel = self._find_in_core_name_map(core_name, group_id=exec_ctx.current_group_id) or \
+                                  self._find_channel_by_name(core_name, group_id=exec_ctx.current_group_id)
 
                         # Sub-step A: Deparenthesize stream core name and retry
                         if not channel:
                             deparen = re.sub(r'\(([^)]+)\)', r'\1', core_name)
                             deparen = re.sub(r'\s+', ' ', deparen).strip()
                             if deparen.lower() != core_name.lower():
-                                logger.debug("[AUTO-CREATE-EXEC] Deparen fallback: '%s' -> '%s'", core_name, deparen)
-                                channel = self._core_name_to_channel.get(deparen.lower()) \
-                                          or self._find_channel_by_name(deparen)
+                                logger.debug("[AUTO-CREATE-EXEC] Deparen fallback: '%s' -> '%s' (group_id=%s)", core_name, deparen, exec_ctx.current_group_id)
+                                channel = self._find_in_core_name_map(deparen, group_id=exec_ctx.current_group_id) or \
+                                          self._find_channel_by_name(deparen, group_id=exec_ctx.current_group_id)
 
                         # Sub-step B: Word-prefix containment (single-candidate only)
                         if not channel:
@@ -1999,8 +2078,11 @@ class ActionExecutor:
             return desc
         return ""
 
-    def _find_channel_by_name(self, name: str) -> Optional[dict]:
+    def _find_channel_by_name(self, name: str, group_id: int = None) -> Optional[dict]:
         """Find channel by exact name (case-insensitive).
+
+        If group_id is provided, it ONLY looks for channels in that group.
+        This allows the same channel name to exist in different groups.
 
         Also checks the base-name mapping so that a lookup for "USA Network"
         finds a channel created as "4000 | USA Network", and the normalized-name
@@ -2008,46 +2090,120 @@ class ActionExecutor:
         normalized_name_in_group does.
         """
         name_lower = name.lower()
+
+        def _filter_by_group(channels: list[dict]) -> Optional[dict]:
+            if not channels:
+                return None
+            if group_id is not None:
+                # Find channel specifically in this group
+                for c in channels:
+                    c_group = c.get("channel_group_id") or c.get("channel_group")
+                    # handle both ID and dict form from API
+                    if isinstance(c_group, dict):
+                        c_group = c_group.get("id")
+                    if c_group == group_id:
+                        return c
+                return None
+            # No group filter, return first one
+            return channels[0]
+
         # Check newly created channels first (by exact name)
-        if name_lower in self._created_channels:
-            logger.debug("[AUTO-CREATE-EXEC] '%s' found in created channels", name)
-            return self._created_channels[name_lower]
+        match = _filter_by_group(self._created_channels.get(name_lower, []))
+        if match:
+            logger.debug("[AUTO-CREATE-EXEC] '%s' found in created channels (group=%s)", name, group_id)
+            return match
+
+        # Check existing channels (by exact name)
+        match = _filter_by_group(self._channel_by_name.get(name_lower, []))
+        if match:
+            logger.debug("[AUTO-CREATE-EXEC] '%s' found in existing channels (group=%s, id=%s)", name, group_id, match.get('id'))
+            return match
+
         # Check base-name mapping (base name -> number-prefixed channel)
-        if name_lower in self._base_name_to_channel:
-            logger.debug("[AUTO-CREATE-EXEC] '%s' found via base-name mapping", name)
-            return self._base_name_to_channel[name_lower]
-        result = self._channel_by_name.get(name_lower)
-        if result:
-            logger.debug("[AUTO-CREATE-EXEC] '%s' found in existing channels (id=%s)", name, result.get('id'))
-            return result
+        match = _filter_by_group(self._base_name_to_channel.get(name_lower, []))
+        if match:
+            logger.debug("[AUTO-CREATE-EXEC] '%s' found via base-name mapping (group=%s)", name, group_id)
+            return match
+
         # Check normalized-name mapping (normalization-engine-processed channel names)
+        # Note: normalized index is currently 1:1, it might need list-wrapping too if we want full group-awareness there
         if name_lower in self._normalized_name_to_channel:
             result = self._normalized_name_to_channel[name_lower]
-            logger.debug("[AUTO-CREATE-EXEC] '%s' found via normalized-name mapping (id=%s, name='%s')", name, result.get('id'), result.get('name'))
-            return result
+            c_group = result.get("channel_group_id") or result.get("channel_group")
+            if isinstance(c_group, dict):
+                c_group = c_group.get("id")
+            
+            if group_id is None or c_group == group_id:
+                logger.debug("[AUTO-CREATE-EXEC] '%s' found via normalized-name mapping (id=%s, name='%s')", name, result.get('id'), result.get('name'))
+                return result
+        
         return None
 
-    def _find_channel_by_regex(self, pattern: str) -> Optional[dict]:
-        """Find first channel matching regex pattern."""
+    def _find_channel_by_regex(self, pattern: str, group_id: int = None) -> Optional[dict]:
+        """Find first channel matching regex pattern, optionally filtered by group."""
         try:
             regex = re.compile(pattern, re.IGNORECASE)
+            
+            def _matches(c):
+                if not regex.search(c.get("name", "")):
+                    return False
+                if group_id is not None:
+                    c_group = c.get("channel_group_id") or c.get("channel_group")
+                    if isinstance(c_group, dict):
+                        c_group = c_group.get("id")
+                    return c_group == group_id
+                return True
+
             for channel in self.existing_channels:
-                if regex.search(channel.get("name", "")):
+                if _matches(channel):
                     return channel
-            for channel in self._created_channels.values():
-                if regex.search(channel.get("name", "")):
-                    return channel
+            for channels in self._created_channels.values():
+                for channel in channels:
+                    if _matches(channel):
+                        return channel
         except re.error:
             logger.debug("[AUTO-CREATE-EXEC] Invalid regex in channel name pattern")
         return None
 
-    def _find_channel_by_tvg_id(self, tvg_id: str) -> Optional[dict]:
-        """Find channel by TVG ID."""
+    def _find_channel_by_tvg_id(self, tvg_id: str, group_id: int = None) -> Optional[dict]:
+        """Find channel by TVG ID, optionally filtered by group."""
         if not tvg_id:
             return None
+        
         for channel in self.existing_channels:
             if channel.get("tvg_id") == tvg_id:
+                if group_id is not None:
+                    c_group = channel.get("channel_group_id") or channel.get("channel_group")
+                    if isinstance(c_group, dict):
+                        c_group = c_group.get("id")
+                    if c_group != group_id:
+                        continue
                 return channel
+        return None
+
+    def _find_in_core_name_map(self, core_name: str, group_id: int = None) -> Optional[dict]:
+        """Find channel in core-name map, optionally filtered by group."""
+        channels = self._core_name_to_channel.get(core_name.lower(), [])
+        return self._filter_channels_by_group(channels, group_id)
+
+    def _find_in_callsign_map(self, callsign: str, group_id: int = None) -> Optional[dict]:
+        """Find channel in callsign map, optionally filtered by group."""
+        channels = self._callsign_to_channel.get(callsign, [])
+        return self._filter_channels_by_group(channels, group_id)
+
+    def _filter_channels_by_group(self, channels: list[dict], group_id: int = None) -> Optional[dict]:
+        """Helper to pick the first channel from a list that matches the group_id."""
+        if not channels:
+            return None
+        if group_id is not None:
+            for c in channels:
+                c_group = c.get("channel_group_id") or c.get("channel_group")
+                if isinstance(c_group, dict):
+                    c_group = c_group.get("id")
+                if c_group == group_id:
+                    return c
+            return None
+        return channels[0]
         for channel in self._created_channels.values():
             if channel.get("tvg_id") == tvg_id:
                 return channel

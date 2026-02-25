@@ -916,7 +916,11 @@ async def get_auto_creation_condition_schema():
 
         # Add value type hints
         if ct.value in ("stream_name_matches", "stream_name_contains", "stream_group_matches",
-                        "tvg_id_matches", "channel_exists_with_name", "channel_exists_matching"):
+                        "tvg_id_matches", "epg_title_contains", "epg_title_matches",
+                        "epg_desc_contains", "epg_desc_matches",
+                        "epg_any_contains", "epg_any_matches",
+                        "any_field_contains", "any_field_matches",
+                        "channel_exists_with_name", "channel_exists_matching"):
             condition_info["value_type"] = "string"
             condition_info["description"] = f"Pattern to match"
         elif ct.value in ("quality_min", "quality_max"):
@@ -1064,6 +1068,10 @@ async def get_auto_creation_template_variables():
             {"name": "{quality_raw}", "description": "Resolution as number (e.g., 1080)"},
             {"name": "{provider}", "description": "M3U account name"},
             {"name": "{provider_id}", "description": "M3U account ID"},
-            {"name": "{normalized_name}", "description": "Name after normalization rules"}
+            {"name": "{normalized_name}", "description": "Name after normalization rules"},
+            {"name": "{epg_match_title}", "description": "Title of the specific program that triggered the match"},
+            {"name": "{epg_match_desc}", "description": "Description of the specific program that matched"},
+            {"name": "{epg_match_start}", "description": "Start time of the matched program (HH:MM)"},
+            {"name": "{epg_match_stop}", "description": "Stop time of the matched program (HH:MM)"}
         ]
     }

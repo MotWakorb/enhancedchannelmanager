@@ -24,6 +24,10 @@ const TEMPLATE_VARIABLES = [
   { name: '{provider}', description: 'M3U provider name', example: 'Provider A' },
   { name: '{provider_id}', description: 'M3U provider ID', example: '1' },
   { name: '{normalized_name}', description: 'Normalized name', example: 'ESPN' },
+  { name: '{epg_match_title}', description: 'Title of matching program', example: 'La caída de Maradona' },
+  { name: '{epg_match_desc}', description: 'Description of matching program', example: 'Documental sobre la vida...' },
+  { name: '{epg_match_start}', description: 'Start time of matching program', example: '16:40' },
+  { name: '{epg_match_stop}', description: 'Stop time of matching program', example: '18:10' },
 ];
 
 // Parse starting number from backend range format (e.g., "100-99999" -> 100)

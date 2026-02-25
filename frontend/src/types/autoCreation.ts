@@ -26,6 +26,15 @@ export type ConditionType =
   | 'quality_max'
   | 'codec_is'
   | 'has_audio_tracks'
+  // EPG current program conditions
+  | 'epg_title_contains'
+  | 'epg_title_matches'
+  | 'epg_desc_contains'
+  | 'epg_desc_matches'
+  | 'epg_any_contains'
+  | 'epg_any_matches'
+  | 'any_field_contains'
+  | 'any_field_matches'
   // Channel conditions
   | 'has_channel'
   | 'channel_exists_with_name'
@@ -169,7 +178,11 @@ export type TemplateVariable =
   | '{quality_raw}'
   | '{provider}'
   | '{provider_id}'
-  | '{normalized_name}';
+  | '{normalized_name}'
+  | '{epg_match_title}'
+  | '{epg_match_desc}'
+  | '{epg_match_start}'
+  | '{epg_match_stop}';
 
 export interface TemplateVariableSchema {
   name: TemplateVariable;
@@ -315,6 +328,8 @@ export interface ExecutionLogEntry {
   stream_id: number;
   stream_name: string;
   m3u_account_id?: number;
+  epg_title?: string | null;
+  epg_description?: string | null;
   rules_evaluated: RuleEvaluation[];
   actions_executed: ActionLogEntry[];
 }
