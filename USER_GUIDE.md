@@ -682,10 +682,21 @@ Build matching logic using a three-part editor (Field + Operator + Value) with A
 | **M3U Account** | is, is not (specific M3U account) |
 | **Quality** | at least, at most (2160p, 1080p, 720p, 480p, 360p) |
 | **Codec** | is, is not (H.264, HEVC, etc.) |
+| **EPG Title (Today)** | contains, matches (regex) |
+| **EPG Description (Today)** | contains, matches (regex) |
+| **EPG Today (Any)** | contains, matches (regex) - Checks both Title and Description |
+| **EPG Source** | is, is not - Filter to specific Dispatcharr EPG provider |
+| **Any Field (Name/EPG)** | contains, matches (regex) - Checks Name, EPG Title, and Description |
 | **Channel Exists** | by name, regex, or group |
 | **Normalized Match in Group** | stream's normalized name matches a channel in a specified group |
 | **Normalized Name (Global)** | stream's normalized name matches any channel across all groups |
 | **Normalized Name (Not In)** | stream's normalized name does NOT match any channel in a specified group |
+
+#### EPG-Based Matching (Today)
+
+EPG conditions evaluate against all programs scheduled for the current UTC day (00:00 to 23:59). When a match is found via EPG, specific program metadata is captured and made available for naming templates.
+
+**EPG Source Filtering:** Use the **EPG Source** condition to restrict matches to a specific provider. This is highly recommended when using keyword-based EPG searches to avoid false positives from different guide sources.
 
 #### AND/OR Connectors
 
@@ -747,8 +758,8 @@ Define what happens when conditions match:
 
 | Action | Description |
 |--------|-------------|
-| **Create Channel** | Template-based naming using `{stream_name}`, `{stream_group}`, `{quality}`, `{provider}`, etc. |
-| **Create Group** | Automatically create a channel group |
+| **Create Channel** | Template-based naming with support for primary and fallback templates |
+| **Create Group** | Automatically create a channel group with fallback support |
 | **Merge Streams** | Combine multiple streams into one channel with quality preference; auto-find uses multi-stage lookup (normalized name → core-name → call sign → deparen/word-prefix); optional max streams per provider limit |
 | **Assign Logo** | Set channel logo from stream or URL |
 | **Assign EPG** | Assign EPG data source |
@@ -757,6 +768,23 @@ Define what happens when conditions match:
 | **Set Variable** | Define reusable variables with regex extraction |
 | **Name Transform** | Apply regex find/replace to channel names |
 | **Skip / Stop** | Skip stream or stop processing further rules |
+
+#### Naming Templates and Variables
+
+Actions like **Create Channel** and **Create Group** support dynamic naming using placeholders:
+
+- `{stream_name}` - Original name of the matched stream
+- `{stream_group}` - Original M3U group name
+- `{quality}` - Stream resolution (e.g., 1080p)
+- `{provider}` - M3U account name
+- `{epg_match_title}` - Title of the specific program that triggered an EPG match
+- `{epg_match_desc}` - Description of the matched program
+- `{epg_match_start}` - Start time of the matched program (`HH:MM`)
+- `{epg_match_stop}` - Stop time of the matched program (`HH:MM`)
+
+**Fallback Name Template:** When using multi-field conditions (like **Any Field**), a stream might match via its original name instead of an EPG program. The **Fallback Name Template** allows you to specify a different naming format for these cases (e.g., use `{stream_name}` if no EPG match is found, but use `{epg_match_start} - {epg_match_title}` if it was an EPG match).
+
+**Group-Aware Matching:** The pipeline is fully group-aware. If you target a specific group for channel creation, the engine will only check for existing channels within that group, allowing you to have duplicate channel names in different parts of your lineup without conflicts.
 
 When a channel already exists, choose behavior:
 - **Skip** - Don't create the channel

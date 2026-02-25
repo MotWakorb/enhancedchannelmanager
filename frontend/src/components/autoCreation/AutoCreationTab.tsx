@@ -1076,6 +1076,21 @@ export function AutoCreationTab() {
                                 {isExpanded ? 'expand_more' : 'chevron_right'}
                               </span>
                               <span className="log-stream-name">{entry.stream_name}</span>
+                              {(entry.epg_title || entry.epg_description) && (
+                                <div className="log-epg-info">
+                                  {entry.epg_title && (
+                                    <span className="log-epg-title" title="Current Program Title">
+                                      <span className="material-icons">event</span>
+                                      {entry.epg_title}
+                                    </span>
+                                  )}
+                                  {entry.epg_description && (
+                                    <span className="log-epg-desc" title={entry.epg_description}>
+                                      {entry.epg_description.length > 60 ? entry.epg_description.substring(0, 60) + '...' : entry.epg_description}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
                               <span className="log-entry-meta">
                                 {winnerRule && (
                                   <span className="log-rule-badge">{winnerRule.rule_name}</span>

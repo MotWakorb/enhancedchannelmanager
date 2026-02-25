@@ -28,6 +28,15 @@ class ConditionType(str, Enum):
     STREAM_GROUP_MATCHES = "stream_group_matches"    # Regex match on group name
     TVG_ID_EXISTS = "tvg_id_exists"                  # Has EPG ID
     TVG_ID_MATCHES = "tvg_id_matches"                # Regex match on EPG ID
+    EPG_TITLE_CONTAINS = "epg_title_contains"        # Substring match on current EPG title
+    EPG_TITLE_MATCHES = "epg_title_matches"          # Regex match on current EPG title
+    EPG_DESC_CONTAINS = "epg_desc_contains"          # Substring match on current EPG description
+    EPG_DESC_MATCHES = "epg_desc_matches"            # Regex match on current EPG description
+    EPG_ANY_CONTAINS = "epg_any_contains"            # Check EPG Title and EPG Desc
+    EPG_ANY_MATCHES = "epg_any_matches"              # Check EPG Title and EPG Desc (Regex)
+    EPG_SOURCE_IS = "epg_source_is"                  # Check EPG Source ID
+    ANY_FIELD_CONTAINS = "any_field_contains"        # Check Name, EPG Title, and EPG Desc
+    ANY_FIELD_MATCHES = "any_field_matches"          # Check Name, EPG Title, and EPG Desc (Regex)
     LOGO_EXISTS = "logo_exists"                      # Has logo URL
     PROVIDER_IS = "provider_is"                      # From specific M3U account(s)
     QUALITY_MIN = "quality_min"                      # Minimum resolution (height)
@@ -148,6 +157,14 @@ class Condition:
             ConditionType.STREAM_GROUP_CONTAINS,
             ConditionType.STREAM_GROUP_MATCHES,
             ConditionType.TVG_ID_MATCHES,
+            ConditionType.EPG_TITLE_CONTAINS,
+            ConditionType.EPG_TITLE_MATCHES,
+            ConditionType.EPG_DESC_CONTAINS,
+            ConditionType.EPG_DESC_MATCHES,
+            ConditionType.EPG_ANY_CONTAINS,
+            ConditionType.EPG_ANY_MATCHES,
+            ConditionType.ANY_FIELD_CONTAINS,
+            ConditionType.ANY_FIELD_MATCHES,
             ConditionType.CHANNEL_EXISTS_WITH_NAME,
             ConditionType.CHANNEL_EXISTS_MATCHING,
         ):
@@ -158,6 +175,10 @@ class Condition:
                 ConditionType.STREAM_NAME_MATCHES,
                 ConditionType.STREAM_GROUP_MATCHES,
                 ConditionType.TVG_ID_MATCHES,
+                ConditionType.EPG_TITLE_MATCHES,
+                ConditionType.EPG_DESC_MATCHES,
+                ConditionType.EPG_ANY_MATCHES,
+                ConditionType.ANY_FIELD_MATCHES,
                 ConditionType.CHANNEL_EXISTS_MATCHING,
             ):
                 try:
@@ -169,7 +190,7 @@ class Condition:
             if not isinstance(self.value, (int, float)) or self.value < 0:
                 errors.append(f"{self.type} requires a positive number")
 
-        elif cond_type == ConditionType.PROVIDER_IS:
+        elif cond_type in (ConditionType.PROVIDER_IS, ConditionType.EPG_SOURCE_IS):
             if not isinstance(self.value, (int, list)):
                 errors.append(f"{self.type} requires an integer or list of integers")
             elif isinstance(self.value, list) and not all(isinstance(x, int) for x in self.value):
@@ -524,6 +545,10 @@ class TemplateVariables:
     PROVIDER = "provider"                # M3U account name
     PROVIDER_ID = "provider_id"          # M3U account ID
     NORMALIZED_NAME = "normalized_name"  # Name after normalization rules
+    EPG_MATCH_TITLE = "epg_match_title"  # Specific program title that matched
+    EPG_MATCH_DESC = "epg_match_desc"    # Specific program description that matched
+    EPG_MATCH_START = "epg_match_start"  # Start time of matched program
+    EPG_MATCH_STOP = "epg_match_stop"    # Stop time of matched program
 
     @classmethod
     def all_variables(cls) -> list[str]:
@@ -538,6 +563,10 @@ class TemplateVariables:
             cls.PROVIDER,
             cls.PROVIDER_ID,
             cls.NORMALIZED_NAME,
+            cls.EPG_MATCH_TITLE,
+            cls.EPG_MATCH_DESC,
+            cls.EPG_MATCH_START,
+            cls.EPG_MATCH_STOP,
         ]
 
     @staticmethod

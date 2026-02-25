@@ -686,6 +686,39 @@
   white-space: nowrap;
 }
 
+.log-epg-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 2;
+  min-width: 0;
+  margin: 0 12px;
+}
+
+.log-epg-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.log-epg-title .material-icons {
+  font-size: 14px;
+}
+
+.log-epg-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .log-entry-meta {
   display: flex;
   align-items: center;

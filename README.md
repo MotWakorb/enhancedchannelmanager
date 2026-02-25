@@ -89,6 +89,11 @@ Build complex matching logic with AND/OR connectors:
 - **M3U Account** - Filter by specific M3U account
 - **Quality** - Minimum/maximum resolution (2160p, 1080p, 720p, 480p, 360p)
 - **Codec** - Filter by video codec (H.264, HEVC, etc.)
+- **EPG Title (Today)** - Search matching program titles for current UTC day
+- **EPG Description (Today)** - Search matching program descriptions for today
+- **EPG Today (Any)** - Search both Title and Description simultaneously
+- **EPG Source** - Filter matches to a specific Dispatcharr EPG provider
+- **Any Field (Name/EPG)** - Check Stream Name, EPG Title, and EPG Description in one condition
 - **Channel Exists** - Check if channel already exists (by name, regex, or group)
 - **Normalized Match in Group** - Check if a stream's normalized name matches any channel in a specified channel group (strips country prefixes and applies normalization engine)
 - **Normalized Name (Global)** - Check if a stream's normalized name matches any channel across all groups
@@ -97,8 +102,8 @@ Build complex matching logic with AND/OR connectors:
 
 #### Actions
 Define what happens when conditions match:
-- **Create Channel** - Template-based naming with variables (`{stream_name}`, `{stream_group}`, `{quality}`, `{provider}`, etc.)
-- **Create Group** - Automatically create channel groups with template naming
+- **Create Channel** - Template-based naming with support for primary and fallback formats (e.g., use `{stream_name}` if no EPG match is found)
+- **Create Group** - Automatically create channel groups with template naming and fallback support
 - **Merge Streams** - Combine multiple streams into a single channel with quality preference ordering, optional per-provider stream limit, and multi-stage auto-lookup (exact name → core-name fallback → call sign fallback → deparen/word-prefix matching)
 - **Remove From Channel** - Remove a stream from its current channel during auto-creation
 - **Set Stream Priority** - Set stream priority/weight within a channel
@@ -107,6 +112,15 @@ Define what happens when conditions match:
 - **Set Variable** - Define reusable variables with regex extraction for use in templates
 - **Name Transform** - Apply regex find/replace to channel names
 - **If Exists Behavior** - Skip, merge (create if new), merge only (existing only), update, or use existing when channels already exist
+
+#### Template Variables
+Dynamic naming placeholders:
+- `{stream_name}`, `{stream_group}`, `{quality}`, `{provider}`
+- `{epg_match_title}` - Specific program title that triggered an EPG match
+- `{epg_match_desc}` - Description of the matched program
+- `{epg_match_start}` - Program start time (`HH:MM`)
+- `{epg_match_stop}` - Program stop time (`HH:MM`)
+- `{custom_var}` - Custom variables defined via Set Variable action
 
 #### Execution
 - **Dry Run Mode** - Preview all changes before applying
@@ -123,6 +137,7 @@ Define what happens when conditions match:
 - **Multi-Criteria Sort** - Sort by stream name, natural name, group, quality, or stream name (regex)
 - **Stream Name (Regex) Sort** - Sort matched streams by a regex capture group extracted from the stream name (e.g., sort by date pattern `(\d{4}-\d{2}-\d{2})`)
 - **Auto-Find Channels** - Merge streams action with `target: auto` automatically finds existing channels using a multi-stage lookup: normalized name → core-name fallback (stripping tags) → call sign fallback → deparen and word-prefix matching. For example, "US: Discovery" finds channel "113 | Discovery", and "ESPN (East)" finds "ESPN"
+- **Group-Aware Isolation** - Pipeline correctly handles same-named channels across different groups by prioritizing lookups within the rule's target group.
 - **User Settings Integration** - Honors channel numbering, default profile, timezone preference, and auto-rename settings
 
 #### Orphan Reconciliation

@@ -838,9 +838,17 @@ class DispatcharrClient:
             if data and len(data) > 0:
                 logger.debug("[DISPATCHARR] EPG grid first item sample: %s", data[0])
 
-        # Dispatcharr returns {"data": [...]}
+        # Dispatcharr usually returns {"programmes": [...], "channels": [...]}
+        # but some versions or endpoints might return {"data": [...]}
         if isinstance(data, dict):
-            return data.get("data", [])
+            # If it has programmes/channels structure, return full dict
+            if "programmes" in data or "channels" in data:
+                return data
+            # If it's just a data wrapper, return the list
+            if "data" in data:
+                return data.get("data", [])
+            return data
+            
         # Fallback for list response
         return data if isinstance(data, list) else []
 
