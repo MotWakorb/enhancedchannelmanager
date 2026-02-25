@@ -9,7 +9,7 @@ import re
 import logging
 from typing import Optional
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from auto_creation_schema import Condition, ConditionType
 
 
@@ -341,11 +341,15 @@ class ConditionEvaluator:
 
             value = prog.get(field_name) or ""
             matched = False
+            matched_segment = pattern
             
             if is_regex:
                 try:
                     flags = 0 if case_sensitive else re.IGNORECASE
-                    matched = bool(re.search(pattern, value, flags))
+                    match_obj = re.search(pattern, value, flags)
+                    if match_obj:
+                        matched = True
+                        matched_segment = match_obj.group(0)
                 except re.error as e:
                     return EvaluationResult(False, cond_type, f"Invalid regex: {e}")
             else:
@@ -357,7 +361,7 @@ class ConditionEvaluator:
             if matched:
                 return EvaluationResult(
                     True, cond_type,
-                    f"Program '{prog.get('title')}' matched {pattern}",
+                    f"Program '{prog.get('title')}' matched '{matched_segment}'",
                     matched_data={"program": prog}
                 )
         
@@ -456,9 +460,36 @@ class ConditionEvaluator:
             
             try:
                 expected_source = int(condition.value)
+                now_utc = datetime.now(timezone.utc)
+                best_prog = None
+                
                 for prog in context.epg_programs:
                     if prog.get("source") == expected_source:
-                        return EvaluationResult(True, cond_type, f"EPG source {expected_source} has programs today for this channel")
+                        # Match found
+                        # Try to find program currently airing
+                        try:
+                            start_str = prog.get("start")
+                            stop_str = prog.get("stop")
+                            if start_str and stop_str:
+                                start = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
+                                stop = datetime.fromisoformat(stop_str.replace('Z', '+00:00'))
+                                if start <= now_utc <= stop:
+                                    return EvaluationResult(
+                                        True, cond_type, 
+                                        f"EPG source {expected_source} matches (Now: '{prog.get('title')}')",
+                                        matched_data={"program": prog}
+                                    )
+                        except:
+                            pass
+                        if not best_prog:
+                            best_prog = prog
+                
+                if best_prog:
+                    return EvaluationResult(
+                        True, cond_type, 
+                        f"EPG source {expected_source} has programs today",
+                        matched_data={"program": best_prog}
+                    )
             except (ValueError, TypeError):
                 return EvaluationResult(False, cond_type, "Invalid source ID")
             
@@ -644,10 +675,12 @@ class ConditionEvaluator:
 
         try:
             flags = 0 if case_sensitive else re.IGNORECASE
-            matched = bool(re.search(pattern, value, flags))
+            match_obj = re.search(pattern, value, flags)
+            matched = bool(match_obj)
+            matched_segment = match_obj.group(0) if match_obj else pattern
             return EvaluationResult(
                 matched, cond_type,
-                f"'{value}' {'matches' if matched else 'does not match'} /{pattern}/"
+                f"'{value}' {'matches' if matched else 'does not match'} /{pattern}/ (segment: '{matched_segment}')"
             )
         except re.error as e:
             logger.error("[AUTO-CREATE-EVAL] Invalid regex pattern '%s': %s", pattern, e)
