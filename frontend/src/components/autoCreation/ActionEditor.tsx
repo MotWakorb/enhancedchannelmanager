@@ -215,6 +215,7 @@ export function ActionEditor({
   const [typeSelectOpen, setTypeSelectOpen] = useState(false);
   const [showVariables, setShowVariables] = useState(false);
   const [showVarTemplateVariables, setShowVarTemplateVariables] = useState(false);
+  const [showVarFallbackVariables, setShowVarFallbackVariables] = useState(false);
   const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>([]);
   const [epgSources, setEpgSources] = useState<EPGSource[]>([]);
   const [channelNumberMode, setChannelNumberMode] = useState<'auto' | 'starting'>(
@@ -348,6 +349,12 @@ export function ActionEditor({
     const currentTemplate = action.name_template || '';
     onChange({ ...action, name_template: currentTemplate + variable });
     setShowVariables(false);
+  };
+
+  const handleInsertFallbackVariable = (variable: string) => {
+    const currentTemplate = action.name_template_fallback || '';
+    onChange({ ...action, name_template_fallback: currentTemplate + variable });
+    setShowVarFallbackVariables(false);
   };
 
   const handleInsertValueVariable = (variable: string) => {
@@ -497,6 +504,56 @@ export function ActionEditor({
                 <span className="preview-text">{getPreviewText()}</span>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Fallback Name Template Field (Optional) */}
+        {actionDef?.hasNameTemplate && (
+          <div className="action-field" style={{ marginTop: '12px' }}>
+            <label htmlFor={`${id}-fallback-template`}>
+              Fallback Name Template (optional)
+            </label>
+            <div className="template-input-wrapper">
+              <input
+                id={`${id}-fallback-template`}
+                type="text"
+                className="action-input"
+                value={action.name_template_fallback || ''}
+                onChange={e => onChange({ ...action, name_template_fallback: e.target.value })}
+                placeholder="Used if no EPG match is found (e.g., {stream_name})"
+                disabled={readonly}
+              />
+              {!readonly && (
+                <button
+                  type="button"
+                  className="show-variables-btn"
+                  onClick={() => setShowVarFallbackVariables(!showVarFallbackVariables)}
+                  aria-label="Show fallback variables"
+                >
+                  <span className="material-icons">code</span>
+                </button>
+              )}
+            </div>
+
+            {showVarFallbackVariables && (
+              <div className="variables-dropdown">
+                <div className="variables-hint">Template variables - click to insert:</div>
+                {TEMPLATE_VARIABLES.map(v => (
+                  <button
+                    key={v.name}
+                    type="button"
+                    className="variable-option"
+                    onClick={() => handleInsertFallbackVariable(v.name)}
+                  >
+                    <span className="variable-name">{v.name}</span>
+                    <span className="variable-desc">{v.description}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <span className="field-hint">
+              This template will be used if the match was found via Name Search instead of EPG.
+            </span>
           </div>
         )}
 

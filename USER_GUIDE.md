@@ -784,6 +784,14 @@ Actions like **Create Channel** and **Create Group** support dynamic naming usin
 
 **Fallback Name Template:** When using multi-field conditions (like **Any Field**), a stream might match via its original name instead of an EPG program. The **Fallback Name Template** allows you to specify a different naming format for these cases (e.g., use `{stream_name}` if no EPG match is found, but use `{epg_match_start} - {epg_match_title}` if it was an EPG match).
 
+- **Smart Fallback:** If you use the **EPG Source** condition, the engine will automatically capture the program *currently airing* on that source even if your keyword didn't match it. This ensures your `{epg_match_*}` variables still have valid data if the stream was matched via its name.
+
+#### Debugging Rules and False Positives
+
+When a rule matches a stream, you can click the **Check** icon in the **Execution Log** to see exactly why it matched. 
+
+- **Match Segments:** For Regex and Substring matches, the log will show exactly which part of the text matched (e.g., `Matched 'Rugby'`). This is extremely helpful for finding typos in long regex strings that might cause false positives (like matching "UEFA" because of a stray character).
+
 **Group-Aware Matching:** The pipeline is fully group-aware. If you target a specific group for channel creation, the engine will only check for existing channels within that group, allowing you to have duplicate channel names in different parts of your lineup without conflicts.
 
 When a channel already exists, choose behavior:
