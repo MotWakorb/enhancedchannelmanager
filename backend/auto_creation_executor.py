@@ -2138,16 +2138,10 @@ class ActionExecutor:
             return match
 
         # Check normalized-name mapping (normalization-engine-processed channel names)
-        # Note: normalized index is currently 1:1, it might need list-wrapping too if we want full group-awareness there
-        if name_lower in self._normalized_name_to_channel:
-            result = self._normalized_name_to_channel[name_lower]
-            c_group = result.get("channel_group_id") or result.get("channel_group")
-            if isinstance(c_group, dict):
-                c_group = c_group.get("id")
-            
-            if group_id is None or c_group == group_id:
-                logger.debug("[AUTO-CREATE-EXEC] '%s' found via normalized-name mapping (id=%s, name='%s')", name, result.get('id'), result.get('name'))
-                return result
+        match = _filter_by_group(self._normalized_name_to_channel.get(name_lower, []))
+        if match:
+            logger.debug("[AUTO-CREATE-EXEC] '%s' found via normalized-name mapping (group=%s, id=%s)", name, group_id, match.get('id'))
+            return match
         
         return None
 
