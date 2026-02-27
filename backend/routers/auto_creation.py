@@ -1047,6 +1047,29 @@ async def get_auto_creation_action_schema():
             "params": {
                 "message": {"type": "string", "description": "Message to log (supports templates)"}
             }
+        },
+        {
+            "type": ActionType.SET_VARIABLE.value,
+            "description": "Set a custom variable for later use",
+            "params": {
+                "variable_name": {"type": "string", "description": "Variable name"},
+                "variable_mode": {"type": "string", "enum": ["regex_extract", "regex_replace", "literal"], "default": "literal"},
+                "source_field": {"type": "string", "enum": ["stream_name", "stream_group", "tvg_id"], "default": "stream_name"},
+                "pattern": {"type": "string", "optional": True},
+                "replacement": {"type": "string", "optional": True},
+                "template": {"type": "string", "optional": True}
+            }
+        },
+        {
+            "type": ActionType.TRANSFORM_TIME.value,
+            "description": "Extract and transform time between timezones",
+            "params": {
+                "variable_name": {"type": "string", "description": "Variable to store the result"},
+                "source_field": {"type": "string", "enum": ["stream_name", "stream_group", "epg_title"], "default": "stream_name"},
+                "pattern": {"type": "string", "default": "(\\d{1,2}:\\d{2})"},
+                "source_tz": {"type": "string", "default": "UTC"},
+                "target_tz": {"type": "string", "default": "UTC"}
+            }
         }
     ]
 

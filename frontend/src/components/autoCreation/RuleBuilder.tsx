@@ -690,6 +690,7 @@ function ActionTypeSelector({
       label: 'Variables',
       types: [
         { type: 'set_variable' as ActionType, label: 'Set Variable' },
+        { type: 'transform_time' as ActionType, label: 'Transform Time' },
       ],
     },
     {

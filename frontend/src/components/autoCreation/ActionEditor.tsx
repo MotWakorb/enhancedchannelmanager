@@ -55,6 +55,25 @@ const VARIABLE_MODE_OPTIONS = [
   { value: 'literal', label: 'Literal / Template' },
 ];
 
+const TIMEZONE_OPTIONS = [
+  { value: 'UTC', label: 'UTC (GMT)' },
+  { value: 'Europe/London', label: 'London' },
+  { value: 'Europe/Madrid', label: 'Madrid' },
+  { value: 'Europe/Paris', label: 'Paris' },
+  { value: 'Europe/Berlin', label: 'Berlin' },
+  { value: 'America/New_York', label: 'US Eastern (New York)' },
+  { value: 'America/Chicago', label: 'US Central (Chicago)' },
+  { value: 'America/Denver', label: 'US Mountain (Denver)' },
+  { value: 'America/Los_Angeles', label: 'US Pacific (Los Angeles)' },
+  { value: 'America/Sao_Paulo', label: 'Brazil (Brasilia)' },
+  { value: 'Australia/Sydney', label: 'Australia (Sydney)' },
+  { value: 'Australia/Melbourne', label: 'Australia (Melbourne)' },
+  { value: 'Australia/Perth', label: 'Australia (Perth)' },
+  { value: 'Asia/Tokyo', label: 'Tokyo' },
+  { value: 'Asia/Dubai', label: 'Dubai' },
+  { value: 'Asia/Kolkata', label: 'India' },
+];
+
 // Action type definitions with metadata
 const ACTION_TYPES: {
   type: ActionType;
@@ -84,6 +103,7 @@ const ACTION_TYPES: {
   { type: 'set_channel_number', label: 'Set Channel Number', description: 'Set the channel number', category: 'assignment', hasValue: true },
   // Variables
   { type: 'set_variable', label: 'Set Variable', description: 'Define a reusable variable from stream data', category: 'variables', hasVariableConfig: true },
+  { type: 'transform_time', label: 'Transform Time', description: 'Extract and convert time between timezones', category: 'variables' },
   // Management actions
   { type: 'remove_from_channel', label: 'Remove From Channel', description: 'Remove this stream from its current channel', category: 'management' },
   { type: 'set_stream_priority', label: 'Set Stream Priority', description: 'Move stream to lowest or highest priority in its channel', category: 'management', hasPriority: true },
@@ -827,6 +847,74 @@ export function ActionEditor({
                 <span className="field-hint">Can use template variables and <code>{'{var:name}'}</code> references</span>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Time Transform Configuration */}
+        {action.type === 'transform_time' && (
+          <div className="action-config-group">
+            <div className="action-field">
+              <label htmlFor={`${id}-time-var`}>Output Variable Name</label>
+              <input
+                id={`${id}-time-var`}
+                type="text"
+                className="action-input mono"
+                value={action.variable_name || ''}
+                onChange={e => onChange({ ...action, variable_name: e.target.value.replace(/[^a-zA-Z0-9_]/g, '') })}
+                placeholder="e.g., local_time"
+                disabled={readonly}
+              />
+              {action.variable_name && (
+                <span className="field-hint">Use as <code>{'{var:' + action.variable_name + '}'}</code> in later actions</span>
+              )}
+            </div>
+
+            <div className="action-field">
+              <label>Source Field</label>
+              <CustomSelect
+                value={action.source_field || 'stream_name'}
+                onChange={val => onChange({ ...action, source_field: val })}
+                options={[...SOURCE_FIELD_OPTIONS, { value: 'epg_title', label: 'EPG Title' }]}
+                disabled={readonly}
+              />
+            </div>
+
+            <div className="action-field">
+              <label htmlFor={`${id}-time-pattern`}>Extraction Regex</label>
+              <input
+                id={`${id}-time-pattern`}
+                type="text"
+                className="action-input mono"
+                value={action.pattern || ''}
+                onChange={e => onChange({ ...action, pattern: e.target.value })}
+                placeholder="e.g., (\d{1,2}:\d{2})"
+                disabled={readonly}
+              />
+              <span className="field-hint">Regex to find the time string in the source field</span>
+            </div>
+
+            <div className="action-field-row" style={{ display: 'flex', gap: '12px' }}>
+              <div className="action-field" style={{ flex: 1 }}>
+                <label>From Timezone</label>
+                <CustomSelect
+                  value={action.source_tz || 'UTC'}
+                  onChange={val => onChange({ ...action, source_tz: val })}
+                  options={TIMEZONE_OPTIONS}
+                  disabled={readonly}
+                  searchable
+                />
+              </div>
+              <div className="action-field" style={{ flex: 1 }}>
+                <label>To Timezone</label>
+                <CustomSelect
+                  value={action.target_tz || 'UTC'}
+                  onChange={val => onChange({ ...action, target_tz: val })}
+                  options={TIMEZONE_OPTIONS}
+                  disabled={readonly}
+                  searchable
+                />
+              </div>
+            </div>
           </div>
         )}
 

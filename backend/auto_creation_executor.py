@@ -7,8 +7,10 @@ potential rollback.
 """
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Optional, Union, List, Dict
 import re
+from datetime import datetime, timedelta, timezone
+import pytz
 
 from auto_creation_schema import Action, ActionType, TemplateVariables
 from auto_creation_evaluator import StreamContext
@@ -348,6 +350,8 @@ class ActionExecutor:
             result = await self._execute_set_channel_number(action, stream_ctx, exec_ctx)
         elif action_type == ActionType.SET_VARIABLE:
             result = await self._execute_set_variable(action, stream_ctx, exec_ctx, template_ctx)
+        elif action_type == ActionType.TRANSFORM_TIME:
+            result = await self._execute_transform_time(action, stream_ctx, exec_ctx, template_ctx)
         elif action_type == ActionType.REMOVE_FROM_CHANNEL:
             result = await self._execute_remove_from_channel(action, stream_ctx, exec_ctx)
         elif action_type == ActionType.SET_STREAM_PRIORITY:
@@ -1734,6 +1738,83 @@ class ActionExecutor:
                 description=f"Regex error in set_variable: {e}",
                 error=str(e)
             )
+
+    async def _execute_transform_time(self, action: Action, stream_ctx: StreamContext,
+                                      exec_ctx: ExecutionContext, template_ctx: dict) -> ActionResult:
+        """Execute transform_time action."""
+        params = action.params
+        var_name = params.get("variable_name")
+        source_field = params.get("source_field", "stream_name")
+        pattern = params.get("pattern", r"(\d{1,2}:\d{2})")
+        source_tz_name = params.get("source_tz", "UTC")
+        target_tz_name = params.get("target_tz", "UTC")
+
+        # Get source value
+        source_value = str(template_ctx.get(source_field, ""))
+
+        # 1. Extract time string
+        time_str = None
+        try:
+            match = re.search(pattern, source_value)
+            if match:
+                time_str = match.group(1) if match.groups() else match.group(0)
+        except re.error as e:
+            return ActionResult(success=False, action_type=action.type, description=f"Invalid regex: {e}", error=str(e))
+
+        if not time_str:
+            return ActionResult(success=True, action_type=action.type, description=f"No time found matching '{pattern}' in '{source_value}'", skipped=True)
+
+        # 2. Parse time string (HH:MM or HH:MM AM/PM)
+        try:
+            # Try various common formats
+            dt = None
+            # Clean up string
+            time_str_clean = time_str.strip().replace('.', ':')
+            
+            for fmt in ("%H:%M", "%I:%M %p", "%I:%M%p", "%I %p"):
+                try:
+                    dt = datetime.strptime(time_str_clean, fmt)
+                    break
+                except ValueError:
+                    continue
+            
+            if not dt:
+                return ActionResult(success=False, action_type=action.type, description=f"Could not parse time string '{time_str}'", error="Parse error")
+
+            # 3. Localize and Convert
+            now = datetime.now(timezone.utc)
+            # Use today's date context
+            dt = dt.replace(year=now.year, month=now.month, day=now.day)
+            
+            try:
+                src_tz = pytz.timezone(source_tz_name)
+                tgt_tz = pytz.timezone(target_tz_name)
+            except pytz.exceptions.UnknownTimeZoneError as e:
+                return ActionResult(success=False, action_type=action.type, description=f"Unknown timezone: {e}", error="TZ error")
+
+            # Localize to source (handling DST)
+            dt_src = src_tz.localize(dt)
+            # Convert to target
+            dt_tgt = dt_src.astimezone(tgt_tz)
+            
+            # Format result
+            result_time = dt_tgt.strftime("%H:%M")
+            
+            # Store in variable
+            exec_ctx.custom_variables[var_name] = result_time
+            
+            logger.debug("[AUTO-CREATE-EXEC] Transformed time '%s' (%s) -> '%s' (%s)", 
+                         time_str, source_tz_name, result_time, target_tz_name)
+            
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description=f"Transformed '{time_str}' ({source_tz_name}) to '{result_time}' ({target_tz_name})"
+            )
+
+        except Exception as e:
+            logger.exception("[AUTO-CREATE-EXEC] Time transform failed")
+            return ActionResult(success=False, action_type=action.type, description=f"Transform failed: {e}", error=str(e))
 
     # =========================================================================
     # Stream Management Actions

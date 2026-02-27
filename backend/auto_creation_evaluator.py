@@ -67,7 +67,8 @@ class StreamContext:
     @classmethod
     def from_dispatcharr_stream(cls, stream: dict, m3u_account_id: int = None,
                                  m3u_account_name: str = None,
-                                 stream_stats: dict = None) -> "StreamContext":
+                                 stream_stats: dict = None,
+                                 account_groups: dict = None) -> "StreamContext":
         """
         Create StreamContext from Dispatcharr stream API response.
 
@@ -76,7 +77,19 @@ class StreamContext:
             m3u_account_id: M3U account ID this stream belongs to
             m3u_account_name: M3U account name
             stream_stats: Optional StreamStats record for quality info
+            account_groups: Optional map of {account_id: [group_dicts]} for group name resolution
         """
+        # Resolve group name
+        group_name = stream.get("group_title") or stream.get("channel_group_name") or stream.get("m3u_group_name")
+        group_id = stream.get("channel_group")
+        
+        # If name is missing but we have ID and the map, look it up
+        if not group_name and group_id and account_groups and m3u_account_id in account_groups:
+            for g in account_groups[m3u_account_id]:
+                if g.get("id") == group_id:
+                    group_name = g.get("name")
+                    break
+
         # Parse resolution from stream_stats
         resolution_height = None
         if stream_stats and stream_stats.get("resolution"):
@@ -92,8 +105,8 @@ class StreamContext:
             stream_id=stream.get("id"),
             stream_name=stream.get("name", ""),
             stream_url=stream.get("url"),
-            group_name=stream.get("group_title") or stream.get("channel_group_name") or stream.get("m3u_group_name"),
-            channel_group_id=stream.get("channel_group"),
+            group_name=group_name,
+            channel_group_id=group_id,
             tvg_id=stream.get("tvg_id"),
             tvg_name=stream.get("tvg_name"),
             logo_url=stream.get("logo_url") or stream.get("tvg_logo"),
@@ -414,11 +427,17 @@ class ConditionEvaluator:
 
         # Group conditions
         elif cond_enum == ConditionType.STREAM_GROUP_CONTAINS:
-            return self._evaluate_contains(condition.value, context.group_name or "",
+            actual_group = (context.group_name or "").strip()
+            res = self._evaluate_contains(condition.value, actual_group,
                                            condition.case_sensitive, cond_type)
+            res.details = f"Group '{actual_group}' {'' if res.matched else 'does not '}contain '{condition.value}'"
+            return res
         elif cond_enum == ConditionType.STREAM_GROUP_MATCHES:
-            return self._evaluate_regex(condition.value, context.group_name or "",
+            actual_group = (context.group_name or "").strip()
+            res = self._evaluate_regex(condition.value, actual_group,
                                         condition.case_sensitive, cond_type)
+            res.details = f"Group '{actual_group}' {'' if res.matched else 'does not '}match /{condition.value}/"
+            return res
 
         # TVG conditions
         elif cond_enum == ConditionType.TVG_ID_EXISTS:
@@ -733,13 +752,13 @@ class ConditionEvaluator:
             matched = actual in expected
             return EvaluationResult(
                 matched, cond_type,
-                f"provider {actual} {'in' if matched else 'not in'} {expected}"
+                f"Provider ID {actual} {'matches' if matched else 'does not match'} list {expected}"
             )
         else:
             matched = actual == expected
             return EvaluationResult(
                 matched, cond_type,
-                f"provider {actual} {'==' if matched else '!='} {expected}"
+                f"Provider ID {actual} {'matches' if matched else 'does not match'} expected {expected}"
             )
 
     # =========================================================================
