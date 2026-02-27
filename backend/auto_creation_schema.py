@@ -247,6 +247,7 @@ class ActionType(str, Enum):
 
     # Variables
     SET_VARIABLE = "set_variable"
+    TRANSFORM_TIME = "transform_time"
 
     # Stream management
     REMOVE_FROM_CHANNEL = "remove_from_channel"
@@ -498,6 +499,32 @@ class Action:
                     template = self.params.get("template")
                     if not template or not isinstance(template, str):
                         errors.append("set_variable with mode 'literal' requires a 'template'")
+
+        # Validate transform_time
+        elif action_type == ActionType.TRANSFORM_TIME:
+            var_name = self.params.get("variable_name")
+            if not var_name or not isinstance(var_name, str):
+                errors.append("transform_time requires a 'variable_name' (string)")
+            elif not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', var_name):
+                errors.append("transform_time.variable_name must be alphanumeric with underscores")
+
+            source = self.params.get("source_field")
+            if not source or not isinstance(source, str):
+                errors.append("transform_time requires a 'source_field'")
+
+            pattern = self.params.get("pattern")
+            if not pattern or not isinstance(pattern, str):
+                errors.append("transform_time requires a 'pattern'")
+            else:
+                try:
+                    re.compile(pattern)
+                except re.error as e:
+                    errors.append(f"Invalid regex pattern for transform_time: {e}")
+
+            if not self.params.get("source_tz"):
+                errors.append("transform_time requires 'source_tz'")
+            if not self.params.get("target_tz"):
+                errors.append("transform_time requires 'target_tz'")
 
         if errors:
             logger.warning("[AUTO-CREATE-SCHEMA] Action validation errors for type=%s: %s", self.type, errors)

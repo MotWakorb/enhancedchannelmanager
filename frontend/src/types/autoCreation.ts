@@ -97,6 +97,7 @@ export type ActionType =
   | 'assign_profile'
   | 'set_channel_number'
   | 'set_variable'
+  | 'transform_time'
   | 'remove_from_channel'
   | 'set_stream_priority'
   | 'skip'
@@ -114,6 +115,7 @@ export type IfExistsBehavior = 'skip' | 'merge' | 'merge_only' | 'update' | 'use
 export interface Action {
   type: ActionType;
   name_template?: string;
+  name_template_fallback?: string;
   group_id?: number;
   if_exists?: IfExistsBehavior;
   channel_number?: string | number;
@@ -128,13 +130,15 @@ export interface Action {
   // Name transform (for create_channel and create_group)
   name_transform_pattern?: string;
   name_transform_replacement?: string;
-  // Set variable
+  // Set variable / Time transform
   variable_name?: string;
   variable_mode?: 'regex_extract' | 'regex_replace' | 'literal';
   source_field?: string;
   pattern?: string;
   replacement?: string;
   template?: string;
+  source_tz?: string;
+  target_tz?: string;
   // EPG assignment
   set_tvg_id?: boolean;
   // Stream priority

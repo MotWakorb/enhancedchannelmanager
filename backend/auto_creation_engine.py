@@ -508,6 +508,13 @@ class AutoCreationEngine:
         # Load stream stats for quality info
         await self._load_stream_stats()
 
+        # Fetch all account group settings for group name resolution
+        account_groups = {}
+        try:
+            account_groups = await self.client.get_all_m3u_group_settings()
+        except Exception as e:
+            logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch account group settings: %s", e)
+
         # Build group name map for enriching stream data
         # (Dispatcharr API returns channel_group as ID, not name)
         group_name_map = {}
@@ -538,7 +545,8 @@ class AutoCreationEngine:
                             stream,
                             m3u_account_id=account_id,
                             m3u_account_name=account.get("name"),
-                            stream_stats=stats
+                            stream_stats=stats,
+                            account_groups=account_groups
                         )
                         all_streams.append(ctx)
                     fetched_for_account += len(streams)
@@ -1021,6 +1029,7 @@ class AutoCreationEngine:
         stream_rule_matches = {}  # stream_id -> list of (rule_id, priority)
 
         # =====================================================================
+        # =====================================================================
         # Pass 1: Evaluate all streams against all rules, collect matches
         # =====================================================================
         logger.info("[AUTO-CREATE-ENGINE] Evaluating %s streams against %s rules", len(streams), len(rules))
@@ -1028,7 +1037,13 @@ class AutoCreationEngine:
 
         for stream in streams:
             results["streams_evaluated"] += 1
+            
             logger.debug(
+                "[AUTO-CREATE-ENGINE] Evaluating stream id=%s name=%r "
+                "m3u=%s group=%r",
+                stream.stream_id, stream.stream_name,
+                stream.m3u_account_id, stream.group_name
+            )
                 "[AUTO-CREATE-ENGINE] Evaluating stream id=%s name=%r "
                 "m3u=%s group=%r",
                 stream.stream_id, stream.stream_name,
