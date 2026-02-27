@@ -4,43 +4,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-#ports commented out to prevent access from ipaddress:6100, and now i expose the port so it still works from ecm.wethebest.net
-    #ports:
-    #  - "6100:6100"
-    expose:
-      - "6100"
+    ports:
+      - "6100:6100"
     volumes:
       - ecm-config:/config
     environment:
       - CONFIG_DIR=/config
-      - TZ=Europe/Madrid
-      #- ORIGIN=https://ecm.wethebest.net
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    networks:
-      - saltbox
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=saltbox"
-      # HTTPS Router
-      - "traefik.http.routers.ecm-https.rule=Host(`ecm.wethebest.net`)"
-      - "traefik.http.routers.ecm-https.entrypoints=websecure"
-      - "traefik.http.routers.ecm-https.tls=true"
-      # now i dont use zerossl so i comment below, i use cloudflare own cert as detailed at the end of chat https://gemini.google.com/app/59c435f6c55386cc
-      - "traefik.http.routers.ecm-https.tls.certresolver=zerossl"
-      #- "traefik.http.routers.ecm-https.tls=true"
-      - "traefik.http.routers.ecm-https.middlewares=authelia@docker"
-      # HTTP Router (Redirection)
-      - "traefik.http.routers.ecm-http.rule=Host(`ecm.wethebest.net`)"
-      - "traefik.http.routers.ecm-http.entrypoints=web"
-      - "traefik.http.routers.ecm-http.middlewares=wecm-redirect-scheme"
-      - "traefik.http.middlewares.ecm-redirect-scheme.redirectscheme.scheme=https"
-      # Connection to App Port
-      - "traefik.http.services.ecm.loadbalancer.server.port=6100"
-
-networks:
-  saltbox:
-    external: true
 
 volumes:
   ecm-config:
