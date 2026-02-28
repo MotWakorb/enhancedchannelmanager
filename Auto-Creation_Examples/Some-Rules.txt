@@ -1,0 +1,839 @@
+version: 1
+exported_at: '2026-02-28T00:22:45.547746Z'
+rules:
+- name: Motorbikes -  ES  - EPG Search & Name Search
+  description: 'This performs EPG search in Spanish groups of Motorbike related keywords,
+    as well as Channel Name search on Spanish groups for the same keywords.
+
+    No timezone conversion required for me.'
+  enabled: true
+  priority: 0
+  m3u_account_id: null
+  m3u_account_name: null
+  target_group_id: null
+  target_group_name: null
+  conditions:
+  - type: epg_source_is
+    value: 11
+    connector: and
+  - type: epg_any_matches
+    value: Motociclismo|MotoGP|Moto2|Moto3|MotoE|Moto GP|Moto 2|Moto 3|SBK|Superbike|Super
+      Bikes|MXGP|Supercross|Motocross|SuperMotocross|MotoAmerica|World SSP|WorldSSP|WorldWCR|Bagger
+      World Cup|Sidecarcross|EnduroGP|Enduro GP|Hard Enduro World|SuperEnduro|Super
+      Enduro|TrialGP|Trial GP|X-Trial|Trial-E|W2RC|Rally-Raid|FIM EWC|8 Horas de Suzuka|Africa
+      Eco Race|Baja World Cup|TT Isle of Man|North West 200|Classic TT|SpeedwayGP|Flat
+      Track World Championship|FIM Freestyle|Drag Bike World|FIM E-Explore|Valentino
+      Rossi|Angel Nieto|Agostini|Casey Stoner|Dani Pedrosa|Mick Doohan|Jorge Lorenzo|Marc
+      Marquez|Dorna
+    connector: and
+  - type: stream_group_matches
+    value: "DAZN ESPA\xD1A|ORANGE SPORTS|VODAFONE SPORTS"
+    connector: and
+  - type: provider_is
+    value: 3
+    connector: or
+  - type: stream_name_matches
+    value: Motociclismo|MotoGP|Moto2|Moto3|MotoE|Moto GP|Moto 2|Moto 3|SBK|Superbike|Super
+      Bikes|MXGP|Supercross|Motocross|SuperMotocross|MotoAmerica|World SSP|WorldSSP|WorldWCR|Bagger
+      World Cup|Sidecarcross|EnduroGP|Enduro GP|Hard Enduro World|SuperEnduro|Super
+      Enduro|TrialGP|Trial GP|X-Trial|Trial-E|W2RC|Rally-Raid|FIM EWC|8 Horas de Suzuka|Africa
+      Eco Race|Baja World Cup|TT Isle of Man|North West 200|Classic TT|SpeedwayGP|Flat
+      Track World Championship|FIM Freestyle|Drag Bike World|FIM E-Explore|Valentino
+      Rossi|Angel Nieto|Agostini|Casey Stoner|Dani Pedrosa|Mick Doohan|Jorge Lorenzo|Marc
+      Marquez|Dorna
+    connector: and
+  - type: stream_group_matches
+    value: ^(DAZN|ES|ORANGE SPORTS|VODAFONE SPORTS)
+    connector: and
+  - type: stream_name_contains
+    value: NO EVENT STREAMING
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: ' ##'
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: '#######'
+    negate: true
+    connector: and
+  actions:
+  - type: create_group
+    if_exists: use_existing
+    name_template: MOTOS
+  - type: create_channel
+    if_exists: merge
+    name_template: "\U0001F1EA\U0001F1F8 {epg_match_start} to {epg_match_stop} - {epg_match_title}"
+    name_template_fallback: "\U0001F1EA\U0001F1F8 {stream_name}"
+    channel_number: 580-99999
+    name_transform_pattern: ^(?:AU\s+\(STAN\s+\d+\)\s+\|\s+|\([A-Z]+\s+\d+\)\s+\|\s+\w+:\s+\d{4}\s+|\(MX\)\s+\(Disney\s+\d+\)\s+\|\s+|CBC\s+\d+:\s+sports\s*\|\s*|US\s+\(ESPN\+\s+\d+\)\s+\|\s+)
+  run_on_refresh: true
+  stop_on_first_match: true
+  sort_field: stream_name
+  sort_order: asc
+  sort_regex: null
+  normalize_names: false
+  skip_struck_streams: true
+- name: Motorbikes -  IT  - Name Search only
+  description: 'This performs a Channel Name search of channel names starting with
+    IT.
+
+    No timezone conversion required'
+  enabled: true
+  priority: 1
+  m3u_account_id: null
+  m3u_account_name: null
+  target_group_id: null
+  target_group_name: null
+  conditions:
+  - type: provider_is
+    value: 3
+    connector: or
+  - type: stream_name_matches
+    value: ^IT
+    connector: and
+  - type: stream_name_matches
+    value: Motociclismo|MotoGP|Moto2|Moto3|MotoE|Moto GP|Moto 2|Moto 3|SBK|Superbike|Super
+      Bikes|MXGP|Supercross|Motocross|SuperMotocross|MotoAmerica|World SSP|WorldSSP|WorldWCR|Bagger
+      World Cup|Sidecarcross|EnduroGP|Enduro GP|Hard Enduro World|SuperEnduro|Super
+      Enduro|TrialGP|Trial GP|X-Trial|Trial-E|W2RC|Rally-Raid|FIM EWC|8 Horas de Suzuka|Africa
+      Eco Race|Baja World Cup|TT Isle of Man|North West 200|Classic TT|SpeedwayGP|Flat
+      Track World Championship|FIM Freestyle|Drag Bike World|FIM E-Explore|Valentino
+      Rossi|Angel Nieto|Agostini|Casey Stoner|Dani Pedrosa|Mick Doohan|Jorge Lorenzo|Marc
+      Marquez|Dorna
+    connector: and
+  - type: stream_name_contains
+    value: NO EVENT STREAMING
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: ' ##'
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: '#######'
+    negate: true
+    connector: and
+  actions:
+  - type: create_group
+    if_exists: use_existing
+    name_template: MOTOS
+  - type: create_channel
+    if_exists: merge
+    name_template: "{epg_match_start} to {epg_match_stop} \U0001F1EE\U0001F1F9 {epg_match_title}"
+    name_template_fallback: '{stream_name}'
+    channel_number: 580-99999
+    name_transform_replacement: "\U0001F1EE\U0001F1F9"
+    name_transform_pattern: '^IT:'
+  run_on_refresh: true
+  stop_on_first_match: true
+  sort_field: null
+  sort_order: asc
+  sort_regex: null
+  normalize_names: false
+  skip_struck_streams: true
+- name: Motorbikes -  US  - Name Search only
+  description: This performs a Channel Name search of channel names starting with
+    US, with timezone conversion for ppv channels
+  enabled: true
+  priority: 2
+  m3u_account_id: null
+  m3u_account_name: null
+  target_group_id: null
+  target_group_name: null
+  conditions:
+  - type: epg_source_is
+    value: 15
+    connector: and
+  - type: epg_any_contains
+    value: Motociclismo|MotoGP|Moto2|Moto3|MotoE|Moto GP|Moto 2|Moto 3|SBK|Superbike|Super
+      Bikes|MXGP|Supercross|Motocross|SuperMotocross|MotoAmerica|World SSP|WorldSSP|WorldWCR|Bagger
+      World Cup|Sidecarcross|EnduroGP|Enduro GP|Hard Enduro World|SuperEnduro|Super
+      Enduro|TrialGP|Trial GP|X-Trial|Trial-E|W2RC|Rally-Raid|FIM EWC|8 Horas de Suzuka|Africa
+      Eco Race|Baja World Cup|TT Isle of Man|North West 200|Classic TT|SpeedwayGP|Flat
+      Track World Championship|FIM Freestyle|Drag Bike World|FIM E-Explore|Valentino
+      Rossi|Angel Nieto|Agostini|Casey Stoner|Dani Pedrosa|Mick Doohan|Jorge Lorenzo|Marc
+      Marquez|Dorna
+    connector: and
+  - type: channel_exists_matching
+    value: ^US
+    connector: and
+  - type: provider_is
+    value: 3
+    connector: or
+  - type: stream_name_matches
+    value: Motociclismo|MotoGP|Moto2|Moto3|MotoE|Moto GP|Moto 2|Moto 3|SBK|Superbike|Super
+      Bikes|MXGP|Supercross|Motocross|SuperMotocross|MotoAmerica|World SSP|WorldSSP|WorldWCR|Bagger
+      World Cup|Sidecarcross|EnduroGP|Enduro GP|Hard Enduro World|SuperEnduro|Super
+      Enduro|TrialGP|Trial GP|X-Trial|Trial-E|W2RC|Rally-Raid|FIM EWC|8 Horas de Suzuka|Africa
+      Eco Race|Baja World Cup|TT Isle of Man|North West 200|Classic TT|SpeedwayGP|Flat
+      Track World Championship|FIM Freestyle|Drag Bike World|FIM E-Explore|Valentino
+      Rossi|Angel Nieto|Agostini|Casey Stoner|Dani Pedrosa|Mick Doohan|Jorge Lorenzo|Marc
+      Marquez|Dorna
+    connector: and
+  - type: stream_group_matches
+    value: ^US
+    connector: and
+  - type: stream_name_contains
+    value: NO EVENT STREAMING
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: '  UK Sat 3 Feb 3:3'
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: ' ##'
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: '#######'
+    negate: true
+    connector: and
+  actions:
+  - type: transform_time
+    source_tz: America/New_York
+    target_tz: Europe/Madrid
+    variable_name: local_time
+    source_field: stream_name
+    pattern: (\d{1,2}:\d{2}[ap]m)(?!.*?\d{1,2}:\d{2})
+  - type: create_group
+    if_exists: use_existing
+    name_template: MOTOS
+  - type: create_channel
+    if_exists: merge
+    name_template: "\U0001F1FA\U0001F1F8 {epg_match_start} to {epg_match_stop} - {epg_match_title}"
+    name_template_fallback: "\U0001F1FA\U0001F1F8 {var:local_time} - {stream_name}"
+    channel_number: 581-99999
+    name_transform_pattern: ^(?:AU\s+\(STAN\s+\d+\)\s+\|\s+|\([A-Z]+\s+\d+\)\s+\|\s+\w+:\s+\d{4}\s+|\(MX\)\s+\(Disney\s+\d+\)\s+\|\s+|CBC\s+\d+:\s+sports\s*\|\s*|US\s+\(ESPN\+\s+\d+\)\s+\|\s+)
+  run_on_refresh: true
+  stop_on_first_match: true
+  sort_field: null
+  sort_order: asc
+  sort_regex: null
+  normalize_names: false
+  skip_struck_streams: true
+- name: Motorbikes -  UK  - EPG & Name Search
+  description: 'This performs EPG search of channels starting with UK of Motorbike
+    related keywords, as well as Channel Name search on the same channels for the
+    same keywords.
+
+    Timezone conversion applied from London to Madrid'
+  enabled: true
+  priority: 3
+  m3u_account_id: null
+  m3u_account_name: null
+  target_group_id: null
+  target_group_name: null
+  conditions:
+  - type: epg_source_is
+    value: 15
+    connector: and
+  - type: epg_any_matches
+    value: Motociclismo|MotoGP|Moto2|Moto3|MotoE|Moto GP|Moto 2|Moto 3|SBK|Superbike|Super
+      Bikes|MXGP|Supercross|Motocross|SuperMotocross|MotoAmerica|World SSP|WorldSSP|WorldWCR|Bagger
+      World Cup|Sidecarcross|EnduroGP|Enduro GP|Hard Enduro World|SuperEnduro|Super
+      Enduro|TrialGP|Trial GP|X-Trial|Trial-E|W2RC|Rally-Raid|FIM EWC|8 Horas de Suzuka|Africa
+      Eco Race|Baja World Cup|TT Isle of Man|North West 200|Classic TT|SpeedwayGP|Flat
+      Track World Championship|FIM Freestyle|Drag Bike World|FIM E-Explore|Valentino
+      Rossi|Angel Nieto|Agostini|Casey Stoner|Dani Pedrosa|Mick Doohan|Jorge Lorenzo|Marc
+      Marquez|Dorna
+    connector: and
+  - type: channel_exists_matching
+    value: ^UK
+    connector: and
+  - type: provider_is
+    value: 3
+    connector: or
+  - type: stream_name_matches
+    value: Motociclismo|MotoGP|Moto2|Moto3|MotoE|Moto GP|Moto 2|Moto 3|SBK|Superbike|Super
+      Bikes|MXGP|Supercross|Motocross|SuperMotocross|MotoAmerica|World SSP|WorldSSP|WorldWCR|Bagger
+      World Cup|Sidecarcross|EnduroGP|Enduro GP|Hard Enduro World|SuperEnduro|Super
+      Enduro|TrialGP|Trial GP|X-Trial|Trial-E|W2RC|Rally-Raid|FIM EWC|8 Horas de Suzuka|Africa
+      Eco Race|Baja World Cup|TT Isle of Man|North West 200|Classic TT|SpeedwayGP|Flat
+      Track World Championship|FIM Freestyle|Drag Bike World|FIM E-Explore|Valentino
+      Rossi|Angel Nieto|Agostini|Casey Stoner|Dani Pedrosa|Mick Doohan|Jorge Lorenzo|Marc
+      Marquez|Dorna
+    connector: and
+  - type: stream_group_matches
+    value: ^(UK|8K)
+    connector: and
+  - type: stream_name_matches
+    value: ^(?!IT)
+    connector: and
+  - type: stream_name_contains
+    value: NO EVENT STREAMING
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: '  UK Sat 3 Feb 3:3'
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: ' ##'
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: '#######'
+    negate: true
+    connector: and
+  actions:
+  - type: transform_time
+    source_tz: Europe/London
+    target_tz: Europe/Madrid
+    variable_name: local_time
+    source_field: stream_name
+    pattern: (\d{1,2}:\d{2}[ap]m)(?!.*?\d{1,2}:\d{2})
+  - type: create_group
+    if_exists: use_existing
+    name_template: MOTOS
+  - type: create_channel
+    if_exists: merge
+    name_template: "\U0001F1EC\U0001F1E7 {epg_match_start} to {epg_match_stop} - {epg_match_title}"
+    name_template_fallback: "\U0001F1EC\U0001F1E7 {stream_name}"
+    channel_number: 580-99999
+    name_transform_pattern: ^(?:AU\s+\(STAN\s+\d+\)\s+\|\s+|\([A-Z]+\s+\d+\)\s+\|\s+\w+:\s+\d{4}\s+|\(MX\)\s+\(Disney\s+\d+\)\s+\|\s+|CBC\s+\d+:\s+sports\s*\|\s*|US\s+\(ESPN\+\s+\d+\)\s+\|\s+)
+  run_on_refresh: true
+  stop_on_first_match: true
+  sort_field: stream_name
+  sort_order: asc
+  sort_regex: null
+  normalize_names: false
+  skip_struck_streams: true
+- name: Motorbikes -  Other CET Countries  - EPG Search & Name Search
+  description: 'This performs EPG search in Central Europe groups of Motorbike related
+    keywords, as well as Channel Name search in the same groups for the same keywords.
+
+    No timezone conversion required for me.
+
+    Countries: DE, NL, PL'
+  enabled: true
+  priority: 4
+  m3u_account_id: null
+  m3u_account_name: null
+  target_group_id: null
+  target_group_name: null
+  conditions:
+  - type: epg_source_is
+    value: 11
+    connector: and
+  - type: epg_any_matches
+    value: Motociclismo|MotoGP|Moto2|Moto3|MotoE|Moto GP|Moto 2|Moto 3|SBK|Superbike|Super
+      Bikes|MXGP|Supercross|Motocross|SuperMotocross|MotoAmerica|World SSP|WorldSSP|WorldWCR|Bagger
+      World Cup|Sidecarcross|EnduroGP|Enduro GP|Hard Enduro World|SuperEnduro|Super
+      Enduro|TrialGP|Trial GP|X-Trial|Trial-E|W2RC|Rally-Raid|FIM EWC|8 Horas de Suzuka|Africa
+      Eco Race|Baja World Cup|TT Isle of Man|North West 200|Classic TT|SpeedwayGP|Flat
+      Track World Championship|FIM Freestyle|Drag Bike World|FIM E-Explore|Valentino
+      Rossi|Angel Nieto|Agostini|Casey Stoner|Dani Pedrosa|Mick Doohan|Jorge Lorenzo|Marc
+      Marquez|Dorna
+    connector: and
+  - type: stream_name_matches
+    value: ^(NL|PL|DE)
+    connector: and
+  - type: provider_is
+    value: 3
+    connector: or
+  - type: stream_name_matches
+    value: Motociclismo|MotoGP|Moto2|Moto3|MotoE|Moto GP|Moto 2|Moto 3|SBK|Superbike|Super
+      Bikes|MXGP|Supercross|Motocross|SuperMotocross|MotoAmerica|World SSP|WorldSSP|WorldWCR|Bagger
+      World Cup|Sidecarcross|EnduroGP|Enduro GP|Hard Enduro World|SuperEnduro|Super
+      Enduro|TrialGP|Trial GP|X-Trial|Trial-E|W2RC|Rally-Raid|FIM EWC|8 Horas de Suzuka|Africa
+      Eco Race|Baja World Cup|TT Isle of Man|North West 200|Classic TT|SpeedwayGP|Flat
+      Track World Championship|FIM Freestyle|Drag Bike World|FIM E-Explore|Valentino
+      Rossi|Angel Nieto|Agostini|Casey Stoner|Dani Pedrosa|Mick Doohan|Jorge Lorenzo|Marc
+      Marquez|Dorna
+    connector: and
+  - type: stream_name_matches
+    value: ^(NL|PL|DE)
+    connector: and
+  - type: stream_name_contains
+    value: NO EVENT STREAMING
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: ' ##'
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: '#######'
+    negate: true
+    connector: and
+  actions:
+  - type: create_group
+    if_exists: use_existing
+    name_template: MOTOS
+  - type: create_channel
+    if_exists: merge
+    name_template: "\U0001F1EA\U0001F1FA {epg_match_start} to {epg_match_stop} {epg_match_title}"
+    name_template_fallback: "\U0001F1EA\U0001F1FA {stream_name}"
+    channel_number: 582-99999
+    name_transform_pattern: ^(?:AU\s+\(STAN\s+\d+\)\s+\|\s+|\([A-Z]+\s+\d+\)\s+\|\s+\w+:\s+\d{4}\s+|\(MX\)\s+\(Disney\s+\d+\)\s+\|\s+|CBC\s+\d+:\s+sports\s*\|\s*|US\s+\(ESPN\+\s+\d+\)\s+\|\s+)
+  run_on_refresh: true
+  stop_on_first_match: true
+  sort_field: null
+  sort_order: asc
+  sort_regex: null
+  normalize_names: false
+  skip_struck_streams: true
+- name: Track & Field  - ES - EPG & Name Search
+  description: This performs EPG search on selected EPG source, as well as stream
+    name search in all the groups. No timezone conversion required for me,
+  enabled: true
+  priority: 5
+  m3u_account_id: null
+  m3u_account_name: null
+  target_group_id: null
+  target_group_name: null
+  conditions:
+  - type: epg_source_is
+    value: 11
+    connector: and
+  - type: epg_any_matches
+    value: Track & Field|Track&Field|Atletismo|IAAF|World Athletics Championships|Diamond
+      League|Grand Slam Track|World Athletics Indoor Championships|World Marathon
+      Majors|World Athletics Continental Tour|World Athletics Ultimate Championship|European
+      Athletics Championships|World Athletics Cross Country Championships|World Athletics
+      Race Walking Team Championships|World Athletics Relays
+    connector: and
+  - type: stream_group_matches
+    value: "DAZN ESPA\xD1A|TDT|ES|ORANGE SPORTS|VODAFONE SPORTS|OTROS DEPORTES|MOVISTAR\
+      \ SPORT"
+    connector: and
+  - type: provider_is
+    value: 3
+    connector: or
+  - type: stream_name_matches
+    value: Track & Field|Track&Field|Atletismo|IAAF|World Athletics Championships|Diamond
+      League|Grand Slam Track|World Athletics Indoor Championships|World Marathon
+      Majors|World Athletics Continental Tour|World Athletics Ultimate Championship|European
+      Athletics Championships|World Athletics Cross Country Championships|World Athletics
+      Race Walking Team Championships|World Athletics Relays
+    connector: and
+  - type: stream_group_matches
+    value: ^(DAZN|TDT|ES|ORANGE SPORTS|VODAFONE SPORTS|OTROS|MOVISTAR SPORT)
+    connector: and
+  - type: stream_name_contains
+    value: NO EVENT STREAMING
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: ' ##'
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: '#######'
+    negate: true
+    connector: and
+  actions:
+  - type: create_group
+    if_exists: use_existing
+    name_template: ATLETISMO
+  - type: create_channel
+    if_exists: merge
+    name_template: "\U0001F1EA\U0001F1F8 {epg_match_start} to {epg_match_stop} - {epg_match_title}"
+    name_template_fallback: "\U0001F1EA\U0001F1F8 {stream_name}"
+    channel_number: 300-99999
+    name_transform_pattern: (?:AU\s+\(STAN\s+\d+\)\s+\|\s+|\([A-Z]+\s+\d+\)\s+\|\s+\w+:\s+\d{4}\s+|\(MX\)\s+\(Disney\s+\d+\)\s+\|\s+|CBC\s+\d+:\s+sports\s*\|\s*|US\s+\(ESPN\+\s+\d+\)\s+\|\s+|US:\s+ESPN\+\s+PPV\s+\d+\s+-\s*)
+  run_on_refresh: true
+  stop_on_first_match: true
+  sort_field: null
+  sort_order: asc
+  sort_regex: null
+  normalize_names: false
+  skip_struck_streams: true
+- name: Track & Field  - UK - EPG & Name Search
+  description: This performs EPG search on selected EPG source, as well as stream
+    name search in groups with UK with timezone conversion for ppv channels
+  enabled: true
+  priority: 6
+  m3u_account_id: null
+  m3u_account_name: null
+  target_group_id: null
+  target_group_name: null
+  conditions:
+  - type: epg_source_is
+    value: 15
+    connector: and
+  - type: epg_any_matches
+    value: Track & Field|Track&Field|Atletismo|IAAF|World Athletics Championships|Diamond
+      League|Grand Slam Track|World Athletics Indoor Championships|World Marathon
+      Majors|World Athletics Continental Tour|World Athletics Ultimate Championship|European
+      Athletics Championships|World Athletics Cross Country Championships|World Athletics
+      Race Walking Team Championships|World Athletics Relays
+    connector: and
+  - type: channel_exists_matching
+    value: ^UK
+    connector: and
+  - type: provider_is
+    value: 3
+    connector: or
+  - type: stream_name_matches
+    value: Track & Field|Track&Field|Atletismo|IAAF|World Athletics Championships|Diamond
+      League|Grand Slam Track|World Athletics Indoor Championships|World Marathon
+      Majors|World Athletics Continental Tour|World Athletics Ultimate Championship|European
+      Athletics Championships|World Athletics Cross Country Championships|World Athletics
+      Race Walking Team Championships|World Athletics Relays
+    connector: and
+  - type: stream_group_matches
+    value: ^(?:UK)[|:]
+    connector: and
+  - type: stream_name_contains
+    value: NO EVENT STREAMING
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: '  UK Sat 3 Feb 3:3'
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: ' ##'
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: '#######'
+    negate: true
+    connector: and
+  actions:
+  - type: transform_time
+    source_tz: Europe/London
+    target_tz: Europe/Madrid
+    variable_name: local_time
+    source_field: stream_name
+    pattern: (\d{1,2}:\d{2})
+  - type: create_group
+    if_exists: use_existing
+    name_template: ATLETISMO
+  - type: create_channel
+    if_exists: merge
+    name_template: "\U0001F1EC\U0001F1E7 {epg_match_start} to {epg_match_stop} - {epg_match_title}"
+    name_template_fallback: "\U0001F1EC\U0001F1E7 {var:local_time} - {stream_name}"
+    channel_number: 300-99999
+    name_transform_pattern: (?:AU\s+\(STAN\s+\d+\)\s+\|\s+|\([A-Z]+\s+\d+\)\s+\|\s+\w+:\s+\d{4}\s+|\(MX\)\s+\(Disney\s+\d+\)\s+\|\s+|CBC\s+\d+:\s+sports\s*\|\s*|US\s+\(ESPN\+\s+\d+\)\s+\|\s+|US:\s+ESPN\+\s+PPV\s+\d+\s+-\s*)
+  run_on_refresh: true
+  stop_on_first_match: true
+  sort_field: stream_name
+  sort_order: asc
+  sort_regex: null
+  normalize_names: false
+  skip_struck_streams: true
+- name: Track & Field  - US - Name Search
+  description: This performs a Stream Name search in US groups with timezone conversion
+    for ppv channels from US ET to Madrid
+  enabled: true
+  priority: 7
+  m3u_account_id: null
+  m3u_account_name: null
+  target_group_id: null
+  target_group_name: null
+  conditions:
+  - type: provider_is
+    value: 3
+    connector: or
+  - type: stream_group_matches
+    value: ^(?:US)[|:]
+    connector: and
+  - type: stream_name_matches
+    value: Track & Field|Track&Field|Atletismo|IAAF|World Athletics Championships|Diamond
+      League|Grand Slam Track|World Athletics Indoor Championships|World Marathon
+      Majors|World Athletics Continental Tour|World Athletics Ultimate Championship|European
+      Athletics Championships|World Athletics Cross Country Championships|World Athletics
+      Race Walking Team Championships|World Athletics Relays
+    connector: and
+  - type: stream_name_contains
+    value: NO EVENT STREAMING
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: ' ##'
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: '#######'
+    negate: true
+    connector: and
+  actions:
+  - type: transform_time
+    source_tz: America/New_York
+    target_tz: Europe/Madrid
+    variable_name: local_time
+    source_field: stream_name
+    pattern: (\d{1,2}:\d{2})
+  - type: create_group
+    if_exists: use_existing
+    name_template: ATLETISMO
+  - type: create_channel
+    if_exists: merge
+    name_template: "\U0001F1FA\U0001F1F8 {epg_match_start} to {epg_match_stop} - {epg_match_title}"
+    name_template_fallback: "\U0001F1FA\U0001F1F8 {var:local_time} - {stream_name}"
+    channel_number: 5-99999
+    name_transform_pattern: (?:AU\s+\(STAN\s+\d+\)\s+\|\s+|\([A-Z]+\s+\d+\)\s+\|\s+\w+:\s+\d{4}\s+|\(MX\)\s+\(Disney\s+\d+\)\s+\|\s+|CBC\s+\d+:\s+sports\s*\|\s*|US\s+\(ESPN\+\s+\d+\)\s+\|\s+|US:\s+ESPN\+\s+PPV\s+\d+\s+-\s*)
+  run_on_refresh: true
+  stop_on_first_match: true
+  sort_field: stream_name
+  sort_order: asc
+  sort_regex: null
+  normalize_names: false
+  skip_struck_streams: true
+- name: Track & Field  - BR - Name Search
+  description: This performs a Stream Name search in groups with BR with timezone
+    conversion from Brasilia to Madrid
+  enabled: true
+  priority: 8
+  m3u_account_id: null
+  m3u_account_name: null
+  target_group_id: null
+  target_group_name: null
+  conditions:
+  - type: provider_is
+    value: 3
+    connector: or
+  - type: stream_name_matches
+    value: Track & Field|Track&Field|Atletismo|IAAF|World Athletics Championships|Diamond
+      League|Grand Slam Track|World Athletics Indoor Championships|World Marathon
+      Majors|World Athletics Continental Tour|World Athletics Ultimate Championship|European
+      Athletics Championships|World Athletics Cross Country Championships|World Athletics
+      Race Walking Team Championships|World Athletics Relays
+    connector: and
+  - type: stream_group_matches
+    value: ^(?:BR)[|:]
+    connector: and
+  - type: stream_name_contains
+    value: NO EVENT STREAMING
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: ' ##'
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: '#######'
+    negate: true
+    connector: and
+  actions:
+  - type: transform_time
+    source_tz: America/Sao_Paulo
+    target_tz: Europe/Madrid
+    variable_name: local_time
+    source_field: stream_name
+    pattern: (\d{1,2}:\d{2})
+  - type: create_group
+    if_exists: use_existing
+    name_template: ATLETISMO
+  - type: create_channel
+    if_exists: merge
+    name_template: "\U0001F1E7\U0001F1F7 {epg_match_start} to {epg_match_stop} - {epg_match_title}"
+    name_template_fallback: "\U0001F1E7\U0001F1F7 {var:local_time} - {stream_name}"
+    channel_number: 300-99999
+    name_transform_pattern: (?:AU\s+\(STAN\s+\d+\)\s+\|\s+|\([A-Z]+\s+\d+\)\s+\|\s+\w+:\s+\d{4}\s+|\(MX\)\s+\(Disney\s+\d+\)\s+\|\s+|CBC\s+\d+:\s+sports\s*\|\s*|US\s+\(ESPN\+\s+\d+\)\s+\|\s+|US:\s+ESPN\+\s+PPV\s+\d+\s+-\s*)
+  run_on_refresh: true
+  stop_on_first_match: true
+  sort_field: stream_name
+  sort_order: asc
+  sort_regex: null
+  normalize_names: false
+  skip_struck_streams: true
+- name: Rugby - AU
+  description: This performs Stream Name search in channels of the group US| STAN
+    PPV (with timezone conversion for those ppv channels)
+  enabled: true
+  priority: 9
+  m3u_account_id: null
+  m3u_account_name: null
+  target_group_id: null
+  target_group_name: null
+  conditions:
+  - type: provider_is
+    value: 3
+    connector: or
+  - type: stream_name_matches
+    value: "Rugby|Sevens Series|7 Series|World Cup Sevens|World Cup 7|Copa de Naciones|Nations\
+      \ Cup|SVNS|Leones Brit\\xE1nicos e Irlandeses|British & Irish Lions|6 Naciones|6\
+      \ Nations|Seis Naciones|Six Nations|Copa de Naciones del Pac\\xEDfico|Pacific\
+      \ Nations Cup|JRLO|National Provincial Championship|Currie Cup|Pro D2|Australian\
+      \ Football|AFL|Futbol Australiano|F\xFAtbol Australiano"
+    connector: and
+  - type: stream_group_contains
+    value: US| STAN PPV
+    connector: and
+  - type: stream_name_contains
+    value: NO EVENT STREAMING
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: ' ##'
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: '#######'
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: "^(?!.*(Ecuestre|##|#######|H\xEDpica|Equestrian|SRPSKA|Murcia)).*$"
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: Rugby vs. Bath - 23 Ene. 2026 a las
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: 23-Ene | Gloucester
+    negate: true
+    connector: and
+  actions:
+  - type: transform_time
+    variable_name: local_time
+    source_tz: Australia/Sydney
+    target_tz: Europe/Madrid
+    pattern: (\d{1,2}:\d{2})
+    source_field: stream_name
+  - type: create_group
+    if_exists: use_existing
+    name_template: RUGBY
+  - type: create_channel
+    if_exists: merge
+    name_template: "\U0001F1EC\U0001F1E7 {epg_match_start} to {epg_match_stop} - {epg_match_title}"
+    name_template_fallback: "\U0001F1EC\U0001F1E7 {var:local_time} - {stream_name}"
+    channel_number: 1360-99999
+    name_transform_pattern: (?:AU\s+\(STAN\s+\d+\)\s+\|\s+|\([A-Z]+\s+\d+\)\s+\|\s+\w+:\s+\d{4}\s+|\(MX\)\s+\(Disney\s+\d+\)\s+\|\s+|CBC\s+\d+:\s+sports\s*\|\s*|US\s+\(ESPN\+\s+\d+\)\s+\|\s+|US:\s+ESPN\+\s+PPV\s+\d+\s+-\s*)
+  run_on_refresh: true
+  stop_on_first_match: true
+  sort_field: stream_name
+  sort_order: asc
+  sort_regex: null
+  normalize_names: false
+  skip_struck_streams: true
+- name: Rugby - UK
+  description: Combining EPG search and stream name search for UK and US groups that
+    use the london timezone in the stream name.
+  enabled: true
+  priority: 10
+  m3u_account_id: null
+  m3u_account_name: null
+  target_group_id: null
+  target_group_name: null
+  conditions:
+  - type: epg_source_is
+    value: 15
+    connector: and
+  - type: epg_any_matches
+    value: "Rugby|Seis Naciones|Six Nations|6 Naciones|6 Nations|Mel\xE9|Investec\
+      \ Champions Cup|Gallagher Premiership|British & Irish Lions|Leones Brit\xE1\
+      nicos e Irlandeses|JRLO"
+    connector: and
+  - type: channel_exists_matching
+    value: ^UK
+    connector: and
+  - type: provider_is
+    value: 3
+    connector: or
+  - type: stream_name_matches
+    value: "Rugby|Sevens Series|7 Series|World Cup Sevens|World Cup 7|Copa de Naciones|Nations\
+      \ Cup|SVNS|Leones Brit\\xE1nicos e Irlandeses|British & Irish Lions|6 Naciones|6\
+      \ Nations|Seis Naciones|Six Nations|Copa de Naciones del Pac\\xEDfico|Pacific\
+      \ Nations Cup|JRLO|National Provincial Championship|Currie Cup|Pro D2|Australian\
+      \ Football|AFL|Futbol Australiano|F\xFAtbol Australiano"
+    connector: and
+  - type: stream_group_matches
+    value: ^(UK|8K|US\| RUGBY PPV)
+    connector: and
+  - type: stream_name_matches
+    value: "^(?!.*(Ecuestre|##|#######|H\xEDpica|Equestrian|SRPSKA|Murcia)).*$"
+    connector: and
+  - type: stream_name_contains
+    value: NO EVENT STREAMING
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: Rugby vs. Bath - 23 Ene. 2026 a las
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: 23-Ene | Gloucester
+    negate: true
+    connector: and
+  actions:
+  - type: transform_time
+    variable_name: local_time
+    source_tz: Europe/London
+    target_tz: Europe/Madrid
+    pattern: (\d{1,2}:\d{2})
+    source_field: stream_name
+  - type: create_group
+    if_exists: use_existing
+    name_template: RUGBY
+  - type: create_channel
+    if_exists: merge
+    name_template: "\U0001F1EC\U0001F1E7 {epg_match_start} to {epg_match_stop} - {epg_match_title}"
+    name_template_fallback: "\U0001F1EC\U0001F1E7 {var:local_time} - {stream_name}"
+    channel_number: 1360-99999
+    name_transform_pattern: (?:AU\s+\(STAN\s+\d+\)\s+\|\s+|\([A-Z]+\s+\d+\)\s+\|\s+\w+:\s+\d{4}\s+|\(MX\)\s+\(Disney\s+\d+\)\s+\|\s+|CBC\s+\d+:\s+sports\s*\|\s*|US\s+\(ESPN\+\s+\d+\)\s+\|\s+|US:\s+ESPN\+\s+PPV\s+\d+\s+-\s*)
+    name_transform_replacement: ''
+  run_on_refresh: true
+  stop_on_first_match: true
+  sort_field: null
+  sort_order: asc
+  sort_regex: null
+  normalize_names: false
+  skip_struck_streams: true
+- name: Rugby - US
+  description: Combining EPG search and stream name search for UK and US groups that
+    use the london timezone in the stream name.
+  enabled: true
+  priority: 11
+  m3u_account_id: null
+  m3u_account_name: null
+  target_group_id: null
+  target_group_name: null
+  conditions:
+  - type: provider_is
+    value: 3
+    connector: or
+  - type: stream_name_matches
+    value: "Rugby|Sevens Series|7 Series|World Cup Sevens|World Cup 7|Copa de Naciones|Nations\
+      \ Cup|SVNS|Leones Brit\\xE1nicos e Irlandeses|British & Irish Lions|6 Naciones|6\
+      \ Nations|Seis Naciones|Six Nations|Copa de Naciones del Pac\\xEDfico|Pacific\
+      \ Nations Cup|JRLO|National Provincial Championship|Currie Cup|Pro D2|Australian\
+      \ Football|AFL|Futbol Australiano|F\xFAtbol Australiano"
+    connector: and
+  - type: stream_group_matches
+    value: ^(US\| FLO )
+    connector: and
+  - type: stream_name_matches
+    value: "^(?!.*(Ecuestre|##|#######|H\xEDpica|Equestrian|SRPSKA|Murcia)).*$"
+    connector: and
+  - type: stream_name_contains
+    value: NO EVENT STREAMING
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: Rugby vs. Bath - 23 Ene. 2026 a las
+    negate: true
+    connector: and
+  - type: stream_name_contains
+    value: 23-Ene | Gloucester
+    negate: true
+    connector: and
+  actions:
+  - type: transform_time
+    variable_name: local_time
+    source_tz: America/New_York
+    target_tz: Europe/Madrid
+    pattern: (\d{1,2}:\d{2})
+    source_field: stream_name
+  - type: create_group
+    if_exists: use_existing
+    name_template: RUGBY
+  - type: create_channel
+    if_exists: merge
+    name_template: "\U0001F1EC\U0001F1E7 {epg_match_start} to {epg_match_stop} - {epg_match_title}"
+    name_template_fallback: "\U0001F1EC\U0001F1E7 {var:local_time} - {stream_name}"
+    channel_number: 1360-99999
+    name_transform_pattern: (?:AU\s+\(STAN\s+\d+\)\s+\|\s+|\([A-Z]+\s+\d+\)\s+\|\s+\w+:\s+\d{4}\s+|\(MX\)\s+\(Disney\s+\d+\)\s+\|\s+|CBC\s+\d+:\s+sports\s*\|\s*|US\s+\(ESPN\+\s+\d+\)\s+\|\s+|US:\s+ESPN\+\s+PPV\s+\d+\s+-\s*)
+    name_transform_replacement: ''
+  run_on_refresh: true
+  stop_on_first_match: true
+  sort_field: null
+  sort_order: asc
+  sort_regex: null
+  normalize_names: false
+  skip_struck_streams: true
