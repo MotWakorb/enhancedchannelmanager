@@ -5,11 +5,14 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "6100:6100"
+      - "${ECM_PORT:-6100}:${ECM_PORT:-6100}"
+      - "${ECM_HTTPS_PORT:-6143}:${ECM_HTTPS_PORT:-6143}"
     volumes:
       - ecm-config:/config
     environment:
       - CONFIG_DIR=/config
+      - ECM_PORT=${ECM_PORT:-6100}
+      - ECM_HTTPS_PORT=${ECM_HTTPS_PORT:-6143}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
