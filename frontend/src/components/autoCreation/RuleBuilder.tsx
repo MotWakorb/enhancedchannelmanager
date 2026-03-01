@@ -344,6 +344,8 @@ export function RuleBuilder({
                   { value: 'group_name', label: 'Group Name' },
                   { value: 'quality', label: 'Quality (Resolution)' },
                   { value: 'stream_name_regex', label: 'Stream Name (Regex)' },
+                  { value: 'provider_order', label: 'Provider Order (M3U)' },
+                  { value: 'channel_number', label: 'Channel Number' },
                 ]}
                 value={sortField}
                 onChange={setSortField}

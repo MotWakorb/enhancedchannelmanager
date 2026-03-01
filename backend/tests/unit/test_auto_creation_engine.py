@@ -12,7 +12,9 @@ from auto_creation_engine import (
     get_auto_creation_engine,
     set_auto_creation_engine,
     init_auto_creation_engine,
+    _sort_key,
 )
+from auto_creation_evaluator import StreamContext
 from auto_creation_evaluator import StreamContext
 
 
@@ -878,3 +880,22 @@ class TestAutoCreationEngineIntegration:
         assert result["streams_matched"] == 1  # Only ESPN2 matches
         assert len(result["dry_run_results"]) == 1
         assert "ESPN2" in result["dry_run_results"][0]["stream_name"]
+
+
+class TestSortKey:
+    """Tests for _sort_key with provider_order and channel_number."""
+
+    def test_provider_order_returns_m3u_position(self):
+        """provider_order sort returns m3u_position."""
+        stream = StreamContext(stream_id=1, stream_name="ESPN", m3u_position=42)
+        assert _sort_key(stream, "provider_order") == 42
+
+    def test_channel_number_returns_stream_chno(self):
+        """channel_number sort returns stream_chno."""
+        stream = StreamContext(stream_id=1, stream_name="ESPN", stream_chno=21262.0)
+        assert _sort_key(stream, "channel_number") == 21262.0
+
+    def test_channel_number_none_returns_infinity(self):
+        """channel_number sort returns infinity when stream_chno is None."""
+        stream = StreamContext(stream_id=1, stream_name="ESPN", stream_chno=None)
+        assert _sort_key(stream, "channel_number") == float('inf')
