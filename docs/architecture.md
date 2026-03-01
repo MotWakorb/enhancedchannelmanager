@@ -180,8 +180,8 @@ graph TB
 ## Request Flow
 
 ```
-Browser → Frontend (React SPA on :6100/static/)
-       → HTTP/JSON → FastAPI (:6100/api/*)
+Browser → Frontend (React SPA on :6100/static/ by default)
+       → HTTP/JSON → FastAPI (:6100/api/* by default)
                     → CORS middleware → Auth check → Router endpoint
                     → DispatcharrClient → Dispatcharr API (upstream)
                     → SQLAlchemy ORM → SQLite (/config/journal.db)

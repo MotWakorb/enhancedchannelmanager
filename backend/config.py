@@ -1,5 +1,4 @@
 from pydantic import BaseModel
-from pydantic_settings import BaseSettings
 import json
 import os
 import logging
@@ -139,6 +138,7 @@ class DispatcharrSettings(BaseModel):
     auto_creation_excluded_terms: list[str] = []  # Terms that exclude streams by name (case-insensitive substring)
     auto_creation_excluded_groups: list[str] = []  # M3U group names to exclude (case-insensitive exact match)
     auto_creation_exclude_auto_sync_groups: bool = False  # Exclude streams in Dispatcharr auto-sync groups
+
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)
 
@@ -155,17 +155,9 @@ class DispatcharrSettings(BaseModel):
         return bool(self.telegram_bot_token and self.telegram_chat_id)
 
 
-class Settings(BaseSettings):
-    """App settings from environment (for container config)."""
-    config_dir: str = "/config"
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-
-
 # In-memory cache of settings
 _cached_settings: DispatcharrSettings | None = None
+
 
 
 def ensure_config_dir():
@@ -265,6 +257,19 @@ def clear_settings_cache() -> None:
 def get_settings() -> DispatcharrSettings:
     """Get the current Dispatcharr settings."""
     return load_settings()
+
+
+def get_http_port() -> int:
+    """Get the HTTP port from environment variable (ECM_PORT).
+    
+    This is an app-level runtime configuration and is not persisted to settings.json.
+    Default: 6100
+    """
+    try:
+        return int(os.environ.get("ECM_PORT", 6100))
+    except ValueError:
+        logger.warning("[CONFIG] Invalid ECM_PORT '%s', using default 6100", os.environ.get("ECM_PORT"))
+        return 6100
 
 
 def log_config_status():

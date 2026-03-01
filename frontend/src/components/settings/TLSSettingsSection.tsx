@@ -350,7 +350,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
           <span className={`tls-status-badge ${status.enabled && status.has_certificate ? 'encrypted' : 'unencrypted'}`}>
             {status.enabled && status.has_certificate ? `Encrypted (port ${status.https_port})` : 'UNENCRYPTED'}
           </span>
-          <span className="tls-status-fallback">HTTP fallback on port 6100</span>
+          <span className="tls-status-fallback">HTTP fallback available</span>
         </div>
       )}
 
@@ -425,7 +425,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                     min={1}
                     max={65535}
                   />
-                  <span className="form-hint">HTTPS will listen on this port (default: 6143). HTTP always stays on 6100 as fallback.</span>
+                  <span className="form-hint">HTTPS will listen on this port (default: 6143). HTTP stays on its configured port (default: 6100) as fallback.</span>
                 </div>
 
                 <div className="form-group">
@@ -696,7 +696,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
         </h4>
         <ul>
           <li>
-            <strong>Dual-Port Setup:</strong> HTTP always runs on port 6100 as a fallback.
+            <strong>Dual-Port Setup:</strong> HTTP always runs on its configured port (default 6100) as a fallback.
             HTTPS runs on the configured port (default 6143) when TLS is enabled.
           </li>
           <li>
@@ -713,7 +713,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
           </li>
           <li>
             After enabling TLS, ECM will restart. Access via HTTPS on port {httpsPort},
-            or HTTP on port 6100 as fallback.
+            or HTTP on its configured port as fallback.
           </li>
         </ul>
       </div>
