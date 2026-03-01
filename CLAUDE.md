@@ -1,6 +1,14 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
+## STOP — Create a Bead First
+
+Before reading code, editing files, or exploring the codebase for ANY code task, create a bead:
+
+```bash
+bd create enhancedchannelmanager "Brief description"
+```
+
+No exceptions. No "I'll do it later." The bead comes before the first Read, Grep, or Edit.
 
 ## Beads Quick Reference
 
@@ -40,7 +48,7 @@ See `docs/architecture.md` for a full system architecture diagram (Mermaid).
 We iterate fast by deploying to the live container before committing:
 
 1. **Check closed beads** for context on past work: `bd list --status closed`
-2. **Create a bead**: `bd create enhancedchannelmanager "Brief description"`
+2. **Create a bead** (see "STOP" section above — must happen before any code exploration)
 3. **Edit code** locally
 4. **Copy to container and test**:
    ```bash
