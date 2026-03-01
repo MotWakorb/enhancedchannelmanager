@@ -13,6 +13,7 @@ from datetime import datetime
 from dispatcharr_client import get_client
 from config import (
     get_settings,
+    get_http_port,
     CONFIG_DIR,
     CONFIG_FILE,
     get_log_level_from_env,
@@ -576,8 +577,7 @@ if os.path.exists(static_dir):
 if __name__ == "__main__":
     import uvicorn
     # Support ECM_PORT for direct invocation consistency with entrypoint.sh
-    # via the centralized settings module
-    settings = get_settings()
-    port = settings.http_port
-    logger.info("[MAIN] Starting uvicorn on port %s (from settings/ECM_PORT)", port)
+    # This is an app-level runtime configuration and is not persisted to settings.json.
+    port = get_http_port()
+    logger.info("[MAIN] Starting uvicorn on port %s (from ECM_PORT environment variable)", port)
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
