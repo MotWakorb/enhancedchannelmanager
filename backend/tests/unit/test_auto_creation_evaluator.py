@@ -582,3 +582,120 @@ class TestEvaluateConditions:
         ctx = StreamContext(stream_id=1, stream_name="ESPN")
         result = evaluate_conditions([], ctx)
         assert result is True
+
+
+class TestConditionEvaluatorEPG:
+    """Tests for EPG-related conditions."""
+
+    def test_epg_title_contains_match(self):
+        """Matches substring in EPG program title."""
+        evaluator = ConditionEvaluator()
+        prog = {"title": "MotoGP Australia", "description": "Race", "start": "2026-02-27T06:00:00Z", "stop": "2026-02-27T08:00:00Z", "source": 1}
+        ctx = StreamContext(stream_id=1, stream_name="MotoGP", epg_programs=[prog])
+
+        result = evaluator.evaluate(
+            {"type": "epg_title_contains", "value": "Australia"},
+            ctx
+        )
+        assert result.matched is True
+        assert ctx.epg_match == prog
+        assert ctx.matched_by_epg is True
+        assert "matched 'Australia'" in result.details
+
+    def test_epg_desc_matches_regex(self):
+        """Matches regex in EPG program description."""
+        evaluator = ConditionEvaluator()
+        prog = {"title": "News", "description": "Live from London", "start": "2026-02-27T06:00:00Z", "stop": "2026-02-27T08:00:00Z", "source": 1}
+        ctx = StreamContext(stream_id=1, stream_name="News", epg_programs=[prog])
+
+        result = evaluator.evaluate(
+            {"type": "epg_desc_matches", "value": "from [Ll]ondon"},
+            ctx
+        )
+        assert result.matched is True
+        assert ctx.epg_match == prog
+        assert "segment: 'from London'" in result.details
+
+    def test_epg_any_matches(self):
+        """Matches either title or description."""
+        evaluator = ConditionEvaluator()
+        prog = {"title": "Sports", "description": "Football match", "start": "2026-02-27T06:00:00Z", "stop": "2026-02-27T08:00:00Z", "source": 1}
+        ctx = StreamContext(stream_id=1, stream_name="Sports", epg_programs=[prog])
+
+        # Match title
+        result = evaluator.evaluate({"type": "epg_any_contains", "value": "Sports"}, ctx)
+        assert result.matched is True
+
+        # Match description
+        result = evaluator.evaluate({"type": "epg_any_contains", "value": "Football"}, ctx)
+        assert result.matched is True
+
+    def test_epg_source_is_match(self):
+        """Matches specific EPG source and captures 'now airing' program."""
+        evaluator = ConditionEvaluator()
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        start = (now - datetime.timedelta(hours=1)).isoformat()
+        stop = (now + datetime.timedelta(hours=1)).isoformat()
+        
+        prog = {"title": "Current Program", "start": start, "stop": stop, "source": 5}
+        ctx = StreamContext(stream_id=1, stream_name="Test", epg_programs=[prog])
+
+        result = evaluator.evaluate(
+            {"type": "epg_source_is", "value": 5},
+            ctx
+        )
+        assert result.matched is True
+        assert ctx.epg_match == prog
+        assert "matches (Now: 'Current Program')" in result.details
+
+    def test_epg_source_filter_application(self):
+        """EPG Source condition filters other EPG conditions in the same rule."""
+        evaluator = ConditionEvaluator()
+        prog1 = {"title": "MotoGP", "source": 1}
+        prog2 = {"title": "MotoGP", "source": 2}
+        ctx = StreamContext(stream_id=1, stream_name="Test", epg_programs=[prog1, prog2])
+
+        # Rule has EPG source filter for source 2
+        all_conditions = [
+            {"type": "epg_source_is", "value": 2},
+            {"type": "epg_title_contains", "value": "MotoGP"}
+        ]
+
+        result = evaluator.evaluate(
+            all_conditions[1],
+            ctx,
+            all_rule_conditions=all_conditions
+        )
+        assert result.matched is True
+        assert ctx.epg_match == prog2  # Should match prog2 because of source filter
+
+
+class TestConditionEvaluatorMultiField:
+    """Tests for any_field_* conditions."""
+
+    def test_any_field_contains_stream_name(self):
+        """Matches in stream name (no EPG match)."""
+        evaluator = ConditionEvaluator()
+        ctx = StreamContext(stream_id=1, stream_name="MotoGP Australia")
+
+        result = evaluator.evaluate(
+            {"type": "any_field_contains", "value": "MotoGP"},
+            ctx
+        )
+        assert result.matched is True
+        assert ctx.matched_by_epg is False
+
+    def test_any_field_contains_epg_title(self):
+        """Matches in EPG title (precedence over stream name)."""
+        evaluator = ConditionEvaluator()
+        prog = {"title": "MotoGP Australia", "source": 1}
+        ctx = StreamContext(stream_id=1, stream_name="Test Channel", epg_programs=[prog])
+
+        result = evaluator.evaluate(
+            {"type": "any_field_contains", "value": "Australia"},
+            ctx
+        )
+        assert result.matched is True
+        assert ctx.epg_match == prog
+        assert ctx.matched_by_epg is True

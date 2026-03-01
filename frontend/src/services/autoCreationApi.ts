@@ -45,6 +45,14 @@ export async function getAutoCreationRules(): Promise<AutoCreationRule[]> {
 }
 
 /**
+ * Get available IANA timezones from the backend.
+ */
+export async function getTimezones(): Promise<string[]> {
+  const response = await fetchJson<{ timezones: string[] }>(`${API_BASE}/auto-creation/timezones`);
+  return response.timezones;
+}
+
+/**
  * Get a single auto-creation rule by ID.
  */
 export async function getAutoCreationRule(id: number): Promise<AutoCreationRule> {

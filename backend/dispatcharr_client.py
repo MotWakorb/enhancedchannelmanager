@@ -841,13 +841,8 @@ class DispatcharrClient:
         # Dispatcharr usually returns {"programmes": [...], "channels": [...]}
         # but some versions or endpoints might return {"data": [...]}
         if isinstance(data, dict):
-            # If it has programmes/channels structure, return full dict
-            if "programmes" in data or "channels" in data:
-                return data
-            # If it's just a data wrapper, return the list
-            if "data" in data:
-                return data.get("data", [])
-            return data
+            # Maintain API compatibility by returning only the programs list
+            return data.get("programmes") or data.get("data") or []
             
         # Fallback for list response
         return data if isinstance(data, list) else []

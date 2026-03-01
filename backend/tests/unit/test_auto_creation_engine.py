@@ -6,6 +6,7 @@ pipeline, coordinating rules, streams, and executions.
 """
 from unittest.mock import MagicMock, AsyncMock, patch
 import asyncio
+from collections import defaultdict
 
 from auto_creation_engine import (
     AutoCreationEngine,
@@ -192,6 +193,7 @@ class TestAutoCreationEngineFetchStreams:
                 {"id": 102, "name": "CNN HD", "group_title": "News"},
             ]
         })
+        self.client.get_all_m3u_group_settings = AsyncMock(return_value={})
         self.engine = AutoCreationEngine(self.client)
         # Pre-populate existing groups so _fetch_streams doesn't need them unset
         self.engine._existing_groups = []
@@ -275,6 +277,7 @@ class TestAutoCreationEngineRunPipeline:
                 {"id": 101, "name": "ESPN HD", "group_title": "Sports"},
             ]
         })
+        self.client.get_all_m3u_group_settings = AsyncMock(return_value={})
         self.client.create_channel = AsyncMock(return_value={"id": 1, "name": "ESPN HD"})
         self.engine = AutoCreationEngine(self.client)
 
@@ -838,6 +841,7 @@ class TestAutoCreationEngineIntegration:
                 },
             ]
         })
+        self.client.get_all_m3u_group_settings = AsyncMock(return_value={})
         self.client.create_channel = AsyncMock(return_value={"id": 2, "name": "ESPN2 HD"})
         self.engine = AutoCreationEngine(self.client)
 
@@ -899,3 +903,70 @@ class TestSortKey:
         """channel_number sort returns infinity when stream_chno is None."""
         stream = StreamContext(stream_id=1, stream_name="ESPN", stream_chno=None)
         assert _sort_key(stream, "channel_number") == float('inf')
+
+
+class TestAutoCreationEngineEPG:
+    """Tests for EPG pre-fetching and enrichment."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.get_all_m3u_group_settings = AsyncMock(return_value={})
+        self.engine = AutoCreationEngine(self.client)
+
+    async def test_prefetch_epg_grid_list_format(self):
+        """Engine correctly handles list format from get_epg_grid."""
+        # Mock API returning a simple list (breaking change fix)
+        self.client.get_epg_grid = AsyncMock(return_value=[
+            {
+                "tvg_id": "test.ch",
+                "title": "Match",
+                "start_time": "2026-02-27T10:00:00Z",
+                "end_time": "2026-02-27T12:00:00Z"
+            }
+        ])
+        # Also mock epg_data for source mapping fallback
+        self.client.get_epg_data = AsyncMock(return_value=[
+            {"tvg_id": "test.ch", "epg_source": 5}
+        ])
+
+        # We need to mock datetime to ensure "today" matches our test data
+        with patch("auto_creation_engine.datetime") as mock_dt:
+            import datetime as dt_real
+            mock_now = dt_real.datetime(2026, 2, 27, 11, 0, 0, tzinfo=dt_real.timezone.utc)
+            mock_dt.now.return_value = mock_now
+            mock_dt.fromisoformat = dt_real.datetime.fromisoformat
+
+            # Trigger pre-fetch (via a rule that needs EPG)
+            mock_rule = MagicMock()
+            mock_rule.get_conditions.return_value = [{"type": "epg_title_contains", "value": "Match"}]
+
+            # Setup needed dependencies for run_pipeline
+            self.engine._load_existing_data = AsyncMock()
+            self.engine._load_rules = AsyncMock(return_value=[mock_rule])
+            self.engine._fetch_streams = AsyncMock(return_value=[])
+            self.engine._create_execution = AsyncMock(return_value=MagicMock())
+            self.engine._save_execution = AsyncMock()
+
+            await self.engine.run_pipeline()
+
+            self.client.get_epg_grid.assert_called_once()
+
+    async def test_execution_log_efficiency(self):
+        """Verify execution log only contains matched streams."""
+        # Setup 2 streams, one matches, one doesn't
+        stream1 = StreamContext(stream_id=1, stream_name="Match", m3u_account_id=1)
+        stream2 = StreamContext(stream_id=2, stream_name="No", m3u_account_id=1)
+
+        mock_rule = MagicMock()
+        mock_rule.get_conditions.return_value = [{"type": "stream_name_contains", "value": "Match"}]
+        mock_rule.get_actions.return_value = [{"type": "skip"}]
+
+        execution = MagicMock()
+
+        with patch("auto_creation_engine.get_session"):
+            # Use private method to test Pass 1 logic
+            await self.engine._process_streams([stream1, stream2], [mock_rule], execution, dry_run=True)
+
+            # log should only have 1 entry (for stream1)
+            assert len(self.engine.results["execution_log"]) == 1
+            assert self.engine.results["execution_log"][0]["stream_name"] == "Match"

@@ -8,6 +8,10 @@ import logging
 import time
 from datetime import datetime
 from typing import List, Optional
+try:
+    import zoneinfo
+except ImportError:
+    from backports import zoneinfo
 
 import journal
 from fastapi import APIRouter, Body, HTTPException
@@ -887,6 +891,20 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
 # =============================================================================
 # Validation & Schema Endpoints
 # =============================================================================
+
+
+@router.get("/timezones")
+async def get_timezones():
+    """Get a list of available IANA timezones."""
+    try:
+        # zoneinfo.available_timezones() is available in Python 3.9+
+        zones = sorted(list(zoneinfo.available_timezones()))
+        if not zones:
+            return {"timezones": ["UTC", "Europe/London", "Europe/Madrid", "Europe/Paris", "America/New_York", "America/Chicago", "America/Los_Angeles", "Australia/Sydney", "Asia/Tokyo"]}
+        return {"timezones": zones}
+    except Exception:
+        # Fallback to a common list if discovery fails
+        return {"timezones": ["UTC", "Europe/London", "Europe/Madrid", "Europe/Paris", "America/New_York", "America/Chicago", "America/Los_Angeles", "Australia/Sydney", "Asia/Tokyo"]}
 
 
 @router.post("/validate")

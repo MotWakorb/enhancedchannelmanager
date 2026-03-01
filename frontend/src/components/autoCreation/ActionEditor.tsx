@@ -1,9 +1,10 @@
 /**
  * Component for editing individual actions in auto-creation rules.
  */
-import { useState, useId, useEffect } from 'react';
+import { useState, useId, useEffect, useMemo } from 'react';
 import type { Action, ActionType, IfExistsBehavior } from '../../types/autoCreation';
 import { getChannelGroups, getEPGSources, getStreamProfiles } from '../../services/api';
+import { getTimezones } from '../../services/autoCreationApi';
 import type { EPGSource, StreamProfile } from '../../types';
 import { CustomSelect } from '../CustomSelect';
 import './ActionEditor.css';
@@ -53,25 +54,6 @@ const VARIABLE_MODE_OPTIONS = [
   { value: 'regex_extract', label: 'Regex Extract' },
   { value: 'regex_replace', label: 'Regex Replace' },
   { value: 'literal', label: 'Literal / Template' },
-];
-
-const TIMEZONE_OPTIONS = [
-  { value: 'UTC', label: 'UTC (GMT)' },
-  { value: 'Europe/London', label: 'London' },
-  { value: 'Europe/Madrid', label: 'Madrid' },
-  { value: 'Europe/Paris', label: 'Paris' },
-  { value: 'Europe/Berlin', label: 'Berlin' },
-  { value: 'America/New_York', label: 'US Eastern (New York)' },
-  { value: 'America/Chicago', label: 'US Central (Chicago)' },
-  { value: 'America/Denver', label: 'US Mountain (Denver)' },
-  { value: 'America/Los_Angeles', label: 'US Pacific (Los Angeles)' },
-  { value: 'America/Sao_Paulo', label: 'Brazil (Brasilia)' },
-  { value: 'Australia/Sydney', label: 'Australia (Sydney)' },
-  { value: 'Australia/Melbourne', label: 'Australia (Melbourne)' },
-  { value: 'Australia/Perth', label: 'Australia (Perth)' },
-  { value: 'Asia/Tokyo', label: 'Tokyo' },
-  { value: 'Asia/Dubai', label: 'Dubai' },
-  { value: 'Asia/Kolkata', label: 'India' },
 ];
 
 // Action type definitions with metadata
@@ -240,11 +222,24 @@ export function ActionEditor({
   const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>([]);
   const [epgSources, setEpgSources] = useState<EPGSource[]>([]);
   const [streamProfiles, setStreamProfiles] = useState<StreamProfile[]>([]);
+  const [timezones, setTimezones] = useState<string[]>([]);
   const [channelNumberMode, setChannelNumberMode] = useState<'auto' | 'starting'>(
     parseStartingNumber(action.channel_number) !== null ? 'starting' : 'auto'
   );
   const [nameTransformEnabled, setNameTransformEnabled] = useState(
     !!action.name_transform_pattern
+  );
+
+  // Fetch timezones only when transform_time action is selected
+  useEffect(() => {
+    if (action.type === 'transform_time') {
+      getTimezones().then(setTimezones).catch(() => setTimezones(['UTC']));
+    }
+  }, [action.type]);
+
+  const timezoneOptions = useMemo(() =>
+    timezones.map(tz => ({ value: tz, label: tz })),
+    [timezones]
   );
 
   // Fetch channel groups for group selector
@@ -908,7 +903,7 @@ export function ActionEditor({
                 <CustomSelect
                   value={action.source_tz || 'UTC'}
                   onChange={val => onChange({ ...action, source_tz: val })}
-                  options={TIMEZONE_OPTIONS}
+                  options={timezoneOptions}
                   disabled={readonly}
                   searchable
                 />
@@ -918,7 +913,7 @@ export function ActionEditor({
                 <CustomSelect
                   value={action.target_tz || 'UTC'}
                   onChange={val => onChange({ ...action, target_tz: val })}
-                  options={TIMEZONE_OPTIONS}
+                  options={timezoneOptions}
                   disabled={readonly}
                   searchable
                 />

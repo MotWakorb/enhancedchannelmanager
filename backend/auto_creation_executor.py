@@ -10,7 +10,10 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Union, List, Dict
 import re
 from datetime import datetime, timedelta, timezone
-import pytz
+try:
+    import zoneinfo
+except ImportError:
+    from backports import zoneinfo
 
 from auto_creation_schema import Action, ActionType, TemplateVariables
 from auto_creation_evaluator import StreamContext
@@ -1845,13 +1848,13 @@ class ActionExecutor:
             dt = dt.replace(year=now.year, month=now.month, day=now.day)
             
             try:
-                src_tz = pytz.timezone(source_tz_name)
-                tgt_tz = pytz.timezone(target_tz_name)
-            except pytz.exceptions.UnknownTimeZoneError as e:
+                src_tz = zoneinfo.ZoneInfo(source_tz_name)
+                tgt_tz = zoneinfo.ZoneInfo(target_tz_name)
+            except Exception as e:
                 return ActionResult(success=False, action_type=action.type, description=f"Unknown timezone: {e}", error="TZ error")
 
-            # Localize to source (handling DST)
-            dt_src = src_tz.localize(dt)
+            # Attach timezone to source (dt is naive from strptime)
+            dt_src = dt.replace(tzinfo=src_tz)
             # Convert to target
             dt_tgt = dt_src.astimezone(tgt_tz)
             
@@ -2242,42 +2245,26 @@ class ActionExecutor:
         """
         name_lower = name.lower()
 
-        def _filter_by_group(channels: list[dict]) -> Optional[dict]:
-            if not channels:
-                return None
-            if group_id is not None:
-                # Find channel specifically in this group
-                for c in channels:
-                    c_group = c.get("channel_group_id") or c.get("channel_group")
-                    # handle both ID and dict form from API
-                    if isinstance(c_group, dict):
-                        c_group = c_group.get("id")
-                    if c_group == group_id:
-                        return c
-                return None
-            # No group filter, return first one
-            return channels[0]
-
         # Check newly created channels first (by exact name)
-        match = _filter_by_group(self._created_channels.get(name_lower, []))
+        match = self._filter_channels_by_group(self._created_channels.get(name_lower, []), group_id)
         if match:
             logger.debug("[AUTO-CREATE-EXEC] '%s' found in created channels (group=%s)", name, group_id)
             return match
 
         # Check existing channels (by exact name)
-        match = _filter_by_group(self._channel_by_name.get(name_lower, []))
+        match = self._filter_channels_by_group(self._channel_by_name.get(name_lower, []), group_id)
         if match:
             logger.debug("[AUTO-CREATE-EXEC] '%s' found in existing channels (group=%s, id=%s)", name, group_id, match.get('id'))
             return match
 
         # Check base-name mapping (base name -> number-prefixed channel)
-        match = _filter_by_group(self._base_name_to_channel.get(name_lower, []))
+        match = self._filter_channels_by_group(self._base_name_to_channel.get(name_lower, []), group_id)
         if match:
             logger.debug("[AUTO-CREATE-EXEC] '%s' found via base-name mapping (group=%s)", name, group_id)
             return match
 
         # Check normalized-name mapping (normalization-engine-processed channel names)
-        match = _filter_by_group(self._normalized_name_to_channel.get(name_lower, []))
+        match = self._filter_channels_by_group(self._normalized_name_to_channel.get(name_lower, []), group_id)
         if match:
             logger.debug("[AUTO-CREATE-EXEC] '%s' found via normalized-name mapping (group=%s, id=%s)", name, group_id, match.get('id'))
             return match
@@ -2315,6 +2302,7 @@ class ActionExecutor:
         if not tvg_id:
             return None
         
+        # Check existing channels
         for channel in self.existing_channels:
             if channel.get("tvg_id") == tvg_id:
                 if group_id is not None:
@@ -2324,6 +2312,19 @@ class ActionExecutor:
                     if c_group != group_id:
                         continue
                 return channel
+        
+        # Check newly created channels
+        for channels in self._created_channels.values():
+            for channel in channels:
+                if channel.get("tvg_id") == tvg_id:
+                    if group_id is not None:
+                        c_group = channel.get("channel_group_id") or channel.get("channel_group")
+                        if isinstance(c_group, dict):
+                            c_group = c_group.get("id")
+                        if c_group != group_id:
+                            continue
+                    return channel
+                    
         return None
 
     def _find_in_core_name_map(self, core_name: str, group_id: int = None) -> Optional[dict]:
@@ -2349,10 +2350,6 @@ class ActionExecutor:
                     return c
             return None
         return channels[0]
-        for channel in self._created_channels.values():
-            if channel.get("tvg_id") == tvg_id:
-                return channel
-        return None
 
     def _find_group_by_name(self, name: str) -> Optional[dict]:
         """Find group by exact name (case-insensitive)."""

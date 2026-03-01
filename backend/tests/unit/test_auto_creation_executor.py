@@ -6,6 +6,7 @@ and streams with proper rollback tracking.
 """
 from unittest.mock import MagicMock, AsyncMock
 import asyncio
+import re
 
 from auto_creation_executor import (
     ActionResult,
@@ -181,7 +182,8 @@ class TestActionExecutorInit:
 
         assert len(executor.existing_channels) == 2
         assert executor._channel_by_id[1]["name"] == "ESPN"
-        assert executor._channel_by_name["espn"]["id"] == 1
+        # channel_by_name returns lists
+        assert executor._channel_by_name["espn"][0]["id"] == 1
         assert 100 in executor._used_channel_numbers
         assert 200 in executor._used_channel_numbers
 
@@ -240,7 +242,7 @@ class TestActionExecutorHelpers:
 
     def test_find_channel_by_name_created(self):
         """Find channel finds newly created channels."""
-        self.executor._created_channels["fox"] = {"id": 99, "name": "FOX"}
+        self.executor._created_channels["fox"] = [{"id": 99, "name": "FOX"}]
         channel = self.executor._find_channel_by_name("FOX")
         assert channel["id"] == 99
 
@@ -855,7 +857,7 @@ class TestActionExecutorPropertyActions:
         self.client.update_channel.assert_called_with(1, {"tvg_id": "ESPN.US"})
 
     def test_assign_epg(self):
-        """Assign EPG source — resolves epg_id (source) to epg_data_id (data entry)."""
+        """Assign EPG source \u2014 resolves epg_id (source) to epg_data_id (data entry)."""
         # Create executor with EPG data entries
         epg_data = [{"id": 42, "tvg_id": "dummy_epg", "epg_source": 5}]
         executor = ActionExecutor(
@@ -965,6 +967,20 @@ class TestActionExecutorPropertyActions:
 
         assert result.success is True
         self.client.update_channel.assert_called_with(1, {"stream_profile_id": 3})
+
+    def test_assign_profile_none(self):
+        """Assign profile skips if profile_id is None."""
+        action = {"type": "assign_profile", "profile_id": None}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is True
+        assert result.skipped is True
+        self.client.update_channel.assert_not_called()
 
     def test_set_channel_number(self):
         """Set channel number."""
@@ -1441,6 +1457,128 @@ class TestSetVariable:
         assert exec_ctx.custom_variables["label"] == "Region: US"
 
 
+class TestActionExecutorTransformTime:
+    """Tests for transform_time action."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.client = MagicMock()
+        self.executor = ActionExecutor(self.client)
+        self.stream_ctx = StreamContext(
+            stream_id=201,
+            stream_name="MotoGP Australia 16:40",
+            m3u_account_id=1,
+        )
+
+    def test_transform_time_succeeds(self):
+        """Extracts and transforms time between timezones."""
+        action = {
+            "type": "transform_time",
+            "variable_name": "local_time",
+            "source_field": "stream_name",
+            "pattern": r"(\d{1,2}:\d{2})",
+            "source_tz": "Australia/Sydney",
+            "target_tz": "Europe/Madrid"
+        }
+        exec_ctx = ExecutionContext()
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is True
+        assert "local_time" in exec_ctx.custom_variables
+        # Sydney is usually +10 or +11, Madrid is +1 or +2
+        # 16:40 Sydney -> 06:40 Madrid (assuming 10 hour diff)
+        # Note: Actual value depends on current date (DST), but we check it's formatted
+        assert len(exec_ctx.custom_variables["local_time"]) == 5
+        assert ":" in exec_ctx.custom_variables["local_time"]
+
+    def test_transform_time_no_match(self):
+        """Handles cases where time pattern doesn't match."""
+        self.stream_ctx.stream_name = "MotoGP No Time"
+        action = {
+            "type": "transform_time",
+            "variable_name": "local_time",
+            "pattern": r"(\d{1,2}:\d{2})"
+        }
+        exec_ctx = ExecutionContext()
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is True
+        assert result.skipped is True
+        assert "No time found" in result.description
+
+    def test_transform_time_invalid_tz(self):
+        """Handles unknown timezone names gracefully."""
+        action = {
+            "type": "transform_time",
+            "variable_name": "local_time",
+            "source_tz": "Invalid/Timezone"
+        }
+        exec_ctx = ExecutionContext()
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is False
+        assert "Unknown timezone" in result.description
+
+
+class TestActionExecutorFallbackTemplate:
+    """Tests for fallback name template logic."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.client = MagicMock()
+        self.client.create_channel = AsyncMock(return_value={"id": 99, "name": "Created"})
+        self.executor = ActionExecutor(self.client)
+        self.stream_ctx = StreamContext(
+            stream_id=201,
+            stream_name="Original Stream",
+            m3u_account_id=1,
+        )
+
+    def test_create_channel_uses_fallback_when_no_epg_match(self):
+        """Uses fallback template if matched_by_epg is False."""
+        self.stream_ctx.matched_by_epg = False
+        action = {
+            "type": "create_channel",
+            "name_template": "EPG: {epg_match_title}",
+            "name_template_fallback": "NAME: {stream_name}"
+        }
+        exec_ctx = ExecutionContext()
+
+        asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        call_args = self.client.create_channel.call_args[0][0]
+        assert call_args["name"] == "NAME: Original Stream"
+
+    def test_create_channel_uses_primary_when_epg_matched(self):
+        """Uses primary template if matched_by_epg is True."""
+        self.stream_ctx.matched_by_epg = True
+        self.stream_ctx.epg_match = {"title": "Live Race"}
+        action = {
+            "type": "create_channel",
+            "name_template": "EPG: {epg_match_title}",
+            "name_template_fallback": "NAME: {stream_name}"
+        }
+        exec_ctx = ExecutionContext()
+
+        asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        call_args = self.client.create_channel.call_args[0][0]
+        assert call_args["name"] == "EPG: Live Race"
+
+
 class TestDeferredEPGAssignment:
     """Tests for deferred EPG assignment (dummy EPG sources)."""
 
@@ -1460,7 +1598,7 @@ class TestDeferredEPGAssignment:
         )
 
     def test_assign_epg_dummy_source_no_data_defers(self):
-        """assign_epg on dummy source with no data → deferred (not failed)."""
+        """assign_epg on dummy source with no data \u2192 deferred (not failed)."""
         epg_sources = [
             {"id": 9, "name": "ECM Dummy", "url": "http://localhost:6100/api/dummy-epg/xmltv/1"}
         ]
@@ -1485,7 +1623,7 @@ class TestDeferredEPGAssignment:
         assert len(executor._deferred_epg_assignments) == 1
 
     def test_assign_epg_non_dummy_source_no_data_fails(self):
-        """assign_epg on non-dummy source with no data → still fails."""
+        """assign_epg on non-dummy source with no data \u2192 still fails."""
         epg_sources = [
             {"id": 5, "name": "XMLTV Provider", "url": "http://example.com/epg.xml"}
         ]
@@ -1530,7 +1668,7 @@ class TestDeferredEPGAssignment:
         )
         assert result1.deferred is True
 
-        # Simulate EPG refresh — reload with data
+        # Simulate EPG refresh \u2014 reload with data
         executor.reload_epg_data([
             {"id": 42, "tvg_id": "espn", "epg_source": 9}
         ])

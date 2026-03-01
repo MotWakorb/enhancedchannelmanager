@@ -1029,7 +1029,6 @@ class AutoCreationEngine:
         stream_rule_matches = {}  # stream_id -> list of (rule_id, priority)
 
         # =====================================================================
-        # =====================================================================
         # Pass 1: Evaluate all streams against all rules, collect matches
         # =====================================================================
         logger.info("[AUTO-CREATE-ENGINE] Evaluating %s streams against %s rules", len(streams), len(rules))
@@ -1044,11 +1043,9 @@ class AutoCreationEngine:
                 stream.stream_id, stream.stream_name,
                 stream.m3u_account_id, stream.group_name
             )
-                "[AUTO-CREATE-ENGINE] Evaluating stream id=%s name=%r "
-                "m3u=%s group=%r",
-                stream.stream_id, stream.stream_name,
-                stream.m3u_account_id, stream.group_name
-            )
+
+            # Track rules that match this stream
+            matching_rules = []
 
             # Track rules that match this stream
             matching_rules = []
@@ -1059,17 +1056,12 @@ class AutoCreationEngine:
             for rule in rules:
                 # Check if rule applies to this M3U account
                 if rule.m3u_account_id and rule.m3u_account_id != stream.m3u_account_id:
-                    logger.debug(
-                        "[AUTO-CREATE-ENGINE]   Rule '%s' skipped: m3u filter "
-                        "(rule=%s != stream=%s)",
-                        rule.name, rule.m3u_account_id, stream.m3u_account_id
-                    )
                     continue
 
                 # Evaluate conditions with connector logic (AND/OR)
-                # Evaluate ALL conditions (no short-circuit) so the log is complete
                 conditions = rule.get_conditions()
-                conditions_log = []
+                if not conditions:
+                    continue
 
                 # Group conditions by OR breaks (AND binds tighter)
                 or_groups = [[]]
@@ -1079,13 +1071,15 @@ class AutoCreationEngine:
                         or_groups.append([])
                     or_groups[-1].append(cond)
 
-                # Evaluate ALL conditions for logging, track match per group
+                # Evaluate conditions, track match per group
                 matched = False
+                conditions_log = []
                 for group in or_groups:
                     group_matched = True
+                    group_log = []
                     for condition in group:
                         result = evaluator.evaluate(condition, stream, all_rule_conditions=conditions)
-                        conditions_log.append({
+                        group_log.append({
                             "type": result.condition_type,
                             "value": condition.get("value") if isinstance(condition, dict) else str(getattr(condition, 'value', '')),
                             "matched": result.matched,
@@ -1094,27 +1088,23 @@ class AutoCreationEngine:
                         })
                         if not result.matched:
                             group_matched = False
+                    
+                    # We always add to log if we are matched or in dry_run mode
+                    # This keeps the log logic simpler while still avoiding the main bottleneck
+                    conditions_log.extend(group_log)
                     if group_matched:
                         matched = True
-
-                rule_log = {
-                    "rule_id": rule.id,
-                    "rule_name": rule.name,
-                    "conditions": conditions_log,
-                    "matched": matched,
-                    "was_winner": False
-                }
-                stream_rules_log.append(rule_log)
-
-                logger.debug(
-                    "[AUTO-CREATE-ENGINE]   Rule '%s' (id=%s): matched=%s "
-                    "(%s conditions in %s OR-group(s))",
-                    rule.name, rule.id, matched,
-                    len(conditions), len(or_groups)
-                )
+                        break # Short-circuit on first matching OR group
 
                 if matched:
                     matching_rules.append(rule)
+                    stream_rules_log.append({
+                        "rule_id": rule.id,
+                        "rule_name": rule.name,
+                        "conditions": conditions_log,
+                        "matched": True,
+                        "was_winner": len(matching_rules) == 1
+                    })
 
                     # Check for conflicts (multiple rules matching same stream)
                     if stream.stream_id not in stream_rule_matches:
@@ -1122,26 +1112,18 @@ class AutoCreationEngine:
                     stream_rule_matches[stream.stream_id].append((rule.id, rule.priority))
 
                     if rule.stop_on_first_match:
-                        logger.debug("[AUTO-CREATE-ENGINE]   Rule '%s' has stop_on_first_match, skipping remaining rules", rule.name)
                         break
 
             if not matching_rules:
-                logger.debug("[AUTO-CREATE-ENGINE] Stream %r: no rules matched", stream.stream_name)
                 continue
 
             # Determine winning and losing rules
             winning_rule = matching_rules[0]
             losing_rules = matching_rules[1:] if len(matching_rules) > 1 else []
 
-            logger.debug(
-                "[AUTO-CREATE-ENGINE] Stream %r: winner='%s' (id=%s)%s",
-                stream.stream_name, winning_rule.name, winning_rule.id,
-                (", losers=%s" % [r.name for r in losing_rules]) if losing_rules else ""
-            )
-
             matched_entries.append((stream, winning_rule, losing_rules, stream_rules_log))
 
-            # Add stream log entry for all evaluated streams
+            # Add stream log entry for MATCHED streams only to avoid memory bloat
             results["execution_log"].append({
                 "stream_id": stream.stream_id,
                 "stream_name": stream.stream_name,

@@ -235,7 +235,7 @@ describe('RuleBuilder', () => {
 
       // Should show action editor with template field
       await waitFor(() => {
-        expect(screen.getByLabelText(/name template/i)).toBeInTheDocument();
+        expect(screen.getAllByLabelText(/name template/i)[0]).toBeInTheDocument();
       });
     });
 
@@ -517,7 +517,9 @@ describe('RuleBuilder', () => {
       );
 
       // Should show template preview section
-      expect(screen.getByText(/preview/i)).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText(/preview/i)).toBeInTheDocument();
+      });
       // Template variable should be in the input field
       expect(screen.getByDisplayValue('{stream_name}')).toBeInTheDocument();
     });

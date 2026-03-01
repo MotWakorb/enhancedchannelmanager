@@ -2,9 +2,13 @@
 Unit tests for the Dummy EPG generation engine.
 """
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+try:
+    import zoneinfo
+except ImportError:
+    from backports import zoneinfo
 
 import pytest
-import pytz
 
 from dummy_epg_engine import (
     _js_to_python_named_groups,

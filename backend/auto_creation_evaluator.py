@@ -516,7 +516,7 @@ class ConditionEvaluator:
                                         f"EPG source {expected_source} matches (Now: '{prog.get('title')}')",
                                         matched_data={"program": prog}
                                     )
-                        except:
+                        except (ValueError, TypeError):
                             pass
                         if not best_prog:
                             best_prog = prog

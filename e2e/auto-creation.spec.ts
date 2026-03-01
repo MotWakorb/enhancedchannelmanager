@@ -309,10 +309,23 @@ test.describe('Create Rule', () => {
         await addActionBtn.click({ timeout: 10000 });
         await appPage.waitForTimeout(500);
 
-        // Select "Skip" action if dropdown exists
-        const skipOption = appPage.locator('text=Skip, option:has-text("Skip")').first();
-        if (await skipOption.isVisible().catch(() => false)) {
-          await skipOption.click();
+        // Select "Create Channel" action
+        const createChannelOption = appPage.locator('text=Create Channel, option:has-text("Create Channel")').first();
+        if (await createChannelOption.isVisible().catch(() => false)) {
+          await createChannelOption.click();
+          await appPage.waitForTimeout(500);
+          
+          // Fill in the first name template
+          const nameTemplate = appPage.locator(selectors.autoCreationActionNameTemplate).first();
+          if (await nameTemplate.isVisible()) {
+            await nameTemplate.fill('E2E Test {stream_name}');
+          }
+        } else {
+          // Fallback to Skip if Create Channel not found in this environment's UI
+          const skipOption = appPage.locator('text=Skip, option:has-text("Skip")').first();
+          if (await skipOption.isVisible().catch(() => false)) {
+            await skipOption.click();
+          }
         }
       }
 

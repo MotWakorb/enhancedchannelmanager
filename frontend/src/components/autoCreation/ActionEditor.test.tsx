@@ -64,7 +64,7 @@ describe('ActionEditor', () => {
   });
 
   describe('create_channel action', () => {
-    it('renders name template input', () => {
+    it('renders name template input', async () => {
       render(
         <ActionEditor
           action={{ type: 'create_channel', name_template: '{stream_name}' }}
@@ -73,7 +73,9 @@ describe('ActionEditor', () => {
         />
       );
 
-      expect(screen.getByLabelText(/name template/i)).toHaveValue('{stream_name}');
+      await waitFor(() => {
+        expect(screen.getAllByLabelText(/name template/i)[0]).toHaveValue('{stream_name}');
+      });
     });
 
     it('renders group selector', () => {
@@ -131,7 +133,7 @@ describe('ActionEditor', () => {
   });
 
   describe('create_group action', () => {
-    it('renders name template input', () => {
+    it('renders name template input', async () => {
       render(
         <ActionEditor
           action={{ type: 'create_group', name_template: '{stream_group}' }}
@@ -140,7 +142,9 @@ describe('ActionEditor', () => {
         />
       );
 
-      expect(screen.getByLabelText(/name template/i)).toHaveValue('{stream_group}');
+      await waitFor(() => {
+        expect(screen.getAllByLabelText(/name template/i)[0]).toHaveValue('{stream_group}');
+      });
     });
 
     it('renders if_exists selector', () => {
@@ -380,10 +384,10 @@ describe('ActionEditor', () => {
 
       // Wait for component to settle (groups fetch etc)
       await waitFor(() => {
-        expect(screen.getByLabelText(/name template/i)).toBeInTheDocument();
+        expect(screen.getAllByLabelText(/name template/i)[0]).toBeInTheDocument();
       });
 
-      await user.type(screen.getByLabelText(/name template/i), 'test');
+      await user.type(screen.getAllByLabelText(/name template/i)[0], 'test');
 
       await waitFor(() => {
         expect(onChange).toHaveBeenCalled();
@@ -562,8 +566,13 @@ describe('ActionEditor', () => {
         />
       );
 
+      // Wait for component to settle
+      await waitFor(() => {
+        expect(screen.getAllByLabelText(/name template/i)[0]).toBeInTheDocument();
+      });
+
       // Focus the template input first
-      const input = screen.getByLabelText(/name template/i);
+      const input = screen.getAllByLabelText(/name template/i)[0];
       await user.click(input);
 
       // Open variables helper
@@ -656,7 +665,7 @@ describe('ActionEditor', () => {
   });
 
   describe('readonly mode', () => {
-    it('disables all inputs when readonly', () => {
+    it('disables all inputs when readonly', async () => {
       render(
         <ActionEditor
           action={{ type: 'create_channel', name_template: '{stream_name}' }}
@@ -666,7 +675,9 @@ describe('ActionEditor', () => {
         />
       );
 
-      expect(screen.getByLabelText(/name template/i)).toBeDisabled();
+      await waitFor(() => {
+        expect(screen.getAllByLabelText(/name template/i)[0]).toBeDisabled();
+      });
       // All comboboxes should be disabled
       const comboboxes = screen.getAllByRole('combobox');
       comboboxes.forEach(cb => expect(cb).toBeDisabled());
@@ -707,7 +718,7 @@ describe('ActionEditor', () => {
   });
 
   describe('accessibility', () => {
-    it('has accessible labels for inputs', () => {
+    it('has accessible labels for inputs', async () => {
       render(
         <ActionEditor
           action={{ type: 'create_channel', name_template: '' }}
@@ -716,11 +727,13 @@ describe('ActionEditor', () => {
         />
       );
 
-      expect(screen.getByLabelText(/action type/i)).toBeInTheDocument();
-      expect(screen.getByLabelText(/name template/i)).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByLabelText(/action type/i)).toBeInTheDocument();
+        expect(screen.getAllByLabelText(/name template/i)[0]).toBeInTheDocument();
+      });
     });
 
-    it('shows validation errors with aria-describedby', () => {
+    it('shows validation errors with aria-describedby', async () => {
       render(
         <ActionEditor
           action={{ type: 'create_channel', name_template: '' }}
@@ -730,9 +743,11 @@ describe('ActionEditor', () => {
         />
       );
 
-      const input = screen.getByLabelText(/name template/i);
-      const describedBy = input.getAttribute('aria-describedby');
-      expect(describedBy).toBeTruthy();
+      await waitFor(() => {
+        const input = screen.getAllByLabelText(/name template/i)[0];
+        const describedBy = input.getAttribute('aria-describedby');
+        expect(describedBy).toBeTruthy();
+      });
     });
   });
 

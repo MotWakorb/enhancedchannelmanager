@@ -8,9 +8,11 @@ substitution pairs, and template rendering.
 import logging
 import re
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
-
-import pytz
+from datetime import datetime, timedelta, timezone
+try:
+    import zoneinfo
+except ImportError:
+    from backports import zoneinfo
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +226,12 @@ def compute_event_times(
     Returns:
         Dict with start_dt, end_dt, and formatted time/date strings.
     """
-    now = datetime.now(pytz.timezone(event_timezone))
+    try:
+        tz = zoneinfo.ZoneInfo(event_timezone)
+    except Exception:
+        tz = timezone.utc
+
+    now = datetime.now(tz)
 
     # Parse hour and minute
     hour = int(groups.get("hour", now.hour))
@@ -273,9 +280,8 @@ def compute_event_times(
         year = now.year
 
     # Build datetime in event timezone
-    tz = pytz.timezone(event_timezone)
     try:
-        start_dt = tz.localize(datetime(year, month, day, hour, minute, 0))
+        start_dt = datetime(year, month, day, hour, minute, 0, tzinfo=tz)
     except (ValueError, OverflowError) as e:
         logger.warning("[DUMMY-EPG] Failed to build event datetime: %s", e)
         start_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -285,10 +291,10 @@ def compute_event_times(
     # Convert to output timezone if specified
     if output_timezone:
         try:
-            out_tz = pytz.timezone(output_timezone)
+            out_tz = zoneinfo.ZoneInfo(output_timezone)
             start_dt = start_dt.astimezone(out_tz)
             end_dt = end_dt.astimezone(out_tz)
-        except pytz.exceptions.UnknownTimeZoneError as e:
+        except Exception as e:
             logger.warning("[DUMMY-EPG] Unknown output_timezone %s: %s", output_timezone, e)
 
     # Format time strings
@@ -319,7 +325,7 @@ def compute_event_times(
 
 def _xmltv_datetime(dt: datetime) -> str:
     """Format a datetime as XMLTV format in UTC."""
-    utc_dt = dt.astimezone(pytz.utc)
+    utc_dt = dt.astimezone(timezone.utc)
     return utc_dt.strftime("%Y%m%d%H%M%S +0000")
 
 
@@ -362,7 +368,7 @@ def _make_programme(
 
     if include_date_tag:
         date_el = ET.SubElement(prog, "date")
-        date_el.text = start_dt.astimezone(pytz.utc).strftime("%Y-%m-%d")
+        date_el.text = start_dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
 
     if include_live_tag:
         ET.SubElement(prog, "live")
@@ -453,7 +459,7 @@ def generate_channel_xml(
     sub_pairs = profile.get("substitution_pairs", [])
     substituted_name, _steps = apply_substitutions(source_name, sub_pairs)
 
-    # Extract groups — variant-aware
+    # Extract groups \u2014 variant-aware
     pattern_variants = profile.get("pattern_variants", [])
     matched_variant = None
 
@@ -492,11 +498,13 @@ def generate_channel_xml(
 
     programmes = []
 
-    tz = pytz.timezone(event_timezone)
+    try:
+        tz = zoneinfo.ZoneInfo(event_timezone)
+    except Exception:
+        tz = timezone.utc
+        
     now = datetime.now(tz)
-    today_midnight = tz.localize(
-        datetime(now.year, now.month, now.day, 0, 0, 0)
-    )
+    today_midnight = datetime(now.year, now.month, now.day, 0, 0, 0, tzinfo=tz)
     tomorrow_midnight = today_midnight + timedelta(days=1)
 
     # Helper to resolve templates: matched variant overrides profile-level for core templates;
@@ -524,7 +532,7 @@ def generate_channel_xml(
         title = render_template(get_template("title_template"), template_groups)
         description = render_template(get_template("description_template"), template_groups)
 
-        # Channel logo — variant overrides profile
+        # Channel logo \u2014 variant overrides profile
         logo_url = render_template(get_template("channel_logo_url_template"), template_groups)
         if logo_url:
             icon_el = ET.SubElement(channel_el, "icon")

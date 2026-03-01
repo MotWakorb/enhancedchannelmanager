@@ -33,6 +33,7 @@ export type ConditionType =
   | 'epg_desc_matches'
   | 'epg_any_contains'
   | 'epg_any_matches'
+  | 'epg_source_is'
   | 'any_field_contains'
   | 'any_field_matches'
   // Channel conditions

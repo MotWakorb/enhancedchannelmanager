@@ -825,6 +825,19 @@ export const handlers = [
     return HttpResponse.json({ rules: mockDataStore.autoCreationRules })
   }),
 
+  http.get(`${API_BASE}/auto-creation/timezones`, () => {
+    return HttpResponse.json({
+      timezones: [
+        'UTC',
+        'Europe/London',
+        'Europe/Madrid',
+        'America/New_York',
+        'America/Chicago',
+        'Australia/Sydney',
+      ],
+    })
+  }),
+
   http.post(`${API_BASE}/auto-creation/rules`, async ({ request }) => {
     const data = await request.json() as object
     const newRule = createMockAutoCreationRule(data as Partial<MockAutoCreationRule>)
