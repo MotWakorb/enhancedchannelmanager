@@ -1545,3 +1545,74 @@ class TestDeferredEPGAssignment:
         assert result2.success is True
         assert result2.deferred is False
         self.client.update_channel.assert_called_with(1, {"epg_data_id": 42})
+
+
+class TestVerifyEpgAssignments:
+    """Tests for verify_epg_assignments post-execution verification."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.get_channel = AsyncMock()
+        self.client.update_channel = AsyncMock()
+
+    def _make_executor(self):
+        return ActionExecutor(self.client, existing_channels=[], existing_groups=[])
+
+    def test_noop_when_no_pending(self):
+        """Returns immediately with zero counts when nothing to verify."""
+        executor = self._make_executor()
+        ok, patched, failed = asyncio.get_event_loop().run_until_complete(
+            executor.verify_epg_assignments()
+        )
+        assert (ok, patched, failed) == (0, 0, 0)
+        self.client.get_channel.assert_not_called()
+
+    def test_skips_when_already_persisted(self):
+        """No re-PATCH when GET returns matching epg_data_id."""
+        executor = self._make_executor()
+        executor._pending_epg_verifications = [
+            (100, {"epg_data_id": 42}),
+            (200, {"epg_data_id": 99}),
+        ]
+        self.client.get_channel.side_effect = [
+            {"id": 100, "epg_data_id": 42},
+            {"id": 200, "epg_data_id": 99},
+        ]
+
+        ok, patched, failed = asyncio.get_event_loop().run_until_complete(
+            executor.verify_epg_assignments()
+        )
+        assert (ok, patched, failed) == (2, 0, 0)
+        self.client.update_channel.assert_not_called()
+        # Pending list should be cleared
+        assert executor._pending_epg_verifications == []
+
+    def test_retries_on_mismatch(self):
+        """Re-PATCHes when GET returns wrong epg_data_id."""
+        executor = self._make_executor()
+        executor._pending_epg_verifications = [
+            (100, {"epg_data_id": 42, "tvg_id": "espn"}),
+        ]
+        # GET returns wrong value
+        self.client.get_channel.return_value = {"id": 100, "epg_data_id": None}
+
+        ok, patched, failed = asyncio.get_event_loop().run_until_complete(
+            executor.verify_epg_assignments()
+        )
+        assert (ok, patched, failed) == (0, 1, 0)
+        self.client.update_channel.assert_called_once_with(
+            100, {"epg_data_id": 42, "tvg_id": "espn"}
+        )
+
+    def test_handles_get_failure(self):
+        """Counts as failed when GET raises an exception."""
+        executor = self._make_executor()
+        executor._pending_epg_verifications = [
+            (100, {"epg_data_id": 42}),
+        ]
+        self.client.get_channel.side_effect = Exception("Connection refused")
+
+        ok, patched, failed = asyncio.get_event_loop().run_until_complete(
+            executor.verify_epg_assignments()
+        )
+        assert (ok, patched, failed) == (0, 0, 1)

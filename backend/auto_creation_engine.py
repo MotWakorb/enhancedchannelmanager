@@ -1158,6 +1158,32 @@ class AutoCreationEngine:
                 break
 
         # =====================================================================
+        # Pass 2.5: Verify EPG assignments on newly created channels
+        # =====================================================================
+        if not dry_run:
+            verified_ok, re_patched, failed = await executor.verify_epg_assignments()
+            if re_patched or failed:
+                logger.info(
+                    "[AUTO-CREATE-ENGINE] EPG verification: %s ok, %s re-patched, %s failed",
+                    verified_ok, re_patched, failed
+                )
+                results["channels_updated"] += re_patched
+                if re_patched:
+                    results["execution_log"].append({
+                        "stream_id": None,
+                        "stream_name": "[AUTO-CREATE-ENGINE] EPG verification",
+                        "m3u_account_id": None,
+                        "rules_evaluated": [],
+                        "actions_executed": [{
+                            "type": "verify_epg",
+                            "description": f"Re-patched EPG on {re_patched} newly created channel(s)",
+                            "success": True,
+                            "entity_id": None,
+                            "error": None
+                        }]
+                    })
+
+        # =====================================================================
         # Pass 3: Re-sort existing channels for rules with sort_field
         # =====================================================================
         logger.debug("[AUTO-CREATE-ENGINE] Starting channel renumbering pass")
