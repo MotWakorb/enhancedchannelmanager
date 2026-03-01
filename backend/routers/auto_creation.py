@@ -656,7 +656,9 @@ async def export_auto_creation_rules_yaml():
                     "sort_order": rule.sort_order or "asc",
                     "sort_regex": rule.sort_regex,
                     "normalize_names": rule.normalize_names or False,
-                    "skip_struck_streams": rule.skip_struck_streams or False
+                    "skip_struck_streams": rule.skip_struck_streams or False,
+                    "probe_on_sort": rule.probe_on_sort or False,
+                    "orphan_action": rule.orphan_action or "delete"
                 }
 
                 # Add group_name to actions that have group_id
@@ -817,6 +819,8 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         existing.sort_regex = rule_data.get("sort_regex")
                         existing.normalize_names = rule_data.get("normalize_names", False)
                         existing.skip_struck_streams = rule_data.get("skip_struck_streams", False)
+                        existing.probe_on_sort = rule_data.get("probe_on_sort", False)
+                        existing.orphan_action = rule_data.get("orphan_action", "delete")
                         logger.debug("[AUTO-CREATE-YAML] Rule '%s': updated existing (id=%s), stored actions=%s", rule_name, existing.id, existing.actions)
                         imported.append({"name": existing.name, "action": "updated"})
                     else:
@@ -843,7 +847,9 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         sort_order=rule_data.get("sort_order", "asc"),
                         sort_regex=rule_data.get("sort_regex"),
                         normalize_names=rule_data.get("normalize_names", False),
-                        skip_struck_streams=rule_data.get("skip_struck_streams", False)
+                        skip_struck_streams=rule_data.get("skip_struck_streams", False),
+                        probe_on_sort=rule_data.get("probe_on_sort", False),
+                        orphan_action=rule_data.get("orphan_action", "delete")
                     )
                     session.add(rule)
                     logger.debug("[AUTO-CREATE-YAML] Rule '%s': created new, stored actions=%s", rule_name, rule.actions)
