@@ -151,6 +151,9 @@ class ActionExecutor:
         # Deferred EPG assignments (populated when dummy source has no data yet)
         self._deferred_epg_assignments: list[tuple] = []  # (channel_id, action, stream_ctx, exec_ctx)
 
+        # Pending EPG verifications for newly created channels (channel_id, payload)
+        self._pending_epg_verifications: list[tuple[int, dict]] = []
+
         # Build lookup indices
         self._channel_by_id = {c["id"]: c for c in self.existing_channels}
         self._channel_by_name = {c["name"].lower(): c for c in self.existing_channels}
@@ -1266,6 +1269,13 @@ class ActionExecutor:
 
             await self.client.update_channel(exec_ctx.current_channel_id, payload)
 
+            # Track for post-execution verification if channel was just created
+            newly_created_ids = {c["id"] for c in self._created_channels.values()}
+            if exec_ctx.current_channel_id in newly_created_ids:
+                self._pending_epg_verifications.append(
+                    (exec_ctx.current_channel_id, payload)
+                )
+
             logger.debug(
                 "[AUTO-CREATE-EXEC] Assigned epg_data_id=%s (source=%s, "
                 "tvg_id=%s) to channel %s",
@@ -1290,6 +1300,54 @@ class ActionExecutor:
                 description="Failed to assign EPG",
                 error=str(e)
             )
+
+    async def verify_epg_assignments(self) -> tuple[int, int, int]:
+        """Verify EPG assignments persisted on newly created channels.
+
+        Dispatcharr's async stream processing (triggered by channel creation)
+        can overwrite EPG assignments made immediately after creation. This
+        method batches a single verification pass after all actions complete.
+
+        Returns:
+            (verified_ok, re_patched, failed) counts
+        """
+        if not self._pending_epg_verifications:
+            return (0, 0, 0)
+
+        import asyncio
+        await asyncio.sleep(1)  # Single delay for the entire batch
+
+        verified_ok = 0
+        re_patched = 0
+        failed = 0
+
+        for channel_id, payload in self._pending_epg_verifications:
+            try:
+                channel = await self.client.get_channel(channel_id)
+                expected_epg = payload.get("epg_data_id")
+                actual_epg = channel.get("epg_data_id")
+
+                if actual_epg == expected_epg:
+                    verified_ok += 1
+                    continue
+
+                # Mismatch — re-PATCH
+                logger.info(
+                    "[AUTO-CREATE-EXEC] EPG verify: channel %s has epg_data_id=%s, "
+                    "expected %s — re-patching",
+                    channel_id, actual_epg, expected_epg
+                )
+                await self.client.update_channel(channel_id, payload)
+                re_patched += 1
+            except Exception as e:
+                logger.warning(
+                    "[AUTO-CREATE-EXEC] EPG verify failed for channel %s: %s",
+                    channel_id, e
+                )
+                failed += 1
+
+        self._pending_epg_verifications.clear()
+        return (verified_ok, re_patched, failed)
 
     def reload_epg_data(self, epg_data: list):
         """Rebuild EPG data lookup from fresh data (called by engine in Pass 5)."""
