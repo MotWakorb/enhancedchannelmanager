@@ -161,6 +161,33 @@ TASK_PARAMETER_SCHEMAS = {
             },
         ],
     },
+    "failed_stream_reprobe": {
+        "description": "Re-probe failed/timed-out streams",
+        "parameters": [
+            {
+                "name": "timeout",
+                "type": "number",
+                "label": "Timeout (seconds)",
+                "description": "Timeout per stream probe in seconds",
+                "default": 30,
+                "min": 5,
+                "max": 300,
+            },
+            {
+                "name": "max_concurrent",
+                "type": "number",
+                "label": "Max Concurrent",
+                "description": "Maximum concurrent probe operations",
+                "default": 3,
+                "min": 1,
+                "max": 20,
+            },
+        ],
+    },
+    "struck_stream_cleanup": {
+        "description": "Remove struck-out streams from channels",
+        "parameters": [],
+    },
 }
 
 

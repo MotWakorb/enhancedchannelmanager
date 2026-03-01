@@ -10,6 +10,8 @@ from tasks.m3u_refresh import M3URefreshTask
 from tasks.m3u_change_monitor import M3UChangeMonitorTask
 from tasks.cleanup import CleanupTask
 from tasks.stream_probe import StreamProbeTask
+from tasks.failed_stream_reprobe import FailedStreamReprobeTask
+from tasks.struck_stream_cleanup import StruckStreamCleanupTask
 from tasks.popularity_calculation import PopularityCalculationTask
 from tasks.auto_creation import AutoCreationTask
 from tasks.dummy_epg_refresh import DummyEPGRefreshTask
@@ -20,6 +22,8 @@ __all__ = [
     "M3UChangeMonitorTask",
     "CleanupTask",
     "StreamProbeTask",
+    "FailedStreamReprobeTask",
+    "StruckStreamCleanupTask",
     "PopularityCalculationTask",
     "AutoCreationTask",
     "DummyEPGRefreshTask",

@@ -788,6 +788,11 @@ async def restart_services():
                 if stream_probe_task:
                     stream_probe_task.set_prober(new_prober)
                     logger.info("[SETTINGS] Connected new StreamProber to StreamProbeTask")
+
+                failed_reprobe_task = registry.get_task_instance("failed_stream_reprobe")
+                if failed_reprobe_task:
+                    failed_reprobe_task.set_prober(new_prober)
+                    logger.info("[SETTINGS] Connected new StreamProber to FailedStreamReprobeTask")
             except Exception as e:
                 logger.warning("[SETTINGS] Failed to connect prober to task: %s", e)
 
