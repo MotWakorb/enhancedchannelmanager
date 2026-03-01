@@ -848,7 +848,8 @@ async def get_m3u_profile(account_id: int, profile_id: int):
         logger.debug("[M3U] Fetched profile %s for account %s in %.1fms", profile_id, account_id, elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Internal server error")
+        logger.warning("[M3U] Failed to fetch profile %s for account %s: %s", profile_id, account_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.patch("/accounts/{account_id}/profiles/{profile_id}/")
@@ -864,7 +865,8 @@ async def update_m3u_profile(account_id: int, profile_id: int, request: Request)
         logger.debug("[M3U] Updated profile %s for account %s in %.1fms", profile_id, account_id, elapsed_ms)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Internal server error")
+        logger.warning("[M3U] Failed to update profile %s for account %s: %s", profile_id, account_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/accounts/{account_id}/profiles/{profile_id}/")
@@ -879,7 +881,8 @@ async def delete_m3u_profile(account_id: int, profile_id: int):
         logger.debug("[M3U] Deleted profile %s for account %s in %.1fms", profile_id, account_id, elapsed_ms)
         return {"status": "deleted"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Internal server error")
+        logger.warning("[M3U] Failed to delete profile %s for account %s: %s", profile_id, account_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # -------------------------------------------------------------------------

@@ -152,7 +152,13 @@ export const M3UProfileModal = memo(function M3UProfileModal({
 
   const handleToggleActive = async (profile: M3UAccountProfile) => {
     await executeSave(async () => {
-      await api.updateM3UProfile(account.id, profile.id, { is_active: !profile.is_active });
+      await api.updateM3UProfile(account.id, profile.id, {
+        name: profile.name,
+        max_streams: profile.max_streams,
+        is_active: !profile.is_active,
+        search_pattern: profile.search_pattern || '^(.*)$',
+        replace_pattern: profile.replace_pattern || '$1',
+      });
       await loadProfiles();
       onSaved();
     });
