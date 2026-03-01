@@ -3,8 +3,8 @@
  */
 import { useState, useId, useEffect } from 'react';
 import type { Action, ActionType, IfExistsBehavior } from '../../types/autoCreation';
-import { getChannelGroups, getEPGSources } from '../../services/api';
-import type { EPGSource } from '../../types';
+import { getChannelGroups, getEPGSources, getStreamProfiles } from '../../services/api';
+import type { EPGSource, StreamProfile } from '../../types';
 import { CustomSelect } from '../CustomSelect';
 import './ActionEditor.css';
 
@@ -67,6 +67,7 @@ const ACTION_TYPES: {
   hasNameTransform?: boolean;
   hasVariableConfig?: boolean;
   hasPriority?: boolean;
+  hasProfileId?: boolean;
 }[] = [
   // Creation actions
   { type: 'create_channel', label: 'Create Channel', description: 'Create a new channel for the stream', category: 'creation', hasNameTemplate: true, hasIfExists: true, hasChannelNumbering: true, hasNameTransform: true },
@@ -76,7 +77,7 @@ const ACTION_TYPES: {
   { type: 'assign_logo', label: 'Assign Logo', description: 'Assign a logo to the channel', category: 'assignment', hasValue: true },
   { type: 'assign_tvg_id', label: 'Assign TVG-ID', description: 'Set the TVG-ID for the channel', category: 'assignment', hasValue: true },
   { type: 'assign_epg', label: 'Assign EPG', description: 'Assign EPG data source', category: 'assignment', hasEpgId: true },
-  { type: 'assign_profile', label: 'Assign Profile', description: 'Assign a stream profile', category: 'assignment' },
+  { type: 'assign_profile', label: 'Assign Profile', description: 'Assign a stream profile', category: 'assignment', hasProfileId: true },
   { type: 'set_channel_number', label: 'Set Channel Number', description: 'Set the channel number', category: 'assignment', hasValue: true },
   // Variables
   { type: 'set_variable', label: 'Set Variable', description: 'Define a reusable variable from stream data', category: 'variables', hasVariableConfig: true },
@@ -213,6 +214,7 @@ export function ActionEditor({
   const [showVarTemplateVariables, setShowVarTemplateVariables] = useState(false);
   const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>([]);
   const [epgSources, setEpgSources] = useState<EPGSource[]>([]);
+  const [streamProfiles, setStreamProfiles] = useState<StreamProfile[]>([]);
   const [channelNumberMode, setChannelNumberMode] = useState<'auto' | 'starting'>(
     parseStartingNumber(action.channel_number) !== null ? 'starting' : 'auto'
   );
@@ -235,6 +237,13 @@ export function ActionEditor({
   useEffect(() => {
     if (action.type === 'assign_epg') {
       getEPGSources().then(setEpgSources).catch(() => setEpgSources([]));
+    }
+  }, [action.type]);
+
+  // Fetch stream profiles when assign_profile action is selected
+  useEffect(() => {
+    if (action.type === 'assign_profile') {
+      getStreamProfiles().then(setStreamProfiles).catch(() => setStreamProfiles([]));
     }
   }, [action.type]);
 
@@ -950,6 +959,32 @@ export function ActionEditor({
               Set TVG-ID from matched EPG entry
             </label>
             <span className="field-hint">Also sets the channel&apos;s tvg_id to the matched EPG data entry&apos;s tvg_id</span>
+          </div>
+        )}
+
+        {/* Stream Profile Selector for assign_profile */}
+        {actionDef?.hasProfileId && (
+          <div className="action-field">
+            <label>Stream Profile</label>
+            <CustomSelect
+              value={action.profile_id?.toString() ?? ''}
+              onChange={val => {
+                onChange({ ...action, profile_id: val ? parseInt(val, 10) : undefined });
+              }}
+              options={[
+                { value: '', label: 'Select stream profile...' },
+                ...streamProfiles.map(p => ({
+                  value: p.id.toString(),
+                  label: p.name,
+                })),
+              ]}
+              disabled={readonly}
+              searchable
+              searchPlaceholder="Search profiles..."
+            />
+            {streamProfiles.length === 0 && (
+              <span className="field-hint">No stream profiles found. Configure profiles in Dispatcharr first.</span>
+            )}
           </div>
         )}
 
