@@ -15,11 +15,8 @@ import { selectors } from './fixtures/test-data';
  * Settings has a sidebar with multiple sections - we need to click on "Scheduled Tasks".
  */
 async function navigateToScheduledTasks(appPage: import('@playwright/test').Page): Promise<void> {
-  // First navigate to settings tab
+  // Navigate to settings tab (handles lazy-load Suspense waits internally)
   await navigateToTab(appPage, 'settings');
-
-  // Wait for the settings tab container to be visible first
-  await appPage.waitForSelector('.settings-tab', { timeout: 15000 });
 
   // Wait for the settings sidebar to be fully loaded (may take time due to data loading)
   await appPage.waitForSelector('.settings-sidebar, .settings-nav', { timeout: 15000 });
@@ -169,6 +166,13 @@ test.describe('Task Scheduling', () => {
     if ((await editButton.count()) > 0) {
       await editButton.click();
       await appPage.waitForTimeout(500);
+
+      // Click "+ Add Schedule" to reveal the schedule type selector
+      const addScheduleButton = appPage.locator('button:has-text("Add Schedule")');
+      if ((await addScheduleButton.count()) > 0) {
+        await addScheduleButton.click();
+        await appPage.waitForTimeout(500);
+      }
 
       // Look for schedule type selector
       const scheduleTypes = ['interval', 'daily', 'weekly', 'monthly'];

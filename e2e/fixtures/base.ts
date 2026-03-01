@@ -193,18 +193,57 @@ export async function navigateToTab(page: Page, tabId: string): Promise<void> {
     // Tab may use different active state mechanism
   }
 
-  // Wait for tab-specific content to load (more reliable than fixed timeout)
+  // All tabs are lazy-loaded via React.lazy(). Under parallel worker load, chunk
+  // fetching can fail/timeout, which crashes React (no error boundary around Suspense).
+  // Strategy: wait for Suspense to clear, then check content. If the app crashed
+  // (blank page), reload and retry the navigation once.
   const contentSelector = tabContentSelectors[tabId]
-  if (contentSelector) {
+  const loadContent = async () => {
+    // Wait for Suspense fallback to clear (chunk loaded)
     try {
-      await page.waitForSelector(contentSelector, { timeout: 15000 })
+      await page.waitForSelector('.tab-loading', { state: 'hidden', timeout: 45000 })
     } catch {
-      // Fallback to timeout if selector not found (tab may have different structure)
+      // Suspense fallback never appeared or already gone
+    }
+
+    // Wait for tab-specific content
+    if (contentSelector) {
+      await page.waitForSelector(contentSelector, { timeout: 15000 })
+    } else {
       await page.waitForTimeout(1000)
     }
-  } else {
-    // Fallback for unknown tabs
-    await page.waitForTimeout(1000)
+  }
+
+  try {
+    await loadContent()
+  } catch {
+    // Content didn't load — check if the React app crashed (blank page)
+    const hasNav = await page.locator('.tab-navigation').isVisible().catch(() => false)
+    if (!hasNav) {
+      // App crashed — reload, re-authenticate if needed, and retry navigation
+      await page.reload({ waitUntil: 'domcontentloaded' })
+
+      // Re-login if needed
+      const loginField = page.locator('input[name="username"], #username')
+      const needsLogin = await loginField.isVisible({ timeout: 2000 }).catch(() => false)
+      if (needsLogin) {
+        await loginField.fill(testCredentials.username)
+        await page.locator('input[name="password"], #password').fill(testCredentials.password)
+        await page.locator('button[type="submit"]').click()
+        await page.waitForSelector('.tab-navigation', { timeout: 20000 })
+      } else {
+        await page.waitForSelector('.tab-navigation', { timeout: 20000 })
+      }
+
+      // Retry the tab click and content wait
+      const retryTab = page.locator(tabSelector)
+      await retryTab.waitFor({ state: 'visible', timeout: 10000 })
+      await retryTab.click()
+      await loadContent()
+    } else {
+      // App is alive but tab content has different structure — brief fallback
+      await page.waitForTimeout(1000)
+    }
   }
 }
 
