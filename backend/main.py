@@ -414,6 +414,13 @@ async def startup_event():
                     logger.info("[MAIN] Connected StreamProber to StreamProbeTask")
                 else:
                     logger.warning("[MAIN] StreamProbeTask not found in registry")
+
+                failed_reprobe_task = registry.get_task_instance("failed_stream_reprobe")
+                if failed_reprobe_task:
+                    failed_reprobe_task.set_prober(prober)
+                    logger.info("[MAIN] Connected StreamProber to FailedStreamReprobeTask")
+                else:
+                    logger.warning("[MAIN] FailedStreamReprobeTask not found in registry")
             except Exception as e:
                 logger.warning("[MAIN] Failed to connect prober to task: %s", e)
     except Exception as e:
