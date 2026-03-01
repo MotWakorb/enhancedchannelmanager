@@ -674,6 +674,7 @@ function ActionTypeSelector({
         { type: 'assign_logo' as ActionType, label: 'Assign Logo' },
         { type: 'assign_tvg_id' as ActionType, label: 'Assign TVG-ID' },
         { type: 'assign_epg' as ActionType, label: 'Assign EPG' },
+        { type: 'assign_profile' as ActionType, label: 'Assign Profile' },
         { type: 'set_channel_number' as ActionType, label: 'Set Channel Number' },
       ],
     },
