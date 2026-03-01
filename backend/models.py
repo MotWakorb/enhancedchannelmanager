@@ -186,6 +186,7 @@ class StreamStats(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     dismissed_at = Column(DateTime, nullable=True)  # When failure was dismissed (acknowledged)
     consecutive_failures = Column(Integer, default=0, nullable=False)  # Strike rule: consecutive probe failures
+    is_black_screen = Column(Boolean, default=False, nullable=False)  # Black screen detected during probe
 
     __table_args__ = (
         Index("idx_stream_stats_stream_id", stream_id),
@@ -212,6 +213,7 @@ class StreamStats(Base):
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "dismissed_at": self.dismissed_at.isoformat() + "Z" if self.dismissed_at else None,
             "consecutive_failures": self.consecutive_failures or 0,
+            "is_black_screen": self.is_black_screen or False,
         }
 
     def __repr__(self):

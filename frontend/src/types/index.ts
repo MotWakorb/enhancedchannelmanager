@@ -154,6 +154,7 @@ export interface StreamStats {
   last_probed: string | null;      // ISO timestamp
   created_at: string;
   consecutive_failures: number;    // Strike rule: consecutive probe failures
+  is_black_screen: boolean;        // Black screen detected during probe
 }
 
 export interface StreamStatsSummary {

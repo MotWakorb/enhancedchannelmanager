@@ -1612,6 +1612,19 @@
   font-size: 12px;
 }
 
+.meta-tag.probe-black-screen {
+  background: rgba(168, 85, 247, 0.2);
+  color: #c084fc;
+  cursor: help;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 4px;
+}
+
+.meta-tag.probe-black-screen .material-icons {
+  font-size: 12px;
+}
+
 .meta-tag.strike-count {
   background: rgba(251, 146, 60, 0.2);
   color: #fb923c;

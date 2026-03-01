@@ -207,6 +207,9 @@ def _run_migrations(engine) -> None:
             # Add channel_group_ids column to dummy_epg_profiles (v0.14.0 - Group-based assignment)
             _add_dummy_epg_profiles_channel_group_ids_column(conn)
 
+            # Add is_black_screen column to stream_stats (v0.15.0 - Black screen detection)
+            _add_stream_stats_is_black_screen_column(conn)
+
             logger.debug("[DATABASE] All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception("[DATABASE] Migration failed: %s", e)
@@ -1443,6 +1446,22 @@ def _add_stream_stats_consecutive_failures_column(conn) -> None:
         ))
         conn.commit()
         logger.info("[DATABASE] Migration complete: added consecutive_failures column to stream_stats")
+
+
+def _add_stream_stats_is_black_screen_column(conn) -> None:
+    """Add is_black_screen column to stream_stats table (v0.15.0 - Black screen detection)."""
+    from sqlalchemy import text
+
+    result = conn.execute(text("PRAGMA table_info(stream_stats)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    if "is_black_screen" not in columns:
+        logger.info("[DATABASE] Adding is_black_screen column to stream_stats")
+        conn.execute(text(
+            "ALTER TABLE stream_stats ADD COLUMN is_black_screen BOOLEAN DEFAULT 0 NOT NULL"
+        ))
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: added is_black_screen column to stream_stats")
 
 
 def _add_m3u_digest_exclude_patterns_columns(conn) -> None:

@@ -135,6 +135,11 @@ def smart_sort_streams(
                 # Return tuple with 1 as first element to sort to bottom
                 return (1,) + tuple(0 for _ in active_criteria)
 
+        # Deprioritize black screen streams (probe succeeded but content is black)
+        if deprioritize_failed_streams and stat and getattr(stat, 'is_black_screen', False) is True:
+            logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (black screen)", stream_name)
+            return (1,) + tuple(0 for _ in active_criteria)
+
         if not stat or stat.probe_status != 'success':
             logger.debug("[STREAM-PROBE-SORT]   %s: No successful probe data", stream_name)
             # Still compute M3U priority for unprobed streams (M3U priority doesn't require probing)
@@ -241,6 +246,8 @@ class StreamProber:
         probe_retry_count: int = 1,   # Retries on transient ffprobe failure (0 = no retry)
         probe_retry_delay: int = 2,   # Seconds between retries
         deprioritize_failed_streams: bool = True,  # Deprioritize failed streams in smart sort
+        black_screen_detection_enabled: bool = False,  # Run ffmpeg blackdetect after successful probe
+        black_screen_sample_duration: int = 5,  # Seconds to sample for black screen detection (3-30)
         stream_sort_priority: list[str] = None,  # Priority order for Smart Sort criteria
         stream_sort_enabled: dict[str, bool] = None,  # Which criteria are enabled for Smart Sort
         stream_fetch_page_limit: int = 200,  # Max pages when fetching streams (200 * 500 = 100K streams)
@@ -259,6 +266,8 @@ class StreamProber:
         self.probe_retry_count = max(0, min(5, probe_retry_count))  # Clamp 0-5
         self.probe_retry_delay = max(1, min(30, probe_retry_delay))  # Clamp 1-30
         self.deprioritize_failed_streams = deprioritize_failed_streams
+        self.black_screen_detection_enabled = black_screen_detection_enabled
+        self.black_screen_sample_duration = max(3, min(30, black_screen_sample_duration))  # Clamp 3-30
         self.stream_fetch_page_limit = stream_fetch_page_limit
         logger.info("[STREAM-PROBE] auto_reorder_after_probe=%s", auto_reorder_after_probe)
         # Smart Sort configuration
@@ -769,9 +778,15 @@ class StreamProber:
             logger.debug("[STREAM-PROBE] Measuring bitrate for stream %s", stream_id)
             measured_bitrate = await self._measure_stream_bitrate(url)
 
+            # Black screen detection (opt-in)
+            is_black = False
+            if self.black_screen_detection_enabled:
+                logger.debug("[STREAM-PROBE] Running black screen detection for stream %s", stream_id)
+                is_black = await self._detect_black_screen(url)
+
             # Save probe result with both ffprobe metadata and measured bitrate
             return self._save_probe_result(
-                stream_id, name, result, "success", None, measured_bitrate
+                stream_id, name, result, "success", None, measured_bitrate, is_black
             )
         except asyncio.TimeoutError:
             logger.warning("[STREAM-PROBE] Stream %s probe timed out after %ss", stream_id, self.probe_timeout)
@@ -896,6 +911,38 @@ class StreamProber:
             logger.warning("[STREAM-PROBE] Failed to measure bitrate: %s", e)
             return None
 
+    async def _detect_black_screen(self, url: str) -> bool:
+        """Run ffmpeg blackdetect on a stream sample. Returns True if stream is mostly black."""
+        cmd = [
+            "ffmpeg", "-i", url,
+            "-t", str(self.black_screen_sample_duration),
+            "-vf", "blackdetect=d=0.5:pic_th=0.98",
+            "-an", "-f", "null", "-",
+            "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
+        ]
+        process = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        try:
+            _, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=self.black_screen_sample_duration + 15
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            logger.warning("[STREAM-PROBE] Black screen detection timed out: %s", url[:80])
+            return False
+        output = stderr.decode()
+        durations = re.findall(r'black_duration=([\d.]+)', output)
+        total_black = sum(float(d) for d in durations)
+        ratio = total_black / self.black_screen_sample_duration if self.black_screen_sample_duration > 0 else 0
+        is_black = ratio > 0.90
+        if is_black:
+            logger.warning("[STREAM-PROBE] Black screen detected (%.0f%% black): %s", ratio * 100, url[:80])
+        else:
+            logger.debug("[STREAM-PROBE] Black screen check passed (%.0f%% black): %s", ratio * 100, url[:80])
+        return is_black
+
     def _save_probe_result(
         self,
         stream_id: int,
@@ -904,6 +951,7 @@ class StreamProber:
         status: str,
         error_message: Optional[str],
         measured_bitrate: Optional[int] = None,
+        is_black_screen: bool = False,
     ) -> dict:
         """Parse ffprobe output and save to database."""
         session = get_session()
@@ -925,8 +973,10 @@ class StreamProber:
             # Track consecutive failures for strike rule
             if status in ("failed", "timeout"):
                 stats.consecutive_failures = (stats.consecutive_failures or 0) + 1
+                stats.is_black_screen = False  # Reset on failure (stream state unknown)
             elif status == "success":
                 stats.consecutive_failures = 0
+                stats.is_black_screen = is_black_screen
 
             if ffprobe_data and status == "success":
                 self._parse_ffprobe_data(stats, ffprobe_data)

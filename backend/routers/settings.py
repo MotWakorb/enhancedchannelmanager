@@ -80,6 +80,8 @@ class SettingsRequest(BaseModel):
     stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"]  # Priority order for Smart Sort
     stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}  # Which criteria are enabled
     m3u_account_priorities: dict[str, int] = {}  # M3U account priorities (account_id -> priority value)
+    black_screen_detection_enabled: bool = False  # Run ffmpeg blackdetect after successful probe
+    black_screen_sample_duration: int = 5  # Seconds to sample for black screen detection (3-30)
     deprioritize_failed_streams: bool = True  # When enabled, failed/timeout/pending streams sort to bottom
     strike_threshold: int = 3  # Consecutive failures before flagging stream (0 = disabled)
     normalization_settings: Optional[NormalizationSettings] = None  # User-configurable normalization tags
@@ -150,6 +152,8 @@ class SettingsResponse(BaseModel):
     stream_sort_priority: list[str]  # Priority order for Smart Sort
     stream_sort_enabled: dict[str, bool]  # Which criteria are enabled
     m3u_account_priorities: dict[str, int]  # M3U account priorities (account_id -> priority value)
+    black_screen_detection_enabled: bool  # Run ffmpeg blackdetect after successful probe
+    black_screen_sample_duration: int  # Seconds to sample for black screen detection (3-30)
     deprioritize_failed_streams: bool  # When enabled, failed/timeout/pending streams sort to bottom
     strike_threshold: int  # Consecutive failures before flagging stream (0 = disabled)
     normalization_settings: NormalizationSettings  # User-configurable normalization tags
@@ -271,6 +275,8 @@ async def get_current_settings():
         stream_sort_priority=settings.stream_sort_priority,
         stream_sort_enabled=settings.stream_sort_enabled,
         m3u_account_priorities=settings.m3u_account_priorities,
+        black_screen_detection_enabled=settings.black_screen_detection_enabled,
+        black_screen_sample_duration=settings.black_screen_sample_duration,
         deprioritize_failed_streams=settings.deprioritize_failed_streams,
         strike_threshold=settings.strike_threshold,
         normalization_settings=NormalizationSettings(
@@ -372,6 +378,8 @@ async def update_settings(request: SettingsRequest):
         stream_sort_priority=request.stream_sort_priority,
         stream_sort_enabled=request.stream_sort_enabled,
         m3u_account_priorities=request.m3u_account_priorities,
+        black_screen_detection_enabled=request.black_screen_detection_enabled,
+        black_screen_sample_duration=request.black_screen_sample_duration,
         deprioritize_failed_streams=request.deprioritize_failed_streams,
         strike_threshold=request.strike_threshold,
         # Convert normalization_settings from API format to backend format
@@ -767,6 +775,8 @@ async def restart_services():
                 probe_retry_count=settings.probe_retry_count,
                 probe_retry_delay=settings.probe_retry_delay,
                 deprioritize_failed_streams=settings.deprioritize_failed_streams,
+                black_screen_detection_enabled=settings.black_screen_detection_enabled,
+                black_screen_sample_duration=settings.black_screen_sample_duration,
                 stream_sort_priority=settings.stream_sort_priority,
                 stream_sort_enabled=settings.stream_sort_enabled,
                 stream_fetch_page_limit=settings.stream_fetch_page_limit,

@@ -37,6 +37,7 @@ def create_mock_stats(
     stats.fps = fps
     stats.audio_channels = audio_channels
     stats.probe_status = probe_status
+    stats.is_black_screen = False
     return stats
 
 
