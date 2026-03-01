@@ -50,6 +50,10 @@ class StreamContext:
     channel_id: Optional[int] = None  # Existing channel this stream belongs to
     channel_name: Optional[str] = None
 
+    # Provider ordering
+    m3u_position: int = 0                   # Dispatcharr stream ID (preserves M3U import order)
+    stream_chno: Optional[float] = None     # tvg-chno from M3U source
+
     # Normalized name (after normalization rules applied)
     normalized_name: Optional[str] = None
 
@@ -96,6 +100,8 @@ class StreamContext:
             audio_codec=stream_stats.get("audio_codec") if stream_stats else None,
             audio_tracks=stream_stats.get("audio_channels", 1) if stream_stats else 1,
             bitrate=stream_stats.get("bitrate") if stream_stats else None,
+            m3u_position=stream.get("id", 0),
+            stream_chno=stream.get("stream_chno"),
         )
 
 

@@ -51,6 +51,27 @@ class TestStreamContext:
         assert ctx.resolution is None
         assert ctx.resolution_height is None
 
+    def test_from_dispatcharr_stream_populates_m3u_position(self):
+        """Populates m3u_position from stream id."""
+        stream = {"id": 456, "name": "CNN"}
+        ctx = StreamContext.from_dispatcharr_stream(stream)
+
+        assert ctx.m3u_position == 456
+
+    def test_from_dispatcharr_stream_populates_stream_chno(self):
+        """Populates stream_chno from stream data."""
+        stream = {"id": 1, "name": "CNN", "stream_chno": 21262.0}
+        ctx = StreamContext.from_dispatcharr_stream(stream)
+
+        assert ctx.stream_chno == 21262.0
+
+    def test_from_dispatcharr_stream_stream_chno_none(self):
+        """stream_chno is None when not in stream data."""
+        stream = {"id": 1, "name": "CNN"}
+        ctx = StreamContext.from_dispatcharr_stream(stream)
+
+        assert ctx.stream_chno is None
+
 
 class TestEvaluationResult:
     """Tests for EvaluationResult."""

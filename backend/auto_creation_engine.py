@@ -2118,6 +2118,10 @@ def _sort_key(stream: StreamContext, sort_field: str, sort_regex: str | None = N
         return (stream.group_name or "").lower()
     elif sort_field == "quality":
         return stream.resolution_height or 0
+    elif sort_field == "provider_order":
+        return stream.m3u_position
+    elif sort_field == "channel_number":
+        return stream.stream_chno if stream.stream_chno is not None else float('inf')
     elif sort_field == "stream_name_regex":
         if sort_regex:
             try:
