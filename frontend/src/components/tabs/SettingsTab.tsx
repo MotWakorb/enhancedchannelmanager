@@ -323,6 +323,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [autoReorderAfterProbe, setAutoReorderAfterProbe] = useState(false);
   const [probeRetryCount, setProbeRetryCount] = useState(1);
   const [probeRetryDelay, setProbeRetryDelay] = useState(2);
+  const [blackScreenDetectionEnabled, setBlackScreenDetectionEnabled] = useState(false);
+  const [blackScreenSampleDuration, setBlackScreenSampleDuration] = useState(5);
   const [streamFetchPageLimit, setStreamFetchPageLimit] = useState(200);
   const [probingAll, setProbingAll] = useState(false);
   const [totalStreamCount, setTotalStreamCount] = useState(100); // Default to 100, will be updated on load
@@ -622,6 +624,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setOriginalAutoReorder(settings.auto_reorder_after_probe ?? false);
       setProbeRetryCount(settings.probe_retry_count ?? 1);
       setProbeRetryDelay(settings.probe_retry_delay ?? 2);
+      setBlackScreenDetectionEnabled(settings.black_screen_detection_enabled ?? false);
+      setBlackScreenSampleDuration(settings.black_screen_sample_duration ?? 5);
       setStreamFetchPageLimit(settings.stream_fetch_page_limit ?? 200);
       // Merge saved criteria with any new criteria that may have been added in updates
       const merged = mergeSortCriteria(settings.stream_sort_priority, settings.stream_sort_enabled);
@@ -745,6 +749,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         auto_reorder_after_probe: autoReorderAfterProbe,
         probe_retry_count: probeRetryCount,
         probe_retry_delay: probeRetryDelay,
+        black_screen_detection_enabled: blackScreenDetectionEnabled,
+        black_screen_sample_duration: blackScreenSampleDuration,
         stream_fetch_page_limit: streamFetchPageLimit,
         stream_sort_priority: streamSortPriority,
         stream_sort_enabled: streamSortEnabled,
@@ -3248,6 +3254,40 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 onBlur={() => setProbeRetryDelay(Math.max(1, Math.min(30, probeRetryDelay || 1)))}
               />
             </div>
+
+            <div className="form-group-vertical">
+              <label className="checkbox-label" htmlFor="blackScreenDetection">
+                <input
+                  id="blackScreenDetection"
+                  type="checkbox"
+                  checked={blackScreenDetectionEnabled}
+                  onChange={(e) => setBlackScreenDetectionEnabled(e.target.checked)}
+                />
+                Black screen detection
+              </label>
+              <span className="form-description">
+                After a successful probe, run ffmpeg blackdetect to check if the stream is showing a black screen.
+                Adds ~5-10s per stream. Black screen streams are deprioritized in Smart Sort.
+              </span>
+            </div>
+
+            {blackScreenDetectionEnabled && (
+              <div className="form-group-vertical">
+                <label htmlFor="blackScreenSampleDuration">Black screen sample duration (seconds)</label>
+                <span className="form-description">
+                  How long to sample the stream to detect black screen content. Longer samples are more accurate but slower.
+                </span>
+                <input
+                  id="blackScreenSampleDuration"
+                  type="number"
+                  min="3"
+                  max="30"
+                  value={blackScreenSampleDuration}
+                  onChange={(e) => setBlackScreenSampleDuration(e.target.value === '' ? 5 : parseInt(e.target.value))}
+                  onBlur={() => setBlackScreenSampleDuration(Math.max(3, Math.min(30, blackScreenSampleDuration || 5)))}
+                />
+              </div>
+            )}
 
           </div>
         </div>

@@ -145,6 +145,12 @@ export const StreamListItem = memo(function StreamListItem({
             <span className="material-icons">error_outline</span>
           </span>
         )}
+        {/* Black screen indicator */}
+        {streamStats && streamStats.probe_status === 'success' && streamStats.is_black_screen && (
+          <span className="meta-tag probe-black-screen" title="Black screen detected">
+            <span className="material-icons">videocam_off</span>
+          </span>
+        )}
         {/* Strike count badge */}
         {streamStats && streamStats.consecutive_failures > 0 && strikeThreshold > 0 && (
           <span

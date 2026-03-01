@@ -100,6 +100,9 @@ class DispatcharrSettings(BaseModel):
     # Example: {"1": 100, "2": 50} means M3U account 1 is preferred over account 2
     m3u_account_priorities: dict[str, int] = {}
     # Deprioritize failed streams - when enabled, failed/timeout/pending streams sort to bottom
+    # Black screen detection - run ffmpeg blackdetect after successful probe
+    black_screen_detection_enabled: bool = False
+    black_screen_sample_duration: int = 5  # Seconds to sample for black screen detection (3-30)
     deprioritize_failed_streams: bool = True
     # Strike rule - flag streams with consecutive probe failures (0 = disabled)
     strike_threshold: int = 3

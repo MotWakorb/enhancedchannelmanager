@@ -818,6 +818,8 @@ export interface SettingsResponse {
   stream_sort_priority: SortCriterion[];  // Priority order for Smart Sort (e.g., ['resolution', 'bitrate', 'framerate'])
   stream_sort_enabled: SortEnabledMap;  // Which sort criteria are enabled (e.g., { resolution: true, bitrate: true, framerate: false })
   m3u_account_priorities: M3UAccountPriorities;  // M3U account priorities for sorting (account_id -> priority)
+  black_screen_detection_enabled: boolean;  // Run ffmpeg blackdetect after successful probe
+  black_screen_sample_duration: number;  // Seconds to sample for black screen detection (3-30)
   deprioritize_failed_streams: boolean;  // When enabled, failed/timeout/pending streams sort to bottom
   strike_threshold: number;  // Consecutive failures before flagging stream (0 = disabled)
   normalize_on_channel_create: boolean;  // Default state for normalization toggle when creating channels
@@ -900,6 +902,8 @@ export async function saveSettings(settings: {
   stream_sort_priority?: SortCriterion[];  // Optional - priority order for Smart Sort, defaults to ['resolution', 'bitrate', 'framerate']
   stream_sort_enabled?: SortEnabledMap;  // Optional - which sort criteria are enabled, defaults to all true
   m3u_account_priorities?: M3UAccountPriorities;  // Optional - M3U account priorities for sorting
+  black_screen_detection_enabled?: boolean;  // Optional - run ffmpeg blackdetect after successful probe, defaults to false
+  black_screen_sample_duration?: number;  // Optional - seconds to sample for black screen detection (3-30), defaults to 5
   deprioritize_failed_streams?: boolean;  // Optional - deprioritize failed/timeout/pending streams in sort, defaults to true
   strike_threshold?: number;  // Optional - consecutive failures before flagging stream, defaults to 3
   normalize_on_channel_create?: boolean;  // Optional - default state for normalization toggle, defaults to false

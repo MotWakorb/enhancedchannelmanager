@@ -536,6 +536,7 @@ Automated stream health checking:
 - **Probe Logging** - Detailed probe execution logs for troubleshooting
 - **Persistent History** - Probe results saved to `/config/probe_history.json` and persist across container restarts
 - **Failed Stream Indicators** - Visual error icons on channels and groups that contain failed/timeout streams
+- **Black Screen Detection** - Opt-in ffmpeg blackdetect pass after successful probe to identify streams showing only black content; detected streams are deprioritized in Smart Sort
 
 #### Stream Strikeout System
 Track and manage streams with repeated probe failures:
