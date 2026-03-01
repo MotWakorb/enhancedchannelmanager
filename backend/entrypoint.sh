@@ -109,14 +109,14 @@ check_filesystem() {
 check_network() {
     print_info "Checking network configuration..."
 
-    # Check if port HTTP is available
+    # Check if HTTP port is available
     if ! netstat -tuln 2>/dev/null | grep -q ":${ECM_PORT} "; then
         print_success "Port ${ECM_PORT} (HTTP) is available"
     else
         print_warning "Port ${ECM_PORT} (HTTP) is already in use"
     fi
 
-    # Check if port (HTTPS) is available
+    # Check if HTTPS port is available
     if ! netstat -tuln 2>/dev/null | grep -q ":${ECM_HTTPS_PORT} "; then
         print_success "Port ${ECM_HTTPS_PORT} (HTTPS) is available"
     else
