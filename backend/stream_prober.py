@@ -895,7 +895,7 @@ class StreamProber:
             # Calculate bitrate (bits per second)
             if elapsed > 0:
                 bitrate_bps = int((bytes_downloaded * 8) / elapsed)
-                logger.info("[STREAM-PROBE] Measured bitrate: %, bytes in %.2fs = %, bps (%.2f Mbps)", bytes_downloaded, elapsed, bitrate_bps, bitrate_bps/1000000)
+                logger.info("[STREAM-PROBE] Measured bitrate: %d bytes in %.2fs = %d bps (%.2f Mbps)", bytes_downloaded, elapsed, bitrate_bps, bitrate_bps/1000000)
                 return bitrate_bps
             else:
                 logger.warning("[STREAM-PROBE] Bitrate measurement: elapsed time is zero")
@@ -914,11 +914,12 @@ class StreamProber:
     async def _detect_black_screen(self, url: str) -> bool:
         """Run ffmpeg blackdetect on a stream sample. Returns True if stream is mostly black."""
         cmd = [
-            "ffmpeg", "-i", url,
+            "ffmpeg",
+            "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
+            "-i", url,
             "-t", str(self.black_screen_sample_duration),
             "-vf", "blackdetect=d=0.5:pic_th=0.98",
             "-an", "-f", "null", "-",
-            "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
         ]
         process = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
