@@ -997,8 +997,8 @@ export function AutoCreationTab() {
                   {log.length > 0 && (
                     <span className="log-count">
                       {filteredLog.length === log.length
-                        ? `${log.length} matched streams`
-                        : `${filteredLog.length} of ${log.length} matched streams`}
+                        ? `${log.length} evaluated streams`
+                        : `${filteredLog.length} of ${log.length} evaluated streams`}
                     </span>
                   )}
                 </div>

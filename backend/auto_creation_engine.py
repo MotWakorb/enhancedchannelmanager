@@ -230,6 +230,30 @@ class AutoCreationEngine:
             epg_grid = epg_response.get("data") or []
             grid_channels = epg_response.get("channels") or []
 
+            # NOTE: Re-introducing fallback for channel-source mapping
+            #
+            # The original CRITICAL #1 fix (PR #48) aimed to eliminate the fallback API call
+            # to get_epg_data(page_size=5000) by accessing channels directly from the grid.
+            #
+            # However, in practice, the /api/epg/grid/ endpoint returns {"data": [...], "channels": []}
+            # with an empty channels list. Without channel metadata, we cannot build the
+            # tvg_id -> epg_source mapping needed for EPG_SOURCE_IS conditions to work.
+            #
+            # Alternative approaches were investigated:
+            # - Using /api/channels/channels/: More API calls (page_size=100), less efficient
+            # - Using program-level source fields: Programs don't have epg_source/epg_source_id
+            # - Caching the mapping: Would get stale, adds complexity
+            #
+            # The fallback is the most reliable solution: one API call gets all mappings.
+            # This is a necessary trade-off: the extra API call enables EPG_SOURCE_IS functionality.
+            if not grid_channels:
+                logger.info("[AUTO-CREATE-ENGINE] No channel metadata in grid, fetching EPG data list for source mapping")
+                try:
+                    grid_channels = await self.client.get_epg_data(page_size=5000)
+                    logger.info("[AUTO-CREATE-ENGINE] Fetched %s EPG data entries for mapping", len(grid_channels))
+                except Exception as e:
+                    logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch EPG data list: %s", e)
+
             # Map tvg_id to epg_source from the channels list
             tvg_to_source = {}
             for ch in grid_channels:

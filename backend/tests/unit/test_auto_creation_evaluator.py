@@ -656,16 +656,11 @@ class TestConditionEvaluatorEPG:
         prog2 = {"title": "MotoGP", "source": 2}
         ctx = StreamContext(stream_id=1, stream_name="Test", epg_programs=[prog1, prog2])
 
-        # Rule has EPG source filter for source 2
-        all_conditions = [
-            {"type": "epg_source_is", "value": 2},
-            {"type": "epg_title_contains", "value": "MotoGP"}
-        ]
-
+        # Rule has EPG source filter for source 2 (issue #6: computed once per rule)
         result = evaluator.evaluate(
-            all_conditions[1],
+            {"type": "epg_title_contains", "value": "MotoGP"},
             ctx,
-            all_rule_conditions=all_conditions
+            source_filter=2
         )
         assert result.matched is True
         assert ctx.epg_match == prog2  # Should match prog2 because of source filter
