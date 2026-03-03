@@ -14,7 +14,7 @@ import logging
 import re
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Optional, List
 from config import get_settings
 from database import get_session
 from models import (
@@ -149,122 +149,7 @@ class AutoCreationEngine:
                 break
 
         if needs_epg_grid:
-            try:
-                logger.info("[AUTO-CREATE-ENGINE] Pre-fetching EPG grid for EPG conditions")
-                epg_response = await self.client.get_epg_grid()
-                
-                # Dispatcharr grid API can return a dict with "programmes" and "channels"
-                # or just a list of programs.
-                epg_grid = []
-                grid_channels = []
-                
-                if isinstance(epg_response, dict):
-                    epg_grid = epg_response.get("programmes") or epg_response.get("data") or []
-                    grid_channels = epg_response.get("channels") or []
-                elif isinstance(epg_response, list):
-                    epg_grid = epg_response
-
-                # If we didn't get channel metadata from the grid, fetch it separately
-                # so we can map tvg_id -> epg_source
-                if not grid_channels:
-                    logger.info("[AUTO-CREATE-ENGINE] No channel metadata in grid, fetching EPG data list for source mapping")
-                    try:
-                        # get_epg_data returns a list directly
-                        grid_channels = await self.client.get_epg_data(page_size=5000)
-                        logger.info("[AUTO-CREATE-ENGINE] Fetched %s EPG data entries for mapping", len(grid_channels))
-                    except Exception as e:
-                        logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch EPG data list: %s", e)
-
-                # Map tvg_id to epg_source from the channels list
-                tvg_to_source = {}
-                for ch in grid_channels:
-                    # Dispatcharr channel objects can have 'tvg_id', 'id', or 'channel_id'
-                    t_id = ch.get("tvg_id") or ch.get("id") or ch.get("channel_id")
-                    # Source can be 'epg_source' or 'epg_source_id'
-                    s_id = ch.get("epg_source") or ch.get("epg_source_id")
-                    if t_id and s_id is not None:
-                        tvg_to_source[str(t_id).strip().lower()] = s_id
-
-                now = datetime.now(timezone.utc)
-                logger.info("[AUTO-CREATE-ENGINE] Fetched %s EPG programs. Current UTC time: %s", len(epg_grid), now)
-                logger.info("[AUTO-CREATE-ENGINE] Mapping built for %s EPG channels", len(tvg_to_source))
-
-                # Define boundaries for "today" (UTC)
-                today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-                today_end = today_start + timedelta(days=1)
-
-                epg_lookup = {}  # tvg_id -> {"titles": [...], "descriptions": [...], "programs": [...]}
-                found_sources = set()
-
-                for prog in epg_grid:
-                    tvg_id = prog.get("tvg_id") or prog.get("channel")
-                    if not tvg_id:
-                        continue
-
-                    lookup_key = tvg_id.strip().lower()
-                    
-                    # Try to get source from program first, then from our tvg_to_source map
-                    source_id = prog.get("epg_source") or prog.get("epg_source_id") or tvg_to_source.get(lookup_key)
-
-                    title = prog.get("title") or ""
-                    desc = prog.get("description") or prog.get("desc") or ""
-
-                    start_str = prog.get("start_time") or prog.get("start")
-                    stop_str = prog.get("end_time") or prog.get("stop")
-
-                    if not start_str or not stop_str:
-                        continue
-
-                    try:
-                        # Handle ISO format with Z or +HH:MM
-                        start = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
-                        stop = datetime.fromisoformat(stop_str.replace('Z', '+00:00'))
-
-                        # Match if program overlaps with today
-                        if start < today_end and stop > today_start:
-                            if lookup_key not in epg_lookup:
-                                epg_lookup[lookup_key] = {"titles": [], "descriptions": [], "programs": []}
-                            
-                            epg_lookup[lookup_key]["titles"].append(title)
-                            if desc:
-                                epg_lookup[lookup_key]["descriptions"].append(desc)
-                            
-                            if source_id is not None:
-                                found_sources.add(source_id)
-
-                            # Store full program info for granular matching
-                            epg_lookup[lookup_key]["programs"].append({
-                                "title": title,
-                                "description": desc,
-                                "start": start_str,
-                                "stop": stop_str,
-                                "source": source_id
-                            })
-                    except (ValueError, TypeError) as e:
-                        logger.debug("[AUTO-CREATE-ENGINE] EPG time parse error for %s: %s", tvg_id, e)
-
-                logger.info("[AUTO-CREATE-ENGINE] Built EPG lookup with %s channels having programs today. Sources found: %s", len(epg_lookup), sorted(list(found_sources)))
-
-                # Populate StreamContext with aggregated EPG info
-                enriched_count = 0
-                for ctx in streams:
-                    if ctx.tvg_id:
-                        clean_tvg_id = ctx.tvg_id.strip().lower()
-                        if clean_tvg_id in epg_lookup:
-                            info = epg_lookup[clean_tvg_id]
-                            # Join all programs for today with a separator
-                            ctx.epg_title = " | ".join(dict.fromkeys(info["titles"]))
-                            ctx.epg_description = " | ".join(dict.fromkeys(info["descriptions"]))
-                            ctx.epg_programs = info["programs"]
-                            enriched_count += 1
-
-                if enriched_count:
-                    logger.info("[AUTO-CREATE-ENGINE] Enriched %s streams with today's EPG info", enriched_count)
-                else:
-                    logger.warning("[AUTO-CREATE-ENGINE] No streams were enriched with EPG info (checked %s streams, lookup has %s entries)", len(streams), len(epg_lookup))
-
-            except Exception as e:
-                logger.warning("[AUTO-CREATE-ENGINE] Failed to pre-fetch EPG grid: %s", e)
+            await self._prefetch_epg_grid(streams)
 
         # Create execution record
         execution = await self._create_execution(
@@ -326,6 +211,133 @@ class AutoCreationEngine:
             "duration_seconds": execution.duration_seconds,
             **results
         }
+
+    async def _prefetch_epg_grid(self, streams: List) -> None:
+        """
+        Pre-fetch EPG grid data and enrich streams with current program info.
+
+        This method fetches the EPG grid from Dispatcharr, maps tvg_id to EPG sources,
+        filters programs for today, and populates StreamContext with EPG title/description.
+
+        Args:
+            streams: List of StreamContext objects to enrich with EPG data
+        """
+        try:
+            logger.info("[AUTO-CREATE-ENGINE] Pre-fetching EPG grid for EPG conditions")
+            epg_response = await self.client.get_epg_grid()
+
+            # Dispatcharr grid API can return a dict with "programmes" and "channels"
+            # or just a list of programs.
+            epg_grid = []
+            grid_channels = []
+
+            if isinstance(epg_response, dict):
+                epg_grid = epg_response.get("programmes") or epg_response.get("data") or []
+                grid_channels = epg_response.get("channels") or []
+            elif isinstance(epg_response, list):
+                epg_grid = epg_response
+
+            # If we didn't get channel metadata from the grid, fetch it separately
+            # so we can map tvg_id -> epg_source
+            if not grid_channels:
+                logger.info("[AUTO-CREATE-ENGINE] No channel metadata in grid, fetching EPG data list for source mapping")
+                try:
+                    # get_epg_data returns a list directly
+                    grid_channels = await self.client.get_epg_data(page_size=5000)
+                    logger.info("[AUTO-CREATE-ENGINE] Fetched %s EPG data entries for mapping", len(grid_channels))
+                except Exception as e:
+                    logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch EPG data list: %s", e)
+
+            # Map tvg_id to epg_source from the channels list
+            tvg_to_source = {}
+            for ch in grid_channels:
+                # Dispatcharr channel objects can have 'tvg_id', 'id', or 'channel_id'
+                t_id = ch.get("tvg_id") or ch.get("id") or ch.get("channel_id")
+                # Source can be 'epg_source' or 'epg_source_id'
+                s_id = ch.get("epg_source") or ch.get("epg_source_id")
+                if t_id and s_id is not None:
+                    tvg_to_source[str(t_id).strip().lower()] = s_id
+
+            now = datetime.now(timezone.utc)
+            logger.info("[AUTO-CREATE-ENGINE] Fetched %s EPG programs. Current UTC time: %s", len(epg_grid), now)
+            logger.info("[AUTO-CREATE-ENGINE] Mapping built for %s EPG channels", len(tvg_to_source))
+
+            # Define boundaries for "today" (UTC)
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            today_end = today_start + timedelta(days=1)
+
+            epg_lookup = {}  # tvg_id -> {"titles": [...], "descriptions": [...], "programs": [...]}
+            found_sources = set()
+
+            for prog in epg_grid:
+                tvg_id = prog.get("tvg_id") or prog.get("channel")
+                if not tvg_id:
+                    continue
+
+                lookup_key = tvg_id.strip().lower()
+
+                # Try to get source from program first, then from our tvg_to_source map
+                source_id = prog.get("epg_source") or prog.get("epg_source_id") or tvg_to_source.get(lookup_key)
+
+                title = prog.get("title") or ""
+                desc = prog.get("description") or prog.get("desc") or ""
+
+                start_str = prog.get("start_time") or prog.get("start")
+                stop_str = prog.get("end_time") or prog.get("stop")
+
+                if not start_str or not stop_str:
+                    continue
+
+                try:
+                    # Handle ISO format with Z or +HH:MM
+                    start = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
+                    stop = datetime.fromisoformat(stop_str.replace('Z', '+00:00'))
+
+                    # Match if program overlaps with today
+                    if start < today_end and stop > today_start:
+                        if lookup_key not in epg_lookup:
+                            epg_lookup[lookup_key] = {"titles": [], "descriptions": [], "programs": []}
+
+                        epg_lookup[lookup_key]["titles"].append(title)
+                        if desc:
+                            epg_lookup[lookup_key]["descriptions"].append(desc)
+
+                        if source_id is not None:
+                            found_sources.add(source_id)
+
+                        # Store full program info for granular matching
+                        epg_lookup[lookup_key]["programs"].append({
+                            "title": title,
+                            "description": desc,
+                            "start": start_str,
+                            "stop": stop_str,
+                            "source": source_id
+                        })
+                except (ValueError, TypeError) as e:
+                    logger.debug("[AUTO-CREATE-ENGINE] EPG time parse error for %s: %s", tvg_id, e)
+
+            logger.info("[AUTO-CREATE-ENGINE] Built EPG lookup with %s channels having programs today. Sources found: %s", len(epg_lookup), sorted(list(found_sources)))
+
+            # Populate StreamContext with aggregated EPG info
+            enriched_count = 0
+            for ctx in streams:
+                if ctx.tvg_id:
+                    clean_tvg_id = ctx.tvg_id.strip().lower()
+                    if clean_tvg_id in epg_lookup:
+                        info = epg_lookup[clean_tvg_id]
+                        # Join all programs for today with a separator
+                        ctx.epg_title = " | ".join(dict.fromkeys(info["titles"]))
+                        ctx.epg_description = " | ".join(dict.fromkeys(info["descriptions"]))
+                        ctx.epg_programs = info["programs"]
+                        enriched_count += 1
+
+            if enriched_count:
+                logger.info("[AUTO-CREATE-ENGINE] Enriched %s streams with today's EPG info", enriched_count)
+            else:
+                logger.warning("[AUTO-CREATE-ENGINE] No streams were enriched with EPG info (checked %s streams, lookup has %s entries)", len(streams), len(epg_lookup))
+
+        except Exception as e:
+            logger.warning("[AUTO-CREATE-ENGINE] Failed to pre-fetch EPG grid: %s", e)
 
     async def run_rule(
         self,
@@ -1047,9 +1059,6 @@ class AutoCreationEngine:
             # Track rules that match this stream
             matching_rules = []
 
-            # Track rules that match this stream
-            matching_rules = []
-
             # Build per-stream log of rule evaluations
             stream_rules_log = []
 
@@ -1185,6 +1194,12 @@ class AutoCreationEngine:
 
         logger.debug("[AUTO-CREATE-ENGINE] Total sorted entries: %s", len(sorted_entries))
 
+        # Build index for O(1) execution log updates
+        execution_log_index = {
+            entry.get("stream_id"): entry
+            for entry in results["execution_log"]
+        }
+
         # Track channel IDs per rule in sorted order (for Pass 3 renumber + Pass 3.5 stream reorder)
         rule_channel_order = defaultdict(list)  # rule_id -> [channel_id, ...] in sorted order
 
@@ -1273,11 +1288,9 @@ class AutoCreationEngine:
                         "would_modify": action_result.modified
                     })
 
-            # Update existing stream log entry with executed actions
-            for log_entry in results["execution_log"]:
-                if log_entry.get("stream_id") == stream.stream_id:
-                    log_entry["actions_executed"] = actions_log
-                    break
+            # Update existing stream log entry with executed actions (O(1) lookup)
+            if stream.stream_id in execution_log_index:
+                execution_log_index[stream.stream_id]["actions_executed"] = actions_log
 
             # Aggregate results from execution context
             results["channels_created"] += exec_ctx.channels_created

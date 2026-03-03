@@ -1754,3 +1754,145 @@ class TestVerifyEpgAssignments:
             executor.verify_epg_assignments()
         )
         assert (ok, patched, failed) == (0, 0, 1)
+
+
+class TestParseEpgDate:
+    """Tests for _parse_epg_date function."""
+
+    def test_iso_format_with_z(self):
+        """Parse ISO format with Z suffix (UTC)."""
+        from auto_creation_executor import _parse_epg_date
+        result = _parse_epg_date("2026-02-24T21:30:00Z")
+        assert result == "21:30"
+
+    def test_iso_format_with_offset(self):
+        """Parse ISO format with timezone offset."""
+        from auto_creation_executor import _parse_epg_date
+        result = _parse_epg_date("2026-02-24T21:30:00+05:30")
+        assert result == "21:30"
+
+    def test_xmltv_format(self):
+        """Parse XMLTV format (YYYYMMDDHHMMSS)."""
+        from auto_creation_executor import _parse_epg_date
+        result = _parse_epg_date("20260224213000")
+        assert result == "21:30"
+
+    def test_xmltv_format_with_timezone(self):
+        """Parse XMLTV format with timezone suffix."""
+        from auto_creation_executor import _parse_epg_date
+        result = _parse_epg_date("20260224213000 +0000")
+        assert result == "21:30"
+
+    def test_empty_string(self):
+        """Handle empty string."""
+        from auto_creation_executor import _parse_epg_date
+        result = _parse_epg_date("")
+        assert result == ""
+
+    def test_none_input(self):
+        """Handle None input."""
+        from auto_creation_executor import _parse_epg_date
+        result = _parse_epg_date(None)
+        assert result == ""
+
+    def test_invalid_format(self):
+        """Return original string for invalid format."""
+        from auto_creation_executor import _parse_epg_date
+        result = _parse_epg_date("invalid-date")
+        assert result == "invalid-date"
+
+
+class TestGroupAwareChannelLookup:
+    """Tests for group-aware channel lookup functions."""
+
+    def setup_method(self):
+        """Set up test fixtures with channels in multiple groups."""
+        self.client = MagicMock()
+        self.channels = [
+            {"id": 1, "name": "ESPN", "channel_group_id": 10},
+            {"id": 2, "name": "ESPN", "channel_group_id": 20},  # Same name, different group
+            {"id": 3, "name": "FOX Sports", "channel_group_id": 10},
+            {"id": 4, "name": "FOX Sports", "channel_group_id": 20},
+            {"id": 5, "name": "TNT", "tvg_id": "TNT.US", "channel_group_id": 10},
+            {"id": 6, "name": "TNT", "tvg_id": "TNT.US", "channel_group_id": 20},
+        ]
+        self.groups = [
+            {"id": 10, "name": "Sports Group A"},
+            {"id": 20, "name": "Sports Group B"},
+        ]
+        from auto_creation_executor import ActionExecutor
+        self.executor = ActionExecutor(self.client, existing_channels=self.channels, existing_groups=self.groups)
+
+    def test_find_channel_by_name_with_group_id(self):
+        """Find channel by name within specific group."""
+        channel = self.executor._find_channel_by_name("ESPN", group_id=10)
+        assert channel is not None
+        assert channel["id"] == 1
+        assert channel["channel_group_id"] == 10
+
+    def test_find_channel_by_name_without_group_id(self):
+        """Find channel by name without group restriction returns first match."""
+        channel = self.executor._find_channel_by_name("ESPN")
+        assert channel is not None
+        # Should return first match (id 1)
+
+    def test_find_channel_by_name_group_not_found(self):
+        """Return None when channel name exists but not in specified group."""
+        channel = self.executor._find_channel_by_name("ESPN", group_id=999)
+        assert channel is None
+
+    def test_find_channel_by_regex_with_group_id(self):
+        """Find channel by regex within specific group."""
+        channel = self.executor._find_channel_by_regex(r"FOX.*", group_id=20)
+        assert channel is not None
+        assert channel["id"] == 4
+        assert channel["channel_group_id"] == 20
+
+    def test_find_channel_by_regex_without_group_id(self):
+        """Find channel by regex without group restriction."""
+        channel = self.executor._find_channel_by_regex(r"FOX.*")
+        assert channel is not None
+
+    def test_find_channel_by_tvg_id_with_group_id(self):
+        """Find channel by tvg_id within specific group."""
+        channel = self.executor._find_channel_by_tvg_id("TNT.US", group_id=20)
+        assert channel is not None
+        assert channel["id"] == 6
+        assert channel["channel_group_id"] == 20
+
+    def test_find_channel_by_tvg_id_without_group_id(self):
+        """Find channel by tvg_id without group restriction."""
+        channel = self.executor._find_channel_by_tvg_id("TNT.US")
+        assert channel is not None
+
+    def test_filter_channels_by_group_with_match(self):
+        """Test _filter_channels_by_group returns matching channel."""
+        channels = [{"id": 1, "channel_group_id": 10}, {"id": 2, "channel_group_id": 20}]
+        result = self.executor._filter_channels_by_group(channels, group_id=20)
+        assert result is not None
+        assert result["id"] == 2
+
+    def test_filter_channels_by_group_no_match(self):
+        """Test _filter_channels_by_group returns None when no match."""
+        channels = [{"id": 1, "channel_group_id": 10}]
+        result = self.executor._filter_channels_by_group(channels, group_id=999)
+        assert result is None
+
+    def test_filter_channels_by_group_none_group_id(self):
+        """Test _filter_channels_by_group returns first when group_id is None."""
+        channels = [{"id": 1, "channel_group_id": 10}, {"id": 2, "channel_group_id": 20}]
+        result = self.executor._filter_channels_by_group(channels, group_id=None)
+        assert result is not None
+        assert result["id"] == 1
+
+    def test_filter_channels_by_group_empty_list(self):
+        """Test _filter_channels_by_group handles empty list."""
+        result = self.executor._filter_channels_by_group([], group_id=10)
+        assert result is None
+
+    def test_filter_channels_by_group_dict_group(self):
+        """Test _filter_channels_by_group when channel_group_id is a dict."""
+        channels = [{"id": 1, "channel_group": {"id": 10}}]
+        result = self.executor._filter_channels_by_group(channels, group_id=10)
+        assert result is not None
+        assert result["id"] == 1

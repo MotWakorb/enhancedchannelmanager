@@ -970,3 +970,143 @@ class TestAutoCreationEngineEPG:
             # log should only have 1 entry (for stream1)
             assert len(self.engine.results["execution_log"]) == 1
             assert self.engine.results["execution_log"][0]["stream_name"] == "Match"
+
+
+class TestPrefetchEpgGrid:
+    """Tests for _prefetch_epg_grid method."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        from unittest.mock import AsyncMock, MagicMock
+        self.client = MagicMock()
+        self.client.get_epg_grid = AsyncMock()
+        self.client.get_epg_data = AsyncMock()
+        from auto_creation_engine import AutoCreationEngine
+        self.engine = AutoCreationEngine(self.client)
+
+    def test_epg_grid_dict_format_with_programmes(self):
+        """Handle dict response with 'programmes' key."""
+        from auto_creation_evaluator import StreamContext
+        from unittest.mock import AsyncMock
+
+        streams = [
+            StreamContext(stream_id=1, stream_name="Test Channel 1", tvg_id="CH1.US"),
+            StreamContext(stream_id=2, stream_name="Test Channel 2", tvg_id="CH2.US"),
+        ]
+
+        # Mock get_epg_grid to return dict format
+        self.client.get_epg_grid = AsyncMock(return_value={
+            "programmes": [
+                {
+                    "tvg_id": "CH1.US",
+                    "title": "Show 1",
+                    "description": "Description 1",
+                    "start_time": "2026-03-03T10:00:00Z",
+                    "end_time": "2026-03-03T11:00:00Z",
+                }
+            ],
+            "channels": [
+                {"tvg_id": "CH1.US", "epg_source": 1}
+            ]
+        })
+
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._prefetch_epg_grid(streams)
+        )
+
+        # Verify enrichment
+        assert streams[0].epg_title is not None
+        assert "Show 1" in streams[0].epg_title
+
+    def test_epg_grid_dict_format_with_data_key(self):
+        """Handle dict response with 'data' key instead of 'programmes'."""
+        from auto_creation_evaluator import StreamContext
+        from unittest.mock import AsyncMock
+
+        streams = [
+            StreamContext(stream_id=1, stream_name="Test Channel 1", tvg_id="CH1.US"),
+        ]
+
+        self.client.get_epg_grid = AsyncMock(return_value={
+            "data": [
+                {
+                    "tvg_id": "CH1.US",
+                    "title": "Show 1",
+                    "start": "2026-03-03T10:00:00Z",
+                    "stop": "2026-03-03T11:00:00Z",
+                }
+            ]
+        })
+
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._prefetch_epg_grid(streams)
+        )
+
+        # Should process 'data' key
+        assert streams[0].epg_title is not None
+
+    def test_epg_grid_list_format(self):
+        """Handle list response (legacy format)."""
+        from auto_creation_evaluator import StreamContext
+        from unittest.mock import AsyncMock
+
+        streams = [
+            StreamContext(stream_id=1, stream_name="Test Channel 1", tvg_id="CH1.US"),
+        ]
+
+        self.client.get_epg_grid = AsyncMock(return_value=[
+            {
+                "tvg_id": "CH1.US",
+                "title": "Show 1",
+                "start_time": "2026-03-03T10:00:00Z",
+                "end_time": "2026-03-03T11:00:00Z",
+            }
+        ])
+
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._prefetch_epg_grid(streams)
+        )
+
+        assert streams[0].epg_title is not None
+
+    def test_epg_grid_fetches_channel_metadata(self):
+        """Fetch EPG data list when channel metadata not in grid."""
+        from auto_creation_evaluator import StreamContext
+        from unittest.mock import AsyncMock
+
+        streams = [
+            StreamContext(stream_id=1, stream_name="Test Channel 1", tvg_id="CH1.US"),
+        ]
+
+        self.client.get_epg_grid = AsyncMock(return_value={
+            "programmes": [{"tvg_id": "CH1.US", "title": "Show"}]
+        })
+        self.client.get_epg_data = AsyncMock(return_value=[
+            {"tvg_id": "CH1.US", "epg_source": 1}
+        ])
+
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._prefetch_epg_grid(streams)
+        )
+
+        # Verify get_epg_data was called
+        self.client.get_epg_data.assert_called_once()
+
+    def test_epg_grid_handles_exceptions_gracefully(self):
+        """Handle API errors without crashing."""
+        from auto_creation_evaluator import StreamContext
+        from unittest.mock import AsyncMock
+
+        streams = [
+            StreamContext(stream_id=1, stream_name="Test Channel 1", tvg_id="CH1.US"),
+        ]
+
+        self.client.get_epg_grid = AsyncMock(side_effect=Exception("API Error"))
+
+        # Should not raise, just log warning
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._prefetch_epg_grid(streams)
+        )
+
+        # Streams should remain unchanged
+        assert streams[0].epg_title is None

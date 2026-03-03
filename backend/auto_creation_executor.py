@@ -106,8 +106,6 @@ class ExecutionContext:
             self.streams_skipped += 1
 
 
-from datetime import datetime
-
 def _parse_epg_date(date_str: str) -> str:
     """Parse EPG date string to readable format (HH:MM).
     Handles both ISO (2026-02-24T21:30:00Z) and XMLTV (20260224213000 +0000) formats.

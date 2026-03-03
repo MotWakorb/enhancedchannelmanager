@@ -821,4 +821,225 @@ describe('ActionEditor', () => {
       expect(screen.queryByText(/requires.*channel/i)).not.toBeInTheDocument();
     });
   });
+
+  describe('transform_time action', () => {
+    it('renders transform_time configuration fields', async () => {
+      render(
+        <ActionEditor
+          action={{
+            type: 'transform_time',
+            variable_name: 'local_time',
+            source_field: 'stream_name',
+            pattern: '(\\d{1,2}:\\d{2})',
+            source_tz: 'Australia/Sydney',
+            target_tz: 'Europe/Madrid',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/output variable name/i)).toHaveValue('local_time');
+        expect(screen.getByLabelText(/source field/i)).toHaveValue('stream_name');
+        expect(screen.getByLabelText(/extraction regex/i)).toHaveValue('(\\d{1,2}:\\d{2})');
+        expect(screen.getByLabelText(/from timezone/i)).toHaveValue('Australia/Sydney');
+        expect(screen.getByLabelText(/to timezone/i)).toHaveValue('Europe/Madrid');
+      });
+    });
+
+    it('shows template variable hint when variable_name is set', async () => {
+      render(
+        <ActionEditor
+          action={{
+            type: 'transform_time',
+            variable_name: 'converted_time',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('{var:converted_time}')).toBeInTheDocument();
+      });
+    });
+
+    it('disables timezone inputs when readonly', async () => {
+      render(
+        <ActionEditor
+          action={{
+            type: 'transform_time',
+            source_tz: 'UTC',
+            target_tz: 'UTC',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          readonly={true}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/from timezone/i)).toBeDisabled();
+        expect(screen.getByLabelText(/to timezone/i)).toBeDisabled();
+      });
+    });
+
+    it('shows validation error for invalid timezone', async () => {
+      render(
+        <ActionEditor
+          action={{
+            type: 'transform_time',
+            variable_name: 'test',
+            source_field: 'stream_name',
+            pattern: '(\\d+)',
+            source_tz: 'Invalid/Timezone',
+            target_tz: 'UTC',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          showValidation={true}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText(/not a valid timezone/i)).toBeInTheDocument();
+      });
+    });
+  });
+
+  describe('fallback template', () => {
+    it('renders fallback template field for create_channel action', async () => {
+      render(
+        <ActionEditor
+          action={{
+            type: 'create_channel',
+            name_template: '{stream_name}',
+            name_template_fallback: 'Fallback {epg_title}',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/fallback name template/i)).toHaveValue('Fallback {epg_title}');
+      });
+    });
+
+    it('shows fallback template hint text', async () => {
+      render(
+        <ActionEditor
+          action={{
+            type: 'create_channel',
+            name_template: '{stream_name}',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText(/used if match was found via name search/i)).toBeInTheDocument();
+      });
+    });
+
+    it('appends variable when fallback template button clicked', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <ActionEditor
+          action={{
+            type: 'create_channel',
+            name_template: '{stream_name}',
+            name_template_fallback: '',
+          }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      // Wait for component to settle
+      await waitFor(() => {
+        expect(screen.getByLabelText(/fallback name template/i)).toBeInTheDocument();
+      });
+
+      // Click the variables button for fallback template
+      const fallbackVariablesButton = screen.getByRole('button', { name: /show fallback variables/i });
+      await user.click(fallbackVariablesButton);
+
+      // Click on epg_title variable
+      await user.click(screen.getByText('{epg_title}'));
+
+      await waitFor(() => {
+        expect(onChange).toHaveBeenCalledWith(
+          expect.objectContaining({
+            name_template_fallback: '{epg_title}',
+          })
+        );
+      });
+    });
+  });
+
+  describe('EPG source selector', () => {
+    it('renders EPG source dropdown for assign_epg action', async () => {
+      // Mock EPG sources
+      mockDataStore.epgSources.push(
+        { id: 1, name: 'XMLTV Source', source_type: 'xmltv' },
+        { id: 2, name: 'Dummy Source', source_type: 'dummy' }
+      );
+
+      render(
+        <ActionEditor
+          action={{
+            type: 'assign_epg',
+            epg_source: 1,
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/epg source/i)).toBeInTheDocument();
+      });
+    });
+
+    it('filters out dummy EPG sources from options', async () => {
+      // Mock EPG sources with dummy type
+      mockDataStore.epgSources.push(
+        { id: 1, name: 'XMLTV Source', source_type: 'xmltv' },
+        { id: 2, name: 'Dummy Source', source_type: 'dummy' }
+      );
+
+      const user = userEvent.setup();
+      render(
+        <ActionEditor
+          action={{
+            type: 'assign_epg',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      // Wait for the EPG source field to appear
+      await waitFor(() => {
+        expect(screen.getByLabelText(/epg source/i)).toBeInTheDocument();
+      });
+
+      // Click the EPG source dropdown
+      const epgSourceLabel = screen.getByLabelText(/epg source/i);
+      const epgSourceField = epgSourceLabel.closest('.action-field')!;
+      const epgSourceTrigger = epgSourceField.querySelector('.custom-select-trigger') as HTMLElement;
+      await user.click(epgSourceTrigger);
+
+      // Should only show non-dummy sources
+      await waitFor(() => {
+        expect(screen.getByText('XMLTV Source')).toBeInTheDocument();
+        expect(screen.queryByText('Dummy Source')).not.toBeInTheDocument();
+      });
+    });
+  });
 });

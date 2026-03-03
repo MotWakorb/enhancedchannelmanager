@@ -10,6 +10,10 @@ from enum import Enum
 from typing import Any, Optional, Union
 import re
 import json
+try:
+    import zoneinfo
+except ImportError:
+    from backports import zoneinfo
 
 logger = logging.getLogger(__name__)
 
@@ -521,10 +525,29 @@ class Action:
                 except re.error as e:
                     errors.append(f"Invalid regex pattern for transform_time: {e}")
 
-            if not self.params.get("source_tz"):
+            # Validate source_tz
+            source_tz = self.params.get("source_tz")
+            if not source_tz:
                 errors.append("transform_time requires 'source_tz'")
-            if not self.params.get("target_tz"):
+            elif not isinstance(source_tz, str):
+                errors.append("transform_time.source_tz must be a string")
+            else:
+                try:
+                    zoneinfo.ZoneInfo(source_tz)
+                except Exception as e:
+                    errors.append(f"transform_time.source_tz '{source_tz}' is not a valid timezone: {e}")
+
+            # Validate target_tz
+            target_tz = self.params.get("target_tz")
+            if not target_tz:
                 errors.append("transform_time requires 'target_tz'")
+            elif not isinstance(target_tz, str):
+                errors.append("transform_time.target_tz must be a string")
+            else:
+                try:
+                    zoneinfo.ZoneInfo(target_tz)
+                except Exception as e:
+                    errors.append(f"transform_time.target_tz '{target_tz}' is not a valid timezone: {e}")
 
         if errors:
             logger.warning("[AUTO-CREATE-SCHEMA] Action validation errors for type=%s: %s", self.type, errors)
