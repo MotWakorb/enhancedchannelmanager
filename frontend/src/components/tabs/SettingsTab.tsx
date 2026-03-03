@@ -337,20 +337,23 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     success_count: number;
     failed_count: number;
     skipped_count: number;
+    black_screen_count: number;
     percentage: number;
     rate_limited?: boolean;
     rate_limited_hosts?: Array<{ host: string; backoff_remaining: number; consecutive_429s: number }>;
     max_backoff_remaining?: number;
   } | null>(null);
   const [showProbeResultsModal, setShowProbeResultsModal] = useState(false);
-  const [probeResultsType, setProbeResultsType] = useState<'success' | 'failed' | 'skipped'>('success');
+  const [probeResultsType, setProbeResultsType] = useState<'success' | 'failed' | 'skipped' | 'black_screen'>('success');
   const [probeResults, setProbeResults] = useState<{
     success_streams: Array<{ id: number; name: string; url?: string }>;
     failed_streams: Array<{ id: number; name: string; url?: string; error?: string }>;
     skipped_streams: Array<{ id: number; name: string; url?: string; reason?: string }>;
+    black_screen_streams: Array<{ id: number; name: string; url?: string }>;
     success_count: number;
     failed_count: number;
     skipped_count: number;
+    black_screen_count: number;
   } | null>(null);
   const [probeHistory, setProbeHistory] = useState<ProbeHistoryEntry[]>([]);
   const [showReorderModal, setShowReorderModal] = useState(false);
@@ -1113,15 +1116,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
-  const handleShowHistoryResults = async (historyEntry: ProbeHistoryEntry, type: 'success' | 'failed' | 'skipped') => {
+  const handleShowHistoryResults = async (historyEntry: ProbeHistoryEntry, type: 'success' | 'failed' | 'skipped' | 'black_screen') => {
     // Use the history entry's streams for the modal
     setProbeResults({
       success_streams: historyEntry.success_streams,
       failed_streams: historyEntry.failed_streams,
       skipped_streams: historyEntry.skipped_streams || [],
+      black_screen_streams: historyEntry.black_screen_streams || [],
       success_count: historyEntry.success_count,
       failed_count: historyEntry.failed_count,
       skipped_count: historyEntry.skipped_count || 0,
+      black_screen_count: historyEntry.black_screen_count || 0,
     });
     setProbeResultsType(type);
     setShowProbeResultsModal(true);
@@ -3315,6 +3320,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               {probeProgress && (
                 <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginLeft: '2rem' }}>
                   Success: {probeProgress.success_count} | Failed: {probeProgress.failed_count}
+                  {probeProgress.black_screen_count > 0 && ` | Black Screen: ${probeProgress.black_screen_count}`}
                   {probeProgress.skipped_count > 0 && ` | Skipped: ${probeProgress.skipped_count}`}
                 </div>
               )}
@@ -3510,6 +3516,28 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                     >
                       <span className="material-icons" style={{ fontSize: '16px' }}>block</span>
                       {entry.skipped_count}
+                    </button>
+                  )}
+                  {(entry.black_screen_count ?? 0) > 0 && (
+                    <button
+                      className="probe-history-btn black-screen"
+                      onClick={() => handleShowHistoryResults(entry, 'black_screen')}
+                      style={{
+                        padding: '0.4rem 0.8rem',
+                        fontSize: '13px',
+                        backgroundColor: 'rgba(168, 85, 247, 0.15)',
+                        color: '#a855f7',
+                        border: '1px solid rgba(168, 85, 247, 0.3)',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.3rem'
+                      }}
+                      title="View black screen streams"
+                    >
+                      <span className="material-icons" style={{ fontSize: '16px' }}>videocam_off</span>
+                      {entry.black_screen_count}
                     </button>
                   )}
                   {(entry.reordered_channels && entry.reordered_channels.length > 0) && (
@@ -3995,9 +4023,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             className="modal-container modal-lg probe-results-modal"
           >
             <div className="modal-header">
-              <h2 className={probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : 'failed'}>
-                {probeResultsType === 'success' ? 'Successful Streams' : probeResultsType === 'skipped' ? 'Skipped Streams' : 'Failed Streams'} (
-                {probeResultsType === 'success' ? probeResults.success_count : probeResultsType === 'skipped' ? probeResults.skipped_count : probeResults.failed_count})
+              <h2 className={probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : probeResultsType === 'black_screen' ? 'black-screen' : 'failed'}>
+                {probeResultsType === 'success' ? 'Successful Streams' : probeResultsType === 'skipped' ? 'Skipped Streams' : probeResultsType === 'black_screen' ? 'Black Screen Streams' : 'Failed Streams'} (
+                {probeResultsType === 'success' ? probeResults.success_count : probeResultsType === 'skipped' ? probeResults.skipped_count : probeResultsType === 'black_screen' ? probeResults.black_screen_count : probeResults.failed_count})
               </h2>
               <button
                 onClick={() => setShowProbeResultsModal(false)}
@@ -4013,11 +4041,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   ? probeResults.success_streams
                   : probeResultsType === 'skipped'
                   ? probeResults.skipped_streams
+                  : probeResultsType === 'black_screen'
+                  ? probeResults.black_screen_streams
                   : probeResults.failed_streams;
                 const emptyText = probeResultsType === 'success'
                   ? 'successful'
                   : probeResultsType === 'skipped'
                   ? 'skipped'
+                  : probeResultsType === 'black_screen'
+                  ? 'black screen'
                   : 'failed';
 
                 return streams.length === 0 ? (
@@ -4030,7 +4062,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                       {streams.map((stream) => (
                         <div
                           key={stream.id}
-                          className={`probe-result-item ${probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : 'failed'}`}
+                          className={`probe-result-item ${probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : probeResultsType === 'black_screen' ? 'black-screen' : 'failed'}`}
                         >
                           <div className="probe-result-item-info">
                             <div className="probe-result-item-name">{stream.name}</div>

@@ -41,6 +41,7 @@ export interface ChannelListItemProps {
   onProbeChannel?: () => void;
   isProbing?: boolean;
   hasFailedStreams?: boolean;
+  hasBlackScreenStreams?: boolean;
   onPreviewChannel?: () => void;
 }
 
@@ -81,6 +82,7 @@ export const ChannelListItem = memo(function ChannelListItem({
   onProbeChannel,
   isProbing = false,
   hasFailedStreams = false,
+  hasBlackScreenStreams = false,
   onPreviewChannel,
 }: ChannelListItemProps) {
   const {
@@ -225,10 +227,13 @@ export const ChannelListItem = memo(function ChannelListItem({
           {channelUrl}
         </span>
       )}
-      <span className={`channel-streams-count ${channel.streams.length === 0 ? 'no-streams' : ''} ${hasFailedStreams ? 'has-failed' : ''}`}>
+      <span className={`channel-streams-count ${channel.streams.length === 0 ? 'no-streams' : ''} ${hasFailedStreams ? 'has-failed' : !hasFailedStreams && hasBlackScreenStreams ? 'has-black-screen' : ''}`}>
         {channel.streams.length === 0 && <span className="material-icons warning-icon">warning</span>}
         {hasFailedStreams && channel.streams.length > 0 && (
           <span className="material-icons failed-stream-icon" title="One or more streams failed probe">error</span>
+        )}
+        {!hasFailedStreams && hasBlackScreenStreams && channel.streams.length > 0 && (
+          <span className="material-icons black-screen-icon" title="One or more streams detected as black screen">videocam_off</span>
         )}
         {channel.streams.length} stream{channel.streams.length !== 1 ? 's' : ''}
       </span>

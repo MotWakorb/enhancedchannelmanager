@@ -1886,6 +1886,8 @@ export interface ProbeHistoryEntry {
   success_streams: Array<{ id: number; name: string; url?: string }>;
   failed_streams: Array<{ id: number; name: string; url?: string; error?: string }>;
   skipped_streams: Array<{ id: number; name: string; url?: string; reason?: string }>;
+  black_screen_count: number;
+  black_screen_streams: Array<{ id: number; name: string; url?: string }>;
   reordered_channels?: Array<{
     channel_id: number;
     channel_name: string;

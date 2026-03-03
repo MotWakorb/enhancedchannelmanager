@@ -288,6 +288,8 @@ class StreamProber:
         self._probe_failed_streams = []   # List of {id, name, url, error} for failed probes
         self._probe_skipped_streams = []  # List of {id, name, url, reason} for skipped probes (e.g., M3U at max connections)
         self._probe_progress_skipped_count = 0
+        self._probe_black_screen_streams = []  # List of {id, name, url} for black screen probes
+        self._probe_progress_black_screen_count = 0
         # Probe history - list of last 5 probe runs
         self._probe_history = []  # List of {timestamp, total, success_count, failed_count, status, success_streams, failed_streams}
 
@@ -465,6 +467,7 @@ class StreamProber:
                     "success": self._probe_progress_success_count,
                     "failed": self._probe_progress_failed_count,
                     "skipped": self._probe_progress_skipped_count,
+                    "black_screen": self._probe_progress_black_screen_count,
                     "status": self._probe_progress_status,
                     "current_stream": self._probe_progress_current_stream
                 }
@@ -501,6 +504,8 @@ class StreamProber:
             # Determine notification type based on results
             if self._probe_progress_failed_count > 0:
                 notification_type = "warning"
+            elif self._probe_progress_black_screen_count > 0:
+                notification_type = "warning"
             else:
                 notification_type = "success"
 
@@ -510,6 +515,8 @@ class StreamProber:
                 parts.append(f"{self._probe_progress_success_count} success")
             if self._probe_progress_failed_count > 0:
                 parts.append(f"{self._probe_progress_failed_count} failed")
+            if self._probe_progress_black_screen_count > 0:
+                parts.append(f"{self._probe_progress_black_screen_count} black screen")
             if self._probe_progress_skipped_count > 0:
                 parts.append(f"{self._probe_progress_skipped_count} skipped")
 
@@ -522,6 +529,7 @@ class StreamProber:
                     "success": self._probe_progress_success_count,
                     "failed": self._probe_progress_failed_count,
                     "skipped": self._probe_progress_skipped_count,
+                    "black_screen": self._probe_progress_black_screen_count,
                     "status": "completed",
                     "current_stream": ""
                 }
@@ -542,6 +550,7 @@ class StreamProber:
                     "failed_count": self._probe_progress_failed_count,
                     "success_count": self._probe_progress_success_count,
                     "skipped_count": self._probe_progress_skipped_count,
+                    "black_screen_count": self._probe_progress_black_screen_count,
                     "total_count": self._probe_progress_total,
                 }
                 await send_alert(
@@ -1669,6 +1678,8 @@ class StreamProber:
         self._probe_success_streams = []
         self._probe_failed_streams = []
         self._probe_skipped_streams = []
+        self._probe_black_screen_streams = []
+        self._probe_progress_black_screen_count = 0
         self._account_ramp_state = {}  # Fresh ramp state for each probe run
 
         probed_count = 0
@@ -1878,6 +1889,8 @@ class StreamProber:
                             else:
                                 if m3u_account_id:
                                     self._record_probe_success(m3u_account_id)
+                                if result.get("is_black_screen", False):
+                                    stream_info["is_black_screen"] = True
 
                             return (probe_status, stream_info)
                         finally:
@@ -2103,6 +2116,9 @@ class StreamProber:
                                     if probe_status == "success":
                                         self._probe_progress_success_count += 1
                                         self._probe_success_streams.append(stream_info)
+                                        if stream_info.get("is_black_screen"):
+                                            self._probe_progress_black_screen_count += 1
+                                            self._probe_black_screen_streams.append(stream_info)
                                     else:
                                         self._probe_progress_failed_count += 1
                                         self._probe_failed_streams.append(stream_info)
@@ -2242,6 +2258,9 @@ class StreamProber:
                     if probe_status == "success":
                         self._probe_progress_success_count += 1
                         self._probe_success_streams.append(stream_info)
+                        if result.get("is_black_screen", False):
+                            self._probe_progress_black_screen_count += 1
+                            self._probe_black_screen_streams.append(stream_info)
                         if m3u_account_id:
                             self._record_probe_success(m3u_account_id)
                     else:
@@ -2313,6 +2332,7 @@ class StreamProber:
             "success_count": self._probe_progress_success_count,
             "failed_count": self._probe_progress_failed_count,
             "skipped_count": self._probe_progress_skipped_count,
+            "black_screen_count": self._probe_progress_black_screen_count,
             "percentage": round((self._probe_progress_current / self._probe_progress_total * 100) if self._probe_progress_total > 0 else 0, 1),
             "rate_limited": rate_limit_info["is_rate_limited"],
             "rate_limited_hosts": rate_limit_info["hosts"],
@@ -2349,9 +2369,11 @@ class StreamProber:
             "success_streams": self._probe_success_streams,
             "failed_streams": self._probe_failed_streams,
             "skipped_streams": self._probe_skipped_streams,
+            "black_screen_streams": self._probe_black_screen_streams,
             "success_count": len(self._probe_success_streams),
             "failed_count": len(self._probe_failed_streams),
-            "skipped_count": len(self._probe_skipped_streams)
+            "skipped_count": len(self._probe_skipped_streams),
+            "black_screen_count": len(self._probe_black_screen_streams)
         }
 
     def _save_probe_history(self, start_time: datetime, total: int, error: str = None, reordered_channels: list = None):
@@ -2372,6 +2394,8 @@ class StreamProber:
             "success_streams": list(self._probe_success_streams),  # Copy the list
             "failed_streams": list(self._probe_failed_streams),    # Copy the list
             "skipped_streams": list(self._probe_skipped_streams),  # Copy the list
+            "black_screen_count": self._probe_progress_black_screen_count,
+            "black_screen_streams": list(self._probe_black_screen_streams),  # Copy the list
             "reordered_channels": reordered_channels or [],  # List of channels that were reordered
             # Include sort configuration used for this run (for UI display)
             "sort_config": {
