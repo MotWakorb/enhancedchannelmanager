@@ -333,6 +333,15 @@
   letter-spacing: 0.5px;
 }
 
+.type-subcategory-label {
+  padding: 6px 16px 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  letter-spacing: 0.3px;
+  text-transform: none;
+}
+
 .type-option {
   display: block;
   width: 100%;

@@ -1,7 +1,7 @@
 /**
  * Component for building and editing auto-creation rules.
  */
-import { useState, useEffect, useId, useCallback } from 'react';
+import { useState, useEffect, useId, useCallback, Fragment } from 'react';
 import type { AutoCreationRule, CreateRuleData, Condition, Action, ConditionType, ActionType } from '../../types/autoCreation';
 import { ConditionEditor } from './ConditionEditor';
 import { ActionEditor } from './ActionEditor';
@@ -593,28 +593,49 @@ function ConditionTypeSelector({
   onSelect: (type: ConditionType) => void;
   onClose: () => void;
 }) {
-  const categories = [
+  interface CategoryGroup {
+    label?: string;
+    types: Array<{ type: ConditionType; label: string }>;
+  }
+
+  interface Category {
+    label: string;
+    types?: Array<{ type: ConditionType; label: string }>;
+    groups?: CategoryGroup[];
+  }
+
+  const categories: Category[] = [
     {
       label: 'Stream Conditions',
-      types: [
-        { type: 'stream_name_contains' as ConditionType, label: 'Stream Name Contains' },
-        { type: 'stream_name_matches' as ConditionType, label: 'Stream Name Matches (Regex)' },
-        { type: 'stream_group_contains' as ConditionType, label: 'Stream Group Contains' },
-        { type: 'stream_group_matches' as ConditionType, label: 'Stream Group Matches (Regex)' },
-        { type: 'provider_is' as ConditionType, label: 'M3U Account' },
-        { type: 'quality_min' as ConditionType, label: 'Minimum Quality' },
-        { type: 'quality_max' as ConditionType, label: 'Maximum Quality' },
-        { type: 'tvg_id_exists' as ConditionType, label: 'TVG-ID Exists' },
-        { type: 'epg_title_contains' as ConditionType, label: 'EPG Title (Today) Contains' },
-        { type: 'epg_title_matches' as ConditionType, label: 'EPG Title (Today) Matches (Regex)' },
-        { type: 'epg_desc_contains' as ConditionType, label: 'EPG Description (Today) Contains' },
-        { type: 'epg_desc_matches' as ConditionType, label: 'EPG Description (Today) Matches (Regex)' },
-        { type: 'epg_any_contains' as ConditionType, label: 'EPG Today (Title & Description) Contains' },
-        { type: 'epg_any_matches' as ConditionType, label: 'EPG Today (Title & Description) Matches (Regex)' },
-        { type: 'epg_source_is' as ConditionType, label: 'EPG Source' },
-        { type: 'any_field_contains' as ConditionType, label: 'Any Field (Name/EPG Today) Contains' },
-        { type: 'any_field_matches' as ConditionType, label: 'Any Field (Name/EPG Today) Matches (Regex)' },
-        { type: 'logo_exists' as ConditionType, label: 'Logo Exists' },
+      groups: [
+        {
+          label: 'Stream',
+          types: [
+            { type: 'stream_name_contains' as ConditionType, label: 'Stream Name Contains' },
+            { type: 'stream_name_matches' as ConditionType, label: 'Stream Name Matches (Regex)' },
+            { type: 'stream_group_contains' as ConditionType, label: 'Stream Group Contains' },
+            { type: 'stream_group_matches' as ConditionType, label: 'Stream Group Matches (Regex)' },
+            { type: 'provider_is' as ConditionType, label: 'M3U Account' },
+            { type: 'quality_min' as ConditionType, label: 'Minimum Quality' },
+            { type: 'quality_max' as ConditionType, label: 'Maximum Quality' },
+            { type: 'tvg_id_exists' as ConditionType, label: 'TVG-ID Exists' },
+            { type: 'any_field_contains' as ConditionType, label: 'Any Field (Name/EPG Today) Contains' },
+            { type: 'any_field_matches' as ConditionType, label: 'Any Field (Name/EPG Today) Matches (Regex)' },
+            { type: 'logo_exists' as ConditionType, label: 'Logo Exists' },
+          ],
+        },
+        {
+          label: 'EPG',
+          types: [
+            { type: 'epg_title_contains' as ConditionType, label: 'EPG Title (Today) Contains' },
+            { type: 'epg_title_matches' as ConditionType, label: 'EPG Title (Today) Matches (Regex)' },
+            { type: 'epg_desc_contains' as ConditionType, label: 'EPG Description (Today) Contains' },
+            { type: 'epg_desc_matches' as ConditionType, label: 'EPG Description (Today) Matches (Regex)' },
+            { type: 'epg_any_contains' as ConditionType, label: 'EPG Today (Title & Description) Contains' },
+            { type: 'epg_any_matches' as ConditionType, label: 'EPG Today (Title & Description) Matches (Regex)' },
+            { type: 'epg_source_is' as ConditionType, label: 'EPG Source' },
+          ],
+        },
       ],
     },
     {
@@ -635,6 +656,40 @@ function ConditionTypeSelector({
     },
   ];
 
+  const renderCategory = (cat: Category) => (
+    <div key={cat.label} className="type-category">
+      <div className="type-category-label">{cat.label}</div>
+      {cat.groups ? (
+        cat.groups.map(group => (
+          <Fragment key={group.label || 'ungrouped'}>
+            {group.label && <div className="type-subcategory-label">{group.label}</div>}
+            {group.types.map(t => (
+              <button
+                key={t.type}
+                type="button"
+                className="type-option"
+                onClick={() => onSelect(t.type)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </Fragment>
+        ))
+      ) : (
+        cat.types?.map(t => (
+          <button
+            key={t.type}
+            type="button"
+            className="type-option"
+            onClick={() => onSelect(t.type)}
+          >
+            {t.label}
+          </button>
+        ))
+      )}
+    </div>
+  );
+
   return (
     <div className="type-selector-dropdown">
       <div className="type-selector-header">
@@ -643,21 +698,7 @@ function ConditionTypeSelector({
           <span className="material-icons">close</span>
         </button>
       </div>
-      {categories.map(cat => (
-        <div key={cat.label} className="type-category">
-          <div className="type-category-label">{cat.label}</div>
-          {cat.types.map(t => (
-            <button
-              key={t.type}
-              type="button"
-              className="type-option"
-              onClick={() => onSelect(t.type)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      ))}
+      {categories.map(renderCategory)}
     </div>
   );
 }
