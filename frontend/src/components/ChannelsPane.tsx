@@ -4878,6 +4878,10 @@ export function ChannelsPane({
                         const stats = streamStatsMap.get(streamId);
                         return stats && (stats.probe_status === 'failed' || stats.probe_status === 'timeout');
                       })}
+                      hasBlackScreenStreams={channel.streams.some(streamId => {
+                        const stats = streamStatsMap.get(streamId);
+                        return stats && stats.probe_status === 'success' && stats.is_black_screen;
+                      })}
                       onPreviewChannel={() => handlePreviewChannel(channel)}
                     />
                     {selectedChannelId === channel.id && (

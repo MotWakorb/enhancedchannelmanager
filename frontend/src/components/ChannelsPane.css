@@ -1260,6 +1260,16 @@
   margin-right: 0.25rem;
 }
 
+.channel-streams-count.has-black-screen {
+  color: #a855f7;
+}
+
+.channel-streams-count .black-screen-icon {
+  font-size: 0.9rem;
+  color: #a855f7;
+  margin-right: 0.25rem;
+}
+
 /* Highlight channels without streams */
 .channel-item.no-streams {
   border-left: 3px solid var(--warning);
