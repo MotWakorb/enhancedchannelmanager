@@ -479,6 +479,16 @@ async def update_settings(request: SettingsRequest):
             )
             logger.info("[SETTINGS] Updated prober sort settings from settings")
 
+    # Update prober's black screen detection settings without requiring restart
+    if (new_settings.black_screen_detection_enabled != current_settings.black_screen_detection_enabled or
+            new_settings.black_screen_sample_duration != current_settings.black_screen_sample_duration):
+        prober = get_prober()
+        if prober:
+            prober.black_screen_detection_enabled = new_settings.black_screen_detection_enabled
+            prober.black_screen_sample_duration = max(3, min(30, new_settings.black_screen_sample_duration))
+            logger.info("[SETTINGS] Updated prober black screen settings: enabled=%s, duration=%ss",
+                        new_settings.black_screen_detection_enabled, new_settings.black_screen_sample_duration)
+
     logger.info("[SETTINGS] Settings saved successfully - configured: %s, auth_changed: %s, server_changed: %s", new_settings.is_configured(), auth_changed, server_changed)
     return {"status": "saved", "configured": new_settings.is_configured(), "server_changed": server_changed}
 
