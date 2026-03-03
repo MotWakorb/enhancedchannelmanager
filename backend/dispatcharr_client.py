@@ -808,8 +808,8 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
-    async def get_epg_grid(self, start: str = None, end: str = None) -> list:
-        """Get EPG programs for the guide grid.
+    async def get_epg_grid(self, start: str = None, end: str = None) -> dict:
+        """Get EPG programs and channels for the guide grid.
 
         Uses /api/epg/grid/ endpoint which automatically filters to:
         - Programs ending after 1 hour ago
@@ -817,6 +817,10 @@ class DispatcharrClient:
 
         This endpoint does NOT support custom time ranges via parameters.
         The time range is hard-coded on the Dispatcharr side.
+
+        Returns:
+            dict: {"data": [...], "channels": [...]} or similar structure
+                  containing programmes and channel metadata
 
         Args:
             start: Ignored - kept for API compatibility
@@ -831,21 +835,13 @@ class DispatcharrClient:
         if isinstance(data, dict):
             logger.debug("[DISPATCHARR] EPG grid response keys: %s", data.keys())
             logger.debug("[DISPATCHARR] EPG grid data length: %s items", len(data.get('data', [])))
+            logger.debug("[DISPATCHARR] EPG grid channels length: %s items", len(data.get('channels', [])))
             if data.get('data') and len(data.get('data', [])) > 0:
                 logger.debug("[DISPATCHARR] EPG grid first item sample: %s", data['data'][0])
-        elif isinstance(data, list):
-            logger.debug("[DISPATCHARR] EPG grid list length: %s items", len(data))
-            if data and len(data) > 0:
-                logger.debug("[DISPATCHARR] EPG grid first item sample: %s", data[0])
 
-        # Dispatcharr usually returns {"programmes": [...], "channels": [...]}
-        # but some versions or endpoints might return {"data": [...]}
-        if isinstance(data, dict):
-            # Maintain API compatibility by returning only the programs list
-            return data.get("programmes") or data.get("data") or []
-            
-        # Fallback for list response
-        return data if isinstance(data, list) else []
+        # Return the raw dict response so callers can access both programmes and channels
+        # Dispatcharr returns {"data": [...], "channels": [...]} structure
+        return data if isinstance(data, dict) else {"data": data if isinstance(data, list) else [], "channels": []}
 
     # -------------------------------------------------------------------------
     # Stream Profiles

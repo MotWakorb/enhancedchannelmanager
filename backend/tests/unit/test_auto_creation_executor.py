@@ -6,7 +6,6 @@ and streams with proper rollback tracking.
 """
 from unittest.mock import MagicMock, AsyncMock
 import asyncio
-import re
 
 from auto_creation_executor import (
     ActionResult,

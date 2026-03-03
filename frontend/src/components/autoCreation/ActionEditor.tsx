@@ -576,7 +576,7 @@ export function ActionEditor({
               </div>
             )}
             <span className="field-hint">
-              This template will be used if the match was found via Name Search instead of EPG.
+              This template will be used when no EPG match is found.
             </span>
           </div>
         )}

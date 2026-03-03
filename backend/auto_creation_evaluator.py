@@ -81,18 +81,20 @@ class StreamContext:
             m3u_account_id: M3U account ID this stream belongs to
             m3u_account_name: M3U account name
             stream_stats: Optional StreamStats record for quality info
-            account_groups: Optional map of {account_id: [group_dicts]} for group name resolution
+            account_groups: Optional map of {channel_group_id: settings} from get_all_m3u_group_settings()
+                          where each setting has m3u_account_id, m3u_account_name, channel_group, etc.
         """
         # Resolve group name
         group_name = stream.get("group_title") or stream.get("channel_group_name") or stream.get("m3u_group_name")
         group_id = stream.get("channel_group")
-        
+
         # If name is missing but we have ID and the map, look it up
-        if not group_name and group_id and account_groups and m3u_account_id in account_groups:
-            for g in account_groups[m3u_account_id]:
-                if g.get("id") == group_id:
-                    group_name = g.get("name")
-                    break
+        # account_groups is {channel_group_id: settings} where settings contains m3u_account_id
+        if not group_name and group_id and account_groups and group_id in account_groups:
+            group_setting = account_groups[group_id]
+            # Verify this group belongs to the same account
+            if group_setting.get("m3u_account_id") == m3u_account_id:
+                group_name = group_setting.get("channel_group_name") or group_setting.get("name")
 
         # Parse resolution from stream_stats
         resolution_height = None
@@ -291,15 +293,15 @@ class ConditionEvaluator:
                 return match.group(0)
         return re.sub(pattern, replace_match, text)
 
-    def evaluate(self, condition: Condition | dict, context: StreamContext, 
-                 all_rule_conditions: list = None) -> EvaluationResult:
+    def evaluate(self, condition: Condition | dict, context: StreamContext,
+                 source_filter: int = None) -> EvaluationResult:
         """
         Evaluate a condition against a stream context.
 
         Args:
             condition: Condition object or dict to evaluate
             context: StreamContext with stream data
-            all_rule_conditions: All conditions in the current rule (to look for filters)
+            source_filter: Optional EPG source ID to filter EPG conditions (computed once per rule)
 
         Returns:
             EvaluationResult indicating if condition matched
@@ -307,22 +309,7 @@ class ConditionEvaluator:
         if isinstance(condition, dict):
             condition = Condition.from_dict(condition)
 
-        # Check for EPG Source filter in other conditions of the same rule
-        source_filter = None
-        if all_rule_conditions:
-            for c_data in all_rule_conditions:
-                # Handle both dict and object
-                c_type = c_data.get("type") if isinstance(c_data, dict) else getattr(c_data, "type", None)
-                c_negate = c_data.get("negate", False) if isinstance(c_data, dict) else getattr(c_data, "negate", False)
-                c_value = c_data.get("value") if isinstance(c_data, dict) else getattr(c_data, "value", None)
-                
-                if c_type == ConditionType.EPG_SOURCE_IS and not c_negate:
-                    try:
-                        source_filter = int(c_value)
-                        break
-                    except (ValueError, TypeError):
-                        continue
-
+        # source_filter is now computed once per rule in the engine (issue #6)
         result = self._evaluate_condition(condition, context, source_filter=source_filter)
 
         # Capture matched data if available

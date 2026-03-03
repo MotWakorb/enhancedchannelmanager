@@ -2270,10 +2270,14 @@ class ActionExecutor:
         return None
 
     def _find_channel_by_regex(self, pattern: str, group_id: int = None) -> Optional[dict]:
-        """Find first channel matching regex pattern, optionally filtered by group."""
+        """Find first channel matching regex pattern, optionally filtered by group.
+
+        Also checks base-name and normalized-name maps to be consistent with
+        _find_channel_by_name behavior (issue #12).
+        """
         try:
             regex = re.compile(pattern, re.IGNORECASE)
-            
+
             def _matches(c):
                 if not regex.search(c.get("name", "")):
                     return False
@@ -2284,13 +2288,33 @@ class ActionExecutor:
                     return c_group == group_id
                 return True
 
+            # Check existing channels (actual channel names)
             for channel in self.existing_channels:
                 if _matches(channel):
                     return channel
+
+            # Check created channels (actual channel names)
             for channels in self._created_channels.values():
                 for channel in channels:
                     if _matches(channel):
                         return channel
+
+            # Check base-name mapping (e.g., "USA Network" -> "4000 | USA Network")
+            # For regex to work on base names, we need to match against the base name
+            for base_name, channels in self._base_name_to_channel.items():
+                if regex.search(base_name):
+                    match = self._filter_channels_by_group(channels, group_id)
+                    if match:
+                        logger.debug("[AUTO-CREATE-EXEC] Regex '%s' matched base-name '%s' (group=%s)", pattern, base_name, group_id)
+                        return match
+
+            # Check normalized-name mapping
+            for norm_name, channels in self._normalized_name_to_channel.items():
+                if regex.search(norm_name):
+                    match = self._filter_channels_by_group(channels, group_id)
+                    if match:
+                        logger.debug("[AUTO-CREATE-EXEC] Regex '%s' matched normalized-name '%s' (group=%s)", pattern, norm_name, group_id)
+                        return match
         except re.error:
             logger.debug("[AUTO-CREATE-EXEC] Invalid regex in channel name pattern")
         return None

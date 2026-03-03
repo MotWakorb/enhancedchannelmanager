@@ -226,27 +226,9 @@ class AutoCreationEngine:
             logger.info("[AUTO-CREATE-ENGINE] Pre-fetching EPG grid for EPG conditions")
             epg_response = await self.client.get_epg_grid()
 
-            # Dispatcharr grid API can return a dict with "programmes" and "channels"
-            # or just a list of programs.
-            epg_grid = []
-            grid_channels = []
-
-            if isinstance(epg_response, dict):
-                epg_grid = epg_response.get("programmes") or epg_response.get("data") or []
-                grid_channels = epg_response.get("channels") or []
-            elif isinstance(epg_response, list):
-                epg_grid = epg_response
-
-            # If we didn't get channel metadata from the grid, fetch it separately
-            # so we can map tvg_id -> epg_source
-            if not grid_channels:
-                logger.info("[AUTO-CREATE-ENGINE] No channel metadata in grid, fetching EPG data list for source mapping")
-                try:
-                    # get_epg_data returns a list directly
-                    grid_channels = await self.client.get_epg_data(page_size=5000)
-                    logger.info("[AUTO-CREATE-ENGINE] Fetched %s EPG data entries for mapping", len(grid_channels))
-                except Exception as e:
-                    logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch EPG data list: %s", e)
+            # get_epg_grid now returns a dict with "data" (programs) and "channels"
+            epg_grid = epg_response.get("data") or []
+            grid_channels = epg_response.get("channels") or []
 
             # Map tvg_id to epg_source from the channels list
             tvg_to_source = {}
@@ -1072,6 +1054,25 @@ class AutoCreationEngine:
                 if not conditions:
                     continue
 
+                # Compute source_filter once per rule to avoid O(N²) scanning (issue #6)
+                source_filter = None
+                for c_data in conditions:
+                    c_type = c_data.get("type") if isinstance(c_data, dict) else getattr(c_data, "type", None)
+                    c_negate = c_data.get("negate", False) if isinstance(c_data, dict) else getattr(c_data, "negate", False)
+                    c_value = c_data.get("value") if isinstance(c_data, dict) else getattr(c_data, "value", None)
+
+                    if c_type == "EPG_SOURCE_IS" and not c_negate:
+                        try:
+                            source_filter = int(c_value)
+                            break
+                        except (ValueError, TypeError):
+                            continue
+
+                # Reset EPG match state at the start of each rule's evaluation
+                # to prevent state bleed from previous rules (issue #2)
+                stream.epg_match = None
+                stream.matched_by_epg = False
+
                 # Group conditions by OR breaks (AND binds tighter)
                 or_groups = [[]]
                 for cond in conditions:
@@ -1087,7 +1088,7 @@ class AutoCreationEngine:
                     group_matched = True
                     group_log = []
                     for condition in group:
-                        result = evaluator.evaluate(condition, stream, all_rule_conditions=conditions)
+                        result = evaluator.evaluate(condition, stream, source_filter=source_filter)
                         group_log.append({
                             "type": result.condition_type,
                             "value": condition.get("value") if isinstance(condition, dict) else str(getattr(condition, 'value', '')),
@@ -1103,7 +1104,7 @@ class AutoCreationEngine:
                     conditions_log.extend(group_log)
                     if group_matched:
                         matched = True
-                        break # Short-circuit on first matching OR group
+                        # Removed short-circuit break to ensure all OR groups are evaluated and logged (issue #5)
 
                 if matched:
                     matching_rules.append(rule)
@@ -1123,6 +1124,18 @@ class AutoCreationEngine:
                     if rule.stop_on_first_match:
                         break
 
+            # Add execution log entry for ALL streams (matched and non-matched)
+            # to provide visibility into why streams didn't match (issue #3)
+            results["execution_log"].append({
+                "stream_id": stream.stream_id,
+                "stream_name": stream.stream_name,
+                "m3u_account_id": stream.m3u_account_id,
+                "epg_title": stream.epg_title,
+                "epg_description": stream.epg_description,
+                "rules_evaluated": stream_rules_log,
+                "actions_executed": []  # Actions only filled in Pass 2 for matched streams
+            })
+
             if not matching_rules:
                 continue
 
@@ -1131,17 +1144,6 @@ class AutoCreationEngine:
             losing_rules = matching_rules[1:] if len(matching_rules) > 1 else []
 
             matched_entries.append((stream, winning_rule, losing_rules, stream_rules_log))
-
-            # Add stream log entry for MATCHED streams only to avoid memory bloat
-            results["execution_log"].append({
-                "stream_id": stream.stream_id,
-                "stream_name": stream.stream_name,
-                "m3u_account_id": stream.m3u_account_id,
-                "epg_title": stream.epg_title,
-                "epg_description": stream.epg_description,
-                "rules_evaluated": stream_rules_log,
-                "actions_executed": []  # Actions only for matched streams, filled in Pass 2
-            })
 
         logger.info("[AUTO-CREATE-ENGINE] Complete: %s streams matched out of %s evaluated", len(matched_entries), len(streams))
 

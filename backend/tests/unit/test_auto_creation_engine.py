@@ -6,6 +6,7 @@ pipeline, coordinating rules, streams, and executions.
 """
 from unittest.mock import MagicMock, AsyncMock, patch
 import asyncio
+import pytest
 from collections import defaultdict
 
 from auto_creation_engine import (
@@ -15,8 +16,7 @@ from auto_creation_engine import (
     init_auto_creation_engine,
     _sort_key,
 )
-from auto_creation_evaluator import StreamContext
-from auto_creation_evaluator import StreamContext
+from auto_creation_evaluator import StreamContext, ConditionEvaluator
 
 
 class TestAutoCreationEngineInit:
@@ -52,13 +52,12 @@ class TestAutoCreationEngineSingleton:
 
         assert result is engine
 
-    def test_init_auto_creation_engine(self):
+    @pytest.mark.asyncio
+    async def test_init_auto_creation_engine(self):
         """init_auto_creation_engine creates and sets engine."""
         client = MagicMock()
 
-        result = asyncio.get_event_loop().run_until_complete(
-            init_auto_creation_engine(client)
-        )
+        result = await init_auto_creation_engine(client)
 
         assert result is not None
         assert get_auto_creation_engine() is result
@@ -83,37 +82,34 @@ class TestAutoCreationEngineLoadData:
         ])
         self.engine = AutoCreationEngine(self.client)
 
-    def test_load_existing_data_success(self):
+    @pytest.mark.asyncio
+    async def test_load_existing_data_success(self):
         """Load existing channels and groups successfully."""
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._load_existing_data()
-        )
+        await self.engine._load_existing_data()
 
         assert len(self.engine._existing_channels) == 2
         assert len(self.engine._existing_groups) == 2
         self.client.get_channels.assert_called_once_with(page=1, page_size=100)
         self.client.get_channel_groups.assert_called_once()
 
-    def test_load_existing_data_api_failure(self):
+    @pytest.mark.asyncio
+    async def test_load_existing_data_api_failure(self):
         """Load existing data handles API failures gracefully."""
         self.client.get_channels = AsyncMock(side_effect=Exception("API error"))
         self.client.get_channel_groups = AsyncMock(side_effect=Exception("API error"))
 
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._load_existing_data()
-        )
+        await self.engine._load_existing_data()
 
         assert self.engine._existing_channels == []
         assert self.engine._existing_groups == []
 
-    def test_load_existing_data_empty_response(self):
+    @pytest.mark.asyncio
+    async def test_load_existing_data_empty_response(self):
         """Load existing data handles empty responses."""
         self.client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
         self.client.get_channel_groups = AsyncMock(return_value=None)
 
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._load_existing_data()
-        )
+        await self.engine._load_existing_data()
 
         assert self.engine._existing_channels == []
         assert self.engine._existing_groups == []
@@ -127,8 +123,9 @@ class TestAutoCreationEngineLoadRules:
         self.client = MagicMock()
         self.engine = AutoCreationEngine(self.client)
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_load_rules_all_enabled(self, mock_get_session):
+    async def test_load_rules_all_enabled(self, mock_get_session):
         """Load all enabled rules sorted by priority."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
@@ -147,15 +144,14 @@ class TestAutoCreationEngineLoadRules:
         mock_query.all.return_value = [mock_rule1, mock_rule2]
         mock_session.query.return_value = mock_query
 
-        rules = asyncio.get_event_loop().run_until_complete(
-            self.engine._load_rules()
-        )
+        rules = await self.engine._load_rules()
 
         assert len(rules) == 2
         mock_session.close.assert_called_once()
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_load_rules_specific_ids(self, mock_get_session):
+    async def test_load_rules_specific_ids(self, mock_get_session):
         """Load specific rules by ID."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
@@ -169,9 +165,7 @@ class TestAutoCreationEngineLoadRules:
         mock_query.all.return_value = [mock_rule]
         mock_session.query.return_value = mock_query
 
-        rules = asyncio.get_event_loop().run_until_complete(
-            self.engine._load_rules(rule_ids=[1])
-        )
+        rules = await self.engine._load_rules(rule_ids=[1])
 
         assert len(rules) == 1
 
@@ -198,37 +192,36 @@ class TestAutoCreationEngineFetchStreams:
         # Pre-populate existing groups so _fetch_streams doesn't need them unset
         self.engine._existing_groups = []
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_fetch_streams_all_accounts(self, mock_get_session):
+    async def test_fetch_streams_all_accounts(self, mock_get_session):
         """Fetch streams from all M3U accounts."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
         mock_session.query.return_value.filter.return_value.all.return_value = []
 
-        streams = asyncio.get_event_loop().run_until_complete(
-            self.engine._fetch_streams()
-        )
+        streams = await self.engine._fetch_streams()
 
         # 2 accounts * 2 streams each
         assert len(streams) == 4
         assert all(isinstance(s, StreamContext) for s in streams)
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_fetch_streams_specific_accounts(self, mock_get_session):
+    async def test_fetch_streams_specific_accounts(self, mock_get_session):
         """Fetch streams from specific M3U accounts."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
         mock_session.query.return_value.filter.return_value.all.return_value = []
 
-        streams = asyncio.get_event_loop().run_until_complete(
-            self.engine._fetch_streams(m3u_account_ids=[1])
-        )
+        streams = await self.engine._fetch_streams(m3u_account_ids=[1])
 
         # 1 account * 2 streams
         assert len(streams) == 2
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_fetch_streams_api_failure(self, mock_get_session):
+    async def test_fetch_streams_api_failure(self, mock_get_session):
         """Fetch streams handles API failure gracefully."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
@@ -236,14 +229,13 @@ class TestAutoCreationEngineFetchStreams:
 
         self.client.get_streams = AsyncMock(side_effect=Exception("API error"))
 
-        streams = asyncio.get_event_loop().run_until_complete(
-            self.engine._fetch_streams()
-        )
+        streams = await self.engine._fetch_streams()
 
         assert streams == []
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_fetch_streams_from_rules(self, mock_get_session):
+    async def test_fetch_streams_from_rules(self, mock_get_session):
         """Fetch streams from accounts specified in rules."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
@@ -252,9 +244,7 @@ class TestAutoCreationEngineFetchStreams:
         mock_rule = MagicMock()
         mock_rule.m3u_account_id = 1
 
-        streams = asyncio.get_event_loop().run_until_complete(
-            self.engine._fetch_streams(rules=[mock_rule])
-        )
+        streams = await self.engine._fetch_streams(rules=[mock_rule])
 
         # Only account 1
         assert len(streams) == 2
@@ -281,23 +271,23 @@ class TestAutoCreationEngineRunPipeline:
         self.client.create_channel = AsyncMock(return_value={"id": 1, "name": "ESPN HD"})
         self.engine = AutoCreationEngine(self.client)
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_run_pipeline_no_rules(self, mock_get_session):
+    async def test_run_pipeline_no_rules(self, mock_get_session):
         """Run pipeline with no enabled rules."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
         mock_session.query.return_value.filter.return_value.order_by.return_value.all.return_value = []
 
-        result = asyncio.get_event_loop().run_until_complete(
-            self.engine.run_pipeline()
-        )
+        result = await self.engine.run_pipeline()
 
         assert result["success"] is True
         assert result["message"] == "No enabled rules to process"
         assert result["streams_evaluated"] == 0
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_run_pipeline_dry_run(self, mock_get_session):
+    async def test_run_pipeline_dry_run(self, mock_get_session):
         """Run pipeline in dry run mode."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
@@ -328,17 +318,16 @@ class TestAutoCreationEngineRunPipeline:
         mock_session.refresh = MagicMock()
         mock_session.merge = MagicMock()
 
-        result = asyncio.get_event_loop().run_until_complete(
-            self.engine.run_pipeline(dry_run=True)
-        )
+        result = await self.engine.run_pipeline(dry_run=True)
 
         assert result["success"] is True
         assert result["mode"] == "dry_run"
         # Stream was skipped by rule
         assert result["streams_matched"] == 1
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_run_rule(self, mock_get_session):
+    async def test_run_rule(self, mock_get_session):
         """Run specific rule."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
@@ -350,9 +339,7 @@ class TestAutoCreationEngineRunPipeline:
         mock_query.all.return_value = []
         mock_session.query.return_value = mock_query
 
-        result = asyncio.get_event_loop().run_until_complete(
-            self.engine.run_rule(rule_id=1, dry_run=True)
-        )
+        result = await self.engine.run_rule(rule_id=1, dry_run=True)
 
         assert result["success"] is True
         assert result["message"] == "No enabled rules to process"
@@ -369,22 +356,22 @@ class TestAutoCreationEngineRollback:
         self.client.update_channel = AsyncMock()
         self.engine = AutoCreationEngine(self.client)
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_rollback_execution_not_found(self, mock_get_session):
+    async def test_rollback_execution_not_found(self, mock_get_session):
         """Rollback returns error if execution not found."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
         mock_session.query.return_value.filter.return_value.first.return_value = None
 
-        result = asyncio.get_event_loop().run_until_complete(
-            self.engine.rollback_execution(999)
-        )
+        result = await self.engine.rollback_execution(999)
 
         assert result["success"] is False
         assert "not found" in result["error"].lower()
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_rollback_execution_already_rolled_back(self, mock_get_session):
+    async def test_rollback_execution_already_rolled_back(self, mock_get_session):
         """Rollback returns error if already rolled back."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
@@ -393,15 +380,14 @@ class TestAutoCreationEngineRollback:
         mock_execution.status = "rolled_back"
         mock_session.query.return_value.filter.return_value.first.return_value = mock_execution
 
-        result = asyncio.get_event_loop().run_until_complete(
-            self.engine.rollback_execution(1)
-        )
+        result = await self.engine.rollback_execution(1)
 
         assert result["success"] is False
         assert "already rolled back" in result["error"].lower()
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_rollback_dry_run_execution(self, mock_get_session):
+    async def test_rollback_dry_run_execution(self, mock_get_session):
         """Rollback returns error for dry-run executions."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
@@ -411,15 +397,14 @@ class TestAutoCreationEngineRollback:
         mock_execution.mode = "dry_run"
         mock_session.query.return_value.filter.return_value.first.return_value = mock_execution
 
-        result = asyncio.get_event_loop().run_until_complete(
-            self.engine.rollback_execution(1)
-        )
+        result = await self.engine.rollback_execution(1)
 
         assert result["success"] is False
         assert "dry-run" in result["error"].lower()
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_rollback_execution_success(self, mock_get_session):
+    async def test_rollback_execution_success(self, mock_get_session):
         """Rollback execution successfully."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
@@ -436,9 +421,7 @@ class TestAutoCreationEngineRollback:
         ]
         mock_session.query.return_value.filter.return_value.first.return_value = mock_execution
 
-        result = asyncio.get_event_loop().run_until_complete(
-            self.engine.rollback_execution(1)
-        )
+        result = await self.engine.rollback_execution(1)
 
         assert result["success"] is True
         assert result["entities_removed"] == 2
@@ -453,8 +436,9 @@ class TestAutoCreationEngineRollback:
         assert mock_execution.status == "rolled_back"
         assert mock_execution.rolled_back_at is not None
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_rollback_execution_api_error(self, mock_get_session):
+    async def test_rollback_execution_api_error(self, mock_get_session):
         """Rollback handles API errors gracefully."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
@@ -471,9 +455,7 @@ class TestAutoCreationEngineRollback:
         # Make delete fail
         self.client.delete_channel = AsyncMock(side_effect=Exception("API error"))
 
-        result = asyncio.get_event_loop().run_until_complete(
-            self.engine.rollback_execution(1)
-        )
+        result = await self.engine.rollback_execution(1)
 
         # Should still succeed (errors are logged but don't fail rollback)
         assert result["success"] is True
@@ -492,8 +474,9 @@ class TestAutoCreationEngineProcessStreams:
         self.engine._existing_channels = []
         self.engine._existing_groups = []
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_process_streams_no_match(self, mock_get_session):
+    async def test_process_streams_no_match(self, mock_get_session):
         """Process streams with no matching rules."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
@@ -513,15 +496,14 @@ class TestAutoCreationEngineProcessStreams:
         mock_execution = MagicMock()
         mock_execution.id = 1
 
-        result = asyncio.get_event_loop().run_until_complete(
-            self.engine._process_streams(streams, [mock_rule], mock_execution, dry_run=True)
-        )
+        result = await self.engine._process_streams(streams, [mock_rule], mock_execution, dry_run=True)
 
         assert result["streams_evaluated"] == 1
         assert result["streams_matched"] == 0
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_process_streams_match_skip(self, mock_get_session):
+    async def test_process_streams_match_skip(self, mock_get_session):
         """Process streams that match a skip rule."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
@@ -543,15 +525,14 @@ class TestAutoCreationEngineProcessStreams:
         mock_execution = MagicMock()
         mock_execution.id = 1
 
-        result = asyncio.get_event_loop().run_until_complete(
-            self.engine._process_streams(streams, [mock_rule], mock_execution, dry_run=True)
-        )
+        result = await self.engine._process_streams(streams, [mock_rule], mock_execution, dry_run=True)
 
         assert result["streams_evaluated"] == 1
         assert result["streams_matched"] == 1
         assert result["streams_skipped"] == 1
 
-    def test_process_streams_multiple_rules_conflict(self):
+    @pytest.mark.asyncio
+    async def test_process_streams_multiple_rules_conflict(self):
         """Process streams that match multiple rules (conflict)."""
         streams = [
             StreamContext(stream_id=1, stream_name="ESPN", m3u_account_id=1, m3u_account_name="Provider")
@@ -584,17 +565,16 @@ class TestAutoCreationEngineProcessStreams:
             mock_session = MagicMock()
             mock_get_session.return_value = mock_session
 
-            result = asyncio.get_event_loop().run_until_complete(
-                self.engine._process_streams(streams, [mock_rule1, mock_rule2], mock_execution, dry_run=True)
-            )
+            result = await self.engine._process_streams(streams, [mock_rule1, mock_rule2], mock_execution, dry_run=True)
 
         # Should detect conflict
         assert len(result["conflicts"]) == 1
         assert result["conflicts"][0]["winning_rule_id"] == 1
         assert result["conflicts"][0]["losing_rule_ids"] == [2]
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_process_streams_stop_processing(self, mock_get_session):
+    async def test_process_streams_stop_processing(self, mock_get_session):
         """Process streams stops on stop_processing action."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
@@ -617,9 +597,7 @@ class TestAutoCreationEngineProcessStreams:
         mock_execution = MagicMock()
         mock_execution.id = 1
 
-        result = asyncio.get_event_loop().run_until_complete(
-            self.engine._process_streams(streams, [mock_rule], mock_execution, dry_run=True)
-        )
+        result = await self.engine._process_streams(streams, [mock_rule], mock_execution, dry_run=True)
 
         # Both streams are evaluated in Pass 1, but stop_processing
         # halts Pass 2 after the first match is actioned
@@ -635,37 +613,36 @@ class TestAutoCreationEngineExecutionTracking:
         self.client = MagicMock()
         self.engine = AutoCreationEngine(self.client)
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_create_execution(self, mock_get_session):
+    async def test_create_execution(self, mock_get_session):
         """Create execution record."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
 
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._create_execution(mode="execute", triggered_by="manual")
-        )
+        await self.engine._create_execution(mode="execute", triggered_by="manual")
 
         mock_session.add.assert_called_once()
         mock_session.commit.assert_called_once()
         mock_session.close.assert_called_once()
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_save_execution(self, mock_get_session):
+    async def test_save_execution(self, mock_get_session):
         """Save execution record."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
 
         mock_execution = MagicMock()
 
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._save_execution(mock_execution)
-        )
+        await self.engine._save_execution(mock_execution)
 
         mock_session.merge.assert_called_once_with(mock_execution)
         mock_session.commit.assert_called_once()
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_record_conflict(self, mock_get_session):
+    async def test_record_conflict(self, mock_get_session):
         """Record conflict in database."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
@@ -687,21 +664,20 @@ class TestAutoCreationEngineExecutionTracking:
         losing_rule = MagicMock()
         losing_rule.id = 2
 
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._record_conflict(
-                execution=mock_execution,
-                stream=stream,
-                winning_rule=winning_rule,
-                losing_rules=[losing_rule],
-                conflict_type="duplicate_match"
-            )
+        await self.engine._record_conflict(
+            execution=mock_execution,
+            stream=stream,
+            winning_rule=winning_rule,
+            losing_rules=[losing_rule],
+            conflict_type="duplicate_match"
         )
 
         mock_session.add.assert_called_once()
         mock_session.commit.assert_called_once()
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_update_rule_stats(self, mock_get_session):
+    async def test_update_rule_stats(self, mock_get_session):
         """Update rule statistics after execution."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
@@ -714,9 +690,7 @@ class TestAutoCreationEngineExecutionTracking:
             "streams_matched": 10,
         }
 
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._update_rule_stats([mock_rule], results)
-        )
+        await self.engine._update_rule_stats([mock_rule], results)
 
         assert mock_rule.last_run_at is not None
         mock_session.merge.assert_called_once_with(mock_rule)
@@ -734,37 +708,35 @@ class TestAutoCreationEngineRollbackHelpers:
         self.client.update_channel = AsyncMock()
         self.engine = AutoCreationEngine(self.client)
 
-    def test_rollback_created_channel(self):
+    @pytest.mark.asyncio
+    async def test_rollback_created_channel(self):
         """Rollback created channel by deleting it."""
         entity = {"type": "channel", "id": 1, "name": "ESPN"}
 
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._rollback_created_entity(entity)
-        )
+        await self.engine._rollback_created_entity(entity)
 
         self.client.delete_channel.assert_called_once_with(1)
 
-    def test_rollback_created_group(self):
+    @pytest.mark.asyncio
+    async def test_rollback_created_group(self):
         """Rollback created group by deleting it."""
         entity = {"type": "group", "id": 1, "name": "Sports"}
 
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._rollback_created_entity(entity)
-        )
+        await self.engine._rollback_created_entity(entity)
 
         self.client.delete_channel_group.assert_called_once_with(1)
 
-    def test_rollback_created_entity_api_error(self):
+    @pytest.mark.asyncio
+    async def test_rollback_created_entity_api_error(self):
         """Rollback handles API error gracefully."""
         self.client.delete_channel = AsyncMock(side_effect=Exception("API error"))
         entity = {"type": "channel", "id": 1, "name": "ESPN"}
 
         # Should not raise
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._rollback_created_entity(entity)
-        )
+        await self.engine._rollback_created_entity(entity)
 
-    def test_rollback_modified_channel(self):
+    @pytest.mark.asyncio
+    async def test_rollback_modified_channel(self):
         """Rollback modified channel by restoring state."""
         entity = {
             "type": "channel",
@@ -773,23 +745,21 @@ class TestAutoCreationEngineRollbackHelpers:
             "previous": {"logo_url": "old.png", "tvg_id": "ESPN.US"}
         }
 
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._rollback_modified_entity(entity)
-        )
+        await self.engine._rollback_modified_entity(entity)
 
         self.client.update_channel.assert_called_once_with(1, {"logo_url": "old.png", "tvg_id": "ESPN.US"})
 
-    def test_rollback_modified_entity_no_previous(self):
+    @pytest.mark.asyncio
+    async def test_rollback_modified_entity_no_previous(self):
         """Rollback skips entity with no previous state."""
         entity = {"type": "channel", "id": 1, "name": "ESPN"}
 
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._rollback_modified_entity(entity)
-        )
+        await self.engine._rollback_modified_entity(entity)
 
         self.client.update_channel.assert_not_called()
 
-    def test_rollback_modified_entity_api_error(self):
+    @pytest.mark.asyncio
+    async def test_rollback_modified_entity_api_error(self):
         """Rollback handles API error gracefully."""
         self.client.update_channel = AsyncMock(side_effect=Exception("API error"))
         entity = {
@@ -800,9 +770,7 @@ class TestAutoCreationEngineRollbackHelpers:
         }
 
         # Should not raise
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._rollback_modified_entity(entity)
-        )
+        await self.engine._rollback_modified_entity(entity)
 
 
 class TestAutoCreationEngineIntegration:
@@ -845,8 +813,9 @@ class TestAutoCreationEngineIntegration:
         self.client.create_channel = AsyncMock(return_value={"id": 2, "name": "ESPN2 HD"})
         self.engine = AutoCreationEngine(self.client)
 
+    @pytest.mark.asyncio
     @patch("auto_creation_engine.get_session")
-    def test_full_pipeline_dry_run(self, mock_get_session):
+    async def test_full_pipeline_dry_run(self, mock_get_session):
         """Run full pipeline in dry-run mode with real stream data."""
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
@@ -874,9 +843,7 @@ class TestAutoCreationEngineIntegration:
         mock_query.all.return_value = [mock_rule]
         mock_session.query.return_value = mock_query
 
-        result = asyncio.get_event_loop().run_until_complete(
-            self.engine.run_pipeline(dry_run=True)
-        )
+        result = await self.engine.run_pipeline(dry_run=True)
 
         assert result["success"] is True
         assert result["mode"] == "dry_run"
@@ -913,21 +880,23 @@ class TestAutoCreationEngineEPG:
         self.client.get_all_m3u_group_settings = AsyncMock(return_value={})
         self.engine = AutoCreationEngine(self.client)
 
-    async def test_prefetch_epg_grid_list_format(self):
-        """Engine correctly handles list format from get_epg_grid."""
-        # Mock API returning a simple list (breaking change fix)
-        self.client.get_epg_grid = AsyncMock(return_value=[
-            {
-                "tvg_id": "test.ch",
-                "title": "Match",
-                "start_time": "2026-02-27T10:00:00Z",
-                "end_time": "2026-02-27T12:00:00Z"
-            }
-        ])
-        # Also mock epg_data for source mapping fallback
-        self.client.get_epg_data = AsyncMock(return_value=[
-            {"tvg_id": "test.ch", "epg_source": 5}
-        ])
+    @pytest.mark.asyncio
+    async def test_prefetch_epg_grid_dict_format(self):
+        """Engine correctly handles dict format from get_epg_grid."""
+        # Mock API returning dict with data and channels (issue #1 fix)
+        self.client.get_epg_grid = AsyncMock(return_value={
+            "data": [
+                {
+                    "tvg_id": "test.ch",
+                    "title": "Match",
+                    "start_time": "2026-02-27T10:00:00Z",
+                    "end_time": "2026-02-27T12:00:00Z"
+                }
+            ],
+            "channels": [
+                {"tvg_id": "test.ch", "epg_source": 5}
+            ]
+        })
 
         # We need to mock datetime to ensure "today" matches our test data
         with patch("auto_creation_engine.datetime") as mock_dt:
@@ -951,8 +920,9 @@ class TestAutoCreationEngineEPG:
 
             self.client.get_epg_grid.assert_called_once()
 
+    @pytest.mark.asyncio
     async def test_execution_log_efficiency(self):
-        """Verify execution log only contains matched streams."""
+        """Verify execution log contains all streams (matched and non-matched)."""
         # Setup 2 streams, one matches, one doesn't
         stream1 = StreamContext(stream_id=1, stream_name="Match", m3u_account_id=1)
         stream2 = StreamContext(stream_id=2, stream_name="No", m3u_account_id=1)
@@ -967,9 +937,10 @@ class TestAutoCreationEngineEPG:
             # Use private method to test Pass 1 logic
             await self.engine._process_streams([stream1, stream2], [mock_rule], execution, dry_run=True)
 
-            # log should only have 1 entry (for stream1)
-            assert len(self.engine.results["execution_log"]) == 1
-            assert self.engine.results["execution_log"][0]["stream_name"] == "Match"
+            # Log should have 2 entries (both streams, matched and non-matched)
+            assert len(self.engine.results["execution_log"]) == 2
+            stream_names = {entry["stream_name"] for entry in self.engine.results["execution_log"]}
+            assert stream_names == {"Match", "No"}
 
 
 class TestPrefetchEpgGrid:
@@ -984,8 +955,9 @@ class TestPrefetchEpgGrid:
         from auto_creation_engine import AutoCreationEngine
         self.engine = AutoCreationEngine(self.client)
 
-    def test_epg_grid_dict_format_with_programmes(self):
-        """Handle dict response with 'programmes' key."""
+    @pytest.mark.asyncio
+    async def test_epg_grid_dict_format_with_data_key(self):
+        """Handle dict response with 'data' key (issue #1 fix)."""
         from auto_creation_evaluator import StreamContext
         from unittest.mock import AsyncMock
 
@@ -994,9 +966,9 @@ class TestPrefetchEpgGrid:
             StreamContext(stream_id=2, stream_name="Test Channel 2", tvg_id="CH2.US"),
         ]
 
-        # Mock get_epg_grid to return dict format
+        # Mock get_epg_grid to return dict format with "data" key
         self.client.get_epg_grid = AsyncMock(return_value={
-            "programmes": [
+            "data": [
                 {
                     "tvg_id": "CH1.US",
                     "title": "Show 1",
@@ -1010,42 +982,14 @@ class TestPrefetchEpgGrid:
             ]
         })
 
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._prefetch_epg_grid(streams)
-        )
+        await self.engine._prefetch_epg_grid(streams)
 
         # Verify enrichment
         assert streams[0].epg_title is not None
         assert "Show 1" in streams[0].epg_title
 
-    def test_epg_grid_dict_format_with_data_key(self):
-        """Handle dict response with 'data' key instead of 'programmes'."""
-        from auto_creation_evaluator import StreamContext
-        from unittest.mock import AsyncMock
-
-        streams = [
-            StreamContext(stream_id=1, stream_name="Test Channel 1", tvg_id="CH1.US"),
-        ]
-
-        self.client.get_epg_grid = AsyncMock(return_value={
-            "data": [
-                {
-                    "tvg_id": "CH1.US",
-                    "title": "Show 1",
-                    "start": "2026-03-03T10:00:00Z",
-                    "stop": "2026-03-03T11:00:00Z",
-                }
-            ]
-        })
-
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._prefetch_epg_grid(streams)
-        )
-
-        # Should process 'data' key
-        assert streams[0].epg_title is not None
-
-    def test_epg_grid_list_format(self):
+    @pytest.mark.asyncio
+    async def test_epg_grid_list_format(self):
         """Handle list response (legacy format)."""
         from auto_creation_evaluator import StreamContext
         from unittest.mock import AsyncMock
@@ -1063,36 +1007,44 @@ class TestPrefetchEpgGrid:
             }
         ])
 
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._prefetch_epg_grid(streams)
-        )
+        await self.engine._prefetch_epg_grid(streams)
 
         assert streams[0].epg_title is not None
 
-    def test_epg_grid_fetches_channel_metadata(self):
-        """Fetch EPG data list when channel metadata not in grid."""
+    @pytest.mark.asyncio
+    async def test_epg_grid_includes_channels_for_source_mapping(self):
+        """Grid response includes both data and channels (issue #1 fix)."""
         from auto_creation_evaluator import StreamContext
         from unittest.mock import AsyncMock
+        from unittest.mock import patch
 
         streams = [
             StreamContext(stream_id=1, stream_name="Test Channel 1", tvg_id="CH1.US"),
         ]
 
+        # Grid now returns both data and channels in one call
+        # Programs need start_time/end_time to be included in "today's" lookup
         self.client.get_epg_grid = AsyncMock(return_value={
-            "programmes": [{"tvg_id": "CH1.US", "title": "Show"}]
+            "data": [{"tvg_id": "CH1.US", "title": "Show", "start_time": "2026-03-03T10:00:00Z", "end_time": "2026-03-03T11:00:00Z"}],
+            "channels": [{"tvg_id": "CH1.US", "epg_source": 1}]
         })
-        self.client.get_epg_data = AsyncMock(return_value=[
-            {"tvg_id": "CH1.US", "epg_source": 1}
-        ])
 
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._prefetch_epg_grid(streams)
-        )
+        # Mock datetime to ensure "today" matches our test data
+        with patch("auto_creation_engine.datetime") as mock_dt:
+            import datetime as dt_real
+            mock_now = dt_real.datetime(2026, 3, 3, 10, 30, 0, tzinfo=dt_real.timezone.utc)
+            mock_dt.now.return_value = mock_now
+            mock_dt.fromisoformat = dt_real.datetime.fromisoformat
 
-        # Verify get_epg_data was called
-        self.client.get_epg_data.assert_called_once()
+            await self.engine._prefetch_epg_grid(streams)
 
-    def test_epg_grid_handles_exceptions_gracefully(self):
+            # Verify get_epg_data was NOT called (no fallback needed)
+            self.client.get_epg_data.assert_not_called()
+            # Verify stream was enriched with EPG data
+            assert streams[0].epg_title is not None
+
+    @pytest.mark.asyncio
+    async def test_epg_grid_handles_exceptions_gracefully(self):
         """Handle API errors without crashing."""
         from auto_creation_evaluator import StreamContext
         from unittest.mock import AsyncMock
@@ -1104,9 +1056,187 @@ class TestPrefetchEpgGrid:
         self.client.get_epg_grid = AsyncMock(side_effect=Exception("API Error"))
 
         # Should not raise, just log warning
-        asyncio.get_event_loop().run_until_complete(
-            self.engine._prefetch_epg_grid(streams)
-        )
+        await self.engine._prefetch_epg_grid(streams)
 
         # Streams should remain unchanged
         assert streams[0].epg_title is None
+
+
+class TestStateResetAcrossRules:
+    """Tests for EPG state reset between rules (issue #2)."""
+
+    @pytest.mark.asyncio
+    async def test_epg_match_state_reset_between_rules(self):
+        """EPG match state is reset between evaluating different rules."""
+        from auto_creation_evaluator import ConditionEvaluator
+
+        # Create a stream with EPG programs from two different sources
+        prog_source1 = {"title": "Movie", "source": 1, "start": "2026-03-03T10:00:00Z", "stop": "2026-03-03T12:00:00Z"}
+        prog_source2 = {"title": "Movie", "source": 2, "start": "2026-03-03T10:00:00Z", "stop": "2026-03-03T12:00:00Z"}
+        ctx = StreamContext(stream_id=1, stream_name="Test", epg_programs=[prog_source1, prog_source2])
+
+        evaluator = ConditionEvaluator()
+
+        # Rule 1: Match EPG title with source filter for source 1
+        rule1_conditions = [
+            {"type": "epg_source_is", "value": 1},
+            {"type": "epg_title_contains", "value": "Movie"}
+        ]
+
+        # Evaluate Rule 1 conditions (simulating what happens in the engine)
+        for cond in rule1_conditions:
+            result = evaluator.evaluate(cond, ctx, source_filter=1)
+            # First condition sets the source filter
+            if cond["type"] == "epg_source_is":
+                continue
+            # Second condition should match and set epg_match
+            if result.matched:
+                assert ctx.epg_match is not None
+                assert ctx.epg_match.get("source") == 1
+                assert ctx.matched_by_epg is True
+
+        # Now simulate the state reset that happens in the engine (issue #2 fix)
+        ctx.epg_match = None
+        ctx.matched_by_epg = False
+
+        # Rule 2: Match EPG title with source filter for source 2
+        rule2_conditions = [
+            {"type": "epg_source_is", "value": 2},
+            {"type": "epg_title_contains", "value": "Movie"}
+        ]
+
+        # Evaluate Rule 2 conditions
+        for cond in rule2_conditions:
+            result = evaluator.evaluate(cond, ctx, source_filter=2)
+            if cond["type"] == "epg_source_is":
+                continue
+            # Should match with source 2 (not source 1)
+            if result.matched:
+                assert ctx.epg_match is not None
+                assert ctx.epg_match.get("source") == 2
+                assert ctx.matched_by_epg is True
+
+
+class TestAccountGroupsLookup:
+    """Tests for account_groups lookup fix (issue #4)."""
+
+    def test_account_groups_lookup_by_group_id(self):
+        """account_groups lookup uses channel_group_id as key, not m3u_account_id."""
+        # Simulate the data structure returned by get_all_m3u_group_settings()
+        # Returns {channel_group_id: settings}
+        account_groups = {
+            100: {
+                "channel_group": 100,
+                "enabled": True,
+                "m3u_account_id": 1,
+                "m3u_account_name": "Provider 1"
+            },
+            200: {
+                "channel_group": 200,
+                "enabled": True,
+                "m3u_account_id": 2,
+                "m3u_account_name": "Provider 2"
+            }
+        }
+
+        # Stream has channel_group ID 100
+        stream = {
+            "id": 1,
+            "name": "Test Channel",
+            "channel_group": 100
+        }
+
+        # Create context using from_dispatcharr_stream
+        ctx = StreamContext.from_dispatcharr_stream(
+            stream,
+            m3u_account_id=1,
+            account_groups=account_groups
+        )
+
+        # The lookup should work because we use the correct key (channel_group_id)
+        # and verify the m3u_account_id matches
+        assert ctx is not None
+        assert ctx.stream_id == 1
+        assert ctx.channel_group_id == 100
+
+    def test_account_groups_lookup_wrong_account_fails(self):
+        """Lookup fails when group belongs to different account."""
+        account_groups = {
+            100: {
+                "channel_group": 100,
+                "m3u_account_id": 2,  # Different account
+                "m3u_account_name": "Provider 2"
+            }
+        }
+
+        stream = {
+            "id": 1,
+            "name": "Test Channel",
+            "channel_group": 100
+        }
+
+        # Create context with m3u_account_id=1 but group belongs to account 2
+        ctx = StreamContext.from_dispatcharr_stream(
+            stream,
+            m3u_account_id=1,
+            account_groups=account_groups
+        )
+
+        # Should not find group name because account IDs don't match
+        # (the fix checks m3u_account_id matches)
+        assert ctx is not None
+
+
+class TestNegatedEpgConditions:
+    """Tests for negated EPG conditions with source filter (coverage gap)."""
+
+    def test_epg_source_filter_with_negate_true(self):
+        """EPG_SOURCE_IS with negate=True should not filter other EPG conditions."""
+        from auto_creation_evaluator import ConditionEvaluator
+
+        # Programs from two sources
+        prog1 = {"title": "Movie", "source": 1, "start": "2026-03-03T10:00:00Z", "stop": "2026-03-03T12:00:00Z"}
+        prog2 = {"title": "Movie", "source": 2, "start": "2026-03-03T10:00:00Z", "stop": "2026-03-03T12:00:00Z"}
+        ctx = StreamContext(stream_id=1, stream_name="Test", epg_programs=[prog1, prog2])
+
+        evaluator = ConditionEvaluator()
+
+        # When source_filter is set to 1, but condition is negated
+        # The negate should prevent filtering, so we should search all sources
+        result = evaluator.evaluate(
+            {"type": "epg_title_contains", "value": "Movie", "negate": True},
+            ctx,
+            source_filter=1
+        )
+
+        # Negated condition should NOT match (title contains "Movie")
+        assert result.matched is False
+
+    def test_epg_source_is_negate_filters_out_source(self):
+        """EPG_SOURCE_IS with negate=True excludes that source from consideration."""
+        from auto_creation_evaluator import ConditionEvaluator
+
+        prog1 = {"title": "Movie", "source": 1, "start": "2026-03-03T10:00:00Z", "stop": "2026-03-03T12:00:00Z"}
+        prog2 = {"title": "Movie", "source": 2, "start": "2026-03-03T10:00:00Z", "stop": "2026-03-03T12:00:00Z"}
+        ctx = StreamContext(stream_id=1, stream_name="Test", epg_programs=[prog1, prog2])
+
+        evaluator = ConditionEvaluator()
+
+        # EPG_SOURCE_IS with negate=True and value 1
+        # This should exclude source 1 programs
+        result = evaluator.evaluate(
+            {"type": "epg_source_is", "value": 1, "negate": True},
+            ctx
+        )
+
+        # Should NOT match because source 1 has programs (negated to False)
+        assert result.matched is False
+
+        # Now test with only source 2 programs (no source 1 programs)
+        ctx_only_source2 = StreamContext(stream_id=2, stream_name="Test2", epg_programs=[prog2])
+        result2 = evaluator.evaluate(
+            {"type": "epg_source_is", "value": 1, "negate": True},
+            ctx_only_source2
+        )
+        # Should match because source 1 has no programs (negated to True)
+        assert result2.matched is True

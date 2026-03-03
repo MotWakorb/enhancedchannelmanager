@@ -6,6 +6,7 @@ services:
       dockerfile: Dockerfile
     ports:
       - "${ECM_PORT:-6100}:${ECM_PORT:-6100}"
+      - "${ECM_HTTPS_PORT:-6443}:${ECM_HTTPS_PORT:-6443}"
     volumes:
       - ecm-config:/config
     environment:

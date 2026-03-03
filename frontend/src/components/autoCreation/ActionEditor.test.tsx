@@ -940,7 +940,7 @@ describe('ActionEditor', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText(/used if match was found via name search/i)).toBeInTheDocument();
+        expect(screen.getByText(/used when no epg match is found/i)).toBeInTheDocument();
       });
     });
 
