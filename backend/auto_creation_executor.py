@@ -428,8 +428,8 @@ class ActionExecutor:
             TemplateVariables.NORMALIZED_NAME: stream_ctx.normalized_name or stream_ctx.stream_name,
             TemplateVariables.EPG_MATCH_TITLE: stream_ctx.epg_match.get("title", "") if stream_ctx.epg_match else "",
             TemplateVariables.EPG_MATCH_DESC: stream_ctx.epg_match.get("description", "") if stream_ctx.epg_match else "",
-            TemplateVariables.EPG_MATCH_START: _parse_epg_date(stream_ctx.epg_match.get("start", "")) if stream_ctx.epg_match else "",
-            TemplateVariables.EPG_MATCH_STOP: _parse_epg_date(stream_ctx.epg_match.get("stop", "")) if stream_ctx.epg_match else "",
+            TemplateVariables.EPG_MATCH_START: _parse_epg_date(stream_ctx.epg_match.get("start") or stream_ctx.epg_match.get("start_time") or "") if stream_ctx.epg_match else "",
+            TemplateVariables.EPG_MATCH_STOP: _parse_epg_date(stream_ctx.epg_match.get("stop") or stream_ctx.epg_match.get("end_time") or "") if stream_ctx.epg_match else "",
         }
 
         # Add custom variables with var: prefix
