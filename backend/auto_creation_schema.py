@@ -38,7 +38,6 @@ class ConditionType(str, Enum):
     EPG_DESC_MATCHES = "epg_desc_matches"            # Regex match on current EPG description
     EPG_ANY_CONTAINS = "epg_any_contains"            # Check EPG Title and EPG Desc
     EPG_ANY_MATCHES = "epg_any_matches"              # Check EPG Title and EPG Desc (Regex)
-    EPG_SOURCE_IS = "epg_source_is"                  # Check EPG Source ID
     ANY_FIELD_CONTAINS = "any_field_contains"        # Check Name, EPG Title, and EPG Desc
     ANY_FIELD_MATCHES = "any_field_matches"          # Check Name, EPG Title, and EPG Desc (Regex)
     LOGO_EXISTS = "logo_exists"                      # Has logo URL
@@ -113,7 +112,7 @@ class Condition:
 
         conditions = None
         if "conditions" in data:
-            conditions = [cls.from_dict(c) for c in data["conditions"]]
+            conditions = [Condition.from_dict(c) for c in data["conditions"]]
 
         return cls(
             type=data.get("type", "always"),
@@ -194,11 +193,12 @@ class Condition:
             if not isinstance(self.value, (int, float)) or self.value < 0:
                 errors.append(f"{self.type} requires a positive number")
 
-        elif cond_type in (ConditionType.PROVIDER_IS, ConditionType.EPG_SOURCE_IS):
+        elif cond_enum == ConditionType.PROVIDER_IS:
             if not isinstance(self.value, (int, list)):
                 errors.append(f"{self.type} requires an integer or list of integers")
             elif isinstance(self.value, list) and not all(isinstance(x, int) for x in self.value):
                 errors.append(f"{self.type} list must contain only integers")
+
 
         elif cond_type == ConditionType.CODEC_IS:
             if not isinstance(self.value, (str, list)):

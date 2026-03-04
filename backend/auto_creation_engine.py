@@ -26,6 +26,7 @@ from models import (
 from auto_creation_schema import (
     Action,
     ActionType,
+    Condition,
     ConditionType,
 )
 from auto_creation_evaluator import (
@@ -141,7 +142,6 @@ class AutoCreationEngine:
                 if ctype in (ConditionType.EPG_TITLE_CONTAINS, ConditionType.EPG_TITLE_MATCHES,
                               ConditionType.EPG_DESC_CONTAINS, ConditionType.EPG_DESC_MATCHES,
                               ConditionType.EPG_ANY_CONTAINS, ConditionType.EPG_ANY_MATCHES,
-                              ConditionType.EPG_SOURCE_IS,
                               ConditionType.ANY_FIELD_CONTAINS, ConditionType.ANY_FIELD_MATCHES):
                     needs_epg_grid = True
                     break
@@ -212,12 +212,12 @@ class AutoCreationEngine:
             **results
         }
 
-    async def _prefetch_epg_grid(self, streams: List) -> None:
+    async def _prefetch_epg_grid(self, streams: list[StreamContext]) -> None:
         """
         Pre-fetch EPG grid data and enrich streams with current program info.
 
-        This method fetches the EPG grid from Dispatcharr, maps tvg_id to EPG sources,
-        filters programs for today, and populates StreamContext with EPG title/description.
+        This method fetches the EPG grid from Dispatcharr, filters programs for today, 
+        and populates StreamContext with EPG title/description.
 
         Args:
             streams: List of StreamContext objects to enrich with EPG data
@@ -226,124 +226,64 @@ class AutoCreationEngine:
             logger.info("[AUTO-CREATE-ENGINE] Pre-fetching EPG grid for EPG conditions")
             epg_response = await self.client.get_epg_grid()
 
-            # get_epg_grid now returns a dict with "data" (programs) and "channels"
+            # get_epg_grid returns a dict with "data" (programs)
             epg_grid = epg_response.get("data") or []
-            grid_channels = epg_response.get("channels") or []
 
-            # NOTE: Re-introducing fallback for channel-source mapping
-            #
-            # The original CRITICAL #1 fix (PR #48) aimed to eliminate the fallback API call
-            # to get_epg_data(page_size=5000) by accessing channels directly from the grid.
-            #
-            # However, in practice, the /api/epg/grid/ endpoint returns {"data": [...], "channels": []}
-            # with an empty channels list. Without channel metadata, we cannot build the
-            # tvg_id -> epg_source mapping needed for EPG_SOURCE_IS conditions to work.
-            #
-            # Alternative approaches were investigated:
-            # - Using /api/channels/channels/: More API calls (page_size=100), less efficient
-            # - Using program-level source fields: Programs don't have epg_source/epg_source_id
-            # - Caching the mapping: Would get stale, adds complexity
-            #
-            # The fallback is the most reliable solution: one API call gets all mappings.
-            # This is a necessary trade-off: the extra API call enables EPG_SOURCE_IS functionality.
-            if not grid_channels:
-                logger.info("[AUTO-CREATE-ENGINE] No channel metadata in grid, fetching EPG data list for source mapping")
-                try:
-                    grid_channels = await self.client.get_epg_data(page_size=5000)
-                    logger.info("[AUTO-CREATE-ENGINE] Fetched %s EPG data entries for mapping", len(grid_channels))
-                except Exception as e:
-                    logger.warning("[AUTO-CREATE-ENGINE] Failed to fetch EPG data list: %s", e)
+            if not epg_grid:
+                logger.debug("[AUTO-CREATE-ENGINE] EPG grid returned no programs")
+                return
 
-            # Map tvg_id to epg_source from the channels list
-            tvg_to_source = {}
-            for ch in grid_channels:
-                # Dispatcharr channel objects can have 'tvg_id', 'id', or 'channel_id'
-                t_id = ch.get("tvg_id") or ch.get("id") or ch.get("channel_id")
-                # Source can be 'epg_source' or 'epg_source_id'
-                s_id = ch.get("epg_source") or ch.get("epg_source_id")
-                if t_id and s_id is not None:
-                    tvg_to_source[str(t_id).strip().lower()] = s_id
-
-            now = datetime.now(timezone.utc)
-            logger.info("[AUTO-CREATE-ENGINE] Fetched %s EPG programs. Current UTC time: %s", len(epg_grid), now)
-            logger.info("[AUTO-CREATE-ENGINE] Mapping built for %s EPG channels", len(tvg_to_source))
-
-            # Define boundaries for "today" (UTC)
-            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            today_end = today_start + timedelta(days=1)
-
-            epg_lookup = {}  # tvg_id -> {"titles": [...], "descriptions": [...], "programs": [...]}
-            found_sources = set()
-
+            # Map programs by tvg_id for fast lookup
+            prog_map = defaultdict(list)
             for prog in epg_grid:
+                # Some API versions or specific programs use 'channel' instead of 'tvg_id'
                 tvg_id = prog.get("tvg_id") or prog.get("channel")
-                if not tvg_id:
-                    continue
+                if tvg_id:
+                    lookup_key = str(tvg_id).strip().lower()
+                    prog_map[lookup_key].append(prog)
 
-                lookup_key = tvg_id.strip().lower()
-
-                # Try to get source from program first, then from our tvg_to_source map
-                source_id = prog.get("epg_source") or prog.get("epg_source_id") or tvg_to_source.get(lookup_key)
-
-                title = prog.get("title") or ""
-                desc = prog.get("description") or prog.get("desc") or ""
-
-                start_str = prog.get("start_time") or prog.get("start")
-                stop_str = prog.get("end_time") or prog.get("stop")
-
-                if not start_str or not stop_str:
-                    continue
-
-                try:
-                    # Handle ISO format with Z or +HH:MM
-                    start = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
-                    stop = datetime.fromisoformat(stop_str.replace('Z', '+00:00'))
-
-                    # Match if program overlaps with today
-                    if start < today_end and stop > today_start:
-                        if lookup_key not in epg_lookup:
-                            epg_lookup[lookup_key] = {"titles": [], "descriptions": [], "programs": []}
-
-                        epg_lookup[lookup_key]["titles"].append(title)
-                        if desc:
-                            epg_lookup[lookup_key]["descriptions"].append(desc)
-
-                        if source_id is not None:
-                            found_sources.add(source_id)
-
-                        # Store full program info for granular matching
-                        epg_lookup[lookup_key]["programs"].append({
-                            "title": title,
-                            "description": desc,
-                            "start": start_str,
-                            "stop": stop_str,
-                            "source": source_id
-                        })
-                except (ValueError, TypeError) as e:
-                    logger.debug("[AUTO-CREATE-ENGINE] EPG time parse error for %s: %s", tvg_id, e)
-
-            logger.info("[AUTO-CREATE-ENGINE] Built EPG lookup with %s channels having programs today. Sources found: %s", len(epg_lookup), sorted(list(found_sources)))
-
-            # Populate StreamContext with aggregated EPG info
+            # Enrich streams with current program and raw list for matching
+            now = datetime.now(timezone.utc)
             enriched_count = 0
-            for ctx in streams:
-                if ctx.tvg_id:
-                    clean_tvg_id = ctx.tvg_id.strip().lower()
-                    if clean_tvg_id in epg_lookup:
-                        info = epg_lookup[clean_tvg_id]
-                        # Join all programs for today with a separator
-                        ctx.epg_title = " | ".join(dict.fromkeys(info["titles"]))
-                        ctx.epg_description = " | ".join(dict.fromkeys(info["descriptions"]))
-                        ctx.epg_programs = info["programs"]
-                        enriched_count += 1
 
-            if enriched_count:
-                logger.info("[AUTO-CREATE-ENGINE] Enriched %s streams with today's EPG info", enriched_count)
-            else:
-                logger.warning("[AUTO-CREATE-ENGINE] No streams were enriched with EPG info (checked %s streams, lookup has %s entries)", len(streams), len(epg_lookup))
+            for stream in streams:
+                if not stream.tvg_id:
+                    continue
+
+                lookup_key = str(stream.tvg_id).strip().lower()
+                progs = prog_map.get(lookup_key, [])
+                if not progs:
+                    continue
+
+                # Store all programs for this stream (used by ConditionEvaluator)
+                stream.epg_programs = progs
+
+                # Find current program
+                current = None
+                for p in progs:
+                    try:
+                        start_str = p.get("start_time") or p.get("start")
+                        end_str = p.get("end_time") or p.get("stop")
+                        if not start_str or not end_str:
+                            continue
+                        start = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+                        end = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+                        if start <= now <= end:
+                            current = p
+                            break
+                    except (KeyError, ValueError):
+                        continue
+
+                if current:
+                    stream.epg_title = current.get("title")
+                    stream.epg_description = current.get("description") or current.get("desc")
+                    enriched_count += 1
+
+            logger.info("[AUTO-CREATE-ENGINE] Enriched %s/%s streams with current EPG guide data", 
+                        enriched_count, len(streams))
 
         except Exception as e:
-            logger.warning("[AUTO-CREATE-ENGINE] Failed to pre-fetch EPG grid: %s", e)
+            logger.error("[AUTO-CREATE-ENGINE] Failed to pre-fetch EPG grid: %s", e)
 
     async def run_rule(
         self,
@@ -1078,32 +1018,22 @@ class AutoCreationEngine:
                 if not conditions:
                     continue
 
-                # Compute source_filter once per rule to avoid O(N²) scanning (issue #6)
-                source_filter = None
-                for c_data in conditions:
-                    c_type = c_data.get("type") if isinstance(c_data, dict) else getattr(c_data, "type", None)
-                    c_negate = c_data.get("negate", False) if isinstance(c_data, dict) else getattr(c_data, "negate", False)
-                    c_value = c_data.get("value") if isinstance(c_data, dict) else getattr(c_data, "value", None)
-
-                    if c_type == "EPG_SOURCE_IS" and not c_negate:
-                        try:
-                            source_filter = int(c_value)
-                            break
-                        except (ValueError, TypeError):
-                            continue
-
                 # Reset EPG match state at the start of each rule's evaluation
                 # to prevent state bleed from previous rules (issue #2)
                 stream.epg_match = None
                 stream.matched_by_epg = False
 
                 # Group conditions by OR breaks (AND binds tighter)
-                or_groups = [[]]
+                or_groups = []
+                current_group = []
                 for cond in conditions:
                     connector = cond.get("connector", "and") if isinstance(cond, dict) else getattr(cond, 'connector', 'and')
-                    if connector == "or" and or_groups[-1]:
-                        or_groups.append([])
-                    or_groups[-1].append(cond)
+                    if (connector == "or" or connector.lower() == "or") and current_group:
+                        or_groups.append(current_group)
+                        current_group = []
+                    current_group.append(cond)
+                if current_group:
+                    or_groups.append(current_group)
 
                 # Evaluate conditions, track match per group
                 matched = False
@@ -1111,34 +1041,38 @@ class AutoCreationEngine:
                 for group in or_groups:
                     group_matched = True
                     group_log = []
-                    for condition in group:
-                        result = evaluator.evaluate(condition, stream, source_filter=source_filter)
-                        group_log.append({
-                            "type": result.condition_type,
-                            "value": condition.get("value") if isinstance(condition, dict) else str(getattr(condition, 'value', '')),
-                            "matched": result.matched,
-                            "details": result.details,
-                            "connector": condition.get("connector", "and") if isinstance(condition, dict) else getattr(condition, 'connector', 'and')
-                        })
-                        if not result.matched:
-                            group_matched = False
+
+                    # Wrap the group in an AND condition for evaluation
+                    # This ensures correct logical evaluation and matched_data propagation
+                    group_condition = Condition(
+                        type=ConditionType.AND.value,
+                        conditions=[Condition.from_dict(c) for c in group]
+                    )
+                    result = evaluator.evaluate(group_condition, stream)
                     
-                    # We always add to log if we are matched or in dry_run mode
-                    # This keeps the log logic simpler while still avoiding the main bottleneck
-                    conditions_log.extend(group_log)
-                    if group_matched:
+                    # Log individual conditions from the result details for visibility
+                    group_matched = result.matched
+                    if result.matched:
                         matched = True
-                        # Removed short-circuit break to ensure all OR groups are evaluated and logged (issue #5)
+                    
+                    # Reconstruct log from details or add overall group result
+                    conditions_log.append({
+                        "type": "or_group",
+                        "matched": result.matched,
+                        "details": result.details
+                    })
+
+                # Always add to log to provide visibility into why streams didn't match (issue #3)
+                stream_rules_log.append({
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "conditions": conditions_log,
+                    "matched": matched,
+                    "was_winner": matched and len(matching_rules) == 0
+                })
 
                 if matched:
                     matching_rules.append(rule)
-                    stream_rules_log.append({
-                        "rule_id": rule.id,
-                        "rule_name": rule.name,
-                        "conditions": conditions_log,
-                        "matched": True,
-                        "was_winner": len(matching_rules) == 1
-                    })
 
                     # Check for conflicts (multiple rules matching same stream)
                     if stream.stream_id not in stream_rule_matches:

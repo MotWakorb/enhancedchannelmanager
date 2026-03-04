@@ -6,7 +6,7 @@ import { useState, useEffect, useId } from 'react';
 import type { Condition, ConditionType } from '../../types/autoCreation';
 import { CustomSelect } from '../CustomSelect';
 import type { SelectOption } from '../CustomSelect';
-import { getM3UAccounts, getChannelGroups, getEPGSources } from '../../services/api';
+import { getM3UAccounts, getChannelGroups } from '../../services/api';
 import './ConditionEditor.css';
 
 // ============================================================================
@@ -71,13 +71,6 @@ const FIELDS: FieldDef[] = [
   { id: 'epg_title', label: 'EPG Title (Today)', category: 'stream', operators: TEXT_OPS },
   { id: 'epg_desc', label: 'EPG Description (Today)', category: 'stream', operators: TEXT_OPS },
   { id: 'epg_any', label: 'EPG Today (Title & Description)', category: 'stream', operators: TEXT_OPS },
-  {
-    id: 'epg_source', label: 'EPG Source', category: 'stream',
-    operators: [
-      { id: 'is', label: 'Is', valueType: 'select' },
-      { id: 'is_not', label: 'Is Not', valueType: 'select' },
-    ],
-  },
   { id: 'any_field', label: 'Any Field (Name/EPG Today)', category: 'stream', operators: TEXT_OPS },
   {
     id: 'provider', label: 'M3U Account', category: 'stream',
@@ -211,10 +204,6 @@ function buildCondition(
         default: type = 'epg_any_contains'; value = userValue; break;
       }
       break;
-    case 'epg_source':
-      type = 'epg_source_is'; value = userValue;
-      if (operator === 'is_not') negate = true;
-      break;
     case 'any_field':
       switch (operator) {
         case 'does_not_contain': type = 'any_field_contains'; value = userValue; negate = true; break;
@@ -327,9 +316,6 @@ function parseCondition(condition: Condition): { field: string; operator: string
       return { field: 'epg_any', operator: negate ? 'does_not_contain' : 'contains', displayValue: String(value ?? '') };
     case 'epg_any_matches':
       return detectRegexOp('epg_any', String(value ?? ''), true);
-
-    case 'epg_source_is':
-      return { field: 'epg_source', operator: negate ? 'is_not' : 'is', displayValue: String(value ?? '') };
 
     case 'any_field_contains':
       return { field: 'any_field', operator: negate ? 'does_not_contain' : 'contains', displayValue: String(value ?? '') };
@@ -536,13 +522,6 @@ export function ConditionEditor({
     ).catch(() => setProviderOptions([]));
   }, []);
 
-  const [epgSources, setEpgSources] = useState<{id: number, name: string}[]>([]);
-  useEffect(() => {
-    getEPGSources().then(sources =>
-      setEpgSources(sources.map(s => ({ id: s.id, name: s.name })))
-    ).catch(() => setEpgSources([]));
-  }, []);
-
   const [groupOptions, setGroupOptions] = useState<SelectOption[]>([]);
   useEffect(() => {
     getChannelGroups().then(groups =>
@@ -649,7 +628,6 @@ export function ConditionEditor({
                 <CustomSelect
                   options={
                     currentField === 'provider' ? providerOptions : 
-                    currentField === 'epg_source' ? epgSources.map(s => ({ value: String(s.id), label: s.name })) :
                     currentField === 'normalized_match_group' ? groupOptions : 
                     (operatorDef?.selectOptions ?? [])
                   }
@@ -657,12 +635,11 @@ export function ConditionEditor({
                   onChange={(val) => handleValueChange(Number(val))}
                   placeholder={
                     currentField === 'normalized_match_group' ? "Select group..." : 
-                    currentField === 'epg_source' ? "Select source..." :
                     "Select..."
                   }
                   disabled={readonly}
                   className="condition-value-select"
-                  searchable={currentField === 'provider' || currentField === 'normalized_match_group' || currentField === 'epg_source'}
+                  searchable={currentField === 'provider' || currentField === 'normalized_match_group'}
                 />
               ) : isNumber ? (
                 <input

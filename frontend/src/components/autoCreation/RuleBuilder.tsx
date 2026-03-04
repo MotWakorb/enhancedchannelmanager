@@ -633,7 +633,6 @@ function ConditionTypeSelector({
             { type: 'epg_desc_matches' as ConditionType, label: 'EPG Description (Today) Matches (Regex)' },
             { type: 'epg_any_contains' as ConditionType, label: 'EPG Today (Title & Description) Contains' },
             { type: 'epg_any_matches' as ConditionType, label: 'EPG Today (Title & Description) Matches (Regex)' },
-            { type: 'epg_source_is' as ConditionType, label: 'EPG Source' },
           ],
         },
       ],

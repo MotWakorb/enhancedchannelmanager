@@ -630,41 +630,6 @@ class TestConditionEvaluatorEPG:
         result = evaluator.evaluate({"type": "epg_any_contains", "value": "Football"}, ctx)
         assert result.matched is True
 
-    def test_epg_source_is_match(self):
-        """Matches specific EPG source and captures 'now airing' program."""
-        evaluator = ConditionEvaluator()
-        import datetime
-        now = datetime.datetime.now(datetime.timezone.utc)
-        start = (now - datetime.timedelta(hours=1)).isoformat()
-        stop = (now + datetime.timedelta(hours=1)).isoformat()
-        
-        prog = {"title": "Current Program", "start": start, "stop": stop, "source": 5}
-        ctx = StreamContext(stream_id=1, stream_name="Test", epg_programs=[prog])
-
-        result = evaluator.evaluate(
-            {"type": "epg_source_is", "value": 5},
-            ctx
-        )
-        assert result.matched is True
-        assert ctx.epg_match == prog
-        assert "matches (Now: 'Current Program')" in result.details
-
-    def test_epg_source_filter_application(self):
-        """EPG Source condition filters other EPG conditions in the same rule."""
-        evaluator = ConditionEvaluator()
-        prog1 = {"title": "MotoGP", "source": 1}
-        prog2 = {"title": "MotoGP", "source": 2}
-        ctx = StreamContext(stream_id=1, stream_name="Test", epg_programs=[prog1, prog2])
-
-        # Rule has EPG source filter for source 2 (issue #6: computed once per rule)
-        result = evaluator.evaluate(
-            {"type": "epg_title_contains", "value": "MotoGP"},
-            ctx,
-            source_filter=2
-        )
-        assert result.matched is True
-        assert ctx.epg_match == prog2  # Should match prog2 because of source filter
-
 
 class TestConditionEvaluatorMultiField:
     """Tests for any_field_* conditions."""

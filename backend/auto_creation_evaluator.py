@@ -75,37 +75,27 @@ class StreamContext:
                                  account_groups: dict = None) -> "StreamContext":
         """
         Create StreamContext from Dispatcharr stream API response.
-
-        Args:
-            stream: Stream dict from Dispatcharr API
-            m3u_account_id: M3U account ID this stream belongs to
-            m3u_account_name: M3U account name
-            stream_stats: Optional StreamStats record for quality info
-            account_groups: Optional map of {channel_group_id: settings} from get_all_m3u_group_settings()
-                          where each setting has m3u_account_id, m3u_account_name, channel_group, etc.
         """
         # Resolve group name
         group_name = stream.get("group_title") or stream.get("channel_group_name") or stream.get("m3u_group_name")
         group_id = stream.get("channel_group")
 
-        # If name is missing but we have ID and the map, look it up
-        # account_groups is {channel_group_id: settings} where settings contains m3u_account_id
-        if not group_name and group_id and account_groups and group_id in account_groups:
+        # account_groups is {channel_group_id: settings} from get_all_m3u_group_settings()
+        if group_id and account_groups and group_id in account_groups:
             group_setting = account_groups[group_id]
-            # Verify this group belongs to the same account
             if group_setting.get("m3u_account_id") == m3u_account_id:
-                group_name = group_setting.get("channel_group_name") or group_setting.get("name")
+                if not group_name:
+                    group_name = group_setting.get("name") or group_setting.get("channel_group_name")
 
         # Parse resolution from stream_stats
         resolution_height = None
         if stream_stats and stream_stats.get("resolution"):
             try:
-                # Format is "1920x1080"
                 parts = stream_stats["resolution"].split("x")
                 if len(parts) == 2:
                     resolution_height = int(parts[1])
-            except (ValueError, IndexError) as e:
-                logger.debug("[AUTO-CREATE-EVAL] Suppressed resolution parse error: %s", e)
+            except (ValueError, IndexError):
+                pass
 
         return cls(
             stream_id=stream.get("id"),
@@ -145,22 +135,13 @@ class EvaluationResult:
 
 class ConditionEvaluator:
     """
-    Evaluates conditions against stream contexts.
-
-    Usage:
-        evaluator = ConditionEvaluator(existing_channels, existing_groups)
-        result = evaluator.evaluate(condition, stream_context)
+    Evaluates auto-creation conditions against stream contexts.
     """
 
     def __init__(self, existing_channels: list[dict] = None, existing_groups: list[dict] = None,
                  normalization_engine=None):
         """
         Initialize the evaluator with existing channel/group data.
-
-        Args:
-            existing_channels: List of existing channel dicts from Dispatcharr
-            existing_groups: List of existing group dicts from Dispatcharr
-            normalization_engine: Optional NormalizationEngine for normalized_name_in_group conditions
         """
         self.existing_channels = existing_channels or []
         self.existing_groups = existing_groups or []
@@ -177,9 +158,6 @@ class ConditionEvaluator:
                     self._channels_by_group[group_id] = []
                 self._channels_by_group[group_id].append(channel)
 
-        # Build per-group channel name sets for fast normalized name lookups
-        # Includes raw names, names with channel-number prefixes stripped (e.g. "106 | Name" -> "Name"),
-        # and normalization-engine-processed names for maximum match coverage
         self._channel_names_by_group: dict[int, set[str]] = {}
         channel_number_prefix = re.compile(r'^\d+\s*\|\s*')
         for gid, channels in self._channels_by_group.items():
@@ -187,43 +165,24 @@ class ConditionEvaluator:
             for c in channels:
                 raw = c["name"]
                 names.add(raw.lower())
-                # Strip "123 | " channel number prefixes
                 stripped = channel_number_prefix.sub('', raw)
                 if stripped != raw:
                     names.add(stripped.lower())
-                # Apply normalization engine to the stripped name
                 if self._normalization_engine:
                     try:
                         result = self._normalization_engine.normalize(stripped)
-                        normalized = result.normalized
-                        if normalized:
-                            names.add(normalized.lower())
-                    except Exception as e:
-                        logger.warning("[AUTO-CREATE-EVAL] Normalization failed for channel '%s': %s", stripped, e)
+                        if result and result.normalized:
+                            names.add(result.normalized.lower())
+                    except Exception:
+                        pass
             self._channel_names_by_group[gid] = names
 
-        # Build global set of all channel names across all groups for normalized_name_exists
         self._all_channel_names: set[str] = set()
         for names_set in self._channel_names_by_group.values():
             self._all_channel_names.update(names_set)
 
     def _expand_date_placeholders(self, text: str, allow_ranges: bool = True) -> str:
-        """
-        Expand {date...} or {today...} placeholders in text.
-
-        Args:
-            text: Text with potential placeholders
-            allow_ranges: If True, expansions like {date+3} return a regex group (d1|d2|d3).
-                         If False, only single-date placeholders are expanded.
-
-        Supported formats:
-        - {date} or {today} -> YYYY-MM-DD (today)
-        - {date+N} -> today + N days (range: today to today+N)
-        - {date-N} -> today - N days (range: today to today-N)
-        - {date+Nd} -> today + N days (range: today to today+N)
-        - {date+Nw} -> today + N weeks (range: today to today+N*7)
-        - {date:FORMAT} -> today formatted (e.g., {date:%d %b})
-        """
+        """Expand {date...} or {today...} placeholders in text."""
         if not text or not isinstance(text, str) or "{" not in text:
             return text
 
@@ -232,34 +191,25 @@ class ConditionEvaluator:
         def replace_match(match):
             offset_str = match.group(1)
             format_str = match.group(2)
-
             base_date = datetime.now()
-
-            # Default unit is days
             unit = "d"
-            val_str = None
             val = 0
 
             if offset_str:
                 if not allow_ranges:
-                    return match.group(0)  # Don't expand ranges if not allowed
-
+                    return match.group(0)
                 val_str = offset_str
-                # Check if specific unit provided (d=days, w=weeks)
                 if offset_str[-1].lower() in ("d", "w"):
                     unit = offset_str[-1].lower()
                     val_str = offset_str[:-1]
-
                 try:
-                    # Parse the numerical offset value
                     val = int(val_str)
                 except ValueError:
-                    return match.group(0)  # Return original if parsing fails
+                    return match.group(0)
 
-            # Remove colon from format string if present
             fmt = "%Y-%m-%d"
             if format_str:
-                fmt = format_str[1:]  # Skip the ':'
+                fmt = format_str[1:]
 
             if val == 0:
                 try:
@@ -267,20 +217,11 @@ class ConditionEvaluator:
                 except ValueError:
                     return match.group(0)
 
-            # Range calculation
-            days_to_add = val
-            if unit == "w":
-                days_to_add = val * 7
-
+            days_to_add = val * 7 if unit == "w" else val
             max_days = 90
-            # Cap the range at 90 days to prevent huge regex generation
-            if days_to_add > max_days:
-                days_to_add = max_days
-            elif days_to_add < -max_days:
-                days_to_add = -max_days
+            days_to_add = max(min(days_to_add, max_days), -max_days)
 
             dates = []
-            # range is exclusive at end, so we need +1 or -1 to include the target date
             step = 1 if days_to_add > 0 else -1
             end = days_to_add + step
 
@@ -293,48 +234,38 @@ class ConditionEvaluator:
                 return match.group(0)
         return re.sub(pattern, replace_match, text)
 
-    def evaluate(self, condition: Condition | dict, context: StreamContext,
-                 source_filter: int = None) -> EvaluationResult:
-        """
-        Evaluate a condition against a stream context.
-
-        Args:
-            condition: Condition object or dict to evaluate
-            context: StreamContext with stream data
-            source_filter: Optional EPG source ID to filter EPG conditions (computed once per rule)
-
-        Returns:
-            EvaluationResult indicating if condition matched
-        """
+    def evaluate(self, condition: Condition | dict, context: StreamContext) -> EvaluationResult:
+        """Evaluate a condition against a stream context."""
         if isinstance(condition, dict):
             condition = Condition.from_dict(condition)
 
-        # source_filter is now computed once per rule in the engine (issue #6)
-        result = self._evaluate_condition(condition, context, source_filter=source_filter)
-
-        # Capture matched data if available
-        if result.matched and result.matched_data:
-            if "program" in result.matched_data:
-                context.epg_match = result.matched_data["program"]
-            
-            # If the result came from an EPG field, mark it
-            if result.condition_type in (
-                ConditionType.EPG_TITLE_CONTAINS, ConditionType.EPG_TITLE_MATCHES,
-                ConditionType.EPG_DESC_CONTAINS, ConditionType.EPG_DESC_MATCHES,
-                ConditionType.EPG_ANY_CONTAINS, ConditionType.EPG_ANY_MATCHES,
-                ConditionType.EPG_SOURCE_IS, # EPG_SOURCE_IS will set matched_data if it finds a 'now' program
-            ) or (result.condition_type in (
-                ConditionType.ANY_FIELD_CONTAINS, ConditionType.ANY_FIELD_MATCHES
-            ) and "program" in result.matched_data):
-                context.matched_by_epg = True
+        result = self._evaluate_condition(condition, context)
 
         # Apply negation if specified
         if condition.negate:
             result = EvaluationResult(
                 matched=not result.matched,
                 condition_type=f"not({result.condition_type})",
-                details=f"Negated: {result.details}"
+                details=f"Negated: {result.details}",
+                matched_data=result.matched_data
             )
+
+        # Capture matched data if available (after possible negation)
+        if result.matched and result.matched_data:
+            if "program" in result.matched_data:
+                context.epg_match = result.matched_data["program"]
+            
+            is_epg_type = result.condition_type in (
+                ConditionType.EPG_TITLE_CONTAINS, ConditionType.EPG_TITLE_MATCHES,
+                ConditionType.EPG_DESC_CONTAINS, ConditionType.EPG_DESC_MATCHES,
+                ConditionType.EPG_ANY_CONTAINS, ConditionType.EPG_ANY_MATCHES,
+                "and", "or"
+            )
+            
+            if is_epg_type or (result.condition_type in (
+                ConditionType.ANY_FIELD_CONTAINS, ConditionType.ANY_FIELD_MATCHES
+            ) and "program" in result.matched_data):
+                context.matched_by_epg = True
 
         logger.debug(
             "[AUTO-CREATE-EVAL] stream=%r type=%s matched=%s details=%s",
@@ -344,19 +275,14 @@ class ConditionEvaluator:
 
     def _evaluate_epg_field(self, field_name: str, pattern: str, is_regex: bool, 
                             case_sensitive: bool, context: StreamContext, 
-                            cond_type: str, source_id: int = None) -> EvaluationResult:
+                            cond_type: str) -> EvaluationResult:
         """Evaluate a field against daily programs and capture the matching program."""
         if not context.epg_programs:
             return EvaluationResult(False, cond_type, "No EPG data for today")
 
         pattern = self._expand_date_placeholders(pattern, allow_ranges=not is_regex)
         
-        # We search individual programs to find WHICH ONE matched
         for prog in context.epg_programs:
-            # Filter by EPG source if specified
-            if source_id is not None and prog.get("source") != source_id:
-                continue
-
             value = prog.get(field_name) or ""
             matched = False
             matched_segment = pattern
@@ -385,10 +311,9 @@ class ConditionEvaluator:
         
         return EvaluationResult(False, cond_type, f"No program scheduled for today matched '{pattern}'")
 
-    def _evaluate_condition(self, condition: Condition, context: StreamContext, 
-                            source_filter: int = None) -> EvaluationResult:
+    def _evaluate_condition(self, condition: Condition, context: StreamContext) -> EvaluationResult:
         """Internal evaluation logic."""
-        cond_type = condition.type
+        cond_type = condition.type.lower()
 
         try:
             cond_enum = ConditionType(cond_type)
@@ -423,612 +348,242 @@ class ConditionEvaluator:
             actual_group = (context.group_name or "").strip()
             res = self._evaluate_contains(condition.value, actual_group,
                                            condition.case_sensitive, cond_type)
-            res.details = f"Group '{actual_group}' {'' if res.matched else 'does not '}contain '{condition.value}'"
             return res
         elif cond_enum == ConditionType.STREAM_GROUP_MATCHES:
             actual_group = (context.group_name or "").strip()
             res = self._evaluate_regex(condition.value, actual_group,
                                         condition.case_sensitive, cond_type)
-            res.details = f"Group '{actual_group}' {'' if res.matched else 'does not '}match /{condition.value}/"
             return res
 
         # TVG conditions
         elif cond_enum == ConditionType.TVG_ID_EXISTS:
             has_tvg = bool(context.tvg_id)
-            expected = condition.value if condition.value is not None else True
-            matched = has_tvg == expected
-            return EvaluationResult(matched, cond_type,
-                                    f"tvg_id {'exists' if has_tvg else 'missing'}: {context.tvg_id}")
+            matched = has_tvg == (condition.value if condition.value is not None else True)
+            return EvaluationResult(matched, cond_type, f"tvg_id {'exists' if has_tvg else 'missing'}")
         elif cond_enum == ConditionType.TVG_ID_MATCHES:
             return self._evaluate_regex(condition.value, context.tvg_id or "",
                                         condition.case_sensitive, cond_type)
 
         # EPG conditions
         elif cond_enum == ConditionType.EPG_TITLE_CONTAINS:
-            logger.debug("[AUTO-CREATE-EVAL] Checking EPG title contains '%s' in today's programs (source=%s)", condition.value, source_filter)
-            return self._evaluate_epg_field("title", condition.value, False, condition.case_sensitive, context, cond_type, source_id=source_filter)
+            return self._evaluate_epg_field("title", condition.value, False, condition.case_sensitive, context, cond_type)
         elif cond_enum == ConditionType.EPG_TITLE_MATCHES:
-            logger.debug("[AUTO-CREATE-EVAL] Checking EPG title matches /%s/ in today's programs (source=%s)", condition.value, source_filter)
-            return self._evaluate_epg_field("title", condition.value, True, condition.case_sensitive, context, cond_type, source_id=source_filter)
+            return self._evaluate_epg_field("title", condition.value, True, condition.case_sensitive, context, cond_type)
         elif cond_enum == ConditionType.EPG_DESC_CONTAINS:
-            logger.debug("[AUTO-CREATE-EVAL] Checking EPG description contains '%s' in today's programs (source=%s)", condition.value, source_filter)
-            return self._evaluate_epg_field("description", condition.value, False, condition.case_sensitive, context, cond_type, source_id=source_filter)
+            return self._evaluate_epg_field("description", condition.value, False, condition.case_sensitive, context, cond_type)
         elif cond_enum == ConditionType.EPG_DESC_MATCHES:
-            logger.debug("[AUTO-CREATE-EVAL] Checking EPG description matches /%s/ in today's programs (source=%s)", condition.value, source_filter)
-            return self._evaluate_epg_field("description", condition.value, True, condition.case_sensitive, context, cond_type, source_id=source_filter)
+            return self._evaluate_epg_field("description", condition.value, True, condition.case_sensitive, context, cond_type)
 
-        # EPG multi-field search (Title & Description)
+        # multi-field search
         elif cond_enum == ConditionType.EPG_ANY_CONTAINS:
-            # Check EPG Title
-            title_res = self._evaluate_epg_field("title", condition.value, False, condition.case_sensitive, context, cond_type, source_id=source_filter)
-            if title_res.matched:
-                return title_res
-            # Check EPG Description
-            desc_res = self._evaluate_epg_field("description", condition.value, False, condition.case_sensitive, context, cond_type, source_id=source_filter)
-            return desc_res
-
+            title_res = self._evaluate_epg_field("title", condition.value, False, condition.case_sensitive, context, cond_type)
+            if title_res.matched: return title_res
+            return self._evaluate_epg_field("description", condition.value, False, condition.case_sensitive, context, cond_type)
         elif cond_enum == ConditionType.EPG_ANY_MATCHES:
-            # Check EPG Title
-            title_res = self._evaluate_epg_field("title", condition.value, True, condition.case_sensitive, context, cond_type, source_id=source_filter)
-            if title_res.matched:
-                return title_res
-            # Check EPG Description
-            desc_res = self._evaluate_epg_field("description", condition.value, True, condition.case_sensitive, context, cond_type, source_id=source_filter)
-            return desc_res
+            title_res = self._evaluate_epg_field("title", condition.value, True, condition.case_sensitive, context, cond_type)
+            if title_res.matched: return title_res
+            return self._evaluate_epg_field("description", condition.value, True, condition.case_sensitive, context, cond_type)
 
-        # EPG Source Condition
-        elif cond_enum == ConditionType.EPG_SOURCE_IS:
-            # Match if there are ANY programs from this source today for this tvg_id
-            if not context.epg_programs:
-                return EvaluationResult(False, cond_type, "No EPG data for today")
-            
-            try:
-                expected_source = int(condition.value)
-                now_utc = datetime.now(timezone.utc)
-                best_prog = None
-                
-                for prog in context.epg_programs:
-                    if prog.get("source") == expected_source:
-                        # Match found
-                        # Try to find program currently airing
-                        try:
-                            start_str = prog.get("start")
-                            stop_str = prog.get("stop")
-                            if start_str and stop_str:
-                                start = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
-                                stop = datetime.fromisoformat(stop_str.replace('Z', '+00:00'))
-                                if start <= now_utc <= stop:
-                                    return EvaluationResult(
-                                        True, cond_type, 
-                                        f"EPG source {expected_source} matches (Now: '{prog.get('title')}')",
-                                        matched_data={"program": prog}
-                                    )
-                        except (ValueError, TypeError):
-                            pass
-                        if not best_prog:
-                            best_prog = prog
-                
-                if best_prog:
-                    return EvaluationResult(
-                        True, cond_type, 
-                        f"EPG source {expected_source} has programs today",
-                        matched_data={"program": best_prog}
-                    )
-            except (ValueError, TypeError):
-                return EvaluationResult(False, cond_type, "Invalid source ID")
-            
-            return EvaluationResult(False, cond_type, f"EPG source {condition.value} has no programs today for this channel")
-
-        # Multi-field search (Name, Title & Description)
+        # Fallback to standard ANY_FIELD handling
         elif cond_enum == ConditionType.ANY_FIELD_CONTAINS:
-            # Check Stream Name
             name_res = self._evaluate_contains(condition.value, context.stream_name, condition.case_sensitive, cond_type)
-            # Check EPG Title
-            title_res = self._evaluate_epg_field("title", condition.value, False, condition.case_sensitive, context, cond_type, source_id=source_filter)
-            if title_res.matched:
-                return title_res
-            # Check EPG Description
-            desc_res = self._evaluate_epg_field("description", condition.value, False, condition.case_sensitive, context, cond_type, source_id=source_filter)
-            if desc_res.matched:
-                return desc_res
-            # Fallback to name result
-            return name_res
-
+            if name_res.matched: return name_res
+            return self.evaluate({"type": "epg_any_contains", "value": condition.value, "case_sensitive": condition.case_sensitive}, context)
         elif cond_enum == ConditionType.ANY_FIELD_MATCHES:
-            # Check Stream Name
             name_res = self._evaluate_regex(condition.value, context.stream_name, condition.case_sensitive, cond_type)
-            # Check EPG Title
-            title_res = self._evaluate_epg_field("title", condition.value, True, condition.case_sensitive, context, cond_type, source_id=source_filter)
-            if title_res.matched:
-                return title_res
-            # Check EPG Description
-            desc_res = self._evaluate_epg_field("description", condition.value, True, condition.case_sensitive, context, cond_type, source_id=source_filter)
-            if desc_res.matched:
-                return desc_res
-            # Fallback to name result
-            return name_res
+            if name_res.matched: return name_res
+            return self.evaluate({"type": "epg_any_matches", "value": condition.value, "case_sensitive": condition.case_sensitive}, context)
 
-        # Logo condition
+        # Provider, Quality, Codec, Logo
         elif cond_enum == ConditionType.LOGO_EXISTS:
             has_logo = bool(context.logo_url)
-            expected = condition.value if condition.value is not None else True
-            matched = has_logo == expected
-            return EvaluationResult(matched, cond_type,
-                                    f"logo {'exists' if has_logo else 'missing'}")
-
-        # Provider condition
+            return EvaluationResult(has_logo == (condition.value if condition.value is not None else True), cond_type, f"logo {'exists' if has_logo else 'missing'}")
         elif cond_enum == ConditionType.PROVIDER_IS:
             return self._evaluate_provider_is(condition.value, context.m3u_account_id, cond_type)
-
-        # Quality conditions
         elif cond_enum == ConditionType.QUALITY_MIN:
             return self._evaluate_quality_min(condition.value, context.resolution_height, cond_type)
         elif cond_enum == ConditionType.QUALITY_MAX:
             return self._evaluate_quality_max(condition.value, context.resolution_height, cond_type)
-
-        # Codec condition
         elif cond_enum == ConditionType.CODEC_IS:
             return self._evaluate_codec_is(condition.value, context.video_codec, cond_type)
-
-        # Audio tracks condition
         elif cond_enum == ConditionType.HAS_AUDIO_TRACKS:
             min_tracks = int(condition.value) if condition.value else 1
-            matched = context.audio_tracks >= min_tracks
-            return EvaluationResult(matched, cond_type,
-                                    f"audio tracks: {context.audio_tracks} >= {min_tracks}")
+            return EvaluationResult(context.audio_tracks >= min_tracks, cond_type, f"audio tracks: {context.audio_tracks} >= {min_tracks}")
 
         # Channel conditions
         elif cond_enum == ConditionType.HAS_CHANNEL:
             has_channel = context.channel_id is not None
-            expected = condition.value if condition.value is not None else True
-            matched = has_channel == expected
-            return EvaluationResult(matched, cond_type,
-                                    f"has_channel: {has_channel} (channel_id={context.channel_id})")
-
+            return EvaluationResult(has_channel == (condition.value if condition.value is not None else True), cond_type, f"has_channel: {has_channel}")
         elif cond_enum == ConditionType.CHANNEL_EXISTS_WITH_NAME:
             return self._evaluate_channel_exists_name(condition.value, cond_type)
-
         elif cond_enum == ConditionType.CHANNEL_EXISTS_MATCHING:
             return self._evaluate_channel_exists_regex(condition.value, condition.case_sensitive, cond_type)
-
         elif cond_enum == ConditionType.CHANNEL_IN_GROUP:
             return self._evaluate_channel_in_group(condition.value, context.channel_id, cond_type)
-
         elif cond_enum == ConditionType.CHANNEL_HAS_STREAMS:
             return self._evaluate_channel_has_streams(condition.value, context.channel_id, cond_type)
-
         elif cond_enum == ConditionType.NORMALIZED_NAME_IN_GROUP:
             return self._evaluate_normalized_name_in_group(condition.value, context, cond_type)
-
         elif cond_enum == ConditionType.NORMALIZED_NAME_NOT_IN_GROUP:
             return self._evaluate_normalized_name_not_in_group(condition.value, context, cond_type)
-
         elif cond_enum == ConditionType.NORMALIZED_NAME_EXISTS:
             return self._evaluate_normalized_name_exists(context, cond_type)
-
         elif cond_enum == ConditionType.NORMALIZED_NAME_NOT_EXISTS:
             return self._evaluate_normalized_name_not_exists(context, cond_type)
 
-        # Fallback
-        logger.warning("[AUTO-CREATE-EVAL] Unhandled condition type: %s", cond_type)
-        return EvaluationResult(False, cond_type, f"Unhandled condition type")
-
-    # =========================================================================
-    # Logical Operators
-    # =========================================================================
+        return EvaluationResult(False, cond_type, "Unhandled type")
 
     def _evaluate_and(self, condition: Condition, context: StreamContext) -> EvaluationResult:
-        """Evaluate AND condition - all sub-conditions must match."""
+        """Evaluate AND compound condition."""
         if not condition.conditions:
-            return EvaluationResult(False, "and", "No sub-conditions")
-
-        results = []
-        for sub_cond in condition.conditions:
-            result = self.evaluate(sub_cond, context)
-            results.append(result)
-            if not result.matched:
-                # Short-circuit on first failure
-                logger.debug(
-                    "[AUTO-CREATE-EVAL] AND stream=%r short-circuit fail at "
-                    "sub-condition %s: %s",
-                    context.stream_name, result.condition_type, result.details
-                )
-                return EvaluationResult(
-                    False, "and",
-                    f"Failed at: {result.condition_type} - {result.details}"
-                )
-
-        logger.debug("[AUTO-CREATE-EVAL] AND stream=%r all %s sub-conditions matched", context.stream_name, len(results))
-        return EvaluationResult(
-            True, "and",
-            f"All {len(results)} conditions matched"
-        )
+            return EvaluationResult(True, "and", "Empty AND matches")
+        all_details = []
+        final_matched_data = {}
+        for i, sub in enumerate(condition.conditions):
+            res = self.evaluate(sub, context)
+            all_details.append(f"[{i}] {res.condition_type}: {res.details}")
+            if not res.matched:
+                return EvaluationResult(False, "and", " AND ".join(all_details))
+            if res.matched_data:
+                final_matched_data.update(res.matched_data)
+        return EvaluationResult(True, "and", " AND ".join(all_details), matched_data=final_matched_data)
 
     def _evaluate_or(self, condition: Condition, context: StreamContext) -> EvaluationResult:
-        """Evaluate OR condition - at least one sub-condition must match."""
+        """Evaluate OR compound condition."""
         if not condition.conditions:
-            return EvaluationResult(False, "or", "No sub-conditions")
-
-        for sub_cond in condition.conditions:
-            result = self.evaluate(sub_cond, context)
-            if result.matched:
-                # Short-circuit on first success
-                logger.debug(
-                    "[AUTO-CREATE-EVAL] OR stream=%r short-circuit match at "
-                    "sub-condition %s: %s",
-                    context.stream_name, result.condition_type, result.details
-                )
-                return EvaluationResult(
-                    True, "or",
-                    f"Matched: {result.condition_type} - {result.details}"
-                )
-
-        logger.debug(
-            "[AUTO-CREATE-EVAL] OR stream=%r none of %s sub-conditions matched",
-            context.stream_name, len(condition.conditions)
-        )
-        return EvaluationResult(
-            False, "or",
-            f"None of {len(condition.conditions)} conditions matched"
-        )
+            return EvaluationResult(True, "or", "Empty OR matches")
+        all_details = []
+        for i, sub in enumerate(condition.conditions):
+            res = self.evaluate(sub, context)
+            all_details.append(f"[{i}] {res.condition_type}: {res.details}")
+            if res.matched:
+                return EvaluationResult(True, "or", " OR ".join(all_details), matched_data=res.matched_data)
+        return EvaluationResult(False, "or", " OR ".join(all_details))
 
     def _evaluate_not(self, condition: Condition, context: StreamContext) -> EvaluationResult:
-        """Evaluate NOT condition - inverts the sub-condition result."""
+        """Evaluate NOT compound condition."""
         if not condition.conditions or len(condition.conditions) != 1:
-            return EvaluationResult(False, "not", "Requires exactly 1 sub-condition")
+            return EvaluationResult(False, "not", "NOT requires exactly 1 sub-condition")
+        res = self.evaluate(condition.conditions[0], context)
+        return EvaluationResult(not res.matched, "not", f"NOT ({res.details})")
 
-        result = self.evaluate(condition.conditions[0], context)
-        return EvaluationResult(
-            not result.matched, "not",
-            f"Negated ({result.condition_type}): {result.details}"
-        )
-
-    # =========================================================================
-    # String Matching
-    # =========================================================================
-
-    def _evaluate_regex(self, pattern: str, value: str, case_sensitive: bool,
-                        cond_type: str) -> EvaluationResult:
-        """Evaluate regex pattern against value."""
-
+    # String Matching helpers
+    def _evaluate_regex(self, pattern: str, value: str, case_sensitive: bool, cond_type: str) -> EvaluationResult:
         pattern = self._expand_date_placeholders(pattern)
-        if not pattern:
-            return EvaluationResult(False, cond_type, "No pattern specified")
-        if value is None:
-            value = ""
-
+        if not pattern: return EvaluationResult(False, cond_type, "No pattern")
         try:
             flags = 0 if case_sensitive else re.IGNORECASE
-            match_obj = re.search(pattern, value, flags)
+            match_obj = re.search(pattern, value or "", flags)
             matched = bool(match_obj)
-            matched_segment = match_obj.group(0) if match_obj else pattern
-            return EvaluationResult(
-                matched, cond_type,
-                f"'{value}' {'matches' if matched else 'does not match'} /{pattern}/ (segment: '{matched_segment}')"
-            )
+            return EvaluationResult(matched, cond_type, f"'{value}' {'matches' if matched else 'no match'} /{pattern}/")
         except re.error as e:
-            logger.error("[AUTO-CREATE-EVAL] Invalid regex pattern '%s': %s", pattern, e)
             return EvaluationResult(False, cond_type, f"Invalid regex: {e}")
 
-    def _evaluate_contains(self, substring: str, value: str, case_sensitive: bool,
-                           cond_type: str) -> EvaluationResult:
-        """Evaluate substring containment."""
-
+    def _evaluate_contains(self, substring: str, value: str, case_sensitive: bool, cond_type: str) -> EvaluationResult:
         substring = self._expand_date_placeholders(substring, allow_ranges=False)
+        if not substring: return EvaluationResult(False, cond_type, "No substring")
+        matched = (substring in (value or "")) if case_sensitive else (substring.lower() in (value or "").lower())
+        return EvaluationResult(matched, cond_type, f"'{value}' {'contains' if matched else 'no match'} '{substring}'")
 
-        if not substring:
-            return EvaluationResult(False, cond_type, "No substring specified")
-        if value is None:
-            value = ""
+    # Provider, Quality, Codec, etc. helpers
+    def _evaluate_provider_is(self, expected, actual, cond_type):
+        if actual is None: return EvaluationResult(False, cond_type, "No provider")
+        matched = (actual in expected) if isinstance(expected, list) else (actual == expected)
+        return EvaluationResult(matched, cond_type, f"Provider {actual} check")
 
-        if case_sensitive:
-            matched = substring in value
-        else:
-            matched = substring.lower() in value.lower()
+    def _evaluate_quality_min(self, min_h, actual_h, cond_type):
+        if actual_h is None: return EvaluationResult(False, cond_type, "No quality")
+        return EvaluationResult(actual_h >= min_h, cond_type, f"quality {actual_h}p >= {min_h}p")
 
-        return EvaluationResult(
-            matched, cond_type,
-            f"'{value}' {'contains' if matched else 'does not contain'} '{substring}'"
-        )
+    def _evaluate_quality_max(self, max_h, actual_h, cond_type):
+        if actual_h is None: return EvaluationResult(True, cond_type, "No quality")
+        return EvaluationResult(actual_h <= max_h, cond_type, f"quality {actual_h}p <= {max_h}p")
 
-    # =========================================================================
-    # Provider Conditions
-    # =========================================================================
+    def _evaluate_codec_is(self, expected, actual, cond_type):
+        if actual is None: return EvaluationResult(False, cond_type, "No codec")
+        act_l = actual.lower()
+        matched = (act_l in [c.lower() for c in expected]) if isinstance(expected, list) else (act_l == expected.lower())
+        return EvaluationResult(matched, cond_type, f"codec {actual} check")
 
-    def _evaluate_provider_is(self, expected: int | list, actual: int | None,
-                               cond_type: str) -> EvaluationResult:
-        """Evaluate if stream is from expected provider(s)."""
-        if actual is None:
-            return EvaluationResult(False, cond_type, "No provider ID on stream")
+    # Channel conditions
+    def _evaluate_channel_exists_name(self, name, cond_type):
+        name = self._expand_date_placeholders(name, allow_ranges=False)
+        exists = name.lower() in self._channel_names
+        return EvaluationResult(exists, cond_type, f"Channel '{name}' exists: {exists}")
 
-        if isinstance(expected, list):
-            matched = actual in expected
-            return EvaluationResult(
-                matched, cond_type,
-                f"Provider ID {actual} {'matches' if matched else 'does not match'} list {expected}"
-            )
-        else:
-            matched = actual == expected
-            return EvaluationResult(
-                matched, cond_type,
-                f"Provider ID {actual} {'matches' if matched else 'does not match'} expected {expected}"
-            )
-
-    # =========================================================================
-    # Quality Conditions
-    # =========================================================================
-
-    def _evaluate_quality_min(self, min_height: int, actual_height: int | None,
-                               cond_type: str) -> EvaluationResult:
-        """Evaluate minimum quality requirement."""
-        if actual_height is None:
-            # No quality info - assume doesn't meet minimum
-            return EvaluationResult(
-                False, cond_type,
-                f"No quality info available (required >= {min_height}p)"
-            )
-
-        matched = actual_height >= min_height
-        return EvaluationResult(
-            matched, cond_type,
-            f"quality {actual_height}p {'>='}  {min_height}p: {matched}"
-        )
-
-    def _evaluate_quality_max(self, max_height: int, actual_height: int | None,
-                               cond_type: str) -> EvaluationResult:
-        """Evaluate maximum quality limit."""
-        if actual_height is None:
-            # No quality info - assume within limit
-            return EvaluationResult(
-                True, cond_type,
-                f"No quality info available (limit <= {max_height}p)"
-            )
-
-        matched = actual_height <= max_height
-        return EvaluationResult(
-            matched, cond_type,
-            f"quality {actual_height}p {'<='} {max_height}p: {matched}"
-        )
-
-    # =========================================================================
-    # Codec Conditions
-    # =========================================================================
-
-    def _evaluate_codec_is(self, expected: str | list, actual: str | None,
-                           cond_type: str) -> EvaluationResult:
-        """Evaluate video codec match."""
-        if actual is None:
-            return EvaluationResult(False, cond_type, "No codec info available")
-
-        actual_lower = actual.lower()
-
-        if isinstance(expected, list):
-            expected_lower = [c.lower() for c in expected]
-            matched = actual_lower in expected_lower
-            return EvaluationResult(
-                matched, cond_type,
-                f"codec '{actual}' {'in' if matched else 'not in'} {expected}"
-            )
-        else:
-            matched = actual_lower == expected.lower()
-            return EvaluationResult(
-                matched, cond_type,
-                f"codec '{actual}' {'==' if matched else '!='} '{expected}'"
-            )
-
-    # =========================================================================
-    # Channel Conditions
-    # =========================================================================
-
-    def _evaluate_channel_exists_name(self, channel_name: str, cond_type: str) -> EvaluationResult:
-        """Check if a channel with exact name exists."""
-
-        channel_name = self._expand_date_placeholders(channel_name, allow_ranges=False)
-
-        exists = channel_name.lower() in self._channel_names
-        return EvaluationResult(
-            exists, cond_type,
-            f"Channel '{channel_name}' {'exists' if exists else 'does not exist'}"
-        )
-
-    def _evaluate_channel_exists_regex(self, pattern: str, case_sensitive: bool,
-                                        cond_type: str) -> EvaluationResult:
-        """Check if any channel matches the regex pattern."""
-
+    def _evaluate_channel_exists_regex(self, pattern, case_sensitive, cond_type):
         pattern = self._expand_date_placeholders(pattern)
-
         try:
             flags = 0 if case_sensitive else re.IGNORECASE
             regex = re.compile(pattern, flags)
+            for ch in self.existing_channels:
+                if regex.search(ch.get("name", "")): return EvaluationResult(True, cond_type, f"Match: {ch['name']}")
+            return EvaluationResult(False, cond_type, "No regex match")
+        except re.error as e: return EvaluationResult(False, cond_type, f"Regex err: {e}")
 
-            for channel in self.existing_channels:
-                if regex.search(channel.get("name", "")):
-                    return EvaluationResult(
-                        True, cond_type,
-                        f"Channel '{channel['name']}' matches /{pattern}/"
-                    )
+    def _evaluate_channel_in_group(self, group_id, channel_id, cond_type):
+        if channel_id is None: return EvaluationResult(False, cond_type, "No channel")
+        ch = self._channel_by_id.get(channel_id)
+        if not ch: return EvaluationResult(False, cond_type, "Not found")
+        cg_id = ch.get("channel_group_id") or ch.get("channel_group", {}).get("id")
+        return EvaluationResult(cg_id == group_id, cond_type, f"Group {cg_id} check")
 
-            return EvaluationResult(
-                False, cond_type,
-                f"No channel matches /{pattern}/"
-            )
-        except re.error as e:
-            return EvaluationResult(False, cond_type, f"Invalid regex: {e}")
+    def _evaluate_channel_has_streams(self, min_s, channel_id, cond_type):
+        if channel_id is None: return EvaluationResult(False, cond_type, "No channel")
+        ch = self._channel_by_id.get(channel_id)
+        if not ch: return EvaluationResult(False, cond_type, "Not found")
+        count = len(ch.get("streams", []))
+        return EvaluationResult(count >= min_s, cond_type, f"Streams: {count} >= {min_s}")
 
-    def _evaluate_channel_in_group(self, group_id: int, channel_id: int | None,
-                                    cond_type: str) -> EvaluationResult:
-        """Check if the stream's channel is in a specific group."""
-        if channel_id is None:
-            return EvaluationResult(False, cond_type, "Stream has no channel")
-
-        channel = self._channel_by_id.get(channel_id)
-        if not channel:
-            return EvaluationResult(False, cond_type, f"Channel {channel_id} not found")
-
-        channel_group_id = channel.get("channel_group_id") or channel.get("channel_group", {}).get("id")
-        matched = channel_group_id == group_id
-
-        return EvaluationResult(
-            matched, cond_type,
-            f"Channel in group {channel_group_id} {'==' if matched else '!='} {group_id}"
-        )
-
-    def _evaluate_channel_has_streams(self, min_streams: int, channel_id: int | None,
-                                       cond_type: str) -> EvaluationResult:
-        """Check if the stream's channel has at least N streams."""
-        if channel_id is None:
-            return EvaluationResult(False, cond_type, "Stream has no channel")
-
-        channel = self._channel_by_id.get(channel_id)
-        if not channel:
-            return EvaluationResult(False, cond_type, f"Channel {channel_id} not found")
-
-        # Get stream count from channel
-        stream_count = len(channel.get("streams", []))
-        matched = stream_count >= min_streams
-
-        return EvaluationResult(
-            matched, cond_type,
-            f"Channel has {stream_count} streams {'>='}  {min_streams}: {matched}"
-        )
-
-
-    def _evaluate_normalized_name_in_group(self, group_id: int, context: StreamContext,
-                                              cond_type: str) -> EvaluationResult:
-        """Check if the stream's normalized name matches any channel in the specified group."""
-        if not group_id:
-            return EvaluationResult(False, cond_type, "No group ID specified")
-
-        # Get channel names in the target group
+    def _evaluate_normalized_name_in_group(self, group_id, context, cond_type):
+        if not group_id: return EvaluationResult(False, cond_type, "No group")
         group_names = self._channel_names_by_group.get(group_id)
-        if not group_names:
-            return EvaluationResult(False, cond_type, f"Group {group_id} has no channels")
-
-        # Normalize the stream name
-        stream_name = context.stream_name
-        if self._normalization_engine:
-            try:
-                result = self._normalization_engine.normalize(stream_name)
-                normalized = result.normalized
-            except Exception as e:
-                logger.warning("[AUTO-CREATE-EVAL] Normalization failed for '%s': %s", stream_name, e)
-                normalized = stream_name
-        else:
-            normalized = stream_name
-
-        # Check if normalized name matches any channel in the group (case-insensitive)
+        if not group_names: return EvaluationResult(False, cond_type, "Empty group")
+        normalized = self._normalize_stream_name(context)
         matched = normalized.lower() in group_names
+        return EvaluationResult(matched, cond_type, f"Normalized '{normalized}' in group {group_id}: {matched}")
 
-        return EvaluationResult(
-            matched, cond_type,
-            f"'{stream_name}' → '{normalized}' {'matches' if matched else 'no match in'} group {group_id} "
-            f"({len(group_names)} channels)"
-        )
-
-    def _evaluate_normalized_name_not_in_group(self, group_id: int, context: StreamContext,
-                                                  cond_type: str) -> EvaluationResult:
-        """Check if the stream's normalized name does NOT match any channel in the specified group."""
-        # Reuse the in-group evaluator and invert the result
-        result = self._evaluate_normalized_name_in_group(group_id, context, "normalized_name_in_group")
-        return EvaluationResult(
-            not result.matched, cond_type,
-            result.details.replace("matches", "NOT in").replace("no match in", "confirmed not in")
-            if result.details else f"Inverted group check for group {group_id}"
-        )
+    def _evaluate_normalized_name_not_in_group(self, group_id, context, cond_type):
+        res = self._evaluate_normalized_name_in_group(group_id, context, "normalized_name_in_group")
+        return EvaluationResult(not res.matched, cond_type, f"Inverted: {res.details}")
 
     def _normalize_stream_name(self, context: StreamContext) -> str:
-        """Normalize the stream name using the normalization engine if available."""
-        stream_name = context.stream_name
         if self._normalization_engine:
-            try:
-                result = self._normalization_engine.normalize(stream_name)
-                return result.normalized
-            except Exception as e:
-                logger.warning("[AUTO-CREATE-EVAL] Normalization failed for '%s': %s", stream_name, e)
-                return stream_name
-        return stream_name
+            try: return self._normalization_engine.normalize(context.stream_name).normalized
+            except Exception: pass
+        return context.stream_name
 
-    def _evaluate_normalized_name_exists(self, context: StreamContext,
-                                            cond_type: str) -> EvaluationResult:
-        """Check if the stream's normalized name matches any channel in ANY group."""
-        if not self._all_channel_names:
-            return EvaluationResult(False, cond_type, "No channels exist in any group")
-
+    def _evaluate_normalized_name_exists(self, context, cond_type):
+        if not self._all_channel_names: return EvaluationResult(False, cond_type, "No channels")
         normalized = self._normalize_stream_name(context)
         matched = normalized.lower() in self._all_channel_names
+        return EvaluationResult(matched, cond_type, f"Normalized '{normalized}' exists: {matched}")
 
-        return EvaluationResult(
-            matched, cond_type,
-            f"'{context.stream_name}' → '{normalized}' {'found' if matched else 'not found'} "
-            f"across all groups ({len(self._all_channel_names)} names)"
-        )
-
-    def _evaluate_normalized_name_not_exists(self, context: StreamContext,
-                                                cond_type: str) -> EvaluationResult:
-        """Check if the stream's normalized name does NOT match any channel in any group."""
-        result = self._evaluate_normalized_name_exists(context, "normalized_name_exists")
-        return EvaluationResult(
-            not result.matched, cond_type,
-            result.details.replace("found", "confirmed absent").replace("not found", "confirmed absent")
-            if result.details else "Inverted global check"
-        )
+    def _evaluate_normalized_name_not_exists(self, context, cond_type):
+        res = self._evaluate_normalized_name_exists(context, "normalized_name_exists")
+        return EvaluationResult(not res.matched, cond_type, f"Inverted: {res.details}")
 
 
 def evaluate_conditions(conditions: list, context: StreamContext,
                         existing_channels: list = None,
                         existing_groups: list = None) -> bool:
-    """
-    Convenience function to evaluate a list of conditions with connector support.
-
-    Conditions are connected by AND/OR connectors (stored on each condition).
-    AND binds tighter than OR (standard precedence):
-      cond1 AND cond2 OR cond3 = (cond1 AND cond2) OR cond3
-
-    Args:
-        conditions: List of condition dicts or Condition objects
-        context: StreamContext to evaluate against
-        existing_channels: Existing channels for channel conditions
-        existing_groups: Existing groups for group conditions
-
-    Returns:
-        True if conditions match according to connector logic
-    """
+    """Convenience function to evaluate a list of conditions."""
     evaluator = ConditionEvaluator(existing_channels, existing_groups)
-
-    if not conditions:
-        logger.debug("[AUTO-CREATE-EVAL] stream=%r no conditions -> True", context.stream_name)
-        return True
-
-    # Group conditions by OR breaks (AND binds tighter than OR)
-    or_groups = [[]]
+    if not conditions: return True
+    or_groups = []
+    current_group = []
     for cond in conditions:
         connector = cond.get("connector", "and") if isinstance(cond, dict) else getattr(cond, 'connector', 'and')
-        if connector == "or" and or_groups[-1]:
-            or_groups.append([])
-        or_groups[-1].append(cond)
-
-    logger.debug(
-        "[AUTO-CREATE-EVAL] stream=%r %s conditions in %s OR-group(s)",
-        context.stream_name, len(conditions), len(or_groups)
-    )
-
-    # Evaluate: any OR-group fully matching = overall match
-    for group_idx, group in enumerate(or_groups):
+        if connector.lower() == "or" and current_group:
+            or_groups.append(current_group)
+            current_group = []
+        current_group.append(cond)
+    if current_group: or_groups.append(current_group)
+    for group in or_groups:
         group_matched = True
         for condition in group:
-            result = evaluator.evaluate(condition, context)
-            if not result.matched:
+            if not evaluator.evaluate(condition, context).matched:
                 group_matched = False
                 break
-        if group_matched:
-            logger.debug(
-                "[AUTO-CREATE-EVAL] stream=%r OR-group %s matched -> overall True",
-                context.stream_name, group_idx
-            )
-            return True
-
-    logger.debug(
-        "[AUTO-CREATE-EVAL] stream=%r no OR-group matched -> overall False",
-        context.stream_name
-    )
+        if group_matched: return True
     return False
