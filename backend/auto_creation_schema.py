@@ -193,7 +193,7 @@ class Condition:
             if not isinstance(self.value, (int, float)) or self.value < 0:
                 errors.append(f"{self.type} requires a positive number")
 
-        elif cond_enum == ConditionType.PROVIDER_IS:
+        elif cond_type == ConditionType.PROVIDER_IS:
             if not isinstance(self.value, (int, list)):
                 errors.append(f"{self.type} requires an integer or list of integers")
             elif isinstance(self.value, list) and not all(isinstance(x, int) for x in self.value):
