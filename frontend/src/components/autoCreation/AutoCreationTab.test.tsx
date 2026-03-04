@@ -529,7 +529,7 @@ describe('AutoCreationTab', () => {
       await user.click(importButton);
 
       await waitFor(() => {
-        expect(screen.getByText(/imported.*1.*rule/i)).toBeInTheDocument();
+        expect(screen.getByText(/imported rules.*1 created/i)).toBeInTheDocument();
       });
     });
   });

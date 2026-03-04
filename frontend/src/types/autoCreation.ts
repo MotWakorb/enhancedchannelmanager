@@ -439,9 +439,20 @@ export interface YAMLImportRequest {
   overwrite?: boolean;
 }
 
+export interface YAMLImportedItem {
+  name: string;
+  action: 'created' | 'updated';
+}
+
+export interface YAMLImportError {
+  rule_index: number;
+  rule_name: string;
+  errors: string[];
+}
+
 export interface YAMLImportResponse {
   success: boolean;
-  imported: string[];
-  skipped: string[];
-  errors: string[];
+  imported: YAMLImportedItem[];
+  errors: YAMLImportError[];
+  warnings?: string[];
 }
