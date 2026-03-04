@@ -7,7 +7,7 @@ existing channels in the system.
 """
 import re
 import logging
-from typing import Optional
+from typing import Optional, Any
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from auto_creation_schema import Condition, ConditionType
@@ -128,9 +128,27 @@ class EvaluationResult:
     condition_type: str
     details: Optional[str] = None  # Human-readable explanation
     matched_data: Optional[dict] = None  # Captured data (e.g. the specific program)
+    sub_results: Optional[list["EvaluationResult"]] = field(default_factory=list)
+    value: Optional[Any] = None
+    negate: bool = False
+    connector: str = "and"
 
     def __bool__(self):
         return self.matched
+
+    def to_dict(self) -> dict:
+        """Convert to dict for JSON logging/API."""
+        res = {
+            "type": self.condition_type,
+            "matched": self.matched,
+            "details": self.details,
+            "value": self.value,
+            "negate": self.negate,
+            "connector": self.connector
+        }
+        if self.sub_results:
+            res["sub_results"] = [r.to_dict() for r in self.sub_results]
+        return res
 
 
 class ConditionEvaluator:
@@ -240,6 +258,11 @@ class ConditionEvaluator:
             condition = Condition.from_dict(condition)
 
         result = self._evaluate_condition(condition, context)
+        
+        # Populate structured info from condition
+        result.value = condition.value
+        result.negate = condition.negate
+        result.connector = condition.connector
 
         # Apply negation if specified
         if condition.negate:
@@ -247,22 +270,30 @@ class ConditionEvaluator:
                 matched=not result.matched,
                 condition_type=f"not({result.condition_type})",
                 details=f"Negated: {result.details}",
-                matched_data=result.matched_data
+                matched_data=result.matched_data,
+                sub_results=result.sub_results,
+                value=result.value,
+                negate=result.negate,
+                connector=result.connector
             )
 
-        # Capture matched data if available (after possible negation)
+        # Capture matched data if available AND the final result is True (after negation)
+        # This fixes Issue #1 where negated EPG conditions corrupted match state
         if result.matched and result.matched_data:
             if "program" in result.matched_data:
                 context.epg_match = result.matched_data["program"]
             
-            is_epg_type = result.condition_type in (
+            # Check if this condition (or any sub-condition if it was AND/OR) matched by EPG
+            # The result.condition_type might be "not(epg_...)" so we check original type too
+            original_type = condition.type.lower()
+            is_epg_type = original_type in (
                 ConditionType.EPG_TITLE_CONTAINS, ConditionType.EPG_TITLE_MATCHES,
                 ConditionType.EPG_DESC_CONTAINS, ConditionType.EPG_DESC_MATCHES,
                 ConditionType.EPG_ANY_CONTAINS, ConditionType.EPG_ANY_MATCHES,
                 "and", "or"
             )
             
-            if is_epg_type or (result.condition_type in (
+            if is_epg_type or (original_type in (
                 ConditionType.ANY_FIELD_CONTAINS, ConditionType.ANY_FIELD_MATCHES
             ) and "program" in result.matched_data):
                 context.matched_by_epg = True
@@ -305,7 +336,7 @@ class ConditionEvaluator:
             if matched:
                 return EvaluationResult(
                     True, cond_type,
-                    f"Program '{prog.get('title')}' matched '{matched_segment}'",
+                    f"Program '{prog.get('title')}' matched segment: '{matched_segment}'",
                     matched_data={"program": prog}
                 )
         
@@ -436,36 +467,50 @@ class ConditionEvaluator:
     def _evaluate_and(self, condition: Condition, context: StreamContext) -> EvaluationResult:
         """Evaluate AND compound condition."""
         if not condition.conditions:
-            return EvaluationResult(True, "and", "Empty AND matches")
-        all_details = []
+            return EvaluationResult(False, "and", "Empty AND group")
+        
+        sub_results = []
         final_matched_data = {}
-        for i, sub in enumerate(condition.conditions):
+        matched = True
+        
+        for sub in condition.conditions:
             res = self.evaluate(sub, context)
-            all_details.append(f"[{i}] {res.condition_type}: {res.details}")
+            sub_results.append(res)
             if not res.matched:
-                return EvaluationResult(False, "and", " AND ".join(all_details))
-            if res.matched_data:
+                matched = False
+                # Continue evaluating all sub-conditions for full logging (Issue #4)
+            if res.matched and res.matched_data:
                 final_matched_data.update(res.matched_data)
-        return EvaluationResult(True, "and", " AND ".join(all_details), matched_data=final_matched_data)
+        
+        details = " AND ".join([f"[{i}] {r.condition_type}: {r.matched}" for i, r in enumerate(sub_results)])
+        return EvaluationResult(matched, "and", details, matched_data=final_matched_data, sub_results=sub_results)
 
     def _evaluate_or(self, condition: Condition, context: StreamContext) -> EvaluationResult:
         """Evaluate OR compound condition."""
         if not condition.conditions:
-            return EvaluationResult(True, "or", "Empty OR matches")
-        all_details = []
-        for i, sub in enumerate(condition.conditions):
+            return EvaluationResult(False, "or", "Empty OR group")
+        
+        sub_results = []
+        final_matched_data = {}
+        matched = False
+        
+        for sub in condition.conditions:
             res = self.evaluate(sub, context)
-            all_details.append(f"[{i}] {res.condition_type}: {res.details}")
+            sub_results.append(res)
             if res.matched:
-                return EvaluationResult(True, "or", " OR ".join(all_details), matched_data=res.matched_data)
-        return EvaluationResult(False, "or", " OR ".join(all_details))
+                matched = True
+                if not final_matched_data and res.matched_data:
+                    final_matched_data.update(res.matched_data)
+        
+        details = " OR ".join([f"[{i}] {r.condition_type}: {r.matched}" for i, r in enumerate(sub_results)])
+        return EvaluationResult(matched, "or", details, matched_data=final_matched_data, sub_results=sub_results)
 
     def _evaluate_not(self, condition: Condition, context: StreamContext) -> EvaluationResult:
         """Evaluate NOT compound condition."""
         if not condition.conditions or len(condition.conditions) != 1:
             return EvaluationResult(False, "not", "NOT requires exactly 1 sub-condition")
         res = self.evaluate(condition.conditions[0], context)
-        return EvaluationResult(not res.matched, "not", f"NOT ({res.details})")
+        return EvaluationResult(not res.matched, "not", f"NOT ({res.details})", sub_results=[res])
 
     # String Matching helpers
     def _evaluate_regex(self, pattern: str, value: str, case_sensitive: bool, cond_type: str) -> EvaluationResult:

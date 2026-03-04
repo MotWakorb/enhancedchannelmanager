@@ -600,7 +600,7 @@ class TestConditionEvaluatorEPG:
         assert result.matched is True
         assert ctx.epg_match == prog
         assert ctx.matched_by_epg is True
-        assert "matched 'Australia'" in result.details
+        assert "matched segment: 'Australia'" in result.details
 
     def test_epg_desc_matches_regex(self):
         """Matches regex in EPG program description."""

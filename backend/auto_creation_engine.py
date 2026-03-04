@@ -1055,12 +1055,8 @@ class AutoCreationEngine:
                     if result.matched:
                         matched = True
                     
-                    # Reconstruct log from details or add overall group result
-                    conditions_log.append({
-                        "type": "or_group",
-                        "matched": result.matched,
-                        "details": result.details
-                    })
+                    # Reconstruct log from structured result for visibility (Issue #3 and #4)
+                    conditions_log.append(result.to_dict())
 
                 # Always add to log to provide visibility into why streams didn't match (issue #3)
                 stream_rules_log.append({
