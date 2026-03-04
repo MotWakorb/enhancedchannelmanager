@@ -1077,8 +1077,7 @@ export const handlers = [
     mockDataStore.autoCreationRules.push(newRule)
     return HttpResponse.json({
       success: true,
-      imported: ['Imported Rule'],
-      skipped: [],
+      imported: [{ name: 'Imported Rule', action: 'created' }],
       errors: [],
     })
   }),
