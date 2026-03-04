@@ -41,7 +41,7 @@ const previewSelectors = {
 
   // Stream and channel items
   streamPreviewButton: '.stream-item .stream-preview-btn, .stream-item button[title*="Preview"]',
-  channelPreviewButton: '.channel-item .channel-preview-btn, .channel-item button[title*="Preview"]',
+  channelPreviewButton: '.channel-menu-dropdown .channel-menu-item:has-text("Preview"), .channel-item button[title*="Preview"]',
   streamActionButton: '.stream-item .stream-actions button',
   channelActionButton: '.channel-item .channel-actions button',
 };
