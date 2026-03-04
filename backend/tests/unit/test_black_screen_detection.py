@@ -44,7 +44,7 @@ def create_mock_stats(
 
 
 class TestDetectBlackScreen:
-    """Tests for _detect_black_screen method."""
+    """Tests for _detect_black_screen method (signalstats YAVG-based)."""
 
     def _make_mock_process(self, stderr_output):
         """Create a mock process that works with asyncio.wait_for."""
@@ -58,13 +58,19 @@ class TestDetectBlackScreen:
         mock_process.wait = AsyncMock()
         return mock_process
 
+    def _make_yavg_output(self, *values):
+        """Build ffmpeg signalstats stderr output from YAVG values."""
+        lines = [
+            f"[Parsed_metadata_1 @ 0x1234] lavfi.signalstats.YAVG={v}\n".encode()
+            for v in values
+        ]
+        return b"".join(lines)
+
     @pytest.mark.asyncio
-    async def test_detects_black_screen_above_threshold(self):
-        """Returns True when >90% of sample is black."""
+    async def test_detects_dark_screen_below_threshold(self):
+        """Returns True when average YAVG is below threshold (pure black = 16)."""
         prober = create_prober(black_screen_detection_enabled=True, black_screen_sample_duration=5)
-        stderr_output = (
-            b"[blackdetect @ 0x1234] black_start=0 black_end=4.8 black_duration=4.8\n"
-        )
+        stderr_output = self._make_yavg_output(16.0, 16.0, 16.0, 16.0)
         mock_process = self._make_mock_process(stderr_output)
 
         with patch("stream_prober.asyncio.create_subprocess_exec", return_value=mock_process):
@@ -73,10 +79,22 @@ class TestDetectBlackScreen:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_returns_false_when_not_black(self):
-        """Returns False when stream has normal content."""
+    async def test_detects_dark_slate_with_logo(self):
+        """Returns True for dark slate with small logo (YAVG ~16.5)."""
         prober = create_prober(black_screen_detection_enabled=True, black_screen_sample_duration=5)
-        stderr_output = b"frame=  150 fps= 30 q=-0.0 Lsize=N/A time=00:00:05.00\n"
+        stderr_output = self._make_yavg_output(16.5, 16.5, 16.6, 16.5)
+        mock_process = self._make_mock_process(stderr_output)
+
+        with patch("stream_prober.asyncio.create_subprocess_exec", return_value=mock_process):
+            result = await prober._detect_black_screen("http://example.com/stream")
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_returns_false_for_normal_content(self):
+        """Returns False when stream has normal content (YAVG ~88)."""
+        prober = create_prober(black_screen_detection_enabled=True, black_screen_sample_duration=5)
+        stderr_output = self._make_yavg_output(87.5, 88.0, 87.8, 88.2)
         mock_process = self._make_mock_process(stderr_output)
 
         with patch("stream_prober.asyncio.create_subprocess_exec", return_value=mock_process):
@@ -85,12 +103,10 @@ class TestDetectBlackScreen:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_returns_false_below_threshold(self):
-        """Returns False when black is present but below 90% threshold."""
-        prober = create_prober(black_screen_detection_enabled=True, black_screen_sample_duration=10)
-        stderr_output = (
-            b"[blackdetect @ 0x1234] black_start=0 black_end=5 black_duration=5\n"
-        )
+    async def test_returns_false_for_dim_but_not_dark_content(self):
+        """Returns False when brightness is low but above threshold (YAVG ~30)."""
+        prober = create_prober(black_screen_detection_enabled=True, black_screen_sample_duration=5)
+        stderr_output = self._make_yavg_output(28.0, 30.0, 32.0, 29.0)
         mock_process = self._make_mock_process(stderr_output)
 
         with patch("stream_prober.asyncio.create_subprocess_exec", return_value=mock_process):
@@ -117,19 +133,29 @@ class TestDetectBlackScreen:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_handles_multiple_black_segments(self):
-        """Correctly sums multiple black segments."""
+    async def test_returns_false_when_no_yavg_data(self):
+        """Returns False when signalstats produces no YAVG output."""
         prober = create_prober(black_screen_detection_enabled=True, black_screen_sample_duration=5)
-        stderr_output = (
-            b"[blackdetect @ 0x1234] black_start=0 black_end=2 black_duration=2\n"
-            b"[blackdetect @ 0x1234] black_start=2.5 black_end=5.5 black_duration=3\n"
-        )
+        stderr_output = b"frame=  150 fps= 30 q=-0.0 Lsize=N/A time=00:00:05.00\n"
         mock_process = self._make_mock_process(stderr_output)
 
         with patch("stream_prober.asyncio.create_subprocess_exec", return_value=mock_process):
             result = await prober._detect_black_screen("http://example.com/stream")
 
-        assert result is True
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_borderline_at_threshold(self):
+        """Returns False when YAVG is exactly at threshold."""
+        prober = create_prober(black_screen_detection_enabled=True, black_screen_sample_duration=5)
+        threshold = StreamProber.BLACK_SCREEN_YAVG_THRESHOLD
+        stderr_output = self._make_yavg_output(threshold, threshold, threshold)
+        mock_process = self._make_mock_process(stderr_output)
+
+        with patch("stream_prober.asyncio.create_subprocess_exec", return_value=mock_process):
+            result = await prober._detect_black_screen("http://example.com/stream")
+
+        assert result is False  # < threshold, not <=
 
 
 class TestSmartSortBlackScreen:

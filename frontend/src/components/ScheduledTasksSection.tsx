@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../services/api';
 import type { TaskStatus } from '../services/api';
+import type { ChannelGroup } from '../types';
 import { logger } from '../utils/logger';
 import { TaskEditorModal } from './TaskEditorModal';
 import { TaskHistoryPanel } from './TaskHistoryPanel';
 import { useNotifications } from '../contexts/NotificationContext';
 import { formatDateTime } from '../utils/formatting';
+import '../components/ModalBase.css';
 
 interface ScheduledTasksSectionProps {
   userTimezone?: string;
@@ -252,6 +254,119 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
   );
 }
 
+// -------------------------------------------------------------------------
+// Run Now Dialog — shown for tasks with channel_groups parameter
+// -------------------------------------------------------------------------
+function RunNowDialog({ task, onRun, onCancel }: {
+  task: TaskStatus;
+  onRun: (taskId: string, parameters: Record<string, unknown>) => void;
+  onCancel: () => void;
+}) {
+  const [groups, setGroups] = useState<ChannelGroup[]>([]);
+  const [selectedGroups, setSelectedGroups] = useState<number[]>([]);
+  const [loadingGroups, setLoadingGroups] = useState(true);
+
+  useEffect(() => {
+    api.getChannelGroups().then((allGroups) => {
+      const withChannels = allGroups.filter(g => g.channel_count > 0);
+      setGroups(withChannels);
+      setSelectedGroups(withChannels.map(g => g.id));
+      setLoadingGroups(false);
+    }).catch(() => setLoadingGroups(false));
+  }, []);
+
+  const allSelected = groups.length > 0 && selectedGroups.length === groups.length;
+  const noneSelected = selectedGroups.length === 0;
+
+  const toggleGroup = (id: number) => {
+    setSelectedGroups(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal-container modal-sm" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2 className="modal-title">Run {task.task_name}</h2>
+          <button className="modal-close-btn" onClick={onCancel}>
+            <span className="material-icons">close</span>
+          </button>
+        </div>
+        <div className="modal-body">
+          <div className="modal-form-group">
+            <label className="modal-form-label">Channel Groups</label>
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+              <button
+                type="button"
+                className={`modal-btn modal-btn-${allSelected ? 'primary' : 'secondary'}`}
+                style={{ padding: '0.25rem 0.625rem', fontSize: '0.8rem' }}
+                onClick={() => setSelectedGroups(groups.map(g => g.id))}
+              >
+                Select All
+              </button>
+              <button
+                type="button"
+                className={`modal-btn modal-btn-${noneSelected ? 'primary' : 'secondary'}`}
+                style={{ padding: '0.25rem 0.625rem', fontSize: '0.8rem' }}
+                onClick={() => setSelectedGroups([])}
+              >
+                Select None
+              </button>
+            </div>
+            {loadingGroups ? (
+              <div className="modal-loading">Loading groups...</div>
+            ) : groups.length === 0 ? (
+              <div className="modal-empty-state">No channel groups with channels</div>
+            ) : (
+              <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                {groups.map(group => (
+                  <label
+                    key={group.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      padding: '0.4rem 0.5rem',
+                      borderRadius: 'var(--radius-md)',
+                      cursor: 'pointer',
+                      backgroundColor: selectedGroups.includes(group.id) ? 'rgba(100, 108, 255, 0.1)' : 'transparent',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedGroups.includes(group.id)}
+                      onChange={() => toggleGroup(group.id)}
+                      style={{ accentColor: 'var(--accent)' }}
+                    />
+                    <span style={{ flex: 1, fontSize: '0.9rem', color: 'var(--text-primary)' }}>{group.name}</span>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{group.channel_count} ch</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button type="button" className="modal-btn modal-btn-secondary" onClick={onCancel}>Cancel</button>
+          <button
+            type="button"
+            className="modal-btn modal-btn-primary"
+            disabled={noneSelected || loadingGroups}
+            onClick={() => onRun(task.task_id, { channel_groups: selectedGroups })}
+          >
+            <span className="material-icons">play_arrow</span>
+            Run ({selectedGroups.length} group{selectedGroups.length !== 1 ? 's' : ''})
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Tasks that support the group picker for "Run Now"
+const TASKS_WITH_GROUP_PICKER = new Set(['black_screen_scan', 'stream_probe']);
+
 export function ScheduledTasksSection({ userTimezone: _userTimezone }: ScheduledTasksSectionProps) {
   // userTimezone can be used in future for display formatting
   void _userTimezone;
@@ -259,6 +374,7 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
   const [loading, setLoading] = useState(true);
   const [runningTasks, setRunningTasks] = useState<Set<string>>(new Set());
   const [editingTask, setEditingTask] = useState<TaskStatus | null>(null);
+  const [runNowTask, setRunNowTask] = useState<TaskStatus | null>(null);
   const notifications = useNotifications();
 
   const loadTasks = useCallback(async () => {
@@ -298,24 +414,32 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
   }, [tasks]);
 
   const handleRunNow = async (taskId: string) => {
-    // Find task name for better feedback
+    const task = tasks.find(t => t.task_id === taskId);
+
+    // Show group picker dialog for tasks that support it
+    if (task && TASKS_WITH_GROUP_PICKER.has(taskId)) {
+      setRunNowTask(task);
+      return;
+    }
+
+    await executeRunNow(taskId);
+  };
+
+  const executeRunNow = async (taskId: string, parameters?: Record<string, unknown>) => {
     const task = tasks.find(t => t.task_id === taskId);
     const taskName = task?.task_name || taskId;
 
+    setRunNowTask(null);
     setRunningTasks((prev) => new Set(prev).add(taskId));
     notifications.info(`Starting ${taskName}...`, 'Task Started');
 
     try {
-      const result = await api.runTask(taskId);
+      const result = await api.runTask(taskId, undefined, parameters);
       logger.info(`Task ${taskId} completed`, result);
 
-      // Show result notification only if show_notifications is enabled for this task
-      // Note: Cancelled tasks don't show notification here - handleCancel shows it via polling
       if (result.error === 'CANCELLED') {
-        // Task was cancelled - notification already shown by handleCancel
         logger.info(`${taskName} was cancelled (notification handled by cancel handler)`);
       } else if (task?.show_notifications !== false) {
-        // Only show toast if show_notifications is not explicitly disabled
         if (result.success) {
           notifications.success(
             `${taskName} completed: ${result.success_count} succeeded, ${result.failed_count} failed`,
@@ -329,7 +453,6 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
         }
       }
 
-      // Reload tasks to get updated status
       await loadTasks();
     } catch (err) {
       logger.error(`Failed to run task ${taskId}`, err);
@@ -508,6 +631,15 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
           task={editingTask}
           onClose={() => setEditingTask(null)}
           onSaved={loadTasks}
+        />
+      )}
+
+      {/* Run Now Group Picker Dialog */}
+      {runNowTask && (
+        <RunNowDialog
+          task={runNowTask}
+          onRun={executeRunNow}
+          onCancel={() => setRunNowTask(null)}
         />
       )}
     </div>

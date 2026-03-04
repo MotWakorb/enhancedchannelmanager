@@ -47,6 +47,7 @@ class TaskConfigUpdate(BaseModel):
 class TaskRunRequest(BaseModel):
     """Request body for running a task."""
     schedule_id: Optional[int] = None  # Run with parameters from a specific schedule
+    parameters: Optional[dict] = None  # Ad-hoc parameters for one-off runs
 
 
 class CronValidateRequest(BaseModel):
@@ -187,6 +188,44 @@ TASK_PARAMETER_SCHEMAS = {
     "struck_stream_cleanup": {
         "description": "Remove struck-out streams from channels",
         "parameters": [],
+    },
+    "black_screen_scan": {
+        "description": "Scan probed streams for black screens",
+        "parameters": [
+            {
+                "name": "sample_duration",
+                "type": "number",
+                "label": "Sample Duration (seconds)",
+                "description": "How long to sample each stream for black screen detection",
+                "default": 5,
+                "min": 3,
+                "max": 30,
+            },
+            {
+                "name": "max_concurrent",
+                "type": "number",
+                "label": "Max Concurrent",
+                "description": "Maximum concurrent black screen checks",
+                "default": 3,
+                "min": 1,
+                "max": 10,
+            },
+            {
+                "name": "auto_sync_groups",
+                "type": "boolean",
+                "label": "Auto-sync groups",
+                "description": "Scan all probed streams regardless of group selection",
+                "default": False,
+            },
+            {
+                "name": "channel_groups",
+                "type": "number_array",
+                "label": "Channel Groups",
+                "description": "Only scan streams in these channel groups",
+                "default": [],
+                "source": "channel_groups",
+            },
+        ],
     },
 }
 
@@ -396,7 +435,8 @@ async def run_task(task_id: str, request: Optional[TaskRunRequest] = None):
         from task_engine import get_engine
         engine = get_engine()
         schedule_id = request.schedule_id if request else None
-        result = await engine.run_task(task_id, schedule_id=schedule_id)
+        ad_hoc_parameters = request.parameters if request else None
+        result = await engine.run_task(task_id, schedule_id=schedule_id, parameters=ad_hoc_parameters)
 
         if result is None:
             raise HTTPException(status_code=404, detail=f"Task {task_id} not found")

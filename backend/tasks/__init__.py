@@ -15,6 +15,7 @@ from tasks.struck_stream_cleanup import StruckStreamCleanupTask
 from tasks.popularity_calculation import PopularityCalculationTask
 from tasks.auto_creation import AutoCreationTask
 from tasks.dummy_epg_refresh import DummyEPGRefreshTask
+from tasks.black_screen_scan import BlackScreenScanTask
 
 __all__ = [
     "EPGRefreshTask",
@@ -27,4 +28,5 @@ __all__ = [
     "PopularityCalculationTask",
     "AutoCreationTask",
     "DummyEPGRefreshTask",
+    "BlackScreenScanTask",
 ]
