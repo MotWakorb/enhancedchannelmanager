@@ -162,7 +162,7 @@ class TestRunTask:
             response = await async_client.post("/api/tasks/stream_probe/run")
 
         assert response.status_code == 200
-        mock_engine.run_task.assert_called_once_with("stream_probe", schedule_id=None)
+        mock_engine.run_task.assert_called_once_with("stream_probe", schedule_id=None, parameters=None)
 
     @pytest.mark.asyncio
     async def test_returns_404_for_unknown(self, async_client):

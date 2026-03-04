@@ -920,14 +920,24 @@ class StreamProber:
             logger.warning("[STREAM-PROBE] Failed to measure bitrate: %s", e)
             return None
 
+    # YAVG brightness threshold for dark/black screen detection.
+    # In YUV TV range, 16 = pure black. Real content typically YAVG > 40.
+    # Threshold of 20 catches: pure black, dark slates, off-air screens with small logos.
+    BLACK_SCREEN_YAVG_THRESHOLD = 20
+
     async def _detect_black_screen(self, url: str) -> bool:
-        """Run ffmpeg blackdetect on a stream sample. Returns True if stream is mostly black."""
+        """Detect dark/black screens by measuring average brightness (YAVG) via signalstats.
+
+        Uses ffmpeg signalstats to compute per-frame average luma (YAVG).
+        In YUV TV range: 16 = pure black, ~88 = typical content.
+        Returns True if average YAVG across the sample is below threshold.
+        """
         cmd = [
             "ffmpeg",
             "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
             "-i", url,
             "-t", str(self.black_screen_sample_duration),
-            "-vf", "blackdetect=d=0.5:pic_th=0.98",
+            "-vf", "signalstats,metadata=mode=print:key=lavfi.signalstats.YAVG",
             "-an", "-f", "null", "-",
         ]
         process = await asyncio.create_subprocess_exec(
@@ -943,15 +953,18 @@ class StreamProber:
             logger.warning("[STREAM-PROBE] Black screen detection timed out: %s", url[:80])
             return False
         output = stderr.decode()
-        durations = re.findall(r'black_duration=([\d.]+)', output)
-        total_black = sum(float(d) for d in durations)
-        ratio = total_black / self.black_screen_sample_duration if self.black_screen_sample_duration > 0 else 0
-        is_black = ratio > 0.90
-        if is_black:
-            logger.warning("[STREAM-PROBE] Black screen detected (%.0f%% black): %s", ratio * 100, url[:80])
+        yavg_values = re.findall(r'lavfi\.signalstats\.YAVG=([\d.]+)', output)
+        if not yavg_values:
+            logger.debug("[STREAM-PROBE] No YAVG data from signalstats: %s", url[:80])
+            return False
+        avg_brightness = sum(float(v) for v in yavg_values) / len(yavg_values)
+        is_dark = avg_brightness < self.BLACK_SCREEN_YAVG_THRESHOLD
+        if is_dark:
+            logger.warning("[STREAM-PROBE] Dark screen detected (YAVG=%.1f, threshold=%d): %s",
+                           avg_brightness, self.BLACK_SCREEN_YAVG_THRESHOLD, url[:80])
         else:
-            logger.debug("[STREAM-PROBE] Black screen check passed (%.0f%% black): %s", ratio * 100, url[:80])
-        return is_black
+            logger.debug("[STREAM-PROBE] Screen brightness OK (YAVG=%.1f): %s", avg_brightness, url[:80])
+        return is_dark
 
     def _save_probe_result(
         self,

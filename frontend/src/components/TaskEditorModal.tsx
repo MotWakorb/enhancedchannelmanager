@@ -60,24 +60,29 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
       try {
         // Load parameter schema for this task
         const schemaResponse = await api.getTaskParameterSchema(task.task_id);
-        setParameterSchema(schemaResponse.parameters || []);
+        const params = schemaResponse.parameters || [];
+        setParameterSchema(params);
 
-        // Load task-specific data based on task type
-        if (task.task_id === 'epg_refresh') {
-          const sources = await api.getEPGSources();
-          setEpgSources(sources);
-        } else if (task.task_id === 'm3u_refresh') {
-          const accounts = await api.getM3UAccounts();
-          setM3uAccounts(accounts);
-        } else if (task.task_id === 'stream_probe') {
-          // Load channel groups and settings for defaults
-          const [groups, settingsData] = await Promise.all([
-            api.getChannelGroups(),
-            api.getSettings(),
-          ]);
-          setChannelGroups(groups);
-          setSettings(settingsData);
+        // Load data based on which sources the schema references
+        const sources = new Set(params.map(p => p.source).filter(Boolean));
+        const loaders: Promise<void>[] = [];
+
+        if (sources.has('channel_groups')) {
+          loaders.push(api.getChannelGroups().then(setChannelGroups));
         }
+        if (sources.has('epg_sources')) {
+          loaders.push(api.getEPGSources().then(setEpgSources));
+        }
+        if (sources.has('m3u_accounts')) {
+          loaders.push(api.getM3UAccounts().then(setM3uAccounts));
+        }
+
+        // Load settings for default parameter values (stream_probe)
+        if (task.task_id === 'stream_probe') {
+          loaders.push(api.getSettings().then(setSettings));
+        }
+
+        await Promise.all(loaders);
       } catch (err) {
         logger.error('Failed to load data for task config', err);
       }
