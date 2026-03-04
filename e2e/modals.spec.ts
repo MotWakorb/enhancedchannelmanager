@@ -291,7 +291,7 @@ test.describe('ChannelProfilesListModal', () => {
     await appPage.waitForTimeout(1000)
 
     // Look for profiles button (icon-only button with title or class)
-    const profilesBtn = appPage.locator('.profiles-btn, button[title*="profile"], button[title*="Profile"]').first()
+    const profilesBtn = appPage.locator('.profiles-btn, .pane-toolbar-menu-item:has-text("Manage Profiles"), button[title*="profile"], button[title*="Profile"]').first()
 
     if ((await profilesBtn.count()) > 0 && (await profilesBtn.isVisible())) {
       await profilesBtn.click()
