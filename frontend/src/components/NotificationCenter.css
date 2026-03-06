@@ -342,6 +342,10 @@
   color: var(--error);
 }
 
+.probe-stat-black-screen {
+  color: var(--warning);
+}
+
 .probe-stat-skipped {
   color: var(--text-muted);
 }

@@ -783,18 +783,22 @@ class TaskEngine:
             async with self._lock:
                 self._active_tasks.discard(task_id)
 
-    async def run_task(self, task_id: str, schedule_id: Optional[int] = None) -> Optional[TaskResult]:
+    async def run_task(self, task_id: str, schedule_id: Optional[int] = None, parameters: Optional[dict] = None) -> Optional[TaskResult]:
         """
         Manually run a task (API entry point).
 
         Args:
             task_id: ID of task to run
             schedule_id: Optional schedule ID to use parameters from
+            parameters: Optional ad-hoc parameters (takes priority over schedule)
 
         Returns:
             TaskResult or None if task not found
         """
-        parameters = None
+        if parameters:
+            logger.info("[%s] Manual run with ad-hoc parameters: %s", task_id, parameters)
+            return await self._execute_task(task_id, triggered_by="manual", parameters=parameters)
+
         if schedule_id:
             # Load parameters from the specified schedule
             try:

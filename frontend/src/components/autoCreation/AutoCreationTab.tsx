@@ -105,6 +105,8 @@ export function AutoCreationTab() {
   const [exportYaml, setExportYaml] = useState('');
   const [importLoading, setImportLoading] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  const [importConflicts, setImportConflicts] = useState<string[]>([]);
+  const [importNewCount, setImportNewCount] = useState(0);
 
   const notifications = useNotifications();
 
@@ -371,17 +373,51 @@ export function AutoCreationTab() {
     }
   }, []);
 
-  const handleImport = useCallback(async () => {
+  const handleImport = useCallback(async (overwrite = false) => {
     setImportLoading(true);
     setImportError(null);
+    if (!overwrite) setImportConflicts([]);
 
     try {
-      const result = await autoCreationApi.importAutoCreationRulesYAML(importYaml);
-      const importedCount = result.imported.length;
+      const result = await autoCreationApi.importAutoCreationRulesYAML(importYaml, overwrite);
+
+      // Check for "already exists" conflicts when not overwriting
+      const conflictErrors = result.errors.filter(e =>
+        e.errors?.some((msg: string) => msg.includes('already exists'))
+      );
+      const otherErrors = result.errors.filter(e =>
+        !e.errors?.some((msg: string) => msg.includes('already exists'))
+      );
+
+      if (!overwrite && conflictErrors.length > 0) {
+        // Show confirmation with conflict list
+        setImportConflicts(conflictErrors.map(e => e.rule_name));
+        setImportNewCount(result.imported.length);
+        if (otherErrors.length > 0) {
+          setImportError(`${otherErrors.length} rule(s) had validation errors`);
+        }
+        return;
+      }
+
+      // Success
+      const created = result.imported.filter(r => r.action === 'created').length;
+      const updated = result.imported.filter(r => r.action === 'updated').length;
+      const parts: string[] = [];
+      if (created > 0) parts.push(`${created} created`);
+      if (updated > 0) parts.push(`${updated} updated`);
+      const summary = parts.length > 0 ? parts.join(', ') : 'No changes';
+
       await fetchRules();
       setImportYaml('');
+      setImportConflicts([]);
+      setImportNewCount(0);
       setShowImportDialog(false);
-      notifications.success(`Imported ${importedCount} rule${importedCount !== 1 ? 's' : ''}`, 'Auto-Creation');
+
+      if (otherErrors.length > 0) {
+        notifications.warning(`${summary}. ${otherErrors.length} rule(s) had errors.`, 'Auto-Creation');
+      } else {
+        notifications.success(`Imported rules: ${summary}`, 'Auto-Creation');
+      }
     } catch (err) {
       setImportError(err instanceof Error ? err.message : 'Failed to import rules');
     } finally {
@@ -1200,7 +1236,7 @@ export function AutoCreationTab() {
               <h2>Import Rules</h2>
               <button
                 className="modal-close-btn"
-                onClick={() => setShowImportDialog(false)}
+                onClick={() => { setShowImportDialog(false); setImportConflicts([]); setImportNewCount(0); }}
                 aria-label="Close"
               >
                 <span className="material-icons">close</span>
@@ -1212,12 +1248,27 @@ export function AutoCreationTab() {
                 <textarea
                   id="import-yaml"
                   value={importYaml}
-                  onChange={e => setImportYaml(e.target.value)}
+                  onChange={e => { setImportYaml(e.target.value); setImportConflicts([]); setImportNewCount(0); }}
                   placeholder="Paste YAML content here..."
                   rows={10}
                   aria-label="YAML content"
                 />
               </div>
+              {importConflicts.length > 0 && (
+                <div className="import-conflicts">
+                  <div className="import-conflicts-header">
+                    <span className="material-icons" style={{ color: 'var(--warning)', fontSize: '18px', verticalAlign: 'middle' }}>warning</span>
+                    {' '}{importConflicts.length} rule{importConflicts.length !== 1 ? 's' : ''} already exist{importConflicts.length === 1 ? 's' : ''}
+                    {importNewCount > 0 && ` (${importNewCount} new rule${importNewCount !== 1 ? 's' : ''} imported successfully)`}
+                  </div>
+                  <ul className="import-conflicts-list">
+                    {importConflicts.map(name => (
+                      <li key={name}>{name}</li>
+                    ))}
+                  </ul>
+                  <p className="import-conflicts-prompt">Import again to overwrite these rules?</p>
+                </div>
+              )}
               {importError && (
                 <div className="import-error">{importError}</div>
               )}
@@ -1225,18 +1276,30 @@ export function AutoCreationTab() {
             <div className="modal-footer">
               <button
                 className="btn-secondary"
-                onClick={() => setShowImportDialog(false)}
+                onClick={() => { setShowImportDialog(false); setImportConflicts([]); setImportNewCount(0); }}
               >
                 Cancel
               </button>
-              <button
-                className="btn-primary"
-                onClick={handleImport}
-                disabled={!importYaml.trim() || importLoading}
-                aria-label="Import"
-              >
-                {importLoading ? 'Importing...' : 'Import'}
-              </button>
+              {importConflicts.length > 0 ? (
+                <button
+                  className="btn-primary"
+                  onClick={() => handleImport(true)}
+                  disabled={importLoading}
+                  aria-label="Overwrite and Import"
+                  style={{ background: 'var(--warning)', color: '#000' }}
+                >
+                  {importLoading ? 'Importing...' : `Overwrite ${importConflicts.length} Rule${importConflicts.length !== 1 ? 's' : ''}`}
+                </button>
+              ) : (
+                <button
+                  className="btn-primary"
+                  onClick={() => handleImport(false)}
+                  disabled={!importYaml.trim() || importLoading}
+                  aria-label="Import"
+                >
+                  {importLoading ? 'Importing...' : 'Import'}
+                </button>
+              )}
             </div>
           </div>
         </ModalOverlay>

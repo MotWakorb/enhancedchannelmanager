@@ -1,4 +1,5 @@
-import { memo } from 'react';
+import { memo, useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { Channel } from '../types';
@@ -41,8 +42,147 @@ export interface ChannelListItemProps {
   onProbeChannel?: () => void;
   isProbing?: boolean;
   hasFailedStreams?: boolean;
+  hasBlackScreenStreams?: boolean;
   onPreviewChannel?: () => void;
 }
+
+interface ChannelMenuProps {
+  channel: Channel;
+  isEditMode: boolean;
+  isProbing: boolean;
+  channelUrl?: string;
+  onProbeChannel?: () => void;
+  onPreviewChannel?: () => void;
+  onCopyChannelUrl?: () => void;
+  onEditChannel: () => void;
+  onDelete: () => void;
+}
+
+const ChannelMenu = memo(function ChannelMenu({
+  channel,
+  isEditMode,
+  isProbing,
+  channelUrl,
+  onProbeChannel,
+  onPreviewChannel,
+  onCopyChannelUrl,
+  onEditChannel,
+  onDelete,
+}: ChannelMenuProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (
+        btnRef.current && !btnRef.current.contains(target) &&
+        dropdownRef.current && !dropdownRef.current.contains(target)
+      ) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [menuOpen]);
+
+  const hasStreams = channel.streams && channel.streams.length > 0;
+  const hasAnyItem = hasStreams || channelUrl || isEditMode;
+  if (!hasAnyItem) return null;
+
+  return (
+    <>
+      <button
+        className="channel-menu-btn"
+        ref={btnRef}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (menuOpen) {
+            setMenuOpen(false);
+          } else {
+            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            setMenuPosition({ top: rect.bottom + 2, left: rect.right });
+            setMenuOpen(true);
+          }
+        }}
+        title="Channel actions"
+      >
+        <span className="material-icons">more_vert</span>
+      </button>
+      {menuOpen && menuPosition && createPortal(
+        <div
+          className="channel-menu-dropdown"
+          ref={dropdownRef}
+          style={{ top: menuPosition.top, left: menuPosition.left }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {onProbeChannel && hasStreams && (
+            <button
+              className={`channel-menu-item ${isProbing ? 'loading' : ''}`}
+              onClick={() => { setMenuOpen(false); onProbeChannel(); }}
+              disabled={isProbing}
+            >
+              <span className={`material-icons ${isProbing ? 'spinning' : ''}`}>
+                {isProbing ? 'sync' : 'speed'}
+              </span>
+              <span>{isProbing ? 'Probing...' : 'Probe Channel'}</span>
+            </button>
+          )}
+          {onPreviewChannel && hasStreams && (
+            <button
+              className="channel-menu-item"
+              onClick={() => { setMenuOpen(false); onPreviewChannel(); }}
+            >
+              <span className="material-icons">visibility</span>
+              <span>Preview</span>
+            </button>
+          )}
+          {channelUrl && (
+            <button
+              className="channel-menu-item"
+              onClick={() => { setMenuOpen(false); openInVLC(channelUrl, channel.name); }}
+            >
+              <span className="material-icons">play_circle</span>
+              <span>Open in VLC</span>
+            </button>
+          )}
+          {onCopyChannelUrl && (
+            <button
+              className="channel-menu-item"
+              onClick={() => { setMenuOpen(false); onCopyChannelUrl(); }}
+            >
+              <span className="material-icons">content_copy</span>
+              <span>Copy URL</span>
+            </button>
+          )}
+          {isEditMode && (
+            <>
+              <div className="channel-menu-divider" />
+              <button
+                className="channel-menu-item"
+                onClick={() => { setMenuOpen(false); onEditChannel(); }}
+              >
+                <span className="material-icons">edit</span>
+                <span>Edit Channel</span>
+              </button>
+              <button
+                className="channel-menu-item danger"
+                onClick={() => { setMenuOpen(false); onDelete(); }}
+              >
+                <span className="material-icons">delete</span>
+                <span>Delete Channel</span>
+              </button>
+            </>
+          )}
+        </div>,
+        document.body
+      )}
+    </>
+  );
+});
 
 export const ChannelListItem = memo(function ChannelListItem({
   channel,
@@ -81,6 +221,7 @@ export const ChannelListItem = memo(function ChannelListItem({
   onProbeChannel,
   isProbing = false,
   hasFailedStreams = false,
+  hasBlackScreenStreams = false,
   onPreviewChannel,
 }: ChannelListItemProps) {
   const {
@@ -225,89 +366,27 @@ export const ChannelListItem = memo(function ChannelListItem({
           {channelUrl}
         </span>
       )}
-      <span className={`channel-streams-count ${channel.streams.length === 0 ? 'no-streams' : ''} ${hasFailedStreams ? 'has-failed' : ''}`}>
+      <span className={`channel-streams-count ${channel.streams.length === 0 ? 'no-streams' : ''} ${hasFailedStreams ? 'has-failed' : !hasFailedStreams && hasBlackScreenStreams ? 'has-black-screen' : ''}`}>
         {channel.streams.length === 0 && <span className="material-icons warning-icon">warning</span>}
         {hasFailedStreams && channel.streams.length > 0 && (
           <span className="material-icons failed-stream-icon" title="One or more streams failed probe">error</span>
         )}
+        {!hasFailedStreams && hasBlackScreenStreams && channel.streams.length > 0 && (
+          <span className="material-icons black-screen-icon" title="One or more streams detected as black screen">videocam_off</span>
+        )}
         {channel.streams.length} stream{channel.streams.length !== 1 ? 's' : ''}
       </span>
-      {/* Probe channel button - probes all streams in this channel */}
-      {onProbeChannel && channel.streams && channel.streams.length > 0 && (
-        <button
-          className={`probe-channel-btn ${isProbing ? 'probing' : ''}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onProbeChannel();
-          }}
-          disabled={isProbing}
-          title={isProbing ? 'Probing streams...' : 'Probe all streams in this channel'}
-        >
-          <span className={`material-icons ${isProbing ? 'spinning' : ''}`}>
-            {isProbing ? 'sync' : 'speed'}
-          </span>
-        </button>
-      )}
-      {onPreviewChannel && channel.streams.length > 0 && (
-        <button
-          className="preview-btn channel-preview-btn"
-          onClick={(e) => {
-            e.stopPropagation();
-            onPreviewChannel();
-          }}
-          title="Preview channel in browser"
-        >
-          <span className="material-icons">visibility</span>
-        </button>
-      )}
-      {channelUrl && (
-        <button
-          className="vlc-btn channel-vlc-btn"
-          onClick={(e) => {
-            e.stopPropagation();
-            openInVLC(channelUrl, channel.name);
-          }}
-          title="Open channel in VLC"
-        >
-          <span className="material-icons">play_circle</span>
-        </button>
-      )}
-      {onCopyChannelUrl && (
-        <button
-          className="copy-url-btn channel-copy-url-btn"
-          onClick={(e) => {
-            e.stopPropagation();
-            onCopyChannelUrl();
-          }}
-          title="Copy channel stream URL"
-        >
-          <span className="material-icons">content_copy</span>
-        </button>
-      )}
-      {isEditMode && (
-        <>
-          <button
-            className="channel-row-edit-btn"
-            onClick={(e) => {
-              e.stopPropagation();
-              onEditChannel();
-            }}
-            title="Edit channel"
-          >
-            <span className="material-icons">edit</span>
-          </button>
-          <button
-            className="channel-row-delete-btn"
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete();
-            }}
-            title="Delete channel"
-          >
-            <span className="material-icons">delete</span>
-          </button>
-        </>
-      )}
+      <ChannelMenu
+        channel={channel}
+        isEditMode={isEditMode}
+        isProbing={isProbing}
+        channelUrl={channelUrl}
+        onProbeChannel={onProbeChannel}
+        onPreviewChannel={onPreviewChannel}
+        onCopyChannelUrl={onCopyChannelUrl}
+        onEditChannel={onEditChannel}
+        onDelete={onDelete}
+      />
     </div>
   );
 });

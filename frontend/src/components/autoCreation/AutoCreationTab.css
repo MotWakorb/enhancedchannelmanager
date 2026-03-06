@@ -413,6 +413,39 @@
   font-size: 13px;
 }
 
+.import-conflicts {
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: var(--radius-lg);
+  font-size: 13px;
+}
+
+.import-conflicts-header {
+  font-weight: 600;
+  color: var(--warning);
+  margin-bottom: 8px;
+}
+
+.import-conflicts-list {
+  margin: 0;
+  padding-left: 20px;
+  max-height: 150px;
+  overflow-y: auto;
+  color: var(--text-primary);
+}
+
+.import-conflicts-list li {
+  padding: 2px 0;
+}
+
+.import-conflicts-prompt {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
 .import-success {
   margin-top: 12px;
   padding: 10px 14px;

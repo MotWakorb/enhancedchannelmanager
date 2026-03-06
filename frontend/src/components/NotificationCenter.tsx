@@ -15,6 +15,7 @@ interface ProbeProgress {
   success: number;
   failed: number;
   skipped: number;
+  black_screen: number;
   status: 'idle' | 'starting' | 'fetching' | 'refreshing' | 'probing' | 'paused' | 'cancelled' | 'completed' | 'reordering' | 'failed' | 'fetching_sources' | 'fetching_accounts' | 'building_digest' | 'sending_email' | 'sending_discord';
   current_stream: string;
 }
@@ -342,6 +343,12 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
               <span className="probe-stat probe-stat-failed">
                 <span className="material-icons">close</span>
                 {progress.failed}
+              </span>
+            )}
+            {progress.black_screen > 0 && (
+              <span className="probe-stat probe-stat-black-screen">
+                <span className="material-icons">tv_off</span>
+                {progress.black_screen}
               </span>
             )}
             {progress.skipped > 0 && (

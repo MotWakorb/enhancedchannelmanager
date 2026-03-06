@@ -1886,6 +1886,8 @@ export interface ProbeHistoryEntry {
   success_streams: Array<{ id: number; name: string; url?: string }>;
   failed_streams: Array<{ id: number; name: string; url?: string; error?: string }>;
   skipped_streams: Array<{ id: number; name: string; url?: string; reason?: string }>;
+  black_screen_count: number;
+  black_screen_streams: Array<{ id: number; name: string; url?: string }>;
   reordered_channels?: Array<{
     channel_id: number;
     channel_name: string;
@@ -2135,7 +2137,7 @@ export async function updateTask(taskId: string, config: TaskConfigUpdate): Prom
   });
 }
 
-export async function runTask(taskId: string, scheduleId?: number): Promise<{
+export async function runTask(taskId: string, scheduleId?: number, parameters?: Record<string, unknown>): Promise<{
   success: boolean;
   message: string;
   error?: string;  // "CANCELLED" when task was cancelled
@@ -2146,11 +2148,14 @@ export async function runTask(taskId: string, scheduleId?: number): Promise<{
   failed_count: number;
   skipped_count: number;
 }> {
-  const body = scheduleId ? { schedule_id: scheduleId } : undefined;
+  const body: Record<string, unknown> = {};
+  if (scheduleId) body.schedule_id = scheduleId;
+  if (parameters) body.parameters = parameters;
+  const hasBody = Object.keys(body).length > 0;
   return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/run`, {
     method: 'POST',
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
+    headers: hasBody ? { 'Content-Type': 'application/json' } : undefined,
+    body: hasBody ? JSON.stringify(body) : undefined,
   });
 }
 
