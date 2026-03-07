@@ -206,7 +206,7 @@ export interface UseEditModeReturn {
   renamedGroupNames: Map<number, string>; // groupId -> newName for staged renames
   canLocalUndo: boolean;
   canLocalRedo: boolean;
-  editModeDuration: number | null; // milliseconds since entering edit mode
+  editModeEnteredAt: number | null; // timestamp when edit mode was entered
 
   // Actions
   enterEditMode: () => void;

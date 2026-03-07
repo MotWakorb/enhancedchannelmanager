@@ -3334,35 +3334,6 @@ export function ChannelsPane({
 
   // Memoize expensive channel filtering and grouping operations
   const channelsByGroup = useMemo(() => {
-    // Debug: Log channel group_id distribution before filtering
-    const groupIdCounts: Record<string, number> = {};
-    localChannels.forEach((ch) => {
-      const key = ch.channel_group_id !== null ? String(ch.channel_group_id) : 'ungrouped';
-      groupIdCounts[key] = (groupIdCounts[key] || 0) + 1;
-    });
-    logger.debug('[CHANNELS-DEBUG] Frontend received channels per group_id (before filtering):', groupIdCounts);
-    logger.debug(`[CHANNELS-DEBUG] Total channels in localChannels: ${localChannels.length}`);
-
-    // Count auto_created channels for debugging
-    const autoCreatedChannels = localChannels.filter(ch => ch.auto_created);
-    const manualChannels = localChannels.filter(ch => !ch.auto_created);
-    logger.debug(`[CHANNELS-DEBUG] Channel breakdown: ${manualChannels.length} manual, ${autoCreatedChannels.length} auto_created`);
-
-    // Log auto_created channels by group for debugging
-    if (autoCreatedChannels.length > 0) {
-      const autoCreatedByGroup: Record<string, { count: number; samples: string[] }> = {};
-      autoCreatedChannels.forEach((ch) => {
-        const key = ch.channel_group_id !== null ? String(ch.channel_group_id) : 'ungrouped';
-        if (!autoCreatedByGroup[key]) autoCreatedByGroup[key] = { count: 0, samples: [] };
-        autoCreatedByGroup[key].count++;
-        if (autoCreatedByGroup[key].samples.length < 3) {
-          autoCreatedByGroup[key].samples.push(`#${ch.channel_number} ${ch.name}`);
-        }
-      });
-      logger.debug('[CHANNELS-DEBUG] Auto-created channels by group:', autoCreatedByGroup);
-      logger.debug('[CHANNELS-DEBUG] autoSyncRelatedGroups:', Array.from(autoSyncRelatedGroups));
-    }
-
     // Filter channels based on search term and auto-created filter
     const visibleChannels = localChannels.filter((ch) => {
       // First, apply search filter if there's a search term
@@ -3384,15 +3355,6 @@ export function ChannelsPane({
       // and should remain visible in ECM.
       return true;
     });
-
-    // Debug: Log after filtering
-    const afterFilterCounts: Record<string, number> = {};
-    visibleChannels.forEach((ch) => {
-      const key = ch.channel_group_id !== null ? String(ch.channel_group_id) : 'ungrouped';
-      afterFilterCounts[key] = (afterFilterCounts[key] || 0) + 1;
-    });
-    logger.debug('[CHANNELS-DEBUG] Visible channels per group_id (after filtering):', afterFilterCounts);
-    logger.debug(`[CHANNELS-DEBUG] Visible channels: ${visibleChannels.length}, filtered out: ${localChannels.length - visibleChannels.length}`);
 
     // Apply missing data filters
     const hasMissingDataFilters = channelListFilters?.filterMissingLogo

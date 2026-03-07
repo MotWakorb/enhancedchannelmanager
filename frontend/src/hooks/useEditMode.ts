@@ -1545,25 +1545,9 @@ export function useEditMode({
     buildBulkOperations,
   ]);
 
-  // Compute edit mode duration with live updates (in seconds)
-  const [editModeDuration, setEditModeDuration] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (!state.isActive || !state.enteredAt) {
-      setEditModeDuration(null);
-      return;
-    }
-
-    // Update immediately (convert ms to seconds)
-    setEditModeDuration(Math.floor((Date.now() - state.enteredAt) / 1000));
-
-    // Update every second
-    const interval = setInterval(() => {
-      setEditModeDuration(Math.floor((Date.now() - state.enteredAt!) / 1000));
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [state.isActive, state.enteredAt]);
+  // Expose the raw timestamp so consumers can compute duration locally
+  // without causing re-renders of the entire component tree every second
+  const editModeEnteredAt = state.isActive ? state.enteredAt : null;
 
   // Sync new channels from API into the working copy (e.g., from CSV import)
   // This adds channels that exist in the API but not yet in the working copy
@@ -1637,7 +1621,7 @@ export function useEditMode({
     renamedGroupNames,
     canLocalUndo: state.localUndoStack.length > 0,
     canLocalRedo: state.localRedoStack.length > 0,
-    editModeDuration,
+    editModeEnteredAt,
 
     // Actions
     enterEditMode,

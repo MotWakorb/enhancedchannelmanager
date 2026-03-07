@@ -377,22 +377,23 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
   const [runNowTask, setRunNowTask] = useState<TaskStatus | null>(null);
   const notifications = useNotifications();
 
-  const loadTasks = useCallback(async () => {
+  const loadTasks = useCallback(async (showLoading = false) => {
     try {
+      if (showLoading) setLoading(true);
       const result = await api.getTasks();
       setTasks(result.tasks);
     } catch (err) {
       logger.error('Failed to load tasks', err);
       notifications.error('Failed to load scheduled tasks', 'Tasks');
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    loadTasks();
+    loadTasks(true); // Show loading on initial load only
     // Poll for updates every 5 seconds
-    const interval = setInterval(loadTasks, 5000);
+    const interval = setInterval(() => loadTasks(false), 5000);
     return () => clearInterval(interval);
   }, [loadTasks]);
 
