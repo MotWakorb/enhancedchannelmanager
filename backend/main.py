@@ -249,9 +249,18 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     logger.error("[VALIDATION-ERROR] Validation errors: %s", exc.errors())
     logger.error("[VALIDATION-ERROR] Validation body: %s", exc.body)
 
+    # Sanitize errors for JSON serialization — ctx.error may contain
+    # non-serializable ValueError objects from field_validator
+    safe_errors = []
+    for err in exc.errors():
+        safe_err = dict(err)
+        if "ctx" in safe_err and isinstance(safe_err["ctx"], dict):
+            safe_err["ctx"] = {k: str(v) for k, v in safe_err["ctx"].items()}
+        safe_errors.append(safe_err)
+
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors(), "body": str(exc.body)},
+        content={"detail": safe_errors, "body": str(exc.body)},
     )
 
 
