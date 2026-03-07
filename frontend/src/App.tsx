@@ -56,6 +56,29 @@ const StatsTab = lazy(() => import('./components/tabs/StatsTab').then(m => ({ de
 const SettingsTab = lazy(() => import('./components/tabs/SettingsTab').then(m => ({ default: m.SettingsTab })));
 const AutoCreationTab = lazy(() => import('./components/autoCreation/AutoCreationTab').then(m => ({ default: m.AutoCreationTab })));
 const FFMPEGBuilderTab = lazy(() => import('./components/ffmpegBuilder/FFMPEGBuilderTab').then(m => ({ default: m.FFMPEGBuilderTab })));
+const ExportTab = lazy(() => import('./components/tabs/ExportTab').then(m => ({ default: m.ExportTab })));
+
+// Self-contained timer component — updates only itself every second,
+// not the entire App tree (which was the previous behavior)
+function EditModeTimer({ enteredAt }: { enteredAt: number }) {
+  const [seconds, setSeconds] = useState(() => Math.floor((Date.now() - enteredAt) / 1000));
+
+  useEffect(() => {
+    setSeconds(Math.floor((Date.now() - enteredAt) / 1000));
+    const interval = setInterval(() => {
+      setSeconds(Math.floor((Date.now() - enteredAt) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [enteredAt]);
+
+  const display = seconds < 60
+    ? `${seconds}s`
+    : seconds % 60 > 0
+      ? `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+      : `${Math.floor(seconds / 60)}m`;
+
+  return <span className="edit-mode-timer">({display})</span>;
+}
 
 function App() {
   // Health check and version info
@@ -217,7 +240,7 @@ function App() {
     renamedGroupNames,
     canLocalUndo,
     canLocalRedo,
-    editModeDuration,
+    editModeEnteredAt,
     enterEditMode,
     exitEditMode: rawExitEditMode,
     stageUpdateChannel,
@@ -2002,13 +2025,6 @@ function App() {
     [channels, displayChannels, isEditMode, stageBulkAssignNumbers, recordChange]
   );
 
-  // Format duration for display
-  const formatDuration = (seconds: number): string => {
-    if (seconds < 60) return `${seconds}s`;
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
-  };
 
   // Merge real channel groups with staged groups when in edit mode
   const displayChannelGroups = isEditMode && stagedGroups.length > 0
@@ -2038,10 +2054,8 @@ function App() {
                       {stagedOperationCount} change{stagedOperationCount !== 1 ? 's' : ''}
                     </span>
                   )}
-                  {editModeDuration !== null && (
-                    <span className="edit-mode-timer">
-                      ({formatDuration(editModeDuration)})
-                    </span>
+                  {editModeEnteredAt !== null && (
+                    <EditModeTimer enteredAt={editModeEnteredAt} />
                   )}
                   <div className="edit-mode-buttons">
                     <button
@@ -2322,6 +2336,7 @@ function App() {
           {activeTab === 'logo-manager' && <LogoManagerTab />}
           {activeTab === 'm3u-changes' && <M3UChangesTab />}
           {activeTab === 'auto-creation' && <AutoCreationTab />}
+          {activeTab === 'export' && <ExportTab />}
           {activeTab === 'journal' && <JournalTab />}
           {activeTab === 'stats' && <StatsTab />}
           {activeTab === 'ffmpeg-builder' && <FFMPEGBuilderTab />}
