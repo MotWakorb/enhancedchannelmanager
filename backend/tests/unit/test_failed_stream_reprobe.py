@@ -57,6 +57,7 @@ class TestFailedStreamReprobeTask:
         mock_prober._probe_progress_skipped_count = 0
         mock_prober._probe_success_streams = [{"id": 10, "name": "s10"}, {"id": 20, "name": "s20"}]
         mock_prober._probe_failed_streams = []
+        mock_prober._last_probe_channel_stream_ids = {10, 20, 30}  # Scope includes failed streams
 
         # Make probe_all_streams return immediately
         async def mock_probe(**kwargs):
@@ -124,3 +125,86 @@ class TestFailedStreamReprobeTask:
         config = task.get_config()
         assert config["timeout"] == 60
         assert config["max_concurrent"] == 10
+
+    @pytest.mark.asyncio
+    async def test_scopes_to_last_probe_groups(self, test_session):
+        """Only reprobes failed streams that were in the last scheduled probe's groups."""
+        from models import StreamStats
+
+        # Stream 10 is in the last probe's groups, stream 40 is not (e.g., event stream)
+        test_session.add(StreamStats(stream_id=10, stream_name="s10", probe_status="failed", consecutive_failures=1))
+        test_session.add(StreamStats(stream_id=40, stream_name="event-stream", probe_status="failed", consecutive_failures=1))
+        test_session.commit()
+
+        task = self._make_task()
+
+        mock_prober = MagicMock()
+        mock_prober._probing_in_progress = False
+        mock_prober.probe_timeout = 30
+        mock_prober.max_concurrent_probes = 3
+        mock_prober._probe_progress_total = 1
+        mock_prober._probe_progress_current = 1
+        mock_prober._probe_progress_status = "completed"
+        mock_prober._probe_progress_current_stream = ""
+        mock_prober._probe_progress_success_count = 1
+        mock_prober._probe_progress_failed_count = 0
+        mock_prober._probe_progress_skipped_count = 0
+        mock_prober._probe_success_streams = [{"id": 10, "name": "s10"}]
+        mock_prober._probe_failed_streams = []
+        # Only stream 10 is in scope — stream 40 is from a different group
+        mock_prober._last_probe_channel_stream_ids = {10, 20, 30}
+
+        async def mock_probe(**kwargs):
+            pass
+        mock_prober.probe_all_streams = AsyncMock(side_effect=mock_probe)
+
+        task.set_prober(mock_prober)
+
+        with patch("tasks.failed_stream_reprobe.get_session", return_value=test_session):
+            result = await task.execute()
+
+        assert result.success is True
+        call_kwargs = mock_prober.probe_all_streams.call_args[1]
+        # Stream 40 should be excluded — only stream 10 is in scope
+        assert set(call_kwargs["stream_ids_filter"]) == {10}
+
+    @pytest.mark.asyncio
+    async def test_no_scope_reprobes_all(self, test_session):
+        """Without scoped IDs (no prior probe), reprobes all failed streams."""
+        from models import StreamStats
+
+        test_session.add(StreamStats(stream_id=10, stream_name="s10", probe_status="failed", consecutive_failures=1))
+        test_session.add(StreamStats(stream_id=40, stream_name="s40", probe_status="failed", consecutive_failures=1))
+        test_session.commit()
+
+        task = self._make_task()
+
+        mock_prober = MagicMock()
+        mock_prober._probing_in_progress = False
+        mock_prober.probe_timeout = 30
+        mock_prober.max_concurrent_probes = 3
+        mock_prober._probe_progress_total = 2
+        mock_prober._probe_progress_current = 2
+        mock_prober._probe_progress_status = "completed"
+        mock_prober._probe_progress_current_stream = ""
+        mock_prober._probe_progress_success_count = 2
+        mock_prober._probe_progress_failed_count = 0
+        mock_prober._probe_progress_skipped_count = 0
+        mock_prober._probe_success_streams = [{"id": 10, "name": "s10"}, {"id": 40, "name": "s40"}]
+        mock_prober._probe_failed_streams = []
+        # Empty set = no prior probe ran, so no scoping
+        mock_prober._last_probe_channel_stream_ids = set()
+
+        async def mock_probe(**kwargs):
+            pass
+        mock_prober.probe_all_streams = AsyncMock(side_effect=mock_probe)
+
+        task.set_prober(mock_prober)
+
+        with patch("tasks.failed_stream_reprobe.get_session", return_value=test_session):
+            result = await task.execute()
+
+        assert result.success is True
+        call_kwargs = mock_prober.probe_all_streams.call_args[1]
+        # Both should be included when no scope is set
+        assert set(call_kwargs["stream_ids_filter"]) == {10, 40}
