@@ -994,16 +994,18 @@ class AutoCreationEngine:
 
         for stream in streams:
             results["streams_evaluated"] += 1
+            stream.dry_run = dry_run
             
             logger.debug(
                 "[AUTO-CREATE-ENGINE] Evaluating stream id=%s name=%r "
-                "m3u=%s group=%r",
+                "m3u=%s group=%r dry_run=%s",
                 stream.stream_id, stream.stream_name,
-                stream.m3u_account_id, stream.group_name
+                stream.m3u_account_id, stream.group_name, dry_run
             )
 
             # Track rules that match this stream
             matching_rules = []
+            matched = False
 
             # Build per-stream log of rule evaluations
             stream_rules_log = []
@@ -1011,6 +1013,11 @@ class AutoCreationEngine:
             for rule in rules:
                 # Check if rule applies to this M3U account
                 if rule.m3u_account_id and rule.m3u_account_id != stream.m3u_account_id:
+                    logger.debug(
+                        "[AUTO-CREATE-ENGINE] Skipping rule '%s' for stream %r: "
+                        "M3U account mismatch (%s != %s)",
+                        rule.name, stream.stream_name, rule.m3u_account_id, stream.m3u_account_id
+                    )
                     continue
 
                 # Evaluate conditions with connector logic (AND/OR)
@@ -1078,17 +1085,17 @@ class AutoCreationEngine:
                     if rule.stop_on_first_match:
                         break
 
-            # Add execution log entry for ALL streams (matched and non-matched)
-            # to provide visibility into why streams didn't match (issue #3)
-            results["execution_log"].append({
-                "stream_id": stream.stream_id,
-                "stream_name": stream.stream_name,
-                "m3u_account_id": stream.m3u_account_id,
-                "epg_title": stream.epg_title,
-                "epg_description": stream.epg_description,
-                "rules_evaluated": stream_rules_log,
-                "actions_executed": []  # Actions only filled in Pass 2 for matched streams
-            })
+            # Add execution log entry for matched streams, or ALL streams in dry-run mode (issue #5)
+            if matched or dry_run:
+                results["execution_log"].append({
+                    "stream_id": stream.stream_id,
+                    "stream_name": stream.stream_name,
+                    "m3u_account_id": stream.m3u_account_id,
+                    "epg_title": stream.epg_title,
+                    "epg_description": stream.epg_description,
+                    "rules_evaluated": stream_rules_log,
+                    "actions_executed": []  # Actions only filled in Pass 2 for matched streams
+                })
 
             if not matching_rules:
                 continue

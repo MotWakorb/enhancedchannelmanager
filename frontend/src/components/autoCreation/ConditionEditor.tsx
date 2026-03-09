@@ -68,10 +68,10 @@ const FIELDS: FieldDef[] = [
   { id: 'stream_name', label: 'Stream Name', category: 'stream', operators: TEXT_OPS },
   { id: 'stream_group', label: 'Stream Group', category: 'stream', operators: TEXT_OPS },
   { id: 'tvg_id', label: 'TVG-ID', category: 'stream', operators: [...EXISTS_OPS, ...TEXT_OPS] },
-  { id: 'epg_title', label: 'EPG Title (Today)', category: 'stream', operators: TEXT_OPS },
-  { id: 'epg_desc', label: 'EPG Description (Today)', category: 'stream', operators: TEXT_OPS },
-  { id: 'epg_any', label: 'EPG Today (Title & Description)', category: 'stream', operators: TEXT_OPS },
-  { id: 'any_field', label: 'Any Field (Name/EPG Today)', category: 'stream', operators: TEXT_OPS },
+  { id: 'epg_title', label: 'EPG Title (Today UTC)', category: 'stream', operators: TEXT_OPS },
+  { id: 'epg_desc', label: 'EPG Description (Today UTC)', category: 'stream', operators: TEXT_OPS },
+  { id: 'epg_any', label: 'EPG Today UTC (Title & Description)', category: 'stream', operators: TEXT_OPS },
+  { id: 'any_field', label: 'Any Field (Name/EPG Today UTC)', category: 'stream', operators: TEXT_OPS },
   {
     id: 'provider', label: 'M3U Account', category: 'stream',
     operators: [
@@ -600,7 +600,12 @@ export function ConditionEditor({
         <div className="condition-main-row">
           {/* Field selector */}
           <CustomSelect
-            options={FIELD_OPTIONS}
+            options={FIELD_OPTIONS.map(opt => {
+              if (opt.value.startsWith('epg_') || opt.value === 'any_field') {
+                return { ...opt, title: 'Uses UTC day boundaries (00:00-23:59 UTC)' };
+              }
+              return opt;
+            })}
             value={currentField}
             onChange={handleFieldChange}
             placeholder="Select field..."

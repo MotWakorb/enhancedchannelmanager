@@ -125,7 +125,7 @@ def _parse_epg_date(date_str: str) -> str:
 
         # Fallback to manual slice for raw XMLTV format (YYYYMMDDHHMMSS)
         # 20260224213000 -> 21:30
-        if len(date_str) >= 12 and date_str[0:2] == "20": # Basic sanity check for year 20xx
+        if date_str and re.match(r'^\d{14}', date_str):
             hh = date_str[8:10]
             mm = date_str[10:12]
             return f"{hh}:{mm}"

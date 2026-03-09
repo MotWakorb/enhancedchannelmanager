@@ -47,7 +47,10 @@ class StreamContext:
 
     # Provider info
     m3u_account_id: Optional[int] = None
-    m3u_account_name: Optional[str] = None
+    m3u_account_name: Optional[int] = None
+
+    # Execution mode
+    dry_run: bool = False
 
     # Quality info (from StreamStats if probed)
     resolution: Optional[str] = None  # e.g., "1920x1080"
@@ -94,8 +97,8 @@ class StreamContext:
                 parts = stream_stats["resolution"].split("x")
                 if len(parts) == 2:
                     resolution_height = int(parts[1])
-            except (ValueError, IndexError):
-                pass
+            except (ValueError, IndexError) as e:
+                logger.debug("[AUTO-CREATE-EVAL] Failed to parse resolution '%s': %s", stream_stats.get("resolution"), e)
 
         return cls(
             stream_id=stream.get("id"),
@@ -191,8 +194,8 @@ class ConditionEvaluator:
                         result = self._normalization_engine.normalize(stripped)
                         if result and result.normalized:
                             names.add(result.normalized.lower())
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("[AUTO-CREATE-EVAL] Failed to normalize channel name '%s': %s", stripped, e)
             self._channel_names_by_group[gid] = names
 
         self._all_channel_names: set[str] = set()
@@ -478,7 +481,10 @@ class ConditionEvaluator:
             sub_results.append(res)
             if not res.matched:
                 matched = False
-                # Continue evaluating all sub-conditions for full logging (Issue #4)
+                if not context.dry_run:
+                    # Short-circuit in execute mode for performance (Issue #4)
+                    break
+                # In dry-run mode, continue for full logging
             if res.matched and res.matched_data:
                 final_matched_data.update(res.matched_data)
         
@@ -501,6 +507,10 @@ class ConditionEvaluator:
                 matched = True
                 if not final_matched_data and res.matched_data:
                     final_matched_data.update(res.matched_data)
+                if not context.dry_run:
+                    # Short-circuit in execute mode for performance (Issue #4)
+                    break
+                # In dry-run mode, continue for full logging
         
         details = " OR ".join([f"[{i}] {r.condition_type}: {r.matched}" for i, r in enumerate(sub_results)])
         return EvaluationResult(matched, "or", details, matched_data=final_matched_data, sub_results=sub_results)
@@ -594,8 +604,10 @@ class ConditionEvaluator:
 
     def _normalize_stream_name(self, context: StreamContext) -> str:
         if self._normalization_engine:
-            try: return self._normalization_engine.normalize(context.stream_name).normalized
-            except Exception: pass
+            try:
+                return self._normalization_engine.normalize(context.stream_name).normalized
+            except Exception as e:
+                logger.debug("[AUTO-CREATE-EVAL] Failed to normalize stream name '%s': %s", context.stream_name, e)
         return context.stream_name
 
     def _evaluate_normalized_name_exists(self, context, cond_type):

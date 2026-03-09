@@ -659,3 +659,39 @@ class TestConditionEvaluatorMultiField:
         assert result.matched is True
         assert ctx.epg_match == prog
         assert ctx.matched_by_epg is True
+
+
+class TestConditionEvaluatorSpecialCases:
+    """Special regression tests for PR feedback."""
+
+    def test_negated_epg_condition_not_setting_state(self):
+        """Negated EPG match should NOT set matched_by_epg=True (Issue #1)."""
+        evaluator = ConditionEvaluator()
+        # Program that matches the value 'X'
+        prog = {"title": "Program X", "source": 1}
+        ctx = StreamContext(stream_id=1, stream_name="Stream", epg_programs=[prog])
+
+        # Condition: Title does NOT contain 'X'
+        # The internal match will be True, but the final result will be False
+        result = evaluator.evaluate(
+            {"type": "epg_title_contains", "value": "X", "negate": True},
+            ctx
+        )
+        assert result.matched is False
+        assert ctx.matched_by_epg is False
+        assert ctx.epg_match is None
+
+    def test_negated_epg_condition_passing_not_setting_state(self):
+        """Negated EPG match that evaluates to True should NOT set matched_by_epg (if no actual match)."""
+        evaluator = ConditionEvaluator()
+        prog = {"title": "Program Y", "source": 1}
+        ctx = StreamContext(stream_id=1, stream_name="Stream", epg_programs=[prog])
+
+        # Condition: Title does NOT contain 'X' (Matches because it contains 'Y')
+        result = evaluator.evaluate(
+            {"type": "epg_title_contains", "value": "X", "negate": True},
+            ctx
+        )
+        assert result.matched is True
+        assert ctx.matched_by_epg is False
+        assert ctx.epg_match is None
