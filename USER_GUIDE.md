@@ -685,7 +685,6 @@ Build matching logic using a three-part editor (Field + Operator + Value) with A
 | **EPG Title (Today)** | contains, matches (regex) |
 | **EPG Description (Today)** | contains, matches (regex) |
 | **EPG Today (Any)** | contains, matches (regex) - Checks both Title and Description |
-| **EPG Source** | is, is not - Filter to specific Dispatcharr EPG provider |
 | **Any Field (Name/EPG)** | contains, matches (regex) - Checks Name, EPG Title, and Description |
 | **Channel Exists** | by name, regex, or group |
 | **Normalized Match in Group** | stream's normalized name matches a channel in a specified group |

@@ -121,17 +121,19 @@ def _parse_epg_date(date_str: str) -> str:
             dt = datetime.fromisoformat(clean_str)
             return dt.strftime("%H:%M")
         except (ValueError, TypeError):
+            logger.debug("[AUTO-CREATE-EXEC] Failed to parse EPG date as ISO: '%s'", date_str)
             pass
 
         # Fallback to manual slice for raw XMLTV format (YYYYMMDDHHMMSS)
         # 20260224213000 -> 21:30
-        if date_str and re.match(r'^\d{14}', date_str):
+        if date_str and re.match(r'^20\d{12}', date_str):
             hh = date_str[8:10]
             mm = date_str[10:12]
             return f"{hh}:{mm}"
             
         return date_str
-    except Exception:
+    except Exception as e:
+        logger.debug("[AUTO-CREATE-EXEC] Failed to parse EPG date '%s': %s", date_str, e)
         return date_str
 
 class ActionExecutor:
@@ -1629,10 +1631,10 @@ class ActionExecutor:
         profile_id = action.params.get("profile_id")
         if not profile_id:
             return ActionResult(
-                success=False,
+                success=True,
                 action_type=action.type,
-                description="No profile_id specified",
-                error="Missing profile_id"
+                description="No profile_id specified, skipped",
+                skipped=True
             )
 
         if exec_ctx.dry_run:

@@ -47,7 +47,7 @@ class StreamContext:
 
     # Provider info
     m3u_account_id: Optional[int] = None
-    m3u_account_name: Optional[int] = None
+    m3u_account_name: Optional[str] = None
 
     # Execution mode
     dry_run: bool = False
@@ -131,10 +131,10 @@ class EvaluationResult:
     condition_type: str
     details: Optional[str] = None  # Human-readable explanation
     matched_data: Optional[dict] = None  # Captured data (e.g. the specific program)
-    sub_results: Optional[list["EvaluationResult"]] = field(default_factory=list)
+    sub_results: Optional[list["EvaluationResult"]] = None
     value: Optional[Any] = None
     negate: bool = False
-    connector: str = "and"
+    connector: Optional[str] = None
 
     def __bool__(self):
         return self.matched
@@ -147,7 +147,7 @@ class EvaluationResult:
             "details": self.details,
             "value": self.value,
             "negate": self.negate,
-            "connector": self.connector
+            "connector": self.connector or "and"
         }
         if self.sub_results:
             res["sub_results"] = [r.to_dict() for r in self.sub_results]
@@ -314,7 +314,7 @@ class ConditionEvaluator:
         if not context.epg_programs:
             return EvaluationResult(False, cond_type, "No EPG data for today")
 
-        pattern = self._expand_date_placeholders(pattern, allow_ranges=not is_regex)
+        pattern = self._expand_date_placeholders(pattern, allow_ranges=is_regex)
         
         for prog in context.epg_programs:
             value = prog.get(field_name) or ""

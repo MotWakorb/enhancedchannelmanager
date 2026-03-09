@@ -228,7 +228,8 @@ def compute_event_times(
     """
     try:
         tz = zoneinfo.ZoneInfo(event_timezone)
-    except Exception:
+    except Exception as e:
+        logger.debug("[DUMMY-EPG] Unknown event_timezone '%s', falling back to UTC: %s", event_timezone, e)
         tz = timezone.utc
 
     now = datetime.now(tz)
@@ -500,7 +501,8 @@ def generate_channel_xml(
 
     try:
         tz = zoneinfo.ZoneInfo(event_timezone)
-    except Exception:
+    except Exception as e:
+        logger.debug("[DUMMY-EPG] Unknown event_timezone '%s', falling back to UTC: %s", event_timezone, e)
         tz = timezone.utc
         
     now = datetime.now(tz)

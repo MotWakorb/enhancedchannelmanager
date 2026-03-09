@@ -184,10 +184,13 @@ class Condition:
                 ConditionType.ANY_FIELD_MATCHES,
                 ConditionType.CHANNEL_EXISTS_MATCHING,
             ):
-                try:
-                    re.compile(self.value)
-                except re.error as e:
-                    errors.append(f"Invalid regex pattern for {self.type}: {e}")
+                if len(self.value) > 500:
+                    errors.append(f"{self.type} regex pattern is too long (max 500 chars)")
+                else:
+                    try:
+                        re.compile(self.value)
+                    except re.error as e:
+                        errors.append(f"Invalid regex pattern for {self.type}: {e}")
 
         elif cond_type in (ConditionType.QUALITY_MIN, ConditionType.QUALITY_MAX, ConditionType.CHANNEL_HAS_STREAMS, ConditionType.HAS_AUDIO_TRACKS):
             if not isinstance(self.value, (int, float)) or self.value < 0:

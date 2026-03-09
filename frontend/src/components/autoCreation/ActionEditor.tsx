@@ -223,6 +223,7 @@ export function ActionEditor({
   const [epgSources, setEpgSources] = useState<EPGSource[]>([]);
   const [streamProfiles, setStreamProfiles] = useState<StreamProfile[]>([]);
   const [timezones, setTimezones] = useState<string[]>([]);
+  const [loadingTimezones, setLoadingTimezones] = useState(false);
   const [channelNumberMode, setChannelNumberMode] = useState<'auto' | 'starting'>(
     parseStartingNumber(action.channel_number) !== null ? 'starting' : 'auto'
   );
@@ -232,10 +233,14 @@ export function ActionEditor({
 
   // Fetch timezones only when transform_time action is selected
   useEffect(() => {
-    if (action.type === 'transform_time') {
-      getTimezones().then(setTimezones).catch(() => setTimezones(['UTC']));
+    if (action.type === 'transform_time' && timezones.length === 0) {
+      setLoadingTimezones(true);
+      getTimezones()
+        .then(setTimezones)
+        .catch(() => setTimezones(['UTC']))
+        .finally(() => setLoadingTimezones(false));
     }
-  }, [action.type]);
+  }, [action.type, timezones.length]);
 
   const timezoneOptions = useMemo(() =>
     timezones.map(tz => ({ value: tz, label: tz })),
@@ -362,6 +367,13 @@ export function ActionEditor({
     }
     if (newType === 'set_stream_priority') {
       newAction.priority = 'lowest';
+    }
+    if (newType === 'transform_time') {
+      newAction.source_field = 'stream_name';
+      newAction.pattern = '(\\d{1,2}:\\d{2})';
+      newAction.source_tz = 'UTC';
+      newAction.target_tz = 'UTC';
+      newAction.variable_name = 'converted_time';
     }
 
     onChange(newAction);
@@ -904,7 +916,8 @@ export function ActionEditor({
                   value={action.source_tz || 'UTC'}
                   onChange={val => onChange({ ...action, source_tz: val })}
                   options={timezoneOptions}
-                  disabled={readonly}
+                  placeholder={loadingTimezones ? "Loading..." : "Select timezone..."}
+                  disabled={readonly || loadingTimezones}
                   searchable
                 />
               </div>
@@ -914,12 +927,12 @@ export function ActionEditor({
                   value={action.target_tz || 'UTC'}
                   onChange={val => onChange({ ...action, target_tz: val })}
                   options={timezoneOptions}
-                  disabled={readonly}
+                  placeholder={loadingTimezones ? "Loading..." : "Select timezone..."}
+                  disabled={readonly || loadingTimezones}
                   searchable
                 />
               </div>
-            </div>
-          </div>
+            </div>          </div>
         )}
 
         {/* Target Selector for merge_streams */}

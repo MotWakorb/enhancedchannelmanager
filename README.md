@@ -92,7 +92,6 @@ Build complex matching logic with AND/OR connectors:
 - **EPG Title (Today)** - Search matching program titles for current UTC day
 - **EPG Description (Today)** - Search matching program descriptions for today
 - **EPG Today (Any)** - Search both Title and Description simultaneously
-- **EPG Source** - Filter matches to a specific Dispatcharr EPG provider
 - **Any Field (Name/EPG)** - Check Stream Name, EPG Title, and EPG Description in one condition
 - **Channel Exists** - Check if channel already exists (by name, regex, or group)
 - **Normalized Match in Group** - Check if a stream's normalized name matches any channel in a specified channel group (strips country prefixes and applies normalization engine)

@@ -36,6 +36,8 @@ function fetchText(url: string, options?: RequestInit): Promise<string> {
 // Rules CRUD
 // =============================================================================
 
+let _tzCache: string[] | null = null;
+
 /**
  * Get all auto-creation rules.
  */
@@ -48,8 +50,10 @@ export async function getAutoCreationRules(): Promise<AutoCreationRule[]> {
  * Get available IANA timezones from the backend.
  */
 export async function getTimezones(): Promise<string[]> {
+  if (_tzCache) return _tzCache;
   const response = await fetchJson<{ timezones: string[] }>(`${API_BASE}/auto-creation/timezones`);
-  return response.timezones;
+  _tzCache = response.timezones;
+  return _tzCache;
 }
 
 /**

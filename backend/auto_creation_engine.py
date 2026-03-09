@@ -992,6 +992,10 @@ class AutoCreationEngine:
         logger.info("[AUTO-CREATE-ENGINE] Evaluating %s streams against %s rules", len(streams), len(rules))
         matched_entries = []  # list of (stream, winning_rule, losing_rules, stream_rules_log)
 
+        # Track non-matched log entries to prevent bloat (Issue #5)
+        MAX_UNMATCHED_LOG = 500
+        unmatched_logged = 0
+
         for stream in streams:
             results["streams_evaluated"] += 1
             stream.dry_run = dry_run
@@ -1043,38 +1047,43 @@ class AutoCreationEngine:
                     or_groups.append(current_group)
 
                 # Evaluate conditions, track match per group
-                matched = False
+                rule_matched = False
                 conditions_log = []
-                for group in or_groups:
-                    group_matched = True
-                    group_log = []
 
+                for group in or_groups:
                     # Wrap the group in an AND condition for evaluation
-                    # This ensures correct logical evaluation and matched_data propagation
                     group_condition = Condition(
                         type=ConditionType.AND.value,
                         conditions=[Condition.from_dict(c) for c in group]
                     )
                     result = evaluator.evaluate(group_condition, stream)
                     
-                    # Log individual conditions from the result details for visibility
-                    group_matched = result.matched
                     if result.matched:
+                        rule_matched = True
                         matched = True
                     
-                    # Reconstruct log from structured result for visibility (Issue #3 and #4)
-                    conditions_log.append(result.to_dict())
+                    # Flatten AND wrapper so frontend gets individual condition entries (Item 6)
+                    if result.sub_results:
+                        conditions_log.extend([sr.to_dict() for sr in result.sub_results])
+                    else:
+                        conditions_log.append(result.to_dict())
 
-                # Always add to log to provide visibility into why streams didn't match (issue #3)
+                # Always add to log to provide visibility into why streams didn't match
                 stream_rules_log.append({
                     "rule_id": rule.id,
                     "rule_name": rule.name,
                     "conditions": conditions_log,
-                    "matched": matched,
-                    "was_winner": matched and len(matching_rules) == 0
+                    "matched": rule_matched,
+                    "was_winner": rule_matched and len(matching_rules) == 0
                 })
 
-                if matched:
+                # Restore logger.debug (Item 4A)
+                logger.debug(
+                    "[AUTO-CREATE-ENGINE] Rule '%s' (id=%s): matched=%s (%s conditions in %s OR-group(s))",
+                    rule.name, rule.id, rule_matched, len(conditions), len(or_groups)
+                )
+
+                if rule_matched:
                     matching_rules.append(rule)
 
                     # Check for conflicts (multiple rules matching same stream)
@@ -1085,17 +1094,44 @@ class AutoCreationEngine:
                     if rule.stop_on_first_match:
                         break
 
-            # Add execution log entry for matched streams, or ALL streams in dry-run mode (issue #5)
-            if matched or dry_run:
-                results["execution_log"].append({
-                    "stream_id": stream.stream_id,
-                    "stream_name": stream.stream_name,
-                    "m3u_account_id": stream.m3u_account_id,
-                    "epg_title": stream.epg_title,
-                    "epg_description": stream.epg_description,
-                    "rules_evaluated": stream_rules_log,
-                    "actions_executed": []  # Actions only filled in Pass 2 for matched streams
-                })
+            if not matching_rules:
+                # Restore logger.debug (Item 4C)
+                logger.debug("[AUTO-CREATE-ENGINE] Stream %r: no rules matched", stream.stream_name)
+                
+                # Cap execution log entries in dry-run mode (Item 7)
+                if dry_run and unmatched_logged < MAX_UNMATCHED_LOG:
+                    results["execution_log"].append({
+                        "stream_id": stream.stream_id,
+                        "stream_name": stream.stream_name,
+                        "m3u_account_id": stream.m3u_account_id,
+                        "epg_title": stream.epg_title,
+                        "epg_description": stream.epg_description,
+                        "rules_evaluated": stream_rules_log,
+                        "actions_executed": []
+                    })
+                    unmatched_logged += 1
+                continue
+
+            # Determine winning and losing rules
+            winning_rule = matching_rules[0]
+            losing_rules = matching_rules[1:]
+            
+            # Restore logger.debug (Item 4B)
+            logger.debug(
+                "[AUTO-CREATE-ENGINE] Stream %r: winner='%s' (id=%s)%s",
+                stream.stream_name, winning_rule.name, winning_rule.id,
+                (", losers=%s" % [r.name for r in losing_rules]) if losing_rules else ""
+            )
+
+            results["execution_log"].append({
+                "stream_id": stream.stream_id,
+                "stream_name": stream.stream_name,
+                "m3u_account_id": stream.m3u_account_id,
+                "epg_title": stream.epg_title,
+                "epg_description": stream.epg_description,
+                "rules_evaluated": stream_rules_log,
+                "actions_executed": []  # Actions only filled in Pass 2 for matched streams
+            })
 
             if not matching_rules:
                 continue
