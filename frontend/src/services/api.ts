@@ -2,6 +2,7 @@ import type {
   Channel,
   ChannelGroup,
   ChannelProfile,
+  MergeChannelsRequest,
   Stream,
   StreamGroupInfo,
   M3UAccount,
@@ -225,6 +226,13 @@ export async function createChannel(data: {
   return fetchJson(`${API_BASE}/channels`, {
     method: 'POST',
     body: JSON.stringify(data),
+  });
+}
+
+export async function mergeChannels(request: MergeChannelsRequest): Promise<Channel> {
+  return fetchJson(`${API_BASE}/channels/merge`, {
+    method: 'POST',
+    body: JSON.stringify(request),
   });
 }
 

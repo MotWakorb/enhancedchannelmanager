@@ -45,6 +45,7 @@ import { ChannelListItem } from './ChannelListItem';
 import { StreamListItem } from './StreamListItem';
 import { PreviewStreamModal } from './PreviewStreamModal';
 import { CSVImportModal } from './CSVImportModal';
+import { MergeChannelsModal } from './MergeChannelsModal';
 import { exportChannelsToCSV, downloadCSVTemplate } from '../services/api';
 import './ChannelsPane.css';
 import './ModalBase.css';
@@ -1450,6 +1451,10 @@ export function ChannelsPane({
 
   // CSV import modal state
   const csvImportModal = useModal();
+
+  // Merge channels modal state
+  const mergeModal = useModal();
+  const [mergeChannelIds, setMergeChannelIds] = useState<number[]>([]);
 
   // Context menu management
   const {
@@ -7190,6 +7195,15 @@ export function ChannelsPane({
             <div className="context-menu-item" onClick={handleCreateGroupAndMove}>
               Create new group and move
             </div>
+            {contextMenu.metadata.channelIds.length >= 2 && (
+              <div className="context-menu-item" onClick={() => {
+                setMergeChannelIds(contextMenu.metadata.channelIds);
+                mergeModal.open();
+                hideContextMenu();
+              }}>
+                Merge channels ({contextMenu.metadata.channelIds.length})
+              </div>
+            )}
           </div>
         )}
 
@@ -7219,6 +7233,44 @@ export function ChannelsPane({
             }
           }}
         />
+
+        {/* Merge Channels Modal */}
+        {mergeModal.isOpen && mergeChannelIds.length >= 2 && (
+          <MergeChannelsModal
+            channels={channels.filter((c) => mergeChannelIds.includes(c.id))}
+            logos={logos}
+            epgData={epgData.map((e) => ({
+              id: e.id,
+              tvg_id: e.tvg_id,
+              name: e.name,
+              icon_url: e.icon_url,
+              epg_source: e.epg_source,
+            }))}
+            epgSources={epgSources.map((s) => ({
+              id: s.id,
+              name: s.name,
+              source_type: s.source_type,
+            }))}
+            channelGroups={channelGroups}
+            streamProfiles={streamProfiles}
+            streams={allStreams.map((s) => ({
+              id: s.id,
+              name: s.name,
+              m3u_account: s.m3u_account,
+            }))}
+            onClose={() => {
+              mergeModal.close();
+              setMergeChannelIds([]);
+            }}
+            onMerged={() => {
+              mergeModal.close();
+              setMergeChannelIds([]);
+              onClearChannelSelection?.();
+              onChannelsChange?.();
+              onChannelGroupsChange?.();
+            }}
+          />
+        )}
       </div>
     </div>
   );
