@@ -61,6 +61,17 @@ class AssignNumbersRequest(BaseModel):
     starting_number: Optional[float] = None
 
 
+class MergeChannelsRequest(BaseModel):
+    source_channel_ids: list[int]
+    target_name: str
+    target_channel_number: Optional[float] = None
+    target_channel_group_id: Optional[int] = None
+    target_logo_id: Optional[int] = None
+    target_tvg_id: Optional[str] = None
+    target_epg_data_id: Optional[int] = None
+    target_stream_profile_id: Optional[int] = None
+
+
 class ClearAutoCreatedRequest(BaseModel):
     group_ids: list[int]
 
@@ -1587,6 +1598,109 @@ async def update_channel(channel_id: int, data: dict):
         return result
     except Exception as e:
         logger.exception("[CHANNELS] Failed to update channel %s: %s", channel_id, e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/merge")
+async def merge_channels(request: "MergeChannelsRequest"):
+    """Merge multiple channels into a single new channel.
+
+    Creates a new channel with the specified metadata, moves all streams
+    from the source channels into it (preserving order, deduplicating),
+    then deletes the source channels.
+    """
+    logger.debug("[CHANNELS] POST /channels/merge - sources=%s target_name=%s",
+                 request.source_channel_ids, request.target_name)
+
+    if len(request.source_channel_ids) < 2:
+        raise HTTPException(status_code=400, detail="At least 2 source channels are required")
+
+    client = get_client()
+    new_channel = None
+    try:
+        # 1. Fetch all source channels and collect their streams (ordered, deduplicated)
+        source_channels = []
+        all_streams: list[int] = []
+        seen_streams: set[int] = set()
+        for cid in request.source_channel_ids:
+            channel = await client.get_channel(cid)
+            source_channels.append(channel)
+            for sid in channel.get("streams", []):
+                if sid not in seen_streams:
+                    all_streams.append(sid)
+                    seen_streams.add(sid)
+
+        source_names = [ch.get("name", "Unknown") for ch in source_channels]
+
+        # 2. Create the new merged channel
+        create_data = {"name": request.target_name}
+        if request.target_channel_number is not None:
+            create_data["channel_number"] = request.target_channel_number
+        if request.target_channel_group_id is not None:
+            create_data["channel_group_id"] = request.target_channel_group_id
+        if request.target_logo_id is not None:
+            create_data["logo_id"] = request.target_logo_id
+        if request.target_tvg_id is not None:
+            create_data["tvg_id"] = request.target_tvg_id
+
+        new_channel = await client.create_channel(create_data)
+        new_channel_id = new_channel["id"]
+        logger.info("[CHANNELS] Created merged channel id=%s name=%s", new_channel_id, request.target_name)
+
+        # 3. Assign streams to the new channel
+        if all_streams:
+            await client.update_channel(new_channel_id, {"streams": all_streams})
+            logger.info("[CHANNELS] Assigned %d streams to merged channel %s", len(all_streams), new_channel_id)
+
+        # 4. Update EPG data if specified
+        update_data = {}
+        if request.target_epg_data_id is not None:
+            update_data["epg_data_id"] = request.target_epg_data_id
+        if request.target_stream_profile_id is not None:
+            update_data["stream_profile_id"] = request.target_stream_profile_id
+        if update_data:
+            await client.update_channel(new_channel_id, update_data)
+
+        # 5. Delete source channels
+        deleted_ids = []
+        for cid in request.source_channel_ids:
+            try:
+                await client.delete_channel(cid)
+                deleted_ids.append(cid)
+                logger.debug("[CHANNELS] Deleted source channel %s during merge", cid)
+            except Exception as del_err:
+                logger.warning("[CHANNELS] Failed to delete source channel %s during merge: %s", cid, del_err)
+
+        # 6. Fetch the final state of the merged channel
+        result = await client.get_channel(new_channel_id)
+
+        # Log to journal
+        journal.log_entry(
+            category="channel",
+            action_type="merge",
+            entity_id=new_channel_id,
+            entity_name=request.target_name,
+            description=f"Merged {len(source_channels)} channels into '{request.target_name}'",
+            before_value={"source_channels": [{"id": ch.get("id"), "name": ch.get("name")} for ch in source_channels]},
+            after_value={"merged_channel_id": new_channel_id, "stream_count": len(all_streams), "deleted_source_ids": deleted_ids},
+        )
+
+        logger.info("[CHANNELS] Merge complete: %d channels -> '%s' (id=%s, %d streams)",
+                     len(source_channels), request.target_name, new_channel_id, len(all_streams))
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Rollback: delete the new channel if it was created
+        if new_channel:
+            try:
+                await client.delete_channel(new_channel["id"])
+                logger.info("[CHANNELS] Rolled back merged channel %s after error", new_channel["id"])
+            except Exception:
+                logger.warning("[CHANNELS] Failed to rollback merged channel %s", new_channel["id"])
+        logger.exception("[CHANNELS] Channel merge failed: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
