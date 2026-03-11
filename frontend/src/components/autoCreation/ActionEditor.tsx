@@ -343,6 +343,20 @@ export function ActionEditor({
       }
     }
 
+    // Validate transform_time (Issue DEV-2)
+    if (action.type === 'transform_time') {
+      if (!action.variable_name) return 'Output variable name is required';
+      if (!action.source_field) return 'Source field is required';
+      if (!action.pattern) return 'Extraction regex is required';
+      try {
+        new RegExp(action.pattern);
+      } catch {
+        return 'Invalid extraction regex pattern';
+      }
+      if (!action.source_tz) return 'Source timezone is required';
+      if (!action.target_tz) return 'Target timezone is required';
+    }
+
     return null;
   };
 
@@ -352,6 +366,8 @@ export function ActionEditor({
 
   const handleTypeChange = (newType: ActionType) => {
     const newDef = ACTION_TYPES.find(a => a.type === newType);
+
+    // DEV-3: Clear type-specific fields when switching away
     const newAction: Action = { type: newType };
 
     // Initialize defaults based on type
@@ -380,7 +396,6 @@ export function ActionEditor({
     setTypeSelectOpen(false);
     setNameTransformEnabled(false);
   };
-
   const handleInsertVariable = (variable: string) => {
     const currentTemplate = action.name_template || '';
     onChange({ ...action, name_template: currentTemplate + variable });
@@ -875,13 +890,13 @@ export function ActionEditor({
                 id={`${id}-time-var`}
                 type="text"
                 className="action-input mono"
-                value={action.variable_name || ''}
+                value={action.variable_name || 'converted_time'}
                 onChange={e => onChange({ ...action, variable_name: e.target.value.replace(/[^a-zA-Z0-9_]/g, '') })}
                 placeholder="e.g., local_time"
                 disabled={readonly}
               />
-              {action.variable_name && (
-                <span className="field-hint">Use as <code>{'{var:' + action.variable_name + '}'}</code> in later actions</span>
+              {(action.variable_name || 'converted_time') && (
+                <span className="field-hint">Use as <code>{'{var:' + (action.variable_name || 'converted_time') + '}'}</code> in later actions</span>
               )}
             </div>
 
@@ -901,9 +916,9 @@ export function ActionEditor({
                 id={`${id}-time-pattern`}
                 type="text"
                 className="action-input mono"
-                value={action.pattern || ''}
+                value={action.pattern || '(\\d{1,2}:\\d{2})'}
                 onChange={e => onChange({ ...action, pattern: e.target.value })}
-                placeholder="e.g., (\d{1,2}:\d{2})"
+                placeholder="e.g., (\\d{1,2}:\\d{2})"
                 disabled={readonly}
               />
               <span className="field-hint">Regex to find the time string in the source field</span>

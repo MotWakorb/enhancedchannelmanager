@@ -184,7 +184,7 @@ class Condition:
                 ConditionType.ANY_FIELD_MATCHES,
                 ConditionType.CHANNEL_EXISTS_MATCHING,
             ):
-                if len(self.value) > 500:
+                if len(self.value) > 800:
                     errors.append(f"{self.type} regex pattern is too long (max 500 chars)")
                 else:
                     try:

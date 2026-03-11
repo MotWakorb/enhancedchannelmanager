@@ -50,10 +50,18 @@ export async function getAutoCreationRules(): Promise<AutoCreationRule[]> {
  * Get available IANA timezones from the backend.
  */
 export async function getTimezones(): Promise<string[]> {
-  if (_tzCache) return _tzCache;
-  const response = await fetchJson<{ timezones: string[] }>(`${API_BASE}/auto-creation/timezones`);
-  _tzCache = response.timezones;
-  return _tzCache;
+  if (_tzCache && _tzCache.length > 0) return _tzCache;
+  
+  try {
+    const response = await fetchJson<{ timezones: string[] }>(`${API_BASE}/auto-creation/timezones`);
+    if (response.timezones && response.timezones.length > 0) {
+      _tzCache = response.timezones;
+    }
+    return _tzCache || ['UTC'];
+  } catch (err) {
+    console.error('Failed to fetch timezones:', err);
+    return ['UTC'];
+  }
 }
 
 /**

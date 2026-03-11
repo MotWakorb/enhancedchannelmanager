@@ -600,7 +600,7 @@ class TestConditionEvaluatorEPG:
         assert result.matched is True
         assert ctx.epg_match == prog
         assert ctx.matched_by_epg is True
-        assert "matched segment: 'Australia'" in result.details
+        assert "Found 1 matching program(s)" in result.details
 
     def test_epg_desc_matches_regex(self):
         """Matches regex in EPG program description."""
@@ -614,7 +614,7 @@ class TestConditionEvaluatorEPG:
         )
         assert result.matched is True
         assert ctx.epg_match == prog
-        assert "segment: 'from London'" in result.details
+        assert "Found 1 matching program(s)" in result.details
 
     def test_epg_any_matches(self):
         """Matches either title or description."""
@@ -661,11 +661,8 @@ class TestConditionEvaluatorMultiField:
         assert ctx.matched_by_epg is True
 
 
-class TestConditionEvaluatorSpecialCases:
-    """Special regression tests for PR feedback."""
-
     def test_negated_epg_condition_does_not_set_match_state(self):
-        """Negated EPG condition that initially matched should NOT set matched_by_epg (Issue #1)."""
+        """Negated EPG condition that initially matched should NOT set matched_by_epg (Item 10A)."""
         context = StreamContext(stream_id=1, stream_name="Test")
         context.epg_programs = [{"title": "Rugby World Cup", "description": "Live rugby"}]
         

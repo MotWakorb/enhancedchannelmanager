@@ -11,8 +11,26 @@ from auto_creation_executor import (
     ActionResult,
     ExecutionContext,
     ActionExecutor,
+    _parse_epg_date
 )
 from auto_creation_evaluator import StreamContext
+
+def test_parse_epg_date_iso():
+    """Item 10C: Test ISO format."""
+    assert _parse_epg_date("2026-02-24T21:30:00Z") == "21:30"
+
+def test_parse_epg_date_iso_with_offset():
+    """Item 10C: Test ISO format with offset."""
+    assert _parse_epg_date("2026-02-24T21:30:00+00:00") == "21:30"
+
+def test_parse_epg_date_xmltv():
+    """Item 10C: Test XMLTV format."""
+    assert _parse_epg_date("20260224213000 +0000") == "21:30"
+
+def test_parse_epg_date_empty():
+    """Item 10C: Test empty/None cases."""
+    assert _parse_epg_date("") == ""
+    assert _parse_epg_date(None) == ""
 
 
 class TestActionResult:

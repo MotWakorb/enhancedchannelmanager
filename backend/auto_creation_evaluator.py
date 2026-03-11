@@ -283,7 +283,10 @@ class ConditionEvaluator:
         # Capture matched data if available AND the final result is True (after negation)
         # This fixes Issue #1 where negated EPG conditions corrupted match state
         if result.matched and result.matched_data:
-            if "program" in result.matched_data:
+            if "programs" in result.matched_data and result.matched_data["programs"]:
+                # Use the first program for legacy state compatibility
+                context.epg_match = result.matched_data["programs"][0]
+            elif "program" in result.matched_data:
                 context.epg_match = result.matched_data["program"]
             
             # Check if this condition (or any sub-condition if it was AND/OR) matched by EPG
@@ -298,7 +301,7 @@ class ConditionEvaluator:
             
             if is_epg_type or (original_type in (
                 ConditionType.ANY_FIELD_CONTAINS, ConditionType.ANY_FIELD_MATCHES
-            ) and "program" in result.matched_data):
+            ) and context.epg_match is not None):
                 context.matched_by_epg = True
 
         logger.debug(
@@ -316,11 +319,13 @@ class ConditionEvaluator:
 
         pattern = self._expand_date_placeholders(pattern, allow_ranges=is_regex)
         
+        matching_programs = []
+
         for prog in context.epg_programs:
             value = prog.get(field_name) or ""
             matched = False
             matched_segment = pattern
-            
+
             if is_regex:
                 try:
                     flags = 0 if case_sensitive else re.IGNORECASE
@@ -335,16 +340,27 @@ class ConditionEvaluator:
                     matched = pattern in value
                 else:
                     matched = pattern.lower() in value.lower()
-            
-            if matched:
-                return EvaluationResult(
-                    True, cond_type,
-                    f"Program '{prog.get('title')}' matched segment: '{matched_segment}'",
-                    matched_data={"program": prog}
-                )
-        
-        return EvaluationResult(False, cond_type, f"No program scheduled for today matched '{pattern}'")
 
+            if matched:
+                matching_programs.append(prog)
+
+        if matching_programs:
+            # Sort by start time if possible
+            try:
+                matching_programs.sort(key=lambda x: x.get('start', ''))
+            except:
+                pass
+
+            return EvaluationResult(
+                True, cond_type,
+                f"Found {len(matching_programs)} matching program(s)",
+                matched_data={
+                    "programs": matching_programs,
+                    "program": matching_programs[0] # Legacy compatibility for tests
+                }
+            )
+
+        return EvaluationResult(False, cond_type, f"No program scheduled for today matched '{pattern}'")
     def _evaluate_condition(self, condition: Condition, context: StreamContext) -> EvaluationResult:
         """Internal evaluation logic."""
         cond_type = condition.type.lower()

@@ -1009,6 +1009,7 @@ class AutoCreationEngine:
 
             # Track rules that match this stream
             matching_rules = []
+            match_instances = [] # List of (rule, stream_ctx)
             matched = False
 
             # Build per-stream log of rule evaluations
@@ -1033,6 +1034,7 @@ class AutoCreationEngine:
                 # to prevent state bleed from previous rules (issue #2)
                 stream.epg_match = None
                 stream.matched_by_epg = False
+                rule_programs = [] # List of unique programs matched by this rule
 
                 # Group conditions by OR breaks (AND binds tighter)
                 or_groups = []
@@ -1061,6 +1063,11 @@ class AutoCreationEngine:
                     if result.matched:
                         rule_matched = True
                         matched = True
+                        
+                        # Handle multiple programs found by EPG conditions
+                        # We merge programs from all OR groups that matched
+                        if result.matched_data and "programs" in result.matched_data:
+                            rule_programs.extend(result.matched_data["programs"])
                     
                     # Flatten AND wrapper so frontend gets individual condition entries (Item 6)
                     if result.sub_results:
@@ -1077,22 +1084,50 @@ class AutoCreationEngine:
                     "was_winner": rule_matched and len(matching_rules) == 0
                 })
 
-                # Restore logger.debug (Item 4A)
-                logger.debug(
-                    "[AUTO-CREATE-ENGINE] Rule '%s' (id=%s): matched=%s (%s conditions in %s OR-group(s))",
-                    rule.name, rule.id, rule_matched, len(conditions), len(or_groups)
-                )
-
                 if rule_matched:
                     matching_rules.append(rule)
+                    
+                    # Deduplicate programs found
+                    unique_progs = []
+                    seen_titles = set()
+                    for p in rule_programs:
+                        pid = f"{p.get('start')}_{p.get('title')}"
+                        if pid not in seen_titles:
+                            unique_progs.append(p)
+                            seen_titles.add(pid)
+                    
+                    # PRIORITY LOGIC: If we matched specific programs, we ONLY create channels for those.
+                    # We skip the generic "stream match" to avoid the empty 'to -' channels.
+                    if unique_progs:
+                        for p in unique_progs:
+                            # Create a copy of the stream context for this specific program match
+                            match_instance = StreamContext(**vars(stream))
+                            match_instance.epg_match = p
+                            match_instance.matched_by_epg = True
+                            match_instances.append((rule, match_instance))
+                    else:
+                        # Standard match (no specific program info found in ANY matched OR group)
+                        match_instances.append((rule, stream))
 
-                    # Check for conflicts (multiple rules matching same stream)
+                    # Restore logger.debug (Item 4A)
+                    logger.debug(
+                        "[AUTO-CREATE-ENGINE] Rule '%s' (id=%s): matched=%s (%s conditions in %s OR-group(s))",
+                        rule.name, rule.id, rule_matched, len(conditions), len(or_groups)
+                    )
+
+                    # Check for conflicts (we check stream_id only)
                     if stream.stream_id not in stream_rule_matches:
                         stream_rule_matches[stream.stream_id] = []
                     stream_rule_matches[stream.stream_id].append((rule.id, rule.priority))
 
                     if rule.stop_on_first_match:
                         break
+                else:
+                    # Restore logger.debug (Item 4A)
+                    logger.debug(
+                        "[AUTO-CREATE-ENGINE] Rule '%s' (id=%s): matched=False (%s conditions in %s OR-group(s))",
+                        rule.name, rule.id, len(conditions), len(or_groups)
+                    )
 
             if not matching_rules:
                 # Restore logger.debug (Item 4C)
@@ -1113,15 +1148,32 @@ class AutoCreationEngine:
                 continue
 
             # Determine winning and losing rules
-            winning_rule = matching_rules[0]
-            losing_rules = matching_rules[1:]
+            # match_instances is a list of (rule, stream_ctx_with_program)
+            winning_entries = [match_instances[0]]
+            
+            # If we matched multiple programs for the SAME winning rule, we keep all of them!
+            # This is the "One Channel Per Program" magic.
+            first_rule = match_instances[0][0]
+            for i in range(1, len(match_instances)):
+                r, s_ctx = match_instances[i]
+                if r.id == first_rule.id:
+                    winning_entries.append((r, s_ctx))
+                else:
+                    # Rules after the first different one are losers
+                    break
+
+            # losing_rules are any matching_rules EXCEPT the winner
+            losing_rules = [r for r in matching_rules if r.id != first_rule.id]
             
             # Restore logger.debug (Item 4B)
             logger.debug(
                 "[AUTO-CREATE-ENGINE] Stream %r: winner='%s' (id=%s)%s",
-                stream.stream_name, winning_rule.name, winning_rule.id,
+                stream.stream_name, first_rule.name, first_rule.id,
                 (", losers=%s" % [r.name for r in losing_rules]) if losing_rules else ""
             )
+
+            for win_rule, win_ctx in winning_entries:
+                matched_entries.append((win_ctx, win_rule, losing_rules, stream_rules_log))
 
             results["execution_log"].append({
                 "stream_id": stream.stream_id,
@@ -1132,15 +1184,6 @@ class AutoCreationEngine:
                 "rules_evaluated": stream_rules_log,
                 "actions_executed": []  # Actions only filled in Pass 2 for matched streams
             })
-
-            if not matching_rules:
-                continue
-
-            # Determine winning and losing rules
-            winning_rule = matching_rules[0]
-            losing_rules = matching_rules[1:] if len(matching_rules) > 1 else []
-
-            matched_entries.append((stream, winning_rule, losing_rules, stream_rules_log))
 
         logger.info("[AUTO-CREATE-ENGINE] Complete: %s streams matched out of %s evaluated", len(matched_entries), len(streams))
 
