@@ -17,6 +17,17 @@ export interface Channel {
   _stagedLogoUrl?: string;
 }
 
+export interface MergeChannelsRequest {
+  source_channel_ids: number[];
+  target_name: string;
+  target_channel_number?: number | null;
+  target_channel_group_id?: number | null;
+  target_logo_id?: number | null;
+  target_tvg_id?: string | null;
+  target_epg_data_id?: number | null;
+  target_stream_profile_id?: number | null;
+}
+
 export type EPGSourceType = 'xmltv' | 'schedules_direct' | 'dummy';
 export type EPGSourceStatus = 'idle' | 'fetching' | 'parsing' | 'error' | 'success' | 'disabled';
 
