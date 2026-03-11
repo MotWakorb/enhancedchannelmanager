@@ -73,6 +73,7 @@ const ACTION_TYPES: {
   hasVariableConfig?: boolean;
   hasPriority?: boolean;
   hasProfileId?: boolean;
+  hasTimeConfig?: boolean;
 }[] = [
   // Creation actions
   { type: 'create_channel', label: 'Create Channel', description: 'Create a new channel for the stream', category: 'creation', hasNameTemplate: true, hasIfExists: true, hasChannelNumbering: true, hasNameTransform: true },
@@ -86,7 +87,7 @@ const ACTION_TYPES: {
   { type: 'set_channel_number', label: 'Set Channel Number', description: 'Set the channel number', category: 'assignment', hasValue: true },
   // Variables
   { type: 'set_variable', label: 'Set Variable', description: 'Define a reusable variable from stream data', category: 'variables', hasVariableConfig: true },
-  { type: 'transform_time', label: 'Transform Time', description: 'Extract and convert time between timezones', category: 'variables' },
+  { type: 'transform_time', label: 'Transform Time', description: 'Extract and convert time between timezones', category: 'variables', hasTimeConfig: true },
   // Management actions
   { type: 'remove_from_channel', label: 'Remove From Channel', description: 'Remove this stream from its current channel', category: 'management' },
   { type: 'set_stream_priority', label: 'Set Stream Priority', description: 'Move stream to lowest or highest priority in its channel', category: 'management', hasPriority: true },
@@ -882,7 +883,7 @@ export function ActionEditor({
         )}
 
         {/* Time Transform Configuration */}
-        {action.type === 'transform_time' && (
+        {actionDef?.hasTimeConfig && (
           <div className="action-config-group">
             <div className="action-field">
               <label htmlFor={`${id}-time-var`}>Output Variable Name</label>
