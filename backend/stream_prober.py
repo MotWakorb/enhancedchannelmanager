@@ -292,6 +292,8 @@ class StreamProber:
         self._probe_progress_black_screen_count = 0
         # Probe history - list of last 5 probe runs
         self._probe_history = []  # List of {timestamp, total, success_count, failed_count, status, success_streams, failed_streams}
+        # Channel stream IDs from the last scheduled probe (used to scope reprobes)
+        self._last_probe_channel_stream_ids: set = set()
 
         # Profile-to-account mapping for connection tracking
         self._profile_to_account_map = {}  # profile_id -> account_id (built during probe_all_streams)
@@ -1722,6 +1724,12 @@ class StreamProber:
             logger.info("[STREAM-PROBE] Fetching channel stream IDs (override groups: %s)...", channel_groups_override)
             channel_stream_ids, stream_to_channels, stream_to_channel_number = await self._fetch_channel_stream_ids(channel_groups_override)
             logger.info("[STREAM-PROBE] Found %s unique streams across all channels", len(channel_stream_ids))
+
+            # Store channel stream IDs for scheduled probes (not reprobes)
+            # so the reprobe task can scope to only these streams
+            if not stream_ids_filter:
+                self._last_probe_channel_stream_ids = set(channel_stream_ids)
+                logger.info("[STREAM-PROBE] Saved %s channel stream IDs for reprobe scoping", len(self._last_probe_channel_stream_ids))
 
             # Fetch M3U accounts to map account IDs to names and max_streams
             logger.info("[STREAM-PROBE] Fetching M3U accounts...")

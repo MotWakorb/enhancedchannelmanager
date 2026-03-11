@@ -63,9 +63,9 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
   const initialLoadDone = useRef(false);
 
   // Load notifications
-  const loadNotifications = useCallback(async () => {
+  const loadNotifications = useCallback(async (showLoading = false) => {
     try {
-      setLoading(true);
+      if (showLoading) setLoading(true);
       const response = await api.getNotifications({ page_size: 20 });
       // Pin active task/probe notifications to the top
       const sorted = [...response.notifications].sort((a, b) => {
@@ -101,7 +101,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
     } catch (err) {
       console.error('Failed to load notifications:', err);
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }, []);
 
@@ -127,10 +127,10 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
 
   // Load on mount and periodically - faster when probe or auto-creation is running
   useEffect(() => {
-    loadNotifications();
+    loadNotifications(true); // Show loading spinner on initial load only
     // Poll every 2 seconds when probe is running, 5s for auto-creation, otherwise every 30 seconds
     const pollInterval = hasActiveProbe ? 2000 : hasActiveAutoCreation ? 5000 : 30000;
-    const interval = setInterval(loadNotifications, pollInterval);
+    const interval = setInterval(() => loadNotifications(false), pollInterval);
     return () => clearInterval(interval);
   }, [loadNotifications, hasActiveProbe, hasActiveAutoCreation]);
 

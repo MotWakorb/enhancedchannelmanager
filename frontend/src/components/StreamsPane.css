@@ -335,6 +335,8 @@ button.group-selection-checkbox {
   display: flex;
   align-items: center;
   padding: 0.5rem;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 2.5rem;
   background-color: var(--input-bg);
   border-radius: var(--radius-md);
   cursor: default;
