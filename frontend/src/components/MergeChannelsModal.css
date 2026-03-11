@@ -1,0 +1,90 @@
+/* MergeChannelsModal — only merge-specific styles; layout from ModalBase.css */
+
+/* Short input for channel number */
+.merge-channels-modal .merge-input-short {
+  max-width: 120px;
+}
+
+/* Source channels list */
+.merge-source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--bg-tertiary, #1a1a2e);
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-lg);
+  padding: 8px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.merge-source-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary, #252540);
+}
+
+.merge-source-name {
+  font-size: 0.85rem;
+  color: var(--text-primary, #fff);
+}
+
+.merge-source-streams {
+  font-size: 0.8rem;
+  color: var(--text-secondary, #888);
+}
+
+/* Radio group container (EPG, Logo pickers) */
+.merge-radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg-tertiary, #1a1a2e);
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-lg);
+  padding: 8px;
+}
+
+/* Logo preview thumbnail in radio options */
+.merge-logo-preview {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+}
+
+/* Streams preview */
+.merge-streams-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg-tertiary, #1a1a2e);
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-lg);
+  padding: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.merge-stream-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  font-size: 0.85rem;
+  color: var(--text-primary, #fff);
+}
+
+.merge-stream-icon {
+  font-size: 16px;
+  color: var(--text-secondary, #888);
+}
+
+.merge-stream-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
