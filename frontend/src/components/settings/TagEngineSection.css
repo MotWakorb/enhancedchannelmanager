@@ -564,3 +564,10 @@
   padding: 1rem 1.25rem;
   border-top: 1px solid var(--border-primary);
 }
+
+.tag-engine-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+

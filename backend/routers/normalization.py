@@ -8,7 +8,9 @@ import logging
 import time
 from typing import List, Optional
 
+import yaml
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from config import get_settings
@@ -703,3 +705,207 @@ async def run_normalization_migration(force: bool = False, migrate_settings: boo
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to create demo rules")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/export")
+async def export_normalization_rules():
+    """Export all normalization rules and groups as YAML."""
+    logger.debug("[NORMALIZE] GET /export")
+    try:
+        from models import NormalizationRuleGroup, NormalizationRule
+        session = get_session()
+        try:
+            groups = session.query(NormalizationRuleGroup).order_by(
+                NormalizationRuleGroup.priority
+            ).all()
+
+            export_data = {
+                "normalization_rules": {
+                    "version": 1,
+                    "groups": []
+                }
+            }
+
+            for group in groups:
+                rules = session.query(NormalizationRule).filter(
+                    NormalizationRule.group_id == group.id
+                ).order_by(NormalizationRule.priority).all()
+
+                group_data = {
+                    "name": group.name,
+                    "description": group.description,
+                    "enabled": group.enabled,
+                    "is_builtin": group.is_builtin,
+                    "rules": []
+                }
+
+                for rule in rules:
+                    rule_data = {
+                        "name": rule.name,
+                        "description": rule.description,
+                        "enabled": rule.enabled,
+                        "condition_type": rule.condition_type,
+                        "condition_value": rule.condition_value,
+                        "case_sensitive": rule.case_sensitive,
+                        "action_type": rule.action_type,
+                        "action_value": rule.action_value,
+                        "stop_processing": rule.stop_processing,
+                        "is_builtin": rule.is_builtin,
+                    }
+
+                    # Include compound conditions if present
+                    if rule.conditions:
+                        rule_data["conditions"] = json.loads(rule.conditions) if isinstance(rule.conditions, str) else rule.conditions
+                        rule_data["condition_logic"] = rule.condition_logic or "AND"
+
+                    # Include tag group reference by name for portability
+                    if rule.tag_group_id:
+                        from models import TagGroup
+                        tag_group = session.query(TagGroup).filter(TagGroup.id == rule.tag_group_id).first()
+                        if tag_group:
+                            rule_data["tag_group_name"] = tag_group.name
+                        rule_data["tag_match_position"] = rule.tag_match_position
+
+                    # Include else action if present
+                    if rule.else_action_type:
+                        rule_data["else_action_type"] = rule.else_action_type
+                        rule_data["else_action_value"] = rule.else_action_value
+
+                    group_data["rules"].append(rule_data)
+
+                export_data["normalization_rules"]["groups"].append(group_data)
+
+            yaml_content = yaml.dump(export_data, default_flow_style=False, sort_keys=False, allow_unicode=True)
+            return Response(
+                content=yaml_content,
+                media_type="application/x-yaml",
+                headers={"Content-Disposition": "attachment; filename=normalization-rules.yaml"}
+            )
+        finally:
+            session.close()
+    except Exception as e:
+        logger.exception("[NORMALIZE] Failed to export normalization rules")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+class ImportRulesRequest(BaseModel):
+    yaml_content: str
+    overwrite: bool = False  # If true, delete existing non-builtin groups first
+
+
+@router.post("/import")
+async def import_normalization_rules(request: ImportRulesRequest):
+    """Import normalization rules and groups from YAML."""
+    logger.debug("[NORMALIZE] POST /import - overwrite=%s", request.overwrite)
+    try:
+        data = yaml.safe_load(request.yaml_content)
+    except yaml.YAMLError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
+
+    if not data or "normalization_rules" not in data:
+        raise HTTPException(status_code=400, detail="Missing 'normalization_rules' key in YAML")
+
+    rules_data = data["normalization_rules"]
+    if "groups" not in rules_data:
+        raise HTTPException(status_code=400, detail="Missing 'groups' key in normalization_rules")
+
+    try:
+        from models import NormalizationRuleGroup, NormalizationRule, TagGroup
+        session = get_session()
+        try:
+            # If overwrite, delete existing non-builtin groups
+            if request.overwrite:
+                existing_groups = session.query(NormalizationRuleGroup).filter(
+                    NormalizationRuleGroup.is_builtin == False
+                ).all()
+                for g in existing_groups:
+                    session.query(NormalizationRule).filter(
+                        NormalizationRule.group_id == g.id
+                    ).delete()
+                    session.delete(g)
+                session.flush()
+
+            # Build tag group name -> id map for resolving references
+            tag_groups = session.query(TagGroup).all()
+            tag_group_map = {tg.name: tg.id for tg in tag_groups}
+
+            created_groups = 0
+            created_rules = 0
+            skipped_groups = 0
+
+            max_priority = session.query(NormalizationRuleGroup).count()
+
+            for group_data in rules_data["groups"]:
+                group_name = group_data.get("name")
+                if not group_name:
+                    continue
+
+                # Skip if group with same name already exists (unless overwrite)
+                existing = session.query(NormalizationRuleGroup).filter(
+                    NormalizationRuleGroup.name == group_name
+                ).first()
+                if existing:
+                    skipped_groups += 1
+                    continue
+
+                group = NormalizationRuleGroup(
+                    name=group_name,
+                    description=group_data.get("description"),
+                    enabled=group_data.get("enabled", True),
+                    priority=max_priority,
+                    is_builtin=False,  # Always create as non-builtin on import
+                )
+                session.add(group)
+                session.flush()  # Get the group ID
+                max_priority += 1
+                created_groups += 1
+
+                for rule_priority, rule_data in enumerate(group_data.get("rules", [])):
+                    # Resolve tag group reference by name
+                    tag_group_id = None
+                    if "tag_group_name" in rule_data:
+                        tag_group_id = tag_group_map.get(rule_data["tag_group_name"])
+
+                    conditions_json = None
+                    if "conditions" in rule_data and rule_data["conditions"]:
+                        conditions_json = json.dumps(rule_data["conditions"])
+
+                    rule = NormalizationRule(
+                        group_id=group.id,
+                        name=rule_data.get("name", "Imported Rule"),
+                        description=rule_data.get("description"),
+                        enabled=rule_data.get("enabled", True),
+                        priority=rule_priority,
+                        condition_type=rule_data.get("condition_type"),
+                        condition_value=rule_data.get("condition_value"),
+                        case_sensitive=rule_data.get("case_sensitive", False),
+                        tag_group_id=tag_group_id,
+                        tag_match_position=rule_data.get("tag_match_position"),
+                        conditions=conditions_json,
+                        condition_logic=rule_data.get("condition_logic", "AND"),
+                        action_type=rule_data.get("action_type", "remove"),
+                        action_value=rule_data.get("action_value"),
+                        else_action_type=rule_data.get("else_action_type"),
+                        else_action_value=rule_data.get("else_action_value"),
+                        stop_processing=rule_data.get("stop_processing", False),
+                        is_builtin=False,
+                    )
+                    session.add(rule)
+                    created_rules += 1
+
+            session.commit()
+            logger.info("[NORMALIZE] Imported %s groups, %s rules, skipped %s groups",
+                        created_groups, created_rules, skipped_groups)
+            return {
+                "status": "imported",
+                "created_groups": created_groups,
+                "created_rules": created_rules,
+                "skipped_groups": skipped_groups,
+            }
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("[NORMALIZE] Failed to import normalization rules")
+        raise HTTPException(status_code=500, detail=str(e))

@@ -2633,6 +2633,25 @@ export async function runNormalizationMigration(force?: boolean): Promise<Normal
   });
 }
 
+/**
+ * Export normalization rules as YAML
+ */
+export async function exportNormalizationRulesYaml(): Promise<string> {
+  const response = await fetch(`${API_BASE}/normalization/export`);
+  if (!response.ok) throw new Error('Failed to export normalization rules');
+  return response.text();
+}
+
+/**
+ * Import normalization rules from YAML
+ */
+export async function importNormalizationRulesYaml(yamlContent: string, overwrite: boolean = false): Promise<{ status: string; created_groups: number; created_rules: number; skipped_groups: number }> {
+  return fetchJson(`${API_BASE}/normalization/import`, {
+    method: 'POST',
+    body: JSON.stringify({ yaml_content: yamlContent, overwrite }),
+  });
+}
+
 // =============================================================================
 // Tag Engine API
 // =============================================================================
@@ -2716,6 +2735,25 @@ export async function testTagGroup(groupId: number, text: string): Promise<TestT
   return fetchJson(`${API_BASE}/tags/test`, {
     method: 'POST',
     body: JSON.stringify({ group_id: groupId, text }),
+  });
+}
+
+/**
+ * Export tags as YAML
+ */
+export async function exportTagsYaml(): Promise<string> {
+  const response = await fetch(`${API_BASE}/tags/export`);
+  if (!response.ok) throw new Error('Failed to export tags');
+  return response.text();
+}
+
+/**
+ * Import tags from YAML
+ */
+export async function importTagsYaml(yamlContent: string, overwrite: boolean = false): Promise<{ status: string; created_groups: number; created_tags: number; merged_groups: number }> {
+  return fetchJson(`${API_BASE}/tags/import`, {
+    method: 'POST',
+    body: JSON.stringify({ yaml_content: yamlContent, overwrite }),
   });
 }
 
