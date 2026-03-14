@@ -599,6 +599,11 @@ Admin panel for managing user accounts (requires admin privileges):
 - **Toggle Active Status** - Quickly activate or deactivate user accounts
 - **Delete Users** - Remove user accounts (soft delete)
 
+#### Backup & Restore
+- **Create Backup** - Download a zip file containing all ECM configuration (settings, database, logos, TLS certificates, uploaded M3U files)
+- **Restore from Backup** - Upload a backup zip to restore all configuration (Settings tab)
+- **Initial Setup Restore** - Option to restore from backup during first-run setup instead of configuring manually
+
 #### Appearance
 - **Theme** - Choose from three themes:
   - **Dark** (default) - Dark theme for low-light environments
@@ -1324,6 +1329,14 @@ Interactive API documentation is available at `/api/docs` (Swagger UI) and `/api
 | `POST /api/tls/https/stop` | Stop HTTPS server |
 | `POST /api/tls/https/restart` | Restart HTTPS server |
 | `GET /api/tls/https/status` | Get HTTPS server status |
+
+### Backup
+
+| Endpoint | Description |
+|-|-|
+| `GET /api/backup/create` | Download backup zip of all configuration |
+| `POST /api/backup/restore` | Restore from uploaded backup zip |
+| `POST /api/backup/restore-initial` | Restore from backup during initial setup (no auth) |
 
 ### Authentication
 

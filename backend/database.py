@@ -1617,6 +1617,20 @@ def _perform_maintenance(engine) -> None:
             logger.exception("[DATABASE] Database maintenance failed: %s", e)
 
 
+def close_db() -> None:
+    """Close the database engine and session factory.
+
+    Used during backup restore to safely replace the database file.
+    Call init_db() after to reinitialize.
+    """
+    global _engine, _SessionLocal
+    if _engine:
+        _engine.dispose()
+        logger.info("[DATABASE] Database engine disposed")
+    _engine = None
+    _SessionLocal = None
+
+
 def get_session():
     """Get a database session. Use as context manager or close manually."""
     if _SessionLocal is None:
