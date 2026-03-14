@@ -1062,6 +1062,35 @@ class ActionExecutor:
         value = action.params.get("value", "from_stream")
         if value == "from_stream":
             logo_url = stream_ctx.logo_url
+        elif value == "from_epg":
+            # Resolve logo from EPG data entry's icon_url
+            epg_source_id = action.params.get("epg_id")
+            if not epg_source_id:
+                return ActionResult(
+                    success=False,
+                    action_type=action.type,
+                    description="No EPG source specified for from_epg logo",
+                    error="Missing epg_id for from_epg"
+                )
+            source_entries = self._epg_data_by_source.get(epg_source_id, [])
+            if not source_entries:
+                return ActionResult(
+                    success=False,
+                    action_type=action.type,
+                    description=f"No EPG data entries found for source {epg_source_id}",
+                    error=f"EPG source {epg_source_id} has no data entries"
+                )
+            channel = self._channel_by_id.get(exec_ctx.current_channel_id, {})
+            epg_data_entry = self._match_epg_data(channel, source_entries)
+            if not epg_data_entry:
+                channel_name = channel.get("name", "unknown")
+                return ActionResult(
+                    success=True,
+                    action_type=action.type,
+                    description=f"No matching EPG data for '{channel_name}' in source {epg_source_id}",
+                    skipped=True
+                )
+            logo_url = epg_data_entry.get("icon_url") or epg_data_entry.get("icon")
         else:
             logo_url = TemplateVariables.expand_template(value, template_ctx, exec_ctx.custom_variables)
 

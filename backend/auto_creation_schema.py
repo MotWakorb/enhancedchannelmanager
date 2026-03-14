@@ -404,7 +404,9 @@ class Action:
         elif action_type == ActionType.ASSIGN_LOGO:
             value = self.params.get("value")
             if value is None:
-                errors.append("assign_logo requires a 'value' (URL or 'from_stream')")
+                errors.append("assign_logo requires a 'value' (URL, 'from_stream', or 'from_epg')")
+            elif value == "from_epg" and not self.params.get("epg_id"):
+                errors.append("assign_logo with 'from_epg' requires an 'epg_id'")
 
         # Validate assign_tvg_id
         elif action_type == ActionType.ASSIGN_TVG_ID:

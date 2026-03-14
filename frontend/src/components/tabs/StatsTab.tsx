@@ -788,6 +788,11 @@ export function StatsTab() {
                     <span className="channel-name" title={`${displayName}${channel.stream_name && channel.stream_name !== displayName ? ` (Stream: ${channel.stream_name})` : ''}`}>
                       {displayName}
                     </span>
+                    {channel.stream_name && channel.stream_name !== displayName && (
+                      <span className="stream-name-badge" title={`Stream: ${channel.stream_name}`}>
+                        {channel.stream_name}
+                      </span>
+                    )}
                     {m3uSource && (
                       <span className="m3u-source" title={`M3U Source: ${m3uSource}`}>
                         {m3uSource}

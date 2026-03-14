@@ -854,10 +854,120 @@ export function ActionEditor({
         )}
 
         {/* Value Field for assignment actions */}
-        {actionDef?.hasValue && (
+        {actionDef?.hasValue && action.type === 'assign_logo' && (
+          <div className="action-field">
+            <label>Logo Source</label>
+            <div className="logo-source-options">
+              <label className="transform-toggle">
+                <input
+                  type="radio"
+                  name={`${id}-logo-source`}
+                  checked={action.value === 'from_stream' || !action.value}
+                  onChange={() => onChange({ ...action, value: 'from_stream', epg_id: undefined })}
+                  disabled={readonly}
+                />
+                From stream (M3U logo)
+              </label>
+              <label className="transform-toggle">
+                <input
+                  type="radio"
+                  name={`${id}-logo-source`}
+                  checked={action.value === 'from_epg'}
+                  onChange={() => onChange({ ...action, value: 'from_epg' })}
+                  disabled={readonly}
+                />
+                From EPG source
+              </label>
+              <label className="transform-toggle">
+                <input
+                  type="radio"
+                  name={`${id}-logo-source`}
+                  checked={action.value !== 'from_stream' && action.value !== 'from_epg' && !!action.value}
+                  onChange={() => onChange({ ...action, value: '', epg_id: undefined })}
+                  disabled={readonly}
+                />
+                Custom URL / template
+              </label>
+            </div>
+
+            {action.value === 'from_epg' && (
+              <div className="action-field" style={{ marginTop: '0.5rem' }}>
+                <label>EPG Source</label>
+                <CustomSelect
+                  value={action.epg_id?.toString() ?? ''}
+                  onChange={val => {
+                    onChange({ ...action, epg_id: val ? parseInt(val, 10) : undefined });
+                  }}
+                  options={[
+                    { value: '', label: 'Select EPG source...' },
+                    ...epgSources.map(src => ({
+                      value: src.id.toString(),
+                      label: src.name,
+                    })),
+                  ]}
+                  disabled={readonly}
+                  searchable
+                  searchPlaceholder="Search EPG sources..."
+                />
+                {epgSources.length === 0 && (
+                  <span className="field-hint">No EPG sources configured. Add sources in the EPG Manager tab.</span>
+                )}
+                <span className="field-hint">Matches channel to EPG entry and uses its icon/logo</span>
+              </div>
+            )}
+
+            {action.value !== 'from_stream' && action.value !== 'from_epg' && action.value !== undefined && (
+              <>
+                <div className="template-input-wrapper" style={{ marginTop: '0.5rem' }}>
+                  <input
+                    id={`${id}-value`}
+                    type="text"
+                    className="action-input"
+                    value={action.value || ''}
+                    onChange={e => onChange({ ...action, value: e.target.value })}
+                    placeholder="https://example.com/logo.png or {template}"
+                    disabled={readonly}
+                  />
+                  {!readonly && (
+                    <button
+                      type="button"
+                      className="show-variables-btn"
+                      onClick={() => setShowVariables(!showVariables)}
+                      aria-label="Show variables"
+                      title="Template variables available"
+                    >
+                      <span className="material-icons">code</span>
+                    </button>
+                  )}
+                </div>
+
+                {showVariables && (
+                  <div className="variables-dropdown">
+                    <div className="variables-hint">Template variables - click to insert:</div>
+                    {TEMPLATE_VARIABLES.map(v => (
+                      <button
+                        key={v.name}
+                        type="button"
+                        className="variable-option"
+                        onClick={() => handleInsertValueVariable(v.name)}
+                      >
+                        <span className="variable-name">{v.name}</span>
+                        <span className="variable-desc">{v.description}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <span className="field-hint">Template variables allowed</span>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Value Field for other assignment actions (not assign_logo) */}
+        {actionDef?.hasValue && action.type !== 'assign_logo' && (
           <div className="action-field">
             <label htmlFor={`${id}-value`}>
-              {action.type === 'assign_logo' && 'Logo URL'}
               {action.type === 'assign_tvg_id' && 'TVG-ID'}
               {action.type === 'set_channel_number' && 'Channel Number'}
             </label>
@@ -869,9 +979,8 @@ export function ActionEditor({
                 value={action.value || ''}
                 onChange={e => onChange({ ...action, value: e.target.value })}
                 placeholder={
-                  action.type === 'assign_logo' ? 'https://example.com/logo.png or {template}'
-                    : action.type === 'set_channel_number' ? '101 or {auto}'
-                      : 'Enter value or template'
+                  action.type === 'set_channel_number' ? '101 or {auto}'
+                    : 'Enter value or template'
                 }
                 disabled={readonly}
               />
