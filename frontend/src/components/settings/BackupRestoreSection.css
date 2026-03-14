@@ -158,11 +158,4 @@
   color: var(--text-secondary);
 }
 
-.backup-loading .material-icons {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
+/* Uses .spinning from shared/common.css (counter-clockwise, matches sync icon) */

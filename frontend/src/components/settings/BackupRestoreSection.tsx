@@ -97,7 +97,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
         </p>
         {downloading ? (
           <div className="backup-loading">
-            <span className="material-icons">sync</span>
+            <span className="material-icons spinning">sync</span>
             Creating backup...
           </div>
         ) : (
@@ -135,7 +135,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
           />
           {restoring ? (
             <div className="backup-loading">
-              <span className="material-icons">sync</span>
+              <span className="material-icons spinning">sync</span>
               Restoring...
             </div>
           ) : (

@@ -277,7 +277,7 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
                 XMLTV URL
               </button>
               <button className="btn-secondary" onClick={handleRegenerate} disabled={regenerating}>
-                <span className={`material-icons ${regenerating ? 'spinning' : ''}`}>refresh</span>
+                <span className={`material-icons ${regenerating ? 'spinning-cw' : ''}`}>refresh</span>
                 {regenerating ? 'Regenerating...' : 'Regenerate'}
               </button>
               <button

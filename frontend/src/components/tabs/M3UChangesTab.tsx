@@ -239,7 +239,7 @@ export function M3UChangesTab() {
             onClick={fetchChanges}
             disabled={loading}
           >
-            <span className={`material-icons ${loading ? 'spinning' : ''}`}>refresh</span>
+            <span className={`material-icons ${loading ? 'spinning-cw' : ''}`}>refresh</span>
             Refresh
           </button>
         </div>

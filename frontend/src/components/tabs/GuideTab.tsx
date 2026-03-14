@@ -622,7 +622,7 @@ export function GuideTab({
           disabled={loading}
           title="Refresh program data"
         >
-          <span className={`material-icons ${loading ? 'spinning' : ''}`}>refresh</span>
+          <span className={`material-icons ${loading ? 'spinning-cw' : ''}`}>refresh</span>
           Refresh
         </button>
 
