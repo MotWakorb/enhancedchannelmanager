@@ -880,7 +880,9 @@ class AutoCreationEngine:
             "dry_run_results": [],
             "conflicts": [],
             "execution_log": [],
-            "rule_match_counts": {}
+            "rule_match_counts": {},
+            "probe_stream_ids": set(),
+            "streams_probed": 0
         }
 
         # Track which streams have been processed by which rules
@@ -1149,6 +1151,7 @@ class AutoCreationEngine:
             results["streams_removed"] += exec_ctx.streams_removed
             results["created_entities"].extend(exec_ctx.created_entities)
             results["modified_entities"].extend(exec_ctx.modified_entities)
+            results["probe_stream_ids"].update(exec_ctx.probe_stream_ids)
 
             # Track channel ID for Pass 3 renumber + Pass 3.5 stream reorder
             if exec_ctx.current_channel_id:
@@ -1280,7 +1283,95 @@ class AutoCreationEngine:
             )
             await self._refresh_dummy_epg_and_retry(executor, results, epg_sources, dry_run)
 
+        # =====================================================================
+        # Pass 6: Batch probe streams queued by probe_streams actions
+        # =====================================================================
+        if results["probe_stream_ids"]:
+            await self._batch_probe_streams(
+                results["probe_stream_ids"], streams, results, dry_run
+            )
+
+        # Clean up non-serializable set before returning
+        del results["probe_stream_ids"]
+
         return results
+
+    # =========================================================================
+    # Pass 6: Batch probe streams queued by probe_streams actions
+    # =========================================================================
+
+    async def _batch_probe_streams(
+        self,
+        probe_stream_ids: set[int],
+        streams: list,
+        results: dict,
+        dry_run: bool
+    ):
+        """Probe streams that were queued by probe_streams actions."""
+        from stream_prober import get_prober
+
+        # Build lookup from stream contexts
+        stream_lookup = {}
+        for stream in streams:
+            if stream.stream_id in probe_stream_ids and stream.stream_url:
+                stream_lookup[stream.stream_id] = (stream.stream_url, stream.stream_name)
+
+        if not stream_lookup:
+            logger.info("[AUTO-CREATE-ENGINE] Pass 6: no probeable streams found in queue of %s", len(probe_stream_ids))
+            return
+
+        count = len(stream_lookup)
+        logger.info("[AUTO-CREATE-ENGINE] Pass 6: probing %s stream(s) queued by probe_streams actions", count)
+
+        if dry_run:
+            results["dry_run_results"].append({
+                "stream_id": None,
+                "stream_name": "[Pass 6] Probe Streams",
+                "rule_id": None,
+                "rule_name": None,
+                "action": f"Would probe {count} stream(s)",
+                "would_create": False,
+                "would_modify": True
+            })
+            return
+
+        prober = get_prober()
+        if not prober:
+            logger.warning("[AUTO-CREATE-ENGINE] Pass 6: prober not available, skipping")
+            results["execution_log"].append({
+                "stream_name": "[Pass 6] Probe Streams",
+                "actions_executed": [{"type": "probe_streams", "description": "Prober not available, skipped"}]
+            })
+            return
+
+        semaphore = asyncio.Semaphore(3)
+        probed = 0
+
+        async def probe_one(stream_id, url, name):
+            nonlocal probed
+            async with semaphore:
+                try:
+                    await prober.probe_stream(stream_id, url, name)
+                    probed += 1
+                except Exception as e:
+                    logger.warning("[AUTO-CREATE-ENGINE] Pass 6: failed to probe stream %s (%s): %s", stream_id, name, e)
+
+        tasks = [
+            probe_one(sid, url, name)
+            for sid, (url, name) in stream_lookup.items()
+        ]
+        await asyncio.gather(*tasks)
+
+        results["streams_probed"] = probed
+        logger.info("[AUTO-CREATE-ENGINE] Pass 6: probed %s/%s stream(s)", probed, count)
+
+        results["execution_log"].append({
+            "stream_name": "[Pass 6] Probe Streams",
+            "actions_executed": [{
+                "type": "probe_streams",
+                "description": f"Probed {probed}/{count} stream(s)"
+            }]
+        })
 
     # =========================================================================
     # Pass 5: Dummy EPG Refresh + Retry Deferred Assignments

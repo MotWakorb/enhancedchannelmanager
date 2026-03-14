@@ -65,6 +65,9 @@ class ExecutionContext:
     # Custom variables set by set_variable actions
     custom_variables: dict = field(default_factory=dict)
 
+    # Stream IDs queued for post-pipeline probing
+    probe_stream_ids: list[int] = field(default_factory=list)
+
     def add_result(self, result: ActionResult):
         """Add an action result and update statistics."""
         self.results.append(result)
@@ -303,6 +306,13 @@ class ActionExecutor:
             result = await self._execute_remove_from_channel(action, stream_ctx, exec_ctx)
         elif action_type == ActionType.SET_STREAM_PRIORITY:
             result = await self._execute_set_stream_priority(action, stream_ctx, exec_ctx)
+        elif action_type == ActionType.PROBE_STREAMS:
+            exec_ctx.probe_stream_ids.append(stream_ctx.stream_id)
+            result = ActionResult(
+                success=True,
+                action_type=action.type,
+                description="Stream queued for probing after pipeline"
+            )
         elif action_type == ActionType.SKIP:
             result = ActionResult(
                 success=True,

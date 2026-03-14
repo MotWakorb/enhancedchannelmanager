@@ -90,6 +90,7 @@ export type ActionType =
   | 'set_variable'
   | 'remove_from_channel'
   | 'set_stream_priority'
+  | 'probe_streams'
   | 'skip'
   | 'stop_processing'
   | 'log_match';

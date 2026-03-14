@@ -230,6 +230,7 @@ class ActionType(str, Enum):
     # Stream management
     REMOVE_FROM_CHANNEL = "remove_from_channel"
     SET_STREAM_PRIORITY = "set_stream_priority"
+    PROBE_STREAMS = "probe_streams"
 
     # Control flow
     SKIP = "skip"
