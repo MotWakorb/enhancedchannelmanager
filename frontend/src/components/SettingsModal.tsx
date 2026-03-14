@@ -154,7 +154,7 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
 
   return (
     <ModalOverlay onClose={onClose}>
-      <div className="settings-modal modal-container modal-sm">
+      <div className="settings-modal modal-container modal-md">
         <div className="modal-header">
           <h2>Dispatcharr Connection Settings</h2>
           <button className="modal-close-btn" onClick={onClose}>
