@@ -1691,13 +1691,71 @@ function App() {
           // Shift amount is the total range taken by new channels
           const shiftAmount = channelCount * incrementShift;
 
-          // Shift ALL channels that are at or after the starting number
-          // This ensures channels after the new range are also pushed down,
-          // avoiding duplicate channel numbers
-          const channelsToShift = displayChannels
-            .filter((ch) => ch.channel_number !== null &&
-                    ch.channel_number >= startingNumber)
-            .sort((a, b) => (b.channel_number ?? 0) - (a.channel_number ?? 0)); // Sort descending to avoid conflicts
+          // Group-aware push down: only shift channels within the target group,
+          // then cascade into subsequent groups only if shifting would cause collisions.
+          // e.g., Cable 200-312, Sports 400-425: inserting at 220 should only shift Cable,
+          // not Sports (there's a gap between 312 and 400).
+
+          // Build a sorted list of groups by their minimum channel number
+          const groupMap = new Map<number | null, { channels: typeof displayChannels; minNum: number; maxNum: number }>();
+          for (const ch of displayChannels) {
+            if (ch.channel_number === null) continue;
+            const gid = ch.channel_group_id;
+            const existing = groupMap.get(gid);
+            if (existing) {
+              existing.channels.push(ch);
+              existing.minNum = Math.min(existing.minNum, ch.channel_number);
+              existing.maxNum = Math.max(existing.maxNum, ch.channel_number);
+            } else {
+              groupMap.set(gid, { channels: [ch], minNum: ch.channel_number, maxNum: ch.channel_number });
+            }
+          }
+
+          // Sort groups by their minimum channel number
+          const sortedGroups = Array.from(groupMap.entries())
+            .sort((a, b) => a[1].minNum - b[1].minNum);
+
+          // Find the target group (the one we're inserting into)
+          const targetGroupId = channelGroupId;
+          const targetGroupIdx = sortedGroups.findIndex(([gid]) => gid === targetGroupId);
+
+          // Collect channels to shift: start with channels in the target group at or after insertion point
+          const channelsToShift: typeof displayChannels = [];
+
+          if (targetGroupIdx !== -1) {
+            const [, targetGroup] = sortedGroups[targetGroupIdx];
+
+            // Shift channels in the target group at or after the starting number
+            const targetShiftChannels = targetGroup.channels.filter(
+              (ch) => ch.channel_number !== null && ch.channel_number >= startingNumber
+            );
+            channelsToShift.push(...targetShiftChannels);
+
+            // Cascade into subsequent groups only if the shifted max would collide
+            let currentMaxAfterShift = targetGroup.maxNum + shiftAmount;
+
+            for (let i = targetGroupIdx + 1; i < sortedGroups.length; i++) {
+              const [, nextGroup] = sortedGroups[i];
+              // If there's a gap between the shifted max and the next group's min, stop
+              if (currentMaxAfterShift < nextGroup.minNum) break;
+
+              // Collision: need to shift this group's channels too
+              channelsToShift.push(...nextGroup.channels);
+              currentMaxAfterShift = nextGroup.maxNum + shiftAmount;
+            }
+          } else {
+            // Fallback: target group not found, only shift channels at/after starting number
+            // that would actually collide with the new channel range
+            const endOfNewRange = startingNumber + shiftAmount;
+            channelsToShift.push(
+              ...displayChannels.filter(
+                (ch) => ch.channel_number !== null && ch.channel_number >= startingNumber && ch.channel_number < endOfNewRange
+              )
+            );
+          }
+
+          // Sort descending to avoid conflicts when shifting
+          channelsToShift.sort((a, b) => (b.channel_number ?? 0) - (a.channel_number ?? 0));
 
           // Shift each channel by the amount needed to make room for new channels
           for (const ch of channelsToShift) {
