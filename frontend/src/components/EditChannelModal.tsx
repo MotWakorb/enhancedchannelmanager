@@ -79,6 +79,9 @@ export const EditChannelModal = memo(function EditChannelModal({
   const [tvgIdPickerOpen, setTvgIdPickerOpen] = useState(false);
   const [tvgIdSearch, setTvgIdSearch] = useState('');
 
+  // TVG-ID suffix filter for EPG search (e.g. ".us" to match "CMTMusic(CMTMUS).us")
+  const [tvgIdSuffixFilter, setTvgIdSuffixFilter] = useState('');
+
   // Stream Profile dropdown state
   const [streamProfileDropdownOpen, setStreamProfileDropdownOpen] = useState(false);
   const streamProfileDropdownRef = useRef<HTMLDivElement>(null);
@@ -274,6 +277,8 @@ export const EditChannelModal = memo(function EditChannelModal({
   // Get non-dummy EPG source IDs for filtering
   const nonDummyEpgSourceIds = new Set(nonDummyEpgSources.map(s => s.id));
 
+  const suffixFilterLower = tvgIdSuffixFilter.toLowerCase();
+
   const filteredEpgData = epgData.filter((epg) => {
     // First filter by EPG source
     // If specific sources selected, only show from those; otherwise show all non-dummy sources
@@ -283,6 +288,8 @@ export const EditChannelModal = memo(function EditChannelModal({
       // When no filter selected, exclude dummy EPG sources
       if (!nonDummyEpgSourceIds.has(epg.epg_source)) return false;
     }
+    // Filter by TVG-ID suffix
+    if (suffixFilterLower && !epg.tvg_id.toLowerCase().endsWith(suffixFilterLower)) return false;
     // Then filter by search term
     const searchTerm = (epgDropdownOpen ? epgSearch : tvgIdSearch).toLowerCase();
     if (!searchTerm) return true;
@@ -299,6 +306,8 @@ export const EditChannelModal = memo(function EditChannelModal({
     } else {
       if (!nonDummyEpgSourceIds.has(epg.epg_source)) return false;
     }
+    // Filter by TVG-ID suffix
+    if (suffixFilterLower && !epg.tvg_id.toLowerCase().endsWith(suffixFilterLower)) return false;
     // Then filter by search term
     const searchTerm = tvgIdSearch.toLowerCase();
     if (!searchTerm) return true;
@@ -622,15 +631,16 @@ export const EditChannelModal = memo(function EditChannelModal({
             </div>
           )}
           <div className="epg-search-container" ref={epgDropdownRef}>
-            <div className="search-input-wrapper">
-              <input
-                type="text"
-                className="edit-channel-text-input"
-                placeholder="Search EPG data..."
-                value={epgSearch}
-                onChange={(e) => handleEpgSearch(e.target.value)}
-                onFocus={() => setEpgDropdownOpen(true)}
-              />
+            <div className="epg-search-row">
+              <div className="search-input-wrapper" style={{ flex: 1 }}>
+                <input
+                  type="text"
+                  className="edit-channel-text-input"
+                  placeholder="Search EPG data..."
+                  value={epgSearch}
+                  onChange={(e) => handleEpgSearch(e.target.value)}
+                  onFocus={() => setEpgDropdownOpen(true)}
+                />
               {epgSearch && (
                 <button
                   type="button"
@@ -641,6 +651,27 @@ export const EditChannelModal = memo(function EditChannelModal({
                   <span className="material-icons">close</span>
                 </button>
               )}
+              </div>
+              <div className="search-input-wrapper epg-suffix-filter">
+                <input
+                  type="text"
+                  className="edit-channel-text-input"
+                  placeholder="Suffix e.g. .us"
+                  value={tvgIdSuffixFilter}
+                  onChange={(e) => setTvgIdSuffixFilter(e.target.value)}
+                  title="Filter by TVG-ID suffix (e.g. .us)"
+                />
+                {tvgIdSuffixFilter && (
+                  <button
+                    type="button"
+                    className="search-clear-btn"
+                    onClick={() => setTvgIdSuffixFilter('')}
+                    title="Clear suffix filter"
+                  >
+                    <span className="material-icons">close</span>
+                  </button>
+                )}
+              </div>
             </div>
             {epgDropdownOpen && (
               <div className="epg-dropdown">
@@ -736,28 +767,26 @@ export const EditChannelModal = memo(function EditChannelModal({
         <div className="edit-channel-section">
           <div className="logo-section-header">
             <label>Channel Logo</label>
-            {currentEpgData?.icon_url && (
+            <div className="logo-section-actions">
               <button
                 onClick={handleUseEpgLogo}
-                disabled={addingEpgLogo}
+                disabled={!currentEpgData?.icon_url || addingEpgLogo}
                 className="logo-epg-btn"
-                title="Use the logo from the assigned EPG data"
+                title={currentEpgData?.icon_url ? 'Use the logo from the assigned EPG data' : 'Assign EPG data first'}
               >
                 <span className="material-icons">live_tv</span>
                 {addingEpgLogo ? 'Adding...' : 'Use EPG Logo'}
               </button>
-            )}
-            {streamLogoUrl && (
               <button
                 onClick={handleUseStreamLogo}
-                disabled={addingStreamLogo}
+                disabled={!streamLogoUrl || addingStreamLogo}
                 className="logo-epg-btn"
-                title="Use the logo from the channel's M3U streams"
+                title={streamLogoUrl ? 'Use the logo from the channel\'s M3U streams' : 'No stream logo available'}
               >
                 <span className="material-icons">playlist_play</span>
                 {addingStreamLogo ? 'Adding...' : 'Use Stream Logo'}
               </button>
-            )}
+            </div>
           </div>
 
           {/* Current logo preview */}
