@@ -3965,6 +3965,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <span className="material-icons">link</span>
             Linked Accounts
           </li>
+          <li
+            className={`settings-nav-item ${activePage === 'backup-restore' ? 'active' : ''}`}
+            onClick={() => setActivePage('backup-restore')}
+          >
+            <span className="material-icons">backup</span>
+            Backup & Restore
+          </li>
           {user?.is_admin && (
             <>
               <li className="settings-nav-divider">Administration</li>
@@ -3988,13 +3995,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               >
                 <span className="material-icons">https</span>
                 TLS Certificates
-              </li>
-              <li
-                className={`settings-nav-item ${activePage === 'backup-restore' ? 'active' : ''}`}
-                onClick={() => setActivePage('backup-restore')}
-              >
-                <span className="material-icons">backup</span>
-                Backup & Restore
               </li>
             </>
           )}

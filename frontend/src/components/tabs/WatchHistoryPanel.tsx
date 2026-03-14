@@ -110,7 +110,7 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
         </div>
         <div className="header-right">
           <button className="refresh-btn" onClick={fetchData} disabled={loading}>
-            <span className={`material-icons ${loading ? 'spinning' : ''}`}>refresh</span>
+            <span className={`material-icons ${loading ? 'spinning-cw' : ''}`}>refresh</span>
           </button>
         </div>
       </div>

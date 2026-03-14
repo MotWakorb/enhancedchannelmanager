@@ -37,9 +37,14 @@
   }
 }
 
-/* Spinning utility class - counter-clockwise by default */
+/* Spinning utility class - counter-clockwise by default (matches sync icon) */
 .spinning {
   animation: spin 1s linear infinite reverse;
+}
+
+/* Clockwise spin - use for refresh icon (single clockwise arrow) */
+.spinning-cw {
+  animation: spin 1s linear infinite;
 }
 
 /* Slide in from top animation - used by success messages
