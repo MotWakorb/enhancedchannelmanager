@@ -187,100 +187,6 @@
   color: var(--text-primary);
 }
 
-/* Bulk Actions Dropdown */
-.bulk-actions-dropdown {
-  position: relative;
-  display: inline-flex;
-}
-
-.bulk-actions-dropdown .bulk-action-btn {
-  gap: 0.125rem;
-}
-
-.bulk-actions-dropdown .bulk-action-btn .sort-dropdown-arrow {
-  font-size: 16px !important;
-  margin-left: -4px;
-  opacity: 0.7;
-}
-
-.bulk-actions-dropdown .bulk-action-btn.loading {
-  border-color: var(--accent-primary);
-  color: var(--accent-primary);
-  padding: 0.375rem 0.5rem;
-  text-align: left;
-}
-
-.bulk-actions-dropdown .bulk-action-btn.loading .sort-dropdown-arrow {
-  display: none;
-}
-
-.bulk-actions-dropdown .bulk-action-btn.loading .material-icons.spinning {
-  animation: spin 1s linear infinite reverse;
-}
-
-.bulk-actions-menu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  min-width: 190px;
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border-primary);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  z-index: 1000;
-  padding: 0.25rem 0;
-  margin-top: 2px;
-}
-
-.bulk-actions-item {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  width: 100%;
-  padding: 0.5rem 0.75rem;
-  background: none;
-  border: none;
-  color: var(--text-primary);
-  cursor: pointer;
-  transition: background-color 0.15s;
-  font-size: 0.85rem;
-  text-align: left;
-  white-space: nowrap;
-}
-
-.bulk-actions-item:hover {
-  background-color: var(--accent-10);
-}
-
-.bulk-actions-item .material-icons {
-  font-size: 18px;
-  color: var(--text-secondary);
-}
-
-.bulk-actions-item:hover .material-icons {
-  color: var(--accent-primary);
-}
-
-.bulk-actions-item.disabled {
-  opacity: 0.5;
-  pointer-events: none;
-}
-
-.bulk-actions-divider {
-  height: 1px;
-  background-color: var(--border-primary);
-  margin: 0.25rem 0;
-}
-
-.bulk-actions-section-label {
-  padding: 0.25rem 0.75rem 0.125rem;
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-secondary);
-  opacity: 0.7;
-}
-
 .edit-mode-info {
   display: flex;
   align-items: center;
@@ -4071,33 +3977,6 @@
 }
 
 /* Sort dropdown in bulk action bar */
-.bulk-action-btn-wrapper .sort-dropdown-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.375rem 0.5rem;
-  background-color: var(--button-bg);
-  border: 1px solid var(--border-secondary);
-  border-radius: 4px;
-}
-
-.bulk-action-btn-wrapper .sort-dropdown-btn:hover:not(:disabled) {
-  background-color: var(--button-hover-bg);
-  border-color: var(--accent-primary);
-}
-
-.bulk-action-btn-wrapper .sort-dropdown-btn .sort-dropdown-arrow {
-  display: none;
-}
-
-.bulk-action-btn-wrapper .sort-dropdown-btn .material-icons {
-  font-size: 18px;
-}
-
-.bulk-action-btn-wrapper .sort-dropdown-btn:hover:not(:disabled) {
-  background-color: var(--accent-25);
-}
-
 /* Sort dropdown for all channels button */
 .sort-all-quality-btn-wrapper .sort-dropdown-btn {
   display: flex;

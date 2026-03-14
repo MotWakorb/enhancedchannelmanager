@@ -21,7 +21,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamStats, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings } from '../types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamStats, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings, SortMode } from '../types';
 import { logger } from '../utils/logger';
 import { getStreamDragData, hasStreamDragData, clearStreamDragData } from '../utils/dragStore';
 import { computeAutoRename } from '../utils/channelRename';
@@ -160,7 +160,7 @@ interface GroupState {
 
 // Reusable Sort Dropdown Button component
 interface SortDropdownButtonProps {
-  onSortByMode: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => void;
+  onSortByMode: (mode: SortMode) => void;
   disabled?: boolean;
   isLoading?: boolean;
   className?: string;
@@ -196,7 +196,7 @@ const SortDropdownButton = memo(function SortDropdownButton({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen]);
 
-  const handleModeClick = (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => {
+  const handleModeClick = (mode: SortMode) => {
     setIsOpen(false);
     onSortByMode(mode);
   };
@@ -262,207 +262,6 @@ const SortDropdownButton = memo(function SortDropdownButton({
   );
 });
 
-// Bulk Actions Dropdown - consolidates 6 bulk action buttons into a single menu
-interface BulkActionsDropdownProps {
-  onAssignEPG: () => void;
-  onFetchLCN: () => void;
-  onNormalize: () => void;
-  onRenumber: () => void;
-  onRenumberAllGroups: () => void;
-  onSetLogoFromM3U: () => void;
-  onSortByMode: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => void;
-  onProbe: () => void;
-  hasSelection: boolean;
-  bulkEPGLoading: boolean;
-  bulkLCNLoading: boolean;
-  bulkLogoLoading: boolean;
-  bulkSortingByQuality: boolean;
-  probingChannels: boolean;
-  sortEnabled?: Record<'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels', boolean>;
-}
-
-const BulkActionsDropdown = memo(function BulkActionsDropdown({
-  onAssignEPG,
-  onFetchLCN,
-  onNormalize,
-  onRenumber,
-  onRenumberAllGroups,
-  onSetLogoFromM3U,
-  onSortByMode,
-  onProbe,
-  hasSelection,
-  bulkEPGLoading,
-  bulkLCNLoading,
-  bulkLogoLoading,
-  bulkSortingByQuality,
-  probingChannels,
-  sortEnabled = { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false },
-}: BulkActionsDropdownProps) {
-  const [isOpen, setIsOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-
-  const anyLoading = bulkEPGLoading || bulkLCNLoading || bulkLogoLoading || bulkSortingByQuality || probingChannels;
-  const anySortEnabled = sortEnabled.resolution || sortEnabled.bitrate || sortEnabled.framerate || sortEnabled.m3u_priority || sortEnabled.audio_channels;
-
-  // Close on outside click
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isOpen]);
-
-  const handleItemClick = (action: () => void) => {
-    setIsOpen(false);
-    action();
-  };
-
-  const handleSortClick = (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => {
-    setIsOpen(false);
-    onSortByMode(mode);
-  };
-
-  return (
-    <div className="bulk-actions-dropdown" ref={dropdownRef}>
-      <button
-        className={`bulk-action-btn${anyLoading ? ' loading' : ''}`}
-        onClick={() => setIsOpen(!isOpen)}
-        title="Bulk actions"
-      >
-        <span className={`material-icons${anyLoading ? ' spinning' : ''}`}>
-          {anyLoading ? 'sync' : 'more_vert'}
-        </span>
-        <span className="material-icons sort-dropdown-arrow">arrow_drop_down</span>
-      </button>
-      {isOpen && (
-        <div className="bulk-actions-menu">
-          <button
-            className="bulk-actions-item"
-            onClick={() => handleItemClick(onRenumberAllGroups)}
-          >
-            <span className="material-icons">format_list_numbered</span>
-            <span>Renumber All Groups</span>
-          </button>
-          {hasSelection && (
-            <>
-              <div className="bulk-actions-divider" />
-              <div className="bulk-actions-section-label">Selection</div>
-              <button
-                className={`bulk-actions-item${bulkEPGLoading ? ' disabled' : ''}`}
-                onClick={() => !bulkEPGLoading && handleItemClick(onAssignEPG)}
-              >
-                <span className={`material-icons${bulkEPGLoading ? ' spinning' : ''}`}>
-                  {bulkEPGLoading ? 'sync' : 'live_tv'}
-                </span>
-                <span>Assign EPG</span>
-              </button>
-              <button
-                className={`bulk-actions-item${bulkLCNLoading ? ' disabled' : ''}`}
-                onClick={() => !bulkLCNLoading && handleItemClick(onFetchLCN)}
-              >
-                <span className={`material-icons${bulkLCNLoading ? ' spinning' : ''}`}>
-                  {bulkLCNLoading ? 'sync' : 'confirmation_number'}
-                </span>
-                <span>Fetch Gracenote IDs</span>
-              </button>
-              <button
-                className="bulk-actions-item"
-                onClick={() => handleItemClick(onNormalize)}
-              >
-                <span className="material-icons">text_format</span>
-                <span>Normalize Names</span>
-              </button>
-              <button
-                className="bulk-actions-item"
-                onClick={() => handleItemClick(onRenumber)}
-              >
-                <span className="material-icons">tag</span>
-                <span>Renumber</span>
-              </button>
-              <button
-                className={`bulk-actions-item${bulkLogoLoading ? ' disabled' : ''}`}
-                onClick={() => !bulkLogoLoading && handleItemClick(onSetLogoFromM3U)}
-              >
-                <span className={`material-icons${bulkLogoLoading ? ' spinning' : ''}`}>
-                  {bulkLogoLoading ? 'sync' : 'image'}
-                </span>
-                <span>Set Logo from M3U</span>
-              </button>
-              <div className="bulk-actions-divider" />
-              <div className="bulk-actions-section-label">Sort Streams</div>
-              {anySortEnabled && (
-                <button className="bulk-actions-item" onClick={() => handleSortClick('smart')}>
-                  <span className="material-icons">auto_awesome</span>
-                  <span>Smart Sort</span>
-                </button>
-              )}
-              {sortEnabled.resolution && (
-                <button
-                  className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
-                  onClick={() => !bulkSortingByQuality && handleSortClick('resolution')}
-                >
-                  <span className="material-icons">aspect_ratio</span>
-                  <span>By Resolution</span>
-                </button>
-              )}
-              {sortEnabled.bitrate && (
-                <button
-                  className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
-                  onClick={() => !bulkSortingByQuality && handleSortClick('bitrate')}
-                >
-                  <span className="material-icons">speed</span>
-                  <span>By Bitrate</span>
-                </button>
-              )}
-              {sortEnabled.framerate && (
-                <button
-                  className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
-                  onClick={() => !bulkSortingByQuality && handleSortClick('framerate')}
-                >
-                  <span className="material-icons">slow_motion_video</span>
-                  <span>By Framerate</span>
-                </button>
-              )}
-              {sortEnabled.m3u_priority && (
-                <button
-                  className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
-                  onClick={() => !bulkSortingByQuality && handleSortClick('m3u_priority')}
-                >
-                  <span className="material-icons">low_priority</span>
-                  <span>By M3U Priority</span>
-                </button>
-              )}
-              {sortEnabled.audio_channels && (
-                <button
-                  className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
-                  onClick={() => !bulkSortingByQuality && handleSortClick('audio_channels')}
-                >
-                  <span className="material-icons">surround_sound</span>
-                  <span>By Audio Channels</span>
-                </button>
-              )}
-              <div className="bulk-actions-divider" />
-              <button
-                className={`bulk-actions-item${probingChannels ? ' disabled' : ''}`}
-                onClick={() => !probingChannels && handleItemClick(onProbe)}
-              >
-                <span className={`material-icons${probingChannels ? ' spinning' : ''}`}>
-                  {probingChannels ? 'sync' : 'speed'}
-                </span>
-                <span>Probe Streams</span>
-              </button>
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-});
-
 // Pane-level three-dot menu for toolbar actions
 interface PaneToolbarMenuProps {
   isEditMode: boolean;
@@ -471,7 +270,7 @@ interface PaneToolbarMenuProps {
   onOpenProfiles: () => void;
   onShowHiddenGroups: () => void;
   onImportCSV: () => void;
-  onSortAllByMode: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => void;
+  onSortAllByMode: (mode: SortMode) => void;
   bulkSortingByQuality: boolean;
   sortEnabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels', boolean>;
   onAssignEPG: () => void;
@@ -480,7 +279,7 @@ interface PaneToolbarMenuProps {
   onRenumber: () => void;
   onRenumberAllGroups: () => void;
   onSetLogoFromM3U: () => void;
-  onSortSelectedByMode: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => void;
+  onSortSelectedByMode: (mode: SortMode) => void;
   onProbe: () => void;
   hasSelection: boolean;
   bulkEPGLoading: boolean;
@@ -546,12 +345,12 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
     setSortSelectedSubMenuOpen(false);
   };
 
-  const handleSortAllClick = (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => {
+  const handleSortAllClick = (mode: SortMode) => {
     close();
     onSortAllByMode(mode);
   };
 
-  const handleSortSelectedClick = (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => {
+  const handleSortSelectedClick = (mode: SortMode) => {
     close();
     onSortSelectedByMode(mode);
   };
@@ -861,7 +660,7 @@ interface DroppableGroupHeaderProps {
   onProbeGroup?: () => void;
   isProbing?: boolean;
   onSortStreamsByQuality?: () => void;
-  onSortStreamsByMode?: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => void;
+  onSortStreamsByMode?: (mode: SortMode) => void;
   isSortingByQuality?: boolean;
   enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels', boolean>;
   failedChannelCount?: number;
@@ -942,7 +741,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
     onSelectAll?.();
   };
 
-  const handleSortModeClick = (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => {
+  const handleSortModeClick = (mode: SortMode) => {
     setGroupMenuOpen(false);
     setSortSubMenuOpen(false);
     if (onSortStreamsByMode) {
@@ -2707,8 +2506,7 @@ export function ChannelsPane({
     }
   };
 
-  // Sort mode types
-  type SortMode = 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels';
+
 
   // Sort mode labels for journal/description
   const SORT_MODE_LABELS: Record<SortMode, string> = {
