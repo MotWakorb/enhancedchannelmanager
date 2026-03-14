@@ -3,16 +3,17 @@
 
 /* Test connection button states */
 .btn-test {
-  background-color: var(--success-bg);
-  border: 1px solid var(--success);
-  color: var(--success);
+  background-color: var(--bg-tertiary, #2a2a4a);
+  border: 1px solid var(--border-color, #3a3a5a);
+  color: var(--text-primary, #fff);
   transition: all 0.2s;
   min-width: 120px;
   text-align: center;
 }
 
 .btn-test:hover:not(:disabled) {
-  filter: brightness(1.2);
+  background-color: var(--bg-secondary, #353555);
+  border-color: var(--border-color, #4a4a6a);
 }
 
 .btn-test.btn-test-success {

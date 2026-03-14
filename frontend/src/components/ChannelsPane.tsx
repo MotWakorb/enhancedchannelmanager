@@ -269,11 +269,13 @@ interface BulkActionsDropdownProps {
   onNormalize: () => void;
   onRenumber: () => void;
   onRenumberAllGroups: () => void;
+  onSetLogoFromM3U: () => void;
   onSortByMode: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => void;
   onProbe: () => void;
   hasSelection: boolean;
   bulkEPGLoading: boolean;
   bulkLCNLoading: boolean;
+  bulkLogoLoading: boolean;
   bulkSortingByQuality: boolean;
   probingChannels: boolean;
   sortEnabled?: Record<'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels', boolean>;
@@ -285,11 +287,13 @@ const BulkActionsDropdown = memo(function BulkActionsDropdown({
   onNormalize,
   onRenumber,
   onRenumberAllGroups,
+  onSetLogoFromM3U,
   onSortByMode,
   onProbe,
   hasSelection,
   bulkEPGLoading,
   bulkLCNLoading,
+  bulkLogoLoading,
   bulkSortingByQuality,
   probingChannels,
   sortEnabled = { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false },
@@ -297,7 +301,7 @@ const BulkActionsDropdown = memo(function BulkActionsDropdown({
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const anyLoading = bulkEPGLoading || bulkLCNLoading || bulkSortingByQuality || probingChannels;
+  const anyLoading = bulkEPGLoading || bulkLCNLoading || bulkLogoLoading || bulkSortingByQuality || probingChannels;
   const anySortEnabled = sortEnabled.resolution || sortEnabled.bitrate || sortEnabled.framerate || sortEnabled.m3u_priority || sortEnabled.audio_channels;
 
   // Close on outside click
@@ -378,6 +382,15 @@ const BulkActionsDropdown = memo(function BulkActionsDropdown({
               >
                 <span className="material-icons">tag</span>
                 <span>Renumber</span>
+              </button>
+              <button
+                className={`bulk-actions-item${bulkLogoLoading ? ' disabled' : ''}`}
+                onClick={() => !bulkLogoLoading && handleItemClick(onSetLogoFromM3U)}
+              >
+                <span className={`material-icons${bulkLogoLoading ? ' spinning' : ''}`}>
+                  {bulkLogoLoading ? 'sync' : 'image'}
+                </span>
+                <span>Set Logo from M3U</span>
               </button>
               <div className="bulk-actions-divider" />
               <div className="bulk-actions-section-label">Sort Streams</div>
@@ -466,11 +479,13 @@ interface PaneToolbarMenuProps {
   onNormalize: () => void;
   onRenumber: () => void;
   onRenumberAllGroups: () => void;
+  onSetLogoFromM3U: () => void;
   onSortSelectedByMode: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => void;
   onProbe: () => void;
   hasSelection: boolean;
   bulkEPGLoading: boolean;
   bulkLCNLoading: boolean;
+  bulkLogoLoading: boolean;
   probingChannels: boolean;
 }
 
@@ -489,11 +504,13 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
   onNormalize,
   onRenumber,
   onRenumberAllGroups,
+  onSetLogoFromM3U,
   onSortSelectedByMode,
   onProbe,
   hasSelection,
   bulkEPGLoading,
   bulkLCNLoading,
+  bulkLogoLoading,
   probingChannels,
 }: PaneToolbarMenuProps) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -503,7 +520,7 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
   const btnRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const anyLoading = bulkEPGLoading || bulkLCNLoading || bulkSortingByQuality || probingChannels;
+  const anyLoading = bulkEPGLoading || bulkLCNLoading || bulkLogoLoading || bulkSortingByQuality || probingChannels;
   const anySortEnabled = sortEnabledCriteria.resolution || sortEnabledCriteria.bitrate || sortEnabledCriteria.framerate || sortEnabledCriteria.m3u_priority || sortEnabledCriteria.audio_channels;
 
   useEffect(() => {
@@ -694,6 +711,16 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
               <button className="pane-toolbar-menu-item" onClick={() => { close(); onRenumber(); }}>
                 <span className="material-icons">tag</span>
                 <span>Renumber</span>
+              </button>
+              <button
+                className={`pane-toolbar-menu-item ${bulkLogoLoading ? 'loading' : ''}`}
+                onClick={() => !bulkLogoLoading && (() => { close(); onSetLogoFromM3U(); })()}
+                disabled={bulkLogoLoading}
+              >
+                <span className={`material-icons ${bulkLogoLoading ? 'spinning' : ''}`}>
+                  {bulkLogoLoading ? 'sync' : 'image'}
+                </span>
+                <span>Set Logo from M3U</span>
               </button>
 
               {/* Sort Selected Streams submenu */}
@@ -1337,7 +1364,6 @@ export function ChannelsPane({
 }: ChannelsPaneProps) {
   // Suppress unused variable warnings - these are passed through but handled in parent
   void _onStageBulkAssignNumbers;
-  void onLogosChange;
   // These props are no longer used directly since channel creation is routed to bulk create modal
   void onCreateChannel;
   void onStageAddStream;
@@ -1433,6 +1459,9 @@ export function ChannelsPane({
   // Bulk EPG assignment modal state
   const bulkEPGModal = useModal();
   const [bulkEPGLoading, setBulkEPGLoading] = useState(false);
+
+  // Bulk logo from M3U state
+  const [bulkLogoLoading, setBulkLogoLoading] = useState(false);
 
   // Clear EPG loading spinner when modal opens
   useEffect(() => {
@@ -1803,6 +1832,51 @@ export function ChannelsPane({
       });
     }
   }, [selectedChannelIds, channels, notifications]);
+
+  // Handle bulk set logo from M3U streams
+  const handleBulkSetLogoFromM3U = useCallback(async () => {
+    setBulkLogoLoading(true);
+    const logoCache = new Map<string, import('../types').Logo>();
+    let assigned = 0, skipped = 0;
+
+    logger.info(`[BulkLogoM3U] Starting bulk logo assignment for ${selectedChannelIds.size} channels`);
+
+    try {
+      for (const channelId of selectedChannelIds) {
+        const channel = channels.find(c => c.id === channelId);
+        if (!channel) continue;
+
+        try {
+          const streams = await api.getChannelStreams(channelId);
+          const logoUrl = streams.find(s => s.logo_url)?.logo_url;
+
+          if (!logoUrl) {
+            logger.debug(`[BulkLogoM3U] No logo_url found in streams for channel ${channel.name} (${channelId})`);
+            skipped++;
+            continue;
+          }
+
+          logger.debug(`[BulkLogoM3U] Assigning logo to channel ${channel.name} (${channelId}) from ${logoUrl}`);
+          const logo = await api.getOrCreateLogo(channel.name, logoUrl, logoCache);
+          await api.updateChannel(channelId, { logo_id: logo.id });
+          assigned++;
+        } catch (err) {
+          logger.warn(`[BulkLogoM3U] Failed to assign logo for channel ${channelId}:`, err);
+          skipped++;
+        }
+      }
+
+      logger.info(`[BulkLogoM3U] Complete: ${assigned} assigned, ${skipped} skipped`);
+      notifications.success(`Set logos: ${assigned} assigned, ${skipped} skipped (no M3U logo)`);
+      onChannelsChange?.();
+      onLogosChange?.();
+    } catch (err) {
+      logger.error('[BulkLogoM3U] Bulk set logo from M3U failed:', err);
+      notifications.error('Failed to set logos from M3U');
+    } finally {
+      setBulkLogoLoading(false);
+    }
+  }, [selectedChannelIds, channels, notifications, onChannelsChange, onLogosChange]);
 
   // Handle probe group request - probes all streams in all channels of a group
   // Uses the same backend probe logic as "Probe All Streams Now" but filtered to a single group
@@ -5502,10 +5576,12 @@ export function ChannelsPane({
               renumberAllGroupsModal.open();
             }}
             onSortSelectedByMode={handleSortSelectedStreamsByMode}
+            onSetLogoFromM3U={handleBulkSetLogoFromM3U}
             onProbe={handleBulkProbe}
             hasSelection={selectedChannelIds.size > 0}
             bulkEPGLoading={bulkEPGLoading}
             bulkLCNLoading={bulkLCNLoading}
+            bulkLogoLoading={bulkLogoLoading}
             probingChannels={probingChannels.size > 0}
           />
         </div>

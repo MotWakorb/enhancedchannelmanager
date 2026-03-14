@@ -53,6 +53,8 @@ export const EditChannelModal = memo(function EditChannelModal({
   const [addingLogo, setAddingLogo] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [addingEpgLogo, setAddingEpgLogo] = useState(false);
+  const [addingStreamLogo, setAddingStreamLogo] = useState(false);
+  const [streamLogoUrl, setStreamLogoUrl] = useState<string | null>(null);
   const [pendingLogo, setPendingLogo] = useState<Logo | null>(null);
   const [immediateLogoUrl, setImmediateLogoUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -217,6 +219,37 @@ export const EditChannelModal = memo(function EditChannelModal({
       setAddingEpgLogo(false);
     }
   };
+
+  const handleUseStreamLogo = async () => {
+    if (!streamLogoUrl) return;
+    setImmediateLogoUrl(streamLogoUrl);
+    setAddingStreamLogo(true);
+    try {
+      const newLogo = await onLogoCreate(streamLogoUrl);
+      if (newLogo && newLogo.id) {
+        setPendingLogo(newLogo);
+        setSelectedLogoId(newLogo.id);
+      }
+    } catch (err) {
+      console.error('Failed to create logo from stream:', err);
+      setImmediateLogoUrl(null);
+    } finally {
+      setAddingStreamLogo(false);
+    }
+  };
+
+  useEffect(() => {
+    if (channel.streams.length === 0) return;
+    api.getChannelStreams(channel.id).then(streams => {
+      const url = streams.find(s => s.logo_url)?.logo_url || null;
+      if (url) {
+        console.log(`[EditChannelModal] Found stream logo for channel ${channel.id}: ${url}`);
+      }
+      setStreamLogoUrl(url);
+    }).catch((err) => {
+      console.error(`[EditChannelModal] Failed to fetch streams for channel ${channel.id}:`, err);
+    });
+  }, [channel.id, channel.streams.length]);
 
   useEffect(() => {
     if (pendingLogo && logos.find((l) => l.id === pendingLogo.id)) {
@@ -712,6 +745,17 @@ export const EditChannelModal = memo(function EditChannelModal({
               >
                 <span className="material-icons">live_tv</span>
                 {addingEpgLogo ? 'Adding...' : 'Use EPG Logo'}
+              </button>
+            )}
+            {streamLogoUrl && (
+              <button
+                onClick={handleUseStreamLogo}
+                disabled={addingStreamLogo}
+                className="logo-epg-btn"
+                title="Use the logo from the channel's M3U streams"
+              >
+                <span className="material-icons">playlist_play</span>
+                {addingStreamLogo ? 'Adding...' : 'Use Stream Logo'}
               </button>
             )}
           </div>
