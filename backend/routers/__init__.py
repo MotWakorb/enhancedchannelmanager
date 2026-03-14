@@ -25,6 +25,7 @@ from routers.channels import router as channels_router
 from routers.channel_groups import router as channel_groups_router
 from routers.dummy_epg import router as dummy_epg_router
 from routers.export import router as export_router
+from routers.backup import router as backup_router
 
 all_routers = [
     tasks_router,
@@ -49,4 +50,5 @@ all_routers = [
     channel_groups_router,
     dummy_epg_router,
     export_router,
+    backup_router,
 ]

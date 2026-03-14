@@ -3436,3 +3436,52 @@ export async function regenerateDummyEPG(): Promise<{ status: string; profiles: 
     credentials: 'include',
   });
 }
+
+// ============================================================================
+// Backup & Restore
+// ============================================================================
+
+export function getBackupDownloadUrl(): string {
+  return `${API_BASE}/backup/create`;
+}
+
+export interface RestoreResult {
+  status: string;
+  backup_version: string;
+  backup_date: string;
+  restored_files: string[];
+}
+
+export async function restoreBackup(file: File): Promise<RestoreResult> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch(`${API_BASE}/backup/restore`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Restore failed' }));
+    throw new Error(error.detail || 'Restore failed');
+  }
+
+  return response.json();
+}
+
+export async function restoreBackupInitial(file: File): Promise<RestoreResult> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch(`${API_BASE}/backup/restore-initial`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Restore failed' }));
+    throw new Error(error.detail || 'Restore failed');
+  }
+
+  return response.json();
+}

@@ -8,6 +8,7 @@ import { AuthSettingsSection } from '../settings/AuthSettingsSection';
 import { UserManagementSection } from '../settings/UserManagementSection';
 import { LinkedAccountsSection } from '../settings/LinkedAccountsSection';
 import { TLSSettingsSection } from '../settings/TLSSettingsSection';
+import { BackupRestoreSection } from '../settings/BackupRestoreSection';
 import { useAuth } from '../../hooks/useAuth';
 import type { ChannelProfile, M3UDigestSettings, M3UDigestFrequency } from '../../types';
 import { logger } from '../../utils/logger';
@@ -3988,6 +3989,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 <span className="material-icons">https</span>
                 TLS Certificates
               </li>
+              <li
+                className={`settings-nav-item ${activePage === 'backup-restore' ? 'active' : ''}`}
+                onClick={() => setActivePage('backup-restore')}
+              >
+                <span className="material-icons">backup</span>
+                Backup & Restore
+              </li>
             </>
           )}
         </ul>
@@ -4008,6 +4016,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'auth-settings' && <AuthSettingsSection isAdmin={user?.is_admin ?? false} />}
         {activePage === 'user-management' && <UserManagementSection isAdmin={user?.is_admin ?? false} currentUserId={user?.id ?? 0} />}
         {activePage === 'tls-settings' && <TLSSettingsSection isAdmin={user?.is_admin ?? false} />}
+        {activePage === 'backup-restore' && <BackupRestoreSection isAdmin={user?.is_admin ?? false} />}
       </div>
 
       <DeleteOrphanedGroupsModal

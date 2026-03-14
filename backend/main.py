@@ -75,6 +75,7 @@ tags_metadata = [
     {"name": "Stream Preview", "description": "Live stream and channel preview endpoints"},
     {"name": "Admin", "description": "User management (admin only)"},
     {"name": "FFMPEG Profiles", "description": "Save and load FFMPEG Builder profiles"},
+    {"name": "Backup", "description": "Backup and restore ECM configuration"},
 ]
 
 app = FastAPI(
@@ -100,7 +101,7 @@ handle authentication automatically when accessed through the web UI.
 ## Rate Limiting
 No rate limiting is enforced, but rapid polling is logged for diagnostics.
     """,
-    version="0.15.0-0003",
+    version="0.15.0-0007",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
