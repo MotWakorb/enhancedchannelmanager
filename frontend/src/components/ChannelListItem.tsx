@@ -89,6 +89,18 @@ const ChannelMenu = memo(function ChannelMenu({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [menuOpen]);
 
+  // Flip menu upward if it would overflow the viewport bottom
+  useEffect(() => {
+    if (!menuOpen || !dropdownRef.current || !menuPosition) return;
+    const el = dropdownRef.current;
+    const rect = el.getBoundingClientRect();
+    const viewportHeight = window.innerHeight;
+    if (rect.bottom > viewportHeight) {
+      // Position above the button instead of below
+      el.style.top = `${Math.max(0, menuPosition.top - rect.height - (btnRef.current?.getBoundingClientRect().height ?? 0) - 4)}px`;
+    }
+  }, [menuOpen, menuPosition]);
+
   const hasStreams = channel.streams && channel.streams.length > 0;
   const hasAnyItem = hasStreams || channelUrl || isEditMode;
   if (!hasAnyItem) return null;

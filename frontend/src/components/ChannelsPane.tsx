@@ -899,6 +899,17 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [groupMenuOpen]);
 
+  // Flip group menu upward if it would overflow the viewport bottom
+  useEffect(() => {
+    if (!groupMenuOpen || !groupMenuDropdownRef.current || !menuPosition) return;
+    const el = groupMenuDropdownRef.current;
+    const rect = el.getBoundingClientRect();
+    const viewportHeight = window.innerHeight;
+    if (rect.bottom > viewportHeight) {
+      el.style.top = `${Math.max(0, menuPosition.top - rect.height)}px`;
+    }
+  }, [groupMenuOpen, menuPosition]);
+
   const handleCheckboxClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onSelectAll?.();
@@ -7123,6 +7134,20 @@ export function ChannelsPane({
         {contextMenu && (
           <div
             className="context-menu"
+            ref={(el) => {
+              if (!el) return;
+              const rect = el.getBoundingClientRect();
+              const viewportHeight = window.innerHeight;
+              const viewportWidth = window.innerWidth;
+              // Flip upward if menu would overflow the bottom
+              if (contextMenu.y + rect.height > viewportHeight) {
+                el.style.top = `${Math.max(0, contextMenu.y - rect.height)}px`;
+              }
+              // Flip left if menu would overflow the right
+              if (contextMenu.x + rect.width > viewportWidth) {
+                el.style.left = `${Math.max(0, contextMenu.x - rect.width)}px`;
+              }
+            }}
             style={{
               position: 'fixed',
               top: contextMenu.y,
