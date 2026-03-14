@@ -40,6 +40,9 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
   const [, setOriginalUrl] = useState('');
   const [, setOriginalUsername] = useState('');
 
+  // Store full settings so we can pass through fields this modal doesn't edit
+  const [fullSettings, setFullSettings] = useState<Record<string, unknown> | null>(null);
+
   useEffect(() => {
     if (isOpen) {
       loadSettings();
@@ -50,6 +53,7 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
   const loadSettings = async () => {
     try {
       const settings = await api.getSettings();
+      setFullSettings(settings as unknown as Record<string, unknown>);
       setUrl(settings.url);
       setUsername(settings.username);
       setOriginalUrl(settings.url);
@@ -98,7 +102,11 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
     setLoading(true);
 
     try {
+      // Spread fullSettings first so fields this modal doesn't edit (exclusions,
+      // probe settings, normalization, etc.) are preserved instead of being
+      // reset to Pydantic defaults on the backend.
       await api.saveSettings({
+        ...fullSettings,
         url,
         username,
         // Only send password if it was entered
@@ -112,7 +120,7 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
         show_stream_urls: showStreamUrls,
         hide_auto_sync_groups: hideAutoSyncGroups,
         theme: theme,
-      });
+      } as Parameters<typeof api.saveSettings>[0]);
       onSaved();
       onClose();
       notifications.success('Settings saved successfully');
