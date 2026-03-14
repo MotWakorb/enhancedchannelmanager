@@ -84,6 +84,7 @@ const ACTION_TYPES: {
   // Management actions
   { type: 'remove_from_channel', label: 'Remove From Channel', description: 'Remove this stream from its current channel', category: 'management' },
   { type: 'set_stream_priority', label: 'Set Stream Priority', description: 'Move stream to lowest or highest priority in its channel', category: 'management', hasPriority: true },
+  { type: 'probe_streams', label: 'Probe Streams', description: 'Queue streams for probing after pipeline completes', category: 'management' },
   // Control actions
   { type: 'skip', label: 'Skip', description: 'Skip this stream (do not process)', category: 'control' },
   { type: 'stop_processing', label: 'Stop Processing', description: 'Stop processing further rules', category: 'control' },
