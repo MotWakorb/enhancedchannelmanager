@@ -2768,6 +2768,11 @@
   margin-bottom: 0;
 }
 
+.logo-section-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
 .logo-selection-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
@@ -3319,6 +3324,16 @@
 /* EPG Search Dropdown */
 .epg-search-container {
   position: relative;
+}
+
+.epg-search-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.epg-suffix-filter {
+  flex: 0 0 140px !important;
 }
 
 .epg-dropdown {
