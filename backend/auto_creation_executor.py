@@ -513,6 +513,31 @@ class ActionExecutor:
                     f"(e.g., one per country), or adjust the name template to keep the distinguishing text."
                 )
 
+            # Rename channel if normalization produces a different name than what's stored
+            if normalize_names and self._normalization_engine:
+                existing_name = existing["name"]
+                _num_pfx = re.match(r'^(\d+\s*\|\s*)', existing_name)
+                existing_base = _num_pfx.group(0) if _num_pfx else ""
+                existing_core = existing_name[len(existing_base):]
+                if existing_core.lower() != channel_name.lower():
+                    new_name = existing_base + channel_name
+                    if exec_ctx.dry_run:
+                        action_details.append(f"Would rename channel: '{existing_name}' \u2192 '{new_name}'")
+                        existing["name"] = new_name
+                    else:
+                        try:
+                            await self.client.update_channel(existing["id"], {"name": new_name})
+                            action_details.append(f"Renamed channel: '{existing_name}' \u2192 '{new_name}'")
+                            logger.info("[AUTO-CREATE-EXEC] Renamed channel %s: '%s' -> '%s'", existing["id"], existing_name, new_name)
+                            # Update caches
+                            old_lower = existing_name.lower()
+                            self._channel_by_name.pop(old_lower, None)
+                            existing["name"] = new_name
+                            self._channel_by_name[new_name.lower()] = existing
+                        except Exception as e:
+                            logger.warning("[AUTO-CREATE-EXEC] Failed to rename channel '%s' to '%s': %s", existing_name, new_name, e)
+                            action_details.append(f"Failed to rename channel: {e}")
+
             if if_exists == "skip":
                 exec_ctx.current_channel_id = existing["id"]
                 return ActionResult(

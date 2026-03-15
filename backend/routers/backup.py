@@ -15,6 +15,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 
+from auth import RequireAdminIfEnabled
 from config import CONFIG_DIR, CONFIG_FILE, get_settings, clear_settings_cache
 from database import close_db, get_engine, init_db, JOURNAL_DB_FILE
 from dispatcharr_client import reset_client
@@ -187,8 +188,8 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
 
 
 @router.get("/create")
-async def create_backup():
-    """Create and download a backup zip of all ECM configuration."""
+async def create_backup(_admin=RequireAdminIfEnabled):
+    """Create and download a backup zip of all ECM configuration. Admin only."""
     logger.info("[BACKUP] Creating backup")
 
     try:
@@ -206,8 +207,8 @@ async def create_backup():
 
 
 @router.post("/restore")
-async def restore_backup(file: UploadFile = File(...)):
-    """Restore ECM configuration from an uploaded backup zip."""
+async def restore_backup(file: UploadFile = File(...), _admin=RequireAdminIfEnabled):
+    """Restore ECM configuration from an uploaded backup zip. Admin only."""
     logger.info("[BACKUP] Restore requested, filename=%s", file.filename)
 
     # Read uploaded file

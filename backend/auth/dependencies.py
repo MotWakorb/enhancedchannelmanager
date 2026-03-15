@@ -214,3 +214,36 @@ def require_auth_if_enabled():
 
 # Pre-built dependency for common use
 RequireAuthIfEnabled = Depends(require_auth_if_enabled())
+
+
+def require_admin_if_enabled():
+    """
+    Factory function to create a dependency that requires admin when auth is enabled.
+
+    When auth is disabled (setup not complete or require_auth=False),
+    the endpoint is publicly accessible. When auth is enabled, the
+    caller must be an authenticated admin.
+    """
+    async def check_admin(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> Optional[User]:
+        settings = get_auth_settings()
+
+        # If auth not required or setup not complete, allow anonymous access
+        if not settings.require_auth or not settings.setup_complete:
+            return None
+
+        # Auth is required - get the user and check admin
+        user = await get_current_user(request, session)
+        if not user.is_admin:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin access required"
+            )
+        return user
+
+    return check_admin
+
+
+RequireAdminIfEnabled = Depends(require_admin_if_enabled())

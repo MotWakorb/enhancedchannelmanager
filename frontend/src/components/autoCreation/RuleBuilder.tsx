@@ -6,6 +6,7 @@ import type { AutoCreationRule, CreateRuleData, Condition, Action, ConditionType
 import { ConditionEditor } from './ConditionEditor';
 import { ActionEditor } from './ActionEditor';
 import { CustomSelect } from '../CustomSelect';
+import { getNormalizationRules } from '../../services/api';
 import './RuleBuilder.css';
 
 export interface RuleBuilderProps {
@@ -44,10 +45,19 @@ export function RuleBuilder({
   const [conditions, setConditions] = useState<Condition[]>(rule?.conditions || []);
   const [actions, setActions] = useState<Action[]>(rule?.actions || []);
 
+  const [hasActiveNormRules, setHasActiveNormRules] = useState(false);
   const [errors, setErrors] = useState<ValidationErrors>({});
   const [saving, setSaving] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+
+  // Check if any enabled normalization groups have enabled rules
+  useEffect(() => {
+    getNormalizationRules().then(({ groups }) => {
+      const active = groups.some(g => g.enabled && g.rules?.some(r => r.enabled));
+      setHasActiveNormRules(active);
+    }).catch(() => {});
+  }, []);
 
   // Escape key closes the cancel confirm dialog (capture phase to intercept before parent ModalOverlay)
   useEffect(() => {
@@ -307,6 +317,12 @@ export function RuleBuilder({
                 />
                 <span>Normalize names</span>
               </label>
+              {!normalizeNames && hasActiveNormRules && (
+                <span className="norm-hint">
+                  <span className="material-icons norm-hint-icon">info</span>
+                  Active normalization rules won't apply unless this is enabled
+                </span>
+              )}
               <label className="checkbox-item">
                 <input
                   type="checkbox"

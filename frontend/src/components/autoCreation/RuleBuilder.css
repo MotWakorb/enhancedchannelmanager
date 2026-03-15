@@ -425,3 +425,16 @@
     width: 100%;
   }
 }
+
+.norm-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--warning);
+  margin-left: 4px;
+}
+
+.norm-hint-icon {
+  font-size: 14px;
+}
