@@ -163,10 +163,6 @@ export async function getChannels(params?: {
   return fetchJson(`${API_BASE}/channels${query}`, { signal: params?.signal });
 }
 
-export async function getChannel(id: number): Promise<Channel> {
-  return fetchJson(`${API_BASE}/channels/${id}`);
-}
-
 export async function getChannelStreams(channelId: number): Promise<Stream[]> {
   return fetchJson(`${API_BASE}/channels/${channelId}/streams`);
 }
@@ -357,13 +353,6 @@ export async function restoreChannelGroup(id: number): Promise<void> {
   });
 }
 
-export async function getChannelGroupsWithStreams(): Promise<{
-  groups: Array<{ id: number; name: string }>;
-  total_groups: number;
-}> {
-  return fetchJson(`${API_BASE}/channel-groups/with-streams`);
-}
-
 export interface AutoCreatedGroup {
   id: number;
   name: string;
@@ -418,28 +407,12 @@ export async function getStreams(params?: {
   return fetchJson(`${API_BASE}/streams${query}`, { signal: params?.signal });
 }
 
-export async function getStreamsByIds(streamIds: number[]): Promise<Stream[]> {
-  return fetchJson(`${API_BASE}/streams/by-ids`, {
-    method: 'POST',
-    body: JSON.stringify({ stream_ids: streamIds }),
-  });
-}
-
 export async function getStreamGroups(bypassCache?: boolean, m3uAccountId?: number | null): Promise<StreamGroupInfo[]> {
   const queryParams: string[] = [];
   if (bypassCache) queryParams.push('bypass_cache=true');
   if (m3uAccountId !== undefined && m3uAccountId !== null) queryParams.push(`m3u_account_id=${m3uAccountId}`);
   const query = queryParams.length > 0 ? `?${queryParams.join('&')}` : '';
   return fetchJson(`${API_BASE}/stream-groups${query}`);
-}
-
-export async function invalidateCache(prefix?: string): Promise<{ message: string }> {
-  const params = prefix ? `?prefix=${encodeURIComponent(prefix)}` : '';
-  return fetchJson(`${API_BASE}/cache/invalidate${params}`, { method: 'POST' });
-}
-
-export async function getCacheStats(): Promise<{ entry_count: number; entries: Array<{ key: string; age_seconds: number }> }> {
-  return fetchJson(`${API_BASE}/cache/stats`);
 }
 
 // M3U Accounts (Providers)
@@ -516,18 +489,6 @@ export async function deleteM3UAccount(id: number): Promise<{ status: string }> 
 // M3U Refresh
 export async function refreshM3UAccount(id: number): Promise<{ success: boolean; message: string }> {
   return fetchJson(`${API_BASE}/m3u/refresh/${id}`, {
-    method: 'POST',
-  });
-}
-
-export async function refreshAllM3UAccounts(): Promise<{ success: boolean; message: string }> {
-  return fetchJson(`${API_BASE}/m3u/refresh`, {
-    method: 'POST',
-  });
-}
-
-export async function refreshM3UVod(id: number): Promise<{ success: boolean; message: string }> {
-  return fetchJson(`${API_BASE}/m3u/accounts/${id}/refresh-vod`, {
     method: 'POST',
   });
 }
@@ -622,26 +583,6 @@ export async function updateM3UGroupSettings(
 // Server Groups
 export async function getServerGroups(): Promise<ServerGroup[]> {
   return fetchJson(`${API_BASE}/m3u/server-groups`);
-}
-
-export async function createServerGroup(data: { name: string }): Promise<ServerGroup> {
-  return fetchJson(`${API_BASE}/m3u/server-groups`, {
-    method: 'POST',
-    body: JSON.stringify(data),
-  });
-}
-
-export async function updateServerGroup(id: number, data: Partial<ServerGroup>): Promise<ServerGroup> {
-  return fetchJson(`${API_BASE}/m3u/server-groups/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify(data),
-  });
-}
-
-export async function deleteServerGroup(id: number): Promise<{ status: string }> {
-  return fetchJson(`${API_BASE}/m3u/server-groups/${id}`, {
-    method: 'DELETE',
-  });
 }
 
 // Health check
@@ -1023,10 +964,6 @@ export async function getLogos(params?: {
   return fetchJson(`${API_BASE}/channels/logos${query}`);
 }
 
-export async function getLogo(id: number): Promise<Logo> {
-  return fetchJson(`${API_BASE}/channels/logos/${id}`);
-}
-
 export async function createLogo(data: { name: string; url: string }): Promise<Logo> {
   return fetchJson(`${API_BASE}/channels/logos`, {
     method: 'POST',
@@ -1126,10 +1063,6 @@ export async function getEPGData(params?: {
   return fetchJson(`${API_BASE}/epg/data${query}`);
 }
 
-export async function getEPGDataById(id: number): Promise<EPGData> {
-  return fetchJson(`${API_BASE}/epg/data/${id}`);
-}
-
 // EPG Grid (programs for previous hour + next 24 hours)
 // Uses Dispatcharr's /api/epg/grid/ endpoint which automatically filters to:
 // - Programs ending after 1 hour ago
@@ -1209,16 +1142,6 @@ export async function deleteChannelProfile(id: number): Promise<{ status: string
   });
 }
 
-export async function bulkUpdateProfileChannels(
-  profileId: number,
-  data: { channel_ids: number[]; enabled: boolean }
-): Promise<{ success: boolean }> {
-  return fetchJson(`${API_BASE}/channel-profiles/${profileId}/channels/bulk-update`, {
-    method: 'PATCH',
-    body: JSON.stringify(data),
-  });
-}
-
 export async function updateProfileChannel(
   profileId: number,
   channelId: number,
@@ -1265,198 +1188,6 @@ export async function getOrCreateLogo(name: string, url: string, logoCache: Map<
   }
 }
 
-// Options for bulk channel creation
-export interface BulkCreateOptions {
-  timezonePreference?: TimezonePreference;
-  stripCountryPrefix?: boolean;
-  keepCountryPrefix?: boolean;       // Keep and normalize country prefix (e.g., "US: ESPN" -> "US | ESPN")
-  countrySeparator?: NumberSeparator; // Separator for country prefix when keeping
-  stripNetworkPrefix?: boolean;      // Strip network prefixes like "CHAMP |", "PPV |" etc.
-  customNetworkPrefixes?: string[];  // Additional user-defined prefixes to strip
-  stripNetworkSuffix?: boolean;      // Strip network suffixes like "(ENGLISH)", "[LIVE]", "BACKUP" etc.
-  customNetworkSuffixes?: string[];  // Additional user-defined suffixes to strip
-  addChannelNumber?: boolean;
-  numberSeparator?: NumberSeparator;
-  prefixOrder?: PrefixOrder;         // Order of prefixes: 'number-first' (100 | US | Name) or 'country-first' (US | 100 | Name)
-}
-
-// Bulk Channel Creation
-// Groups streams with normalized names into the same channel (merging streams from different M3Us and quality variants)
-export async function bulkCreateChannelsFromStreams(
-  streams: { id: number; name: string; logo_url?: string | null }[],
-  startingNumber: number,
-  channelGroupId: number | null,
-  timezonePreferenceOrOptions: TimezonePreference | BulkCreateOptions = 'both'
-): Promise<{ created: Channel[]; errors: string[]; mergedCount: number }> {
-  logger.info(`Starting bulk channel creation from ${streams.length} streams`, {
-    startingNumber,
-    channelGroupId,
-  });
-
-  // Handle both old signature (just TimezonePreference) and new signature (BulkCreateOptions)
-  let timezonePreference: TimezonePreference;
-  let stripCountry = false;
-  let keepCountry = false;
-  let countrySeparator: NumberSeparator = '|';
-  let stripNetwork = false;
-  let customNetworkPrefixes: string[] | undefined;
-  let stripSuffix = false;
-  let customNetworkSuffixes: string[] | undefined;
-  let addChannelNumber = false;
-  let numberSeparator: NumberSeparator = '|';
-  let prefixOrder: PrefixOrder = 'number-first';
-
-  if (typeof timezonePreferenceOrOptions === 'object') {
-    timezonePreference = timezonePreferenceOrOptions.timezonePreference ?? 'both';
-    stripCountry = timezonePreferenceOrOptions.stripCountryPrefix ?? false;
-    keepCountry = timezonePreferenceOrOptions.keepCountryPrefix ?? false;
-    countrySeparator = timezonePreferenceOrOptions.countrySeparator ?? '|';
-    stripNetwork = timezonePreferenceOrOptions.stripNetworkPrefix ?? false;
-    customNetworkPrefixes = timezonePreferenceOrOptions.customNetworkPrefixes;
-    stripSuffix = timezonePreferenceOrOptions.stripNetworkSuffix ?? false;
-    customNetworkSuffixes = timezonePreferenceOrOptions.customNetworkSuffixes;
-    addChannelNumber = timezonePreferenceOrOptions.addChannelNumber ?? false;
-    numberSeparator = timezonePreferenceOrOptions.numberSeparator ?? '|';
-    prefixOrder = timezonePreferenceOrOptions.prefixOrder ?? 'number-first';
-  } else {
-    timezonePreference = timezonePreferenceOrOptions;
-  }
-
-  logger.debug('Bulk create options', {
-    timezonePreference,
-    stripCountry,
-    keepCountry,
-    stripNetwork,
-    stripSuffix,
-    addChannelNumber,
-  });
-
-  const created: Channel[] = [];
-  const errors: string[] = [];
-  // Cache logos to avoid repeated lookups for the same URL
-  const logoCache = new Map<string, Logo>();
-
-  // Filter streams based on timezone preference first
-  const filteredStreams = filterStreamsByTimezone(streams, timezonePreference);
-  logger.debug(`Filtered ${streams.length} streams to ${filteredStreams.length} based on timezone preference`);
-
-  // Group streams by normalized name to merge identical channels from different M3Us and quality variants
-  // The normalized name is used as the key, but we track original names for the channel name selection
-  const streamsByNormalizedName = new Map<string, { id: number; name: string; logo_url?: string | null }[]>();
-  for (const stream of filteredStreams) {
-    const normalizedName = normalizeStreamName(stream.name, {
-      timezonePreference,
-      stripCountryPrefix: stripCountry,
-      keepCountryPrefix: keepCountry,
-      countrySeparator,
-      stripNetworkPrefix: stripNetwork,
-      customNetworkPrefixes,
-      stripNetworkSuffix: stripSuffix,
-      customNetworkSuffixes,
-    });
-    const existing = streamsByNormalizedName.get(normalizedName);
-    if (existing) {
-      existing.push(stream);
-    } else {
-      streamsByNormalizedName.set(normalizedName, [stream]);
-    }
-  }
-
-  // Count how many streams were merged (filtered streams - unique normalized names)
-  const mergedCount = filteredStreams.length - streamsByNormalizedName.size;
-  logger.info(`Grouped ${filteredStreams.length} streams into ${streamsByNormalizedName.size} unique channels (${mergedCount} merged)`);
-
-  // Create one channel per unique normalized name
-  let channelIndex = 0;
-  for (const [normalizedName, groupedStreams] of streamsByNormalizedName) {
-    const channelNumber = startingNumber + channelIndex;
-    channelIndex++;
-
-    // Use the normalized name as the channel name (cleaner, without quality suffix)
-    // Optionally prepend channel number and/or country prefix based on prefixOrder
-    // normalizedName already has country prefix if keepCountry is true (e.g., "US | Sports Channel")
-    // We need to extract it to reorder if needed
-    let channelName = normalizedName;
-
-    if (addChannelNumber && keepCountry) {
-      // Both number and country enabled - need to consider order
-      // normalizedName is currently: "US | Sports Channel" (country already normalized)
-      // Extract country from the normalized name to reorder
-      const countryMatch = normalizedName.match(new RegExp(`^([A-Z]{2,6})\\s*[${countrySeparator}]\\s*(.+)$`));
-      if (countryMatch) {
-        const [, countryCode, baseName] = countryMatch;
-        if (prefixOrder === 'country-first') {
-          // Country first: "US | 100 | Sports Channel"
-          channelName = `${countryCode} ${countrySeparator} ${channelNumber} ${numberSeparator} ${baseName}`;
-        } else {
-          // Number first (default): "100 | US | Sports Channel"
-          channelName = `${channelNumber} ${numberSeparator} ${countryCode} ${countrySeparator} ${baseName}`;
-        }
-      } else {
-        // No country found in name, just add number
-        channelName = `${channelNumber} ${numberSeparator} ${normalizedName}`;
-      }
-    } else if (addChannelNumber) {
-      // Only number, no country
-      channelName = `${channelNumber} ${numberSeparator} ${normalizedName}`;
-    }
-    // else: normalizedName is already correct (with or without country prefix)
-
-    try {
-      // Create the channel
-      logger.debug(`Creating channel ${channelIndex}/${streamsByNormalizedName.size}: ${channelName}`);
-      const channel = await createChannel({
-        name: channelName,
-        channel_number: channelNumber,
-        channel_group_id: channelGroupId ?? undefined,
-      });
-
-      // Add all streams with this normalized name to the channel (provides multi-provider/quality redundancy)
-      // Sort streams by quality so highest quality (UHD/4K) appears first
-      const sortedStreams = sortStreamsByQuality(groupedStreams);
-      const addedStreamIds: number[] = [];
-      for (const stream of sortedStreams) {
-        try {
-          await addStreamToChannel(channel.id, stream.id);
-          addedStreamIds.push(stream.id);
-        } catch (streamError) {
-          logger.error(`Failed to add stream ${stream.id} to channel ${channelName}`, streamError);
-          errors.push(`Channel "${channelName}" created but stream assignment failed for stream ${stream.id}: ${streamError}`);
-        }
-      }
-      logger.info(`Created channel: ${channelName}`, { channelId: channel.id, streamCount: addedStreamIds.length });
-
-      // Use the first stream's logo if available (sorted streams, so highest quality first)
-      const logoUrl = sortedStreams.find((s: { logo_url?: string | null }) => s.logo_url)?.logo_url;
-      if (logoUrl) {
-        try {
-          const logo = await getOrCreateLogo(channelName, logoUrl, logoCache);
-          await updateChannel(channel.id, { logo_id: logo.id });
-          created.push({ ...channel, streams: addedStreamIds, logo_id: logo.id });
-        } catch (logoError) {
-          // Logo assignment failed, but channel was still created
-          logger.warn(`Logo assignment failed for channel: ${channelName}`, logoError);
-          errors.push(`Channel "${channelName}" created but logo assignment failed: ${logoError}`);
-          created.push({ ...channel, streams: addedStreamIds });
-        }
-      } else {
-        created.push({ ...channel, streams: addedStreamIds });
-      }
-    } catch (error) {
-      logger.error(`Failed to create channel: ${channelName}`, error);
-      errors.push(`Failed to create channel "${channelName}": ${error}`);
-    }
-  }
-
-  logger.info(`Bulk channel creation complete`, {
-    channelsCreated: created.length,
-    errors: errors.length,
-    mergedCount,
-  });
-
-  return { created, errors, mergedCount };
-}
-
 // Journal API
 export async function getJournalEntries(params?: JournalQueryParams): Promise<JournalResponse> {
   const query = buildQuery({
@@ -1476,12 +1207,6 @@ export async function getJournalStats(): Promise<JournalStats> {
   return fetchJson(`${API_BASE}/journal/stats`);
 }
 
-export async function purgeJournalEntries(days: number): Promise<{ deleted_count: number }> {
-  return fetchJson(`${API_BASE}/journal/purge?days=${days}`, {
-    method: 'DELETE',
-  });
-}
-
 // =============================================================================
 // Stats & Monitoring
 // =============================================================================
@@ -1492,14 +1217,6 @@ export async function purgeJournalEntries(days: number): Promise<{ deleted_count
  */
 export async function getChannelStats(): Promise<ChannelStatsResponse> {
   return fetchJson(`${API_BASE}/stats/channels`);
-}
-
-/**
- * Get detailed stats for a specific channel.
- * Includes per-client information, buffer status, codec details, etc.
- */
-export async function getChannelStatsDetail(channelId: number): Promise<ChannelStats> {
-  return fetchJson(`${API_BASE}/stats/channels/${channelId}`);
 }
 
 /**
@@ -1523,15 +1240,6 @@ export async function getSystemEvents(params?: {
  */
 export async function stopChannel(channelId: number | string): Promise<{ success: boolean }> {
   return fetchJson(`${API_BASE}/stats/channels/${channelId}/stop`, {
-    method: 'POST',
-  });
-}
-
-/**
- * Stop a specific client connection.
- */
-export async function stopClient(channelId: number | string): Promise<{ success: boolean }> {
-  return fetchJson(`${API_BASE}/stats/channels/${channelId}/stop-client`, {
     method: 'POST',
   });
 }
@@ -1597,13 +1305,6 @@ export async function getPopularityRankings(
 }
 
 /**
- * Get popularity score for a specific channel.
- */
-export async function getChannelPopularity(channelId: string): Promise<import('../types').ChannelPopularityScore> {
-  return fetchJson(`${API_BASE}/stats/popularity/channel/${channelId}`);
-}
-
-/**
  * Get channels that are trending up or down.
  */
 export async function getTrendingChannels(
@@ -1652,20 +1353,6 @@ export async function getWatchHistory(options: {
 // =============================================================================
 
 /**
- * Get all stream probe statistics.
- */
-export async function getStreamStats(): Promise<import('../types').StreamStats[]> {
-  return fetchJson(`${API_BASE}/stream-stats`);
-}
-
-/**
- * Get probe stats for a specific stream.
- */
-export async function getStreamStatsById(streamId: number): Promise<import('../types').StreamStats> {
-  return fetchJson(`${API_BASE}/stream-stats/${streamId}`);
-}
-
-/**
  * Get probe stats for multiple streams by their IDs.
  */
 export async function getStreamStatsByIds(streamIds: number[]): Promise<Record<number, import('../types').StreamStats>> {
@@ -1687,31 +1374,6 @@ export async function computeSort(
     method: 'POST',
     body: JSON.stringify({ channels, mode }),
   });
-}
-
-/**
- * Get summary of stream probe statistics.
- */
-export async function getStreamStatsSummary(): Promise<import('../types').StreamStatsSummary> {
-  return fetchJson(`${API_BASE}/stream-stats/summary`);
-}
-
-/**
- * Probe a single stream on-demand.
- */
-export async function probeStream(streamId: number): Promise<import('../types').StreamStats> {
-  logger.debug(`[Probe] probeStream called for stream ID: ${streamId}`);
-
-  try {
-    const result = await fetchJson(`${API_BASE}/stream-stats/probe/${streamId}`, {
-      method: 'POST',
-    }) as import('../types').StreamStats;
-    logger.debug(`[Probe] probeStream succeeded for stream ${streamId}:`, result);
-    return result;
-  } catch (error) {
-    console.error(`[Probe] probeStream failed for stream ${streamId}:`, error);
-    throw error;
-  }
 }
 
 /**
@@ -1789,38 +1451,6 @@ export async function getProbeProgress(): Promise<{
   }>;
 }
 
-export async function getProbeResults(): Promise<{
-  success_streams: Array<{ id: number; name: string; url?: string }>;
-  failed_streams: Array<{ id: number; name: string; url?: string; error?: string }>;
-  skipped_streams: Array<{ id: number; name: string; url?: string; reason?: string }>;
-  success_count: number;
-  failed_count: number;
-  skipped_count: number;
-}> {
-  return fetchJson(`${API_BASE}/stream-stats/probe/results`, {
-    method: 'GET',
-  }) as Promise<{
-    success_streams: Array<{ id: number; name: string; url?: string }>;
-    failed_streams: Array<{ id: number; name: string; url?: string; error?: string }>;
-    skipped_streams: Array<{ id: number; name: string; url?: string; reason?: string }>;
-    success_count: number;
-    failed_count: number;
-    skipped_count: number;
-  }>;
-}
-
-/**
- * Dismiss probe failures for the specified streams.
- * Dismissed streams won't appear in failed lists until re-probed.
- */
-export async function dismissStreamStats(streamIds: number[]): Promise<{ dismissed: number; stream_ids: number[] }> {
-  return fetchJson(`${API_BASE}/stream-stats/dismiss`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ stream_ids: streamIds }),
-  }) as Promise<{ dismissed: number; stream_ids: number[] }>;
-}
-
 /**
  * Clear (delete) probe stats for the specified streams.
  * Streams will appear as 'pending' (never probed) until re-probed.
@@ -1841,15 +1471,6 @@ export async function clearAllStreamStats(): Promise<{ cleared: number }> {
   return fetchJson(`${API_BASE}/stream-stats/clear-all`, {
     method: 'POST',
   }) as Promise<{ cleared: number }>;
-}
-
-/**
- * Get list of dismissed stream IDs.
- */
-export async function getDismissedStreamIds(): Promise<{ dismissed_stream_ids: number[]; count: number }> {
-  return fetchJson(`${API_BASE}/stream-stats/dismissed`, {
-    method: 'GET',
-  }) as Promise<{ dismissed_stream_ids: number[]; count: number }>;
 }
 
 // Strike Rule API
@@ -2103,28 +1724,6 @@ export interface TaskConfigUpdate {
   show_notifications?: boolean;  // Show in NotificationCenter (bell icon)
 }
 
-export interface CronPreset {
-  name: string;
-  expression: string;
-  description: string;
-}
-
-export interface CronValidationResult {
-  valid: boolean;
-  error?: string;
-  description?: string;
-  next_runs?: string[];
-}
-
-export interface TaskEngineStatus {
-  running: boolean;
-  check_interval: number;
-  max_concurrent: number;
-  active_tasks: string[];
-  active_task_count: number;
-  registered_task_count: number;
-}
-
 export async function getTasks(): Promise<{ tasks: TaskStatus[] }> {
   return fetchJson(`${API_BASE}/tasks`, {
     method: 'GET',
@@ -2180,33 +1779,6 @@ export async function getTaskHistory(taskId: string, limit = 50, offset = 0): Pr
   });
 }
 
-export async function getAllTaskHistory(limit = 100, offset = 0): Promise<{ history: TaskExecution[] }> {
-  const query = buildQuery({ limit, offset });
-  return fetchJson(`${API_BASE}/tasks/history/all${query}`, {
-    method: 'GET',
-  });
-}
-
-export async function getTaskEngineStatus(): Promise<TaskEngineStatus> {
-  return fetchJson(`${API_BASE}/tasks/engine/status`, {
-    method: 'GET',
-  });
-}
-
-export async function getCronPresets(): Promise<{ presets: CronPreset[] }> {
-  return fetchJson(`${API_BASE}/cron/presets`, {
-    method: 'GET',
-  });
-}
-
-export async function validateCronExpression(expression: string): Promise<CronValidationResult> {
-  return fetchJson(`${API_BASE}/cron/validate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ expression }),
-  });
-}
-
 // -------------------------------------------------------------------------
 // Task Schedule API (Multiple Schedules per Task)
 // -------------------------------------------------------------------------
@@ -2249,12 +1821,6 @@ export async function getTaskParameterSchema(taskId: string): Promise<TaskParame
   });
 }
 
-export async function getAllTaskParameterSchemas(): Promise<{ schemas: Record<string, { description: string; parameters: TaskParameterSchema[] }> }> {
-  return fetchJson(`${API_BASE}/tasks/parameter-schemas`, {
-    method: 'GET',
-  });
-}
-
 // -------------------------------------------------------------------------
 // Notifications API
 // -------------------------------------------------------------------------
@@ -2283,18 +1849,6 @@ export interface NotificationsResponse {
   page_size: number;
 }
 
-export interface CreateNotificationData {
-  notification_type?: 'info' | 'success' | 'warning' | 'error';
-  title?: string;
-  message: string;
-  source?: string;
-  source_id?: string;
-  action_label?: string;
-  action_url?: string;
-  metadata?: Record<string, unknown>;
-  send_alerts?: boolean; // If false, don't dispatch to Discord/Telegram/Email
-}
-
 export async function getNotifications(params?: {
   page?: number;
   page_size?: number;
@@ -2308,24 +1862,6 @@ export async function getNotifications(params?: {
     notification_type: params?.notification_type,
   });
   return fetchJson(`${API_BASE}/notifications${query}`);
-}
-
-export async function createNotification(data: CreateNotificationData): Promise<Notification> {
-  return fetchJson(`${API_BASE}/notifications`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      message: data.message,
-      notification_type: data.notification_type,
-      title: data.title,
-      source: data.source,
-      source_id: data.source_id,
-      action_label: data.action_label,
-      action_url: data.action_url,
-      metadata: data.metadata,
-      send_alerts: data.send_alerts,
-    }),
-  });
 }
 
 export async function markNotificationRead(notificationId: number, read: boolean = true): Promise<Notification> {
@@ -2354,144 +1890,9 @@ export async function clearNotifications(readOnly: boolean = true): Promise<{ de
   });
 }
 
-export async function deleteNotificationsBySource(source: string, sourceId?: string): Promise<{ deleted: number; source: string; source_id: string | null }> {
-  const query = buildQuery({ source, source_id: sourceId });
-  return fetchJson(`${API_BASE}/notifications/by-source${query}`, {
-    method: 'DELETE',
-  });
-}
-
-// =============================================================================
-// Alert Methods
-// =============================================================================
-
-export interface AlertMethodType {
-  type: string;
-  display_name: string;
-  required_fields: string[];
-  optional_fields: Record<string, unknown>;
-}
-
-// Granular alert source filtering types
-export type AlertFilterMode = 'all' | 'only_selected' | 'all_except';
-
-export interface AlertSourceEpgRefresh {
-  enabled: boolean;
-  filter_mode: AlertFilterMode;
-  source_ids: number[];
-}
-
-export interface AlertSourceM3uRefresh {
-  enabled: boolean;
-  filter_mode: AlertFilterMode;
-  account_ids: number[];
-}
-
-export interface AlertSourceProbeFailures {
-  enabled: boolean;
-  min_failures: number;
-}
-
-export interface AlertSources {
-  version?: number;
-  epg_refresh?: AlertSourceEpgRefresh;
-  m3u_refresh?: AlertSourceM3uRefresh;
-  probe_failures?: AlertSourceProbeFailures;
-}
-
-export interface AlertMethod {
-  id: number;
-  name: string;
-  method_type: string;
-  enabled: boolean;
-  config: Record<string, unknown>;
-  notify_info: boolean;
-  notify_success: boolean;
-  notify_warning: boolean;
-  notify_error: boolean;
-  alert_sources: AlertSources | null;
-  last_sent_at: string | null;
-  created_at: string | null;
-}
-
-export interface AlertMethodCreate {
-  name: string;
-  method_type: string;
-  config: Record<string, unknown>;
-  enabled?: boolean;
-  notify_info?: boolean;
-  notify_success?: boolean;
-  notify_warning?: boolean;
-  notify_error?: boolean;
-  alert_sources?: AlertSources | null;
-}
-
-export interface AlertMethodUpdate {
-  name?: string;
-  config?: Record<string, unknown>;
-  enabled?: boolean;
-  notify_info?: boolean;
-  notify_success?: boolean;
-  notify_warning?: boolean;
-  notify_error?: boolean;
-  alert_sources?: AlertSources | null;
-}
-
-export async function getAlertMethodTypes(): Promise<AlertMethodType[]> {
-  return fetchJson(`${API_BASE}/alert-methods/types`);
-}
-
-export async function getAlertMethods(): Promise<AlertMethod[]> {
-  return fetchJson(`${API_BASE}/alert-methods`);
-}
-
-export async function getAlertMethod(methodId: number): Promise<AlertMethod> {
-  return fetchJson(`${API_BASE}/alert-methods/${methodId}`);
-}
-
-export async function createAlertMethod(data: AlertMethodCreate): Promise<{ id: number; name: string; method_type: string; enabled: boolean }> {
-  return fetchJson(`${API_BASE}/alert-methods`, {
-    method: 'POST',
-    body: JSON.stringify(data),
-  });
-}
-
-export async function updateAlertMethod(methodId: number, data: AlertMethodUpdate): Promise<{ success: boolean }> {
-  return fetchJson(`${API_BASE}/alert-methods/${methodId}`, {
-    method: 'PATCH',
-    body: JSON.stringify(data),
-  });
-}
-
-export async function deleteAlertMethod(methodId: number): Promise<{ success: boolean }> {
-  return fetchJson(`${API_BASE}/alert-methods/${methodId}`, {
-    method: 'DELETE',
-  });
-}
-
-export async function testAlertMethod(methodId: number): Promise<{ success: boolean; message: string }> {
-  return fetchJson(`${API_BASE}/alert-methods/${methodId}/test`, {
-    method: 'POST',
-  });
-}
-
 // =============================================================================
 // Normalization Rules API
 // =============================================================================
-
-/**
- * Get all normalization rule groups
- */
-export async function getNormalizationGroups(): Promise<{ groups: NormalizationRuleGroup[] }> {
-  return fetchJson(`${API_BASE}/normalization/groups`);
-}
-
-/**
- * Get a single normalization rule group by ID
- */
-export async function getNormalizationGroup(groupId: number): Promise<NormalizationRuleGroup> {
-  return fetchJson(`${API_BASE}/normalization/groups/${groupId}`);
-}
 
 /**
  * Create a new normalization rule group
@@ -2538,13 +1939,6 @@ export async function reorderNormalizationGroups(groupIds: number[]): Promise<{ 
 export async function getNormalizationRules(groupId?: number): Promise<{ groups: NormalizationRuleGroup[] }> {
   const query = groupId ? `?group_id=${groupId}` : '';
   return fetchJson(`${API_BASE}/normalization/rules${query}`);
-}
-
-/**
- * Get a single normalization rule by ID
- */
-export async function getNormalizationRule(ruleId: number): Promise<NormalizationRule> {
-  return fetchJson(`${API_BASE}/normalization/rules/${ruleId}`);
 }
 
 /**
@@ -2613,23 +2007,6 @@ export async function normalizeTexts(texts: string[]): Promise<NormalizationBatc
   return fetchJson(`${API_BASE}/normalization/normalize`, {
     method: 'POST',
     body: JSON.stringify({ texts }),
-  });
-}
-
-/**
- * Get normalization migration status
- */
-export async function getNormalizationMigrationStatus(): Promise<NormalizationMigrationStatus> {
-  return fetchJson(`${API_BASE}/normalization/migration/status`);
-}
-
-/**
- * Run normalization migration to create built-in rules
- */
-export async function runNormalizationMigration(force?: boolean): Promise<NormalizationMigrationResult> {
-  const query = force ? '?force=true' : '';
-  return fetchJson(`${API_BASE}/normalization/migration/run${query}`, {
-    method: 'POST',
   });
 }
 
@@ -2729,16 +2106,6 @@ export async function deleteTag(groupId: number, tagId: number): Promise<{ statu
 }
 
 /**
- * Test text against a tag group to find matches
- */
-export async function testTagGroup(groupId: number, text: string): Promise<TestTagsResponse> {
-  return fetchJson(`${API_BASE}/tags/test`, {
-    method: 'POST',
-    body: JSON.stringify({ group_id: groupId, text }),
-  });
-}
-
-/**
  * Export tags as YAML
  */
 export async function exportTagsYaml(): Promise<string> {
@@ -2790,25 +2157,6 @@ export async function getM3UChanges(params?: {
 }
 
 /**
- * Get change history for a specific M3U account
- */
-export async function getM3UAccountChanges(
-  accountId: number,
-  params?: {
-    page?: number;
-    pageSize?: number;
-    changeType?: M3UChangeType;
-  }
-): Promise<M3UChangesResponse> {
-  const query = buildQuery({
-    page: params?.page,
-    page_size: params?.pageSize,
-    change_type: params?.changeType,
-  });
-  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/changes${query}`);
-}
-
-/**
  * Get aggregated summary of M3U changes
  */
 export async function getM3UChangesSummary(params?: {
@@ -2820,20 +2168,6 @@ export async function getM3UChangesSummary(params?: {
     m3u_account_id: params?.m3uAccountId,
   });
   return fetchJson(`${API_BASE}/m3u/changes/summary${query}`);
-}
-
-/**
- * Get recent M3U snapshots
- */
-export async function getM3USnapshots(params?: {
-  m3uAccountId?: number;
-  limit?: number;
-}): Promise<M3USnapshot[]> {
-  const query = buildQuery({
-    m3u_account_id: params?.m3uAccountId,
-    limit: params?.limit,
-  });
-  return fetchJson(`${API_BASE}/m3u/snapshots${query}`);
 }
 
 /**
@@ -2956,14 +2290,6 @@ export async function parseCSVPreview(content: string): Promise<CSVPreviewResult
  */
 export async function getAuthStatus(): Promise<AuthStatus> {
   return fetchJson(`${API_BASE}/auth/status`);
-}
-
-/**
- * Get list of available authentication providers.
- * Returns provider names and enabled status.
- */
-export async function getAuthProviders(): Promise<AuthProvidersResponse> {
-  return fetchJson(`${API_BASE}/auth/providers`);
 }
 
 /**
@@ -3100,15 +2426,6 @@ export async function updateAuthSettings(settings: AuthSettingsUpdate): Promise<
  */
 export async function listUsers(): Promise<UserListResponse> {
   return fetchJson(`${API_BASE}/auth/admin/users`, {
-    credentials: 'include',
-  });
-}
-
-/**
- * Get user details (admin only).
- */
-export async function getUser(userId: number): Promise<UserDetailResponse> {
-  return fetchJson(`${API_BASE}/auth/admin/users/${userId}`, {
     credentials: 'include',
   });
 }
@@ -3305,15 +2622,6 @@ export async function testDNSProvider(data: DNSProviderTestRequest): Promise<DNS
   return fetchJson(`${API_BASE}/tls/test-dns-provider`, {
     method: 'POST',
     body: JSON.stringify(data),
-    credentials: 'include',
-  });
-}
-
-/**
- * Test HTTP-01 challenge endpoint reachability.
- */
-export async function testHTTPChallenge(): Promise<{ success: boolean; message: string }> {
-  return fetchJson(`${API_BASE}/tls/test-http-challenge`, {
     credentials: 'include',
   });
 }

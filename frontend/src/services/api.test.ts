@@ -6,7 +6,6 @@ import { server } from '../test/mocks/server';
 import { http, HttpResponse } from 'msw';
 import {
   getChannels,
-  getChannel,
   updateChannel,
   addStreamToChannel,
   removeStreamFromChannel,
@@ -20,7 +19,6 @@ import {
   getChannelBandwidthStats,
   getUniqueViewersByChannel,
   getPopularityRankings,
-  getChannelPopularity,
   getTrendingChannels,
   calculatePopularity,
 } from './api';
@@ -89,41 +87,6 @@ describe('API Service', () => {
       );
 
       await expect(getChannels()).rejects.toThrow();
-    });
-  });
-
-  describe('getChannel', () => {
-    it('fetches single channel', async () => {
-      server.use(
-        http.get('/api/channels/1', () => {
-          return HttpResponse.json({
-            id: 1,
-            uuid: 'uuid-1',
-            name: 'Test Channel',
-            channel_number: 100,
-            channel_group_id: null,
-            streams: [],
-          });
-        })
-      );
-
-      const result = await getChannel(1);
-
-      expect(result.id).toBe(1);
-      expect(result.name).toBe('Test Channel');
-    });
-
-    it('throws on 404', async () => {
-      server.use(
-        http.get('/api/channels/999', () => {
-          return HttpResponse.json(
-            { detail: 'Channel not found' },
-            { status: 404 }
-          );
-        })
-      );
-
-      await expect(getChannel(999)).rejects.toThrow('Channel not found');
     });
   });
 
@@ -466,45 +429,6 @@ describe('API Service', () => {
 
       expect(requestUrl).toContain('limit=25');
       expect(requestUrl).toContain('offset=50');
-    });
-  });
-
-  describe('getChannelPopularity', () => {
-    it('fetches single channel popularity score', async () => {
-      server.use(
-        http.get('/api/stats/popularity/channel/test-uuid', () => {
-          return HttpResponse.json({
-            id: 1,
-            channel_id: 'test-uuid',
-            channel_name: 'Test Channel',
-            score: 75.5,
-            rank: 5,
-            trend: 'up',
-            trend_percent: 10.0,
-            calculated_at: new Date().toISOString(),
-            created_at: new Date().toISOString(),
-          });
-        })
-      );
-
-      const result = await getChannelPopularity('test-uuid');
-
-      expect(result.channel_id).toBe('test-uuid');
-      expect(result.score).toBe(75.5);
-      expect(result.trend).toBe('up');
-    });
-
-    it('throws 404 when channel not found', async () => {
-      server.use(
-        http.get('/api/stats/popularity/channel/nonexistent', () => {
-          return HttpResponse.json(
-            { detail: 'Channel not found' },
-            { status: 404 }
-          );
-        })
-      );
-
-      await expect(getChannelPopularity('nonexistent')).rejects.toThrow('Channel not found');
     });
   });
 
