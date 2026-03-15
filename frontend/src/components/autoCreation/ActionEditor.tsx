@@ -238,9 +238,9 @@ export function ActionEditor({
     }
   }, [action.type]);
 
-  // Fetch EPG sources when assign_epg action is selected
+  // Fetch EPG sources when assign_epg or assign_logo action is selected
   useEffect(() => {
-    if (action.type === 'assign_epg') {
+    if (action.type === 'assign_epg' || action.type === 'assign_logo') {
       getEPGSources().then(setEpgSources).catch(() => setEpgSources([]));
     }
   }, [action.type]);
