@@ -48,7 +48,6 @@ export function RuleBuilder({
   const [saving, setSaving] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
-  const [showConditionSelector, setShowConditionSelector] = useState(false);
 
   // Escape key closes the cancel confirm dialog (capture phase to intercept before parent ModalOverlay)
   useEffect(() => {
@@ -174,10 +173,9 @@ export function RuleBuilder({
     }
   };
 
-  const handleAddCondition = (type: ConditionType) => {
-    const newCondition: Condition = { type, connector: 'and' };
+  const handleAddCondition = () => {
+    const newCondition: Condition = { type: 'stream_name_contains', connector: 'and' };
     setConditions([...conditions, newCondition]);
-    setShowConditionSelector(false);
   };
 
   const handleToggleConnector = (index: number) => {
@@ -449,20 +447,12 @@ export function RuleBuilder({
             <button
               type="button"
               className="add-item-btn"
-              onClick={() => setShowConditionSelector(!showConditionSelector)}
-              aria-expanded={showConditionSelector}
+              onClick={handleAddCondition}
               aria-label="Add condition"
             >
               <span className="material-icons">add</span>
               Add Condition
             </button>
-
-            {showConditionSelector && (
-              <ConditionTypeSelector
-                onSelect={handleAddCondition}
-                onClose={() => setShowConditionSelector(false)}
-              />
-            )}
           </div>
         </section>
 
@@ -567,71 +557,4 @@ function needsValue(type: ConditionType): boolean {
   return !noValueTypes.includes(type);
 }
 
-// Condition Type Selector Component
-function ConditionTypeSelector({
-  onSelect,
-  onClose,
-}: {
-  onSelect: (type: ConditionType) => void;
-  onClose: () => void;
-}) {
-  const categories = [
-    {
-      label: 'Stream Conditions',
-      types: [
-        { type: 'stream_name_contains' as ConditionType, label: 'Stream Name Contains' },
-        { type: 'stream_name_matches' as ConditionType, label: 'Stream Name Matches (Regex)' },
-        { type: 'stream_group_contains' as ConditionType, label: 'Stream Group Contains' },
-        { type: 'stream_group_matches' as ConditionType, label: 'Stream Group Matches (Regex)' },
-        { type: 'provider_is' as ConditionType, label: 'M3U Account' },
-        { type: 'quality_min' as ConditionType, label: 'Minimum Quality' },
-        { type: 'quality_max' as ConditionType, label: 'Maximum Quality' },
-        { type: 'tvg_id_exists' as ConditionType, label: 'TVG-ID Exists' },
-        { type: 'logo_exists' as ConditionType, label: 'Logo Exists' },
-      ],
-    },
-    {
-      label: 'Channel Conditions',
-      types: [
-        { type: 'has_channel' as ConditionType, label: 'Has Channel' },
-        { type: 'channel_exists_with_name' as ConditionType, label: 'Channel Exists With Name' },
-        { type: 'normalized_name_in_group' as ConditionType, label: 'Normalized Match in Group' },
-        { type: 'normalized_name_exists' as ConditionType, label: 'Normalized Match (Any Group)' },
-      ],
-    },
-    {
-      label: 'Special',
-      types: [
-        { type: 'always' as ConditionType, label: 'Always' },
-        { type: 'never' as ConditionType, label: 'Never' },
-      ],
-    },
-  ];
-
-  return (
-    <div className="type-selector-dropdown">
-      <div className="type-selector-header">
-        <span>Select Condition Type</span>
-        <button type="button" className="close-btn" onClick={onClose}>
-          <span className="material-icons">close</span>
-        </button>
-      </div>
-      {categories.map(cat => (
-        <div key={cat.label} className="type-category">
-          <div className="type-category-label">{cat.label}</div>
-          {cat.types.map(t => (
-            <button
-              key={t.type}
-              type="button"
-              className="type-option"
-              onClick={() => onSelect(t.type)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      ))}
-    </div>
-  );
-}
 

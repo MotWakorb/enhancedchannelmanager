@@ -257,9 +257,9 @@ describe('AutoCreationTab', () => {
       // Fill in the form
       await user.type(screen.getByLabelText(/rule name/i), 'Brand New Rule');
 
-      // Add condition
+      // Add condition (defaults to Stream Name Contains) and fill value
       await user.click(screen.getByRole('button', { name: /add condition/i }));
-      await user.click(screen.getByText(/always/i));
+      await user.type(screen.getByPlaceholderText(/enter text/i), 'test');
 
       // Add action (adds blank action) and select Skip type
       await user.click(screen.getByRole('button', { name: /add action/i }));

@@ -136,26 +136,13 @@ describe('RuleBuilder', () => {
       expect(screen.getByRole('button', { name: /add condition/i })).toBeInTheDocument();
     });
 
-    it('opens condition type selector when clicking add', async () => {
+    it('adds a blank condition when clicking add', async () => {
       const user = userEvent.setup();
       render(<RuleBuilder onSave={vi.fn()} onCancel={vi.fn()} />);
 
       await user.click(screen.getByRole('button', { name: /add condition/i }));
 
-      // Should show condition type options (ConditionTypeSelector still uses category labels)
-      await waitFor(() => {
-        expect(screen.getByText(/stream conditions/i)).toBeInTheDocument();
-      });
-    });
-
-    it('adds a condition when type is selected', async () => {
-      const user = userEvent.setup();
-      render(<RuleBuilder onSave={vi.fn()} onCancel={vi.fn()} />);
-
-      await user.click(screen.getByRole('button', { name: /add condition/i }));
-      await user.click(screen.getByText(/stream name contains/i));
-
-      // Should show condition editor with field and operator dropdowns
+      // Should add a condition card with default Stream Name / Contains and value input
       await waitFor(() => {
         expect(screen.getByPlaceholderText(/enter text/i)).toBeInTheDocument();
       });
@@ -257,10 +244,10 @@ describe('RuleBuilder', () => {
       const onSave = vi.fn();
       render(<RuleBuilder onSave={onSave} onCancel={vi.fn()} />);
 
-      // Fill in name and add a condition
+      // Fill in name and add a condition with a value
       await user.type(screen.getByLabelText(/rule name/i), 'Test Rule');
       await user.click(screen.getByRole('button', { name: /add condition/i }));
-      await user.click(screen.getByText(/always/i));
+      await user.type(screen.getByPlaceholderText(/enter text/i), 'ESPN');
 
       // Try to save without actions
       await user.click(screen.getByRole('button', { name: /save/i }));
@@ -411,12 +398,8 @@ describe('RuleBuilder', () => {
       const user = userEvent.setup();
       render(<RuleBuilder onSave={vi.fn()} onCancel={vi.fn()} />);
 
-      // Add a condition that requires a value
+      // Add a condition (defaults to Stream Name Contains with empty value)
       await user.click(screen.getByRole('button', { name: /add condition/i }));
-      await waitFor(() => {
-        expect(screen.getByText(/stream conditions/i)).toBeInTheDocument();
-      });
-      await user.click(screen.getByText(/stream name contains/i));
 
       // Don't fill in the value and try to save
       await user.type(screen.getByLabelText(/rule name/i), 'Test Rule');
