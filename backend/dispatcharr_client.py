@@ -15,7 +15,14 @@ class DispatcharrClient:
         self.base_url = self.settings.url.rstrip("/")
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
-        self._client = httpx.AsyncClient(timeout=30.0)
+        self._client = httpx.AsyncClient(
+            timeout=30.0,
+            limits=httpx.Limits(
+                max_connections=20,
+                max_keepalive_connections=5,
+                keepalive_expiry=5.0,
+            ),
+        )
         # Lock to prevent multiple concurrent authentication attempts
         # This prevents race conditions when many requests arrive simultaneously
         self._auth_lock = asyncio.Lock()
