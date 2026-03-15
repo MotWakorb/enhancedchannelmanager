@@ -222,6 +222,7 @@ class ActionType(str, Enum):
     ASSIGN_TVG_ID = "assign_tvg_id"
     ASSIGN_EPG = "assign_epg"
     ASSIGN_PROFILE = "assign_profile"
+    ASSIGN_CHANNEL_PROFILE = "assign_channel_profile"
     SET_CHANNEL_NUMBER = "set_channel_number"
 
     # Variables
@@ -429,6 +430,14 @@ class Action:
             profile_id = self.params.get("profile_id")
             if profile_id is None or not isinstance(profile_id, int):
                 errors.append("assign_profile requires a 'profile_id' (integer)")
+
+        # Validate assign_channel_profile
+        elif action_type == ActionType.ASSIGN_CHANNEL_PROFILE:
+            channel_profile_ids = self.params.get("channel_profile_ids")
+            if not channel_profile_ids or not isinstance(channel_profile_ids, list):
+                errors.append("assign_channel_profile requires 'channel_profile_ids' (list of integers)")
+            elif not all(isinstance(pid, int) for pid in channel_profile_ids):
+                errors.append("assign_channel_profile 'channel_profile_ids' must all be integers")
 
         # Validate set_channel_number
         elif action_type == ActionType.SET_CHANNEL_NUMBER:

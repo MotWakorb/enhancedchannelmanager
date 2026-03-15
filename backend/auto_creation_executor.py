@@ -298,6 +298,8 @@ class ActionExecutor:
             result = await self._execute_assign_epg(action, stream_ctx, exec_ctx)
         elif action_type == ActionType.ASSIGN_PROFILE:
             result = await self._execute_assign_profile(action, stream_ctx, exec_ctx)
+        elif action_type == ActionType.ASSIGN_CHANNEL_PROFILE:
+            result = await self._execute_assign_channel_profile(action, stream_ctx, exec_ctx)
         elif action_type == ActionType.SET_CHANNEL_NUMBER:
             result = await self._execute_set_channel_number(action, stream_ctx, exec_ctx)
         elif action_type == ActionType.SET_VARIABLE:
@@ -1608,6 +1610,58 @@ class ActionExecutor:
                 success=False,
                 action_type=action.type,
                 description="Failed to assign profile",
+                error=str(e)
+            )
+
+    async def _execute_assign_channel_profile(self, action: Action, stream_ctx: StreamContext,
+                                               exec_ctx: ExecutionContext) -> ActionResult:
+        """Execute assign_channel_profile action."""
+        if not exec_ctx.current_channel_id:
+            return ActionResult(
+                success=False,
+                action_type=action.type,
+                description="No channel context for assign_channel_profile",
+                error="No channel to update"
+            )
+
+        channel_profile_ids = action.params.get("channel_profile_ids", [])
+        if not channel_profile_ids:
+            return ActionResult(
+                success=False,
+                action_type=action.type,
+                description="No channel_profile_ids specified",
+                error="Missing channel_profile_ids"
+            )
+
+        if exec_ctx.dry_run:
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description=f"Would assign {len(channel_profile_ids)} channel profile(s)",
+                entity_type="channel",
+                entity_id=exec_ctx.current_channel_id,
+                modified=True
+            )
+
+        try:
+            for profile_id in channel_profile_ids:
+                await self.client.update_profile_channel(
+                    profile_id, exec_ctx.current_channel_id, {"enabled": True}
+                )
+
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description=f"Assigned {len(channel_profile_ids)} channel profile(s) to channel",
+                entity_type="channel",
+                entity_id=exec_ctx.current_channel_id,
+                modified=True
+            )
+        except Exception as e:
+            return ActionResult(
+                success=False,
+                action_type=action.type,
+                description="Failed to assign channel profile(s)",
                 error=str(e)
             )
 
