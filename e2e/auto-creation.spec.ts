@@ -285,34 +285,47 @@ test.describe('Create Rule', () => {
         await nameInput.fill(testRuleName);
       }
 
-      // Add a simple condition (Always)
+      // Add a condition (defaults to Stream Name Contains) and fill value
       const addConditionBtn = appPage.locator(selectors.autoCreationAddConditionBtn);
       if (await addConditionBtn.isVisible()) {
         await addConditionBtn.click();
         await appPage.waitForTimeout(500);
 
-        // Select "Always" condition if dropdown exists
-        const alwaysOption = appPage.locator('text=Always, option:has-text("Always")').first();
-        if (await alwaysOption.isVisible().catch(() => false)) {
-          await alwaysOption.click();
+        // Fill in the condition value
+        const conditionValue = appPage.locator('input[placeholder="Enter text"]').first();
+        if (await conditionValue.isVisible().catch(() => false)) {
+          await conditionValue.fill('E2E Test');
+        }
+
+        // Change to Always via field dropdown if available
+        const fieldDropdown = appPage.locator('.condition-field-select, [role="combobox"]').first();
+        if (await fieldDropdown.isVisible().catch(() => false)) {
+          await fieldDropdown.click();
+          const alwaysOption = appPage.locator('text=Always').first();
+          if (await alwaysOption.isVisible().catch(() => false)) {
+            await alwaysOption.click();
+          }
         }
       }
 
-      // Close the condition type-picker dropdown (it overlays the Add Action button)
-      await appPage.keyboard.press('Escape');
       await appPage.waitForTimeout(300);
 
-      // Add a simple action (Skip)
+      // Add an action (defaults to blank) and select Skip
       const addActionBtn = appPage.locator(selectors.autoCreationAddActionBtn);
       if (await addActionBtn.isVisible()) {
         await addActionBtn.scrollIntoViewIfNeeded();
         await addActionBtn.click({ timeout: 10000 });
         await appPage.waitForTimeout(500);
 
-        // Select "Skip" action if dropdown exists
-        const skipOption = appPage.locator('text=Skip, option:has-text("Skip")').first();
-        if (await skipOption.isVisible().catch(() => false)) {
-          await skipOption.click();
+        // Click the action type combobox and select Skip
+        const actionTypeCombobox = appPage.locator('[role="combobox"][aria-label="Action type"]').first();
+        if (await actionTypeCombobox.isVisible().catch(() => false)) {
+          await actionTypeCombobox.click();
+          await appPage.waitForTimeout(300);
+          const skipOption = appPage.locator('[role="option"]:has-text("Skip")').first();
+          if (await skipOption.isVisible().catch(() => false)) {
+            await skipOption.click();
+          }
         }
       }
 
