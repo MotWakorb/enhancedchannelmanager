@@ -35,7 +35,7 @@ export function RuleBuilder({
   const [enabled, setEnabled] = useState(rule?.enabled ?? true);
   const [runOnRefresh, setRunOnRefresh] = useState(rule?.run_on_refresh ?? false);
   const [stopOnFirstMatch, setStopOnFirstMatch] = useState(rule?.stop_on_first_match ?? true);
-  const [sortField, setSortField] = useState(rule?.sort_field || '');
+  const [sortField, setSortField] = useState(rule?.sort_field ?? 'smart_sort');
   const [sortOrder, setSortOrder] = useState(rule?.sort_order || 'asc');
   const [probeOnSort, setProbeOnSort] = useState(rule?.probe_on_sort ?? false);
   const [sortRegex, setSortRegex] = useState(rule?.sort_regex || '');
@@ -342,7 +342,8 @@ export function RuleBuilder({
             <div className="sort-config-row">
               <CustomSelect
                 options={[
-                  { value: '', label: 'No sorting (default)' },
+                  { value: 'smart_sort', label: 'Smart Sort (default)' },
+                  { value: '', label: 'No sorting' },
                   { value: 'stream_name', label: 'Stream Name' },
                   { value: 'stream_name_natural', label: 'Stream Name (Natural)' },
                   { value: 'group_name', label: 'Group Name' },
@@ -355,7 +356,7 @@ export function RuleBuilder({
                 onChange={setSortField}
                 placeholder="No sorting"
               />
-              {sortField && (
+              {sortField && sortField !== 'smart_sort' && (
                 <CustomSelect
                   options={[
                     { value: 'asc', label: 'Ascending' },
