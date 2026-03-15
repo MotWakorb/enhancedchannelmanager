@@ -3,8 +3,8 @@
  */
 import { useState, useId, useEffect } from 'react';
 import type { Action, ActionType, IfExistsBehavior } from '../../types/autoCreation';
-import { getChannelGroups, getEPGSources, getStreamProfiles } from '../../services/api';
-import type { EPGSource, StreamProfile } from '../../types';
+import { getChannelGroups, getEPGSources, getStreamProfiles, getChannelProfiles } from '../../services/api';
+import type { EPGSource, StreamProfile, ChannelProfile } from '../../types';
 import { CustomSelect } from '../CustomSelect';
 import './ActionEditor.css';
 
@@ -68,6 +68,7 @@ const ACTION_TYPES: {
   hasVariableConfig?: boolean;
   hasPriority?: boolean;
   hasProfileId?: boolean;
+  hasChannelProfileId?: boolean;
 }[] = [
   // Creation actions
   { type: 'create_channel', label: 'Create Channel', description: 'Create a new channel for the stream', category: 'creation', hasNameTemplate: true, hasIfExists: true, hasChannelNumbering: true, hasNameTransform: true },
@@ -78,6 +79,7 @@ const ACTION_TYPES: {
   { type: 'assign_tvg_id', label: 'Assign TVG-ID', description: 'Set the TVG-ID for the channel', category: 'assignment', hasValue: true },
   { type: 'assign_epg', label: 'Assign EPG', description: 'Assign EPG data source', category: 'assignment', hasEpgId: true },
   { type: 'assign_profile', label: 'Assign Profile', description: 'Assign a stream profile', category: 'assignment', hasProfileId: true },
+  { type: 'assign_channel_profile', label: 'Set Channel Profile', description: 'Assign a channel profile', category: 'assignment', hasChannelProfileId: true },
   { type: 'set_channel_number', label: 'Set Channel Number', description: 'Set the channel number', category: 'assignment', hasValue: true },
   // Variables
   { type: 'set_variable', label: 'Set Variable', description: 'Define a reusable variable from stream data', category: 'variables', hasVariableConfig: true },
@@ -216,6 +218,8 @@ export function ActionEditor({
   const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>([]);
   const [epgSources, setEpgSources] = useState<EPGSource[]>([]);
   const [streamProfiles, setStreamProfiles] = useState<StreamProfile[]>([]);
+  const [channelProfiles, setChannelProfiles] = useState<ChannelProfile[]>([]);
+  const [channelProfileDropdownOpen, setChannelProfileDropdownOpen] = useState(false);
   const [channelNumberMode, setChannelNumberMode] = useState<'auto' | 'starting'>(
     parseStartingNumber(action.channel_number) !== null ? 'starting' : 'auto'
   );
@@ -248,11 +252,18 @@ export function ActionEditor({
     }
   }, [action.type]);
 
+  // Fetch channel profiles when assign_channel_profile action is selected
+  useEffect(() => {
+    if (action.type === 'assign_channel_profile') {
+      getChannelProfiles().then(setChannelProfiles).catch(() => setChannelProfiles([]));
+    }
+  }, [action.type]);
+
   const actionDef = ACTION_TYPES.find(a => a.type === action.type);
 
   // Check for dependency warnings
   const getDependencyWarning = (): string | null => {
-    if (['assign_logo', 'assign_tvg_id', 'assign_epg', 'assign_profile', 'set_channel_number'].includes(action.type)) {
+    if (['assign_logo', 'assign_tvg_id', 'assign_epg', 'assign_profile', 'assign_channel_profile', 'set_channel_number'].includes(action.type)) {
       const hasChannelCreation = previousActions.some(a =>
         a.type === 'create_channel' || a.type === 'merge_streams'
       );
@@ -409,7 +420,7 @@ export function ActionEditor({
               aria-expanded={typeSelectOpen}
               role="combobox"
             >
-              <span>{actionDef?.label || action.type}</span>
+              <span>{actionDef?.label || action.type || 'Select an action...'}</span>
               <span className="material-icons">expand_more</span>
             </button>
 
@@ -1095,6 +1106,64 @@ export function ActionEditor({
             {streamProfiles.length === 0 && (
               <span className="field-hint">No stream profiles found. Configure profiles in Dispatcharr first.</span>
             )}
+          </div>
+        )}
+
+        {/* Channel Profile Multi-Select for assign_channel_profile */}
+        {actionDef?.hasChannelProfileId && (
+          <div className="action-field">
+            <label>Channel Profiles</label>
+            <div className="multi-select-dropdown">
+              <button
+                type="button"
+                className="dropdown-trigger"
+                onClick={() => !readonly && setChannelProfileDropdownOpen(!channelProfileDropdownOpen)}
+                disabled={readonly}
+              >
+                <span className="dropdown-value">
+                  {(action.channel_profile_ids?.length ?? 0) === 0
+                    ? 'Select channel profiles...'
+                    : channelProfiles
+                        .filter(p => action.channel_profile_ids?.includes(p.id))
+                        .map(p => p.name)
+                        .join(', ') || `${action.channel_profile_ids?.length} selected`}
+                </span>
+                <span className="material-icons">{channelProfileDropdownOpen ? 'expand_less' : 'expand_more'}</span>
+              </button>
+              {channelProfileDropdownOpen && (
+                <div className="dropdown-menu">
+                  <div className="dropdown-actions">
+                    <button type="button" onClick={() => onChange({ ...action, channel_profile_ids: channelProfiles.map(p => p.id) })}>
+                      Select All
+                    </button>
+                    <button type="button" onClick={() => onChange({ ...action, channel_profile_ids: [] })}>
+                      Clear All
+                    </button>
+                  </div>
+                  <div className="dropdown-options">
+                    {channelProfiles.map(profile => (
+                      <label key={profile.id} className="dropdown-option">
+                        <input
+                          type="checkbox"
+                          checked={action.channel_profile_ids?.includes(profile.id) ?? false}
+                          onChange={() => {
+                            const current = action.channel_profile_ids ?? [];
+                            const updated = current.includes(profile.id)
+                              ? current.filter(id => id !== profile.id)
+                              : [...current, profile.id];
+                            onChange({ ...action, channel_profile_ids: updated });
+                          }}
+                        />
+                        <span>{profile.name}</span>
+                      </label>
+                    ))}
+                    {channelProfiles.length === 0 && (
+                      <span className="dropdown-empty">No channel profiles found. Configure profiles in Dispatcharr first.</span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
 

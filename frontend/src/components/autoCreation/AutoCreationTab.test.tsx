@@ -261,9 +261,10 @@ describe('AutoCreationTab', () => {
       await user.click(screen.getByRole('button', { name: /add condition/i }));
       await user.click(screen.getByText(/always/i));
 
-      // Add action
+      // Add action (adds blank action) and select Skip type
       await user.click(screen.getByRole('button', { name: /add action/i }));
-      await user.click(screen.getByRole('button', { name: /^skip$/i }));
+      await user.click(screen.getByRole('combobox', { name: /action type/i }));
+      await user.click(screen.getByRole('option', { name: /skip/i }));
 
       // Save
       await user.click(screen.getByRole('button', { name: /save/i }));

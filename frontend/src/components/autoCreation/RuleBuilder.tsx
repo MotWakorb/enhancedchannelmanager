@@ -49,7 +49,6 @@ export function RuleBuilder({
   const [isDirty, setIsDirty] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [showConditionSelector, setShowConditionSelector] = useState(false);
-  const [showActionSelector, setShowActionSelector] = useState(false);
 
   // Escape key closes the cancel confirm dialog (capture phase to intercept before parent ModalOverlay)
   useEffect(() => {
@@ -114,6 +113,8 @@ export function RuleBuilder({
 
     if (actions.length === 0) {
       newErrors.actions = 'At least one action is required';
+    } else if (actions.some(a => !a.type)) {
+      newErrors.actions = 'All actions must have a type selected';
     } else {
       // Validate individual action fields
       for (const [i, action] of actions.entries()) {
@@ -196,20 +197,9 @@ export function RuleBuilder({
     setConditions(conditions.filter((_, i) => i !== index));
   };
 
-  const handleAddAction = (type: ActionType) => {
-    const newAction: Action = { type };
-    if (type === 'create_channel' || type === 'create_group') {
-      newAction.if_exists = 'skip';
-    }
-    if (type === 'merge_streams') {
-      newAction.target = 'auto';
-    }
-    if (type === 'set_variable') {
-      newAction.variable_mode = 'regex_extract';
-      newAction.source_field = 'stream_name';
-    }
+  const handleAddAction = () => {
+    const newAction: Action = { type: '' as ActionType };
     setActions([...actions, newAction]);
-    setShowActionSelector(false);
   };
 
   const handleUpdateAction = (index: number, updated: Action) => {
@@ -508,20 +498,12 @@ export function RuleBuilder({
             <button
               type="button"
               className="add-item-btn"
-              onClick={() => setShowActionSelector(!showActionSelector)}
-              aria-expanded={showActionSelector}
+              onClick={handleAddAction}
               aria-label="Add action"
             >
               <span className="material-icons">add</span>
               Add Action
             </button>
-
-            {showActionSelector && (
-              <ActionTypeSelector
-                onSelect={handleAddAction}
-                onClose={() => setShowActionSelector(false)}
-              />
-            )}
           </div>
         </section>
       </div>
@@ -653,79 +635,3 @@ function ConditionTypeSelector({
   );
 }
 
-// Action Type Selector Component
-function ActionTypeSelector({
-  onSelect,
-  onClose,
-}: {
-  onSelect: (type: ActionType) => void;
-  onClose: () => void;
-}) {
-  const categories = [
-    {
-      label: 'Creation',
-      types: [
-        { type: 'create_channel' as ActionType, label: 'Create Channel' },
-        { type: 'create_group' as ActionType, label: 'Create Group' },
-        { type: 'merge_streams' as ActionType, label: 'Merge Streams' },
-      ],
-    },
-    {
-      label: 'Assignment',
-      types: [
-        { type: 'assign_logo' as ActionType, label: 'Assign Logo' },
-        { type: 'assign_tvg_id' as ActionType, label: 'Assign TVG-ID' },
-        { type: 'assign_epg' as ActionType, label: 'Assign EPG' },
-        { type: 'assign_profile' as ActionType, label: 'Assign Profile' },
-        { type: 'set_channel_number' as ActionType, label: 'Set Channel Number' },
-      ],
-    },
-    {
-      label: 'Variables',
-      types: [
-        { type: 'set_variable' as ActionType, label: 'Set Variable' },
-      ],
-    },
-    {
-      label: 'Management',
-      types: [
-        { type: 'remove_from_channel' as ActionType, label: 'Remove From Channel' },
-        { type: 'set_stream_priority' as ActionType, label: 'Set Stream Priority' },
-      ],
-    },
-    {
-      label: 'Control',
-      types: [
-        { type: 'skip' as ActionType, label: 'Skip' },
-        { type: 'stop_processing' as ActionType, label: 'Stop Processing' },
-        { type: 'log_match' as ActionType, label: 'Log Match' },
-      ],
-    },
-  ];
-
-  return (
-    <div className="type-selector-dropdown">
-      <div className="type-selector-header">
-        <span>Select Action Type</span>
-        <button type="button" className="close-btn" onClick={onClose}>
-          <span className="material-icons">close</span>
-        </button>
-      </div>
-      {categories.map(cat => (
-        <div key={cat.label} className="type-category">
-          <div className="type-category-label">{cat.label}</div>
-          {cat.types.map(t => (
-            <button
-              key={t.type}
-              type="button"
-              className="type-option"
-              onClick={() => onSelect(t.type)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      ))}
-    </div>
-  );
-}
