@@ -4016,7 +4016,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'auth-settings' && <AuthSettingsSection isAdmin={user?.is_admin ?? false} />}
         {activePage === 'user-management' && <UserManagementSection isAdmin={user?.is_admin ?? false} currentUserId={user?.id ?? 0} />}
         {activePage === 'tls-settings' && <TLSSettingsSection isAdmin={user?.is_admin ?? false} />}
-        {activePage === 'backup-restore' && <BackupRestoreSection isAdmin={user?.is_admin ?? false} />}
+        {activePage === 'backup-restore' && <BackupRestoreSection isAdmin={!user || user.is_admin} />}
       </div>
 
       <DeleteOrphanedGroupsModal
