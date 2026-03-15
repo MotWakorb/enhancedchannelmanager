@@ -2226,6 +2226,9 @@ def _sort_key(stream: StreamContext, sort_field: str, sort_regex: str | None = N
                 except (ValueError, TypeError):
                     return (0, 0, captured)
         return (-1, 0, "")
+    elif sort_field == "smart_sort":
+        # Sort by resolution (descending), then bitrate, then audio tracks
+        return (-(stream.resolution_height or 0), -(stream.bitrate or 0), -(stream.audio_tracks or 0))
     return stream.stream_name.lower()
 
 
