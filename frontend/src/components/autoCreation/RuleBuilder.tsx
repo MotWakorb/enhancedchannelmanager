@@ -35,10 +35,12 @@ export function RuleBuilder({
   const [enabled, setEnabled] = useState(rule?.enabled ?? true);
   const [runOnRefresh, setRunOnRefresh] = useState(rule?.run_on_refresh ?? false);
   const [stopOnFirstMatch, setStopOnFirstMatch] = useState(rule?.stop_on_first_match ?? true);
-  const [sortField, setSortField] = useState(rule?.sort_field ?? 'smart_sort');
+  const [sortField, setSortField] = useState(rule?.sort_field ?? '');
   const [sortOrder, setSortOrder] = useState(rule?.sort_order || 'asc');
   const [probeOnSort, setProbeOnSort] = useState(rule?.probe_on_sort ?? false);
   const [sortRegex, setSortRegex] = useState(rule?.sort_regex || '');
+  const [streamSortField, setStreamSortField] = useState(rule?.stream_sort_field ?? 'smart_sort');
+  const [streamSortOrder, setStreamSortOrder] = useState(rule?.stream_sort_order || 'asc');
   const [normalizeNames, setNormalizeNames] = useState(rule?.normalize_names ?? false);
   const [skipStruckStreams, setSkipStruckStreams] = useState(rule?.skip_struck_streams ?? false);
   const [orphanAction, setOrphanAction] = useState(rule?.orphan_action || 'delete');
@@ -166,6 +168,8 @@ export function RuleBuilder({
         sort_order: sortOrder,
         probe_on_sort: probeOnSort,
         sort_regex: sortRegex || '',
+        stream_sort_field: streamSortField || '',
+        stream_sort_order: streamSortOrder,
         normalize_names: normalizeNames,
         skip_struck_streams: skipStruckStreams,
         orphan_action: orphanAction,
@@ -337,13 +341,12 @@ export function RuleBuilder({
           </div>
 
           <div className="form-field">
-            <label>Sort Matched Streams</label>
-            <span className="field-hint">Controls the order streams are processed (affects channel numbering)</span>
+            <label>Channel Sort</label>
+            <span className="field-hint">Controls the order channels are numbered (renumbers on every run)</span>
             <div className="sort-config-row">
               <CustomSelect
                 options={[
-                  { value: 'smart_sort', label: 'Smart Sort (default)' },
-                  { value: '', label: 'No sorting' },
+                  { value: '', label: 'No sorting (keep manual numbers)' },
                   { value: 'stream_name', label: 'Stream Name' },
                   { value: 'stream_name_natural', label: 'Stream Name (Natural)' },
                   { value: 'group_name', label: 'Group Name' },
@@ -356,7 +359,7 @@ export function RuleBuilder({
                 onChange={setSortField}
                 placeholder="No sorting"
               />
-              {sortField && sortField !== 'smart_sort' && (
+              {sortField && (
                 <CustomSelect
                   options={[
                     { value: 'asc', label: 'Ascending' },
@@ -385,6 +388,53 @@ export function RuleBuilder({
               </div>
             )}
             {sortField === 'quality' && (
+              <div className="checkbox-group">
+                <label className="checkbox-option">
+                  <input
+                    type="checkbox"
+                    checked={probeOnSort}
+                    onChange={e => setProbeOnSort(e.target.checked)}
+                    disabled={isLoading}
+                    aria-label="Probe unprobed streams before sorting"
+                  />
+                  <span>Probe unprobed streams before sorting</span>
+                </label>
+                <p className="form-hint">
+                  Gathers resolution data for streams that haven't been probed. Adds time to execution.
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div className="form-field">
+            <label>Stream Sort</label>
+            <span className="field-hint">Reorders streams within each channel (e.g. best quality first)</span>
+            <div className="sort-config-row">
+              <CustomSelect
+                options={[
+                  { value: 'smart_sort', label: 'Smart Sort (default)' },
+                  { value: '', label: 'No sorting' },
+                  { value: 'quality', label: 'Quality (Resolution)' },
+                  { value: 'stream_name', label: 'Stream Name' },
+                  { value: 'stream_name_natural', label: 'Stream Name (Natural)' },
+                  { value: 'provider_order', label: 'Provider Order (M3U)' },
+                ]}
+                value={streamSortField}
+                onChange={setStreamSortField}
+                placeholder="No sorting"
+              />
+              {streamSortField && streamSortField !== 'smart_sort' && (
+                <CustomSelect
+                  options={[
+                    { value: 'asc', label: 'Ascending' },
+                    { value: 'desc', label: 'Descending' },
+                  ]}
+                  value={streamSortOrder}
+                  onChange={setStreamSortOrder}
+                />
+              )}
+            </div>
+            {streamSortField === 'quality' && (
               <div className="checkbox-group">
                 <label className="checkbox-option">
                   <input

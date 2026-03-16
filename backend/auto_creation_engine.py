@@ -564,7 +564,8 @@ class AutoCreationEngine:
             rule = rule_map.get(winning_rule.id)
             if not rule:
                 continue
-            if rule.sort_field != "quality" or not getattr(rule, 'probe_on_sort', False):
+            needs_quality = rule.sort_field == "quality" or getattr(rule, 'stream_sort_field', None) == "quality"
+            if not needs_quality or not getattr(rule, 'probe_on_sort', False):
                 continue
             # Only probe streams without existing stats
             if stream.stream_id in self._stream_stats_cache:
@@ -662,7 +663,7 @@ class AutoCreationEngine:
             stream_m3u_map = {}
 
         for rule in rules:
-            if not rule.sort_field:
+            if not rule.stream_sort_field:
                 continue
 
             # Deduplicate — rule_channel_order may list the same channel multiple times
@@ -719,7 +720,7 @@ class AutoCreationEngine:
                         "rule_id": rule.id,
                         "rule_name": rule.name,
                         "action": f"Would reorder {len(sorted_streams)} streams in '{channel_name}' "
-                                  f"by smart sort ({rule.sort_field})",
+                                  f"by smart sort ({rule.stream_sort_field})",
                         "would_create": False,
                         "would_modify": True
                     })
@@ -736,7 +737,7 @@ class AutoCreationEngine:
                             "actions_executed": [{
                                 "type": "reorder_streams",
                                 "description": f"Reordered {len(sorted_streams)} streams in '{channel_name}' "
-                                              f"by smart sort ({rule.sort_field})",
+                                              f"by smart sort ({rule.stream_sort_field})",
                                 "success": True,
                                 "entity_id": channel_id,
                                 "error": None

@@ -43,6 +43,8 @@ class CreateAutoCreationRuleRequest(BaseModel):
     sort_order: str = "asc"
     probe_on_sort: bool = False
     sort_regex: Optional[str] = None
+    stream_sort_field: Optional[str] = None
+    stream_sort_order: str = "asc"
     normalize_names: bool = False
     skip_struck_streams: bool = False
     orphan_action: str = "delete"
@@ -64,6 +66,8 @@ class UpdateAutoCreationRuleRequest(BaseModel):
     sort_order: Optional[str] = None
     probe_on_sort: Optional[bool] = None
     sort_regex: Optional[str] = None
+    stream_sort_field: Optional[str] = None
+    stream_sort_order: Optional[str] = None
     normalize_names: Optional[bool] = None
     skip_struck_streams: Optional[bool] = None
     orphan_action: Optional[str] = None
@@ -169,6 +173,8 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
                 sort_order=request.sort_order,
                 probe_on_sort=request.probe_on_sort,
                 sort_regex=request.sort_regex,
+                stream_sort_field=request.stream_sort_field,
+                stream_sort_order=request.stream_sort_order,
                 normalize_names=request.normalize_names,
                 skip_struck_streams=request.skip_struck_streams,
                 orphan_action=request.orphan_action
@@ -237,6 +243,10 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
                 rule.probe_on_sort = request.probe_on_sort
             if request.sort_regex is not None:
                 rule.sort_regex = request.sort_regex or None
+            if request.stream_sort_field is not None:
+                rule.stream_sort_field = request.stream_sort_field or None
+            if request.stream_sort_order is not None:
+                rule.stream_sort_order = request.stream_sort_order
             if request.normalize_names is not None:
                 rule.normalize_names = request.normalize_names
             if request.skip_struck_streams is not None:
@@ -404,6 +414,8 @@ async def duplicate_auto_creation_rule(rule_id: int):
                 stop_on_first_match=rule.stop_on_first_match,
                 sort_field=rule.sort_field,
                 sort_order=rule.sort_order,
+                stream_sort_field=rule.stream_sort_field,
+                stream_sort_order=rule.stream_sort_order,
                 normalize_names=rule.normalize_names,
                 skip_struck_streams=rule.skip_struck_streams
             )
@@ -655,6 +667,8 @@ async def export_auto_creation_rules_yaml():
                     "sort_field": rule.sort_field,
                     "sort_order": rule.sort_order or "asc",
                     "sort_regex": rule.sort_regex,
+                    "stream_sort_field": rule.stream_sort_field,
+                    "stream_sort_order": rule.stream_sort_order or "asc",
                     "normalize_names": rule.normalize_names or False,
                     "skip_struck_streams": rule.skip_struck_streams or False,
                     "probe_on_sort": rule.probe_on_sort or False,
@@ -817,6 +831,8 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         existing.sort_field = rule_data.get("sort_field")
                         existing.sort_order = rule_data.get("sort_order", "asc")
                         existing.sort_regex = rule_data.get("sort_regex")
+                        existing.stream_sort_field = rule_data.get("stream_sort_field")
+                        existing.stream_sort_order = rule_data.get("stream_sort_order", "asc")
                         existing.normalize_names = rule_data.get("normalize_names", False)
                         existing.skip_struck_streams = rule_data.get("skip_struck_streams", False)
                         existing.probe_on_sort = rule_data.get("probe_on_sort", False)
@@ -846,6 +862,8 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         sort_field=rule_data.get("sort_field"),
                         sort_order=rule_data.get("sort_order", "asc"),
                         sort_regex=rule_data.get("sort_regex"),
+                        stream_sort_field=rule_data.get("stream_sort_field"),
+                        stream_sort_order=rule_data.get("stream_sort_order", "asc"),
                         normalize_names=rule_data.get("normalize_names", False),
                         skip_struck_streams=rule_data.get("skip_struck_streams", False),
                         probe_on_sort=rule_data.get("probe_on_sort", False),
