@@ -489,6 +489,40 @@ async def update_settings(request: SettingsRequest):
             logger.info("[SETTINGS] Updated prober black screen settings: enabled=%s, duration=%ss",
                         new_settings.black_screen_detection_enabled, new_settings.black_screen_sample_duration)
 
+    # Update remaining prober settings without requiring restart
+    prober = get_prober()
+    if prober:
+        changed = []
+        if new_settings.auto_reorder_after_probe != current_settings.auto_reorder_after_probe:
+            prober.auto_reorder_after_probe = new_settings.auto_reorder_after_probe
+            changed.append(f"auto_reorder_after_probe={new_settings.auto_reorder_after_probe}")
+        if new_settings.stream_probe_timeout != current_settings.stream_probe_timeout:
+            prober.probe_timeout = new_settings.stream_probe_timeout
+            changed.append(f"probe_timeout={new_settings.stream_probe_timeout}")
+        if new_settings.bitrate_sample_duration != current_settings.bitrate_sample_duration:
+            prober.bitrate_sample_duration = new_settings.bitrate_sample_duration
+            changed.append(f"bitrate_sample_duration={new_settings.bitrate_sample_duration}")
+        if new_settings.skip_recently_probed_hours != current_settings.skip_recently_probed_hours:
+            prober.skip_recently_probed_hours = new_settings.skip_recently_probed_hours
+            changed.append(f"skip_recently_probed_hours={new_settings.skip_recently_probed_hours}")
+        if new_settings.refresh_m3us_before_probe != current_settings.refresh_m3us_before_probe:
+            prober.refresh_m3us_before_probe = new_settings.refresh_m3us_before_probe
+            changed.append(f"refresh_m3us_before_probe={new_settings.refresh_m3us_before_probe}")
+        if new_settings.probe_retry_count != current_settings.probe_retry_count:
+            prober.probe_retry_count = max(0, min(5, new_settings.probe_retry_count))
+            changed.append(f"probe_retry_count={prober.probe_retry_count}")
+        if new_settings.probe_retry_delay != current_settings.probe_retry_delay:
+            prober.probe_retry_delay = max(1, min(30, new_settings.probe_retry_delay))
+            changed.append(f"probe_retry_delay={prober.probe_retry_delay}")
+        if new_settings.deprioritize_failed_streams != current_settings.deprioritize_failed_streams:
+            prober.deprioritize_failed_streams = new_settings.deprioritize_failed_streams
+            changed.append(f"deprioritize_failed_streams={new_settings.deprioritize_failed_streams}")
+        if new_settings.stream_fetch_page_limit != current_settings.stream_fetch_page_limit:
+            prober.stream_fetch_page_limit = new_settings.stream_fetch_page_limit
+            changed.append(f"stream_fetch_page_limit={new_settings.stream_fetch_page_limit}")
+        if changed:
+            logger.info("[SETTINGS] Updated prober settings: %s", ", ".join(changed))
+
     logger.info("[SETTINGS] Settings saved successfully - configured: %s, auth_changed: %s, server_changed: %s", new_settings.is_configured(), auth_changed, server_changed)
     return {"status": "saved", "configured": new_settings.is_configured(), "server_changed": server_changed}
 

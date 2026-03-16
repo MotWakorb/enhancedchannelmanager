@@ -189,6 +189,19 @@ TASK_PARAMETER_SCHEMAS = {
         "description": "Remove struck-out streams from channels",
         "parameters": [],
     },
+    "auto_creation": {
+        "description": "Auto-create channels from streams based on rules",
+        "parameters": [
+            {
+                "name": "rule_ids",
+                "type": "number_array",
+                "label": "Rules",
+                "description": "Which auto-creation rules to run (empty = all enabled rules)",
+                "default": [],
+                "source": "auto_creation_rules",
+            },
+        ],
+    },
     "black_screen_scan": {
         "description": "Scan probed streams for black screens",
         "parameters": [
