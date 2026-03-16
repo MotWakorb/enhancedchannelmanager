@@ -804,25 +804,26 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setPassword('');
       logger.info('Settings saved successfully');
       // Check if any settings that require a restart have changed
+      // Only poll interval and timezone changes require a full service restart.
+      // Probe settings (auto_reorder, refresh_m3us, timeout, etc.) are pushed
+      // live to the prober on save — no restart needed.
       const pollOrTimezoneChanged = statsPollInterval !== originalPollInterval || userTimezone !== originalTimezone;
-      const probeSettingsChanged = autoReorderAfterProbe !== originalAutoReorder ||
-                                   refreshM3usBeforeProbe !== originalRefreshM3usBeforeProbe;
+
+      // Update originals for probe settings that are now applied live
+      setOriginalAutoReorder(autoReorderAfterProbe);
+      setOriginalRefreshM3usBeforeProbe(refreshM3usBeforeProbe);
 
       // Debug logging for restart detection
       logger.info(`[RESTART-CHECK] Poll interval: ${statsPollInterval} vs original ${originalPollInterval}`);
       logger.info(`[RESTART-CHECK] Timezone: "${userTimezone}" vs original "${originalTimezone}"`);
-      logger.info(`[RESTART-CHECK] Auto-reorder: ${autoReorderAfterProbe} vs original ${originalAutoReorder}`);
-      logger.info(`[RESTART-CHECK] Refresh M3Us: ${refreshM3usBeforeProbe} vs original ${originalRefreshM3usBeforeProbe}`);
-      logger.info(`[RESTART-CHECK] pollOrTimezoneChanged=${pollOrTimezoneChanged}, probeSettingsChanged=${probeSettingsChanged}`);
+      logger.info(`[RESTART-CHECK] pollOrTimezoneChanged=${pollOrTimezoneChanged}`);
 
-      if (pollOrTimezoneChanged || probeSettingsChanged) {
+      if (pollOrTimezoneChanged) {
         logger.info('[RESTART-CHECK] Setting needsRestart=true');
         setNeedsRestart(true);
 
         // Show toast notification with restart action
-        const message = pollOrTimezoneChanged
-          ? 'Stats or timezone settings changed. Restart services to apply.'
-          : 'Probe settings changed. Restart services to apply.';
+        const message = 'Stats or timezone settings changed. Restart services to apply.';
 
         // Dismiss any previous restart toast before showing new one
         if (restartToastIdRef.current) {
