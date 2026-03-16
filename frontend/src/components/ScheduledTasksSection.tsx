@@ -80,7 +80,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
       border: '1px solid var(--border-color)',
       borderRadius: '8px',
       marginBottom: '1rem',
-      overflow: 'hidden',
+      overflow: 'visible',
     }}>
       {/* Header */}
       <div style={{
@@ -202,7 +202,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
       {/* Status info */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+        gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
         gap: '1rem',
         padding: '1rem',
         backgroundColor: 'var(--bg-tertiary)',
