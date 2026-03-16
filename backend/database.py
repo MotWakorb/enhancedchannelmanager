@@ -211,6 +211,9 @@ def _run_migrations(engine) -> None:
             # Add is_black_screen column to stream_stats (v0.15.0 - Black screen detection)
             _add_stream_stats_is_black_screen_column(conn)
 
+            # Add stream_sort_field and stream_sort_order columns to auto_creation_rules (v0.15.0)
+            _add_auto_creation_rules_stream_sort_columns(conn)
+
             logger.debug("[DATABASE] All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception("[DATABASE] Migration failed: %s", e)
@@ -1431,6 +1434,29 @@ def _add_auto_creation_rules_sort_regex_column(conn) -> None:
         conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN sort_regex TEXT"))
         conn.commit()
         logger.info("[DATABASE] Migration complete: added sort_regex column")
+
+
+def _add_auto_creation_rules_stream_sort_columns(conn) -> None:
+    """Add stream_sort_field and stream_sort_order columns to auto_creation_rules table."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_rules'"
+    ))
+    if not result.fetchone():
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
+    if "stream_sort_field" not in columns:
+        logger.info("[DATABASE] Adding stream_sort_field column to auto_creation_rules")
+        conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN stream_sort_field VARCHAR(50)"))
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: added stream_sort_field column")
+    if "stream_sort_order" not in columns:
+        logger.info("[DATABASE] Adding stream_sort_order column to auto_creation_rules")
+        conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN stream_sort_order VARCHAR(4) DEFAULT 'asc'"))
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: added stream_sort_order column")
 
 
 def _add_stream_stats_consecutive_failures_column(conn) -> None:
