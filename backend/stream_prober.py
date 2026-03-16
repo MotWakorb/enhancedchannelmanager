@@ -2594,3 +2594,68 @@ def set_prober(prober: StreamProber):
     global _prober
     _prober = prober
     logger.info("[STREAM-PROBE] Stream prober instance set: %s", prober is not None)
+
+
+def ensure_prober() -> Optional[StreamProber]:
+    """Get the global prober, creating one if it doesn't exist and settings are configured.
+
+    This provides self-healing if the prober was never created at startup
+    (e.g., settings not yet configured) or was lost during a failed restart.
+    """
+    global _prober
+    if _prober is not None:
+        return _prober
+
+    try:
+        from config import get_settings
+        from dispatcharr_client import get_client
+
+        settings = get_settings()
+        if not settings.is_configured():
+            logger.debug("[STREAM-PROBE] Cannot create prober - settings not configured")
+            return None
+
+        logger.info("[STREAM-PROBE] Prober not found, creating new instance...")
+        prober = StreamProber(
+            get_client(),
+            probe_timeout=settings.stream_probe_timeout,
+            user_timezone=settings.user_timezone,
+            bitrate_sample_duration=settings.bitrate_sample_duration,
+            parallel_probing_enabled=settings.parallel_probing_enabled,
+            max_concurrent_probes=settings.max_concurrent_probes,
+            profile_distribution_strategy=settings.profile_distribution_strategy,
+            skip_recently_probed_hours=settings.skip_recently_probed_hours,
+            refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
+            auto_reorder_after_probe=settings.auto_reorder_after_probe,
+            probe_retry_count=settings.probe_retry_count,
+            probe_retry_delay=settings.probe_retry_delay,
+            deprioritize_failed_streams=settings.deprioritize_failed_streams,
+            black_screen_detection_enabled=settings.black_screen_detection_enabled,
+            black_screen_sample_duration=settings.black_screen_sample_duration,
+            stream_sort_priority=settings.stream_sort_priority,
+            stream_sort_enabled=settings.stream_sort_enabled,
+            stream_fetch_page_limit=settings.stream_fetch_page_limit,
+            m3u_account_priorities=settings.m3u_account_priorities,
+        )
+        _prober = prober
+        logger.info("[STREAM-PROBE] Auto-created prober instance")
+
+        # Wire up notification callbacks if available
+        try:
+            from services.notification_service import (
+                create_notification_internal,
+                update_notification_internal,
+                delete_notifications_by_source_internal,
+            )
+            prober.set_notification_callbacks(
+                create_callback=create_notification_internal,
+                update_callback=update_notification_internal,
+                delete_by_source_callback=delete_notifications_by_source_internal,
+            )
+        except Exception as e:
+            logger.warning("[STREAM-PROBE] Could not set notification callbacks: %s", e)
+
+        return _prober
+    except Exception as e:
+        logger.error("[STREAM-PROBE] Failed to auto-create prober: %s", e)
+        return None
