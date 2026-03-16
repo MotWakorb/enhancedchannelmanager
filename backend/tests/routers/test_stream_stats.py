@@ -268,7 +268,7 @@ class TestProbeBulkStreams:
         ]
         mock_prober.probe_stream.return_value = {"stream_id": 10, "status": "success"}
 
-        with patch("routers.stream_stats.get_prober", return_value=mock_prober):
+        with patch("routers.stream_stats.ensure_prober", return_value=mock_prober):
             response = await async_client.post(
                 "/api/stream-stats/probe/bulk",
                 json={"stream_ids": [10]},
@@ -282,7 +282,7 @@ class TestProbeBulkStreams:
     @pytest.mark.asyncio
     async def test_returns_503_when_prober_unavailable(self, async_client):
         """Returns 503 when prober is not available."""
-        with patch("routers.stream_stats.get_prober", return_value=None):
+        with patch("routers.stream_stats.ensure_prober", return_value=None):
             response = await async_client.post(
                 "/api/stream-stats/probe/bulk",
                 json={"stream_ids": [10]},
@@ -300,7 +300,7 @@ class TestProbeAllStreams:
         mock_prober = MagicMock()
         mock_prober._probing_in_progress = False
 
-        with patch("routers.stream_stats.get_prober", return_value=mock_prober), \
+        with patch("routers.stream_stats.ensure_prober", return_value=mock_prober), \
              patch("asyncio.create_task"):
             response = await async_client.post("/api/stream-stats/probe/all")
 
@@ -313,7 +313,7 @@ class TestProbeAllStreams:
         mock_prober = MagicMock()
         mock_prober._probing_in_progress = True
 
-        with patch("routers.stream_stats.get_prober", return_value=mock_prober), \
+        with patch("routers.stream_stats.ensure_prober", return_value=mock_prober), \
              patch("asyncio.create_task"):
             response = await async_client.post("/api/stream-stats/probe/all")
 
@@ -323,7 +323,7 @@ class TestProbeAllStreams:
     @pytest.mark.asyncio
     async def test_returns_503_when_prober_unavailable(self, async_client):
         """Returns 503 when prober is not available."""
-        with patch("routers.stream_stats.get_prober", return_value=None):
+        with patch("routers.stream_stats.ensure_prober", return_value=None):
             response = await async_client.post("/api/stream-stats/probe/all")
 
         assert response.status_code == 503
@@ -340,7 +340,7 @@ class TestGetProbeProgress:
             "in_progress": True, "total": 100, "completed": 50,
         }
 
-        with patch("routers.stream_stats.get_prober", return_value=mock_prober):
+        with patch("routers.stream_stats.ensure_prober", return_value=mock_prober):
             response = await async_client.get("/api/stream-stats/probe/progress")
 
         assert response.status_code == 200
@@ -349,7 +349,7 @@ class TestGetProbeProgress:
     @pytest.mark.asyncio
     async def test_returns_503_when_prober_unavailable(self, async_client):
         """Returns 503 when prober is not available."""
-        with patch("routers.stream_stats.get_prober", return_value=None):
+        with patch("routers.stream_stats.ensure_prober", return_value=None):
             response = await async_client.get("/api/stream-stats/probe/progress")
 
         assert response.status_code == 503
@@ -364,7 +364,7 @@ class TestGetProbeResults:
         mock_prober = MagicMock()
         mock_prober.get_probe_results.return_value = {"results": [], "summary": {}}
 
-        with patch("routers.stream_stats.get_prober", return_value=mock_prober):
+        with patch("routers.stream_stats.ensure_prober", return_value=mock_prober):
             response = await async_client.get("/api/stream-stats/probe/results")
 
         assert response.status_code == 200
@@ -381,7 +381,7 @@ class TestGetProbeHistory:
             {"run_id": 1, "started_at": "2024-01-01T00:00:00Z"},
         ]
 
-        with patch("routers.stream_stats.get_prober", return_value=mock_prober):
+        with patch("routers.stream_stats.ensure_prober", return_value=mock_prober):
             response = await async_client.get("/api/stream-stats/probe/history")
 
         assert response.status_code == 200
@@ -396,7 +396,7 @@ class TestCancelProbe:
         mock_prober = MagicMock()
         mock_prober.cancel_probe.return_value = {"status": "cancelled"}
 
-        with patch("routers.stream_stats.get_prober", return_value=mock_prober):
+        with patch("routers.stream_stats.ensure_prober", return_value=mock_prober):
             response = await async_client.post("/api/stream-stats/probe/cancel")
 
         assert response.status_code == 200
@@ -412,7 +412,7 @@ class TestResetProbeState:
         mock_prober = MagicMock()
         mock_prober.force_reset_probe_state.return_value = {"status": "reset"}
 
-        with patch("routers.stream_stats.get_prober", return_value=mock_prober):
+        with patch("routers.stream_stats.ensure_prober", return_value=mock_prober):
             response = await async_client.post("/api/stream-stats/probe/reset")
 
         assert response.status_code == 200
@@ -536,7 +536,7 @@ class TestProbeSingleStream:
             "stream_id": 42, "status": "success",
         }
 
-        with patch("routers.stream_stats.get_prober", return_value=mock_prober):
+        with patch("routers.stream_stats.ensure_prober", return_value=mock_prober):
             response = await async_client.post("/api/stream-stats/probe/42")
 
         assert response.status_code == 200
@@ -548,7 +548,7 @@ class TestProbeSingleStream:
         mock_prober = AsyncMock()
         mock_prober._fetch_all_streams.return_value = []
 
-        with patch("routers.stream_stats.get_prober", return_value=mock_prober):
+        with patch("routers.stream_stats.ensure_prober", return_value=mock_prober):
             response = await async_client.post("/api/stream-stats/probe/99999")
 
         assert response.status_code == 404
@@ -556,7 +556,7 @@ class TestProbeSingleStream:
     @pytest.mark.asyncio
     async def test_returns_503_when_prober_unavailable(self, async_client):
         """Returns 503 when prober is not available."""
-        with patch("routers.stream_stats.get_prober", return_value=None):
+        with patch("routers.stream_stats.ensure_prober", return_value=None):
             response = await async_client.post("/api/stream-stats/probe/42")
 
         assert response.status_code == 503
