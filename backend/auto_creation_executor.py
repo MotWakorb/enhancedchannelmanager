@@ -1151,9 +1151,20 @@ class ActionExecutor:
 
         try:
             channel = self._channel_by_id.get(exec_ctx.current_channel_id, {})
-            previous_state = {"logo_url": channel.get("logo_url")}
+            channel_name = channel.get("name", "")
+            previous_state = {"logo_id": channel.get("logo_id"), "logo_url": channel.get("logo_url")}
 
-            await self.client.update_channel(exec_ctx.current_channel_id, {"logo_url": logo_url})
+            # Resolve logo URL to a Dispatcharr logo_id (same as channel creation)
+            logo_id = await self._resolve_logo_id(logo_url, channel_name)
+            if not logo_id:
+                return ActionResult(
+                    success=True,
+                    action_type=action.type,
+                    description=f"Could not resolve logo URL to logo_id: {logo_url[:60]}",
+                    skipped=True
+                )
+
+            await self.client.update_channel(exec_ctx.current_channel_id, {"logo_id": logo_id})
 
             return ActionResult(
                 success=True,
