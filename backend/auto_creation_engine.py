@@ -300,6 +300,9 @@ class AutoCreationEngine:
             # get_channel_groups() returns a flat list
             self._existing_groups = await self.client.get_channel_groups() or []
             logger.debug("[AUTO-CREATE-ENGINE] Loaded %s channels, %s groups", len(self._existing_channels), len(self._existing_groups))
+            if self._existing_channels:
+                channel_names = [c.get("name", "<no name>") for c in self._existing_channels]
+                logger.debug("[AUTO-CREATE-ENGINE] Existing channel names: %s", channel_names)
         except Exception as e:
             logger.exception("[AUTO-CREATE-ENGINE] Failed to load existing data: %s", e)
             self._existing_channels = []
@@ -1809,6 +1812,24 @@ class AutoCreationEngine:
                     continue
 
                 orphan_ids = previous_ids - current_ids
+
+                # Filter out stale orphans: IDs that no longer exist in
+                # Dispatcharr (already deleted externally or via re-import).
+                # Only keep orphans that actually still exist as channels —
+                # there's no point trying to delete something that's already gone,
+                # and it prevents delete/re-import cycles from triggering
+                # mass orphan cleanup and renumbering.
+                if orphan_ids:
+                    existing_channel_ids = set(executor._channel_by_id.keys())
+                    stale_ids = orphan_ids - existing_channel_ids
+                    if stale_ids:
+                        logger.info(
+                            "[AUTO-CREATE-ENGINE] Rule '%s': %s orphan ID(s) no "
+                            "longer exist in Dispatcharr (already deleted/re-imported), skipping",
+                            rule.name, len(stale_ids)
+                        )
+                        orphan_ids -= stale_ids
+
                 logger.debug(
                     "[AUTO-CREATE-ENGINE] Rule '%s': previous=%s "
                     "current=%s orphans=%s orphan_ids=%s",

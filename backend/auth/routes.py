@@ -41,6 +41,21 @@ from .dependencies import (
 logger = logging.getLogger(__name__)
 
 
+def _cleanup_expired_sessions(session: Session, user_id: int) -> int:
+    """Delete expired sessions for a specific user. Returns count deleted."""
+    expired = session.query(UserSession).filter(
+        UserSession.user_id == user_id,
+        UserSession.expires_at < datetime.utcnow(),
+    ).all()
+    count = len(expired)
+    for s in expired:
+        session.delete(s)
+    if count:
+        session.commit()
+        logger.info("[AUTH] Cleaned up %d expired session(s) for user_id=%s", count, user_id)
+    return count
+
+
 def send_password_reset_email(to_email: str, reset_token: str, base_url: str) -> bool:
     """
     Send a password reset email using the shared SMTP settings.
@@ -524,6 +539,9 @@ async def login(
     user.last_login_at = datetime.utcnow()
     session.commit()
 
+    # Clean up expired sessions for this user
+    _cleanup_expired_sessions(session, user.id)
+
     # Set cookies
     _set_auth_cookies(response, access_token, refresh_token)
 
@@ -653,6 +671,9 @@ async def refresh_tokens(
         settings = get_auth_settings()
         user_session.expires_at = datetime.utcnow() + timedelta(days=settings.jwt.refresh_token_expire_days)
         session.commit()
+
+        # Clean up expired sessions for this user
+        _cleanup_expired_sessions(session, int(user_id))
 
         # Set new cookies
         _set_auth_cookies(response, new_access_token, new_refresh_token)

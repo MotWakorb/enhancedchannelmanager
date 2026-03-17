@@ -3,8 +3,10 @@ Auto-creation router — auto-creation pipeline CRUD, execution, import/export, 
 
 Extracted from main.py (Phase 3 of v0.13.0 backend refactor).
 """
+import io
 import json
 import logging
+import tarfile
 import time
 from datetime import datetime
 from typing import List, Optional
@@ -13,6 +15,7 @@ import journal
 from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
+from starlette.responses import StreamingResponse
 
 from database import get_session
 from dispatcharr_client import get_client
@@ -1091,3 +1094,189 @@ async def get_auto_creation_template_variables():
             {"name": "{normalized_name}", "description": "Name after normalization rules"}
         ]
     }
+
+
+# =============================================================================
+# Debug Bundle
+# =============================================================================
+
+
+def _add_tar_entry(tf: tarfile.TarFile, name: str, data: str):
+    """Add a text file to a tar archive."""
+    encoded = data.encode("utf-8")
+    info = tarfile.TarInfo(name=name)
+    info.size = len(encoded)
+    info.mtime = time.time()
+    tf.addfile(info, io.BytesIO(encoded))
+
+
+@router.get("/debug-bundle")
+async def generate_debug_bundle():
+    """Generate a diagnostic tar.gz bundle for troubleshooting auto-creation.
+
+    Contains obfuscated channel data, rules, and logs safe for sharing.
+    """
+    logger.info("[AUTO-CREATE] Generating debug bundle")
+    start = time.time()
+    client = get_client()
+
+    from csv_handler import generate_csv
+    from log_utils import get_recent_logs
+    from models import AutoCreationRule
+    from obfuscate import obfuscate_text, obfuscate_url
+    from routers.backup import APP_VERSION
+
+    try:
+        # -- 1. Fetch channels and groups from Dispatcharr ----------------
+        all_channels = []
+        page = 1
+        while True:
+            result = await client.get_channels(page=page, page_size=100)
+            channels = result.get("results", [])
+            all_channels.extend(channels)
+            if not result.get("next"):
+                break
+            page += 1
+
+        groups = await client.get_channel_groups() or []
+        group_lookup = {g.get("id"): g.get("name", "") for g in groups}
+
+        # -- 2. channels.json — minimal channel list ----------------------
+        channels_json_data = [
+            {
+                "id": ch.get("id"),
+                "name": ch.get("name", ""),
+                "channel_number": ch.get("channel_number"),
+                "channel_group_name": group_lookup.get(ch.get("channel_group_id"), ""),
+            }
+            for ch in all_channels
+        ]
+        channels_json_str = json.dumps(channels_json_data, indent=2)
+
+        # -- 3. channels.csv — full export with obfuscated URLs -----------
+        # Collect stream IDs
+        all_stream_ids = set()
+        for ch in all_channels:
+            all_stream_ids.update(ch.get("streams", []))
+
+        # Fetch stream URLs in batches
+        stream_url_lookup = {}
+        stream_ids_list = list(all_stream_ids)
+        for i in range(0, len(stream_ids_list), 100):
+            batch = stream_ids_list[i:i + 100]
+            if batch:
+                try:
+                    streams = await client.get_streams_by_ids(batch)
+                    for s in streams:
+                        url = s.get("url", "")
+                        stream_url_lookup[s.get("id")] = obfuscate_url(url) if url else ""
+                except Exception as e:
+                    logger.warning("[AUTO-CREATE] Debug bundle: failed to fetch stream batch: %s", e)
+
+        csv_channels = []
+        for ch in sorted(all_channels, key=lambda c: c.get("channel_number", 0) or 0):
+            stream_ids = ch.get("streams", [])
+            stream_urls = [stream_url_lookup.get(sid, "") for sid in stream_ids if stream_url_lookup.get(sid)]
+            csv_channels.append({
+                "channel_number": ch.get("channel_number"),
+                "name": ch.get("name", ""),
+                "group_name": group_lookup.get(ch.get("channel_group_id"), ""),
+                "tvg_id": ch.get("tvg_id", ""),
+                "gracenote_id": ch.get("tvc_guide_stationid", ""),
+                "logo_url": "",
+                "stream_urls": ";".join(stream_urls),
+            })
+        csv_content = generate_csv(csv_channels)
+
+        # -- 4. rules.yaml — reuse export logic --------------------------
+        import yaml
+        session = get_session()
+        try:
+            rules = session.query(AutoCreationRule).order_by(
+                AutoCreationRule.priority
+            ).all()
+
+            m3u_id_to_name = {}
+            try:
+                m3u_accounts = await client.get_m3u_accounts()
+                m3u_id_to_name = {a["id"]: a["name"] for a in m3u_accounts}
+            except Exception:
+                pass
+
+            export_rules = {
+                "version": 1,
+                "exported_at": datetime.utcnow().isoformat() + "Z",
+                "rules": [],
+            }
+            for rule in rules:
+                rule_dict = {
+                    "name": rule.name,
+                    "description": rule.description,
+                    "enabled": rule.enabled,
+                    "priority": rule.priority,
+                    "m3u_account_id": rule.m3u_account_id,
+                    "m3u_account_name": m3u_id_to_name.get(rule.m3u_account_id),
+                    "target_group_id": rule.target_group_id,
+                    "target_group_name": group_lookup.get(rule.target_group_id),
+                    "conditions": rule.get_conditions(),
+                    "actions": rule.get_actions(),
+                    "run_on_refresh": rule.run_on_refresh,
+                    "stop_on_first_match": rule.stop_on_first_match,
+                    "sort_field": rule.sort_field,
+                    "sort_order": rule.sort_order or "asc",
+                    "sort_regex": rule.sort_regex,
+                    "stream_sort_field": rule.stream_sort_field,
+                    "stream_sort_order": rule.stream_sort_order or "asc",
+                    "normalize_names": rule.normalize_names or False,
+                    "skip_struck_streams": rule.skip_struck_streams or False,
+                    "probe_on_sort": rule.probe_on_sort or False,
+                    "orphan_action": rule.orphan_action or "delete",
+                }
+                for action in rule_dict["actions"]:
+                    gid = action.get("group_id")
+                    if gid is not None and gid in group_lookup:
+                        action["group_name"] = group_lookup[gid]
+                export_rules["rules"].append(rule_dict)
+
+            rule_count = len(rules)
+            yaml_content = yaml.dump(export_rules, default_flow_style=False, sort_keys=False)
+        finally:
+            session.close()
+
+        # -- 5. logs.txt — recent logs, obfuscated -----------------------
+        log_lines = get_recent_logs()
+        obfuscated_lines = [obfuscate_text(line) for line in log_lines]
+        logs_text = "\n".join(obfuscated_lines)
+
+        # -- 6. manifest.json --------------------------------------------
+        manifest = {
+            "ecm_version": APP_VERSION,
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "channel_count": len(all_channels),
+            "rule_count": rule_count,
+            "group_count": len(groups),
+        }
+        manifest_str = json.dumps(manifest, indent=2)
+
+        # -- 7. Pack into tar.gz -----------------------------------------
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            _add_tar_entry(tf, "channels.json", channels_json_str)
+            _add_tar_entry(tf, "channels.csv", csv_content)
+            _add_tar_entry(tf, "rules.yaml", yaml_content)
+            _add_tar_entry(tf, "logs.txt", logs_text)
+            _add_tar_entry(tf, "manifest.json", manifest_str)
+        buf.seek(0)
+
+        elapsed_ms = (time.time() - start) * 1000
+        filename = f"ecm-debug-bundle-{datetime.utcnow():%Y%m%d-%H%M%S}.tar.gz"
+        logger.info("[AUTO-CREATE] Debug bundle generated in %.1fms (%s channels, %s rules)", elapsed_ms, len(all_channels), rule_count)
+
+        return StreamingResponse(
+            buf,
+            media_type="application/gzip",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except Exception as e:
+        logger.exception("[AUTO-CREATE] Failed to generate debug bundle: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to generate debug bundle")
