@@ -65,6 +65,14 @@ def get_token_from_request(request: Request) -> Optional[str]:
     return None
 
 
+def decode_token_safe(token: str) -> Optional[dict]:
+    """Decode a JWT token without raising exceptions. Returns payload or None."""
+    try:
+        return decode_token(token)
+    except (TokenExpiredError, InvalidTokenError, TokenRevokedError):
+        return None
+
+
 def get_refresh_token_from_request(request: Request) -> Optional[str]:
     """
     Extract refresh token from request.

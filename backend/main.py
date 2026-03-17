@@ -40,8 +40,9 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 # Sanitize all log arguments to prevent log injection (CWE-117)
-from log_utils import install_safe_logging  # noqa: E402
+from log_utils import install_safe_logging, install_ring_buffer  # noqa: E402
 install_safe_logging()
+install_ring_buffer()
 logger = logging.getLogger(__name__)
 
 # OpenAPI tags for organizing endpoints in Swagger UI
@@ -101,7 +102,7 @@ handle authentication automatically when accessed through the web UI.
 ## Rate Limiting
 No rate limiting is enforced, but rapid polling is logged for diagnostics.
     """,
-    version="0.15.0-0026",
+    version="0.15.0-0027",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -371,6 +372,22 @@ async def startup_event():
 
     # Initialize journal database
     init_db()
+
+    # Purge all expired user sessions
+    try:
+        from models import UserSession
+        sess = get_session()
+        try:
+            expired_count = sess.query(UserSession).filter(
+                UserSession.expires_at < datetime.utcnow(),
+            ).delete()
+            sess.commit()
+            if expired_count:
+                logger.info("[MAIN] Purged %d expired user session(s) on startup", expired_count)
+        finally:
+            sess.close()
+    except Exception as e:
+        logger.warning("[MAIN] Failed to purge expired sessions: %s", e)
 
     # Remove directional suffixes from Timezone Tags (East/West affect EPG timing)
     try:

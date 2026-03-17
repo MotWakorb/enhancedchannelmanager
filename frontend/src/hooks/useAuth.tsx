@@ -14,6 +14,7 @@ import {
   getCurrentUser,
   getAuthStatus,
 } from '../services/api';
+import { HttpError } from '../services/httpClient';
 
 // Auth context state
 interface AuthContextState {
@@ -76,9 +77,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
         // Try to get current user (will use existing cookie)
         const response = await getCurrentUser();
         setUser(response.user);
-      } catch {
-        // Not authenticated or error - that's fine
-        setUser(null);
+      } catch (error) {
+        // Only clear user for auth errors (401/403). Server errors (500, network)
+        // should not boot the user to the login page.
+        if (error instanceof HttpError && (error.status === 401 || error.status === 403)) {
+          setUser(null);
+        }
+        // For non-auth errors, leave user state as-is (null on initial mount, preserved on re-check)
       } finally {
         setIsLoading(false);
       }
@@ -114,8 +119,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
     try {
       const response = await getCurrentUser();
       setUser(response.user);
-    } catch {
-      setUser(null);
+    } catch (error) {
+      // Only clear user for auth errors; server/network errors should not log out
+      if (error instanceof HttpError && (error.status === 401 || error.status === 403)) {
+        setUser(null);
+      }
     }
   }, []);
 
