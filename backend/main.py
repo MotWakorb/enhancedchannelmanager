@@ -415,6 +415,25 @@ async def startup_event():
     except Exception as e:
         logger.warning("[MAIN] Could not ensure Provider Tags rule: %s", e)
 
+    # Repair duplicate auto-creation rule priorities
+    try:
+        from models import AutoCreationRule
+        sess = get_session()
+        try:
+            all_rules = sess.query(AutoCreationRule).order_by(
+                AutoCreationRule.priority, AutoCreationRule.id
+            ).all()
+            priorities = [r.priority for r in all_rules]
+            if len(priorities) != len(set(priorities)):
+                for idx, rule in enumerate(all_rules):
+                    rule.priority = idx
+                sess.commit()
+                logger.info("[MAIN] Repaired duplicate auto-creation rule priorities (%d rules)", len(all_rules))
+        finally:
+            sess.close()
+    except Exception as e:
+        logger.warning("[MAIN] Could not check auto-creation rule priorities: %s", e)
+
     logger.info("[MAIN] CONFIG_DIR: %s", CONFIG_DIR)
     logger.info("[MAIN] CONFIG_FILE: %s", CONFIG_FILE)
     logger.info("[MAIN] CONFIG_DIR exists: %s", CONFIG_DIR.exists())

@@ -768,6 +768,8 @@ class TestActionExecutorPropertyActions:
         """Set up test fixtures."""
         self.client = MagicMock()
         self.client.update_channel = AsyncMock()
+        self.client.create_logo = AsyncMock(return_value={"id": 42})
+        self.client.find_logo_by_url = AsyncMock(return_value=None)
 
         self.channels = [
             {"id": 1, "name": "ESPN", "logo_url": None, "tvg_id": None},
@@ -809,7 +811,7 @@ class TestActionExecutorPropertyActions:
 
         assert result.success is True
         assert result.modified is True
-        self.client.update_channel.assert_called_with(1, {"logo_url": "http://example.com/espn.png"})
+        self.client.update_channel.assert_called_with(1, {"logo_id": 42})
 
     def test_assign_logo_explicit_url(self):
         """Assign explicit logo URL."""
@@ -824,7 +826,7 @@ class TestActionExecutorPropertyActions:
         )
 
         assert result.success is True
-        self.client.update_channel.assert_called_with(1, {"logo_url": "http://other.com/logo.png"})
+        self.client.update_channel.assert_called_with(1, {"logo_id": 42})
 
     def test_assign_logo_no_url_skips(self):
         """Assign logo skips if no URL available."""

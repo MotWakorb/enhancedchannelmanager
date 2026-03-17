@@ -161,11 +161,18 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
 
         session = get_session()
         try:
+            # Auto-assign priority: if requested priority already taken, append at end
+            existing_priorities = [r.priority for r in session.query(AutoCreationRule).all()]
+            if existing_priorities and request.priority in existing_priorities:
+                priority = max(existing_priorities) + 1
+            else:
+                priority = request.priority
+
             rule = AutoCreationRule(
                 name=request.name,
                 description=request.description,
                 enabled=request.enabled,
-                priority=request.priority,
+                priority=priority,
                 m3u_account_id=request.m3u_account_id,
                 target_group_id=request.target_group_id,
                 conditions=json.dumps(request.conditions),
@@ -877,6 +884,18 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                     imported.append({"name": rule.name, "action": "created"})
 
             session.commit()
+
+            # De-duplicate priorities: if any rules share the same priority,
+            # re-assign sequential priorities preserving relative order (by id)
+            all_rules = session.query(AutoCreationRule).order_by(
+                AutoCreationRule.priority, AutoCreationRule.id
+            ).all()
+            priorities = [r.priority for r in all_rules]
+            if len(priorities) != len(set(priorities)):
+                logger.info("[AUTO-CREATE-YAML] Duplicate priorities detected after import, re-assigning sequentially")
+                for idx, rule in enumerate(all_rules):
+                    rule.priority = idx
+                session.commit()
 
             # Log to journal
             if imported:
