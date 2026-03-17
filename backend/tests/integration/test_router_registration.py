@@ -66,9 +66,14 @@ class TestRoutePrefixes:
         matching = [p for p in paths if p.startswith(prefix)]
         assert len(matching) > 0, f"No routes found with prefix {prefix}"
 
+    # Convenience redirects that intentionally live outside /api/
+    NON_API_ROUTES = {"/swagger"}
+
     def test_all_routes_under_api(self):
-        """All API routes should start with /api/."""
+        """All API routes should start with /api/ (except known redirects)."""
         for route in _get_api_routes():
+            if route.path in self.NON_API_ROUTES:
+                continue
             assert route.path.startswith("/api/"), (
                 f"Route {route.path} not under /api/ prefix"
             )

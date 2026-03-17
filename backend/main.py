@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 import asyncio
 from fastapi.exceptions import RequestValidationError
 import os
@@ -101,12 +101,51 @@ handle authentication automatically when accessed through the web UI.
 ## Rate Limiting
 No rate limiting is enforced, but rapid polling is logged for diagnostics.
     """,
-    version="0.15.0-0008",
+    version="0.15.0-0026",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
 )
+
+
+@app.get("/swagger", include_in_schema=False)
+async def swagger_redirect():
+    return RedirectResponse(url="/api/docs")
+
+
+from fastapi.openapi.utils import get_openapi
+
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+        tags=app.openapi_tags,
+    )
+    openapi_schema["components"]["securitySchemes"] = {
+        "BearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": (
+                "Obtain a JWT via `POST /api/auth/login` with "
+                '`{"username": "...", "password": "..."}`. '
+                "Use the `access_token` from the response."
+            ),
+        }
+    }
+    openapi_schema["security"] = [{"BearerAuth": []}]
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
+
 
 # CORS for development
 app.add_middleware(
@@ -116,6 +155,61 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ============================================================================
+# Global Auth Middleware — secure-by-default for all /api/* endpoints
+# ============================================================================
+# Paths that are intentionally public (no auth required even when auth is enabled)
+AUTH_EXEMPT_PATHS = {
+    # Health check (Docker, load balancers)
+    "/api/health",
+    # Auth flow (must be public by definition)
+    "/api/auth/login",
+    "/api/auth/refresh",
+    "/api/auth/logout",
+    "/api/auth/status",
+    "/api/auth/setup-required",
+    "/api/auth/setup",
+    "/api/auth/forgot-password",
+    "/api/auth/reset-password",
+    "/api/auth/providers",
+    "/api/auth/dispatcharr/login",
+    "/api/auth/admin/settings",
+    # Initial setup (only works when no config exists)
+    "/api/backup/restore-initial",
+    # OpenAPI docs
+    "/api/docs",
+    "/api/redoc",
+    "/api/openapi.json",
+}
+
+from auth.settings import get_auth_settings
+from auth.dependencies import get_token_from_request, decode_token_safe
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """Reject unauthenticated requests to /api/* unless path is exempt."""
+    path = request.url.path
+
+    # Only gate /api/ paths — static files, SPA routes pass through
+    if path.startswith("/api/"):
+        auth_settings = get_auth_settings()
+
+        # Skip auth when it's not required or setup isn't complete
+        if auth_settings.require_auth and auth_settings.setup_complete:
+            # Check if path is exempt
+            if path not in AUTH_EXEMPT_PATHS:
+                token = get_token_from_request(request)
+                if not token or not decode_token_safe(token):
+                    return JSONResponse(
+                        status_code=401,
+                        content={"detail": "Not authenticated"},
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
+
+    return await call_next(request)
+
 
 # Include auth router
 from auth.routes import router as auth_router

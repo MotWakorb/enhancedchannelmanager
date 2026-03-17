@@ -18,7 +18,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 
 ## Features
 
-### Authentication (v0.11.5)
+### Authentication
 
 ECM includes a comprehensive authentication system to secure access to your channel management:
 
@@ -962,7 +962,13 @@ uvicorn main:app --reload
 
 ## API Endpoints
 
-Interactive API documentation is available at `/api/docs` (Swagger UI) and `/api/redoc` (ReDoc).
+Interactive API documentation is available at `/api/docs` (Swagger UI) and `/api/redoc` (ReDoc). `/swagger` also redirects to `/api/docs` for convenience.
+
+All API endpoints require JWT Bearer token authentication. To authenticate in the Swagger UI:
+
+1. Call `POST /api/auth/login` with `{"username": "...", "password": "..."}`
+2. Copy the `access_token` from the response
+3. Click the **Authorize** button in the Swagger UI and enter the token
 
 ### Channels
 
@@ -979,6 +985,7 @@ Interactive API documentation is available at `/api/docs` (Swagger UI) and `/api
 | `POST /api/channels/{id}/reorder-streams` | Reorder channel streams |
 | `POST /api/channels/assign-numbers` | Bulk assign channel numbers |
 | `POST /api/channels/bulk-commit` | Batch multiple channel operations in one request |
+| `POST /api/channels/merge` | Merge duplicate channels |
 | `POST /api/channels/clear-auto-created` | Clear auto-created flag from channels |
 | `GET /api/channels/csv-template` | Download CSV template for channel import |
 | `GET /api/channels/export-csv` | Export all channels to CSV |
@@ -1016,6 +1023,7 @@ Interactive API documentation is available at `/api/docs` (Swagger UI) and `/api
 | Endpoint | Description |
 |----------|-------------|
 | `GET /api/streams` | List streams (paginated, searchable, filterable) |
+| `POST /api/streams/by-ids` | Get streams by specific IDs |
 | `GET /api/stream-groups` | List stream groups with stream counts |
 
 ### M3U
@@ -1136,6 +1144,7 @@ Interactive API documentation is available at `/api/docs` (Swagger UI) and `/api
 | `POST /api/stream-stats/clear-all` | Clear all probe stats |
 | `GET /api/stream-stats/struck-out` | List struck-out streams (exceeding failure threshold) |
 | `POST /api/stream-stats/struck-out/remove` | Bulk remove struck-out streams from all channels |
+| `POST /api/stream-stats/compute-sort` | Compute sort scores for streams based on probe data |
 
 ### Enhanced Stats
 
@@ -1182,6 +1191,8 @@ Interactive API documentation is available at `/api/docs` (Swagger UI) and `/api
 | `POST /api/normalization/test-batch` | Test all enabled rules against multiple texts |
 | `POST /api/normalization/normalize` | Normalize text using all enabled rules |
 | `GET /api/normalization/rule-stats` | Get stream match statistics per rule |
+| `GET /api/normalization/export` | Export normalization rules |
+| `POST /api/normalization/import` | Import normalization rules |
 | `GET /api/normalization/migration/status` | Get migration status |
 | `POST /api/normalization/migration/run` | Run demo rules migration |
 
@@ -1198,6 +1209,8 @@ Interactive API documentation is available at `/api/docs` (Swagger UI) and `/api
 | `PATCH /api/tags/groups/{gid}/tags/{tid}` | Update a tag |
 | `DELETE /api/tags/groups/{gid}/tags/{tid}` | Delete a tag |
 | `POST /api/tags/test` | Test text against a tag group |
+| `GET /api/tags/export` | Export all tag groups and tags |
+| `POST /api/tags/import` | Import tag groups and tags |
 
 ### Stream Preview
 
@@ -1330,6 +1343,58 @@ Interactive API documentation is available at `/api/docs` (Swagger UI) and `/api
 | `POST /api/tls/https/restart` | Restart HTTPS server |
 | `GET /api/tls/https/status` | Get HTTPS server status |
 
+### Cron
+
+| Endpoint | Description |
+|-|-|
+| `GET /api/cron/presets` | List cron schedule presets |
+| `POST /api/cron/validate` | Validate a cron expression |
+
+### Dummy EPG
+
+| Endpoint | Description |
+|-|-|
+| `GET /api/dummy-epg/profiles` | List dummy EPG profiles |
+| `POST /api/dummy-epg/profiles` | Create dummy EPG profile |
+| `GET /api/dummy-epg/profiles/{id}` | Get dummy EPG profile |
+| `PATCH /api/dummy-epg/profiles/{id}` | Update dummy EPG profile |
+| `DELETE /api/dummy-epg/profiles/{id}` | Delete dummy EPG profile |
+| `POST /api/dummy-epg/generate` | Generate dummy EPG data |
+| `POST /api/dummy-epg/preview` | Preview dummy EPG output |
+| `POST /api/dummy-epg/preview/batch` | Batch preview dummy EPG |
+| `GET /api/dummy-epg/xmltv` | Get combined XMLTV output |
+| `GET /api/dummy-epg/xmltv/{id}` | Get XMLTV output for a profile |
+| `GET /api/dummy-epg/profiles/export/yaml` | Export profiles as YAML |
+| `POST /api/dummy-epg/profiles/import/yaml` | Import profiles from YAML |
+
+### Export
+
+| Endpoint | Description |
+|-|-|
+| `GET /api/export/profiles` | List export profiles |
+| `POST /api/export/profiles` | Create export profile |
+| `PATCH /api/export/profiles/{id}` | Update export profile |
+| `DELETE /api/export/profiles/{id}` | Delete export profile |
+| `POST /api/export/profiles/{id}/generate` | Generate export files |
+| `GET /api/export/profiles/{id}/preview` | Preview export output |
+| `GET /api/export/profiles/{id}/download/m3u` | Download exported M3U |
+| `GET /api/export/profiles/{id}/download/xmltv` | Download exported XMLTV |
+| `GET /api/export/cloud-targets` | List cloud storage targets |
+| `POST /api/export/cloud-targets` | Create cloud storage target |
+| `PATCH /api/export/cloud-targets/{id}` | Update cloud storage target |
+| `DELETE /api/export/cloud-targets/{id}` | Delete cloud storage target |
+| `POST /api/export/cloud-targets/test` | Test cloud storage credentials |
+| `POST /api/export/cloud-targets/{id}/test` | Test a specific cloud target |
+| `GET /api/export/publish-configs` | List publish configurations |
+| `POST /api/export/publish-configs` | Create publish configuration |
+| `PATCH /api/export/publish-configs/{id}` | Update publish configuration |
+| `DELETE /api/export/publish-configs/{id}` | Delete publish configuration |
+| `POST /api/export/publish-configs/{id}/publish` | Publish to cloud target |
+| `POST /api/export/publish-configs/{id}/dry-run` | Dry-run publish |
+| `GET /api/export/publish-history` | Get publish history |
+| `DELETE /api/export/publish-history` | Clear publish history |
+| `DELETE /api/export/publish-history/{id}` | Delete publish history entry |
+
 ### Backup
 
 | Endpoint | Description |
@@ -1355,6 +1420,15 @@ Interactive API documentation is available at `/api/docs` (Swagger UI) and `/api
 | `POST /api/auth/reset-password` | Reset password with token |
 | `GET /api/auth/providers` | List available auth providers |
 | `POST /api/auth/dispatcharr/login` | Login via Dispatcharr credentials |
+| `GET /api/auth/identities` | List linked auth identities for current user |
+| `POST /api/auth/identities/link` | Link a new auth identity to current user |
+| `DELETE /api/auth/identities/{id}` | Unlink an auth identity |
+| `GET /api/auth/admin/settings` | Get auth settings (admin) |
+| `PUT /api/auth/admin/settings` | Update auth settings (admin) |
+| `GET /api/auth/admin/users` | List users (admin) |
+| `GET /api/auth/admin/users/{id}` | Get user details (admin) |
+| `PUT /api/auth/admin/users/{id}` | Update user (admin) |
+| `DELETE /api/auth/admin/users/{id}` | Delete user (admin) |
 
 ### User Management (Admin)
 
