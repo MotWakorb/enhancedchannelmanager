@@ -818,6 +818,45 @@ def _populate_builtin_tags(conn) -> None:
                 "OLYMPICS", "X GAMES"
             ]
         },
+        "State/Province Tags": {
+            "description": "US state/territory and Canadian province abbreviations",
+            "case_sensitive": True,
+            "tags": [
+                # US states
+                "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+                "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+                "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+                "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+                "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+                # US territories
+                "DC", "PR", "GU", "VI",
+                # Canadian provinces/territories
+                "AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE",
+                "QC", "SK", "YT",
+            ]
+        },
+        "Abbreviation Tags": {
+            "description": "Network and channel abbreviations to preserve during title-casing",
+            "tags": [
+                # Major US broadcast networks
+                "ABC", "CBS", "NBC", "FOX", "PBS", "CW",
+                # Cable networks
+                "ESPN", "ESPNU", "ESPN2", "HBO", "AMC", "BET", "OWN", "ION",
+                "USA", "TNT", "TBS", "FX", "FXX", "TCM", "CNN", "HLN",
+                "MSNBC", "CNBC", "HGTV", "TLC", "CMT", "VH1", "MTV",
+                "BRAVO", "STARZ", "EPIX", "REELZ", "FUSE", "VICE",
+                # Regional sports / specialty
+                "MASN", "NLSE", "NESN", "NBCSN", "NBCLX", "MSGSN",
+                "MSG", "SNY", "YES", "BALLY",
+                "OANN", "INSP", "EWTN",
+                # Callsign-pattern (W/K) stations users can add to
+                "WGN", "KGO", "WPIX",
+                # Tech / streaming
+                "A&E", "AT&T", "TV",
+                # Common suffixes to preserve
+                "HD", "SD", "FHD", "UHD", "4K",
+            ]
+        },
         "Network Tags": {
             "description": "Network and stream type indicators",
             "tags": ["PPV", "LIVE", "BACKUP", "VIP", "PREMIUM", "24/7", "REPLAY"]
@@ -850,19 +889,27 @@ def _populate_builtin_tags(conn) -> None:
             logger.info("[DATABASE] Created built-in group '%s'", group_name)
 
         # Get existing tags for this group
-        result = conn.execute(text("SELECT value FROM tags WHERE group_id = :group_id"), {"group_id": group_id})
-        existing_tags = set(row[0] for row in result.fetchall())
+        result = conn.execute(text("SELECT value, case_sensitive FROM tags WHERE group_id = :group_id"), {"group_id": group_id})
+        existing_tags = {row[0]: row[1] for row in result.fetchall()}
 
         # Deduplicate the tag list (in case of duplicates like CPL)
         unique_tags = list(dict.fromkeys(group_data["tags"]))
+        group_case_sensitive = 1 if group_data.get("case_sensitive") else 0
 
-        # Insert missing tags
+        # Insert missing tags and fix case_sensitive if needed
         for tag_value in unique_tags:
             if tag_value not in existing_tags:
                 conn.execute(text("""
                     INSERT INTO tags (group_id, value, case_sensitive, enabled, is_builtin)
-                    VALUES (:group_id, :value, 0, 1, 1)
-                """), {"group_id": group_id, "value": tag_value})
+                    VALUES (:group_id, :value, :case_sensitive, 1, 1)
+                """), {"group_id": group_id, "value": tag_value, "case_sensitive": group_case_sensitive})
+                tags_added += 1
+            elif existing_tags[tag_value] != group_case_sensitive:
+                # Fix case_sensitive flag on existing tags
+                conn.execute(text("""
+                    UPDATE tags SET case_sensitive = :case_sensitive
+                    WHERE group_id = :group_id AND value = :value
+                """), {"case_sensitive": group_case_sensitive, "group_id": group_id, "value": tag_value})
                 tags_added += 1
 
     conn.commit()

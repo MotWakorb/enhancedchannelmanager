@@ -29,6 +29,7 @@ def invalidate_tag_cache():
     """Clear the global tag caches so the next access reloads from DB."""
     _tag_group_cache.clear()
     NormalizationEngine._tag_group_id_cache.clear()
+    clear_abbreviation_cache()
 
 
 # Unicode superscript to ASCII mapping for quality tags
@@ -110,6 +111,170 @@ class NormalizationResult:
     normalized: str
     rules_applied: list  # List of rule IDs that were applied
     transformations: list  # List of (rule_id, before, after) tuples
+
+
+# Well-known broadcast/network abbreviations that contain vowels.
+# These can't be detected by structural heuristics alone because they
+# look like regular short words (HBO, AMC, ABC, ESPN, etc.)
+# Words that should stay lowercase in title case (unless first word)
+_SMALL_WORDS = {
+    'a', 'an', 'the', 'and', 'but', 'or', 'for', 'nor',
+    'of', 'at', 'by', 'to', 'in', 'on', 'vs', 'via',
+}
+
+# Cache for abbreviation tags loaded from the database
+_abbreviation_tags_cache: set[str] | None = None
+
+
+def _load_abbreviation_tags() -> set[str]:
+    """Load abbreviation tags from the 'Abbreviation Tags' tag group."""
+    global _abbreviation_tags_cache
+    if _abbreviation_tags_cache is not None:
+        return _abbreviation_tags_cache
+
+    try:
+        from database import get_session
+        from models import TagGroup, Tag
+        session = get_session()
+        try:
+            group = session.query(TagGroup).filter(TagGroup.name == "Abbreviation Tags").first()
+            if group:
+                tags = session.query(Tag).filter(
+                    Tag.group_id == group.id, Tag.enabled == True
+                ).all()
+                _abbreviation_tags_cache = {t.value.upper() for t in tags}
+            else:
+                _abbreviation_tags_cache = set()
+        finally:
+            session.close()
+    except Exception:
+        _abbreviation_tags_cache = set()
+
+    return _abbreviation_tags_cache
+
+
+def clear_abbreviation_cache():
+    """Clear the abbreviation tags cache (call when tags are modified)."""
+    global _abbreviation_tags_cache
+    _abbreviation_tags_cache = None
+
+
+def _is_abbreviation(word: str) -> bool:
+    """
+    Check if an all-uppercase word looks like an abbreviation that should
+    stay uppercase during title-casing.
+
+    Only called for all-uppercase words. Mixed-case words (PureFlix, PlayersTV)
+    are preserved as-is by the caller.
+    """
+    alpha = ''.join(c for c in word if c.isalpha())
+    if not alpha:
+        return False
+
+    # Common short words are NOT abbreviations (BY, OF, THE, WAR, etc.)
+    if alpha.lower() in _SMALL_WORDS:
+        return False
+
+    # Single letter: keep uppercase
+    if len(alpha) == 1:
+        return True
+
+    # Contains & (A&E, AT&T) — treat as abbreviation
+    if '&' in word:
+        return True
+
+    # Known abbreviations from the Abbreviation Tags tag group
+    if alpha in _load_abbreviation_tags():
+        return True
+
+    # Contains digits mixed with letters: abbreviation (ESPN2, MSGSN2)
+    if any(c.isdigit() for c in word) and alpha:
+        return True
+
+    # Broadcast callsigns: W/K + 3 letters = 4 chars (WLUK, WGBA, KABC)
+    # or 5 chars (WDCW). 3-letter W/K words (WAR, WIN, KEY) are common English words.
+    # Longer W/K words (WASHINGTON, WEST) are also regular words.
+    if 4 <= len(alpha) <= 5 and alpha[0] in 'WK':
+        return True
+
+    # No vowels (excluding Y) = abbreviation (TNT, CNN, FXX, MSNBC, HGTV, NBCSN, NBCLX)
+    # Y is sometimes a vowel (BY, MY) so we don't count it as purely consonant
+    vowels = sum(1 for c in alpha if c in 'AEIOUY')
+    if vowels == 0:
+        return True
+
+    return False
+
+
+def _smart_title_word(word: str, is_first: bool) -> str:
+    """
+    Apply smart title-casing to a single word.
+
+    Rules:
+    - Mixed-case words (PureFlix, PlayersTV) → preserved as-is
+    - All-uppercase abbreviations (ESPN, CBS, TNT) → preserved
+    - All-uppercase regular words (WASHINGTON, CITY) → Title-cased
+    - All-lowercase words → Title-cased (unless small word and not first)
+    - Handles apostrophes correctly ('90s stays '90s, not '90S)
+    - Handles ampersands (A&E stays A&E)
+    """
+    if not word:
+        return word
+
+    alpha = ''.join(c for c in word if c.isalpha())
+    if not alpha:
+        return word  # Numbers, punctuation only — leave as-is
+
+    # Mixed-case: user already has intentional casing (PureFlix, PlayersTV)
+    if not alpha.isupper() and not alpha.islower():
+        return word
+
+    # All-uppercase: check if abbreviation
+    if alpha.isupper():
+        if _is_abbreviation(word):
+            return word
+        # Small words stay lowercase (unless first word)
+        if not is_first and alpha.lower() in _SMALL_WORDS:
+            return word.lower()
+        # Regular all-caps word — title case it
+        return _title_case_word(word, is_first)
+
+    # All-lowercase
+    # If alpha portion is just a suffix on digits/punctuation ('90s, 24th),
+    # don't capitalize — the letter is a grammatical suffix, not a word start
+    non_alpha_prefix = ''
+    for ch in word:
+        if ch.isalpha():
+            break
+        non_alpha_prefix += ch
+    if non_alpha_prefix and len(alpha) <= 2:
+        return word  # e.g., '90s, 24th — leave as-is
+
+    if not is_first and alpha.lower() in _SMALL_WORDS:
+        return word  # Keep small words lowercase
+
+    return _title_case_word(word, is_first)
+
+
+def _title_case_word(word: str, is_first: bool) -> str:
+    """
+    Title-case a word while handling apostrophes and special chars correctly.
+    Python's str.title() treats ' as a word boundary, turning '90s into '90S.
+    """
+    result = []
+    capitalize_next = True
+    for i, ch in enumerate(word):
+        if ch.isalpha():
+            if capitalize_next:
+                result.append(ch.upper())
+                capitalize_next = False
+            else:
+                result.append(ch.lower())
+        else:
+            result.append(ch)
+            # Don't capitalize after apostrophes or digits
+            # Only capitalize after spaces (which won't appear here since we split on spaces)
+    return ''.join(result)
 
 
 class NormalizationEngine:
@@ -344,12 +509,31 @@ class NormalizationEngine:
                         )
 
             else:  # contains
-                idx = match_text.find(match_tag)
-                if idx >= 0:
+                # Use word-boundary matching so short tags like "WY" don't match
+                # inside longer words like "Laramie" (which contains "LA")
+                # Captures a full separator group on each side (e.g., " | WY | " not just " WY ")
+                sep = r'[\s:\-|/]+'
+                tag_pat = re.escape(match_tag)
+                flags = 0 if case_sensitive else re.IGNORECASE
+                # Try to match with separators on both sides first
+                pattern = r'(' + sep + r')' + tag_pat + r'(?=' + sep + r'|$)'
+                m = re.search(pattern, text, flags)
+                if m:
+                    # Consume the leading separator group + tag, leave trailing for next segment
                     return RuleMatch(
                         matched=True,
-                        match_start=idx,
-                        match_end=idx + len(tag_value),
+                        match_start=m.start(),
+                        match_end=m.end(),
+                        matched_tag=tag_value
+                    )
+                # Try at start of string: tag followed by separator
+                pattern = tag_pat + r'(' + sep + r')'
+                m = re.match(pattern, text, flags)
+                if m:
+                    return RuleMatch(
+                        matched=True,
+                        match_start=0,
+                        match_end=m.end(),
                         matched_tag=tag_value
                     )
 
@@ -510,16 +694,12 @@ class NormalizationEngine:
             elif mode == "sentence":
                 return text[0].upper() + text[1:].lower() if text else text
             else:
-                # Smart title case: preserve short all-caps words (likely acronyms)
+                # Smart title case: preserve abbreviations and mixed-case,
+                # title-case all-caps/all-lower words, keep small words lowercase
                 words = text.split()
-                result = []
-                for word in words:
-                    alpha = ''.join(c for c in word if c.isalpha())
-                    if alpha.isupper() and len(alpha) <= 4:
-                        result.append(word)
-                    else:
-                        result.append(word.title())
-                return ' '.join(result)
+                return ' '.join(
+                    _smart_title_word(w, i == 0) for i, w in enumerate(words)
+                )
 
         else:
             logger.warning("[NORMALIZE] Unknown action type: %s", action_type)
@@ -589,16 +769,12 @@ class NormalizationEngine:
             elif mode == "sentence":
                 return text[0].upper() + text[1:].lower() if text else text
             else:
-                # Smart title case: preserve short all-caps words (likely acronyms)
+                # Smart title case: preserve abbreviations and mixed-case,
+                # title-case all-caps/all-lower words, keep small words lowercase
                 words = text.split()
-                result = []
-                for word in words:
-                    alpha = ''.join(c for c in word if c.isalpha())
-                    if alpha.isupper() and len(alpha) <= 4:
-                        result.append(word)
-                    else:
-                        result.append(word.title())
-                return ' '.join(result)
+                return ' '.join(
+                    _smart_title_word(w, i == 0) for i, w in enumerate(words)
+                )
 
         else:
             logger.warning("[NORMALIZE] Unknown else action type: %s", action_type)

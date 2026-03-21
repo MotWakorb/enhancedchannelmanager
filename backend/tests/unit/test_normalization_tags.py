@@ -414,6 +414,17 @@ class TestSuperscriptConversion:
 class TestCapitalizeAction:
     """Tests for the capitalize action type."""
 
+    @pytest.fixture(autouse=True)
+    def setup_abbreviation_cache(self):
+        """Pre-populate the abbreviation tags cache for tests."""
+        import normalization_engine
+        normalization_engine._abbreviation_tags_cache = {
+            "ESPN", "CBS", "NBC", "ABC", "HBO", "AMC", "HD", "SD", "FHD",
+            "CNN", "TNT", "TBS", "FX", "FXX", "MSNBC", "HGTV",
+        }
+        yield
+        normalization_engine._abbreviation_tags_cache = None
+
     @pytest.fixture
     def engine(self, test_session):
         return NormalizationEngine(test_session)
@@ -460,8 +471,8 @@ class TestCapitalizeAction:
             id=1, group_id=1, name="Title Case Acronyms",
             condition_type="always", action_type="capitalize", action_value="title"
         )
-        result = engine._apply_action("US: ESPN HD", rule, None)
-        assert result == "US: ESPN HD"
+        result = engine._apply_action("CBS: ESPN HD", rule, None)
+        assert result == "CBS: ESPN HD"
 
     def test_title_case_mixed_acronyms_and_words(self, engine):
         from models import NormalizationRule
@@ -469,8 +480,8 @@ class TestCapitalizeAction:
             id=1, group_id=1, name="Title Case Mixed",
             condition_type="always", action_type="capitalize", action_value="title"
         )
-        result = engine._apply_action("US: ATLANTA HAWKS HD", rule, None)
-        assert result == "US: Atlanta Hawks HD"
+        result = engine._apply_action("NBC: ATLANTA HAWKS HD", rule, None)
+        assert result == "NBC: Atlanta Hawks HD"
 
     def test_default_is_title(self, engine):
         from models import NormalizationRule
