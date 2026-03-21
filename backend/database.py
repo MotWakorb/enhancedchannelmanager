@@ -815,7 +815,7 @@ def _populate_builtin_tags(conn) -> None:
                 # Australian Sports
                 "AFL", "A-LEAGUE",
                 # Other
-                "OLYMPICS", "X GAMES"
+                "OLYMPICS", "X GAMES", "ACL"
             ]
         },
         "State/Province Tags": {
@@ -851,10 +851,31 @@ def _populate_builtin_tags(conn) -> None:
                 "OANN", "INSP", "EWTN",
                 # Callsign-pattern (W/K) stations users can add to
                 "WGN", "KGO", "WPIX",
+                # Public / government / specialty
+                "C-SPAN", "CSPAN",
                 # Tech / streaming
                 "A&E", "AT&T", "TV",
+                # Common city/location abbreviations
+                "NYC", "LA", "DC", "SF",
+                # Major sports leagues (also in League Tags for stripping)
+                "NFL", "NBA", "MLB", "NHL", "MLS", "UFC", "WWE", "AEW",
+                "PGA", "ATP", "WTA", "F1", "ACL", "NRL", "AFL",
+                "NCAA", "WNBA", "CFL", "XFL",
                 # Common suffixes to preserve
                 "HD", "SD", "FHD", "UHD", "4K",
+            ]
+        },
+        "Small Word Tags": {
+            "description": "Words to keep lowercase during title-casing (prepositions, articles, conjunctions)",
+            "tags": [
+                # English
+                "a", "an", "the", "and", "but", "or", "for", "nor",
+                "of", "at", "by", "to", "in", "on", "vs", "via", "my",
+                # Spanish / Portuguese
+                "en", "de", "el", "la", "le", "y", "del", "los", "las",
+                "dos", "das", "por", "con", "sin",
+                # French
+                "du", "des", "les", "et", "ou", "au", "aux",
             ]
         },
         "Network Tags": {
