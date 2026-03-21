@@ -8,8 +8,6 @@ import {
   normalizeForEPGMatch,
   normalizeForEPGMatchWithLeague,
   parseTvgId,
-  normalizeChannelDisplayName,
-  previewNameNormalizations,
 } from './epgMatching';
 
 describe('extractLeaguePrefix', () => {
@@ -151,62 +149,3 @@ describe('parseTvgId', () => {
   });
 });
 
-describe('normalizeChannelDisplayName', () => {
-  it('normalizes league prefix format', () => {
-    expect(normalizeChannelDisplayName('NFL ARIZONA CARDINALS')).toBe('NFL: Arizona Cardinals');
-  });
-
-  it('preserves channel number prefix', () => {
-    expect(normalizeChannelDisplayName('700 | NFL ARIZONA CARDINALS')).toBe('700 | NFL: Arizona Cardinals');
-  });
-
-  it('applies title case without league', () => {
-    expect(normalizeChannelDisplayName('ESPN HD')).toBe('Espn Hd');
-  });
-
-  it('handles custom separator', () => {
-    expect(normalizeChannelDisplayName('NBA CHICAGO BULLS', ' - ')).toBe('NBA - Chicago Bulls');
-  });
-
-  it('handles lowercase input', () => {
-    expect(normalizeChannelDisplayName('nfl arizona cardinals')).toBe('NFL: Arizona Cardinals');
-  });
-});
-
-describe('previewNameNormalizations', () => {
-  it('returns only changed channels', () => {
-    const channels = [
-      { id: 1, name: 'NFL ARIZONA CARDINALS' },
-      { id: 2, name: 'NFL: Arizona Cardinals' }, // Already normalized
-      { id: 3, name: 'NBA CHICAGO BULLS' },
-    ];
-
-    const changes = previewNameNormalizations(channels);
-
-    expect(changes).toHaveLength(2);
-    expect(changes[0].id).toBe(1);
-    expect(changes[1].id).toBe(3);
-  });
-
-  it('includes current and normalized names', () => {
-    const channels = [
-      { id: 1, name: 'NFL ARIZONA CARDINALS' },
-    ];
-
-    const changes = previewNameNormalizations(channels);
-
-    expect(changes[0].current).toBe('NFL ARIZONA CARDINALS');
-    expect(changes[0].normalized).toBe('NFL: Arizona Cardinals');
-  });
-
-  it('returns empty array when nothing to change', () => {
-    const channels = [
-      { id: 1, name: 'Espn' },
-      { id: 2, name: 'Cnn' },
-    ];
-
-    const changes = previewNameNormalizations(channels);
-
-    expect(changes).toHaveLength(0);
-  });
-});
