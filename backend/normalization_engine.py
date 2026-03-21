@@ -117,10 +117,15 @@ class NormalizationResult:
 # These can't be detected by structural heuristics alone because they
 # look like regular short words (HBO, AMC, ABC, ESPN, etc.)
 # Words that should stay lowercase in title case (unless first word)
-_SMALL_WORDS = {
+# Fallback small words used when DB tag group isn't available
+_DEFAULT_SMALL_WORDS = {
     'a', 'an', 'the', 'and', 'but', 'or', 'for', 'nor',
-    'of', 'at', 'by', 'to', 'in', 'on', 'vs', 'via',
+    'of', 'at', 'by', 'to', 'in', 'on', 'vs', 'via', 'my',
+    'en', 'de', 'el', 'la', 'le', 'du', 'des', 'les', 'dos', 'das',
 }
+
+# Cache for small word tags loaded from the database
+_small_words_cache: set[str] | None = None
 
 # Cache for abbreviation tags loaded from the database
 _abbreviation_tags_cache: set[str] | None = None
@@ -153,10 +158,38 @@ def _load_abbreviation_tags() -> set[str]:
     return _abbreviation_tags_cache
 
 
+def _load_small_words() -> set[str]:
+    """Load small words from the 'Small Word Tags' tag group."""
+    global _small_words_cache
+    if _small_words_cache is not None:
+        return _small_words_cache
+
+    try:
+        from database import get_session
+        from models import TagGroup, Tag
+        session = get_session()
+        try:
+            group = session.query(TagGroup).filter(TagGroup.name == "Small Word Tags").first()
+            if group:
+                tags = session.query(Tag).filter(
+                    Tag.group_id == group.id, Tag.enabled == True
+                ).all()
+                _small_words_cache = {t.value.lower() for t in tags}
+            else:
+                _small_words_cache = _DEFAULT_SMALL_WORDS
+        finally:
+            session.close()
+    except Exception:
+        _small_words_cache = _DEFAULT_SMALL_WORDS
+
+    return _small_words_cache
+
+
 def clear_abbreviation_cache():
-    """Clear the abbreviation tags cache (call when tags are modified)."""
-    global _abbreviation_tags_cache
+    """Clear all title-case related caches (call when tags are modified)."""
+    global _abbreviation_tags_cache, _small_words_cache
     _abbreviation_tags_cache = None
+    _small_words_cache = None
 
 
 def _is_abbreviation(word: str) -> bool:
@@ -172,7 +205,7 @@ def _is_abbreviation(word: str) -> bool:
         return False
 
     # Common short words are NOT abbreviations (BY, OF, THE, WAR, etc.)
-    if alpha.lower() in _SMALL_WORDS:
+    if alpha.lower() in _load_small_words():
         return False
 
     # Single letter: keep uppercase
@@ -184,7 +217,9 @@ def _is_abbreviation(word: str) -> bool:
         return True
 
     # Known abbreviations from the Abbreviation Tags tag group
-    if alpha in _load_abbreviation_tags():
+    # Check both the alpha-only form and the full word (for C-SPAN, etc.)
+    abbr_tags = _load_abbreviation_tags()
+    if alpha in abbr_tags or word.upper() in abbr_tags:
         return True
 
     # Contains digits mixed with letters: abbreviation (ESPN2, MSGSN2)
@@ -197,9 +232,9 @@ def _is_abbreviation(word: str) -> bool:
     if 4 <= len(alpha) <= 5 and alpha[0] in 'WK':
         return True
 
-    # No vowels (excluding Y) = abbreviation (TNT, CNN, FXX, MSNBC, HGTV, NBCSN, NBCLX)
-    # Y is sometimes a vowel (BY, MY) so we don't count it as purely consonant
-    vowels = sum(1 for c in alpha if c in 'AEIOUY')
+    # No vowels = abbreviation (TNT, CNN, FXX, MSNBC, HGTV, NBCSN, NBCLX, NYC)
+    # BY/MY are handled by small words check above so Y is not treated as a vowel
+    vowels = sum(1 for c in alpha if c in 'AEIOU')
     if vowels == 0:
         return True
 
@@ -234,7 +269,7 @@ def _smart_title_word(word: str, is_first: bool) -> str:
         if _is_abbreviation(word):
             return word
         # Small words stay lowercase (unless first word)
-        if not is_first and alpha.lower() in _SMALL_WORDS:
+        if not is_first and alpha.lower() in _load_small_words():
             return word.lower()
         # Regular all-caps word — title case it
         return _title_case_word(word, is_first)
@@ -250,7 +285,7 @@ def _smart_title_word(word: str, is_first: bool) -> str:
     if non_alpha_prefix and len(alpha) <= 2:
         return word  # e.g., '90s, 24th — leave as-is
 
-    if not is_first and alpha.lower() in _SMALL_WORDS:
+    if not is_first and alpha.lower() in _load_small_words():
         return word  # Keep small words lowercase
 
     return _title_case_word(word, is_first)
