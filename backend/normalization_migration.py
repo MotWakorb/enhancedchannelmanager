@@ -52,9 +52,17 @@ DEMO_RULE_CONFIGS = [
         "action_type": "strip_prefix"
     },
     {
+        "rule_group_name": "Strip State/Province Tags",
+        "rule_group_description": "Remove US state and Canadian province abbreviations from channel names",
+        "priority": 4,
+        "tag_group_name": "State/Province Tags",
+        "match_position": "contains",
+        "action_type": "remove"
+    },
+    {
         "rule_group_name": "Strip Network Tags",
         "rule_group_description": "Remove network/stream type indicators from channel names",
-        "priority": 4,
+        "priority": 5,
         "tag_group_name": "Network Tags",
         "match_position": "suffix",  # Default to suffix; users can duplicate for prefix if needed
         "action_type": "strip_suffix"
@@ -62,7 +70,7 @@ DEMO_RULE_CONFIGS = [
     {
         "rule_group_name": "Strip Provider Tags",
         "rule_group_description": "Remove provider source indicators like (S), (H), (A) from channel names",
-        "priority": 5,
+        "priority": 6,
         "tag_group_name": "Provider Tags",
         "match_position": "suffix",
         "action_type": "strip_suffix"
@@ -153,6 +161,34 @@ def create_demo_rules(
         rules_created += 1
 
         logger.info("[NORMALIZE-MIGRATE] Created rule group '%s' with tag group condition", config['rule_group_name'])
+
+    # Create Title Case rule group — runs last (high priority number) to title-case
+    # whatever remains after all stripping rules have run
+    title_group = NormalizationRuleGroup(
+        name="Title Case",
+        description="Convert channel names to title case, preserving short abbreviations (ESPN, HBO, etc.)",
+        enabled=False,
+        priority=99,  # Run after all stripping rules
+        is_builtin=False
+    )
+    db.add(title_group)
+    db.flush()
+    groups_created += 1
+
+    title_rule = NormalizationRule(
+        group_id=title_group.id,
+        name="Smart Title Case",
+        description="Title-cases text while preserving short all-caps words (likely abbreviations)",
+        enabled=True,
+        priority=0,
+        condition_type="always",
+        action_type="capitalize",
+        action_value="title",
+        is_builtin=False
+    )
+    db.add(title_rule)
+    rules_created += 1
+    logger.info("[NORMALIZE-MIGRATE] Created 'Title Case' rule group")
 
     # Create custom rules from user's custom_normalization_tags (legacy migration)
     custom_rules_created = 0
@@ -386,4 +422,135 @@ def ensure_provider_tags_rule(db: Session) -> dict:
     db.commit()
 
     logger.info("[NORMALIZE-MIGRATE] Created 'Strip Provider Tags' rule group with tag group condition")
+    return {"created": True}
+
+
+def ensure_state_province_tags_rule(db: Session) -> dict:
+    """
+    Ensure the 'Strip State/Province Suffixes' normalization rule group exists.
+
+    For existing installations that already have normalization rules,
+    this adds the State/Province rule group if it's missing.
+
+    Returns:
+        Dict with created status
+    """
+    # Check for new name
+    existing_new = db.query(NormalizationRuleGroup).filter(
+        NormalizationRuleGroup.name == "Strip State/Province Tags"
+    ).first()
+
+    if existing_new:
+        logger.info("[NORMALIZE-MIGRATE] Strip State/Province Tags rule group already exists")
+        return {"created": False}
+
+    # Upgrade old suffix-only rule to contains/remove
+    existing_old = db.query(NormalizationRuleGroup).filter(
+        NormalizationRuleGroup.name == "Strip State/Province Suffixes"
+    ).first()
+
+    if existing_old:
+        existing_old.name = "Strip State/Province Tags"
+        existing_old.description = "Remove US state and Canadian province abbreviations from channel names"
+        # Update the rule inside the group too
+        old_rule = db.query(NormalizationRule).filter(
+            NormalizationRule.group_id == existing_old.id
+        ).first()
+        if old_rule:
+            old_rule.tag_match_position = "contains"
+            old_rule.action_type = "remove"
+        db.commit()
+        logger.info("[NORMALIZE-MIGRATE] Upgraded 'Strip State/Province Suffixes' to 'Strip State/Province Tags' (contains/remove)")
+        return {"created": False, "upgraded": True}
+
+    total_groups = db.query(NormalizationRuleGroup).count()
+    if total_groups == 0:
+        logger.info("[NORMALIZE-MIGRATE] No rule groups exist yet, skipping (create_demo_rules will handle)")
+        return {"created": False}
+
+    state_group = db.query(TagGroup).filter(
+        TagGroup.name == "State/Province Tags"
+    ).first()
+
+    if not state_group:
+        logger.warning("[NORMALIZE-MIGRATE] State/Province Tags tag group not found, skipping rule creation")
+        return {"created": False}
+
+    rule_group = NormalizationRuleGroup(
+        name="Strip State/Province Tags",
+        description="Remove US state and Canadian province abbreviations from channel names",
+        enabled=False,
+        priority=4,
+        is_builtin=False
+    )
+    db.add(rule_group)
+    db.flush()
+
+    rule = NormalizationRule(
+        group_id=rule_group.id,
+        name="Match State/Province Tags",
+        description="Matches any tag from 'State/Province Tags' and removes it",
+        enabled=True,
+        priority=0,
+        condition_type="tag_group",
+        tag_group_id=state_group.id,
+        tag_match_position="contains",
+        action_type="remove",
+        is_builtin=False
+    )
+    db.add(rule)
+    db.commit()
+
+    logger.info("[NORMALIZE-MIGRATE] Created 'Strip State/Province Tags' rule group with tag group condition")
+    return {"created": True}
+
+
+def ensure_title_case_rule(db: Session) -> dict:
+    """
+    Ensure the 'Title Case' normalization rule group exists.
+
+    For existing installations that already have normalization rules,
+    this adds the Title Case rule group if it's missing.
+
+    Returns:
+        Dict with created status
+    """
+    existing = db.query(NormalizationRuleGroup).filter(
+        NormalizationRuleGroup.name == "Title Case"
+    ).first()
+
+    if existing:
+        logger.info("[NORMALIZE-MIGRATE] Title Case rule group already exists")
+        return {"created": False}
+
+    total_groups = db.query(NormalizationRuleGroup).count()
+    if total_groups == 0:
+        logger.info("[NORMALIZE-MIGRATE] No rule groups exist yet, skipping (create_demo_rules will handle)")
+        return {"created": False}
+
+    rule_group = NormalizationRuleGroup(
+        name="Title Case",
+        description="Convert channel names to title case, preserving short abbreviations (ESPN, HBO, etc.)",
+        enabled=False,
+        priority=99,
+        is_builtin=False
+    )
+    db.add(rule_group)
+    db.flush()
+
+    rule = NormalizationRule(
+        group_id=rule_group.id,
+        name="Smart Title Case",
+        description="Title-cases text while preserving short all-caps words (likely abbreviations)",
+        enabled=True,
+        priority=0,
+        condition_type="always",
+        action_type="capitalize",
+        action_value="title",
+        is_builtin=False
+    )
+    db.add(rule)
+    db.commit()
+
+    logger.info("[NORMALIZE-MIGRATE] Created 'Title Case' rule group")
     return {"created": True}

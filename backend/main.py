@@ -415,6 +415,32 @@ async def startup_event():
     except Exception as e:
         logger.warning("[MAIN] Could not ensure Provider Tags rule: %s", e)
 
+    # Ensure State/Province Tags normalization rule exists for existing installations
+    try:
+        from normalization_migration import ensure_state_province_tags_rule
+        session = get_session()
+        try:
+            result = ensure_state_province_tags_rule(session)
+            if result.get("created"):
+                logger.info("[MAIN] Created Strip State/Province Tags normalization rule for existing installation")
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning("[MAIN] Could not ensure Strip State/Province Tags rule: %s", e)
+
+    # Ensure Title Case normalization rule exists for existing installations
+    try:
+        from normalization_migration import ensure_title_case_rule
+        session = get_session()
+        try:
+            result = ensure_title_case_rule(session)
+            if result.get("created"):
+                logger.info("[MAIN] Created Title Case normalization rule for existing installation")
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning("[MAIN] Could not ensure Title Case rule: %s", e)
+
     # Repair duplicate auto-creation rule priorities
     try:
         from models import AutoCreationRule
