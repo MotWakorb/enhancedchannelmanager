@@ -97,8 +97,8 @@ finally:
 
 ## Testing
 
-- Run: `cd /home/lecaptainc/ecm/enhancedchannelmanager/backend && python -m pytest tests/ -q --tb=short 2>&1 | tail -1`
-- The summary line (e.g., `2147 passed, 7 warnings`) is always the **last line**. Use `tail -1` to capture it. Do NOT use `grep` or `tail -5` — pytest emits hundreds of warning lines that bury the summary.
+- Run: `cd /home/lecaptainc/ecm/enhancedchannelmanager/backend && python -m pytest tests/ --tb=short --no-header -p no:warnings 2>&1 | tail -1`
+- This command suppresses warnings and headers so `tail -1` reliably returns the summary (e.g., `2147 passed in 50s`). Do NOT use `-q` — it suppresses the summary line when all tests pass.
 - In-memory SQLite with `StaticPool` for isolation
 - **Mock at router module level**: `patch("routers.channels.get_client", ...)` — NOT `patch("main.get_client", ...)`
 - Fixtures in `tests/conftest.py`: `test_engine`, `test_session`, `async_client`
