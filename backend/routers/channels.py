@@ -165,6 +165,8 @@ class BulkCommitRequest(BaseModel):
     validateOnly: Optional[bool] = False
     # If true, continue processing even when individual operations fail
     continueOnError: Optional[bool] = False
+    # If true, consolidate redundant operations before executing
+    consolidate: Optional[bool] = False
 
 
 class ValidationIssue(BaseModel):
@@ -873,6 +875,119 @@ async def assign_channel_numbers(request: AssignNumbersRequest):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperation]:
+    """Consolidate redundant operations to minimize API calls.
+
+    Optimizations:
+    - Multiple updateChannel for same channel -> single update with merged data
+    - Multiple bulkAssignChannelNumbers -> single call with final positions
+    - Add then remove same stream -> both cancelled
+    - Multiple reorderChannelStreams for same channel -> only final order kept
+    - Operations targeting channels to be deleted are removed
+    - Create + delete of same temp channel cancel out
+    """
+    start = time.time()
+    original_count = len(operations)
+
+    # First pass: find channels to be deleted
+    channels_to_delete: set[int] = set()
+    for op in operations:
+        if op.type == "deleteChannel":
+            channels_to_delete.add(op.channelId)
+
+    # Track final state for each operation type
+    channel_final_updates: dict[int, dict] = {}  # channelId -> merged data
+    channel_final_numbers: dict[int, float] = {}  # channelId -> final number
+    channel_final_stream_order: dict[int, list[int]] = {}  # channelId -> final stream IDs
+    stream_ops: dict[str, dict] = {}  # "channelId:streamId" -> {added: op, removed: op}
+    ordered_ops: list[BulkOperation] = []  # create/delete ops in order
+    temp_ids_created: set[int] = set()
+
+    for op in operations:
+        if op.type == "bulkAssignChannelNumbers":
+            start_num = op.startingNumber or 0
+            for i, cid in enumerate(op.channelIds):
+                if cid not in channels_to_delete:
+                    channel_final_numbers[cid] = start_num + i
+
+        elif op.type == "updateChannel":
+            if op.channelId not in channels_to_delete:
+                existing = channel_final_updates.get(op.channelId, {})
+                existing.update(op.data)
+                channel_final_updates[op.channelId] = existing
+
+        elif op.type == "reorderChannelStreams":
+            if op.channelId not in channels_to_delete:
+                channel_final_stream_order[op.channelId] = op.streamIds
+
+        elif op.type == "addStreamToChannel":
+            if op.channelId not in channels_to_delete:
+                key = f"{op.channelId}:{op.streamId}"
+                entry = stream_ops.setdefault(key, {"added": None, "removed": None})
+                entry["added"] = op
+
+        elif op.type == "removeStreamFromChannel":
+            if op.channelId not in channels_to_delete:
+                key = f"{op.channelId}:{op.streamId}"
+                entry = stream_ops.setdefault(key, {"added": None, "removed": None})
+                entry["removed"] = op
+
+        elif op.type == "createChannel":
+            if op.tempId in channels_to_delete:
+                temp_ids_created.add(op.tempId)
+            else:
+                ordered_ops.append(op)
+
+        elif op.type == "deleteChannel":
+            if op.channelId < 0 and op.channelId in temp_ids_created:
+                pass  # Create + delete cancel out
+            else:
+                ordered_ops.append(op)
+
+        elif op.type in ("createGroup", "deleteChannelGroup", "renameChannelGroup"):
+            ordered_ops.append(op)
+
+    # Build consolidated list
+    consolidated: list[BulkOperation] = list(ordered_ops)
+
+    # Merged updateChannel ops
+    for cid, data in channel_final_updates.items():
+        consolidated.append(BulkUpdateChannelOp(channelId=cid, data=data))
+
+    # Consolidated bulkAssign: group into consecutive ranges
+    if channel_final_numbers:
+        entries = sorted(channel_final_numbers.items(), key=lambda e: e[1])
+        i = 0
+        while i < len(entries):
+            start_num = entries[i][1]
+            j = i
+            while j + 1 < len(entries) and entries[j + 1][1] == entries[j][1] + 1:
+                j += 1
+            ids = [e[0] for e in entries[i:j + 1]]
+            consolidated.append(BulkAssignNumbersOp(channelIds=ids, startingNumber=start_num))
+            i = j + 1
+
+    # Consolidated reorder ops
+    for cid, stream_ids in channel_final_stream_order.items():
+        consolidated.append(BulkReorderStreamsOp(channelId=cid, streamIds=stream_ids))
+
+    # Stream add/remove (cancelled pairs excluded)
+    for entry in stream_ops.values():
+        if entry["added"] and entry["removed"]:
+            continue  # Cancel out
+        if entry["added"]:
+            consolidated.append(entry["added"])
+        if entry["removed"]:
+            consolidated.append(entry["removed"])
+
+    elapsed = (time.time() - start) * 1000
+    logger.info(
+        "[CHANNELS-BULK] Consolidated %d -> %d operations in %.1fms",
+        original_count, len(consolidated), elapsed,
+    )
+    return consolidated
+
+
 @router.post("/bulk-commit")
 async def bulk_commit_operations(request: BulkCommitRequest):
     """
@@ -900,7 +1015,13 @@ async def bulk_commit_operations(request: BulkCommitRequest):
     op_summary = ", ".join(f"{count} {op_type}" for op_type, count in sorted(op_counts.items()))
 
     logger.debug("[CHANNELS-BULK] Starting bulk commit (batch=%s): %s operations (%s)", batch_id, len(request.operations), op_summary)
-    logger.debug("[CHANNELS-BULK] Options: validateOnly=%s, continueOnError=%s", request.validateOnly, request.continueOnError)
+    logger.debug("[CHANNELS-BULK] Options: validateOnly=%s, continueOnError=%s, consolidate=%s", request.validateOnly, request.continueOnError, request.consolidate)
+
+    # Consolidate operations if requested
+    operations = request.operations
+    if request.consolidate:
+        operations = _consolidate_operations(operations)
+        request = request.model_copy(update={"operations": operations})
     if request.groupsToCreate:
         logger.debug("[CHANNELS-BULK] Groups to create: %s", [g.get('name') for g in request.groupsToCreate])
 

@@ -17,7 +17,9 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from alert_methods import send_alert
+from cache import get_cache
 from dispatcharr_client import get_client
+from epg_matching import batch_find_epg_matches
 import journal
 
 logger = logging.getLogger(__name__)
@@ -741,3 +743,160 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
     except Exception as e:
         logger.exception("[EPG-LCN] Batch LCN error: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# ---------------------------------------------------------------------------
+# EPG Matching (v0.15.0 — ported from frontend)
+# ---------------------------------------------------------------------------
+
+class EPGMatchRequest(BaseModel):
+    channel_ids: list[int] = []
+    epg_source_ids: list[int] = []
+    source_order: list[int] = []
+
+
+@router.post("/match")
+async def match_channels_to_epg(request: EPGMatchRequest):
+    """Batch match channels to EPG data with confidence scoring.
+
+    Accepts channel IDs and optional EPG source filter/ordering.
+    Returns pre-categorized results: exact, multiple, and none.
+    Cached per unique set of channel IDs + EPG source IDs.
+    """
+    start = time.time()
+    logger.info(
+        "[EPG-MATCH] POST /match - channels=%d, epg_sources=%d",
+        len(request.channel_ids), len(request.epg_source_ids),
+    )
+
+    client = get_client()
+    cache = get_cache()
+
+    # Build cache key from sorted IDs
+    ch_key = ",".join(str(i) for i in sorted(request.channel_ids))
+    src_key = ",".join(str(i) for i in sorted(request.epg_source_ids))
+    cache_key = f"epg_match:{hash(ch_key)}:{hash(src_key)}"
+
+    cached = cache.get(cache_key)
+    if cached is not None:
+        elapsed = (time.time() - start) * 1000
+        logger.info("[EPG-MATCH] Cache HIT in %.1fms", elapsed)
+        return cached
+
+    try:
+        # Fetch channels
+        channels_result = await client.get_channels(page=1, page_size=10000)
+        all_channels = channels_result.get("results", [])
+
+        # Filter to requested channel IDs (if specified)
+        if request.channel_ids:
+            channel_id_set = set(request.channel_ids)
+            channels = [ch for ch in all_channels if ch.get("id") in channel_id_set]
+        else:
+            channels = all_channels
+
+        # Fetch all streams (for country detection)
+        streams: list[dict] = []
+        page = 1
+        while True:
+            result = await client.get_streams(page=page, page_size=500)
+            streams.extend(result.get("results", []))
+            if not result.get("next"):
+                break
+            page += 1
+
+        # Fetch EPG data (optionally filtered by source)
+        # get_epg_data returns a flat list (handles pagination internally)
+        epg_data: list[dict] = []
+        if request.epg_source_ids:
+            for src_id in request.epg_source_ids:
+                src_data = await client.get_epg_data(epg_source=src_id)
+                epg_data.extend(src_data)
+        else:
+            epg_data = await client.get_epg_data()
+
+        fetch_elapsed = (time.time() - start) * 1000
+        logger.info(
+            "[EPG-MATCH] Fetched %d channels, %d streams, %d EPG entries in %.1fms",
+            len(channels), len(streams), len(epg_data), fetch_elapsed,
+        )
+
+        # Run matching
+        match_start = time.time()
+        results = batch_find_epg_matches(
+            channels=channels,
+            all_streams=streams,
+            epg_data=epg_data,
+            source_order=request.source_order or None,
+        )
+        match_elapsed = (time.time() - match_start) * 1000
+
+        # Serialize results into pre-categorized buckets
+        exact = []
+        multiple = []
+        none_matches = []
+
+        for r in results:
+            matches_list = [
+                {
+                    "epg_id": ms.epg_id,
+                    "epg_name": ms.epg_name,
+                    "tvg_id": ms.tvg_id,
+                    "epg_source": ms.epg_source,
+                    "confidence": ms.confidence,
+                    "match_type": ms.match_type,
+                }
+                for ms in r.matches[:10]  # Limit to top 10
+            ]
+            best_score = r.matches[0].confidence if r.matches else 0
+
+            # Determine status
+            if len(r.matches) == 0:
+                status = "none"
+            elif len(r.matches) == 1:
+                status = "exact"
+            else:
+                status = "multiple"
+
+            entry = {
+                "channel_id": r.channel_id,
+                "channel_name": r.channel_name,
+                "detected_country": r.detected_country,
+                "status": status,
+                "best_score": best_score,
+                "matches": matches_list,
+            }
+            if status == "exact":
+                exact.append(entry)
+            elif status == "multiple":
+                multiple.append(entry)
+            else:
+                none_matches.append(entry)
+
+        response = {
+            "exact": exact,
+            "multiple": multiple,
+            "none": none_matches,
+            "summary": {
+                "total_channels": len(channels),
+                "exact_count": len(exact),
+                "multiple_count": len(multiple),
+                "none_count": len(none_matches),
+                "match_time_ms": round(match_elapsed, 1),
+            },
+        }
+
+        cache.set(cache_key, response)
+
+        total_elapsed = (time.time() - start) * 1000
+        logger.info(
+            "[EPG-MATCH] Completed: exact=%d, multiple=%d, none=%d "
+            "- match=%.1fms, total=%.1fms",
+            len(exact), len(multiple), len(none_matches),
+            match_elapsed, total_elapsed,
+        )
+        return response
+
+    except Exception as e:
+        logger.exception("[EPG-MATCH] Failed: %s", e)
+        raise HTTPException(status_code=500, detail="EPG matching failed")

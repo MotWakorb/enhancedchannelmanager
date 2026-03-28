@@ -245,6 +245,8 @@ export interface BulkCommitRequest {
   validateOnly?: boolean;
   /** If true, continue processing even when individual operations fail */
   continueOnError?: boolean;
+  /** If true, server consolidates redundant operations before executing */
+  consolidate?: boolean;
 }
 
 export interface ValidationIssue {
@@ -1090,6 +1092,53 @@ export async function getEPGLcnBatch(items: LCNLookupItem[]): Promise<{
   return fetchJson(`${API_BASE}/epg/lcn/batch`, {
     method: 'POST',
     body: JSON.stringify({ items }),
+  });
+}
+
+// EPG Matching (server-side)
+export interface EPGMatchEntry {
+  epg_id: number;
+  epg_name: string;
+  tvg_id: string;
+  epg_source: number;
+  confidence: number;
+  match_type: string;
+}
+
+export interface EPGMatchChannelResult {
+  channel_id: number;
+  channel_name: string;
+  detected_country: string | null;
+  status: 'exact' | 'multiple' | 'none';
+  best_score: number;
+  matches: EPGMatchEntry[];
+}
+
+export interface EPGMatchResponse {
+  exact: EPGMatchChannelResult[];
+  multiple: EPGMatchChannelResult[];
+  none: EPGMatchChannelResult[];
+  summary: {
+    total_channels: number;
+    exact_count: number;
+    multiple_count: number;
+    none_count: number;
+    match_time_ms: number;
+  };
+}
+
+export async function matchChannelsToEPG(params: {
+  channel_ids?: number[];
+  epg_source_ids?: number[];
+  source_order?: number[];
+}): Promise<EPGMatchResponse> {
+  return fetchJson(`${API_BASE}/epg/match`, {
+    method: 'POST',
+    body: JSON.stringify({
+      channel_ids: params.channel_ids || [],
+      epg_source_ids: params.epg_source_ids || [],
+      source_order: params.source_order || [],
+    }),
   });
 }
 
