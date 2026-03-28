@@ -18,11 +18,19 @@ services:
     volumes:
       - ./config:/config
     environment:
+      - PUID=1000
+      - PGID=1000
       - ECM_PORT=6100
       - ECM_HTTPS_PORT=6143
 ```
 
 That's it. Open `http://localhost:6100` and the setup wizard will guide you through creating an admin account and connecting to Dispatcharr.
+
+**User / Group Identifiers:**
+- **PUID** (default: 1000) — User ID the application runs as
+- **PGID** (default: 1000) — Group ID the application runs as
+
+Set these to match the owner of your bind-mounted volumes to avoid permission issues. Find your IDs with `id your_user`.
 
 **Port Configuration:**
 - **ECM_PORT** (default: 6100) — HTTP interface (always available as fallback)
