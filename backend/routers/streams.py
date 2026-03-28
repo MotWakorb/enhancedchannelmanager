@@ -2,20 +2,53 @@
 Streams & providers router — stream listing and provider endpoints.
 
 Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
+Enriched with server-side normalization in v0.15.0.
 """
 import logging
 import time
+from enum import Enum
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from cache import get_cache
 from dispatcharr_client import get_client
+from stream_normalization import (
+    enrich_stream,
+    get_stream_quality_priority,
+    sort_streams_by_quality,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Streams"])
+
+
+class StreamSortOrder(str, Enum):
+    """Available server-side sort orders for streams."""
+    name_asc = "name"
+    name_desc = "-name"
+    quality = "quality"
+    quality_desc = "-quality"
+
+
+def _enrich_stream_results(streams: list[dict]) -> None:
+    """Enrich a list of stream dicts in-place with normalization metadata."""
+    start = time.time()
+    for stream in streams:
+        enrichment = enrich_stream(stream)
+        stream["normalized_name"] = enrichment.normalized_name
+        stream["quality_tier"] = enrichment.quality_tier
+        stream["quality_priority"] = enrichment.quality_priority
+        stream["detected_country"] = enrichment.detected_country
+        stream["detected_network_prefix"] = enrichment.detected_network_prefix
+        stream["regional_variant"] = enrichment.regional_variant
+    elapsed = (time.time() - start) * 1000
+    if elapsed > 10:
+        logger.debug(
+            "[STREAMS] Enriched %d streams in %.1fms", len(streams), elapsed
+        )
 
 
 @router.get("/api/streams")
@@ -25,9 +58,11 @@ async def get_streams(
     search: Optional[str] = None,
     channel_group_name: Optional[str] = None,
     m3u_account: Optional[int] = None,
+    sort: Optional[StreamSortOrder] = None,
+    enrich: bool = True,
     bypass_cache: bool = False,
 ):
-    """List streams with pagination, search, and filtering."""
+    """List streams with pagination, search, filtering, and enrichment."""
     start_time = time.time()
     logger.debug(
         "[STREAMS] Fetching streams - page=%s, page_size=%s, "
@@ -37,7 +72,8 @@ async def get_streams(
     )
 
     cache = get_cache()
-    cache_key = f"streams:p{page}:ps{page_size}:s{search or ''}:g{channel_group_name or ''}:m{m3u_account or ''}"
+    sort_str = sort.value if sort else ""
+    cache_key = f"streams:p{page}:ps{page_size}:s{search or ''}:g{channel_group_name or ''}:m{m3u_account or ''}:sort{sort_str}:e{enrich}"
 
     # Try cache first (unless bypassed)
     if not bypass_cache:
@@ -74,9 +110,26 @@ async def get_streams(
         group_map = {g["id"]: g["name"] for g in groups}
 
         # Add channel_group_name to each stream
-        for stream in result.get("results", []):
+        streams = result.get("results", [])
+        for stream in streams:
             group_id = stream.get("channel_group")
             stream["channel_group_name"] = group_map.get(group_id) if group_id else None
+
+        # Enrich streams with normalization metadata
+        if enrich:
+            _enrich_stream_results(streams)
+
+        # Apply server-side sorting
+        if sort and streams:
+            if sort == StreamSortOrder.quality:
+                streams = sort_streams_by_quality(streams)
+            elif sort == StreamSortOrder.quality_desc:
+                streams = list(reversed(sort_streams_by_quality(streams)))
+            elif sort == StreamSortOrder.name_asc:
+                streams.sort(key=lambda s: (s.get("name") or "").lower())
+            elif sort == StreamSortOrder.name_desc:
+                streams.sort(key=lambda s: (s.get("name") or "").lower(), reverse=True)
+            result["results"] = streams
 
         # Cache the result
         cache.set(cache_key, result)
@@ -143,6 +196,9 @@ async def get_streams_by_ids(request: BulkStreamIdsRequest):
         result = await client.get_streams_by_ids(request.stream_ids)
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[STREAMS] Fetched %d streams by IDs in %.1fms", len(request.stream_ids), elapsed_ms)
+        # Enrich results
+        if isinstance(result, list):
+            _enrich_stream_results(result)
         return result
     except Exception as e:
         logger.exception("[STREAMS] Failed to get streams by IDs: %s", e)

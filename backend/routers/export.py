@@ -1062,3 +1062,233 @@ async def delete_publish_history_bulk(older_than_days: int = 30):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Print Guide
+# ---------------------------------------------------------------------------
+
+_GROUP_COLORS = [
+    {"header": "#4A90E2", "bg": "#E8F2FC"},
+    {"header": "#50C878", "bg": "#E8F8F0"},
+    {"header": "#9B59B6", "bg": "#F4ECF7"},
+    {"header": "#E67E22", "bg": "#FDF2E9"},
+    {"header": "#16A085", "bg": "#E8F6F3"},
+    {"header": "#C0392B", "bg": "#FADBD8"},
+    {"header": "#F39C12", "bg": "#FEF5E7"},
+    {"header": "#2C3E50", "bg": "#EAF2F8"},
+    {"header": "#D35400", "bg": "#FBEEE6"},
+    {"header": "#8E44AD", "bg": "#F5EEF8"},
+]
+
+
+def _escape_html(text: str) -> str:
+    """Escape HTML special characters."""
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
+
+
+_CHANNEL_NUM_PREFIX_RE = re.compile(r"^\d+(\.\d+)?\s*[-|:]\s*")
+
+
+def _clean_channel_name(name: str, channel_number) -> str:
+    """Remove channel number prefix from display name."""
+    if not name:
+        return "Unknown Channel"
+    cleaned = _CHANNEL_NUM_PREFIX_RE.sub("", name)
+    if channel_number is not None:
+        try:
+            num_val = float(channel_number)
+            num_str = str(int(num_val)) if num_val == int(num_val) else str(num_val)
+            escaped_num = re.escape(num_str)
+            cleaned = re.sub(rf"^{escaped_num}\s*[-|:]?\s*", "", cleaned, flags=re.IGNORECASE)
+        except (ValueError, TypeError):
+            pass
+    return cleaned.strip() or name
+
+
+def _fmt_channel_number(n) -> str:
+    """Format a channel number for display."""
+    if n is None:
+        return "N/A"
+    try:
+        num = float(n)
+        return str(int(num)) if num == int(num) else str(num)
+    except (ValueError, TypeError):
+        return str(n)
+
+
+class PrintGuideGroupSetting(BaseModel):
+    group_id: int
+    selected: bool = True
+    mode: Literal["detailed", "summary"] = "detailed"
+
+
+class PrintGuideRequest(BaseModel):
+    title: str = "Channel Guide"
+    groups: list[PrintGuideGroupSetting] = []
+
+
+@router.post("/print-guide")
+async def generate_print_guide(request: PrintGuideRequest):
+    """Generate a printable HTML channel guide.
+
+    Returns complete HTML document with CSS pagination and print styling.
+    Groups are colored from a rotating 10-color palette.
+    Each group renders in detailed (all channels) or summary (range) mode.
+    """
+    start = time.time()
+    logger.info("[EXPORT] Generating print guide: title=%s, groups=%d",
+                request.title, len(request.groups))
+
+    client = get_client()
+    try:
+        channel_groups = await client.get_channel_groups()
+        channels_result = await client.get_channels(page=1, page_size=10000)
+        channels = channels_result.get("results", [])
+
+        # Build settings map
+        selected_ids: set[int] = set()
+        settings_map: dict[int, PrintGuideGroupSetting] = {}
+        if request.groups:
+            for gs in request.groups:
+                if gs.selected:
+                    selected_ids.add(gs.group_id)
+                settings_map[gs.group_id] = gs
+        else:
+            selected_ids = {g["id"] for g in channel_groups}
+
+        # Sort groups by lowest channel number
+        group_order: dict[int, float] = {}
+        for ch in channels:
+            gid = ch.get("channel_group_id") or ch.get("channel_group")
+            num = ch.get("channel_number")
+            if gid and num is not None:
+                if gid not in group_order or num < group_order[gid]:
+                    group_order[gid] = num
+        sorted_groups = sorted(
+            channel_groups,
+            key=lambda g: group_order.get(g["id"], 999999),
+        )
+
+        # Build groups HTML
+        groups_html_parts: list[str] = []
+        color_index = 0
+        total_channels = 0
+
+        for group in sorted_groups:
+            gid = group["id"]
+            if selected_ids and gid not in selected_ids:
+                continue
+
+            gs = settings_map.get(gid)
+            mode = gs.mode if gs else "detailed"
+            color = _GROUP_COLORS[color_index % len(_GROUP_COLORS)]
+            color_index += 1
+
+            group_channels = sorted(
+                [
+                    ch for ch in channels
+                    if (ch.get("channel_group_id") or ch.get("channel_group")) == gid
+                    and ch.get("channel_number") is not None
+                ],
+                key=lambda ch: ch.get("channel_number", 0),
+            )
+            if not group_channels:
+                continue
+
+            total_channels += len(group_channels)
+            gname = _escape_html(group.get("name", "Unknown"))
+
+            if mode == "summary":
+                first_num = group_channels[0].get("channel_number")
+                last_num = group_channels[-1].get("channel_number")
+                range_str = (
+                    _fmt_channel_number(first_num) if first_num == last_num
+                    else f"{_fmt_channel_number(first_num)} - {_fmt_channel_number(last_num)}"
+                )
+                groups_html_parts.append(
+                    f'<div class="channel-group summary-mode" style="background:{color["bg"]}">'
+                    f'<div class="group-title" style="background:{color["header"]};color:#fff">{gname}</div>'
+                    f'<div class="channel-list"><div class="channel-line">'
+                    f'<span class="ch-num">{range_str}</span> ({len(group_channels)} channels)'
+                    f'</div></div></div>'
+                )
+            else:
+                lines: list[str] = []
+                for ch in group_channels:
+                    num_str = _fmt_channel_number(ch.get("channel_number"))
+                    dname = _escape_html(_clean_channel_name(ch.get("name", ""), ch.get("channel_number")))
+                    lines.append(f'<div class="channel-line"><span class="ch-num">{num_str}</span> {dname}</div>')
+                groups_html_parts.append(
+                    f'<div class="channel-group" style="background:{color["bg"]}">'
+                    f'<div class="group-title" style="background:{color["header"]};color:#fff">{gname}</div>'
+                    f'<div class="channel-list">{"".join(lines)}</div></div>'
+                )
+
+        groups_html = "\n".join(groups_html_parts)
+        title_esc = _escape_html(request.title)
+
+        html = _build_print_guide_html(title_esc, total_channels, groups_html)
+
+        elapsed = (time.time() - start) * 1000
+        logger.info("[EXPORT] Print guide generated: %d channels, %d groups in %.1fms",
+                    total_channels, color_index, elapsed)
+
+        return Response(content=html, media_type="text/html")
+
+    except Exception as e:
+        logger.exception("[EXPORT] Failed to generate print guide: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to generate print guide")
+
+
+def _build_print_guide_html(title_esc: str, total_channels: int, groups_html: str) -> str:
+    """Assemble the full print guide HTML document."""
+    return f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>{title_esc}</title>
+<style>
+@page{{size:11in 8.5in;margin:0.3in 0.4in}}
+*{{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}
+html,body{{height:100%}}
+body{{font-family:Arial,sans-serif;background:#e0e0e0;padding:20px}}
+.page{{width:10.2in;height:7.9in;margin:0 auto 20px auto;padding:0.3in 0.4in;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.2);font-size:6pt;line-height:1.15;color:#000;overflow:hidden;position:relative}}
+.header{{column-span:all;text-align:center;border-bottom:1.5px solid #000;padding-bottom:3px;margin-bottom:6px}}
+.header h1{{font-size:14pt;font-weight:bold;margin:0 0 2px 0;letter-spacing:.5px}}
+.header .subtitle{{font-size:7pt;margin:0;color:#333}}
+.channel-group{{break-inside:auto;page-break-inside:auto;border:1px solid #999;border-radius:2px;padding:3px 4px;margin-bottom:4px}}
+.group-title{{font-size:7pt;font-weight:bold;padding:2px 4px;margin:-3px -4px 2px -4px;border-radius:1px 1px 0 0}}
+.channel-line{{margin:0;padding:.5px 0;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+.ch-num{{font-weight:bold;display:inline-block;min-width:28px;color:#000}}
+.summary-mode .channel-line{{font-style:italic}}
+.content{{column-count:5;column-gap:10px;column-fill:auto;height:calc(100% - 45px);overflow:hidden}}
+.print-hint{{text-align:center;padding:10px;background:#fff3cd;border:1px solid #ffc107;border-radius:4px;margin-bottom:20px;font-size:10pt}}
+.page-footer{{position:absolute;bottom:0;left:0;right:0;height:15px;text-align:right;padding-right:.1in;font-size:7pt;color:#666}}
+@media print{{body{{background:#fff;padding:0}}.page{{width:auto;height:7.9in;margin:0;padding:0.3in 0.4in;box-shadow:none;page-break-after:always;position:relative;overflow:hidden}}.page:last-child{{page-break-after:auto}}.content{{height:calc(100% - 45px)}}.print-hint{{display:none}}}}
+</style>
+</head>
+<body>
+<div class="print-hint">Print dialog will open automatically. If it doesn't, press Ctrl+P (Cmd+P on Mac).</div>
+<div id="pages-container">
+<div class="page" id="page-1">
+<div class="header"><h1>{title_esc}</h1><div class="subtitle">{total_channels} channels</div></div>
+<div class="content">{groups_html}</div>
+</div>
+</div>
+<script>
+window.addEventListener("load",function(){{setTimeout(function(){{handlePagination();setTimeout(function(){{window.print()}},300)}},200)}});
+function handlePagination(){{var c=document.getElementById("pages-container"),p=document.getElementById("page-1"),t=p.querySelector(".content"),g=Array.from(t.querySelectorAll(".channel-group"));if(!g.length){{addPN(p,1);return}}var r=t.getBoundingClientRect(),m=r.left+r.width;paginate(c,p,g,m)}}
+function paginate(c,p,g,m){{var t=p.querySelector(".content");t.style.overflow="visible";var sg=null,si=-1,oi=-1;for(var i=0;i<g.length;i++){{var r=g[i].getBoundingClientRect();if(r.left>=m){{oi=i;break}}else if(r.right>m+2){{sg=g[i];si=i}}}}t.style.overflow="hidden";if(oi===-1&&!sg){{addPN(p,getPN(p));updPN(c);return}}var n=c.querySelectorAll(".page").length+1,np=document.createElement("div");np.className="page";np.id="page-"+n;np.innerHTML='<div class="header" style="border-bottom:1px solid #999"><h1 style="font-size:10pt">{title_esc} (continued)</h1></div><div class="content"></div>';c.appendChild(np);var nc=np.querySelector(".content");if(sg){{var cl=sg.cloneNode(true);var te=cl.querySelector(".group-title");if(te)te.textContent=te.textContent+" (continued)";nc.appendChild(cl)}}if(oi!==-1){{g.slice(oi).forEach(function(x){{nc.appendChild(x)}})}}addPN(p,getPN(p));setTimeout(function(){{paginate(c,np,Array.from(nc.querySelectorAll(".channel-group")),m)}},50)}}
+function getPN(p){{var m=p.id.match(/page-(\\d+)/);return m?parseInt(m[1],10):1}}
+function updPN(c){{var a=c.querySelectorAll(".page"),t=a.length;a.forEach(function(p,i){{var f=p.querySelector(".page-footer");if(f)f.textContent="Page "+(i+1)+" of "+t}})}}
+function addPN(p,n){{if(p.querySelector(".page-footer"))return;var f=document.createElement("div");f.className="page-footer";f.textContent="Page "+n;p.appendChild(f)}}
+</script>
+</body>
+</html>'''

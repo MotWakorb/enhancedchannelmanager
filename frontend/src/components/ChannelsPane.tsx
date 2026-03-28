@@ -5734,7 +5734,6 @@ export function ChannelsPane({
       <BulkEPGAssignModal
         isOpen={bulkEPGModal.isOpen && selectedChannelIds.size > 0}
         selectedChannels={channels.filter(c => selectedChannelIds.has(c.id))}
-        streams={allStreams}
         epgData={epgData || []}
         epgSources={epgSources || []}
         onClose={() => bulkEPGModal.close()}
