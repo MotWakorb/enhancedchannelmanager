@@ -17,7 +17,7 @@ const BROADCAST_CALL_SIGN_PATTERN = /\b([KW][A-Z]{2,4})(?:[-]?(?:DT|TV|HD|LP|CD|
 /**
  * EPG match with confidence score
  */
-export interface EPGMatchWithScore {
+interface EPGMatchWithScore {
   epg: EPGData;
   confidence: number; // 0-100 confidence score
 }
@@ -25,7 +25,7 @@ export interface EPGMatchWithScore {
 /**
  * Result of EPG matching for a single channel
  */
-export interface EPGMatchResult {
+interface EPGMatchResult {
   channel: Channel;
   detectedCountry: string | null;
   normalizedName: string;
@@ -120,7 +120,7 @@ export function extractBroadcastCallSign(name: string): string | null {
  * @param streams - Array of streams to check
  * @returns Lowercase country code (e.g., "us") or null
  */
-export function detectCountryFromStreams(streams: Stream[]): string | null {
+function detectCountryFromStreams(streams: Stream[]): string | null {
   if (streams.length === 0) return null;
 
   // Try first stream's name (e.g., "US: ESPN" -> "US")
@@ -816,7 +816,7 @@ function findEPGMatchesWithLookup(
 /**
  * Progress callback for batch matching
  */
-export interface BatchMatchProgress {
+interface BatchMatchProgress {
   current: number;
   total: number;
   channelName: string;
@@ -834,79 +834,7 @@ export interface BatchMatchProgress {
  *                      When provided, matches from higher-priority sources are preferred
  * @returns Array of match results
  */
-export async function batchFindEPGMatchesAsync(
-  channels: Channel[],
-  allStreams: Stream[],
-  epgData: EPGData[],
-  onProgress?: (progress: BatchMatchProgress) => void,
-  sourceOrder?: number[]
-): Promise<EPGMatchResult[]> {
-  // Build lookup maps ONCE for all EPG data
-  const epgLookup = buildEPGLookup(epgData);
-
-  // Create a lookup map for streams by ID
-  const streamMap = new Map(allStreams.map(s => [s.id, s]));
-
-  // Create source priority map for sorting (lower index = higher priority)
-  const sourcePriorityMap = new Map<number, number>();
-  if (sourceOrder) {
-    sourceOrder.forEach((sourceId, index) => {
-      sourcePriorityMap.set(sourceId, index);
-    });
-  }
-
-  const results: EPGMatchResult[] = [];
-  const total = channels.length;
-  const BATCH_SIZE = 10; // Process 10 channels before yielding
-
-  for (let i = 0; i < channels.length; i++) {
-    const channel = channels[i];
-
-    // Report progress
-    if (onProgress) {
-      onProgress({ current: i + 1, total, channelName: channel.name });
-    }
-
-    // Get streams associated with this channel
-    const channelStreams = channel.streams
-      .map(id => streamMap.get(id))
-      .filter((s): s is Stream => s !== undefined);
-
-    const result = findEPGMatchesWithLookup(channel, channelStreams, epgLookup);
-
-    // If we have source priority order, re-sort matches by source priority
-    if (sourceOrder && sourceOrder.length > 0 && result.matches.length > 1) {
-      result.matches.sort((a, b) => {
-        const aPriority = sourcePriorityMap.get(a.epg_source) ?? 999;
-        const bPriority = sourcePriorityMap.get(b.epg_source) ?? 999;
-        // Lower priority number = higher priority (comes first)
-        return aPriority - bPriority;
-      });
-
-      // If the top match is from the highest priority source, and there's only one match
-      // from that source, treat it as an exact match
-      const topSourceId = result.matches[0].epg_source;
-      const topPriority = sourcePriorityMap.get(topSourceId) ?? 999;
-      const matchesFromTopSource = result.matches.filter(
-        m => (sourcePriorityMap.get(m.epg_source) ?? 999) === topPriority
-      );
-      if (matchesFromTopSource.length === 1 && result.status === 'multiple') {
-        // Single match from highest priority source - treat as exact
-        result.matches = matchesFromTopSource;
-        result.status = 'exact';
-      }
-    }
-
-    results.push(result);
-
-    // Yield control every BATCH_SIZE channels to allow UI updates
-    if ((i + 1) % BATCH_SIZE === 0) {
-      await new Promise(resolve => setTimeout(resolve, 0));
-    }
-  }
-
-  return results;
-}
+// batchFindEPGMatchesAsync removed — EPG matching moved server-side
 
 /**
  * Get the EPG source name for an EPG data entry.
@@ -938,25 +866,4 @@ export function getEPGSourceName(
  * @param sourceName - Optional EPG source name to include in matching
  * @returns true if all search words match the EPG entry
  */
-export function matchesEPGSearch(
-  epg: EPGData,
-  searchWords: string[],
-  sourceName?: string
-): boolean {
-  const lowerName = epg.name.toLowerCase();
-  const lowerTvgId = epg.tvg_id.toLowerCase();
-  // Create alphanumeric-only versions for fuzzy matching against concatenated names
-  const normalizedName = lowerName.replace(/[^a-z0-9]/g, '');
-  const normalizedTvgId = lowerTvgId.replace(/[^a-z0-9]/g, '');
-  const lowerSourceName = sourceName?.toLowerCase() ?? '';
-
-  // Each search word must appear in name, tvg_id, source name, or their normalized versions
-  return searchWords.every(word => {
-    const normalizedWord = word.replace(/[^a-z0-9]/g, '');
-    return lowerName.includes(word) ||
-           lowerTvgId.includes(word) ||
-           normalizedName.includes(normalizedWord) ||
-           normalizedTvgId.includes(normalizedWord) ||
-           (lowerSourceName && lowerSourceName.includes(word));
-  });
-}
+// matchesEPGSearch removed — EPG matching moved server-side

@@ -702,7 +702,7 @@ export async function checkForUpdates(
       };
     }
   } catch (error) {
-    console.warn('Failed to check for updates:', error);
+    logger.warn('Failed to check for updates:', error);
     return { updateAvailable: false };
   }
 }
@@ -1438,7 +1438,7 @@ export async function probeBulkStreams(streamIds: number[]): Promise<import('../
     logger.debug(`[Probe] probeBulkStreams succeeded, probed ${result.probed} streams`);
     return result;
   } catch (error) {
-    console.error(`[Probe] probeBulkStreams failed:`, error);
+    logger.error(`[Probe] probeBulkStreams failed:`, error);
     throw error;
   }
 }
@@ -1465,7 +1465,7 @@ export async function probeAllStreams(channelGroups?: string[], skipM3uRefresh?:
     logger.debug('[Probe] probeAllStreams request succeeded:', result);
     return result;
   } catch (error) {
-    console.error('[Probe] probeAllStreams failed:', error);
+    logger.error('[Probe] probeAllStreams failed:', error);
     throw error;
   }
 }

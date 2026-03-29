@@ -4,6 +4,7 @@
  * Admin panel for configuring TLS/SSL certificates with Let's Encrypt
  * or manual certificate upload.
  */
+import { logger } from '../../utils/logger';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import * as api from '../../services/api';
 import type { TLSStatus } from '../../types';
@@ -75,7 +76,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
         setRenewDaysBefore(settingsData.renew_days_before_expiry);
       } catch (err) {
         notifications.error('Failed to load TLS settings', 'TLS');
-        console.error('Failed to load TLS settings:', err);
+        logger.error('Failed to load TLS settings:', err);
       } finally {
         setLoading(false);
       }

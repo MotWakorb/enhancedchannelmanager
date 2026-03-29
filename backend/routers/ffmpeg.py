@@ -15,6 +15,15 @@ from database import get_session
 from ffmpeg_builder.probe import probe_source, detect_capabilities as ffmpeg_detect_capabilities
 from ffmpeg_builder.validation import validate_config as ffmpeg_validate_config
 from ffmpeg_builder.command_generator import generate_command as ffmpeg_generate_command
+from ffmpeg_builder.persistence import (
+    create_config as persistence_create_config,
+    get_config as persistence_get_config,
+    update_config as persistence_update_config,
+    delete_config as persistence_delete_config,
+    list_configs as persistence_list_configs,
+    ConfigNotFoundError,
+    ConfigValidationError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,64 +110,86 @@ async def generate_ffmpeg_command_endpoint(request: Request):
     }
 
 
-# --- Saved Configs CRUD (stubs — will be backed by DB in Epic 8) ---
-
-def ffmpeg_list_configs():
-    return []
-
-def ffmpeg_create_config(data):
-    return data
-
-def ffmpeg_get_config(config_id):
-    return None
-
-def ffmpeg_update_config(config_id, data):
-    return data
-
-def ffmpeg_delete_config(config_id):
-    return {"status": "deleted"}
-
+# --- Saved Configs CRUD (backed by ffmpeg_builder.persistence) ---
 
 @router.get("/configs")
 async def list_ffmpeg_configs():
     logger.debug("[FFMPEG] GET /api/ffmpeg/configs")
-    configs = ffmpeg_list_configs()
-    return {"configs": configs}
+    session = get_session()
+    try:
+        configs = persistence_list_configs(session)
+        return {"configs": [{"id": c.id, "name": c.name, "description": c.description, "config": c.config, "created_at": c.created_at.isoformat() + "Z", "updated_at": c.updated_at.isoformat() + "Z"} for c in configs]}
+    finally:
+        session.close()
 
 
 @router.post("/configs", status_code=201)
 async def create_ffmpeg_config(request: Request):
     logger.debug("[FFMPEG] POST /api/ffmpeg/configs")
     body = await request.json()
-    result = ffmpeg_create_config(body)
-    logger.info("[FFMPEG] Created config")
-    return result
+    session = get_session()
+    try:
+        saved = persistence_create_config(
+            session,
+            name=body.get("name", "Untitled"),
+            config=body.get("config", body),
+            description=body.get("description"),
+        )
+        logger.info("[FFMPEG] Created config id=%s name=%s", saved.id, saved.name)
+        return {"id": saved.id, "name": saved.name, "description": saved.description, "config": saved.config, "created_at": saved.created_at.isoformat() + "Z", "updated_at": saved.updated_at.isoformat() + "Z"}
+    except ConfigValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        session.close()
 
 
 @router.get("/configs/{config_id}")
 async def get_ffmpeg_config(config_id: int):
     logger.debug("[FFMPEG] GET /api/ffmpeg/configs/%s", config_id)
-    result = ffmpeg_get_config(config_id)
-    if result is None:
+    session = get_session()
+    try:
+        saved = persistence_get_config(session, config_id)
+        return {"id": saved.id, "name": saved.name, "description": saved.description, "config": saved.config, "created_at": saved.created_at.isoformat() + "Z", "updated_at": saved.updated_at.isoformat() + "Z"}
+    except ConfigNotFoundError:
         raise HTTPException(status_code=404, detail="Config not found")
-    return result
+    finally:
+        session.close()
 
 
 @router.put("/configs/{config_id}")
 async def update_ffmpeg_config(config_id: int, request: Request):
     logger.debug("[FFMPEG] PUT /api/ffmpeg/configs/%s", config_id)
     body = await request.json()
-    result = ffmpeg_update_config(config_id, body)
-    logger.info("[FFMPEG] Updated config id=%s", config_id)
-    return result
+    session = get_session()
+    try:
+        saved = persistence_update_config(
+            session, config_id,
+            name=body.get("name"),
+            config=body.get("config"),
+            description=body.get("description"),
+        )
+        logger.info("[FFMPEG] Updated config id=%s", config_id)
+        return {"id": saved.id, "name": saved.name, "description": saved.description, "config": saved.config, "created_at": saved.created_at.isoformat() + "Z", "updated_at": saved.updated_at.isoformat() + "Z"}
+    except ConfigNotFoundError:
+        raise HTTPException(status_code=404, detail="Config not found")
+    except ConfigValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        session.close()
 
 
 @router.delete("/configs/{config_id}")
 async def delete_ffmpeg_config(config_id: int):
     logger.debug("[FFMPEG] DELETE /api/ffmpeg/configs/%s", config_id)
-    result = ffmpeg_delete_config(config_id)
-    logger.info("[FFMPEG] Deleted config id=%s", config_id)
-    return result
+    session = get_session()
+    try:
+        persistence_delete_config(session, config_id)
+        logger.info("[FFMPEG] Deleted config id=%s", config_id)
+        return {"status": "deleted"}
+    except ConfigNotFoundError:
+        raise HTTPException(status_code=404, detail="Config not found")
+    finally:
+        session.close()
 
 
 # --- Jobs CRUD (stubs — will be backed by job queue in Epic 6) ---

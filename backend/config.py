@@ -273,20 +273,6 @@ def get_http_port() -> int:
         return 6100
 
 
-def log_config_status():
-    """Log the current configuration status for debugging."""
-    logger.info("[CONFIG] CONFIG_DIR: %s", CONFIG_DIR)
-    logger.info("[CONFIG] CONFIG_FILE: %s", CONFIG_FILE)
-    logger.info("[CONFIG] CONFIG_DIR exists: %s", CONFIG_DIR.exists())
-    logger.info("[CONFIG] CONFIG_FILE exists: %s", CONFIG_FILE.exists())
-    if CONFIG_DIR.exists():
-        try:
-            contents = list(CONFIG_DIR.iterdir())
-            logger.info("[CONFIG] CONFIG_DIR contents: %s", contents)
-        except Exception as e:
-            logger.exception("[CONFIG] Failed to list CONFIG_DIR: %s", e)
-
-
 def get_log_level_from_env() -> str:
     """Get log level from environment variable or default to INFO."""
     return os.environ.get("LOG_LEVEL", "INFO").upper()

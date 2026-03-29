@@ -4,6 +4,7 @@
  * Admin panel for configuring authentication providers and settings.
  * Allows enabling/disabling auth providers and configuring their options.
  */
+import { logger } from '../../utils/logger';
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../services/api';
 import type { AuthSettingsPublic, AuthSettingsUpdate } from '../../types';
@@ -49,7 +50,7 @@ export function AuthSettingsSection({ isAdmin }: Props) {
         setRequireAuth(data.require_auth);
       } catch (err) {
         notifications.error('Failed to load authentication settings', 'Auth Settings');
-        console.error('Failed to load auth settings:', err);
+        logger.error('Failed to load auth settings:', err);
       } finally {
         setLoading(false);
       }

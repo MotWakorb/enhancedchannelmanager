@@ -1488,7 +1488,7 @@ export function ChannelsPane({
           .filter((s): s is Stream => s !== undefined);
         setChannelStreams(orderedStreams);
       } catch (err) {
-        console.error('Failed to load streams:', err);
+        logger.error('Failed to load streams:', err);
       } finally {
         setStreamsLoading(false);
       }
@@ -1513,7 +1513,7 @@ export function ChannelsPane({
         });
       } catch (err) {
         // Stats not available is OK - they may not have been probed yet
-        console.debug('Failed to fetch stream stats:', err);
+        logger.debug('Failed to fetch stream stats:', err);
       }
     };
     fetchStreamStats();
@@ -1543,7 +1543,7 @@ export function ChannelsPane({
         });
       } catch (err) {
         // Stats not available is OK - they may not have been probed yet
-        console.debug('Failed to pre-load stream stats:', err);
+        logger.debug('Failed to pre-load stream stats:', err);
       }
     };
     preloadAllStreamStats();
@@ -1553,18 +1553,18 @@ export function ChannelsPane({
   const handleProbeChannel = useCallback(async (channel: Channel) => {
     // channel.streams is an array of stream IDs (numbers)
     const streamIds = channel.streams;
-    console.log(`[ChannelsPane] handleProbeChannel called for channel ${channel.id} (${channel.name}) with ${streamIds.length} streams`);
+    logger.debug(`[ChannelsPane] handleProbeChannel called for channel ${channel.id} (${channel.name}) with ${streamIds.length} streams`);
 
     if (streamIds.length === 0) {
-      console.log(`[ChannelsPane] No streams to probe for channel ${channel.id}`);
+      logger.debug(`[ChannelsPane] No streams to probe for channel ${channel.id}`);
       return;
     }
 
     setProbingChannels((prev) => new Set(prev).add(channel.id));
     try {
-      console.log(`[ChannelsPane] Calling probeBulkStreams for channel ${channel.id}`);
+      logger.debug(`[ChannelsPane] Calling probeBulkStreams for channel ${channel.id}`);
       const result = await api.probeBulkStreams(streamIds);
-      console.log(`[ChannelsPane] probeBulkStreams succeeded for channel ${channel.id}, probed ${result.probed} streams`);
+      logger.debug(`[ChannelsPane] probeBulkStreams succeeded for channel ${channel.id}, probed ${result.probed} streams`);
 
       // Update stats map with results
       if (result.results) {
@@ -1577,7 +1577,7 @@ export function ChannelsPane({
         });
       }
     } catch (err) {
-      console.error(`[ChannelsPane] Failed to probe channel ${channel.id} streams:`, err);
+      logger.error(`[ChannelsPane] Failed to probe channel ${channel.id} streams:`, err);
     } finally {
       setProbingChannels((prev) => {
         const next = new Set(prev);
@@ -1621,7 +1621,7 @@ export function ChannelsPane({
         notifications.success(`Probed ${result.results.length} stream${result.results.length !== 1 ? 's' : ''}: ${successCount} succeeded`, 'Probe Complete');
       }
     } catch (err) {
-      console.error('[ChannelsPane] Bulk probe failed:', err);
+      logger.error('[ChannelsPane] Bulk probe failed:', err);
       notifications.error('Failed to probe streams', 'Probe Error');
     } finally {
       setProbingChannels(prev => {
@@ -1680,10 +1680,10 @@ export function ChannelsPane({
   // Handle probe group request - probes all streams in all channels of a group
   // Uses the same backend probe logic as "Probe All Streams Now" but filtered to a single group
   const handleProbeGroup = useCallback(async (groupId: number | 'ungrouped', groupName: string) => {
-    console.log(`[ChannelsPane] handleProbeGroup called for group ${groupId} (${groupName})`);
+    logger.debug(`[ChannelsPane] handleProbeGroup called for group ${groupId} (${groupName})`);
 
     if (groupId === 'ungrouped') {
-      console.log(`[ChannelsPane] Cannot probe ungrouped channels via group probe`);
+      logger.debug(`[ChannelsPane] Cannot probe ungrouped channels via group probe`);
       return;
     }
 
@@ -1692,15 +1692,15 @@ export function ChannelsPane({
       // Use the same backend probe logic as Settings -> Probe All Streams Now
       // This ensures consistent filtering, logging, and channel discovery
       // Pass skipM3uRefresh=true since this is an on-demand probe from UI
-      console.log(`[ChannelsPane] Calling probeAllStreams for group '${groupName}' (skipping M3U refresh)`);
+      logger.debug(`[ChannelsPane] Calling probeAllStreams for group '${groupName}' (skipping M3U refresh)`);
       const result = await api.probeAllStreams([groupName], true);
-      console.log(`[ChannelsPane] probeAllStreams started for group '${groupName}':`, result);
+      logger.debug(`[ChannelsPane] probeAllStreams started for group '${groupName}':`, result);
 
       // Poll for probe completion to keep the spinner active
       const pollInterval = setInterval(async () => {
         try {
           const progress = await api.getProbeProgress();
-          console.log(`[ChannelsPane] Probe progress for '${groupName}':`, progress);
+          logger.debug(`[ChannelsPane] Probe progress for '${groupName}':`, progress);
 
           if (!progress.in_progress) {
             // Probe completed - clear the spinner
@@ -1710,11 +1710,11 @@ export function ChannelsPane({
               next.delete(groupId);
               return next;
             });
-            console.log(`[ChannelsPane] Probe completed for group '${groupName}'`);
+            logger.info(`[ChannelsPane] Probe completed for group '${groupName}'`);
           }
         } catch (err) {
           // If we can't get progress, stop polling and clear spinner
-          console.error(`[ChannelsPane] Failed to get probe progress:`, err);
+          logger.error(`[ChannelsPane] Failed to get probe progress:`, err);
           clearInterval(pollInterval);
           setProbingGroups((prev) => {
             const next = new Set(prev);
@@ -1725,7 +1725,7 @@ export function ChannelsPane({
       }, 2000); // Poll every 2 seconds
 
     } catch (err) {
-      console.error(`[ChannelsPane] Failed to start probe for group '${groupName}':`, err);
+      logger.error(`[ChannelsPane] Failed to start probe for group '${groupName}':`, err);
       // Clear spinner on error
       setProbingGroups((prev) => {
         const next = new Set(prev);
@@ -1973,19 +1973,19 @@ export function ChannelsPane({
 
   // Handle clearing probe stats for a stream
   const handleClearStreamStats = async (streamId: number) => {
-    console.log('handleClearStreamStats called with streamId:', streamId);
+    logger.debug('handleClearStreamStats called with streamId:', streamId);
     try {
       const result = await api.clearStreamStats([streamId]);
-      console.log('clearStreamStats result:', result);
+      logger.debug('clearStreamStats result:', result);
       // Remove from local stats map so UI updates immediately
       setStreamStatsMap((prev) => {
         const next = new Map(prev);
         next.delete(streamId);
-        console.log('Removed streamId from stats map:', streamId);
+        logger.debug('Removed streamId from stats map:', streamId);
         return next;
       });
     } catch (err) {
-      console.error('Failed to clear stream stats:', err);
+      logger.error('Failed to clear stream stats:', err);
     }
   };
 
@@ -2109,7 +2109,7 @@ export function ChannelsPane({
       setChannelToDelete(null);
       setSubsequentChannels([]);
     } catch (err) {
-      console.error('Failed to delete channel:', err);
+      logger.error('Failed to delete channel:', err);
     } finally {
       setDeleting(false);
     }
@@ -2175,7 +2175,7 @@ export function ChannelsPane({
       setGroupToDelete(null);
       setDeleteGroupChannels(false);
     } catch (err) {
-      console.error('Failed to delete group:', err);
+      logger.error('Failed to delete group:', err);
     } finally {
       setDeletingGroup(false);
     }
@@ -2233,7 +2233,7 @@ export function ChannelsPane({
       setGroupToRename(null);
       setRenameGroupName('');
     } catch (err) {
-      console.error('Failed to rename group:', err);
+      logger.error('Failed to rename group:', err);
     } finally {
       setRenamingGroup(false);
     }
@@ -2319,7 +2319,7 @@ export function ChannelsPane({
 
       bulkDeleteConfirmModal.close();
     } catch (err) {
-      console.error('Failed to bulk delete channels:', err);
+      logger.error('Failed to bulk delete channels:', err);
     } finally {
       setBulkDeleting(false);
     }
@@ -2729,7 +2729,7 @@ export function ChannelsPane({
 
       handleCloseCreateGroupModal();
     } catch (err) {
-      console.error('Failed to create channel group:', err);
+      logger.error('Failed to create channel group:', err);
     } finally {
       setCreatingGroup(false);
     }
@@ -2741,7 +2741,7 @@ export function ChannelsPane({
       const groups = await api.getHiddenChannelGroups();
       setHiddenGroups(groups);
     } catch (error) {
-      console.error('Failed to load hidden groups:', error);
+      logger.error('Failed to load hidden groups:', error);
     }
   };
 
@@ -2756,7 +2756,7 @@ export function ChannelsPane({
         onChannelGroupsChange();
       }
     } catch (error) {
-      console.error('Failed to restore group:', error);
+      logger.error('Failed to restore group:', error);
     }
   };
 
@@ -2976,7 +2976,7 @@ export function ChannelsPane({
         const changeType = nameChanged ? 'channel_name_update' : 'channel_number_update';
         onChannelUpdate(updatedChannel, { type: changeType, description });
       } catch (err) {
-        console.error('Failed to update channel number:', err);
+        logger.error('Failed to update channel number:', err);
       }
     }
     setEditingChannelId(null);
@@ -3017,7 +3017,7 @@ export function ChannelsPane({
         const updatedChannel = await api.updateChannel(channelId, { name: newName });
         onChannelUpdate(updatedChannel, { type: 'channel_name_update', description });
       } catch (err) {
-        console.error('Failed to update channel name:', err);
+        logger.error('Failed to update channel name:', err);
       }
     }
     setEditingNameChannelId(null);
@@ -3043,15 +3043,6 @@ export function ChannelsPane({
     const hasStreamId = hasStreamIdFromTypes || hasStreamIdFromStore;
 
     // Log every dragover call to help debug (use warn for visibility in console)
-    console.warn(`[DRAG-DEBUG] handleStreamDragOver`, {
-      channelId,
-      isEditMode,
-      rawTypes,
-      hasStreamIdFromTypes,
-      hasStreamIdFromStore,
-      hasStreamId,
-    });
-
     logger.debug(`[DRAG-DEBUG] handleStreamDragOver called`, {
       channelId,
       isEditMode,
@@ -3063,19 +3054,16 @@ export function ChannelsPane({
 
     // Block stream drag-over when not in edit mode
     if (!isEditMode) {
-      console.warn(`[DRAG-DEBUG] Blocked: not in edit mode`);
       logger.debug(`[DRAG-DEBUG] Blocked: not in edit mode`);
       return;
     }
 
     // Allow drop if we have stream data from either source
     if (hasStreamId) {
-      console.warn(`[DRAG-DEBUG] Allowing drop - calling preventDefault`);
       logger.debug(`[DRAG-DEBUG] Allowing drop - calling preventDefault`);
       e.preventDefault();
       setDragOverChannelId(channelId);
     } else {
-      console.warn(`[DRAG-DEBUG] No stream drag data found`);
       logger.debug(`[DRAG-DEBUG] No stream drag data found, drop not allowed`);
     }
   };
@@ -3101,7 +3089,7 @@ export function ChannelsPane({
     if (bulkDrag === 'true' && streamIdsJson) {
       try {
         const streamIds = JSON.parse(streamIdsJson) as number[];
-        console.warn('[DRAG-DEBUG] Drop: using dataTransfer bulk data', { channelId, streamIds });
+        logger.debug('[DRAG-DEBUG] Drop: using dataTransfer bulk data', { channelId, streamIds });
         clearStreamDragData();
         onBulkStreamDrop(channelId, streamIds);
         return;
@@ -3112,7 +3100,7 @@ export function ChannelsPane({
 
     // Single stream from dataTransfer
     if (streamIdStr) {
-      console.warn('[DRAG-DEBUG] Drop: using dataTransfer single data', { channelId, streamId: streamIdStr });
+      logger.debug('[DRAG-DEBUG] Drop: using dataTransfer single data', { channelId, streamId: streamIdStr });
       clearStreamDragData();
       onChannelDrop(channelId, parseInt(streamIdStr, 10));
       return;
@@ -3121,7 +3109,7 @@ export function ChannelsPane({
     // Fallback: use drag store (for browsers that clear dataTransfer)
     const dragData = getStreamDragData();
     if (dragData && dragData.type === 'stream' && dragData.streamIds.length > 0) {
-      console.warn('[DRAG-DEBUG] Drop: using drag store fallback', { channelId, streamIds: dragData.streamIds });
+      logger.debug('[DRAG-DEBUG] Drop: using drag store fallback', { channelId, streamIds: dragData.streamIds });
       clearStreamDragData();
       if (dragData.streamIds.length > 1) {
         onBulkStreamDrop(channelId, dragData.streamIds);
@@ -3131,7 +3119,7 @@ export function ChannelsPane({
       return;
     }
 
-    console.warn('[DRAG-DEBUG] Drop: no stream data found');
+    logger.debug('[DRAG-DEBUG] Drop: no stream data found');
   };
 
   // Handle stream group drag over the pane (for bulk channel creation)
@@ -3182,7 +3170,7 @@ export function ChannelsPane({
           const streamIds = JSON.parse(streamIdsJson) as number[];
           onStreamGroupDrop(groupNames, streamIds, targetGroupId, suggestedStartingNumber);
         } catch {
-          console.error('Failed to parse stream group drop data');
+          logger.error('Failed to parse stream group drop data');
         }
       } else {
         // Fallback to single group (backward compatibility)
@@ -3192,7 +3180,7 @@ export function ChannelsPane({
             const streamIds = JSON.parse(streamIdsJson) as number[];
             onStreamGroupDrop([groupName], streamIds, targetGroupId, suggestedStartingNumber);
           } catch {
-            console.error('Failed to parse stream IDs from stream group drop');
+            logger.error('Failed to parse stream IDs from stream group drop');
           }
         }
       }
@@ -5830,7 +5818,7 @@ export function ChannelsPane({
                   description,
                 });
               } catch (err) {
-                console.error('Failed to update channel:', err);
+                logger.error('Failed to update channel:', err);
               }
             }
             editChannelModal.close();
@@ -5851,7 +5839,7 @@ export function ChannelsPane({
               }
               return newLogo;
             } catch (err) {
-              console.error('Failed to create logo:', err);
+              logger.error('Failed to create logo:', err);
               throw err;
             }
           }}
@@ -5863,7 +5851,7 @@ export function ChannelsPane({
               }
               return newLogo;
             } catch (err) {
-              console.error('Failed to upload logo:', err);
+              logger.error('Failed to upload logo:', err);
               throw err;
             }
           }}
@@ -7125,7 +7113,7 @@ export function ChannelsPane({
           onClose={() => csvImportModal.close()}
           onSuccess={() => {
             // Trigger a refresh of channels and groups data, adding new groups to filter
-            console.log('[ChannelsPane] CSV import onSuccess triggered, refreshing data...');
+            logger.info('[ChannelsPane] CSV import onSuccess triggered, refreshing data...');
             if (onCSVImportComplete) {
               onCSVImportComplete();
             } else {

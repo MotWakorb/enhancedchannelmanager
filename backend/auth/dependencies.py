@@ -149,30 +149,6 @@ async def get_current_user(
     return user
 
 
-async def get_current_user_optional(
-    request: Request,
-    session: Session = Depends(get_session),
-) -> Optional[User]:
-    """
-    FastAPI dependency to optionally get the current user.
-
-    Returns None instead of raising an error if not authenticated.
-    Useful for endpoints that have different behavior for authenticated
-    vs. anonymous users.
-
-    Args:
-        request: The FastAPI request object.
-        session: Database session (injected).
-
-    Returns:
-        The authenticated User object or None.
-    """
-    try:
-        return await get_current_user(request, session)
-    except HTTPException:
-        return None
-
-
 async def get_current_active_admin(
     current_user: User = Depends(get_current_user),
 ) -> User:

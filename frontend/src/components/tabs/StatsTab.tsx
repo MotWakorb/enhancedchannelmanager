@@ -265,11 +265,9 @@ export function StatsTab() {
       const elapsed = Date.now() - startTime;
       channelNameMap.current = map;
       logger.debug(`Stats Tab: Loaded ${map.size} channels for lookup in ${elapsed}ms`);
-      console.log(`Loaded ${map.size} channels for lookup`);
     } catch (err) {
       const elapsed = Date.now() - startTime;
       logger.error(`Stats Tab: Failed to load channels for name lookup after ${elapsed}ms`, err);
-      console.error('Failed to load channels for name lookup:', err);
     }
   }, []);
 
@@ -287,11 +285,9 @@ export function StatsTab() {
       const elapsed = Date.now() - startTime;
       streamProfileMap.current = map;
       logger.debug(`Stats Tab: Loaded ${map.size} stream profiles for lookup in ${elapsed}ms`);
-      console.log(`Loaded ${map.size} stream profiles for lookup`);
     } catch (err) {
       const elapsed = Date.now() - startTime;
       logger.error(`Stats Tab: Failed to load stream profiles after ${elapsed}ms`, err);
-      console.error('Failed to load stream profiles:', err);
     }
   }, []);
 
@@ -413,7 +409,7 @@ export function StatsTab() {
       const errorMessage = err instanceof Error ? err.message : 'Failed to fetch stats';
       setError(errorMessage);
 
-      console.error('Failed to fetch stats:', err);
+      logger.error('Failed to fetch stats:', err);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -455,7 +451,6 @@ export function StatsTab() {
     } catch (err) {
       const elapsed = Date.now() - startTime;
       logger.error(`Stats Tab: Failed to load M3U accounts after ${elapsed}ms`, err);
-      console.error('Failed to load M3U accounts:', err);
     }
   }, []);
 
@@ -549,7 +544,6 @@ export function StatsTab() {
       fetchData(false);
     } catch (err) {
       logger.error(`Stats Tab: Failed to stop channel ${channelId}`, err);
-      console.error('Failed to stop channel:', err);
       alert('Failed to stop channel');
     }
   };

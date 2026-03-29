@@ -5,6 +5,7 @@
  * Uses the backend EPG matching API for country-aware matching and conflict resolution.
  */
 
+import { logger } from '../utils/logger';
 import { useState, useEffect, useMemo, useCallback, useRef, memo } from 'react';
 import type { Channel, EPGData, EPGSource } from '../types';
 import {
@@ -215,12 +216,12 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
     // Run async analysis via backend API
     const runAnalysis = async () => {
       try {
-        console.log('[BulkEPGAssign] Running analysis...');
-        console.log('[BulkEPGAssign] Selected channels:', selectedChannels.length);
+        logger.debug('[BulkEPGAssign] Running analysis...');
+        logger.debug('[BulkEPGAssign] Selected channels:', selectedChannels.length);
 
         // Early exit if no channels selected
         if (selectedChannels.length === 0) {
-          console.log('[BulkEPGAssign] No channels selected, skipping analysis');
+          logger.debug('[BulkEPGAssign] No channels selected, skipping analysis');
           setMatchResults([]);
           setPhase('review');
           return;
@@ -234,12 +235,12 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
         // Flatten all results into single array
         const results = [...response.exact, ...response.multiple, ...response.none];
 
-        console.log('[BulkEPGAssign] Match results:', results);
-        console.log(`[BulkEPGAssign] Summary: ${response.summary.exact_count} auto, ${response.summary.multiple_count} conflicts, ${response.summary.none_count} unmatched`);
+        logger.debug('[BulkEPGAssign] Match results:', results);
+        logger.debug(`[BulkEPGAssign] Summary: ${response.summary.exact_count} auto, ${response.summary.multiple_count} conflicts, ${response.summary.none_count} unmatched`);
         setMatchResults(results);
         setPhase('review');
       } catch (error) {
-        console.error('[BulkEPGAssign] Analysis failed:', error);
+        logger.error('[BulkEPGAssign] Analysis failed:', error);
         // Still transition to review phase so UI doesn't hang
         setMatchResults([]);
         setPhase('review');

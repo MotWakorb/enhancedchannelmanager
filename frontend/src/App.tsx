@@ -493,7 +493,7 @@ function App() {
         setNormalizeOnChannelCreate(settings.normalize_on_channel_create ?? false);
         // Store VLC settings globally for vlc utility to access
         const vlcBehavior = (settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only') || 'm3u_fallback';
-        (window as any).__vlcSettings = { behavior: vlcBehavior };
+        window.__vlcSettings = { behavior: vlcBehavior };
         setChannelDefaults({
           includeChannelNumberInName: settings.include_channel_number_in_name,
           channelNumberSeparator: settings.channel_number_separator,
@@ -870,7 +870,7 @@ function App() {
         .map(g => g.id);
 
       if (newGroupIds.length > 0) {
-        console.log('[App] Adding new groups from CSV import to filter:', newGroupIds);
+        logger.debug('[App] Adding new groups from CSV import to filter:', newGroupIds);
         setChannelFilters(prev => ({
           ...prev,
           groupFilter: [...prev.groupFilter, ...newGroupIds],
@@ -1463,7 +1463,7 @@ function App() {
             try {
               await api.updateProfileChannel(profileId, newChannel.id, { enabled: true });
             } catch (err) {
-              console.warn(`Failed to add channel ${newChannel.id} to profile ${profileId}:`, err);
+              logger.warn(`Failed to add channel ${newChannel.id} to profile ${profileId}:`, err);
             }
           }
 
@@ -1536,7 +1536,7 @@ function App() {
           await loadChannels();
         }
       } catch (err) {
-        console.error('Failed to create channel:', err);
+        logger.error('Failed to create channel:', err);
         throw err;
       }
     },

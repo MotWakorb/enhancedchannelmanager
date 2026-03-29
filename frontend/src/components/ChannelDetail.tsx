@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { useState, useEffect } from 'react';
 import {
   DndContext,
@@ -114,7 +115,7 @@ export function ChannelDetail({
         .filter((s): s is Stream => s !== undefined);
       setStreams(orderedStreams);
     } catch (err) {
-      console.error('Failed to load streams:', err);
+      logger.error('Failed to load streams:', err);
     } finally {
       setLoading(false);
     }
@@ -126,7 +127,7 @@ export function ChannelDetail({
       onChannelUpdate(updatedChannel);
       setStreams((prev) => prev.filter((s) => s.id !== streamId));
     } catch (err) {
-      console.error('Failed to remove stream:', err);
+      logger.error('Failed to remove stream:', err);
     }
   };
 
@@ -148,7 +149,7 @@ export function ChannelDetail({
         );
         onChannelUpdate(updatedChannel);
       } catch (err) {
-        console.error('Failed to reorder streams:', err);
+        logger.error('Failed to reorder streams:', err);
         // Revert on error
         setStreams(streams);
       }
@@ -171,7 +172,7 @@ export function ChannelDetail({
       onChannelUpdate(updatedChannel);
       setEditingNumber(false);
     } catch (err) {
-      console.error('Failed to update channel number:', err);
+      logger.error('Failed to update channel number:', err);
     } finally {
       setSaving(false);
     }

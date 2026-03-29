@@ -5,12 +5,14 @@
  * Users can link multiple providers (Local, Dispatcharr, OIDC, SAML, LDAP)
  * to access the same account from different authentication sources.
  */
+import { logger } from '../../utils/logger';
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../services/api';
 import type { UserIdentity, IdentityProvider, AuthStatus } from '../../types';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { ModalOverlay } from '../ModalOverlay';
 import './LinkedAccountsSection.css';
+import { formatDateCompact } from '../../utils/formatting';
 import '../ModalBase.css';
 
 // Provider display configuration
@@ -153,7 +155,7 @@ export function LinkedAccountsSection() {
         setAuthStatus(statusResponse);
       } catch (err) {
         notifications.error('Failed to load linked accounts', 'Linked Accounts');
-        console.error('Failed to load linked accounts:', err);
+        logger.error('Failed to load linked accounts:', err);
       } finally {
         setLoading(false);
       }
@@ -215,19 +217,6 @@ export function LinkedAccountsSection() {
     }
   }, [notifications]);
 
-  // Format timestamp for display
-  const formatDate = (dateStr: string | null): string => {
-    if (!dateStr) return 'Never';
-    const date = new Date(dateStr);
-    return date.toLocaleDateString(undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
-
   const availableProviders = getAvailableProviders();
 
   if (loading) {
@@ -277,7 +266,7 @@ export function LinkedAccountsSection() {
                 </div>
                 <div className="identity-meta">
                   <span title="Last used">
-                    {identity.last_used_at ? `Last used ${formatDate(identity.last_used_at)}` : 'Never used'}
+                    {identity.last_used_at ? `Last used ${formatDateCompact(identity.last_used_at)}` : 'Never used'}
                   </span>
                 </div>
                 <div className="identity-actions">

@@ -170,13 +170,26 @@ class TestCreateConfig:
 
     @pytest.mark.asyncio
     async def test_creates_config(self, async_client):
-        """Creates a config (stub — returns input)."""
+        """Creates a config via persistence layer."""
         response = await async_client.post("/api/ffmpeg/configs", json={
             "name": "Test Config",
-            "settings": {"codec": "h264"},
+            "config": {"input": {}, "output": {}, "videoCodec": {}, "audioCodec": {}},
         })
 
         assert response.status_code == 201
+        data = response.json()
+        assert data["name"] == "Test Config"
+        assert "id" in data
+
+    @pytest.mark.asyncio
+    async def test_creates_config_invalid_returns_400(self, async_client):
+        """Returns 400 for invalid config (missing required keys)."""
+        response = await async_client.post("/api/ffmpeg/configs", json={
+            "name": "Bad Config",
+            "config": {"codec": "h264"},
+        })
+
+        assert response.status_code == 400
 
 
 class TestGetConfig:
@@ -184,8 +197,8 @@ class TestGetConfig:
 
     @pytest.mark.asyncio
     async def test_returns_404_for_nonexistent(self, async_client):
-        """Returns 404 for nonexistent config (stub always returns None)."""
-        response = await async_client.get("/api/ffmpeg/configs/1")
+        """Returns 404 for nonexistent config."""
+        response = await async_client.get("/api/ffmpeg/configs/99999")
 
         assert response.status_code == 404
 
@@ -195,11 +208,25 @@ class TestDeleteConfig:
 
     @pytest.mark.asyncio
     async def test_deletes_config(self, async_client):
-        """Deletes a config (stub)."""
-        response = await async_client.delete("/api/ffmpeg/configs/1")
+        """Creates then deletes a config."""
+        # Create first
+        create_resp = await async_client.post("/api/ffmpeg/configs", json={
+            "name": "To Delete",
+            "config": {"input": {}, "output": {}, "videoCodec": {}, "audioCodec": {}},
+        })
+        config_id = create_resp.json()["id"]
+
+        response = await async_client.delete(f"/api/ffmpeg/configs/{config_id}")
 
         assert response.status_code == 200
         assert response.json()["status"] == "deleted"
+
+    @pytest.mark.asyncio
+    async def test_delete_nonexistent_returns_404(self, async_client):
+        """Returns 404 for deleting nonexistent config."""
+        response = await async_client.delete("/api/ffmpeg/configs/99999")
+
+        assert response.status_code == 404
 
 
 class TestListJobs:

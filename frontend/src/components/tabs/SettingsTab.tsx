@@ -538,7 +538,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           }
         }
       } catch (err) {
-        console.error('Failed to fetch probe progress:', err);
+        logger.error('Failed to fetch probe progress:', err);
       }
     };
 
@@ -662,7 +662,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setTelegramConfigured(settings.telegram_configured ?? false);
       setNeedsRestart(false);
     } catch (err) {
-      console.error('Failed to load settings:', err);
+      logger.error('Failed to load settings:', err);
     }
   };
 
@@ -804,7 +804,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         logger.info(`Frontend log level changed to ${frontendLevel}`);
       }
       // Update global VLC settings for vlc utility to access
-      (window as any).__vlcSettings = { behavior: vlcOpenBehavior };
+      window.__vlcSettings = { behavior: vlcOpenBehavior };
       setOriginalUrl(url);
       setOriginalUsername(username);
       setPassword('');
@@ -2162,7 +2162,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to test Discord webhook';
-      console.error('Discord test error:', err);
+      logger.error('Discord test error:', err);
       notifications.error(errorMessage, 'Discord Test');
     } finally {
       setDiscordTesting(false);

@@ -8,6 +8,7 @@ import type {
 import * as api from '../services/api';
 import { createSnapshot } from '../utils/channelSnapshot';
 import { generateId } from '../utils/idGenerator';
+import { logger } from '../utils/logger';
 
 const MAX_HISTORY_SIZE = 100;
 
@@ -131,7 +132,7 @@ export function useChangeHistory({
         // Check if channel still exists
         const channelExists = channelMapRef.current.has(beforeSnapshot.id);
         if (!channelExists) {
-          console.warn(
+          logger.warn(
             `Channel ${beforeSnapshot.id} no longer exists, skipping undo for this channel`
           );
           continue;
@@ -197,7 +198,7 @@ export function useChangeHistory({
         // Check if channel still exists
         const channelExists = channelMapRef.current.has(afterSnapshot.id);
         if (!channelExists) {
-          console.warn(
+          logger.warn(
             `Channel ${afterSnapshot.id} no longer exists, skipping redo for this channel`
           );
           continue;
@@ -285,7 +286,7 @@ export function useChangeHistory({
         hasUnsavedChanges: prev.past.length > 1,
       }));
     } catch (err) {
-      console.error('Failed to undo change:', err);
+      logger.error('Failed to undo change:', err);
 
       // Rollback UI to original state
       onChannelsRestore(originalChannels);
@@ -341,7 +342,7 @@ export function useChangeHistory({
         hasUnsavedChanges: true,
       }));
     } catch (err) {
-      console.error('Failed to redo change:', err);
+      logger.error('Failed to redo change:', err);
 
       // Rollback UI to original state
       onChannelsRestore(originalChannels);
@@ -435,7 +436,7 @@ export function useChangeHistory({
           hasUnsavedChanges: false,
         }));
       } catch (err) {
-        console.error('Failed to revert to save point:', err);
+        logger.error('Failed to revert to save point:', err);
 
         // Rollback UI to original state
         onChannelsRestore(originalChannels);

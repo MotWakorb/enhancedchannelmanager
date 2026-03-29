@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { useState, useEffect, useRef, memo } from 'react';
 import * as api from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
@@ -70,7 +71,7 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
       setTheme(settings.theme || 'dark');
       setConnectionVerified(null);
     } catch (err) {
-      console.error('Failed to load settings:', err);
+      logger.error('Failed to load settings:', err);
     }
   };
 
@@ -125,7 +126,7 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
       onClose();
       notifications.success('Settings saved successfully');
     } catch (err) {
-      console.error('Failed to save settings:', err);
+      logger.error('Failed to save settings:', err);
       notifications.error('Failed to save settings', 'Save Failed');
     } finally {
       setLoading(false);

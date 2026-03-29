@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import * as api from '../services/api';
 import type { Notification } from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
+import { logger } from '../utils/logger';
 import './NotificationCenter.css';
 
 interface NotificationCenterProps {
@@ -100,7 +101,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
       setNotifications(sorted);
       setUnreadCount(response.unread_count);
     } catch (err) {
-      console.error('Failed to load notifications:', err);
+      logger.error('Failed to load notifications:', err);
     } finally {
       if (showLoading) setLoading(false);
     }
@@ -166,7 +167,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
       await api.markNotificationRead(notification.id, !notification.read);
       loadNotifications();
     } catch (err) {
-      console.error('Failed to mark notification:', err);
+      logger.error('Failed to mark notification:', err);
     }
   };
 
@@ -175,7 +176,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
       await api.markAllNotificationsRead();
       loadNotifications();
     } catch (err) {
-      console.error('Failed to mark all read:', err);
+      logger.error('Failed to mark all read:', err);
     }
   };
 
@@ -184,7 +185,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
       await api.deleteNotification(notification.id);
       loadNotifications();
     } catch (err) {
-      console.error('Failed to delete notification:', err);
+      logger.error('Failed to delete notification:', err);
     }
   };
 
@@ -193,7 +194,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
       await api.clearNotifications(true); // Only clear read
       loadNotifications();
     } catch (err) {
-      console.error('Failed to clear notifications:', err);
+      logger.error('Failed to clear notifications:', err);
     }
   };
 
@@ -202,7 +203,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
       await api.clearNotifications(false); // Delete ALL notifications
       loadNotifications();
     } catch (err) {
-      console.error('Failed to delete all notifications:', err);
+      logger.error('Failed to delete all notifications:', err);
     }
   };
 
@@ -212,7 +213,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
       await api.cancelProbe();
       loadNotifications();
     } catch (err) {
-      console.error('Failed to cancel probe:', err);
+      logger.error('Failed to cancel probe:', err);
     }
   };
 
@@ -222,7 +223,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
       await api.pauseProbe();
       loadNotifications();
     } catch (err) {
-      console.error('Failed to pause probe:', err);
+      logger.error('Failed to pause probe:', err);
     }
   };
 
@@ -232,7 +233,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
       await api.resumeProbe();
       loadNotifications();
     } catch (err) {
-      console.error('Failed to resume probe:', err);
+      logger.error('Failed to resume probe:', err);
     }
   };
 
@@ -251,7 +252,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
         toasts.error(result.message || 'Failed to restart services', 'Restart Failed');
       }
     } catch (err) {
-      console.error('Failed to restart services:', err);
+      logger.error('Failed to restart services:', err);
       toasts.error('Failed to restart services', 'Restart Failed');
     } finally {
       setRestartingFromNotification(null);

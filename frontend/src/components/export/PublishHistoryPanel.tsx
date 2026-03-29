@@ -3,10 +3,7 @@ import type { PublishHistoryEntry, PublishHistoryResponse, PublishConfig } from 
 import * as exportApi from '../../services/exportApi';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { CustomSelect } from '../CustomSelect';
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString();
-}
+import { formatDateTime } from '../../utils/formatting';
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -147,7 +144,7 @@ export function PublishHistoryPanel() {
                   className="publish-history-row"
                   onClick={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
                 >
-                  <span className="publish-history-cell">{formatDate(entry.started_at)}</span>
+                  <span className="publish-history-cell">{formatDateTime(entry.started_at)}</span>
                   <span className="publish-history-cell">{entry.config_name || `#${entry.config_id}`}</span>
                   <span className="publish-history-cell">
                     <span className={`status-badge ${STATUS_CLASSES[entry.status] || ''}`}>
