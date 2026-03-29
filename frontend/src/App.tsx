@@ -158,9 +158,10 @@ function App() {
     timezonePreference: 'both',
     defaultChannelProfileIds: [] as number[],
     customNetworkPrefixes: [] as string[],
-    streamSortPriority: ['resolution', 'bitrate', 'framerate'] as ('resolution' | 'bitrate' | 'framerate')[],
-    streamSortEnabled: { resolution: true, bitrate: true, framerate: true } as Record<'resolution' | 'bitrate' | 'framerate', boolean>,
+    streamSortPriority: ['resolution', 'bitrate', 'framerate'] as api.SortCriterion[],
+    streamSortEnabled: DEFAULT_SORT_ENABLED as api.SortEnabledMap,
     deprioritizeFailedStreams: true,
+    m3uAccountPriorities: {} as api.M3UAccountPriorities,
   });
   // Also keep separate state for use in callbacks (to avoid stale closure issues)
   const [defaultChannelProfileIds, setDefaultChannelProfileIds] = useState<number[]>([]);
@@ -1520,10 +1521,7 @@ function App() {
 
           // Create new group if needed
           if (newGroupName && !targetGroupId) {
-            const newGroup = await api.createChannelGroup({
-              name: newGroupName,
-              channel_profile_ids: defaultChannelProfileIds.length > 0 ? defaultChannelProfileIds : undefined,
-            });
+            const newGroup = await api.createChannelGroup(newGroupName);
             targetGroupId = newGroup.id;
             await loadChannelGroups();
           }
@@ -1532,7 +1530,7 @@ function App() {
           await api.createChannel({
             name,
             channel_number: channelNumber,
-            channel_group_id: targetGroupId,
+            channel_group_id: targetGroupId ?? undefined,
           });
 
           await loadChannels();

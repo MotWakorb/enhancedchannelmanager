@@ -211,6 +211,9 @@ def _run_migrations(engine) -> None:
             # Add is_black_screen column to stream_stats (v0.15.0 - Black screen detection)
             _add_stream_stats_is_black_screen_column(conn)
 
+            # Add is_low_fps column to stream_stats (v0.15.0 - Low FPS detection)
+            _add_stream_stats_is_low_fps_column(conn)
+
             # Add stream_sort_field and stream_sort_order columns to auto_creation_rules (v0.15.0)
             _add_auto_creation_rules_stream_sort_columns(conn)
 
@@ -1557,6 +1560,22 @@ def _add_stream_stats_is_black_screen_column(conn) -> None:
         ))
         conn.commit()
         logger.info("[DATABASE] Migration complete: added is_black_screen column to stream_stats")
+
+
+def _add_stream_stats_is_low_fps_column(conn) -> None:
+    """Add is_low_fps column to stream_stats table (v0.15.0 - Low FPS detection)."""
+    from sqlalchemy import text
+
+    result = conn.execute(text("PRAGMA table_info(stream_stats)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    if "is_low_fps" not in columns:
+        logger.info("[DATABASE] Adding is_low_fps column to stream_stats")
+        conn.execute(text(
+            "ALTER TABLE stream_stats ADD COLUMN is_low_fps BOOLEAN DEFAULT 0 NOT NULL"
+        ))
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: added is_low_fps column to stream_stats")
 
 
 def _add_m3u_digest_exclude_patterns_columns(conn) -> None:

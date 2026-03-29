@@ -151,6 +151,12 @@ export const StreamListItem = memo(function StreamListItem({
             <span className="material-icons">videocam_off</span>
           </span>
         )}
+        {/* Low FPS indicator */}
+        {streamStats && streamStats.probe_status === 'success' && streamStats.is_low_fps && (
+          <span className="meta-tag probe-low-fps" title={`Low FPS detected (${streamStats.fps} FPS)`}>
+            <span className="material-icons">slow_motion_video</span>
+          </span>
+        )}
         {/* Strike count badge */}
         {streamStats && streamStats.consecutive_failures > 0 && strikeThreshold > 0 && (
           <span

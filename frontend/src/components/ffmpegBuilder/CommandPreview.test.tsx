@@ -31,8 +31,8 @@ afterAll(() => server.close());
 
 function buildState(overrides: Partial<FFMPEGBuilderState> = {}): FFMPEGBuilderState {
   return {
-    input: { type: 'file', path: '/input/video.mp4' },
-    output: { path: '/output/result.mp4', format: 'mp4', overwrite: true },
+    input: { type: 'url', path: '/input/video.mp4' },
+    output: { path: '/output/result.mp4', format: 'ts', overwrite: true },
     videoCodec: { codec: 'libx264', rateControl: 'crf', crf: 23, preset: 'medium' },
     audioCodec: { codec: 'aac', bitrate: '192k' },
     videoFilters: [],
@@ -109,7 +109,7 @@ describe('CommandPreview', () => {
     it('generates NVENC command with hwaccel flags', () => {
       renderCommandPreview({
         input: {
-          type: 'file',
+          type: 'url',
           path: '/input/video.mp4',
           hwaccel: { api: 'cuda', outputFormat: 'cuda' },
         },
@@ -220,7 +220,7 @@ describe('CommandPreview', () => {
       renderCommandPreview({
         output: {
           path: '/output/result.mp4',
-          format: 'mp4',
+          format: 'ts',
           overwrite: true,
         },
       });
@@ -434,7 +434,7 @@ describe('CommandPreview', () => {
     it('shows warning for VAAPI without hwupload filter', () => {
       renderCommandPreview({
         input: {
-          type: 'file',
+          type: 'url',
           path: '/input/video.mp4',
           hwaccel: { api: 'vaapi', device: '/dev/dri/renderD128' },
         },

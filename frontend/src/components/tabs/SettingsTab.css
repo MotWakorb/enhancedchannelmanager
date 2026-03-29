@@ -782,6 +782,10 @@
   color: #a855f7;
 }
 
+.probe-results-modal .modal-header h2.low-fps {
+  color: #f59e0b;
+}
+
 /* Body styling */
 .probe-results-body {
   background-color: var(--bg-primary);
@@ -820,6 +824,10 @@
 
 .probe-result-item.black-screen {
   border-left: 3px solid #a855f7;
+}
+
+.probe-result-item.low-fps {
+  border-left: 3px solid #f59e0b;
 }
 
 .probe-result-item-info {

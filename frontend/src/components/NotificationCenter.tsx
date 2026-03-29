@@ -16,6 +16,7 @@ interface ProbeProgress {
   failed: number;
   skipped: number;
   black_screen: number;
+  low_fps: number;
   status: 'idle' | 'starting' | 'fetching' | 'refreshing' | 'probing' | 'paused' | 'cancelled' | 'completed' | 'reordering' | 'failed' | 'fetching_sources' | 'fetching_accounts' | 'building_digest' | 'sending_email' | 'sending_discord';
   current_stream: string;
 }
@@ -28,7 +29,7 @@ interface ProgressMetadata {
 const isProgressNotification = (n: Notification): boolean => {
   // Match stream_probe source OR any task_* source with progress metadata
   const hasProgressSource = n.source === 'stream_probe' || n.source?.startsWith('task_');
-  return hasProgressSource && n.metadata?.progress !== undefined;
+  return !!hasProgressSource && n.metadata?.progress !== undefined;
 };
 
 // Alias for backward compatibility
@@ -349,6 +350,12 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
               <span className="probe-stat probe-stat-black-screen">
                 <span className="material-icons">tv_off</span>
                 {progress.black_screen}
+              </span>
+            )}
+            {progress.low_fps > 0 && (
+              <span className="probe-stat probe-stat-low-fps">
+                <span className="material-icons">slow_motion_video</span>
+                {progress.low_fps}
               </span>
             )}
             {progress.skipped > 0 && (

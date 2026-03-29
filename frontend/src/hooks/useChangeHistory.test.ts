@@ -30,7 +30,12 @@ describe('useChangeHistory', () => {
       streams: [1, 2, 3],
       tvg_id: null,
       epg_data_id: null,
-      logo_url: null,
+      tvc_guide_stationid: null,
+      stream_profile_id: null,
+      logo_id: null,
+      auto_created: false,
+      auto_created_by: null,
+      auto_created_by_name: null,
     },
     {
       id: 2,
@@ -41,7 +46,12 @@ describe('useChangeHistory', () => {
       streams: [4, 5],
       tvg_id: null,
       epg_data_id: null,
-      logo_url: null,
+      tvc_guide_stationid: null,
+      stream_profile_id: null,
+      logo_id: null,
+      auto_created: false,
+      auto_created_by: null,
+      auto_created_by_name: null,
     },
   ];
 
@@ -105,6 +115,7 @@ describe('useChangeHistory', () => {
         result.current.recordChange({
           type: 'channel_name_update',
           description: 'Changed channel name',
+          channelIds: [1],
           before: [{ id: 1, channel_number: 100, name: 'Old Name', channel_group_id: 1, streams: [1, 2, 3] }],
           after: [{ id: 1, channel_number: 100, name: 'New Name', channel_group_id: 1, streams: [1, 2, 3] }],
         });
@@ -130,6 +141,7 @@ describe('useChangeHistory', () => {
         result.current.recordChange({
           type: 'channel_name_update',
           description: 'First change',
+          channelIds: [1],
           before: [{ id: 1, channel_number: 100, name: 'Old', channel_group_id: 1, streams: [] }],
           after: [{ id: 1, channel_number: 100, name: 'New', channel_group_id: 1, streams: [] }],
         });
@@ -156,6 +168,7 @@ describe('useChangeHistory', () => {
           result.current.recordChange({
             type: 'channel_name_update',
             description: `Change ${i}`,
+            channelIds: [1],
             before: [{ id: 1, channel_number: 100, name: `Name ${i}`, channel_group_id: 1, streams: [] }],
             after: [{ id: 1, channel_number: 100, name: `Name ${i + 1}`, channel_group_id: 1, streams: [] }],
           });
@@ -214,6 +227,7 @@ describe('useChangeHistory', () => {
         result.current.recordChange({
           type: 'channel_name_update',
           description: 'Change',
+          channelIds: [1],
           before: [{ id: 1, channel_number: 100, name: 'Old', channel_group_id: 1, streams: [] }],
           after: [{ id: 1, channel_number: 100, name: 'New', channel_group_id: 1, streams: [] }],
         });
@@ -269,6 +283,7 @@ describe('useChangeHistory', () => {
         result.current.recordChange({
           type: 'channel_name_update',
           description: 'Change',
+          channelIds: [1],
           before: [{ id: 1, channel_number: 100, name: 'Old', channel_group_id: 1, streams: [] }],
           after: [{ id: 1, channel_number: 100, name: 'New', channel_group_id: 1, streams: [] }],
         });

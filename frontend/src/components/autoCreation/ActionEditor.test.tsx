@@ -13,7 +13,6 @@ import {
   createMockChannelGroup,
 } from '../../test/mocks/server';
 import { ActionEditor } from './ActionEditor';
-import type { Action, ActionType } from '../../types/autoCreation';
 
 // Setup MSW server
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));

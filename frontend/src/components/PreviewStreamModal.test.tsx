@@ -32,16 +32,8 @@ describe('PreviewStreamModal', () => {
     channel_group_name: 'Sports',
     m3u_account: 1,
     logo_url: null,
-    channel_group_id: 1,
-    stream_hash: 'abc123',
+    channel_group: 1,
     is_custom: false,
-    epg_id: null,
-    probe_status: null,
-    probe_error: null,
-    probe_bitrate: null,
-    probe_resolution: null,
-    probe_codec: null,
-    last_probed_at: null,
   };
 
   const mockChannel: Channel = {
@@ -56,8 +48,9 @@ describe('PreviewStreamModal', () => {
     epg_data_id: null,
     stream_profile_id: null,
     tvc_guide_stationid: null,
-    user_level: 0,
     auto_created: false,
+    auto_created_by: null,
+    auto_created_by_name: null,
   };
 
   const defaultProps = {

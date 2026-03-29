@@ -580,7 +580,7 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
           </p>
         </div>
         <button
-          onClick={loadTasks}
+          onClick={() => { loadTasks(); }}
           style={{
             display: 'flex',
             alignItems: 'center',

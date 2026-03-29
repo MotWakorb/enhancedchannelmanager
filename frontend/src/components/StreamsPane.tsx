@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, StreamGroupInfo, M3UAccount, ChannelGroup, ChannelProfile, M3UGroupSetting } from '../types';
 import { useSelection, useExpandCollapse } from '../hooks';
-import { detectRegionalVariants, filterStreamsByTimezone, normalizeStreamNamesWithBackend, stripQualitySuffixes, type TimezonePreference, type NumberSeparator, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
+import { detectRegionalVariants, filterStreamsByTimezone, normalizeStreamNamesWithBackend, stripQualitySuffixes, type TimezonePreference, type NumberSeparator, type PrefixOrder, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
@@ -114,6 +114,8 @@ interface StreamsPaneProps {
   // Callback when a group is expanded (for lazy loading streams)
   // Passes the group name so only that group's streams can be loaded
   onGroupExpand?: (groupName: string) => void;
+  // Number of consecutive failures before deprioritizing a stream
+  strikeThreshold?: number;
 }
 
 export function StreamsPane({

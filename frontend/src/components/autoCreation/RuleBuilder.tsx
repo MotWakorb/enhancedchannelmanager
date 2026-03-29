@@ -366,7 +366,7 @@ export function RuleBuilder({
                     { value: 'desc', label: 'Descending' },
                   ]}
                   value={sortOrder}
-                  onChange={setSortOrder}
+                  onChange={(val) => setSortOrder(val as 'asc' | 'desc')}
                 />
               )}
             </div>
@@ -430,7 +430,7 @@ export function RuleBuilder({
                     { value: 'desc', label: 'Descending' },
                   ]}
                   value={streamSortOrder}
-                  onChange={setStreamSortOrder}
+                  onChange={(val) => setStreamSortOrder(val as 'asc' | 'desc')}
                 />
               )}
             </div>
@@ -464,7 +464,7 @@ export function RuleBuilder({
                 { value: 'none', label: 'Do nothing (keep orphans)' },
               ]}
               value={orphanAction}
-              onChange={setOrphanAction}
+              onChange={(val) => setOrphanAction(val as 'delete' | 'none' | 'move_uncategorized' | 'delete_and_cleanup_groups')}
             />
           </div>
         </section>

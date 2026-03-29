@@ -514,7 +514,7 @@ export function NormalizationEngineSection() {
 
   // Open rule editor for editing
   const openEditRuleEditor = useCallback((rule: NormalizationRule) => {
-    const hasCompoundConditions = rule.conditions && rule.conditions.length > 0;
+    const hasCompoundConditions = !!(rule.conditions && rule.conditions.length > 0);
     setRuleEditor({
       isOpen: true,
       editingRule: rule,
@@ -523,7 +523,7 @@ export function NormalizationEngineSection() {
       description: rule.description || '',
       conditionType: rule.condition_type,
       conditionValue: rule.condition_value || '',
-      caseSensitive: rule.case_sensitive,
+      caseSensitive: rule.case_sensitive ?? false,
       useCompoundConditions: hasCompoundConditions,
       conditions: rule.conditions || [],
       conditionLogic: rule.condition_logic || 'AND',

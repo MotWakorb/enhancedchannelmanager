@@ -1150,8 +1150,8 @@ export function useEditMode({
       // Replace temp IDs with real IDs in remaining operations
       const resolvedOps = otherOps.map(op => {
         const resolved = { ...op };
-        if (resolved.channelId && resolved.channelId < 0) {
-          const realId = tempIdMap.get(resolved.channelId);
+        if (resolved.channelId && (resolved.channelId as number) < 0) {
+          const realId = tempIdMap.get(resolved.channelId as number);
           if (realId !== undefined) {
             resolved.channelId = realId;
           }

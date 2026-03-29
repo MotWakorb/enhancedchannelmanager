@@ -573,7 +573,7 @@ export const handlers = [
     }
     const groups = Array.from(groupMap.entries()).map(([name, count]) => ({
       name,
-      stream_count: count,
+      count,
     }))
     return HttpResponse.json(groups)
   }),

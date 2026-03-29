@@ -278,7 +278,7 @@ export function M3UManagerTab({
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<M3UAccount | null>(null);
-  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track accounts being refreshed - stores initial updated_at to detect completion
   const [refreshingAccounts, setRefreshingAccounts] = useState<Map<number, { initialUpdatedAt: string | null; startTime: number }>>(new Map());
 

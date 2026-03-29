@@ -1176,6 +1176,16 @@
   margin-right: 0.25rem;
 }
 
+.channel-streams-count.has-low-fps {
+  color: #f59e0b;
+}
+
+.channel-streams-count .low-fps-icon {
+  font-size: 0.9rem;
+  color: #f59e0b;
+  margin-right: 0.25rem;
+}
+
 /* Highlight channels without streams */
 .channel-item.no-streams {
   border-left: 3px solid var(--warning);
@@ -1699,6 +1709,19 @@
 }
 
 .meta-tag.probe-black-screen .material-icons {
+  font-size: 12px;
+}
+
+.meta-tag.probe-low-fps {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+  cursor: help;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 4px;
+}
+
+.meta-tag.probe-low-fps .material-icons {
   font-size: 12px;
 }
 
