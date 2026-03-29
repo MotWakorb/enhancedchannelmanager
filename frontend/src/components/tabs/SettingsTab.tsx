@@ -2696,10 +2696,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   How often to send digest emails. "Immediate" sends right after each M3U refresh.
                 </span>
                 <CustomSelect
+                  className="compact-select"
                   value={digestSettings.frequency}
                   onChange={(val) => handleDigestSettingChange('frequency', val as M3UDigestFrequency)}
                   options={[
-                    { value: 'immediate', label: 'Immediate (after each refresh)' },
+                    { value: 'immediate', label: 'Immediate' },
                     { value: 'hourly', label: 'Hourly' },
                     { value: 'daily', label: 'Daily' },
                     { value: 'weekly', label: 'Weekly' },
@@ -3080,6 +3081,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               <label htmlFor="bitrateSampleDuration">Bitrate measurement duration</label>
               <span className="form-description">How long to sample streams when measuring bitrate</span>
               <CustomSelect
+                className="compact-select"
                 value={String(bitrateSampleDuration)}
                 onChange={(val) => setBitrateSampleDuration(Number(val))}
                 options={[
@@ -3145,6 +3147,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   type="text"
                   inputMode="numeric"
                   pattern="[0-9]*"
+                  style={{ minWidth: '70px', maxWidth: '70px' }}
                   value={maxConcurrentProbes}
                   onChange={(e) => {
                     const val = e.target.value.replace(/[^0-9]/g, '');
@@ -3176,6 +3179,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   <strong>Least Loaded</strong> always picks the profile with the most remaining capacity — best for maximizing throughput when profiles have different connection limits.
                 </span>
                 <CustomSelect
+                  className="compact-select"
                   value={profileDistributionStrategy}
                   onChange={(value) => setProfileDistributionStrategy(value)}
                   options={[
@@ -3307,6 +3311,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 Streams with FPS below this value are flagged as low FPS and deprioritized in Smart Sort.
               </span>
               <CustomSelect
+                className="compact-select"
                 value={String(lowFpsThreshold)}
                 onChange={(val) => setLowFpsThreshold(parseInt(val))}
                 options={[

@@ -297,11 +297,13 @@
 }
 
 .form-group-vertical input[type="number"] {
-  min-width: 100px;
-  max-width: 140px;
+  min-width: 70px;
+  max-width: 100px;
 }
 
-.form-group-vertical input[type="checkbox"] {
+.form-group-vertical input[type="checkbox"],
+.form-group-vertical input[type="radio"] {
+  display: inline;
   min-width: auto;
   max-width: auto;
 }

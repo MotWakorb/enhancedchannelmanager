@@ -230,3 +230,13 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Compact variant — for dropdowns with short values (e.g., "20 FPS", "10 seconds") */
+.custom-select.compact-select {
+  max-width: 180px;
+}
+
+.custom-select.compact-select .custom-select-trigger {
+  min-width: unset;
+  max-width: 180px;
+}
