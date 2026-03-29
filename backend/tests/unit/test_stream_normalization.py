@@ -9,16 +9,12 @@ from stream_normalization import (
     strip_network_prefix,
     has_network_prefix,
     strip_network_suffix,
-    has_network_suffix,
     get_country_prefix,
     strip_country_prefix,
     get_regional_suffix,
     strip_regional_suffix,
-    detect_regional_variants,
-    filter_streams_by_timezone,
     sort_streams_by_quality,
     enrich_stream,
-    enrich_streams_batch,
     DEFAULT_QUALITY_PRIORITY,
 )
 
@@ -167,10 +163,6 @@ class TestNetworkSuffix:
     def test_no_suffix(self):
         assert strip_network_suffix("ESPN") == "ESPN"
 
-    def test_has_suffix(self):
-        assert has_network_suffix("ESPN (ENGLISH)") is True
-        assert has_network_suffix("ESPN") is False
-
 
 # ---------------------------------------------------------------------------
 # Country prefix
@@ -218,54 +210,6 @@ class TestRegionalVariants:
 
     def test_strip_west(self):
         assert strip_regional_suffix("ESPN WEST") == "ESPN"
-
-    def test_detect_variants_true(self):
-        streams = [
-            {"name": "ESPN EAST HD"},
-            {"name": "ESPN WEST HD"},
-        ]
-        assert detect_regional_variants(streams) is True
-
-    def test_detect_variants_false(self):
-        streams = [
-            {"name": "ESPN HD"},
-            {"name": "CNN HD"},
-        ]
-        assert detect_regional_variants(streams) is False
-
-    def test_detect_base_plus_west(self):
-        streams = [
-            {"name": "Fox News HD"},
-            {"name": "Fox News WEST HD"},
-        ]
-        assert detect_regional_variants(streams) is True
-
-
-class TestFilterByTimezone:
-    def test_both(self):
-        streams = [{"name": "ESPN EAST"}, {"name": "ESPN WEST"}]
-        assert len(filter_streams_by_timezone(streams, "both")) == 2
-
-    def test_east_keeps_no_suffix(self):
-        streams = [
-            {"name": "ESPN"},
-            {"name": "CNN EAST"},
-            {"name": "Fox WEST"},
-        ]
-        result = filter_streams_by_timezone(streams, "east")
-        assert len(result) == 2
-        assert result[0]["name"] == "ESPN"
-        assert result[1]["name"] == "CNN EAST"
-
-    def test_west_only(self):
-        streams = [
-            {"name": "ESPN"},
-            {"name": "CNN EAST"},
-            {"name": "Fox WEST"},
-        ]
-        result = filter_streams_by_timezone(streams, "west")
-        assert len(result) == 1
-        assert result[0]["name"] == "Fox WEST"
 
 
 # ---------------------------------------------------------------------------
@@ -324,22 +268,3 @@ class TestEnrichStream:
         stream = {"id": 3, "name": "Fox News HD WEST"}
         result = enrich_stream(stream)
         assert result.regional_variant == "west"
-
-
-class TestBatchEnrichment:
-    def test_batch(self):
-        streams = [
-            {"id": 1, "name": "US | ESPN HD"},
-            {"id": 2, "name": "UK: BBC 4K"},
-            {"id": 3, "name": "CNN SD"},
-        ]
-        result = enrich_streams_batch(streams)
-        assert len(result.enrichments) == 3
-        assert result.enrichments[1].detected_country == "US"
-        assert result.enrichments[2].detected_country == "UK"
-        assert result.enrichments[3].quality_tier == "SD"
-
-    def test_skips_no_id(self):
-        streams = [{"name": "No ID stream"}]
-        result = enrich_streams_batch(streams)
-        assert len(result.enrichments) == 0

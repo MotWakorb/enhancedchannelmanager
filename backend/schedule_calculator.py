@@ -385,26 +385,3 @@ def get_seconds_until(next_run: Optional[datetime]) -> Optional[int]:
     return max(0, int(delta))
 
 
-def format_relative_time(next_run: Optional[datetime]) -> str:
-    """Format next run time as relative time string."""
-    seconds = get_seconds_until(next_run)
-    if seconds is None:
-        return "Not scheduled"
-    if seconds == 0:
-        return "Now"
-    if seconds < 60:
-        return f"in {seconds}s"
-    if seconds < 3600:
-        minutes = seconds // 60
-        return f"in {minutes}m"
-    if seconds < 86400:
-        hours = seconds // 3600
-        minutes = (seconds % 3600) // 60
-        if minutes > 0:
-            return f"in {hours}h {minutes}m"
-        return f"in {hours}h"
-    days = seconds // 86400
-    hours = (seconds % 86400) // 3600
-    if hours > 0:
-        return f"in {days}d {hours}h"
-    return f"in {days}d"

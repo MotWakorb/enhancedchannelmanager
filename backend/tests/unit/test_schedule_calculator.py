@@ -7,7 +7,6 @@ from schedule_calculator import (
     calculate_next_run,
     describe_schedule,
     get_seconds_until,
-    format_relative_time,
     _describe_interval,
     _describe_days,
     _format_time,
@@ -426,38 +425,3 @@ class TestGetSecondsUntil:
         assert get_seconds_until(None) is None
 
 
-class TestFormatRelativeTime:
-    """Tests for format_relative_time()."""
-
-    def test_not_scheduled(self):
-        """Formats None as 'Not scheduled'."""
-        assert "not scheduled" in format_relative_time(None).lower()
-
-    def test_now(self):
-        """Formats immediate time as 'Now'."""
-        result = format_relative_time(datetime.utcnow())
-        assert result.lower() == "now"
-
-    def test_seconds(self):
-        """Formats time in seconds."""
-        future = datetime.utcnow() + timedelta(seconds=30)
-        result = format_relative_time(future)
-        assert "s" in result.lower()
-
-    def test_minutes(self):
-        """Formats time in minutes."""
-        future = datetime.utcnow() + timedelta(minutes=45)
-        result = format_relative_time(future)
-        assert "m" in result.lower()
-
-    def test_hours(self):
-        """Formats time in hours."""
-        future = datetime.utcnow() + timedelta(hours=2)
-        result = format_relative_time(future)
-        assert "h" in result.lower()
-
-    def test_days(self):
-        """Formats time in days."""
-        future = datetime.utcnow() + timedelta(days=3)
-        result = format_relative_time(future)
-        assert "d" in result.lower()
