@@ -1476,7 +1476,7 @@
 }
 
 .sort-quality-btn:hover {
-  background: var(--hover-bg);
+  background: var(--bg-hover);
   color: var(--text-primary);
 }
 

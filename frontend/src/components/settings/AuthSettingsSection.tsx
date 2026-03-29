@@ -113,92 +113,92 @@ export function AuthSettingsSection({ isAdmin }: Props) {
       </div>
 
       {/* Global Settings */}
-      <div className="auth-provider-card">
-        <div className="auth-provider-header">
-          <h4>Global Settings</h4>
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">security</span>
+          <h3>Global Settings</h3>
         </div>
-        <div className="auth-provider-body">
-          <div className="auth-field">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={requireAuth}
-                onChange={(e) => setRequireAuth(e.target.checked)}
-              />
-              <span>Require Authentication</span>
-            </label>
-            <p className="auth-field-hint">
-              When disabled, the application runs in open mode (no login required).
-            </p>
-          </div>
+        <div className="form-group-vertical">
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={requireAuth}
+              onChange={(e) => setRequireAuth(e.target.checked)}
+            />
+            <span>Require Authentication</span>
+          </label>
+          <p className="form-description">
+            When disabled, the application runs in open mode (no login required).
+          </p>
         </div>
       </div>
 
       {/* Local Authentication */}
-      <div className="auth-provider-card">
-        <div className="auth-provider-header">
-          <div className="auth-provider-toggle">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={localEnabled}
-                onChange={(e) => setLocalEnabled(e.target.checked)}
-              />
-              <span>Local Authentication</span>
-            </label>
-          </div>
-          <span className="auth-provider-badge">Username/Password</span>
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">password</span>
+          <h3>Local Authentication</h3>
+        </div>
+        <div className="form-group-vertical">
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={localEnabled}
+              onChange={(e) => setLocalEnabled(e.target.checked)}
+            />
+            <span>Enable local authentication</span>
+          </label>
+          <p className="form-description">
+            Allow users to log in with a username and password stored locally.
+          </p>
         </div>
         {localEnabled && (
-          <div className="auth-provider-body">
-            <div className="auth-field">
-              <label>Minimum Password Length</label>
-              <input
-                type="number"
-                min={6}
-                max={32}
-                value={localMinPasswordLength}
-                onChange={(e) => setLocalMinPasswordLength(Number(e.target.value))}
-              />
-            </div>
+          <div className="form-group-vertical">
+            <label>Minimum Password Length</label>
+            <span className="form-description">Minimum number of characters required for user passwords (6-32).</span>
+            <input
+              type="number"
+              min={6}
+              max={32}
+              value={localMinPasswordLength}
+              onChange={(e) => setLocalMinPasswordLength(Number(e.target.value))}
+            />
           </div>
         )}
       </div>
 
       {/* Dispatcharr SSO */}
-      <div className="auth-provider-card">
-        <div className="auth-provider-header">
-          <div className="auth-provider-toggle">
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">link</span>
+          <h3>Dispatcharr SSO</h3>
+        </div>
+        <div className="form-group-vertical">
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={dispatcharrEnabled}
+              onChange={(e) => setDispatcharrEnabled(e.target.checked)}
+            />
+            <span>Enable Dispatcharr SSO</span>
+          </label>
+          <p className="form-description">
+            Allow users to log in using their Dispatcharr credentials. The Dispatcharr URL is configured in General settings.
+          </p>
+        </div>
+        {dispatcharrEnabled && (
+          <div className="form-group-vertical">
             <label className="checkbox-label">
               <input
                 type="checkbox"
-                checked={dispatcharrEnabled}
-                onChange={(e) => setDispatcharrEnabled(e.target.checked)}
+                checked={dispatcharrAutoCreate}
+                onChange={(e) => setDispatcharrAutoCreate(e.target.checked)}
               />
-              <span>Dispatcharr SSO</span>
+              <span>Auto-create Users</span>
             </label>
-          </div>
-          <span className="auth-provider-badge">External Provider</span>
-        </div>
-        {dispatcharrEnabled && (
-          <div className="auth-provider-body">
-            <p className="auth-provider-info">
-              Users can log in using their Dispatcharr credentials.
-              The Dispatcharr URL is configured in the main settings.
+            <p className="form-description">
+              Automatically create local accounts for Dispatcharr users on first login.
             </p>
-            <div className="auth-field">
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={dispatcharrAutoCreate}
-                  onChange={(e) => setDispatcharrAutoCreate(e.target.checked)}
-                />
-                <span>Auto-create Users</span>
-              </label>
-              <p className="auth-field-hint">
-                Automatically create local accounts for Dispatcharr users on first login.
-              </p>
-            </div>
           </div>
         )}
       </div>

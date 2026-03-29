@@ -102,7 +102,7 @@ handle authentication automatically when accessed through the web UI.
 ## Rate Limiting
 No rate limiting is enforced, but rapid polling is logged for diagnostics.
     """,
-    version="0.15.0-0033",
+    version="0.15.0-0034",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
