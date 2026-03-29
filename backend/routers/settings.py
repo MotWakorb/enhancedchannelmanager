@@ -82,6 +82,7 @@ class SettingsRequest(BaseModel):
     m3u_account_priorities: dict[str, int] = {}  # M3U account priorities (account_id -> priority value)
     black_screen_detection_enabled: bool = False  # Run ffmpeg blackdetect after successful probe
     black_screen_sample_duration: int = 5  # Seconds to sample for black screen detection (3-30)
+    low_fps_threshold: int = 20  # FPS below this value is considered "low FPS" (5, 10, 15, or 20)
     deprioritize_failed_streams: bool = True  # When enabled, failed/timeout/pending streams sort to bottom
     strike_threshold: int = 3  # Consecutive failures before flagging stream (0 = disabled)
     normalization_settings: Optional[NormalizationSettings] = None  # User-configurable normalization tags
@@ -154,6 +155,7 @@ class SettingsResponse(BaseModel):
     m3u_account_priorities: dict[str, int]  # M3U account priorities (account_id -> priority value)
     black_screen_detection_enabled: bool  # Run ffmpeg blackdetect after successful probe
     black_screen_sample_duration: int  # Seconds to sample for black screen detection (3-30)
+    low_fps_threshold: int  # FPS below this value is considered "low FPS"
     deprioritize_failed_streams: bool  # When enabled, failed/timeout/pending streams sort to bottom
     strike_threshold: int  # Consecutive failures before flagging stream (0 = disabled)
     normalization_settings: NormalizationSettings  # User-configurable normalization tags
@@ -277,6 +279,7 @@ async def get_current_settings():
         m3u_account_priorities=settings.m3u_account_priorities,
         black_screen_detection_enabled=settings.black_screen_detection_enabled,
         black_screen_sample_duration=settings.black_screen_sample_duration,
+        low_fps_threshold=settings.low_fps_threshold,
         deprioritize_failed_streams=settings.deprioritize_failed_streams,
         strike_threshold=settings.strike_threshold,
         normalization_settings=NormalizationSettings(
@@ -380,6 +383,7 @@ async def update_settings(request: SettingsRequest):
         m3u_account_priorities=request.m3u_account_priorities,
         black_screen_detection_enabled=request.black_screen_detection_enabled,
         black_screen_sample_duration=request.black_screen_sample_duration,
+        low_fps_threshold=request.low_fps_threshold,
         deprioritize_failed_streams=request.deprioritize_failed_streams,
         strike_threshold=request.strike_threshold,
         # Convert normalization_settings from API format to backend format
@@ -488,6 +492,47 @@ async def update_settings(request: SettingsRequest):
             prober.black_screen_sample_duration = max(3, min(30, new_settings.black_screen_sample_duration))
             logger.info("[SETTINGS] Updated prober black screen settings: enabled=%s, duration=%ss",
                         new_settings.black_screen_detection_enabled, new_settings.black_screen_sample_duration)
+
+    # Update prober's low FPS threshold without requiring restart
+    if new_settings.low_fps_threshold != current_settings.low_fps_threshold:
+        prober = get_prober()
+        if prober:
+            prober.low_fps_threshold = max(1, min(60, new_settings.low_fps_threshold))
+            logger.info("[SETTINGS] Updated prober low FPS threshold: %s", prober.low_fps_threshold)
+
+    # Update remaining prober settings without requiring restart
+    prober = get_prober()
+    if prober:
+        changed = []
+        if new_settings.auto_reorder_after_probe != current_settings.auto_reorder_after_probe:
+            prober.auto_reorder_after_probe = new_settings.auto_reorder_after_probe
+            changed.append(f"auto_reorder_after_probe={new_settings.auto_reorder_after_probe}")
+        if new_settings.stream_probe_timeout != current_settings.stream_probe_timeout:
+            prober.probe_timeout = new_settings.stream_probe_timeout
+            changed.append(f"probe_timeout={new_settings.stream_probe_timeout}")
+        if new_settings.bitrate_sample_duration != current_settings.bitrate_sample_duration:
+            prober.bitrate_sample_duration = new_settings.bitrate_sample_duration
+            changed.append(f"bitrate_sample_duration={new_settings.bitrate_sample_duration}")
+        if new_settings.skip_recently_probed_hours != current_settings.skip_recently_probed_hours:
+            prober.skip_recently_probed_hours = new_settings.skip_recently_probed_hours
+            changed.append(f"skip_recently_probed_hours={new_settings.skip_recently_probed_hours}")
+        if new_settings.refresh_m3us_before_probe != current_settings.refresh_m3us_before_probe:
+            prober.refresh_m3us_before_probe = new_settings.refresh_m3us_before_probe
+            changed.append(f"refresh_m3us_before_probe={new_settings.refresh_m3us_before_probe}")
+        if new_settings.probe_retry_count != current_settings.probe_retry_count:
+            prober.probe_retry_count = max(0, min(5, new_settings.probe_retry_count))
+            changed.append(f"probe_retry_count={prober.probe_retry_count}")
+        if new_settings.probe_retry_delay != current_settings.probe_retry_delay:
+            prober.probe_retry_delay = max(1, min(30, new_settings.probe_retry_delay))
+            changed.append(f"probe_retry_delay={prober.probe_retry_delay}")
+        if new_settings.deprioritize_failed_streams != current_settings.deprioritize_failed_streams:
+            prober.deprioritize_failed_streams = new_settings.deprioritize_failed_streams
+            changed.append(f"deprioritize_failed_streams={new_settings.deprioritize_failed_streams}")
+        if new_settings.stream_fetch_page_limit != current_settings.stream_fetch_page_limit:
+            prober.stream_fetch_page_limit = new_settings.stream_fetch_page_limit
+            changed.append(f"stream_fetch_page_limit={new_settings.stream_fetch_page_limit}")
+        if changed:
+            logger.info("[SETTINGS] Updated prober settings: %s", ", ".join(changed))
 
     logger.info("[SETTINGS] Settings saved successfully - configured: %s, auth_changed: %s, server_changed: %s", new_settings.is_configured(), auth_changed, server_changed)
     return {"status": "saved", "configured": new_settings.is_configured(), "server_changed": server_changed}
@@ -787,6 +832,7 @@ async def restart_services():
                 deprioritize_failed_streams=settings.deprioritize_failed_streams,
                 black_screen_detection_enabled=settings.black_screen_detection_enabled,
                 black_screen_sample_duration=settings.black_screen_sample_duration,
+                low_fps_threshold=settings.low_fps_threshold,
                 stream_sort_priority=settings.stream_sort_priority,
                 stream_sort_enabled=settings.stream_sort_enabled,
                 stream_fetch_page_limit=settings.stream_fetch_page_limit,

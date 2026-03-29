@@ -107,10 +107,10 @@ describe('Stream Loading API', () => {
       expect(groups).toHaveLength(3);
       const sports = groups.find(g => g.name === 'Sports');
       expect(sports).toBeDefined();
-      expect(sports!.stream_count).toBe(2);
+      expect(sports!.count).toBe(2);
       const news = groups.find(g => g.name === 'News');
       expect(news).toBeDefined();
-      expect(news!.stream_count).toBe(1);
+      expect(news!.count).toBe(1);
     });
 
     it('returns empty array when no streams exist', async () => {

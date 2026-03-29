@@ -10,6 +10,8 @@ services:
     volumes:
       - ecm-config:/config
     environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
       - CONFIG_DIR=/config
       - ECM_PORT=${ECM_PORT:-6100}
       - ECM_HTTPS_PORT=${ECM_HTTPS_PORT:-6143}

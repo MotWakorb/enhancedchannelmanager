@@ -34,7 +34,7 @@ describe('Normalization API', () => {
 
       const result = await normalizeTexts(['ESPN HD', 'CNN']);
 
-      expect(requestBody?.texts).toEqual(['ESPN HD', 'CNN']);
+      expect(requestBody!.texts).toEqual(['ESPN HD', 'CNN']);
       expect(result.results).toHaveLength(2);
     });
 
@@ -154,9 +154,9 @@ describe('Normalization API', () => {
         url: 'http://localhost:8090',
         username: 'admin',
         normalize_on_channel_create: true,
-      });
+      } as Parameters<typeof saveSettings>[0]);
 
-      expect(requestBody?.normalize_on_channel_create).toBe(true);
+      expect(requestBody!.normalize_on_channel_create).toBe(true);
     });
   });
 
@@ -183,7 +183,7 @@ describe('Normalization API', () => {
         normalize: true,
       });
 
-      expect(requestBody?.normalize).toBe(true);
+      expect(requestBody!.normalize).toBe(true);
     });
 
     it('works without normalize flag', async () => {
@@ -208,7 +208,7 @@ describe('Normalization API', () => {
       });
 
       // normalize should be undefined when not specified
-      expect(requestBody?.normalize).toBeUndefined();
+      expect(requestBody!.normalize).toBeUndefined();
     });
   });
 });

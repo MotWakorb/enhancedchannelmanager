@@ -13,7 +13,6 @@ import {
   createMockChannelGroup,
 } from '../../test/mocks/server';
 import { ActionEditor } from './ActionEditor';
-import type { Action, ActionType } from '../../types/autoCreation';
 
 // Setup MSW server
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
@@ -211,7 +210,21 @@ describe('ActionEditor', () => {
   });
 
   describe('assign_logo action', () => {
-    it('renders logo URL/value input', () => {
+    it('renders logo source radio buttons', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'assign_logo' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByLabelText(/from stream/i)).toBeChecked();
+      expect(screen.getByLabelText(/from epg/i)).not.toBeChecked();
+      expect(screen.getByLabelText(/custom url/i)).not.toBeChecked();
+    });
+
+    it('renders custom URL input with value', () => {
       render(
         <ActionEditor
           action={{ type: 'assign_logo', value: 'https://example.com/logo.png' }}
@@ -220,13 +233,14 @@ describe('ActionEditor', () => {
         />
       );
 
-      expect(screen.getByLabelText(/logo.*url/i)).toHaveValue('https://example.com/logo.png');
+      expect(screen.getByLabelText(/custom url/i)).toBeChecked();
+      expect(screen.getByPlaceholderText(/example\.com/)).toHaveValue('https://example.com/logo.png');
     });
 
-    it('shows template variables hint', () => {
+    it('shows template variables hint for custom URL', () => {
       render(
         <ActionEditor
-          action={{ type: 'assign_logo' }}
+          action={{ type: 'assign_logo', value: '' }}
           onChange={vi.fn()}
           onRemove={vi.fn()}
         />
@@ -581,7 +595,7 @@ describe('ActionEditor', () => {
       const user = userEvent.setup();
       render(
         <ActionEditor
-          action={{ type: 'assign_logo' }}
+          action={{ type: 'assign_logo', value: '' }}
           onChange={vi.fn()}
           onRemove={vi.fn()}
           previousActions={[{ type: 'create_channel', name_template: '{stream_name}' }]}

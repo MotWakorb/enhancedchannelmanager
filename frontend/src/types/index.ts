@@ -17,6 +17,19 @@ export interface Channel {
   _stagedLogoUrl?: string;
 }
 
+export interface MergeChannelsRequest {
+  source_channel_ids: number[];
+  target_name: string;
+  target_channel_number?: number | null;
+  target_channel_group_id?: number | null;
+  target_logo_id?: number | null;
+  target_tvg_id?: string | null;
+  target_epg_data_id?: number | null;
+  target_stream_profile_id?: number | null;
+}
+
+export type SortMode = 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels';
+
 export type EPGSourceType = 'xmltv' | 'schedules_direct' | 'dummy';
 export type EPGSourceStatus = 'idle' | 'fetching' | 'parsing' | 'error' | 'success' | 'disabled';
 
@@ -155,6 +168,7 @@ export interface StreamStats {
   created_at: string;
   consecutive_failures: number;    // Strike rule: consecutive probe failures
   is_black_screen: boolean;        // Black screen detected during probe
+  is_low_fps: boolean;             // Low FPS detected during probe (< 20 FPS)
 }
 
 export interface StreamStatsSummary {
@@ -748,6 +762,7 @@ export interface NormalizationTransformation {
 export interface NormalizationResult {
   original: string;
   normalized: string;
+  changed?: boolean;
   rules_applied?: number[];
   transformations?: NormalizationTransformation[];
 }
@@ -1221,7 +1236,7 @@ export interface ChangePasswordResponse {
 // =============================================================================
 
 // Provider types for identities
-export type IdentityProvider = 'local' | 'dispatcharr';
+export type IdentityProvider = 'local' | 'dispatcharr' | 'oidc' | 'saml' | 'ldap';
 
 // A linked identity for a user account
 export interface UserIdentity {
@@ -1559,4 +1574,73 @@ export interface DummyEPGPreviewResult {
     channel_logo_url: string;
     program_poster_url: string;
   };
+}
+
+// Channel assignment for Dummy EPG profiles
+export interface DummyEPGChannelAssignment {
+  id: number;
+  profile_id: number;
+  channel_id: number;
+  channel_name: string;
+}
+
+// ── Status / Monitoring Types ──────────────────────────────────────
+
+export type ServiceStatus = 'healthy' | 'degraded' | 'unhealthy' | 'unconfigured' | 'unknown';
+
+export interface ServiceWithStatus {
+  id: string;
+  name: string;
+  type?: string;
+  description?: string;
+  status: ServiceStatus;
+  enabled: boolean;
+  critical?: boolean;
+  check_interval: number;
+  last_check?: {
+    checked_at: string;
+    response_time_ms: number | null;
+    message?: string;
+  };
+}
+
+export interface ServiceAlertRule {
+  id: number;
+  name: string;
+  service_id: string | null;
+  condition: string;
+  threshold: string;
+  notify_method_ids: string;
+  enabled: boolean;
+}
+
+export type IncidentStatus = 'investigating' | 'identified' | 'monitoring' | 'resolved';
+export type IncidentSeverity = 'critical' | 'major' | 'minor';
+
+export interface IncidentUpdate {
+  id: number;
+  status: IncidentStatus;
+  message: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface Incident {
+  id: number;
+  title: string;
+  status: IncidentStatus;
+  severity: IncidentSeverity;
+  service_id: string;
+  created_at: string;
+  resolved_at?: string;
+  auto_created?: boolean;
+  updates?: IncidentUpdate[];
+}
+
+export interface MaintenanceWindow {
+  id: number;
+  title: string;
+  start_time: string;
+  end_time: string;
+  suppress_alerts?: boolean;
 }

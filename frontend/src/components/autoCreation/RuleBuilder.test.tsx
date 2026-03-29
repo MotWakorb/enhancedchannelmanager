@@ -136,26 +136,13 @@ describe('RuleBuilder', () => {
       expect(screen.getByRole('button', { name: /add condition/i })).toBeInTheDocument();
     });
 
-    it('opens condition type selector when clicking add', async () => {
+    it('adds a blank condition when clicking add', async () => {
       const user = userEvent.setup();
       render(<RuleBuilder onSave={vi.fn()} onCancel={vi.fn()} />);
 
       await user.click(screen.getByRole('button', { name: /add condition/i }));
 
-      // Should show condition type options (ConditionTypeSelector still uses category labels)
-      await waitFor(() => {
-        expect(screen.getByText(/stream conditions/i)).toBeInTheDocument();
-      });
-    });
-
-    it('adds a condition when type is selected', async () => {
-      const user = userEvent.setup();
-      render(<RuleBuilder onSave={vi.fn()} onCancel={vi.fn()} />);
-
-      await user.click(screen.getByRole('button', { name: /add condition/i }));
-      await user.click(screen.getByText(/stream name contains/i));
-
-      // Should show condition editor with field and operator dropdowns
+      // Should add a condition card with default Stream Name / Contains and value input
       await waitFor(() => {
         expect(screen.getByPlaceholderText(/enter text/i)).toBeInTheDocument();
       });
@@ -214,28 +201,16 @@ describe('RuleBuilder', () => {
       expect(screen.getByRole('button', { name: /add action/i })).toBeInTheDocument();
     });
 
-    it('opens action type selector when clicking add', async () => {
+    it('adds a blank action when clicking add', async () => {
       const user = userEvent.setup();
       render(<RuleBuilder onSave={vi.fn()} onCancel={vi.fn()} />);
 
       await user.click(screen.getByRole('button', { name: /add action/i }));
 
-      // Should show action type options
+      // Should add an action card with "Select an action..." placeholder
       await waitFor(() => {
-        expect(screen.getByText(/create channel/i)).toBeInTheDocument();
-      });
-    });
-
-    it('adds an action when type is selected', async () => {
-      const user = userEvent.setup();
-      render(<RuleBuilder onSave={vi.fn()} onCancel={vi.fn()} />);
-
-      await user.click(screen.getByRole('button', { name: /add action/i }));
-      await user.click(screen.getByText(/create channel/i));
-
-      // Should show action editor with template field
-      await waitFor(() => {
-        expect(screen.getByLabelText(/name template/i)).toBeInTheDocument();
+        expect(screen.getByRole('combobox', { name: /action type/i })).toBeInTheDocument();
+        expect(screen.getByText(/select an action/i)).toBeInTheDocument();
       });
     });
 
@@ -269,10 +244,10 @@ describe('RuleBuilder', () => {
       const onSave = vi.fn();
       render(<RuleBuilder onSave={onSave} onCancel={vi.fn()} />);
 
-      // Fill in name and add a condition
+      // Fill in name and add a condition with a value
       await user.type(screen.getByLabelText(/rule name/i), 'Test Rule');
       await user.click(screen.getByRole('button', { name: /add condition/i }));
-      await user.click(screen.getByText(/always/i));
+      await user.type(screen.getByPlaceholderText(/enter text/i), 'ESPN');
 
       // Try to save without actions
       await user.click(screen.getByRole('button', { name: /save/i }));
@@ -290,19 +265,18 @@ describe('RuleBuilder', () => {
     it('calls onSave with rule data when valid', async () => {
       const user = userEvent.setup();
       const onSave = vi.fn();
-      render(<RuleBuilder onSave={onSave} onCancel={vi.fn()} />);
+
+      const validRule: Partial<AutoCreationRule> = {
+        conditions: [{ type: 'always' }],
+        actions: [{ type: 'skip' }],
+      };
+
+      render(<RuleBuilder rule={validRule as AutoCreationRule} onSave={onSave} onCancel={vi.fn()} />);
 
       // Fill in the form
+      await user.clear(screen.getByLabelText(/rule name/i));
       await user.type(screen.getByLabelText(/rule name/i), 'My Rule');
       await user.type(screen.getByLabelText(/description/i), 'Description');
-
-      // Add condition
-      await user.click(screen.getByRole('button', { name: /add condition/i }));
-      await user.click(screen.getByText(/always/i));
-
-      // Add action
-      await user.click(screen.getByRole('button', { name: /add action/i }));
-      await user.click(screen.getByRole('button', { name: /^skip$/i }));
 
       // Save
       await user.click(screen.getByRole('button', { name: /save/i }));
@@ -424,20 +398,14 @@ describe('RuleBuilder', () => {
       const user = userEvent.setup();
       render(<RuleBuilder onSave={vi.fn()} onCancel={vi.fn()} />);
 
-      // Add a condition that requires a value
+      // Add a condition (defaults to Stream Name Contains with empty value)
       await user.click(screen.getByRole('button', { name: /add condition/i }));
-      await waitFor(() => {
-        expect(screen.getByText(/stream conditions/i)).toBeInTheDocument();
-      });
-      await user.click(screen.getByText(/stream name contains/i));
 
       // Don't fill in the value and try to save
       await user.type(screen.getByLabelText(/rule name/i), 'Test Rule');
       await user.click(screen.getByRole('button', { name: /add action/i }));
-      await waitFor(() => {
-        expect(screen.getByText(/^skip$/i)).toBeInTheDocument();
-      });
-      await user.click(screen.getByText(/^skip$/i));
+      await user.click(screen.getByRole('combobox', { name: /action type/i }));
+      await user.click(screen.getByRole('option', { name: /skip/i }));
 
       await user.click(screen.getByRole('button', { name: /save/i }));
 

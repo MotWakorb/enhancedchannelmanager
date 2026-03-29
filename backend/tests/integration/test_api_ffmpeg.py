@@ -397,8 +397,7 @@ class TestSavedConfigsAPI:
     @pytest.mark.asyncio
     async def test_list_configs_returns_200(self, async_client):
         """GET /api/ffmpeg/configs returns 200 with a list."""
-        with patch("routers.ffmpeg.ffmpeg_list_configs", return_value=[]):
-            response = await async_client.get("/api/ffmpeg/configs")
+        response = await async_client.get("/api/ffmpeg/configs")
         assert response.status_code == 200
         data = response.json()
         assert "configs" in data
@@ -407,16 +406,14 @@ class TestSavedConfigsAPI:
     @pytest.mark.asyncio
     async def test_create_config_returns_201(self, async_client):
         """POST /api/ffmpeg/configs creates a saved config and returns 201."""
-        saved = create_saved_config(name="My Transcode Preset")
-        with patch("routers.ffmpeg.ffmpeg_create_config", return_value=saved):
-            response = await async_client.post(
-                "/api/ffmpeg/configs",
-                json={
-                    "name": "My Transcode Preset",
-                    "description": "H.264 CRF 23 with AAC audio",
-                    "config": create_builder_state(),
-                },
-            )
+        response = await async_client.post(
+            "/api/ffmpeg/configs",
+            json={
+                "name": "My Transcode Preset",
+                "description": "H.264 CRF 23 with AAC audio",
+                "config": create_builder_state(),
+            },
+        )
         assert response.status_code == 201
         data = response.json()
         assert data["name"] == "My Transcode Preset"
@@ -425,10 +422,14 @@ class TestSavedConfigsAPI:
     @pytest.mark.asyncio
     async def test_get_config_by_id(self, async_client):
         """GET /api/ffmpeg/configs/{id} returns a single saved config."""
-        saved = create_saved_config(name="Lookup Config")
-        config_id = saved["id"]
-        with patch("routers.ffmpeg.ffmpeg_get_config", return_value=saved):
-            response = await async_client.get(f"/api/ffmpeg/configs/{config_id}")
+        # Create first
+        create_resp = await async_client.post(
+            "/api/ffmpeg/configs",
+            json={"name": "Lookup Config", "config": create_builder_state()},
+        )
+        config_id = create_resp.json()["id"]
+
+        response = await async_client.get(f"/api/ffmpeg/configs/{config_id}")
         assert response.status_code == 200
         data = response.json()
         assert data["name"] == "Lookup Config"
@@ -437,17 +438,21 @@ class TestSavedConfigsAPI:
     @pytest.mark.asyncio
     async def test_update_config(self, async_client):
         """PUT /api/ffmpeg/configs/{id} updates a saved config."""
-        saved = create_saved_config(name="Updated Config")
-        config_id = saved["id"]
-        with patch("routers.ffmpeg.ffmpeg_update_config", return_value=saved):
-            response = await async_client.put(
-                f"/api/ffmpeg/configs/{config_id}",
-                json={
-                    "name": "Updated Config",
-                    "description": "Changed description",
-                    "config": create_builder_state(),
-                },
-            )
+        # Create first
+        create_resp = await async_client.post(
+            "/api/ffmpeg/configs",
+            json={"name": "Original Name", "config": create_builder_state()},
+        )
+        config_id = create_resp.json()["id"]
+
+        response = await async_client.put(
+            f"/api/ffmpeg/configs/{config_id}",
+            json={
+                "name": "Updated Config",
+                "description": "Changed description",
+                "config": create_builder_state(),
+            },
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["name"] == "Updated Config"
@@ -455,9 +460,14 @@ class TestSavedConfigsAPI:
     @pytest.mark.asyncio
     async def test_delete_config(self, async_client):
         """DELETE /api/ffmpeg/configs/{id} deletes a saved config."""
-        config_id = 42
-        with patch("routers.ffmpeg.ffmpeg_delete_config", return_value={"status": "deleted"}):
-            response = await async_client.delete(f"/api/ffmpeg/configs/{config_id}")
+        # Create first
+        create_resp = await async_client.post(
+            "/api/ffmpeg/configs",
+            json={"name": "To Delete", "config": create_builder_state()},
+        )
+        config_id = create_resp.json()["id"]
+
+        response = await async_client.delete(f"/api/ffmpeg/configs/{config_id}")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "deleted"
@@ -465,8 +475,7 @@ class TestSavedConfigsAPI:
     @pytest.mark.asyncio
     async def test_get_nonexistent_config_returns_404(self, async_client):
         """GET /api/ffmpeg/configs/{id} returns 404 for unknown ID."""
-        with patch("routers.ffmpeg.ffmpeg_get_config", return_value=None):
-            response = await async_client.get("/api/ffmpeg/configs/99999")
+        response = await async_client.get("/api/ffmpeg/configs/99999")
         assert response.status_code == 404
 
 

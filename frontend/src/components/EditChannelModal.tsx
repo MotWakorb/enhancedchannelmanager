@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, memo } from 'react';
 import type { Channel, Logo } from '../types';
 import * as api from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
+import { logger } from '../utils/logger';
 import './ModalBase.css';
 
 export interface ChannelMetadataChanges {
@@ -53,6 +54,8 @@ export const EditChannelModal = memo(function EditChannelModal({
   const [addingLogo, setAddingLogo] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [addingEpgLogo, setAddingEpgLogo] = useState(false);
+  const [addingStreamLogo, setAddingStreamLogo] = useState(false);
+  const [streamLogoUrl, setStreamLogoUrl] = useState<string | null>(null);
   const [pendingLogo, setPendingLogo] = useState<Logo | null>(null);
   const [immediateLogoUrl, setImmediateLogoUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -76,6 +79,9 @@ export const EditChannelModal = memo(function EditChannelModal({
   // TVG-ID from EPG picker state
   const [tvgIdPickerOpen, setTvgIdPickerOpen] = useState(false);
   const [tvgIdSearch, setTvgIdSearch] = useState('');
+
+  // TVG-ID suffix filter for EPG search (e.g. ".us" to match "CMTMusic(CMTMUS).us")
+  const [tvgIdSuffixFilter, setTvgIdSuffixFilter] = useState('');
 
   // Stream Profile dropdown state
   const [streamProfileDropdownOpen, setStreamProfileDropdownOpen] = useState(false);
@@ -171,7 +177,7 @@ export const EditChannelModal = memo(function EditChannelModal({
       setSelectedLogoId(newLogo.id);
       setNewLogoUrl('');
     } catch (err) {
-      console.error('Failed to add logo:', err);
+      logger.error('Failed to add logo:', err);
     } finally {
       setAddingLogo(false);
     }
@@ -182,7 +188,7 @@ export const EditChannelModal = memo(function EditChannelModal({
     if (!file) return;
 
     if (!file.type.startsWith('image/')) {
-      console.error('Invalid file type. Please select an image file.');
+      logger.warn('Invalid file type. Please select an image file.');
       return;
     }
 
@@ -190,7 +196,7 @@ export const EditChannelModal = memo(function EditChannelModal({
     try {
       await onLogoUpload(file);
     } catch (err) {
-      console.error('Failed to upload logo:', err);
+      logger.error('Failed to upload logo:', err);
     } finally {
       setUploadingLogo(false);
       if (fileInputRef.current) {
@@ -211,12 +217,43 @@ export const EditChannelModal = memo(function EditChannelModal({
         setSelectedLogoId(newLogo.id);
       }
     } catch (err) {
-      console.error('Failed to create logo from EPG:', err);
+      logger.error('Failed to create logo from EPG:', err);
       setImmediateLogoUrl(null);
     } finally {
       setAddingEpgLogo(false);
     }
   };
+
+  const handleUseStreamLogo = async () => {
+    if (!streamLogoUrl) return;
+    setImmediateLogoUrl(streamLogoUrl);
+    setAddingStreamLogo(true);
+    try {
+      const newLogo = await onLogoCreate(streamLogoUrl);
+      if (newLogo && newLogo.id) {
+        setPendingLogo(newLogo);
+        setSelectedLogoId(newLogo.id);
+      }
+    } catch (err) {
+      logger.error('Failed to create logo from stream:', err);
+      setImmediateLogoUrl(null);
+    } finally {
+      setAddingStreamLogo(false);
+    }
+  };
+
+  useEffect(() => {
+    if (channel.streams.length === 0) return;
+    api.getChannelStreams(channel.id).then(streams => {
+      const url = streams.find(s => s.logo_url)?.logo_url || null;
+      if (url) {
+        logger.debug(`[EditChannelModal] Found stream logo for channel ${channel.id}: ${url}`);
+      }
+      setStreamLogoUrl(url);
+    }).catch((err) => {
+      logger.error(`[EditChannelModal] Failed to fetch streams for channel ${channel.id}:`, err);
+    });
+  }, [channel.id, channel.streams.length]);
 
   useEffect(() => {
     if (pendingLogo && logos.find((l) => l.id === pendingLogo.id)) {
@@ -241,6 +278,8 @@ export const EditChannelModal = memo(function EditChannelModal({
   // Get non-dummy EPG source IDs for filtering
   const nonDummyEpgSourceIds = new Set(nonDummyEpgSources.map(s => s.id));
 
+  const suffixFilterLower = tvgIdSuffixFilter.toLowerCase();
+
   const filteredEpgData = epgData.filter((epg) => {
     // First filter by EPG source
     // If specific sources selected, only show from those; otherwise show all non-dummy sources
@@ -250,6 +289,8 @@ export const EditChannelModal = memo(function EditChannelModal({
       // When no filter selected, exclude dummy EPG sources
       if (!nonDummyEpgSourceIds.has(epg.epg_source)) return false;
     }
+    // Filter by TVG-ID suffix
+    if (suffixFilterLower && !epg.tvg_id.toLowerCase().endsWith(suffixFilterLower)) return false;
     // Then filter by search term
     const searchTerm = (epgDropdownOpen ? epgSearch : tvgIdSearch).toLowerCase();
     if (!searchTerm) return true;
@@ -266,6 +307,8 @@ export const EditChannelModal = memo(function EditChannelModal({
     } else {
       if (!nonDummyEpgSourceIds.has(epg.epg_source)) return false;
     }
+    // Filter by TVG-ID suffix
+    if (suffixFilterLower && !epg.tvg_id.toLowerCase().endsWith(suffixFilterLower)) return false;
     // Then filter by search term
     const searchTerm = tvgIdSearch.toLowerCase();
     if (!searchTerm) return true;
@@ -589,15 +632,16 @@ export const EditChannelModal = memo(function EditChannelModal({
             </div>
           )}
           <div className="epg-search-container" ref={epgDropdownRef}>
-            <div className="search-input-wrapper">
-              <input
-                type="text"
-                className="edit-channel-text-input"
-                placeholder="Search EPG data..."
-                value={epgSearch}
-                onChange={(e) => handleEpgSearch(e.target.value)}
-                onFocus={() => setEpgDropdownOpen(true)}
-              />
+            <div className="epg-search-row">
+              <div className="search-input-wrapper" style={{ flex: 1 }}>
+                <input
+                  type="text"
+                  className="edit-channel-text-input"
+                  placeholder="Search EPG data..."
+                  value={epgSearch}
+                  onChange={(e) => handleEpgSearch(e.target.value)}
+                  onFocus={() => setEpgDropdownOpen(true)}
+                />
               {epgSearch && (
                 <button
                   type="button"
@@ -608,6 +652,27 @@ export const EditChannelModal = memo(function EditChannelModal({
                   <span className="material-icons">close</span>
                 </button>
               )}
+              </div>
+              <div className="search-input-wrapper epg-suffix-filter">
+                <input
+                  type="text"
+                  className="edit-channel-text-input"
+                  placeholder="Suffix e.g. .us"
+                  value={tvgIdSuffixFilter}
+                  onChange={(e) => setTvgIdSuffixFilter(e.target.value)}
+                  title="Filter by TVG-ID suffix (e.g. .us)"
+                />
+                {tvgIdSuffixFilter && (
+                  <button
+                    type="button"
+                    className="search-clear-btn"
+                    onClick={() => setTvgIdSuffixFilter('')}
+                    title="Clear suffix filter"
+                  >
+                    <span className="material-icons">close</span>
+                  </button>
+                )}
+              </div>
             </div>
             {epgDropdownOpen && (
               <div className="epg-dropdown">
@@ -703,17 +768,26 @@ export const EditChannelModal = memo(function EditChannelModal({
         <div className="edit-channel-section">
           <div className="logo-section-header">
             <label>Channel Logo</label>
-            {currentEpgData?.icon_url && (
+            <div className="logo-section-actions">
               <button
                 onClick={handleUseEpgLogo}
-                disabled={addingEpgLogo}
+                disabled={!currentEpgData?.icon_url || addingEpgLogo}
                 className="logo-epg-btn"
-                title="Use the logo from the assigned EPG data"
+                title={currentEpgData?.icon_url ? 'Use the logo from the assigned EPG data' : 'Assign EPG data first'}
               >
                 <span className="material-icons">live_tv</span>
                 {addingEpgLogo ? 'Adding...' : 'Use EPG Logo'}
               </button>
-            )}
+              <button
+                onClick={handleUseStreamLogo}
+                disabled={!streamLogoUrl || addingStreamLogo}
+                className="logo-epg-btn"
+                title={streamLogoUrl ? 'Use the logo from the channel\'s M3U streams' : 'No stream logo available'}
+              >
+                <span className="material-icons">playlist_play</span>
+                {addingStreamLogo ? 'Adding...' : 'Use Stream Logo'}
+              </button>
+            </div>
           </div>
 
           {/* Current logo preview */}

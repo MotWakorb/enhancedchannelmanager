@@ -174,13 +174,6 @@ def save_auth_settings(settings: AuthSettings) -> bool:
         raise
 
 
-def clear_auth_settings_cache() -> None:
-    """Clear the cached auth settings (forces reload)."""
-    global _cached_auth_settings
-    _cached_auth_settings = None
-    logger.info("[AUTH-SETTINGS] Auth settings cache cleared")
-
-
 def get_auth_settings() -> AuthSettings:
     """Get the current auth settings."""
     return load_auth_settings()
@@ -195,9 +188,3 @@ def get_jwt_secret_key() -> str:
     return settings.jwt.secret_key
 
 
-def mark_setup_complete() -> None:
-    """Mark the initial auth setup as complete."""
-    settings = get_auth_settings()
-    settings.setup_complete = True
-    save_auth_settings(settings)
-    logger.info("[AUTH-SETTINGS] Auth setup marked as complete")

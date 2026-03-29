@@ -34,18 +34,24 @@ describe('BandwidthPanel', () => {
     today_out: 1073741824, // 1 GB outbound
     week_in: 2684354560, // 2.5 GB inbound
     week_out: 5368709120, // 5 GB outbound
+    month_in: 10737418240,
+    month_out: 10737418240,
+    year_in: 53687091200,
+    year_out: 53687091200,
     all_time_in: 107374182400, // 100 GB inbound
     all_time_out: 214748364800, // 200 GB outbound
     today_peak_bitrate_in: 50000000, // 50 Mbps
     today_peak_bitrate_out: 100000000, // 100 Mbps
+    week_peak_bitrate_in: 0,
+    week_peak_bitrate_out: 0,
     daily_history: [
-      { date: '2026-01-30', bytes_transferred: 1000000000, bytes_in: 400000000, bytes_out: 600000000 },
-      { date: '2026-01-31', bytes_transferred: 1200000000, bytes_in: 500000000, bytes_out: 700000000 },
-      { date: '2026-02-01', bytes_transferred: 800000000, bytes_in: 300000000, bytes_out: 500000000 },
-      { date: '2026-02-02', bytes_transferred: 1500000000, bytes_in: 600000000, bytes_out: 900000000 },
-      { date: '2026-02-03', bytes_transferred: 1100000000, bytes_in: 450000000, bytes_out: 650000000 },
-      { date: '2026-02-04', bytes_transferred: 900000000, bytes_in: 350000000, bytes_out: 550000000 },
-      { date: '2026-02-05', bytes_transferred: 1073741824, bytes_in: 536870912, bytes_out: 536870912 },
+      { date: '2026-01-30', bytes_transferred: 1000000000, bytes_in: 400000000, bytes_out: 600000000, peak_channels: 0, peak_clients: 0, peak_bitrate_in: 0, peak_bitrate_out: 0 },
+      { date: '2026-01-31', bytes_transferred: 1200000000, bytes_in: 500000000, bytes_out: 700000000, peak_channels: 0, peak_clients: 0, peak_bitrate_in: 0, peak_bitrate_out: 0 },
+      { date: '2026-02-01', bytes_transferred: 800000000, bytes_in: 300000000, bytes_out: 500000000, peak_channels: 0, peak_clients: 0, peak_bitrate_in: 0, peak_bitrate_out: 0 },
+      { date: '2026-02-02', bytes_transferred: 1500000000, bytes_in: 600000000, bytes_out: 900000000, peak_channels: 0, peak_clients: 0, peak_bitrate_in: 0, peak_bitrate_out: 0 },
+      { date: '2026-02-03', bytes_transferred: 1100000000, bytes_in: 450000000, bytes_out: 650000000, peak_channels: 0, peak_clients: 0, peak_bitrate_in: 0, peak_bitrate_out: 0 },
+      { date: '2026-02-04', bytes_transferred: 900000000, bytes_in: 350000000, bytes_out: 550000000, peak_channels: 0, peak_clients: 0, peak_bitrate_in: 0, peak_bitrate_out: 0 },
+      { date: '2026-02-05', bytes_transferred: 1073741824, bytes_in: 536870912, bytes_out: 536870912, peak_channels: 0, peak_clients: 0, peak_bitrate_in: 0, peak_bitrate_out: 0 },
     ],
   };
 

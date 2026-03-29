@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from config import get_settings
 from database import get_session
 from dispatcharr_client import get_client
-from stream_prober import StreamProber, get_prober
+from stream_prober import StreamProber, get_prober, ensure_prober
 
 logger = logging.getLogger(__name__)
 
@@ -360,7 +360,7 @@ async def probe_bulk_streams(request: BulkProbeRequest):
     """Trigger on-demand probe for multiple streams."""
     logger.debug("[STREAM-STATS-PROBE] POST /api/stream-stats/probe/bulk - %d streams", len(request.stream_ids))
 
-    prober = get_prober()
+    prober = ensure_prober()
     logger.debug("[STREAM-STATS-PROBE] get_prober() returned: %s", prober is not None)
 
     if not prober:
@@ -404,7 +404,7 @@ async def probe_all_streams_endpoint(request: ProbeAllRequest = ProbeAllRequest(
     """
     logger.debug("[STREAM-STATS-PROBE] POST /api/stream-stats/probe/all - groups=%s, stream_ids=%d", request.channel_groups, len(request.stream_ids) if request.stream_ids else 0)
 
-    prober = get_prober()
+    prober = ensure_prober()
     logger.debug("[STREAM-STATS-PROBE] get_prober() returned: %s", prober is not None)
 
     if not prober:
@@ -441,7 +441,7 @@ async def probe_all_streams_endpoint(request: ProbeAllRequest = ProbeAllRequest(
 async def get_probe_progress():
     """Get current probe all streams progress."""
     logger.debug("[STREAM-STATS-PROBE] GET /api/stream-stats/probe/progress")
-    prober = get_prober()
+    prober = ensure_prober()
     if not prober:
         raise HTTPException(status_code=503, detail="Stream prober not available")
 
@@ -452,7 +452,7 @@ async def get_probe_progress():
 async def get_probe_results():
     """Get detailed results of the last probe all streams operation."""
     logger.debug("[STREAM-STATS-PROBE] GET /api/stream-stats/probe/results")
-    prober = get_prober()
+    prober = ensure_prober()
     if not prober:
         raise HTTPException(status_code=503, detail="Stream prober not available")
 
@@ -463,7 +463,7 @@ async def get_probe_results():
 async def get_probe_history():
     """Get probe run history (last 5 runs)."""
     logger.debug("[STREAM-STATS-PROBE] GET /api/stream-stats/probe/history")
-    prober = get_prober()
+    prober = ensure_prober()
     if not prober:
         raise HTTPException(status_code=503, detail="Stream prober not available")
 
@@ -474,7 +474,7 @@ async def get_probe_history():
 async def cancel_probe():
     """Cancel an in-progress probe operation."""
     logger.debug("[STREAM-STATS-PROBE] POST /api/stream-stats/probe/cancel")
-    prober = get_prober()
+    prober = ensure_prober()
     if not prober:
         raise HTTPException(status_code=503, detail="Stream prober not available")
 
@@ -485,7 +485,7 @@ async def cancel_probe():
 async def reset_probe_state():
     """Force reset the probe state if it gets stuck."""
     logger.debug("[STREAM-STATS-PROBE] POST /api/stream-stats/probe/reset")
-    prober = get_prober()
+    prober = ensure_prober()
     if not prober:
         raise HTTPException(status_code=503, detail="Stream prober not available")
 
@@ -583,7 +583,7 @@ async def probe_single_stream(stream_id: int):
     """Trigger on-demand probe for a single stream."""
     logger.debug("[STREAM-STATS-PROBE] POST /api/stream-stats/probe/%s", stream_id)
 
-    prober = get_prober()
+    prober = ensure_prober()
     logger.debug("[STREAM-STATS-PROBE] get_prober() returned: %s", prober is not None)
 
     if not prober:

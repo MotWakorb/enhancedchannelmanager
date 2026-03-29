@@ -56,6 +56,29 @@ const StatsTab = lazy(() => import('./components/tabs/StatsTab').then(m => ({ de
 const SettingsTab = lazy(() => import('./components/tabs/SettingsTab').then(m => ({ default: m.SettingsTab })));
 const AutoCreationTab = lazy(() => import('./components/autoCreation/AutoCreationTab').then(m => ({ default: m.AutoCreationTab })));
 const FFMPEGBuilderTab = lazy(() => import('./components/ffmpegBuilder/FFMPEGBuilderTab').then(m => ({ default: m.FFMPEGBuilderTab })));
+const ExportTab = lazy(() => import('./components/tabs/ExportTab').then(m => ({ default: m.ExportTab })));
+
+// Self-contained timer component — updates only itself every second,
+// not the entire App tree (which was the previous behavior)
+function EditModeTimer({ enteredAt }: { enteredAt: number }) {
+  const [seconds, setSeconds] = useState(() => Math.floor((Date.now() - enteredAt) / 1000));
+
+  useEffect(() => {
+    setSeconds(Math.floor((Date.now() - enteredAt) / 1000));
+    const interval = setInterval(() => {
+      setSeconds(Math.floor((Date.now() - enteredAt) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [enteredAt]);
+
+  const display = seconds < 60
+    ? `${seconds}s`
+    : seconds % 60 > 0
+      ? `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+      : `${Math.floor(seconds / 60)}m`;
+
+  return <span className="edit-mode-timer">({display})</span>;
+}
 
 function App() {
   // Health check and version info
@@ -135,9 +158,10 @@ function App() {
     timezonePreference: 'both',
     defaultChannelProfileIds: [] as number[],
     customNetworkPrefixes: [] as string[],
-    streamSortPriority: ['resolution', 'bitrate', 'framerate'] as ('resolution' | 'bitrate' | 'framerate')[],
-    streamSortEnabled: { resolution: true, bitrate: true, framerate: true } as Record<'resolution' | 'bitrate' | 'framerate', boolean>,
+    streamSortPriority: ['resolution', 'bitrate', 'framerate'] as api.SortCriterion[],
+    streamSortEnabled: DEFAULT_SORT_ENABLED as api.SortEnabledMap,
     deprioritizeFailedStreams: true,
+    m3uAccountPriorities: {} as api.M3UAccountPriorities,
   });
   // Also keep separate state for use in callbacks (to avoid stale closure issues)
   const [defaultChannelProfileIds, setDefaultChannelProfileIds] = useState<number[]>([]);
@@ -217,7 +241,7 @@ function App() {
     renamedGroupNames,
     canLocalUndo,
     canLocalRedo,
-    editModeDuration,
+    editModeEnteredAt,
     enterEditMode,
     exitEditMode: rawExitEditMode,
     stageUpdateChannel,
@@ -469,7 +493,7 @@ function App() {
         setNormalizeOnChannelCreate(settings.normalize_on_channel_create ?? false);
         // Store VLC settings globally for vlc utility to access
         const vlcBehavior = (settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only') || 'm3u_fallback';
-        (window as any).__vlcSettings = { behavior: vlcBehavior };
+        window.__vlcSettings = { behavior: vlcBehavior };
         setChannelDefaults({
           includeChannelNumberInName: settings.include_channel_number_in_name,
           channelNumberSeparator: settings.channel_number_separator,
@@ -846,7 +870,7 @@ function App() {
         .map(g => g.id);
 
       if (newGroupIds.length > 0) {
-        console.log('[App] Adding new groups from CSV import to filter:', newGroupIds);
+        logger.debug('[App] Adding new groups from CSV import to filter:', newGroupIds);
         setChannelFilters(prev => ({
           ...prev,
           groupFilter: [...prev.groupFilter, ...newGroupIds],
@@ -1439,7 +1463,7 @@ function App() {
             try {
               await api.updateProfileChannel(profileId, newChannel.id, { enabled: true });
             } catch (err) {
-              console.warn(`Failed to add channel ${newChannel.id} to profile ${profileId}:`, err);
+              logger.warn(`Failed to add channel ${newChannel.id} to profile ${profileId}:`, err);
             }
           }
 
@@ -1497,10 +1521,7 @@ function App() {
 
           // Create new group if needed
           if (newGroupName && !targetGroupId) {
-            const newGroup = await api.createChannelGroup({
-              name: newGroupName,
-              channel_profile_ids: defaultChannelProfileIds.length > 0 ? defaultChannelProfileIds : undefined,
-            });
+            const newGroup = await api.createChannelGroup(newGroupName);
             targetGroupId = newGroup.id;
             await loadChannelGroups();
           }
@@ -1509,13 +1530,13 @@ function App() {
           await api.createChannel({
             name,
             channel_number: channelNumber,
-            channel_group_id: targetGroupId,
+            channel_group_id: targetGroupId ?? undefined,
           });
 
           await loadChannels();
         }
       } catch (err) {
-        console.error('Failed to create channel:', err);
+        logger.error('Failed to create channel:', err);
         throw err;
       }
     },
@@ -1668,13 +1689,71 @@ function App() {
           // Shift amount is the total range taken by new channels
           const shiftAmount = channelCount * incrementShift;
 
-          // Shift ALL channels that are at or after the starting number
-          // This ensures channels after the new range are also pushed down,
-          // avoiding duplicate channel numbers
-          const channelsToShift = displayChannels
-            .filter((ch) => ch.channel_number !== null &&
-                    ch.channel_number >= startingNumber)
-            .sort((a, b) => (b.channel_number ?? 0) - (a.channel_number ?? 0)); // Sort descending to avoid conflicts
+          // Group-aware push down: only shift channels within the target group,
+          // then cascade into subsequent groups only if shifting would cause collisions.
+          // e.g., Cable 200-312, Sports 400-425: inserting at 220 should only shift Cable,
+          // not Sports (there's a gap between 312 and 400).
+
+          // Build a sorted list of groups by their minimum channel number
+          const groupMap = new Map<number | null, { channels: typeof displayChannels; minNum: number; maxNum: number }>();
+          for (const ch of displayChannels) {
+            if (ch.channel_number === null) continue;
+            const gid = ch.channel_group_id;
+            const existing = groupMap.get(gid);
+            if (existing) {
+              existing.channels.push(ch);
+              existing.minNum = Math.min(existing.minNum, ch.channel_number);
+              existing.maxNum = Math.max(existing.maxNum, ch.channel_number);
+            } else {
+              groupMap.set(gid, { channels: [ch], minNum: ch.channel_number, maxNum: ch.channel_number });
+            }
+          }
+
+          // Sort groups by their minimum channel number
+          const sortedGroups = Array.from(groupMap.entries())
+            .sort((a, b) => a[1].minNum - b[1].minNum);
+
+          // Find the target group (the one we're inserting into)
+          const targetGroupId = channelGroupId;
+          const targetGroupIdx = sortedGroups.findIndex(([gid]) => gid === targetGroupId);
+
+          // Collect channels to shift: start with channels in the target group at or after insertion point
+          const channelsToShift: typeof displayChannels = [];
+
+          if (targetGroupIdx !== -1) {
+            const [, targetGroup] = sortedGroups[targetGroupIdx];
+
+            // Shift channels in the target group at or after the starting number
+            const targetShiftChannels = targetGroup.channels.filter(
+              (ch) => ch.channel_number !== null && ch.channel_number >= startingNumber
+            );
+            channelsToShift.push(...targetShiftChannels);
+
+            // Cascade into subsequent groups only if the shifted max would collide
+            let currentMaxAfterShift = targetGroup.maxNum + shiftAmount;
+
+            for (let i = targetGroupIdx + 1; i < sortedGroups.length; i++) {
+              const [, nextGroup] = sortedGroups[i];
+              // If there's a gap between the shifted max and the next group's min, stop
+              if (currentMaxAfterShift < nextGroup.minNum) break;
+
+              // Collision: need to shift this group's channels too
+              channelsToShift.push(...nextGroup.channels);
+              currentMaxAfterShift = nextGroup.maxNum + shiftAmount;
+            }
+          } else {
+            // Fallback: target group not found, only shift channels at/after starting number
+            // that would actually collide with the new channel range
+            const endOfNewRange = startingNumber + shiftAmount;
+            channelsToShift.push(
+              ...displayChannels.filter(
+                (ch) => ch.channel_number !== null && ch.channel_number >= startingNumber && ch.channel_number < endOfNewRange
+              )
+            );
+          }
+
+          // Sort descending to avoid conflicts when shifting
+          channelsToShift.sort((a, b) => (b.channel_number ?? 0) - (a.channel_number ?? 0));
 
           // Shift each channel by the amount needed to make room for new channels
           for (const ch of channelsToShift) {
@@ -2002,13 +2081,6 @@ function App() {
     [channels, displayChannels, isEditMode, stageBulkAssignNumbers, recordChange]
   );
 
-  // Format duration for display
-  const formatDuration = (seconds: number): string => {
-    if (seconds < 60) return `${seconds}s`;
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
-  };
 
   // Merge real channel groups with staged groups when in edit mode
   const displayChannelGroups = isEditMode && stagedGroups.length > 0
@@ -2038,10 +2110,8 @@ function App() {
                       {stagedOperationCount} change{stagedOperationCount !== 1 ? 's' : ''}
                     </span>
                   )}
-                  {editModeDuration !== null && (
-                    <span className="edit-mode-timer">
-                      ({formatDuration(editModeDuration)})
-                    </span>
+                  {editModeEnteredAt !== null && (
+                    <EditModeTimer enteredAt={editModeEnteredAt} />
                   )}
                   <div className="edit-mode-buttons">
                     <button
@@ -2322,6 +2392,7 @@ function App() {
           {activeTab === 'logo-manager' && <LogoManagerTab />}
           {activeTab === 'm3u-changes' && <M3UChangesTab />}
           {activeTab === 'auto-creation' && <AutoCreationTab />}
+          {activeTab === 'export' && <ExportTab />}
           {activeTab === 'journal' && <JournalTab />}
           {activeTab === 'stats' && <StatsTab />}
           {activeTab === 'ffmpeg-builder' && <FFMPEGBuilderTab />}

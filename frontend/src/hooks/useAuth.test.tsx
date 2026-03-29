@@ -26,7 +26,7 @@ describe('AuthContext', () => {
 
   describe('useAuth() hook', () => {
     it('returns user when authenticated', async () => {
-      const mockUser = { id: 1, username: 'testuser', is_admin: false };
+      const mockUser = { id: 1, username: 'testuser', is_admin: false, email: null, display_name: null, is_active: true, auth_provider: 'local', external_id: null };
       const { getCurrentUser } = await import('../services/api');
       vi.mocked(getCurrentUser).mockResolvedValue({ user: mockUser });
 
@@ -61,9 +61,9 @@ describe('AuthContext', () => {
     });
 
     it('login() calls API and updates state on success', async () => {
-      const mockUser = { id: 1, username: 'testuser', is_admin: false };
+      const mockUser = { id: 1, username: 'testuser', is_admin: false, email: null, display_name: null, is_active: true, auth_provider: 'local', external_id: null };
       const { login: mockLogin } = await import('../services/api');
-      vi.mocked(mockLogin).mockResolvedValue({ user: mockUser });
+      vi.mocked(mockLogin).mockResolvedValue({ user: mockUser, message: 'Login successful' });
 
       const { useAuth, AuthProvider } = await import('./useAuth');
 
@@ -104,10 +104,10 @@ describe('AuthContext', () => {
     });
 
     it('logout() calls API and clears state', async () => {
-      const mockUser = { id: 1, username: 'testuser', is_admin: false };
+      const mockUser = { id: 1, username: 'testuser', is_admin: false, email: null, display_name: null, is_active: true, auth_provider: 'local', external_id: null };
       const { logout: mockLogout, getCurrentUser } = await import('../services/api');
       vi.mocked(getCurrentUser).mockResolvedValue({ user: mockUser });
-      vi.mocked(mockLogout).mockResolvedValue(undefined);
+      vi.mocked(mockLogout).mockResolvedValue({ message: 'Logged out' });
 
       const { useAuth, AuthProvider } = await import('./useAuth');
 
@@ -130,7 +130,7 @@ describe('AuthContext', () => {
     });
 
     it('auth state persists across page reload', async () => {
-      const mockUser = { id: 1, username: 'testuser', is_admin: false };
+      const mockUser = { id: 1, username: 'testuser', is_admin: false, email: null, display_name: null, is_active: true, auth_provider: 'local', external_id: null };
       const { getCurrentUser } = await import('../services/api');
       vi.mocked(getCurrentUser).mockResolvedValue({ user: mockUser });
 
@@ -173,7 +173,7 @@ describe('Protected Routes', () => {
   });
 
   it('authenticated user can access protected routes', async () => {
-    const mockUser = { id: 1, username: 'testuser', is_admin: false };
+    const mockUser = { id: 1, username: 'testuser', is_admin: false, email: null, display_name: null, is_active: true, auth_provider: 'local', external_id: null };
     const { getCurrentUser } = await import('../services/api');
     vi.mocked(getCurrentUser).mockResolvedValue({ user: mockUser });
 
@@ -185,7 +185,7 @@ describe('Protected Routes', () => {
     const { getCurrentUser } = await import('../services/api');
     // Simulate slow response
     vi.mocked(getCurrentUser).mockImplementation(
-      () => new Promise((resolve) => setTimeout(() => resolve({ user: null }), 1000))
+      () => new Promise((resolve) => setTimeout(() => resolve({ user: { id: 0, username: '', is_admin: false, email: null, display_name: null, is_active: false, auth_provider: 'local', external_id: null } }), 1000))
     );
 
     // Test that loading state is shown

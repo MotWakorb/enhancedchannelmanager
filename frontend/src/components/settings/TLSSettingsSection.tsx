@@ -4,6 +4,7 @@
  * Admin panel for configuring TLS/SSL certificates with Let's Encrypt
  * or manual certificate upload.
  */
+import { logger } from '../../utils/logger';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import * as api from '../../services/api';
 import type { TLSStatus } from '../../types';
@@ -75,7 +76,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
         setRenewDaysBefore(settingsData.renew_days_before_expiry);
       } catch (err) {
         notifications.error('Failed to load TLS settings', 'TLS');
-        console.error('Failed to load TLS settings:', err);
+        logger.error('Failed to load TLS settings:', err);
       } finally {
         setLoading(false);
       }
@@ -362,7 +363,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
         </h3>
 
         <div className="tls-config-content">
-          <div className="form-group">
+          <div className="form-group-vertical">
             <label className="checkbox-label">
               <input
                 type="checkbox"
@@ -375,7 +376,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
 
           {enabled && (
           <>
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label>Certificate Mode</label>
               <div className="radio-group">
                 <label className="radio-option">
@@ -403,8 +404,9 @@ export function TLSSettingsSection({ isAdmin }: Props) {
 
             {mode === 'letsencrypt' && (
               <>
-                <div className="form-group">
+                <div className="form-group-vertical">
                   <label htmlFor="domain">Domain Name</label>
+                  <span className="form-description">The domain where ECM will be accessible (must point to this server)</span>
                   <input
                     type="text"
                     id="domain"
@@ -412,11 +414,11 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                     onChange={(e) => setDomain(e.target.value)}
                     placeholder="ecm.example.com"
                   />
-                  <span className="form-hint">The domain where ECM will be accessible (must point to this server)</span>
                 </div>
 
-                <div className="form-group">
+                <div className="form-group-vertical">
                   <label htmlFor="httpsPort">HTTPS Port</label>
+                  <span className="form-description">HTTPS will listen on this port (default: 6143). HTTP stays on its configured port (default: 6100) as fallback.</span>
                   <input
                     type="number"
                     id="httpsPort"
@@ -425,11 +427,11 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                     min={1}
                     max={65535}
                   />
-                  <span className="form-hint">HTTPS will listen on this port (default: 6143). HTTP stays on its configured port (default: 6100) as fallback.</span>
                 </div>
 
-                <div className="form-group">
+                <div className="form-group-vertical">
                   <label htmlFor="acmeEmail">Email Address</label>
+                  <span className="form-description">Contact email for Let's Encrypt account (renewal notifications)</span>
                   <input
                     type="email"
                     id="acmeEmail"
@@ -437,11 +439,14 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                     onChange={(e) => setAcmeEmail(e.target.value)}
                     placeholder="admin@example.com"
                   />
-                  <span className="form-hint">Contact email for Let's Encrypt account (renewal notifications)</span>
                 </div>
 
-                <div className="form-group">
+                <div className="form-group-vertical">
                   <label htmlFor="dnsProvider">DNS Provider (for automatic TXT record management)</label>
+                  <span className="form-description">
+                    Select Cloudflare or Route53 for automatic DNS record creation.
+                    For other providers, select "Manual" and create the TXT record yourself when prompted.
+                  </span>
                   <select
                     id="dnsProvider"
                     value={dnsProvider}
@@ -451,15 +456,12 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                     <option value="cloudflare">Cloudflare (automatic)</option>
                     <option value="route53">AWS Route53 (automatic)</option>
                   </select>
-                  <span className="form-hint">
-                    Select Cloudflare or Route53 for automatic DNS record creation.
-                    For other providers, select "Manual" and create the TXT record yourself when prompted.
-                  </span>
                 </div>
 
                 {dnsProvider === 'cloudflare' && (
-                  <div className="form-group">
+                  <div className="form-group-vertical">
                     <label htmlFor="dnsApiToken">Cloudflare API Token</label>
+                    <span className="form-description">API token with DNS:Edit permission for your zone</span>
                     <input
                       type="password"
                       id="dnsApiToken"
@@ -467,14 +469,14 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                       onChange={(e) => setDnsApiToken(e.target.value)}
                       placeholder="Enter Cloudflare API token..."
                     />
-                    <span className="form-hint">API token with DNS:Edit permission for your zone</span>
                   </div>
                 )}
 
                 {dnsProvider === 'route53' && (
                   <>
-                    <div className="form-group">
+                    <div className="form-group-vertical">
                       <label htmlFor="awsAccessKeyId">AWS Access Key ID</label>
+                      <span className="form-description">IAM user access key with Route53 permissions</span>
                       <input
                         type="text"
                         id="awsAccessKeyId"
@@ -482,10 +484,9 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                         onChange={(e) => setAwsAccessKeyId(e.target.value)}
                         placeholder="AKIA..."
                       />
-                      <span className="form-hint">IAM user access key with Route53 permissions</span>
                     </div>
 
-                    <div className="form-group">
+                    <div className="form-group-vertical">
                       <label htmlFor="awsSecretAccessKey">AWS Secret Access Key</label>
                       <input
                         type="password"
@@ -496,8 +497,9 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                       />
                     </div>
 
-                    <div className="form-group">
+                    <div className="form-group-vertical">
                       <label htmlFor="awsRegion">AWS Region</label>
+                      <span className="form-description">Route53 is global, but SDK requires a region</span>
                       <select
                         id="awsRegion"
                         value={awsRegion}
@@ -514,13 +516,13 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                         <option value="ap-southeast-1">Asia Pacific (Singapore)</option>
                         <option value="ap-southeast-2">Asia Pacific (Sydney)</option>
                       </select>
-                      <span className="form-hint">Route53 is global, but SDK requires a region</span>
                     </div>
                   </>
                 )}
 
-                <div className="form-group">
+                <div className="form-group-vertical">
                   <label htmlFor="dnsZoneId">Zone/Hosted Zone ID (Optional)</label>
+                  <span className="form-description">Leave empty to auto-detect from domain</span>
                   <input
                     type="text"
                     id="dnsZoneId"
@@ -528,7 +530,6 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                     onChange={(e) => setDnsZoneId(e.target.value)}
                     placeholder="Auto-detected from domain"
                   />
-                  <span className="form-hint">Leave empty to auto-detect from domain</span>
                 </div>
 
                 <button
@@ -540,7 +541,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                   Test DNS Provider
                 </button>
 
-                <div className="form-group">
+                <div className="form-group-vertical">
                   <label className="checkbox-label">
                     <input
                       type="checkbox"
@@ -549,10 +550,10 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                     />
                     <span>Use Staging Environment (for testing)</span>
                   </label>
-                  <span className="form-hint">Uses Let's Encrypt staging server (certificates won't be trusted)</span>
+                  <span className="form-description">Uses Let's Encrypt staging server (certificates won't be trusted)</span>
                 </div>
 
-                <div className="form-group">
+                <div className="form-group-vertical">
                   <label className="checkbox-label">
                     <input
                       type="checkbox"
@@ -564,7 +565,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                 </div>
 
                 {autoRenew && (
-                  <div className="form-group">
+                  <div className="form-group-vertical">
                     <label htmlFor="renewDaysBefore">Renew Days Before Expiry</label>
                     <input
                       type="number"
@@ -581,7 +582,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
 
             {mode === 'manual' && (
               <div className="manual-upload-section">
-                <div className="form-group">
+                <div className="form-group-vertical">
                   <label htmlFor="certFile">Certificate File (PEM)</label>
                   <input
                     type="file"
@@ -591,7 +592,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                   />
                 </div>
 
-                <div className="form-group">
+                <div className="form-group-vertical">
                   <label htmlFor="keyFile">Private Key File (PEM)</label>
                   <input
                     type="file"
@@ -601,15 +602,15 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                   />
                 </div>
 
-                <div className="form-group">
+                <div className="form-group-vertical">
                   <label htmlFor="chainFile">Chain File (Optional)</label>
+                  <span className="form-description">Intermediate certificates (if not included in certificate file)</span>
                   <input
                     type="file"
                     id="chainFile"
                     ref={chainFileRef}
                     accept=".pem,.crt"
                   />
-                  <span className="form-hint">Intermediate certificates (if not included in certificate file)</span>
                 </div>
 
                 <button

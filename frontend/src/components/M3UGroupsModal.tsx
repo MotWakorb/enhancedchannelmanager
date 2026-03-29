@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { useState, useEffect, useMemo, memo } from 'react';
 import type { M3UAccount, ChannelGroupM3UAccount, ChannelGroup, AutoSyncCustomProperties, ChannelProfile, StreamProfile, EPGSource } from '../types';
 import * as api from '../services/api';
@@ -253,7 +254,7 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
             await api.updateM3UGroupSettings(linkedAccountId, { group_settings: linkedSettings });
           } catch (linkedErr) {
             // Log error but continue with other linked accounts
-            console.error(`Failed to update linked account ${linkedAccountId}:`, linkedErr);
+            logger.error(`Failed to update linked account ${linkedAccountId}:`, linkedErr);
           }
         }
       }

@@ -5,6 +5,7 @@
  * When SMTP is not configured: directs users to the CLI password reset docs.
  * Always shows success message to prevent email enumeration.
  */
+import { logger } from '../utils/logger';
 import React, { useState, FormEvent } from 'react';
 import * as api from '../services/api';
 import { useAuth } from '../hooks/useAuth';
@@ -49,7 +50,7 @@ export function ForgotPasswordPage() {
     } catch (err) {
       // Still show success to prevent email enumeration
       // but log the actual error for debugging
-      console.error('Forgot password error:', err);
+      logger.error('Forgot password error:', err);
       setSuccess(true);
     } finally {
       setIsSubmitting(false);

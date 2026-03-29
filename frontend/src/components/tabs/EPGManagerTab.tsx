@@ -1,3 +1,4 @@
+import { logger } from '../../utils/logger';
 import { useState, useEffect, useCallback } from 'react';
 import {
   DndContext,
@@ -23,6 +24,7 @@ import { DummyEPGManagerSection } from '../DummyEPGManagerSection';
 import { CustomSelect } from '../CustomSelect';
 import { ModalOverlay } from '../ModalOverlay';
 import { useNotifications } from '../../contexts/NotificationContext';
+import { formatDateTime } from '../../utils/formatting';
 import './EPGManagerTab.css';
 
 interface SortableEPGSourceRowProps {
@@ -109,12 +111,6 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
     }
   };
 
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return 'Never';
-    const date = new Date(dateStr);
-    return date.toLocaleString();
-  };
-
   return (
     <div
       ref={setNodeRef}
@@ -160,7 +156,7 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
 
       <div className="source-updated">
         <span className="updated-label">Updated:</span>
-        <span className="updated-time">{formatDate(source.updated_at)}</span>
+        <span className="updated-time">{formatDateTime(source.updated_at)}</span>
       </div>
 
       <div className="source-actions">
@@ -615,12 +611,12 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
   };
 
   const handleRefreshAll = async () => {
-    console.log('[EPGManagerTab] handleRefreshAll called!');
+    logger.debug('[EPGManagerTab] handleRefreshAll called!');
     setRefreshingAll(true);
     try {
-      console.log('[EPGManagerTab] Triggering EPG import...');
+      logger.debug('[EPGManagerTab] Triggering EPG import...');
       await api.triggerEPGImport();
-      console.log('[EPGManagerTab] EPG import triggered successfully');
+      logger.debug('[EPGManagerTab] EPG import triggered successfully');
       // Mark all active non-dummy sources as fetching
       setSources(prev => prev.map(s =>
         s.is_active && s.source_type !== 'dummy' ? { ...s, status: 'fetching' } : s
@@ -643,7 +639,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
         setRefreshingAll(false);
       }, 600000);
     } catch (err) {
-      console.error('[EPGManagerTab] Failed to trigger EPG import:', err);
+      logger.error('[EPGManagerTab] Failed to trigger EPG import:', err);
       notifications.error('Failed to trigger EPG import', 'EPG Manager');
       setRefreshingAll(false);
     }

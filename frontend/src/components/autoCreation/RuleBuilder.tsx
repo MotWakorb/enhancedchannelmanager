@@ -6,6 +6,7 @@ import type { AutoCreationRule, CreateRuleData, Condition, Action, ConditionType
 import { ConditionEditor } from './ConditionEditor';
 import { ActionEditor } from './ActionEditor';
 import { CustomSelect } from '../CustomSelect';
+import { getNormalizationRules } from '../../services/api';
 import './RuleBuilder.css';
 
 export interface RuleBuilderProps {
@@ -34,22 +35,31 @@ export function RuleBuilder({
   const [enabled, setEnabled] = useState(rule?.enabled ?? true);
   const [runOnRefresh, setRunOnRefresh] = useState(rule?.run_on_refresh ?? false);
   const [stopOnFirstMatch, setStopOnFirstMatch] = useState(rule?.stop_on_first_match ?? true);
-  const [sortField, setSortField] = useState(rule?.sort_field || '');
+  const [sortField, setSortField] = useState(rule?.sort_field ?? '');
   const [sortOrder, setSortOrder] = useState(rule?.sort_order || 'asc');
   const [probeOnSort, setProbeOnSort] = useState(rule?.probe_on_sort ?? false);
   const [sortRegex, setSortRegex] = useState(rule?.sort_regex || '');
+  const [streamSortField, setStreamSortField] = useState(rule?.stream_sort_field ?? 'smart_sort');
+  const [streamSortOrder, setStreamSortOrder] = useState(rule?.stream_sort_order || 'asc');
   const [normalizeNames, setNormalizeNames] = useState(rule?.normalize_names ?? false);
   const [skipStruckStreams, setSkipStruckStreams] = useState(rule?.skip_struck_streams ?? false);
   const [orphanAction, setOrphanAction] = useState(rule?.orphan_action || 'delete');
   const [conditions, setConditions] = useState<Condition[]>(rule?.conditions || []);
   const [actions, setActions] = useState<Action[]>(rule?.actions || []);
 
+  const [hasActiveNormRules, setHasActiveNormRules] = useState(false);
   const [errors, setErrors] = useState<ValidationErrors>({});
   const [saving, setSaving] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
-  const [showConditionSelector, setShowConditionSelector] = useState(false);
-  const [showActionSelector, setShowActionSelector] = useState(false);
+
+  // Check if any enabled normalization groups have enabled rules
+  useEffect(() => {
+    getNormalizationRules().then(({ groups }) => {
+      const active = groups.some(g => g.enabled && g.rules?.some(r => r.enabled));
+      setHasActiveNormRules(active);
+    }).catch(() => {});
+  }, []);
 
   // Escape key closes the cancel confirm dialog (capture phase to intercept before parent ModalOverlay)
   useEffect(() => {
@@ -114,6 +124,8 @@ export function RuleBuilder({
 
     if (actions.length === 0) {
       newErrors.actions = 'At least one action is required';
+    } else if (actions.some(a => !a.type)) {
+      newErrors.actions = 'All actions must have a type selected';
     } else {
       // Validate individual action fields
       for (const [i, action] of actions.entries()) {
@@ -156,6 +168,8 @@ export function RuleBuilder({
         sort_order: sortOrder,
         probe_on_sort: probeOnSort,
         sort_regex: sortRegex || '',
+        stream_sort_field: streamSortField || '',
+        stream_sort_order: streamSortOrder,
         normalize_names: normalizeNames,
         skip_struck_streams: skipStruckStreams,
         orphan_action: orphanAction,
@@ -173,10 +187,9 @@ export function RuleBuilder({
     }
   };
 
-  const handleAddCondition = (type: ConditionType) => {
-    const newCondition: Condition = { type, connector: 'and' };
+  const handleAddCondition = () => {
+    const newCondition: Condition = { type: 'stream_name_contains', connector: 'and' };
     setConditions([...conditions, newCondition]);
-    setShowConditionSelector(false);
   };
 
   const handleToggleConnector = (index: number) => {
@@ -196,20 +209,9 @@ export function RuleBuilder({
     setConditions(conditions.filter((_, i) => i !== index));
   };
 
-  const handleAddAction = (type: ActionType) => {
-    const newAction: Action = { type };
-    if (type === 'create_channel' || type === 'create_group') {
-      newAction.if_exists = 'skip';
-    }
-    if (type === 'merge_streams') {
-      newAction.target = 'auto';
-    }
-    if (type === 'set_variable') {
-      newAction.variable_mode = 'regex_extract';
-      newAction.source_field = 'stream_name';
-    }
+  const handleAddAction = () => {
+    const newAction: Action = { type: '' as ActionType };
     setActions([...actions, newAction]);
-    setShowActionSelector(false);
   };
 
   const handleUpdateAction = (index: number, updated: Action) => {
@@ -319,6 +321,12 @@ export function RuleBuilder({
                 />
                 <span>Normalize names</span>
               </label>
+              {!normalizeNames && hasActiveNormRules && (
+                <span className="norm-hint">
+                  <span className="material-icons norm-hint-icon">info</span>
+                  Active normalization rules won't apply unless this is enabled
+                </span>
+              )}
               <label className="checkbox-item">
                 <input
                   type="checkbox"
@@ -333,12 +341,12 @@ export function RuleBuilder({
           </div>
 
           <div className="form-field">
-            <label>Sort Matched Streams</label>
-            <span className="field-hint">Controls the order streams are processed (affects channel numbering)</span>
+            <label>Channel Sort</label>
+            <span className="field-hint">Controls the order channels are numbered (renumbers on every run)</span>
             <div className="sort-config-row">
               <CustomSelect
                 options={[
-                  { value: '', label: 'No sorting (default)' },
+                  { value: '', label: 'No sorting (keep manual numbers)' },
                   { value: 'stream_name', label: 'Stream Name' },
                   { value: 'stream_name_natural', label: 'Stream Name (Natural)' },
                   { value: 'group_name', label: 'Group Name' },
@@ -358,7 +366,7 @@ export function RuleBuilder({
                     { value: 'desc', label: 'Descending' },
                   ]}
                   value={sortOrder}
-                  onChange={setSortOrder}
+                  onChange={(val) => setSortOrder(val as 'asc' | 'desc')}
                 />
               )}
             </div>
@@ -399,6 +407,53 @@ export function RuleBuilder({
           </div>
 
           <div className="form-field">
+            <label>Stream Sort</label>
+            <span className="field-hint">Reorders streams within each channel (e.g. best quality first)</span>
+            <div className="sort-config-row">
+              <CustomSelect
+                options={[
+                  { value: 'smart_sort', label: 'Smart Sort (default)' },
+                  { value: '', label: 'No sorting' },
+                  { value: 'quality', label: 'Quality (Resolution)' },
+                  { value: 'stream_name', label: 'Stream Name' },
+                  { value: 'stream_name_natural', label: 'Stream Name (Natural)' },
+                  { value: 'provider_order', label: 'Provider Order (M3U)' },
+                ]}
+                value={streamSortField}
+                onChange={setStreamSortField}
+                placeholder="No sorting"
+              />
+              {streamSortField && streamSortField !== 'smart_sort' && (
+                <CustomSelect
+                  options={[
+                    { value: 'asc', label: 'Ascending' },
+                    { value: 'desc', label: 'Descending' },
+                  ]}
+                  value={streamSortOrder}
+                  onChange={(val) => setStreamSortOrder(val as 'asc' | 'desc')}
+                />
+              )}
+            </div>
+            {streamSortField === 'quality' && (
+              <div className="checkbox-group">
+                <label className="checkbox-option">
+                  <input
+                    type="checkbox"
+                    checked={probeOnSort}
+                    onChange={e => setProbeOnSort(e.target.checked)}
+                    disabled={isLoading}
+                    aria-label="Probe unprobed streams before sorting"
+                  />
+                  <span>Probe unprobed streams before sorting</span>
+                </label>
+                <p className="form-hint">
+                  Gathers resolution data for streams that haven't been probed. Adds time to execution.
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div className="form-field">
             <label>Orphan Cleanup</label>
             <span className="field-hint">What to do with channels that no longer match this rule</span>
             <CustomSelect
@@ -409,7 +464,7 @@ export function RuleBuilder({
                 { value: 'none', label: 'Do nothing (keep orphans)' },
               ]}
               value={orphanAction}
-              onChange={setOrphanAction}
+              onChange={(val) => setOrphanAction(val as 'delete' | 'none' | 'move_uncategorized' | 'delete_and_cleanup_groups')}
             />
           </div>
         </section>
@@ -459,20 +514,12 @@ export function RuleBuilder({
             <button
               type="button"
               className="add-item-btn"
-              onClick={() => setShowConditionSelector(!showConditionSelector)}
-              aria-expanded={showConditionSelector}
+              onClick={handleAddCondition}
               aria-label="Add condition"
             >
               <span className="material-icons">add</span>
               Add Condition
             </button>
-
-            {showConditionSelector && (
-              <ConditionTypeSelector
-                onSelect={handleAddCondition}
-                onClose={() => setShowConditionSelector(false)}
-              />
-            )}
           </div>
         </section>
 
@@ -508,20 +555,12 @@ export function RuleBuilder({
             <button
               type="button"
               className="add-item-btn"
-              onClick={() => setShowActionSelector(!showActionSelector)}
-              aria-expanded={showActionSelector}
+              onClick={handleAddAction}
               aria-label="Add action"
             >
               <span className="material-icons">add</span>
               Add Action
             </button>
-
-            {showActionSelector && (
-              <ActionTypeSelector
-                onSelect={handleAddAction}
-                onClose={() => setShowActionSelector(false)}
-              />
-            )}
           </div>
         </section>
       </div>
@@ -585,147 +624,4 @@ function needsValue(type: ConditionType): boolean {
   return !noValueTypes.includes(type);
 }
 
-// Condition Type Selector Component
-function ConditionTypeSelector({
-  onSelect,
-  onClose,
-}: {
-  onSelect: (type: ConditionType) => void;
-  onClose: () => void;
-}) {
-  const categories = [
-    {
-      label: 'Stream Conditions',
-      types: [
-        { type: 'stream_name_contains' as ConditionType, label: 'Stream Name Contains' },
-        { type: 'stream_name_matches' as ConditionType, label: 'Stream Name Matches (Regex)' },
-        { type: 'stream_group_contains' as ConditionType, label: 'Stream Group Contains' },
-        { type: 'stream_group_matches' as ConditionType, label: 'Stream Group Matches (Regex)' },
-        { type: 'provider_is' as ConditionType, label: 'M3U Account' },
-        { type: 'quality_min' as ConditionType, label: 'Minimum Quality' },
-        { type: 'quality_max' as ConditionType, label: 'Maximum Quality' },
-        { type: 'tvg_id_exists' as ConditionType, label: 'TVG-ID Exists' },
-        { type: 'logo_exists' as ConditionType, label: 'Logo Exists' },
-      ],
-    },
-    {
-      label: 'Channel Conditions',
-      types: [
-        { type: 'has_channel' as ConditionType, label: 'Has Channel' },
-        { type: 'channel_exists_with_name' as ConditionType, label: 'Channel Exists With Name' },
-        { type: 'normalized_name_in_group' as ConditionType, label: 'Normalized Match in Group' },
-        { type: 'normalized_name_exists' as ConditionType, label: 'Normalized Match (Any Group)' },
-      ],
-    },
-    {
-      label: 'Special',
-      types: [
-        { type: 'always' as ConditionType, label: 'Always' },
-        { type: 'never' as ConditionType, label: 'Never' },
-      ],
-    },
-  ];
 
-  return (
-    <div className="type-selector-dropdown">
-      <div className="type-selector-header">
-        <span>Select Condition Type</span>
-        <button type="button" className="close-btn" onClick={onClose}>
-          <span className="material-icons">close</span>
-        </button>
-      </div>
-      {categories.map(cat => (
-        <div key={cat.label} className="type-category">
-          <div className="type-category-label">{cat.label}</div>
-          {cat.types.map(t => (
-            <button
-              key={t.type}
-              type="button"
-              className="type-option"
-              onClick={() => onSelect(t.type)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// Action Type Selector Component
-function ActionTypeSelector({
-  onSelect,
-  onClose,
-}: {
-  onSelect: (type: ActionType) => void;
-  onClose: () => void;
-}) {
-  const categories = [
-    {
-      label: 'Creation',
-      types: [
-        { type: 'create_channel' as ActionType, label: 'Create Channel' },
-        { type: 'create_group' as ActionType, label: 'Create Group' },
-        { type: 'merge_streams' as ActionType, label: 'Merge Streams' },
-      ],
-    },
-    {
-      label: 'Assignment',
-      types: [
-        { type: 'assign_logo' as ActionType, label: 'Assign Logo' },
-        { type: 'assign_tvg_id' as ActionType, label: 'Assign TVG-ID' },
-        { type: 'assign_epg' as ActionType, label: 'Assign EPG' },
-        { type: 'assign_profile' as ActionType, label: 'Assign Profile' },
-        { type: 'set_channel_number' as ActionType, label: 'Set Channel Number' },
-      ],
-    },
-    {
-      label: 'Variables',
-      types: [
-        { type: 'set_variable' as ActionType, label: 'Set Variable' },
-      ],
-    },
-    {
-      label: 'Management',
-      types: [
-        { type: 'remove_from_channel' as ActionType, label: 'Remove From Channel' },
-        { type: 'set_stream_priority' as ActionType, label: 'Set Stream Priority' },
-      ],
-    },
-    {
-      label: 'Control',
-      types: [
-        { type: 'skip' as ActionType, label: 'Skip' },
-        { type: 'stop_processing' as ActionType, label: 'Stop Processing' },
-        { type: 'log_match' as ActionType, label: 'Log Match' },
-      ],
-    },
-  ];
-
-  return (
-    <div className="type-selector-dropdown">
-      <div className="type-selector-header">
-        <span>Select Action Type</span>
-        <button type="button" className="close-btn" onClick={onClose}>
-          <span className="material-icons">close</span>
-        </button>
-      </div>
-      {categories.map(cat => (
-        <div key={cat.label} className="type-category">
-          <div className="type-category-label">{cat.label}</div>
-          {cat.types.map(t => (
-            <button
-              key={t.type}
-              type="button"
-              className="type-option"
-              onClick={() => onSelect(t.type)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      ))}
-    </div>
-  );
-}

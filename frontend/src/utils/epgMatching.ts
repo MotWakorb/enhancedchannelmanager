@@ -17,7 +17,7 @@ const BROADCAST_CALL_SIGN_PATTERN = /\b([KW][A-Z]{2,4})(?:[-]?(?:DT|TV|HD|LP|CD|
 /**
  * EPG match with confidence score
  */
-export interface EPGMatchWithScore {
+interface EPGMatchWithScore {
   epg: EPGData;
   confidence: number; // 0-100 confidence score
 }
@@ -25,7 +25,7 @@ export interface EPGMatchWithScore {
 /**
  * Result of EPG matching for a single channel
  */
-export interface EPGMatchResult {
+interface EPGMatchResult {
   channel: Channel;
   detectedCountry: string | null;
   normalizedName: string;
@@ -120,7 +120,7 @@ export function extractBroadcastCallSign(name: string): string | null {
  * @param streams - Array of streams to check
  * @returns Lowercase country code (e.g., "us") or null
  */
-export function detectCountryFromStreams(streams: Stream[]): string | null {
+function detectCountryFromStreams(streams: Stream[]): string | null {
   if (streams.length === 0) return null;
 
   // Try first stream's name (e.g., "US: ESPN" -> "US")
@@ -816,7 +816,7 @@ function findEPGMatchesWithLookup(
 /**
  * Progress callback for batch matching
  */
-export interface BatchMatchProgress {
+interface BatchMatchProgress {
   current: number;
   total: number;
   channelName: string;
@@ -834,79 +834,7 @@ export interface BatchMatchProgress {
  *                      When provided, matches from higher-priority sources are preferred
  * @returns Array of match results
  */
-export async function batchFindEPGMatchesAsync(
-  channels: Channel[],
-  allStreams: Stream[],
-  epgData: EPGData[],
-  onProgress?: (progress: BatchMatchProgress) => void,
-  sourceOrder?: number[]
-): Promise<EPGMatchResult[]> {
-  // Build lookup maps ONCE for all EPG data
-  const epgLookup = buildEPGLookup(epgData);
-
-  // Create a lookup map for streams by ID
-  const streamMap = new Map(allStreams.map(s => [s.id, s]));
-
-  // Create source priority map for sorting (lower index = higher priority)
-  const sourcePriorityMap = new Map<number, number>();
-  if (sourceOrder) {
-    sourceOrder.forEach((sourceId, index) => {
-      sourcePriorityMap.set(sourceId, index);
-    });
-  }
-
-  const results: EPGMatchResult[] = [];
-  const total = channels.length;
-  const BATCH_SIZE = 10; // Process 10 channels before yielding
-
-  for (let i = 0; i < channels.length; i++) {
-    const channel = channels[i];
-
-    // Report progress
-    if (onProgress) {
-      onProgress({ current: i + 1, total, channelName: channel.name });
-    }
-
-    // Get streams associated with this channel
-    const channelStreams = channel.streams
-      .map(id => streamMap.get(id))
-      .filter((s): s is Stream => s !== undefined);
-
-    const result = findEPGMatchesWithLookup(channel, channelStreams, epgLookup);
-
-    // If we have source priority order, re-sort matches by source priority
-    if (sourceOrder && sourceOrder.length > 0 && result.matches.length > 1) {
-      result.matches.sort((a, b) => {
-        const aPriority = sourcePriorityMap.get(a.epg_source) ?? 999;
-        const bPriority = sourcePriorityMap.get(b.epg_source) ?? 999;
-        // Lower priority number = higher priority (comes first)
-        return aPriority - bPriority;
-      });
-
-      // If the top match is from the highest priority source, and there's only one match
-      // from that source, treat it as an exact match
-      const topSourceId = result.matches[0].epg_source;
-      const topPriority = sourcePriorityMap.get(topSourceId) ?? 999;
-      const matchesFromTopSource = result.matches.filter(
-        m => (sourcePriorityMap.get(m.epg_source) ?? 999) === topPriority
-      );
-      if (matchesFromTopSource.length === 1 && result.status === 'multiple') {
-        // Single match from highest priority source - treat as exact
-        result.matches = matchesFromTopSource;
-        result.status = 'exact';
-      }
-    }
-
-    results.push(result);
-
-    // Yield control every BATCH_SIZE channels to allow UI updates
-    if ((i + 1) % BATCH_SIZE === 0) {
-      await new Promise(resolve => setTimeout(resolve, 0));
-    }
-  }
-
-  return results;
-}
+// batchFindEPGMatchesAsync removed — EPG matching moved server-side
 
 /**
  * Get the EPG source name for an EPG data entry.
@@ -924,95 +852,6 @@ export function getEPGSourceName(
 }
 
 /**
- * Convert a string to title case, keeping certain small words lowercase
- * (except at the start of the string).
- *
- * Examples:
- *   "ARIZONA CARDINALS" -> "Arizona Cardinals"
- *   "the quick brown fox" -> "The Quick Brown Fox"
- *   "war of the worlds" -> "War of the Worlds"
- */
-function toTitleCase(str: string): string {
-  // Common words that should stay lowercase (except at start)
-  const smallWords = ['a', 'an', 'the', 'and', 'but', 'or', 'for', 'nor', 'of', 'at', 'by', 'to', 'in', 'on'];
-
-  return str
-    .toLowerCase()
-    .split(/\s+/)
-    .map((word, index) => {
-      if (index > 0 && smallWords.includes(word)) return word;
-      return word.charAt(0).toUpperCase() + word.slice(1);
-    })
-    .join(' ');
-}
-
-/**
- * Normalize a channel display name by:
- * 1. Preserving channel number prefix (e.g., "700 | ")
- * 2. Detecting and standardizing league prefix (e.g., "NFL" from "NFL ARIZONA CARDINALS")
- * 3. Applying title case to the content name
- * 4. Re-joining with a standardized separator
- *
- * Examples:
- *   "700 | NFL ARIZONA CARDINALS" -> "700 | NFL: Arizona Cardinals"
- *   "701 | NFL ATLANTA FALCONS" -> "701 | NFL: Atlanta Falcons"
- *   "NBA CHICAGO BULLS" -> "NBA: Chicago Bulls"
- *   "ESPN HD" -> "Espn Hd"
- *
- * @param name - The channel name to normalize
- * @param separator - The separator to use between league and name (default: ':')
- * @returns The normalized channel name
- */
-export function normalizeChannelDisplayName(name: string, separator: string = ':'): string {
-  // Extract channel number prefix (e.g., "700 | ")
-  // Support formats: "700 | Name", "700 - Name", "700: Name"
-  const numberMatch = name.match(/^(\d+(?:\.\d+)?\s*[|\-:]\s*)(.+)$/);
-  const numberPrefix = numberMatch ? numberMatch[1] : '';
-  const baseName = numberMatch ? numberMatch[2] : name;
-
-  // Check for league prefix
-  const leagueInfo = extractLeaguePrefix(baseName);
-  if (leagueInfo) {
-    const titleCasedName = toTitleCase(leagueInfo.name);
-    const league = leagueInfo.league.toUpperCase();
-    // Normalize separator: ensure single space around non-space characters
-    // ':' -> ': ', ' - ' -> ' - ', '-' -> ' - ', etc.
-    const trimmedSeparator = separator.trim();
-    const normalizedSeparator = trimmedSeparator === ':' ? ': ' : ` ${trimmedSeparator} `;
-    return `${numberPrefix}${league}${normalizedSeparator}${titleCasedName}`;
-  }
-
-  // No league prefix - just apply title case
-  return `${numberPrefix}${toTitleCase(baseName)}`;
-}
-
-/**
- * Preview channel name normalizations for a list of channels.
- * Returns only channels whose names would actually change.
- *
- * @param channels - Array of channels to preview
- * @returns Array of changes with id, current name, and normalized name
- */
-export function previewNameNormalizations(
-  channels: Array<{ id: number; name: string }>
-): Array<{ id: number; current: string; normalized: string }> {
-  const changes: Array<{ id: number; current: string; normalized: string }> = [];
-
-  for (const channel of channels) {
-    const normalized = normalizeChannelDisplayName(channel.name);
-    if (normalized !== channel.name) {
-      changes.push({
-        id: channel.id,
-        current: channel.name,
-        normalized,
-      });
-    }
-  }
-
-  return changes;
-}
-
-/**
  * Check if an EPG entry matches a multi-word search query.
  * Splits search into words and checks if all words appear in the EPG entry fields.
  * Supports fuzzy matching by stripping non-alphanumeric characters.
@@ -1027,25 +866,4 @@ export function previewNameNormalizations(
  * @param sourceName - Optional EPG source name to include in matching
  * @returns true if all search words match the EPG entry
  */
-export function matchesEPGSearch(
-  epg: EPGData,
-  searchWords: string[],
-  sourceName?: string
-): boolean {
-  const lowerName = epg.name.toLowerCase();
-  const lowerTvgId = epg.tvg_id.toLowerCase();
-  // Create alphanumeric-only versions for fuzzy matching against concatenated names
-  const normalizedName = lowerName.replace(/[^a-z0-9]/g, '');
-  const normalizedTvgId = lowerTvgId.replace(/[^a-z0-9]/g, '');
-  const lowerSourceName = sourceName?.toLowerCase() ?? '';
-
-  // Each search word must appear in name, tvg_id, source name, or their normalized versions
-  return searchWords.every(word => {
-    const normalizedWord = word.replace(/[^a-z0-9]/g, '');
-    return lowerName.includes(word) ||
-           lowerTvgId.includes(word) ||
-           normalizedName.includes(normalizedWord) ||
-           normalizedTvgId.includes(normalizedWord) ||
-           (lowerSourceName && lowerSourceName.includes(word));
-  });
-}
+// matchesEPGSearch removed — EPG matching moved server-side

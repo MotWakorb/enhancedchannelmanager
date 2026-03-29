@@ -123,7 +123,7 @@
 
 .norm-engine-group-drag-handle:hover {
   color: var(--text-primary);
-  background: var(--hover-bg);
+  background: var(--bg-hover);
 }
 
 .norm-engine-group-drag-handle:active {
@@ -147,7 +147,7 @@
 }
 
 .norm-engine-group-header:hover {
-  background: var(--hover-bg);
+  background: var(--bg-hover);
 }
 
 .norm-engine-expand {
@@ -229,7 +229,7 @@
 }
 
 .norm-engine-rule:hover {
-  background: var(--hover-bg);
+  background: var(--bg-hover);
 }
 
 .norm-engine-rule.selected {
@@ -280,7 +280,7 @@
 
 .norm-engine-rule-drag-handle:hover {
   color: var(--text-primary);
-  background: var(--hover-bg);
+  background: var(--bg-hover);
 }
 
 .norm-engine-rule-drag-handle:active {
@@ -405,7 +405,7 @@
 }
 
 .norm-engine-btn:hover {
-  background: var(--hover-bg);
+  background: var(--bg-hover);
   border-color: var(--border-secondary);
 }
 
@@ -424,6 +424,13 @@
   filter: brightness(1.1);
 }
 
+.norm-engine-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+
 .norm-engine-btn-icon {
   display: flex;
   align-items: center;
@@ -438,7 +445,7 @@
 }
 
 .norm-engine-btn-icon:hover {
-  background: var(--hover-bg);
+  background: var(--bg-hover);
   color: var(--text-primary);
 }
 
@@ -473,7 +480,7 @@
 }
 
 .norm-engine-test-panel.collapsible .norm-engine-test-header:hover {
-  background: var(--hover-bg);
+  background: var(--bg-hover);
 }
 
 .norm-engine-test-header {
@@ -852,7 +859,7 @@
 }
 
 .norm-engine-mode-btn:hover:not(.active) {
-  background: var(--hover-bg);
+  background: var(--bg-hover);
   color: var(--text-primary);
 }
 
@@ -960,7 +967,7 @@
 }
 
 .norm-engine-condition-checkbox:hover {
-  background: var(--hover-bg);
+  background: var(--bg-hover);
   color: var(--text-primary);
 }
 

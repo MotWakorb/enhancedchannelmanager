@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import * as api from '../services/api';
 import type { Notification } from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
+import { logger } from '../utils/logger';
 import './NotificationCenter.css';
 
 interface NotificationCenterProps {
@@ -16,6 +17,7 @@ interface ProbeProgress {
   failed: number;
   skipped: number;
   black_screen: number;
+  low_fps: number;
   status: 'idle' | 'starting' | 'fetching' | 'refreshing' | 'probing' | 'paused' | 'cancelled' | 'completed' | 'reordering' | 'failed' | 'fetching_sources' | 'fetching_accounts' | 'building_digest' | 'sending_email' | 'sending_discord';
   current_stream: string;
 }
@@ -28,7 +30,7 @@ interface ProgressMetadata {
 const isProgressNotification = (n: Notification): boolean => {
   // Match stream_probe source OR any task_* source with progress metadata
   const hasProgressSource = n.source === 'stream_probe' || n.source?.startsWith('task_');
-  return hasProgressSource && n.metadata?.progress !== undefined;
+  return !!hasProgressSource && n.metadata?.progress !== undefined;
 };
 
 // Alias for backward compatibility
@@ -63,9 +65,9 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
   const initialLoadDone = useRef(false);
 
   // Load notifications
-  const loadNotifications = useCallback(async () => {
+  const loadNotifications = useCallback(async (showLoading = false) => {
     try {
-      setLoading(true);
+      if (showLoading) setLoading(true);
       const response = await api.getNotifications({ page_size: 20 });
       // Pin active task/probe notifications to the top
       const sorted = [...response.notifications].sort((a, b) => {
@@ -99,9 +101,9 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
       setNotifications(sorted);
       setUnreadCount(response.unread_count);
     } catch (err) {
-      console.error('Failed to load notifications:', err);
+      logger.error('Failed to load notifications:', err);
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }, []);
 
@@ -127,10 +129,10 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
 
   // Load on mount and periodically - faster when probe or auto-creation is running
   useEffect(() => {
-    loadNotifications();
+    loadNotifications(true); // Show loading spinner on initial load only
     // Poll every 2 seconds when probe is running, 5s for auto-creation, otherwise every 30 seconds
     const pollInterval = hasActiveProbe ? 2000 : hasActiveAutoCreation ? 5000 : 30000;
-    const interval = setInterval(loadNotifications, pollInterval);
+    const interval = setInterval(() => loadNotifications(false), pollInterval);
     return () => clearInterval(interval);
   }, [loadNotifications, hasActiveProbe, hasActiveAutoCreation]);
 
@@ -165,7 +167,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
       await api.markNotificationRead(notification.id, !notification.read);
       loadNotifications();
     } catch (err) {
-      console.error('Failed to mark notification:', err);
+      logger.error('Failed to mark notification:', err);
     }
   };
 
@@ -174,7 +176,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
       await api.markAllNotificationsRead();
       loadNotifications();
     } catch (err) {
-      console.error('Failed to mark all read:', err);
+      logger.error('Failed to mark all read:', err);
     }
   };
 
@@ -183,7 +185,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
       await api.deleteNotification(notification.id);
       loadNotifications();
     } catch (err) {
-      console.error('Failed to delete notification:', err);
+      logger.error('Failed to delete notification:', err);
     }
   };
 
@@ -192,7 +194,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
       await api.clearNotifications(true); // Only clear read
       loadNotifications();
     } catch (err) {
-      console.error('Failed to clear notifications:', err);
+      logger.error('Failed to clear notifications:', err);
     }
   };
 
@@ -201,7 +203,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
       await api.clearNotifications(false); // Delete ALL notifications
       loadNotifications();
     } catch (err) {
-      console.error('Failed to delete all notifications:', err);
+      logger.error('Failed to delete all notifications:', err);
     }
   };
 
@@ -211,7 +213,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
       await api.cancelProbe();
       loadNotifications();
     } catch (err) {
-      console.error('Failed to cancel probe:', err);
+      logger.error('Failed to cancel probe:', err);
     }
   };
 
@@ -221,7 +223,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
       await api.pauseProbe();
       loadNotifications();
     } catch (err) {
-      console.error('Failed to pause probe:', err);
+      logger.error('Failed to pause probe:', err);
     }
   };
 
@@ -231,7 +233,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
       await api.resumeProbe();
       loadNotifications();
     } catch (err) {
-      console.error('Failed to resume probe:', err);
+      logger.error('Failed to resume probe:', err);
     }
   };
 
@@ -250,7 +252,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
         toasts.error(result.message || 'Failed to restart services', 'Restart Failed');
       }
     } catch (err) {
-      console.error('Failed to restart services:', err);
+      logger.error('Failed to restart services:', err);
       toasts.error('Failed to restart services', 'Restart Failed');
     } finally {
       setRestartingFromNotification(null);
@@ -349,6 +351,12 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
               <span className="probe-stat probe-stat-black-screen">
                 <span className="material-icons">tv_off</span>
                 {progress.black_screen}
+              </span>
+            )}
+            {progress.low_fps > 0 && (
+              <span className="probe-stat probe-stat-low-fps">
+                <span className="material-icons">slow_motion_video</span>
+                {progress.low_fps}
               </span>
             )}
             {progress.skipped > 0 && (

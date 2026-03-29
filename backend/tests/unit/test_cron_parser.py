@@ -1,19 +1,14 @@
 """
 Unit tests for the cron_parser module.
 """
-from datetime import datetime
-
 from cron_parser import (
     CRON_PRESETS,
     is_croniter_available,
     validate_cron_expression,
     expand_preset,
-    get_next_run_time,
     get_next_n_run_times,
     describe_cron_expression,
     get_preset_list,
-    parse_interval_to_cron,
-    cron_to_interval_seconds,
 )
 
 
@@ -109,45 +104,6 @@ class TestExpandPreset:
         for preset in CRON_PRESETS:
             result = expand_preset(preset)
             assert result != preset  # Should be a different (expanded) value
-
-
-class TestGetNextRunTime:
-    """Tests for get_next_run_time()."""
-
-    def test_returns_datetime_for_valid_cron(self):
-        """Returns datetime for valid cron expression."""
-        result = get_next_run_time("0 * * * *")
-        assert isinstance(result, datetime)
-
-    def test_returns_future_time(self):
-        """Returned time is in the future."""
-        result = get_next_run_time("* * * * *")  # Every minute
-        assert result > datetime.utcnow()
-
-    def test_expands_preset(self):
-        """Presets are expanded before calculation."""
-        result = get_next_run_time("hourly")
-        assert isinstance(result, datetime)
-
-    def test_uses_custom_base_time(self):
-        """Custom base time is respected."""
-        base = datetime(2024, 1, 15, 10, 0, 0)
-        result = get_next_run_time("0 * * * *", base_time=base)
-        assert result > base
-        # Next hour should be 11:00
-        assert result.hour == 11
-
-    def test_returns_none_for_invalid_expression(self):
-        """Returns None for invalid cron expression."""
-        result = get_next_run_time("invalid")
-        assert result is None
-
-    def test_handles_timezone(self):
-        """Timezone parameter affects calculation."""
-        result = get_next_run_time("0 3 * * *", timezone="America/New_York")
-        assert isinstance(result, datetime)
-        # Result should be in UTC (timezone converted)
-        assert result.tzinfo is None
 
 
 class TestGetNextNRunTimes:
@@ -257,67 +213,3 @@ class TestGetPresetList:
             assert "description" in item
 
 
-class TestParseIntervalToCron:
-    """Tests for parse_interval_to_cron()."""
-
-    def test_converts_5_minutes(self):
-        """Converts 5-minute interval to cron."""
-        result = parse_interval_to_cron(300)  # 5 minutes
-        assert result == "*/5 * * * *"
-
-    def test_converts_15_minutes(self):
-        """Converts 15-minute interval to cron."""
-        result = parse_interval_to_cron(900)  # 15 minutes
-        assert result == "*/15 * * * *"
-
-    def test_converts_1_hour(self):
-        """Converts 1-hour interval to cron."""
-        result = parse_interval_to_cron(3600)  # 1 hour
-        assert result == "0 */1 * * *"
-
-    def test_converts_6_hours(self):
-        """Converts 6-hour interval to cron."""
-        result = parse_interval_to_cron(21600)  # 6 hours
-        assert result == "0 */6 * * *"
-
-    def test_returns_none_for_zero(self):
-        """Returns None for zero interval."""
-        assert parse_interval_to_cron(0) is None
-
-    def test_returns_none_for_negative(self):
-        """Returns None for negative interval."""
-        assert parse_interval_to_cron(-300) is None
-
-    def test_returns_none_for_non_divisible_minutes(self):
-        """Returns None for intervals that don't divide evenly into 60."""
-        # 7 minutes doesn't divide evenly into 60
-        assert parse_interval_to_cron(420) is None  # 7 minutes
-
-    def test_returns_none_for_non_divisible_hours(self):
-        """Returns None for hours that don't divide evenly into 24."""
-        # 5 hours doesn't divide evenly into 24
-        assert parse_interval_to_cron(18000) is None  # 5 hours
-
-
-class TestCronToIntervalSeconds:
-    """Tests for cron_to_interval_seconds()."""
-
-    def test_calculates_hourly_interval(self):
-        """Calculates ~1 hour for '0 * * * *'."""
-        result = cron_to_interval_seconds("0 * * * *")
-        assert result == 3600
-
-    def test_calculates_minute_interval(self):
-        """Calculates ~5 minutes for '*/5 * * * *'."""
-        result = cron_to_interval_seconds("*/5 * * * *")
-        assert result == 300
-
-    def test_expands_preset(self):
-        """Expands presets before calculation."""
-        result = cron_to_interval_seconds("hourly")
-        assert result == 3600
-
-    def test_returns_none_for_invalid(self):
-        """Returns None for invalid expressions."""
-        result = cron_to_interval_seconds("invalid")
-        assert result is None

@@ -161,7 +161,7 @@
 }
 
 .link-provider-button:hover {
-  background: var(--hover-bg);
+  background: var(--bg-hover);
   border-color: var(--border-secondary);
 }
 

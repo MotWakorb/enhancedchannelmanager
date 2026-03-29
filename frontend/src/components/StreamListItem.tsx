@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { memo } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -151,6 +152,12 @@ export const StreamListItem = memo(function StreamListItem({
             <span className="material-icons">videocam_off</span>
           </span>
         )}
+        {/* Low FPS indicator */}
+        {streamStats && streamStats.probe_status === 'success' && streamStats.is_low_fps && (
+          <span className="meta-tag probe-low-fps" title={`Low FPS detected (${streamStats.fps} FPS)`}>
+            <span className="material-icons">slow_motion_video</span>
+          </span>
+        )}
         {/* Strike count badge */}
         {streamStats && streamStats.consecutive_failures > 0 && strikeThreshold > 0 && (
           <span
@@ -197,7 +204,7 @@ export const StreamListItem = memo(function StreamListItem({
           className="clear-stats-btn"
           onClick={(e) => {
             e.stopPropagation();
-            console.log('Clear stats button clicked for stream:', stream.id);
+            logger.debug('Clear stats button clicked for stream:', stream.id);
             onClearStats(stream.id);
           }}
           title="Reset probe status"

@@ -1,3 +1,4 @@
+import { logger } from '../../utils/logger';
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { Logo } from '../../types';
 import * as api from '../../services/api';
@@ -118,7 +119,7 @@ export function LogoManagerTab() {
     try {
       await navigator.clipboard.writeText(url);
     } catch (err) {
-      console.error('Failed to copy URL:', err);
+      logger.error('Failed to copy URL:', err);
     }
   };
 

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 import asyncio
 from fastapi.exceptions import RequestValidationError
 import os
@@ -40,8 +40,9 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 # Sanitize all log arguments to prevent log injection (CWE-117)
-from log_utils import install_safe_logging  # noqa: E402
+from log_utils import install_safe_logging, install_ring_buffer  # noqa: E402
 install_safe_logging()
+install_ring_buffer()
 logger = logging.getLogger(__name__)
 
 # OpenAPI tags for organizing endpoints in Swagger UI
@@ -75,6 +76,7 @@ tags_metadata = [
     {"name": "Stream Preview", "description": "Live stream and channel preview endpoints"},
     {"name": "Admin", "description": "User management (admin only)"},
     {"name": "FFMPEG Profiles", "description": "Save and load FFMPEG Builder profiles"},
+    {"name": "Backup", "description": "Backup and restore ECM configuration"},
 ]
 
 app = FastAPI(
@@ -100,12 +102,51 @@ handle authentication automatically when accessed through the web UI.
 ## Rate Limiting
 No rate limiting is enforced, but rapid polling is logged for diagnostics.
     """,
-    version="0.13.0",
+    version="0.15.0-0034",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
 )
+
+
+@app.get("/swagger", include_in_schema=False)
+async def swagger_redirect():
+    return RedirectResponse(url="/api/docs")
+
+
+from fastapi.openapi.utils import get_openapi
+
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+        tags=app.openapi_tags,
+    )
+    openapi_schema["components"]["securitySchemes"] = {
+        "BearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": (
+                "Obtain a JWT via `POST /api/auth/login` with "
+                '`{"username": "...", "password": "..."}`. '
+                "Use the `access_token` from the response."
+            ),
+        }
+    }
+    openapi_schema["security"] = [{"BearerAuth": []}]
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
+
 
 # CORS for development
 app.add_middleware(
@@ -115,6 +156,61 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ============================================================================
+# Global Auth Middleware — secure-by-default for all /api/* endpoints
+# ============================================================================
+# Paths that are intentionally public (no auth required even when auth is enabled)
+AUTH_EXEMPT_PATHS = {
+    # Health check (Docker, load balancers)
+    "/api/health",
+    # Auth flow (must be public by definition)
+    "/api/auth/login",
+    "/api/auth/refresh",
+    "/api/auth/logout",
+    "/api/auth/status",
+    "/api/auth/setup-required",
+    "/api/auth/setup",
+    "/api/auth/forgot-password",
+    "/api/auth/reset-password",
+    "/api/auth/providers",
+    "/api/auth/dispatcharr/login",
+    "/api/auth/admin/settings",
+    # Initial setup (only works when no config exists)
+    "/api/backup/restore-initial",
+    # OpenAPI docs
+    "/api/docs",
+    "/api/redoc",
+    "/api/openapi.json",
+}
+
+from auth.settings import get_auth_settings
+from auth.dependencies import get_token_from_request, decode_token_safe
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """Reject unauthenticated requests to /api/* unless path is exempt."""
+    path = request.url.path
+
+    # Only gate /api/ paths — static files, SPA routes pass through
+    if path.startswith("/api/"):
+        auth_settings = get_auth_settings()
+
+        # Skip auth when it's not required or setup isn't complete
+        if auth_settings.require_auth and auth_settings.setup_complete:
+            # Check if path is exempt
+            if path not in AUTH_EXEMPT_PATHS:
+                token = get_token_from_request(request)
+                if not token or not decode_token_safe(token):
+                    return JSONResponse(
+                        status_code=401,
+                        content={"detail": "Not authenticated"},
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
+
+    return await call_next(request)
+
 
 # Include auth router
 from auth.routes import router as auth_router
@@ -249,9 +345,18 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     logger.error("[VALIDATION-ERROR] Validation errors: %s", exc.errors())
     logger.error("[VALIDATION-ERROR] Validation body: %s", exc.body)
 
+    # Sanitize errors for JSON serialization — ctx.error may contain
+    # non-serializable ValueError objects from field_validator
+    safe_errors = []
+    for err in exc.errors():
+        safe_err = dict(err)
+        if "ctx" in safe_err and isinstance(safe_err["ctx"], dict):
+            safe_err["ctx"] = {k: str(v) for k, v in safe_err["ctx"].items()}
+        safe_errors.append(safe_err)
+
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors(), "body": str(exc.body)},
+        content={"detail": safe_errors, "body": str(exc.body)},
     )
 
 
@@ -267,6 +372,22 @@ async def startup_event():
 
     # Initialize journal database
     init_db()
+
+    # Purge all expired user sessions
+    try:
+        from models import UserSession
+        sess = get_session()
+        try:
+            expired_count = sess.query(UserSession).filter(
+                UserSession.expires_at < datetime.utcnow(),
+            ).delete()
+            sess.commit()
+            if expired_count:
+                logger.info("[MAIN] Purged %d expired user session(s) on startup", expired_count)
+        finally:
+            sess.close()
+    except Exception as e:
+        logger.warning("[MAIN] Failed to purge expired sessions: %s", e)
 
     # Remove directional suffixes from Timezone Tags (East/West affect EPG timing)
     try:
@@ -293,6 +414,51 @@ async def startup_event():
             session.close()
     except Exception as e:
         logger.warning("[MAIN] Could not ensure Provider Tags rule: %s", e)
+
+    # Ensure State/Province Tags normalization rule exists for existing installations
+    try:
+        from normalization_migration import ensure_state_province_tags_rule
+        session = get_session()
+        try:
+            result = ensure_state_province_tags_rule(session)
+            if result.get("created"):
+                logger.info("[MAIN] Created Strip State/Province Tags normalization rule for existing installation")
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning("[MAIN] Could not ensure Strip State/Province Tags rule: %s", e)
+
+    # Ensure Title Case normalization rule exists for existing installations
+    try:
+        from normalization_migration import ensure_title_case_rule
+        session = get_session()
+        try:
+            result = ensure_title_case_rule(session)
+            if result.get("created"):
+                logger.info("[MAIN] Created Title Case normalization rule for existing installation")
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning("[MAIN] Could not ensure Title Case rule: %s", e)
+
+    # Repair duplicate auto-creation rule priorities
+    try:
+        from models import AutoCreationRule
+        sess = get_session()
+        try:
+            all_rules = sess.query(AutoCreationRule).order_by(
+                AutoCreationRule.priority, AutoCreationRule.id
+            ).all()
+            priorities = [r.priority for r in all_rules]
+            if len(priorities) != len(set(priorities)):
+                for idx, rule in enumerate(all_rules):
+                    rule.priority = idx
+                sess.commit()
+                logger.info("[MAIN] Repaired duplicate auto-creation rule priorities (%d rules)", len(all_rules))
+        finally:
+            sess.close()
+    except Exception as e:
+        logger.warning("[MAIN] Could not check auto-creation rule priorities: %s", e)
 
     logger.info("[MAIN] CONFIG_DIR: %s", CONFIG_DIR)
     logger.info("[MAIN] CONFIG_FILE: %s", CONFIG_FILE)

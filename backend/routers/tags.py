@@ -6,7 +6,9 @@ Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 import logging
 from typing import Optional
 
+import yaml
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from database import get_session
@@ -385,3 +387,170 @@ async def test_tags(request: TestTagsRequest):
     except Exception as e:
         logger.exception("[TAGS] Failed to test tags")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/export")
+async def export_tags():
+    """Export all tag groups and their tags as YAML."""
+    logger.debug("[TAGS] GET /export")
+    try:
+        from models import TagGroup, Tag
+        session = get_session()
+        try:
+            groups = session.query(TagGroup).order_by(TagGroup.name).all()
+
+            export_data = {
+                "tags": {
+                    "version": 1,
+                    "groups": []
+                }
+            }
+
+            for group in groups:
+                tags = session.query(Tag).filter(
+                    Tag.group_id == group.id
+                ).order_by(Tag.value).all()
+
+                group_data = {
+                    "name": group.name,
+                    "description": group.description,
+                    "is_builtin": group.is_builtin,
+                    "tags": [
+                        {
+                            "value": tag.value,
+                            "case_sensitive": tag.case_sensitive,
+                            "enabled": tag.enabled,
+                        }
+                        for tag in tags
+                    ]
+                }
+                export_data["tags"]["groups"].append(group_data)
+
+            yaml_content = yaml.dump(export_data, default_flow_style=False, sort_keys=False, allow_unicode=True)
+            return Response(
+                content=yaml_content,
+                media_type="application/x-yaml",
+                headers={"Content-Disposition": "attachment; filename=tags.yaml"}
+            )
+        finally:
+            session.close()
+    except Exception as e:
+        logger.exception("[TAGS] Failed to export tags")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+class ImportTagsRequest(BaseModel):
+    yaml_content: str
+    overwrite: bool = False  # If true, delete existing non-builtin groups first
+
+
+@router.post("/import")
+async def import_tags(request: ImportTagsRequest):
+    """Import tag groups and tags from YAML."""
+    logger.debug("[TAGS] POST /import - overwrite=%s", request.overwrite)
+    try:
+        data = yaml.safe_load(request.yaml_content)
+    except yaml.YAMLError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
+
+    if not data or "tags" not in data:
+        raise HTTPException(status_code=400, detail="Missing 'tags' key in YAML")
+
+    tags_data = data["tags"]
+    if "groups" not in tags_data:
+        raise HTTPException(status_code=400, detail="Missing 'groups' key in tags")
+
+    try:
+        from models import TagGroup, Tag
+        session = get_session()
+        try:
+            # If overwrite, delete existing non-builtin groups
+            if request.overwrite:
+                existing_groups = session.query(TagGroup).filter(
+                    TagGroup.is_builtin == False
+                ).all()
+                for g in existing_groups:
+                    session.query(Tag).filter(Tag.group_id == g.id).delete()
+                    session.delete(g)
+                session.flush()
+
+            created_groups = 0
+            created_tags = 0
+            skipped_groups = 0
+
+            for group_data in tags_data["groups"]:
+                group_name = group_data.get("name")
+                if not group_name:
+                    continue
+
+                # Check if group exists
+                existing = session.query(TagGroup).filter(
+                    TagGroup.name == group_name
+                ).first()
+
+                if existing:
+                    # Add tags to existing group, skip duplicates
+                    for tag_data in group_data.get("tags", []):
+                        tag_value = tag_data.get("value") if isinstance(tag_data, dict) else str(tag_data)
+                        if not tag_value:
+                            continue
+                        existing_tag = session.query(Tag).filter(
+                            Tag.group_id == existing.id,
+                            Tag.value == tag_value
+                        ).first()
+                        if not existing_tag:
+                            tag = Tag(
+                                group_id=existing.id,
+                                value=tag_value,
+                                case_sensitive=tag_data.get("case_sensitive", False) if isinstance(tag_data, dict) else False,
+                                enabled=tag_data.get("enabled", True) if isinstance(tag_data, dict) else True,
+                                is_builtin=False,
+                            )
+                            session.add(tag)
+                            created_tags += 1
+                    skipped_groups += 1
+                    continue
+
+                group = TagGroup(
+                    name=group_name,
+                    description=group_data.get("description"),
+                    is_builtin=False,
+                )
+                session.add(group)
+                session.flush()
+                created_groups += 1
+
+                for tag_data in group_data.get("tags", []):
+                    tag_value = tag_data.get("value") if isinstance(tag_data, dict) else str(tag_data)
+                    if not tag_value:
+                        continue
+                    tag = Tag(
+                        group_id=group.id,
+                        value=tag_value,
+                        case_sensitive=tag_data.get("case_sensitive", False) if isinstance(tag_data, dict) else False,
+                        enabled=tag_data.get("enabled", True) if isinstance(tag_data, dict) else True,
+                        is_builtin=False,
+                    )
+                    session.add(tag)
+                    created_tags += 1
+
+            session.commit()
+            logger.info("[TAGS] Imported %s groups, %s tags, merged into %s existing groups",
+                        created_groups, created_tags, skipped_groups)
+
+            from normalization_engine import invalidate_tag_cache
+            invalidate_tag_cache()
+
+            return {
+                "status": "imported",
+                "created_groups": created_groups,
+                "created_tags": created_tags,
+                "merged_groups": skipped_groups,
+            }
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("[TAGS] Failed to import tags")
+        raise HTTPException(status_code=500, detail=str(e))

@@ -243,6 +243,3 @@ def revoke_token(jti: str) -> None:
     _revoked_tokens.add(jti)
 
 
-def clear_revoked_tokens() -> None:
-    """Clear all revoked tokens (for testing)."""
-    _revoked_tokens.clear()

@@ -1,8 +1,8 @@
 /**
  * TLSSettingsSection styles
  *
- * Uses common.css for: .btn-primary, .btn-secondary, .btn-danger, .form-group, .form-hint, .spinning
- * Uses SettingsTab.css for: .settings-page-header
+ * Uses common.css for: .btn-primary, .btn-secondary, .btn-danger, .spinning
+ * Uses SettingsTab.css for: .settings-page-header, .form-group-vertical, .form-description
  */
 
 .tls-settings-section {
@@ -37,7 +37,7 @@ pre.tls-settings-error {
   align-items: center;
   gap: 0.75rem;
   padding: 1rem;
-  background: var(--card-bg);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-xl);
 }
@@ -79,7 +79,7 @@ pre.tls-settings-error {
 
 /* Status Card - follows auth-provider-card pattern (kept for potential future use) */
 .tls-status-card {
-  background: var(--card-bg);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-xl);
   overflow: hidden;
@@ -94,7 +94,7 @@ pre.tls-settings-error {
   font-size: 0.9375rem;
   font-weight: 500;
   color: var(--text-primary);
-  background: var(--hover-bg);
+  background: var(--bg-hover);
   border-bottom: 1px solid var(--border-primary);
 }
 
@@ -159,7 +159,7 @@ pre.tls-settings-error {
 
 /* Config Card - follows auth-provider-card pattern */
 .tls-config-card {
-  background: var(--card-bg);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-xl);
   overflow: hidden;
@@ -174,7 +174,7 @@ pre.tls-settings-error {
   font-size: 0.9375rem;
   font-weight: 500;
   color: var(--text-primary);
-  background: var(--hover-bg);
+  background: var(--bg-hover);
   border-bottom: 1px solid var(--border-primary);
 }
 
@@ -189,18 +189,6 @@ pre.tls-settings-error {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-}
-
-/* Constrain form group widths inside TLS config */
-.tls-config-content .form-group {
-  max-width: 400px;
-}
-
-.tls-config-content .form-group input[type="email"],
-.tls-config-content .form-group input[type="text"],
-.tls-config-content .form-group input[type="password"],
-.tls-config-content .form-group select {
-  max-width: 100%;
 }
 
 /* Checkbox and radio styles use common patterns from SettingsTab.css:
@@ -245,8 +233,6 @@ pre.tls-settings-error {
   flex-wrap: wrap;
   gap: 0.75rem;
   padding: 1rem 0;
-  border-top: 1px solid var(--border-primary);
-  margin-top: 0.5rem;
 }
 
 /* Info Box */

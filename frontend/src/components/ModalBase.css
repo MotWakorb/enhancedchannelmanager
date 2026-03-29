@@ -273,11 +273,6 @@
   flex-shrink: 0;
 }
 
-/* Left-aligned content in footer */
-.modal-footer-left {
-  margin-right: auto;
-}
-
 /* Footer with space-between layout */
 .modal-footer.modal-footer-spread {
   justify-content: space-between;
@@ -516,22 +511,6 @@
   padding: 0;
 }
 
-/* Centered content */
-.modal-body-centered {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-}
-
-/* Divider line */
-.modal-divider {
-  height: 1px;
-  background: var(--border-color, #3a3a5a);
-  margin: 1rem 0;
-}
-
 /* Section within modal body */
 .modal-section {
   margin-bottom: 1.5rem;
@@ -671,7 +650,6 @@
 }
 
 /* Dropdown inline input - for "add new" functionality */
-.dropdown-inline-input,
 .new-group-input,
 .logo-url-input {
   display: flex;
@@ -680,7 +658,6 @@
   border-bottom: 1px solid var(--border-primary, #2a2a4a);
 }
 
-.dropdown-inline-input input,
 .new-group-input input,
 .logo-url-input input {
   flex: 1;
@@ -692,20 +669,17 @@
   font-size: 0.8rem;
 }
 
-.dropdown-inline-input input:focus,
 .new-group-input input:focus,
 .logo-url-input input:focus {
   outline: none;
   border-color: var(--accent-primary, #6366f1);
 }
 
-.dropdown-inline-input input::placeholder,
 .new-group-input input::placeholder,
 .logo-url-input input::placeholder {
   color: var(--text-muted, #666);
 }
 
-.dropdown-inline-input button,
 .new-group-input button,
 .logo-url-input button {
   display: flex;
@@ -720,32 +694,27 @@
   transition: opacity 0.15s;
 }
 
-.dropdown-inline-input button:hover:not(:disabled),
 .new-group-input button:hover:not(:disabled),
 .logo-url-input button:hover:not(:disabled) {
   opacity: 0.9;
 }
 
-.dropdown-inline-input button:disabled,
 .new-group-input button:disabled,
 .logo-url-input button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.dropdown-inline-input button .material-icons,
 .new-group-input button .material-icons,
 .logo-url-input button .material-icons {
   font-size: 18px;
 }
 
-.dropdown-inline-input button.cancel-btn,
 .new-group-input button.cancel-btn {
   background-color: var(--border-primary, #2a2a4a);
   color: var(--text-secondary, #888);
 }
 
-.dropdown-inline-input button.cancel-btn:hover,
 .new-group-input button.cancel-btn:hover {
   background-color: var(--border-secondary, #3a3a5a);
 }
@@ -962,19 +931,6 @@
   margin: 0 0 1rem 0;
   font-size: 0.9rem;
   line-height: 1.5;
-}
-
-/* Styled bullet list */
-.modal-bullet-list {
-  list-style-type: disc;
-  margin: 0 0 1.5rem 1.5rem;
-  padding: 0;
-  color: var(--text-secondary, #888);
-}
-
-.modal-bullet-list li {
-  margin-bottom: 0.5rem;
-  line-height: 1.4;
 }
 
 /* Info card - for grouped information blocks */

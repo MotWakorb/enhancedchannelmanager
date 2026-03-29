@@ -102,6 +102,7 @@ class DispatcharrSettings(BaseModel):
     # Black screen detection - run ffmpeg blackdetect after successful probe
     black_screen_detection_enabled: bool = False
     black_screen_sample_duration: int = 5  # Seconds to sample for black screen detection (3-30)
+    low_fps_threshold: int = 20  # FPS below this value is considered "low FPS" (5, 10, 15, or 20)
     deprioritize_failed_streams: bool = True
     # Strike rule - flag streams with consecutive probe failures (0 = disabled)
     strike_threshold: int = 3
@@ -270,20 +271,6 @@ def get_http_port() -> int:
     except ValueError:
         logger.warning("[CONFIG] Invalid ECM_PORT '%s', using default 6100", os.environ.get("ECM_PORT"))
         return 6100
-
-
-def log_config_status():
-    """Log the current configuration status for debugging."""
-    logger.info("[CONFIG] CONFIG_DIR: %s", CONFIG_DIR)
-    logger.info("[CONFIG] CONFIG_FILE: %s", CONFIG_FILE)
-    logger.info("[CONFIG] CONFIG_DIR exists: %s", CONFIG_DIR.exists())
-    logger.info("[CONFIG] CONFIG_FILE exists: %s", CONFIG_FILE.exists())
-    if CONFIG_DIR.exists():
-        try:
-            contents = list(CONFIG_DIR.iterdir())
-            logger.info("[CONFIG] CONFIG_DIR contents: %s", contents)
-        except Exception as e:
-            logger.exception("[CONFIG] Failed to list CONFIG_DIR: %s", e)
 
 
 def get_log_level_from_env() -> str:
