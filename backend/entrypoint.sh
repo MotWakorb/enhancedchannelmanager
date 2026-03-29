@@ -5,6 +5,10 @@ set -e
 ECM_PORT=${ECM_PORT:-6100}
 ECM_HTTPS_PORT=${ECM_HTTPS_PORT:-6143}
 
+# PUID/PGID defaults (match typical first non-root user)
+PUID=${PUID:-1000}
+PGID=${PGID:-1000}
+
 # Colors for output
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -40,6 +44,35 @@ print_warning() {
 
 print_info() {
     echo "${BLUE}${ARROW}${NC} $1"
+}
+
+setup_user() {
+    print_info "Setting up user/group identity..."
+    print_info "PUID=${PUID} PGID=${PGID}"
+
+    # Create/modify the appuser group to match PGID
+    CURRENT_GID=$(id -g appuser 2>/dev/null || echo "")
+    if [ "$CURRENT_GID" != "$PGID" ]; then
+        # Check if a group with this GID already exists
+        EXISTING_GROUP=$(getent group "$PGID" 2>/dev/null | cut -d: -f1 || true)
+        if [ -n "$EXISTING_GROUP" ] && [ "$EXISTING_GROUP" != "appuser" ]; then
+            groupmod -g "99${PGID}" "$EXISTING_GROUP" 2>/dev/null || true
+        fi
+        groupmod -o -g "$PGID" appuser 2>/dev/null || true
+    fi
+
+    # Modify appuser UID to match PUID
+    CURRENT_UID=$(id -u appuser 2>/dev/null || echo "")
+    if [ "$CURRENT_UID" != "$PUID" ]; then
+        # Check if a user with this UID already exists
+        EXISTING_USER=$(getent passwd "$PUID" 2>/dev/null | cut -d: -f1 || true)
+        if [ -n "$EXISTING_USER" ] && [ "$EXISTING_USER" != "appuser" ]; then
+            usermod -o -u "99${PUID}" "$EXISTING_USER" 2>/dev/null || true
+        fi
+        usermod -o -u "$PUID" appuser 2>/dev/null || true
+    fi
+
+    print_success "Running as uid=$(id -u appuser) gid=$(id -g appuser)"
 }
 
 # Preflight check functions
@@ -195,6 +228,7 @@ run_preflight_checks() {
 
     FAILED=0
 
+    setup_user || FAILED=1
     check_python || FAILED=1
     check_filesystem || FAILED=1
     check_network || FAILED=1

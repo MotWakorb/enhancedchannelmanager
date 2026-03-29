@@ -176,9 +176,7 @@ export function InputSourceConfig({ value, onChange }: InputSourceConfigProps) {
     emit({
       type: type as InputSourceType,
       path: '',
-      startTime: undefined,
-      duration: undefined,
-      streamLoop: undefined,
+      format: undefined,
     });
   };
 

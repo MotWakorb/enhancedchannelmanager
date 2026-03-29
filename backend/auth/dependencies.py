@@ -65,6 +65,14 @@ def get_token_from_request(request: Request) -> Optional[str]:
     return None
 
 
+def decode_token_safe(token: str) -> Optional[dict]:
+    """Decode a JWT token without raising exceptions. Returns payload or None."""
+    try:
+        return decode_token(token)
+    except (TokenExpiredError, InvalidTokenError, TokenRevokedError):
+        return None
+
+
 def get_refresh_token_from_request(request: Request) -> Optional[str]:
     """
     Extract refresh token from request.
@@ -141,30 +149,6 @@ async def get_current_user(
     return user
 
 
-async def get_current_user_optional(
-    request: Request,
-    session: Session = Depends(get_session),
-) -> Optional[User]:
-    """
-    FastAPI dependency to optionally get the current user.
-
-    Returns None instead of raising an error if not authenticated.
-    Useful for endpoints that have different behavior for authenticated
-    vs. anonymous users.
-
-    Args:
-        request: The FastAPI request object.
-        session: Database session (injected).
-
-    Returns:
-        The authenticated User object or None.
-    """
-    try:
-        return await get_current_user(request, session)
-    except HTTPException:
-        return None
-
-
 async def get_current_active_admin(
     current_user: User = Depends(get_current_user),
 ) -> User:
@@ -214,3 +198,36 @@ def require_auth_if_enabled():
 
 # Pre-built dependency for common use
 RequireAuthIfEnabled = Depends(require_auth_if_enabled())
+
+
+def require_admin_if_enabled():
+    """
+    Factory function to create a dependency that requires admin when auth is enabled.
+
+    When auth is disabled (setup not complete or require_auth=False),
+    the endpoint is publicly accessible. When auth is enabled, the
+    caller must be an authenticated admin.
+    """
+    async def check_admin(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> Optional[User]:
+        settings = get_auth_settings()
+
+        # If auth not required or setup not complete, allow anonymous access
+        if not settings.require_auth or not settings.setup_complete:
+            return None
+
+        # Auth is required - get the user and check admin
+        user = await get_current_user(request, session)
+        if not user.is_admin:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin access required"
+            )
+        return user
+
+    return check_admin
+
+
+RequireAdminIfEnabled = Depends(require_admin_if_enabled())

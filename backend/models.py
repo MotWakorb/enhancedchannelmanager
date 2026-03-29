@@ -187,6 +187,7 @@ class StreamStats(Base):
     dismissed_at = Column(DateTime, nullable=True)  # When failure was dismissed (acknowledged)
     consecutive_failures = Column(Integer, default=0, nullable=False)  # Strike rule: consecutive probe failures
     is_black_screen = Column(Boolean, default=False, nullable=False)  # Black screen detected during probe
+    is_low_fps = Column(Boolean, default=False, nullable=False)  # Low FPS detected during probe (< 20 FPS)
 
     __table_args__ = (
         Index("idx_stream_stats_stream_id", stream_id),
@@ -214,6 +215,7 @@ class StreamStats(Base):
             "dismissed_at": self.dismissed_at.isoformat() + "Z" if self.dismissed_at else None,
             "consecutive_failures": self.consecutive_failures or 0,
             "is_black_screen": self.is_black_screen or False,
+            "is_low_fps": self.is_low_fps or False,
         }
 
     def __repr__(self):
@@ -1424,6 +1426,10 @@ class AutoCreationRule(Base):
     probe_on_sort = Column(Boolean, default=False, nullable=False)  # Probe unprobed streams before quality sort
     sort_regex = Column(String(500), nullable=True)  # Regex with capture group for stream_name_regex sort
 
+    # Stream-level sorting - reorders streams within channels (Pass 3.5)
+    stream_sort_field = Column(String(50), nullable=True)  # None = no stream reorder
+    stream_sort_order = Column(String(4), default="asc")   # "asc" or "desc"
+
     # Normalization - apply normalization engine rules to channel names
     normalize_names = Column(Boolean, default=False, nullable=False)
 
@@ -1524,6 +1530,8 @@ class AutoCreationRule(Base):
             "sort_order": self.sort_order or "asc",
             "probe_on_sort": self.probe_on_sort or False,
             "sort_regex": self.sort_regex,
+            "stream_sort_field": self.stream_sort_field,
+            "stream_sort_order": self.stream_sort_order or "asc",
             "normalize_names": self.normalize_names or False,
             "skip_struck_streams": self.skip_struck_streams or False,
             "orphan_action": self.orphan_action or "delete",

@@ -123,7 +123,7 @@
 }
 
 .tag-group-header:hover {
-  background: var(--hover-bg);
+  background: var(--bg-hover);
 }
 
 .tag-group-info {
@@ -227,7 +227,7 @@
 }
 
 .description-view:hover {
-  background: var(--hover-bg);
+  background: var(--bg-hover);
 }
 
 .description-text {
@@ -465,7 +465,7 @@
 }
 
 .btn-secondary:hover {
-  background: var(--hover-bg);
+  background: var(--bg-hover);
 }
 
 .btn-secondary:disabled {
@@ -564,3 +564,10 @@
   padding: 1rem 1.25rem;
   border-top: 1px solid var(--border-primary);
 }
+
+.tag-engine-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+

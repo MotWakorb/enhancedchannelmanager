@@ -8,6 +8,7 @@ import { AuthSettingsSection } from '../settings/AuthSettingsSection';
 import { UserManagementSection } from '../settings/UserManagementSection';
 import { LinkedAccountsSection } from '../settings/LinkedAccountsSection';
 import { TLSSettingsSection } from '../settings/TLSSettingsSection';
+import { BackupRestoreSection } from '../settings/BackupRestoreSection';
 import { useAuth } from '../../hooks/useAuth';
 import type { ChannelProfile, M3UDigestSettings, M3UDigestFrequency } from '../../types';
 import { logger } from '../../utils/logger';
@@ -325,9 +326,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [probeRetryDelay, setProbeRetryDelay] = useState(2);
   const [blackScreenDetectionEnabled, setBlackScreenDetectionEnabled] = useState(false);
   const [blackScreenSampleDuration, setBlackScreenSampleDuration] = useState(5);
+  const [lowFpsThreshold, setLowFpsThreshold] = useState(20);
   const [streamFetchPageLimit, setStreamFetchPageLimit] = useState(200);
   const [probingAll, setProbingAll] = useState(false);
-  const [totalStreamCount, setTotalStreamCount] = useState(100); // Default to 100, will be updated on load
+  const [, setTotalStreamCount] = useState(100); // Default to 100, will be updated on load
   const [probeProgress, setProbeProgress] = useState<{
     in_progress: boolean;
     total: number;
@@ -338,22 +340,25 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     failed_count: number;
     skipped_count: number;
     black_screen_count: number;
+    low_fps_count: number;
     percentage: number;
     rate_limited?: boolean;
     rate_limited_hosts?: Array<{ host: string; backoff_remaining: number; consecutive_429s: number }>;
     max_backoff_remaining?: number;
   } | null>(null);
   const [showProbeResultsModal, setShowProbeResultsModal] = useState(false);
-  const [probeResultsType, setProbeResultsType] = useState<'success' | 'failed' | 'skipped' | 'black_screen'>('success');
+  const [probeResultsType, setProbeResultsType] = useState<'success' | 'failed' | 'skipped' | 'black_screen' | 'low_fps'>('success');
   const [probeResults, setProbeResults] = useState<{
     success_streams: Array<{ id: number; name: string; url?: string }>;
     failed_streams: Array<{ id: number; name: string; url?: string; error?: string }>;
     skipped_streams: Array<{ id: number; name: string; url?: string; reason?: string }>;
     black_screen_streams: Array<{ id: number; name: string; url?: string }>;
+    low_fps_streams: Array<{ id: number; name: string; url?: string }>;
     success_count: number;
     failed_count: number;
     skipped_count: number;
     black_screen_count: number;
+    low_fps_count: number;
   } | null>(null);
   const [probeHistory, setProbeHistory] = useState<ProbeHistoryEntry[]>([]);
   const [showReorderModal, setShowReorderModal] = useState(false);
@@ -399,8 +404,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // Track original settings to detect if restart is needed
   const [originalPollInterval, setOriginalPollInterval] = useState(10);
   const [originalTimezone, setOriginalTimezone] = useState('');
-  const [originalAutoReorder, setOriginalAutoReorder] = useState(false);
-  const [originalRefreshM3usBeforeProbe, setOriginalRefreshM3usBeforeProbe] = useState(true);
+  const [, setOriginalAutoReorder] = useState(false);
+  const [, setOriginalRefreshM3usBeforeProbe] = useState(true);
   const [, setNeedsRestart] = useState(false);
   const [, setRestarting] = useState(false);
 
@@ -533,7 +538,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           }
         }
       } catch (err) {
-        console.error('Failed to fetch probe progress:', err);
+        logger.error('Failed to fetch probe progress:', err);
       }
     };
 
@@ -629,6 +634,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setProbeRetryDelay(settings.probe_retry_delay ?? 2);
       setBlackScreenDetectionEnabled(settings.black_screen_detection_enabled ?? false);
       setBlackScreenSampleDuration(settings.black_screen_sample_duration ?? 5);
+      setLowFpsThreshold(settings.low_fps_threshold ?? 20);
       setStreamFetchPageLimit(settings.stream_fetch_page_limit ?? 200);
       // Merge saved criteria with any new criteria that may have been added in updates
       const merged = mergeSortCriteria(settings.stream_sort_priority, settings.stream_sort_enabled);
@@ -656,7 +662,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setTelegramConfigured(settings.telegram_configured ?? false);
       setNeedsRestart(false);
     } catch (err) {
-      console.error('Failed to load settings:', err);
+      logger.error('Failed to load settings:', err);
     }
   };
 
@@ -754,6 +760,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         probe_retry_delay: probeRetryDelay,
         black_screen_detection_enabled: blackScreenDetectionEnabled,
         black_screen_sample_duration: blackScreenSampleDuration,
+        low_fps_threshold: lowFpsThreshold,
         stream_fetch_page_limit: streamFetchPageLimit,
         stream_sort_priority: streamSortPriority,
         stream_sort_enabled: streamSortEnabled,
@@ -797,31 +804,32 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         logger.info(`Frontend log level changed to ${frontendLevel}`);
       }
       // Update global VLC settings for vlc utility to access
-      (window as any).__vlcSettings = { behavior: vlcOpenBehavior };
+      window.__vlcSettings = { behavior: vlcOpenBehavior };
       setOriginalUrl(url);
       setOriginalUsername(username);
       setPassword('');
       logger.info('Settings saved successfully');
       // Check if any settings that require a restart have changed
+      // Only poll interval and timezone changes require a full service restart.
+      // Probe settings (auto_reorder, refresh_m3us, timeout, etc.) are pushed
+      // live to the prober on save — no restart needed.
       const pollOrTimezoneChanged = statsPollInterval !== originalPollInterval || userTimezone !== originalTimezone;
-      const probeSettingsChanged = autoReorderAfterProbe !== originalAutoReorder ||
-                                   refreshM3usBeforeProbe !== originalRefreshM3usBeforeProbe;
+
+      // Update originals for probe settings that are now applied live
+      setOriginalAutoReorder(autoReorderAfterProbe);
+      setOriginalRefreshM3usBeforeProbe(refreshM3usBeforeProbe);
 
       // Debug logging for restart detection
       logger.info(`[RESTART-CHECK] Poll interval: ${statsPollInterval} vs original ${originalPollInterval}`);
       logger.info(`[RESTART-CHECK] Timezone: "${userTimezone}" vs original "${originalTimezone}"`);
-      logger.info(`[RESTART-CHECK] Auto-reorder: ${autoReorderAfterProbe} vs original ${originalAutoReorder}`);
-      logger.info(`[RESTART-CHECK] Refresh M3Us: ${refreshM3usBeforeProbe} vs original ${originalRefreshM3usBeforeProbe}`);
-      logger.info(`[RESTART-CHECK] pollOrTimezoneChanged=${pollOrTimezoneChanged}, probeSettingsChanged=${probeSettingsChanged}`);
+      logger.info(`[RESTART-CHECK] pollOrTimezoneChanged=${pollOrTimezoneChanged}`);
 
-      if (pollOrTimezoneChanged || probeSettingsChanged) {
+      if (pollOrTimezoneChanged) {
         logger.info('[RESTART-CHECK] Setting needsRestart=true');
         setNeedsRestart(true);
 
         // Show toast notification with restart action
-        const message = pollOrTimezoneChanged
-          ? 'Stats or timezone settings changed. Restart services to apply.'
-          : 'Probe settings changed. Restart services to apply.';
+        const message = 'Stats or timezone settings changed. Restart services to apply.';
 
         // Dismiss any previous restart toast before showing new one
         if (restartToastIdRef.current) {
@@ -841,9 +849,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
         if (pollOrTimezoneChanged) {
           logger.info('Stats polling or timezone changed - backend restart recommended');
-        }
-        if (probeSettingsChanged) {
-          logger.info('Probe settings changed - backend restart required for schedule changes to take effect');
         }
       } else {
         logger.info('[RESTART-CHECK] No restart-requiring changes detected');
@@ -1116,17 +1121,19 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
-  const handleShowHistoryResults = async (historyEntry: ProbeHistoryEntry, type: 'success' | 'failed' | 'skipped' | 'black_screen') => {
+  const handleShowHistoryResults = async (historyEntry: ProbeHistoryEntry, type: 'success' | 'failed' | 'skipped' | 'black_screen' | 'low_fps') => {
     // Use the history entry's streams for the modal
     setProbeResults({
       success_streams: historyEntry.success_streams,
       failed_streams: historyEntry.failed_streams,
       skipped_streams: historyEntry.skipped_streams || [],
       black_screen_streams: historyEntry.black_screen_streams || [],
+      low_fps_streams: historyEntry.low_fps_streams || [],
       success_count: historyEntry.success_count,
       failed_count: historyEntry.failed_count,
       skipped_count: historyEntry.skipped_count || 0,
       black_screen_count: historyEntry.black_screen_count || 0,
+      low_fps_count: historyEntry.low_fps_count || 0,
     });
     setProbeResultsType(type);
     setShowProbeResultsModal(true);
@@ -2155,7 +2162,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to test Discord webhook';
-      console.error('Discord test error:', err);
+      logger.error('Discord test error:', err);
       notifications.error(errorMessage, 'Discord Test');
     } finally {
       setDiscordTesting(false);
@@ -2689,10 +2696,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   How often to send digest emails. "Immediate" sends right after each M3U refresh.
                 </span>
                 <CustomSelect
+                  className="compact-select"
                   value={digestSettings.frequency}
                   onChange={(val) => handleDigestSettingChange('frequency', val as M3UDigestFrequency)}
                   options={[
-                    { value: 'immediate', label: 'Immediate (after each refresh)' },
+                    { value: 'immediate', label: 'Immediate' },
                     { value: 'hourly', label: 'Hourly' },
                     { value: 'daily', label: 'Daily' },
                     { value: 'weekly', label: 'Weekly' },
@@ -3073,6 +3081,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               <label htmlFor="bitrateSampleDuration">Bitrate measurement duration</label>
               <span className="form-description">How long to sample streams when measuring bitrate</span>
               <CustomSelect
+                className="compact-select"
                 value={String(bitrateSampleDuration)}
                 onChange={(val) => setBitrateSampleDuration(Number(val))}
                 options={[
@@ -3138,6 +3147,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   type="text"
                   inputMode="numeric"
                   pattern="[0-9]*"
+                  style={{ minWidth: '70px', maxWidth: '70px' }}
                   value={maxConcurrentProbes}
                   onChange={(e) => {
                     const val = e.target.value.replace(/[^0-9]/g, '');
@@ -3169,6 +3179,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   <strong>Least Loaded</strong> always picks the profile with the most remaining capacity — best for maximizing throughput when profiles have different connection limits.
                 </span>
                 <CustomSelect
+                  className="compact-select"
                   value={profileDistributionStrategy}
                   onChange={(value) => setProfileDistributionStrategy(value)}
                   options={[
@@ -3294,6 +3305,24 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               </div>
             )}
 
+            <div className="form-group-vertical">
+              <label htmlFor="lowFpsThreshold">Low FPS threshold</label>
+              <span className="form-description">
+                Streams with FPS below this value are flagged as low FPS and deprioritized in Smart Sort.
+              </span>
+              <CustomSelect
+                className="compact-select"
+                value={String(lowFpsThreshold)}
+                onChange={(val) => setLowFpsThreshold(parseInt(val))}
+                options={[
+                  { value: '5', label: '5 FPS' },
+                  { value: '10', label: '10 FPS' },
+                  { value: '15', label: '15 FPS' },
+                  { value: '20', label: '20 FPS' },
+                ]}
+              />
+            </div>
+
           </div>
         </div>
 
@@ -3321,6 +3350,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginLeft: '2rem' }}>
                   Success: {probeProgress.success_count} | Failed: {probeProgress.failed_count}
                   {probeProgress.black_screen_count > 0 && ` | Black Screen: ${probeProgress.black_screen_count}`}
+                  {probeProgress.low_fps_count > 0 && ` | Low FPS: ${probeProgress.low_fps_count}`}
                   {probeProgress.skipped_count > 0 && ` | Skipped: ${probeProgress.skipped_count}`}
                 </div>
               )}
@@ -3538,6 +3568,28 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                     >
                       <span className="material-icons" style={{ fontSize: '16px' }}>videocam_off</span>
                       {entry.black_screen_count}
+                    </button>
+                  )}
+                  {(entry.low_fps_count ?? 0) > 0 && (
+                    <button
+                      className="probe-history-btn low-fps"
+                      onClick={() => handleShowHistoryResults(entry, 'low_fps')}
+                      style={{
+                        padding: '0.4rem 0.8rem',
+                        fontSize: '13px',
+                        backgroundColor: 'rgba(245, 158, 11, 0.15)',
+                        color: '#f59e0b',
+                        border: '1px solid rgba(245, 158, 11, 0.3)',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.3rem'
+                      }}
+                      title="View low FPS streams"
+                    >
+                      <span className="material-icons" style={{ fontSize: '16px' }}>slow_motion_video</span>
+                      {entry.low_fps_count}
                     </button>
                   )}
                   {(entry.reordered_channels && entry.reordered_channels.length > 0) && (
@@ -3964,6 +4016,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <span className="material-icons">link</span>
             Linked Accounts
           </li>
+          <li
+            className={`settings-nav-item ${activePage === 'backup-restore' ? 'active' : ''}`}
+            onClick={() => setActivePage('backup-restore')}
+          >
+            <span className="material-icons">backup</span>
+            Backup & Restore
+          </li>
           {user?.is_admin && (
             <>
               <li className="settings-nav-divider">Administration</li>
@@ -4008,6 +4067,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'auth-settings' && <AuthSettingsSection isAdmin={user?.is_admin ?? false} />}
         {activePage === 'user-management' && <UserManagementSection isAdmin={user?.is_admin ?? false} currentUserId={user?.id ?? 0} />}
         {activePage === 'tls-settings' && <TLSSettingsSection isAdmin={user?.is_admin ?? false} />}
+        {activePage === 'backup-restore' && <BackupRestoreSection isAdmin={!user || user.is_admin} />}
       </div>
 
       <DeleteOrphanedGroupsModal
@@ -4023,9 +4083,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             className="modal-container modal-lg probe-results-modal"
           >
             <div className="modal-header">
-              <h2 className={probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : probeResultsType === 'black_screen' ? 'black-screen' : 'failed'}>
-                {probeResultsType === 'success' ? 'Successful Streams' : probeResultsType === 'skipped' ? 'Skipped Streams' : probeResultsType === 'black_screen' ? 'Black Screen Streams' : 'Failed Streams'} (
-                {probeResultsType === 'success' ? probeResults.success_count : probeResultsType === 'skipped' ? probeResults.skipped_count : probeResultsType === 'black_screen' ? probeResults.black_screen_count : probeResults.failed_count})
+              <h2 className={probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : probeResultsType === 'black_screen' ? 'black-screen' : probeResultsType === 'low_fps' ? 'low-fps' : 'failed'}>
+                {probeResultsType === 'success' ? 'Successful Streams' : probeResultsType === 'skipped' ? 'Skipped Streams' : probeResultsType === 'black_screen' ? 'Black Screen Streams' : probeResultsType === 'low_fps' ? 'Low FPS Streams' : 'Failed Streams'} (
+                {probeResultsType === 'success' ? probeResults.success_count : probeResultsType === 'skipped' ? probeResults.skipped_count : probeResultsType === 'black_screen' ? probeResults.black_screen_count : probeResultsType === 'low_fps' ? probeResults.low_fps_count : probeResults.failed_count})
               </h2>
               <button
                 onClick={() => setShowProbeResultsModal(false)}
@@ -4043,6 +4103,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   ? probeResults.skipped_streams
                   : probeResultsType === 'black_screen'
                   ? probeResults.black_screen_streams
+                  : probeResultsType === 'low_fps'
+                  ? probeResults.low_fps_streams
                   : probeResults.failed_streams;
                 const emptyText = probeResultsType === 'success'
                   ? 'successful'
@@ -4050,6 +4112,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   ? 'skipped'
                   : probeResultsType === 'black_screen'
                   ? 'black screen'
+                  : probeResultsType === 'low_fps'
+                  ? 'low FPS'
                   : 'failed';
 
                 return streams.length === 0 ? (
@@ -4062,7 +4126,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                       {streams.map((stream) => (
                         <div
                           key={stream.id}
-                          className={`probe-result-item ${probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : probeResultsType === 'black_screen' ? 'black-screen' : 'failed'}`}
+                          className={`probe-result-item ${probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : probeResultsType === 'black_screen' ? 'black-screen' : probeResultsType === 'low_fps' ? 'low-fps' : 'failed'}`}
                         >
                           <div className="probe-result-item-info">
                             <div className="probe-result-item-name">{stream.name}</div>

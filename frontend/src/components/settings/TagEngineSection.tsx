@@ -5,12 +5,14 @@
  * Allows viewing, creating, editing tag groups and their tags.
  * Tags are used by the normalization engine for pattern matching.
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import * as api from '../../services/api';
 import type { TagGroup, Tag } from '../../types';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { ModalOverlay } from '../ModalOverlay';
+import { logger } from '../../utils/logger';
 import './TagEngineSection.css';
+import '../ModalBase.css';
 
 interface TagGroupCardProps {
   group: TagGroup;
@@ -44,7 +46,7 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
       setTags(data.tags || []);
     } catch (err) {
       setError('Failed to load tags');
-      console.error(err);
+      logger.error('Tag operation failed:', err);
     } finally {
       setLoading(false);
     }
@@ -65,7 +67,7 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
       setNewTagInput('');
     } catch (err) {
       setError('Failed to add tag');
-      console.error(err);
+      logger.error('Tag operation failed:', err);
     }
   };
 
@@ -88,7 +90,7 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
       }
     } catch (err) {
       setError('Failed to add tags');
-      console.error(err);
+      logger.error('Tag operation failed:', err);
     }
   };
 
@@ -104,7 +106,7 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
       } else {
         setError('Failed to delete tag');
       }
-      console.error(err);
+      logger.error('Tag operation failed:', err);
     }
   };
 
@@ -114,7 +116,7 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
       setTags(tags.map(t => t.id === tag.id ? updated : t));
     } catch (err) {
       setError('Failed to update tag');
-      console.error(err);
+      logger.error('Tag operation failed:', err);
     }
   };
 
@@ -125,7 +127,7 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
       onRefresh();
     } catch (err) {
       setError('Failed to update description');
-      console.error(err);
+      logger.error('Tag operation failed:', err);
     }
   };
 
@@ -291,13 +293,20 @@ export function TagEngineSection() {
   const [newGroupDescription, setNewGroupDescription] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Import/Export state
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importYaml, setImportYaml] = useState('');
+  const [importOverwrite, setImportOverwrite] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const importFileRef = useRef<HTMLInputElement>(null);
+
   const loadGroups = useCallback(async () => {
     try {
       const data = await api.getTagGroups();
       setGroups(data.groups);
     } catch (err) {
       notifications.error('Failed to load tag groups', 'Tags');
-      console.error(err);
+      logger.error('Tag operation failed:', err);
     } finally {
       setLoading(false);
     }
@@ -321,7 +330,7 @@ export function TagEngineSection() {
       setNewGroupDescription('');
     } catch (err) {
       notifications.error('Failed to create tag group', 'Tags');
-      console.error(err);
+      logger.error('Tag operation failed:', err);
     }
   };
 
@@ -336,9 +345,60 @@ export function TagEngineSection() {
       await loadGroups();
     } catch (err) {
       notifications.error('Failed to delete tag group', 'Tags');
-      console.error(err);
+      logger.error('Tag operation failed:', err);
     }
   };
+
+  // Export tags as YAML
+  const handleExportTags = useCallback(async () => {
+    try {
+      const yaml = await api.exportTagsYaml();
+      const blob = new Blob([yaml], { type: 'application/x-yaml' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'tags.yaml';
+      a.click();
+      URL.revokeObjectURL(url);
+      notifications.success('Tags exported successfully', 'Tags');
+    } catch (err) {
+      notifications.error(err instanceof Error ? err.message : 'Failed to export tags', 'Tags');
+    }
+  }, []);
+
+  // Import tags from YAML
+  const handleImportTags = useCallback(async () => {
+    if (!importYaml.trim()) return;
+    setImporting(true);
+    try {
+      const result = await api.importTagsYaml(importYaml, importOverwrite);
+      notifications.success(
+        `Imported ${result.created_groups} groups, ${result.created_tags} tags` +
+        (result.merged_groups > 0 ? ` (merged into ${result.merged_groups} existing groups)` : ''),
+        'Tags'
+      );
+      setShowImportModal(false);
+      setImportYaml('');
+      setImportOverwrite(false);
+      await loadGroups();
+    } catch (err) {
+      notifications.error(err instanceof Error ? err.message : 'Failed to import tags', 'Tags');
+    } finally {
+      setImporting(false);
+    }
+  }, [importYaml, importOverwrite, loadGroups]);
+
+  // Handle file selection for import
+  const handleImportFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      setImportYaml(ev.target?.result as string);
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  }, []);
 
   const filteredGroups = searchQuery
     ? groups.filter(g => g.name.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -366,10 +426,28 @@ export function TagEngineSection() {
             </button>
           )}
         </div>
-        <button className="btn-primary" onClick={() => setShowCreateModal(true)}>
-          <span className="material-icons">add</span>
-          New Group
-        </button>
+        <div className="tag-engine-toolbar-actions">
+          <button
+            className="btn-secondary"
+            onClick={handleExportTags}
+            title="Export tags as YAML"
+          >
+            <span className="material-icons">download</span>
+            Export
+          </button>
+          <button
+            className="btn-secondary"
+            onClick={() => setShowImportModal(true)}
+            title="Import tags from YAML"
+          >
+            <span className="material-icons">upload</span>
+            Import
+          </button>
+          <button className="btn-primary" onClick={() => setShowCreateModal(true)}>
+            <span className="material-icons">add</span>
+            New Group
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -409,6 +487,68 @@ export function TagEngineSection() {
             </div>
           ))}
         </div>
+      )}
+
+      {/* Import Tags Modal */}
+      {showImportModal && (
+        <ModalOverlay onClose={() => setShowImportModal(false)}>
+          <div className="modal-container modal-lg">
+            <div className="modal-header">
+              <h2>Import Tags</h2>
+              <button className="modal-close-btn" onClick={() => setShowImportModal(false)}>
+                <span className="material-icons">close</span>
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="modal-form-group">
+                <label>YAML Content</label>
+                <span className="form-hint">Paste YAML content below or load from a file. Tags will be merged into existing groups with the same name.</span>
+                <input
+                  ref={importFileRef}
+                  type="file"
+                  accept=".yaml,.yml"
+                  onChange={handleImportFile}
+                  style={{ display: 'none' }}
+                />
+                <button
+                  className="modal-btn modal-btn-secondary"
+                  onClick={() => importFileRef.current?.click()}
+                  style={{ marginBottom: '0.5rem' }}
+                >
+                  <span className="material-icons">attach_file</span>
+                  Choose File
+                </button>
+                <textarea
+                  value={importYaml}
+                  onChange={(e) => setImportYaml(e.target.value)}
+                  placeholder="Paste YAML content here..."
+                  rows={12}
+                  style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}
+                />
+              </div>
+              <label className="modal-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={importOverwrite}
+                  onChange={(e) => setImportOverwrite(e.target.checked)}
+                />
+                Replace existing custom groups (delete all non-built-in groups first)
+              </label>
+            </div>
+            <div className="modal-footer">
+              <button className="modal-btn modal-btn-secondary" onClick={() => setShowImportModal(false)}>
+                Cancel
+              </button>
+              <button
+                className="modal-btn modal-btn-primary"
+                onClick={handleImportTags}
+                disabled={!importYaml.trim() || importing}
+              >
+                {importing ? 'Importing...' : 'Import'}
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
       )}
 
       {/* Create Group Modal */}

@@ -15,7 +15,7 @@
 
 /* User List - follows card pattern */
 .user-list {
-  background: var(--card-bg);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-xl);
   overflow: hidden;
@@ -26,7 +26,7 @@
   grid-template-columns: 1.5fr 1.5fr 1fr 0.8fr 0.8fr 1.2fr;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
-  background: var(--hover-bg);
+  background: var(--bg-hover);
   border-bottom: 1px solid var(--border-primary);
   font-size: 0.75rem;
   font-weight: 600;
@@ -50,7 +50,7 @@
 }
 
 .user-list-row:hover {
-  background: var(--hover-bg);
+  background: var(--bg-hover);
 }
 
 .user-list-row.user-inactive {
@@ -203,7 +203,7 @@
 }
 
 .user-action-btn:hover:not(:disabled) {
-  background: var(--hover-bg);
+  background: var(--bg-hover);
 }
 
 .user-action-btn:disabled {

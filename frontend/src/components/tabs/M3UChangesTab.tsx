@@ -1,3 +1,4 @@
+import { logger } from '../../utils/logger';
 import { useState, useEffect, useCallback } from 'react';
 import type { M3UChangeLog, M3UChangeSummary, M3UChangeType, M3UAccount } from '../../types';
 import * as api from '../../services/api';
@@ -100,7 +101,7 @@ export function M3UChangesTab() {
 
   // Fetch M3U accounts for filter dropdown
   useEffect(() => {
-    api.getM3UAccounts().then(setAccounts).catch(console.error);
+    api.getM3UAccounts().then(setAccounts).catch((err: unknown) => logger.error('Failed to load M3U accounts:', err));
   }, []);
 
   // Fetch changes
@@ -199,24 +200,24 @@ export function M3UChangesTab() {
   // Enabled filter options
   const enabledOptions = [
     { value: '', label: 'All Groups' },
-    { value: true, label: 'Enabled Only' },
-    { value: false, label: 'Disabled Only' },
+    { value: 'true', label: 'Enabled Only' },
+    { value: 'false', label: 'Disabled Only' },
   ];
 
   // Hours filter options
   const hoursOptions = [
-    { value: 24, label: 'Last 24 hours' },
-    { value: 72, label: 'Last 3 days' },
-    { value: 168, label: 'Last 7 days' },
-    { value: 720, label: 'Last 30 days' },
-    { value: 2160, label: 'Last 90 days' },
+    { value: '24', label: 'Last 24 hours' },
+    { value: '72', label: 'Last 3 days' },
+    { value: '168', label: 'Last 7 days' },
+    { value: '720', label: 'Last 30 days' },
+    { value: '2160', label: 'Last 90 days' },
   ];
 
   // Page size options
   const pageSizeOptions = [
-    { value: 25, label: '25' },
-    { value: 50, label: '50' },
-    { value: 100, label: '100' },
+    { value: '25', label: '25' },
+    { value: '50', label: '50' },
+    { value: '100', label: '100' },
   ];
 
   return (
@@ -239,7 +240,7 @@ export function M3UChangesTab() {
             onClick={fetchChanges}
             disabled={loading}
           >
-            <span className={`material-icons ${loading ? 'spinning' : ''}`}>refresh</span>
+            <span className={`material-icons ${loading ? 'spinning-cw' : ''}`}>refresh</span>
             Refresh
           </button>
         </div>
@@ -250,19 +251,19 @@ export function M3UChangesTab() {
         <div className="filters-bar">
           <div className="filter-select">
             <CustomSelect
-              value={hoursFilter}
-              onChange={(val) => setHoursFilter(val as number)}
+              value={String(hoursFilter)}
+              onChange={(val) => setHoursFilter(parseInt(val as string))}
               options={hoursOptions}
               placeholder="Time Range"
             />
           </div>
           <div className="filter-select">
             <CustomSelect
-              value={accountFilter}
-              onChange={(val) => setAccountFilter(val as number | '')}
+              value={String(accountFilter)}
+              onChange={(val) => setAccountFilter(val === '' ? '' : parseInt(val as string))}
               options={[
                 { value: '', label: 'All Accounts' },
-                ...accounts.map(a => ({ value: a.id, label: a.name })),
+                ...accounts.map(a => ({ value: String(a.id), label: a.name })),
               ]}
               placeholder="Filter by Account"
             />
@@ -277,8 +278,8 @@ export function M3UChangesTab() {
           </div>
           <div className="filter-select">
             <CustomSelect
-              value={enabledFilter}
-              onChange={(val) => setEnabledFilter(val as boolean | '')}
+              value={String(enabledFilter)}
+              onChange={(val) => setEnabledFilter(val === '' ? '' : val === 'true')}
               options={enabledOptions}
               placeholder="Filter by Status"
             />
@@ -495,9 +496,9 @@ export function M3UChangesTab() {
           <div className="pagination-left">
             <div className="page-size-select">
               <CustomSelect
-                value={pageSize}
+                value={String(pageSize)}
                 onChange={(val) => {
-                  setPageSize(val as number);
+                  setPageSize(parseInt(val as string));
                   setPage(1);
                 }}
                 options={pageSizeOptions}

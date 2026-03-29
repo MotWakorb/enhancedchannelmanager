@@ -72,7 +72,7 @@
 
 .login-provider-tab:hover:not(:disabled) {
   color: var(--text-primary);
-  background: var(--hover-bg);
+  background: var(--bg-hover);
 }
 
 .login-provider-tab.active {

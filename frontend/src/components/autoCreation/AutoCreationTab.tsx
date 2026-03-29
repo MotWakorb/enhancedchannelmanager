@@ -373,6 +373,31 @@ export function AutoCreationTab() {
     }
   }, []);
 
+  const [debugBundleLoading, setDebugBundleLoading] = useState(false);
+  const handleDebugBundle = useCallback(async () => {
+    setDebugBundleLoading(true);
+    try {
+      const response = await fetch(autoCreationApi.getDebugBundleUrl(), { credentials: 'include' });
+      if (!response.ok) throw new Error('Failed to generate debug bundle');
+      const blob = await response.blob();
+      const disposition = response.headers.get('Content-Disposition');
+      const filename = disposition?.match(/filename="(.+)"/)?.[1] || 'ecm-debug-bundle.tar.gz';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      notifications.success('Debug bundle downloaded', 'Auto-Creation');
+    } catch (err) {
+      notifications.error(err instanceof Error ? err.message : 'Failed to generate debug bundle', 'Auto-Creation');
+    } finally {
+      setDebugBundleLoading(false);
+    }
+  }, []);
+
   const handleImport = useCallback(async (overwrite = false) => {
     setImportLoading(true);
     setImportError(null);
@@ -510,6 +535,15 @@ export function AutoCreationTab() {
           >
             <span className="material-icons">download</span>
             Export
+          </button>
+          <button
+            className="btn-secondary"
+            onClick={handleDebugBundle}
+            disabled={debugBundleLoading}
+            aria-label="Debug Bundle"
+          >
+            <span className="material-icons">{debugBundleLoading ? 'hourglass_empty' : 'bug_report'}</span>
+            {debugBundleLoading ? 'Generating...' : 'Debug Bundle'}
           </button>
         </div>
       </header>

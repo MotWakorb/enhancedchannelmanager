@@ -37,7 +37,8 @@ function renderVideoCodecSettings(
   overrides: Partial<VideoCodecSettingsType> = {},
   props: { onChange?: ReturnType<typeof vi.fn>; hwCapabilities?: string[] } = {}
 ) {
-  const onChange = props.onChange ?? vi.fn();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const onChange = (props.onChange ?? vi.fn()) as any;
   const settings: VideoCodecSettingsType = { ...defaultSettings, ...overrides };
   return {
     onChange,

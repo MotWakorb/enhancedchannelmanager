@@ -37,6 +37,9 @@ describe('ScheduleEditor', () => {
     next_run_at: null,
     last_run_at: null,
     parameters: {},
+    description: 'Test schedule',
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
   };
 
   beforeEach(() => {
@@ -266,7 +269,7 @@ describe('ScheduleEditor', () => {
 
     it('applies defaultParameters to new schedule', () => {
       const parameterSchema: TaskParameterSchema[] = [
-        { name: 'batch_size', type: 'number', label: 'Batch Size', default: 10 },
+        { name: 'batch_size', type: 'number', label: 'Batch Size', description: 'Number of items per batch', default: 10 },
       ];
 
       render(

@@ -2,7 +2,7 @@
  * Unit tests for clipboard utility.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { copyToClipboard, copyToClipboardWithFeedback } from './clipboard';
+import { copyToClipboard } from './clipboard';
 
 describe('clipboard', () => {
   let originalClipboard: Clipboard | undefined;
@@ -202,87 +202,5 @@ describe('clipboard', () => {
     });
   });
 
-  describe('copyToClipboardWithFeedback', () => {
-    it('calls onSuccess callback when copy succeeds', async () => {
-      const mockWriteText = vi.fn().mockResolvedValue(undefined);
-      Object.defineProperty(navigator, 'clipboard', {
-        value: { writeText: mockWriteText },
-        writable: true,
-        configurable: true,
-      });
-
-      const onSuccess = vi.fn();
-      const onError = vi.fn();
-
-      const result = await copyToClipboardWithFeedback('success text', 'test', onSuccess, onError);
-
-      expect(result).toBe(true);
-      expect(onSuccess).toHaveBeenCalled();
-      expect(onError).not.toHaveBeenCalled();
-    });
-
-    it('calls onError callback when copy fails', async () => {
-      // Make Clipboard API fail
-      const mockWriteText = vi.fn().mockRejectedValue(new Error('Permission denied'));
-      Object.defineProperty(navigator, 'clipboard', {
-        value: { writeText: mockWriteText },
-        writable: true,
-        configurable: true,
-      });
-
-      // Make execCommand fail
-      const mockExecCommand = vi.fn().mockReturnValue(false);
-      document.execCommand = mockExecCommand;
-
-      // Mock textarea creation
-      const mockTextarea = {
-        value: '',
-        style: {} as CSSStyleDeclaration,
-        setAttribute: vi.fn(),
-        select: vi.fn(),
-        setSelectionRange: vi.fn(),
-        focus: vi.fn(),
-        blur: vi.fn(),
-      };
-      vi.spyOn(document, 'createElement').mockReturnValue(mockTextarea as unknown as HTMLElement);
-      vi.spyOn(document.body, 'appendChild').mockImplementation(() => mockTextarea as unknown as HTMLElement);
-      vi.spyOn(document.body, 'removeChild').mockImplementation(() => mockTextarea as unknown as HTMLElement);
-
-      const onSuccess = vi.fn();
-      const onError = vi.fn();
-
-      const result = await copyToClipboardWithFeedback('fail text', 'test', onSuccess, onError);
-
-      expect(result).toBe(false);
-      expect(onSuccess).not.toHaveBeenCalled();
-      expect(onError).toHaveBeenCalledWith(expect.stringContaining('Failed to copy'));
-    });
-
-    it('works without callbacks', async () => {
-      const mockWriteText = vi.fn().mockResolvedValue(undefined);
-      Object.defineProperty(navigator, 'clipboard', {
-        value: { writeText: mockWriteText },
-        writable: true,
-        configurable: true,
-      });
-
-      const result = await copyToClipboardWithFeedback('no callbacks');
-
-      expect(result).toBe(true);
-    });
-
-    it('uses default description when not provided', async () => {
-      const mockWriteText = vi.fn().mockResolvedValue(undefined);
-      Object.defineProperty(navigator, 'clipboard', {
-        value: { writeText: mockWriteText },
-        writable: true,
-        configurable: true,
-      });
-
-      const result = await copyToClipboardWithFeedback('default desc');
-
-      expect(result).toBe(true);
-      expect(mockWriteText).toHaveBeenCalledWith('default desc');
-    });
-  });
+  // copyToClipboardWithFeedback tests removed — function removed from production code
 });

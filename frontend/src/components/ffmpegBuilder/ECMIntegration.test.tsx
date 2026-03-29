@@ -55,10 +55,14 @@ function renderECMIntegration(
     onSelectProfile?: ReturnType<typeof vi.fn>;
   } = {}
 ) {
-  const onProfileCreate = props.onProfileCreate ?? vi.fn();
-  const onProfileUpdate = props.onProfileUpdate ?? vi.fn();
-  const onProfileDelete = props.onProfileDelete ?? vi.fn();
-  const onSelectProfile = props.onSelectProfile ?? vi.fn();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const onProfileCreate = (props.onProfileCreate ?? vi.fn()) as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const onProfileUpdate = (props.onProfileUpdate ?? vi.fn()) as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const onProfileDelete = (props.onProfileDelete ?? vi.fn()) as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const onSelectProfile = (props.onSelectProfile ?? vi.fn()) as any;
 
   return {
     onProfileCreate,

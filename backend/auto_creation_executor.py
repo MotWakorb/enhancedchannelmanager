@@ -65,6 +65,9 @@ class ExecutionContext:
     # Custom variables set by set_variable actions
     custom_variables: dict = field(default_factory=dict)
 
+    # Stream IDs queued for post-pipeline probing
+    probe_stream_ids: list[int] = field(default_factory=list)
+
     def add_result(self, result: ActionResult):
         """Add an action result and update statistics."""
         self.results.append(result)
@@ -295,6 +298,8 @@ class ActionExecutor:
             result = await self._execute_assign_epg(action, stream_ctx, exec_ctx)
         elif action_type == ActionType.ASSIGN_PROFILE:
             result = await self._execute_assign_profile(action, stream_ctx, exec_ctx)
+        elif action_type == ActionType.ASSIGN_CHANNEL_PROFILE:
+            result = await self._execute_assign_channel_profile(action, stream_ctx, exec_ctx)
         elif action_type == ActionType.SET_CHANNEL_NUMBER:
             result = await self._execute_set_channel_number(action, stream_ctx, exec_ctx)
         elif action_type == ActionType.SET_VARIABLE:
@@ -303,6 +308,13 @@ class ActionExecutor:
             result = await self._execute_remove_from_channel(action, stream_ctx, exec_ctx)
         elif action_type == ActionType.SET_STREAM_PRIORITY:
             result = await self._execute_set_stream_priority(action, stream_ctx, exec_ctx)
+        elif action_type == ActionType.PROBE_STREAMS:
+            exec_ctx.probe_stream_ids.append(stream_ctx.stream_id)
+            result = ActionResult(
+                success=True,
+                action_type=action.type,
+                description="Stream queued for probing after pipeline"
+            )
         elif action_type == ActionType.SKIP:
             result = ActionResult(
                 success=True,
@@ -500,6 +512,31 @@ class ActionExecutor:
                     f"To create separate channels instead: use separate rules with different target groups "
                     f"(e.g., one per country), or adjust the name template to keep the distinguishing text."
                 )
+
+            # Rename channel if normalization produces a different name than what's stored
+            if normalize_names and self._normalization_engine:
+                existing_name = existing["name"]
+                _num_pfx = re.match(r'^(\d+\s*\|\s*)', existing_name)
+                existing_base = _num_pfx.group(0) if _num_pfx else ""
+                existing_core = existing_name[len(existing_base):]
+                if existing_core.lower() != channel_name.lower():
+                    new_name = existing_base + channel_name
+                    if exec_ctx.dry_run:
+                        action_details.append(f"Would rename channel: '{existing_name}' \u2192 '{new_name}'")
+                        existing["name"] = new_name
+                    else:
+                        try:
+                            await self.client.update_channel(existing["id"], {"name": new_name})
+                            action_details.append(f"Renamed channel: '{existing_name}' \u2192 '{new_name}'")
+                            logger.info("[AUTO-CREATE-EXEC] Renamed channel %s: '%s' -> '%s'", existing["id"], existing_name, new_name)
+                            # Update caches
+                            old_lower = existing_name.lower()
+                            self._channel_by_name.pop(old_lower, None)
+                            existing["name"] = new_name
+                            self._channel_by_name[new_name.lower()] = existing
+                        except Exception as e:
+                            logger.warning("[AUTO-CREATE-EXEC] Failed to rename channel '%s' to '%s': %s", existing_name, new_name, e)
+                            action_details.append(f"Failed to rename channel: {e}")
 
             if if_exists == "skip":
                 exec_ctx.current_channel_id = existing["id"]
@@ -1062,6 +1099,35 @@ class ActionExecutor:
         value = action.params.get("value", "from_stream")
         if value == "from_stream":
             logo_url = stream_ctx.logo_url
+        elif value == "from_epg":
+            # Resolve logo from EPG data entry's icon_url
+            epg_source_id = action.params.get("epg_id")
+            if not epg_source_id:
+                return ActionResult(
+                    success=False,
+                    action_type=action.type,
+                    description="No EPG source specified for from_epg logo",
+                    error="Missing epg_id for from_epg"
+                )
+            source_entries = self._epg_data_by_source.get(epg_source_id, [])
+            if not source_entries:
+                return ActionResult(
+                    success=False,
+                    action_type=action.type,
+                    description=f"No EPG data entries found for source {epg_source_id}",
+                    error=f"EPG source {epg_source_id} has no data entries"
+                )
+            channel = self._channel_by_id.get(exec_ctx.current_channel_id, {})
+            epg_data_entry = self._match_epg_data(channel, source_entries)
+            if not epg_data_entry:
+                channel_name = channel.get("name", "unknown")
+                return ActionResult(
+                    success=True,
+                    action_type=action.type,
+                    description=f"No matching EPG data for '{channel_name}' in source {epg_source_id}",
+                    skipped=True
+                )
+            logo_url = epg_data_entry.get("icon_url") or epg_data_entry.get("icon")
         else:
             logo_url = TemplateVariables.expand_template(value, template_ctx, exec_ctx.custom_variables)
 
@@ -1085,9 +1151,20 @@ class ActionExecutor:
 
         try:
             channel = self._channel_by_id.get(exec_ctx.current_channel_id, {})
-            previous_state = {"logo_url": channel.get("logo_url")}
+            channel_name = channel.get("name", "")
+            previous_state = {"logo_id": channel.get("logo_id"), "logo_url": channel.get("logo_url")}
 
-            await self.client.update_channel(exec_ctx.current_channel_id, {"logo_url": logo_url})
+            # Resolve logo URL to a Dispatcharr logo_id (same as channel creation)
+            logo_id = await self._resolve_logo_id(logo_url, channel_name)
+            if not logo_id:
+                return ActionResult(
+                    success=True,
+                    action_type=action.type,
+                    description=f"Could not resolve logo URL to logo_id: {logo_url[:60]}",
+                    skipped=True
+                )
+
+            await self.client.update_channel(exec_ctx.current_channel_id, {"logo_id": logo_id})
 
             return ActionResult(
                 success=True,
@@ -1569,6 +1646,58 @@ class ActionExecutor:
                 success=False,
                 action_type=action.type,
                 description="Failed to assign profile",
+                error=str(e)
+            )
+
+    async def _execute_assign_channel_profile(self, action: Action, stream_ctx: StreamContext,
+                                               exec_ctx: ExecutionContext) -> ActionResult:
+        """Execute assign_channel_profile action."""
+        if not exec_ctx.current_channel_id:
+            return ActionResult(
+                success=False,
+                action_type=action.type,
+                description="No channel context for assign_channel_profile",
+                error="No channel to update"
+            )
+
+        channel_profile_ids = action.params.get("channel_profile_ids", [])
+        if not channel_profile_ids:
+            return ActionResult(
+                success=False,
+                action_type=action.type,
+                description="No channel_profile_ids specified",
+                error="Missing channel_profile_ids"
+            )
+
+        if exec_ctx.dry_run:
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description=f"Would assign {len(channel_profile_ids)} channel profile(s)",
+                entity_type="channel",
+                entity_id=exec_ctx.current_channel_id,
+                modified=True
+            )
+
+        try:
+            for profile_id in channel_profile_ids:
+                await self.client.update_profile_channel(
+                    profile_id, exec_ctx.current_channel_id, {"enabled": True}
+                )
+
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description=f"Assigned {len(channel_profile_ids)} channel profile(s) to channel",
+                entity_type="channel",
+                entity_id=exec_ctx.current_channel_id,
+                modified=True
+            )
+        except Exception as e:
+            return ActionResult(
+                success=False,
+                action_type=action.type,
+                description="Failed to assign channel profile(s)",
                 error=str(e)
             )
 

@@ -217,3 +217,8 @@ export async function importAutoCreationRulesYAML(
     }),
   });
 }
+
+/** URL for the debug bundle download (used directly with fetch). */
+export function getDebugBundleUrl(): string {
+  return `${API_BASE}/auto-creation/debug-bundle`;
+}

@@ -1,3 +1,4 @@
+import { logger } from '../../utils/logger';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { M3UAccount, ServerGroup, EPGSource, ChannelGroup, ChannelProfile, StreamProfile } from '../../types';
 import * as api from '../../services/api';
@@ -9,6 +10,7 @@ import { M3ULinkedAccountsModal } from '../M3ULinkedAccountsModal';
 import { M3UProfileModal } from '../M3UProfileModal';
 import { CustomSelect } from '../CustomSelect';
 import { useNotifications } from '../../contexts/NotificationContext';
+import { formatDateTime } from '../../utils/formatting';
 import './M3UManagerTab.css';
 
 interface M3UManagerTabProps {
@@ -96,12 +98,6 @@ function M3UAccountRow({
 
   const getAccountTypeLabel = (type: M3UAccount['account_type']) => {
     return type === 'XC' ? 'XtreamCodes' : 'Standard M3U';
-  };
-
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return 'Never';
-    const date = new Date(dateStr);
-    return date.toLocaleString();
   };
 
   // Count enabled groups and auto-sync groups
@@ -200,7 +196,7 @@ function M3UAccountRow({
 
       <div className="account-updated">
         <span className="updated-label">Updated:</span>
-        <span className="updated-time">{formatDate(account.updated_at)}</span>
+        <span className="updated-time">{formatDateTime(account.updated_at)}</span>
       </div>
 
       <div className="account-actions">
@@ -278,7 +274,7 @@ export function M3UManagerTab({
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<M3UAccount | null>(null);
-  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track accounts being refreshed - stores initial updated_at to detect completion
   const [refreshingAccounts, setRefreshingAccounts] = useState<Map<number, { initialUpdatedAt: string | null; startTime: number }>>(new Map());
 
@@ -390,7 +386,7 @@ export function M3UManagerTab({
             pollingRef.current = null;
           }
         } catch (err) {
-          console.error('Failed to poll account status:', err);
+          logger.error('Failed to poll account status:', err);
         }
       }, 2000);
     }
@@ -558,7 +554,7 @@ export function M3UManagerTab({
       setM3uAccountPriorities(pendingPriorities);
       notifications.success('M3U account priorities saved successfully.');
     } catch (err) {
-      console.error('Failed to save M3U priorities:', err);
+      logger.error('Failed to save M3U priorities:', err);
       notifications.error('Failed to save M3U priorities.');
     } finally {
       setSavingPriorities(false);

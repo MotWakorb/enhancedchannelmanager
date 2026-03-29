@@ -54,239 +54,6 @@ function computeModifiedChannelIds(
   return modified;
 }
 
-/**
- * Consolidate staged operations to minimize API calls.
- *
- * This optimization reduces redundant operations:
- * - Multiple updateChannel calls for the same channel → single update with merged data
- * - Multiple bulkAssignChannelNumbers → single call with final positions
- * - Add then remove same stream → both operations cancelled
- * - Multiple reorderChannelStreams for same channel → only final order kept
- * - Operations targeting channels that will be deleted are removed
- *
- * Operations that cannot be consolidated:
- * - createChannel, deleteChannel, createGroup, deleteChannelGroup (order matters)
- */
-function consolidateOperations(operations: StagedOperation[], workingCopy: Channel[]): StagedOperation[] {
-  // Track final channel number for each channel (from bulkAssign operations)
-  const channelFinalNumbers = new Map<number, number>();
-
-  // Track final update data for each channel (merged from updateChannel operations)
-  const channelFinalUpdates = new Map<number, { data: Partial<Channel>; lastOp: StagedOperation }>();
-
-  // Track final stream order for each channel (from reorderChannelStreams)
-  const channelFinalStreamOrder = new Map<number, { streamIds: number[]; lastOp: StagedOperation }>();
-
-  // Track stream add/remove pairs to cancel out
-  // Key: "channelId:streamId", Value: { added: StagedOperation | null, removed: StagedOperation | null }
-  const streamOperations = new Map<string, { added: StagedOperation | null; removed: StagedOperation | null }>();
-
-  // Operations that must be preserved in order (create, delete operations)
-  const orderedOperations: StagedOperation[] = [];
-
-  // Track channel IDs that will be deleted (including temp IDs)
-  // Any operations targeting these channels should be skipped
-  const channelsToDelete = new Set<number>();
-
-  // First pass: identify all channels that will be deleted
-  for (const op of operations) {
-    if (op.apiCall.type === 'deleteChannel') {
-      channelsToDelete.add(op.apiCall.channelId);
-    }
-  }
-
-  // Process all operations to build final state
-  for (const op of operations) {
-    switch (op.apiCall.type) {
-      case 'bulkAssignChannelNumbers': {
-        // Track final number for each channel, excluding deleted channels
-        const startNum = op.apiCall.startingNumber ?? 0;
-        op.apiCall.channelIds.forEach((id, index) => {
-          if (!channelsToDelete.has(id)) {
-            channelFinalNumbers.set(id, startNum + index);
-          }
-        });
-        break;
-      }
-
-      case 'updateChannel': {
-        // Skip if channel will be deleted
-        if (channelsToDelete.has(op.apiCall.channelId)) {
-          break;
-        }
-        // Merge update data for same channel
-        const existing = channelFinalUpdates.get(op.apiCall.channelId);
-        if (existing) {
-          // Merge new data into existing
-          channelFinalUpdates.set(op.apiCall.channelId, {
-            data: { ...existing.data, ...op.apiCall.data },
-            lastOp: op,
-          });
-        } else {
-          channelFinalUpdates.set(op.apiCall.channelId, {
-            data: { ...op.apiCall.data },
-            lastOp: op,
-          });
-        }
-        break;
-      }
-
-      case 'reorderChannelStreams': {
-        // Skip if channel will be deleted
-        if (channelsToDelete.has(op.apiCall.channelId)) {
-          break;
-        }
-        // Only keep the final order
-        channelFinalStreamOrder.set(op.apiCall.channelId, {
-          streamIds: op.apiCall.streamIds,
-          lastOp: op,
-        });
-        break;
-      }
-
-      case 'addStreamToChannel': {
-        // Skip if channel will be deleted
-        if (channelsToDelete.has(op.apiCall.channelId)) {
-          break;
-        }
-        const key = `${op.apiCall.channelId}:${op.apiCall.streamId}`;
-        const existing = streamOperations.get(key) || { added: null, removed: null };
-        existing.added = op;
-        streamOperations.set(key, existing);
-        break;
-      }
-
-      case 'removeStreamFromChannel': {
-        // Skip if channel will be deleted
-        if (channelsToDelete.has(op.apiCall.channelId)) {
-          break;
-        }
-        const key = `${op.apiCall.channelId}:${op.apiCall.streamId}`;
-        const existing = streamOperations.get(key) || { added: null, removed: null };
-        existing.removed = op;
-        streamOperations.set(key, existing);
-        break;
-      }
-
-      // These operations must be preserved in order
-      case 'createChannel': {
-        // Skip createChannel if the temp ID will be deleted later
-        // (the channel is created then immediately deleted, so both cancel out)
-        const tempId = op.afterSnapshot[0]?.id;
-        if (tempId !== undefined && channelsToDelete.has(tempId)) {
-          break;
-        }
-        orderedOperations.push(op);
-        break;
-      }
-      case 'deleteChannel': {
-        // Check if this is deleting a temp channel that was created in this batch
-        // If so, the createChannel was already skipped, so skip this too
-        const isNewChannel = op.apiCall.channelId < 0;
-        if (isNewChannel) {
-          // Find if there's a createChannel for this temp ID that we skipped
-          const wasCreatedAndDeleted = operations.some(
-            o => o.apiCall.type === 'createChannel' &&
-                 o.afterSnapshot[0]?.id === op.apiCall.channelId
-          );
-          if (wasCreatedAndDeleted) {
-            // Both create and delete cancel out - skip the delete
-            break;
-          }
-        }
-        orderedOperations.push(op);
-        break;
-      }
-      case 'createGroup':
-      case 'deleteChannelGroup':
-      case 'renameChannelGroup':
-        orderedOperations.push(op);
-        break;
-    }
-  }
-
-  // Build consolidated operations list
-  const consolidated: StagedOperation[] = [];
-
-  // Add ordered operations first (creates/deletes in original order)
-  consolidated.push(...orderedOperations);
-
-  // Add consolidated updateChannel operations
-  for (const [channelId, { data, lastOp }] of channelFinalUpdates) {
-    // Look up channel name for better progress messages
-    const channel = workingCopy.find((ch) => ch.id === channelId);
-    const channelName = channel?.name || `Channel ${channelId}`;
-
-    consolidated.push({
-      ...lastOp,
-      id: generateId(), // New ID for consolidated operation
-      description: `Update "${channelName}"`,
-      apiCall: { type: 'updateChannel', channelId, data },
-    });
-  }
-
-  // Add consolidated bulkAssignChannelNumbers as single operation
-  if (channelFinalNumbers.size > 0) {
-    // Group channels by consecutive number ranges to minimize calls
-    const entries = Array.from(channelFinalNumbers.entries())
-      .sort((a, b) => a[1] - b[1]); // Sort by final channel number
-
-    // Find consecutive ranges
-    let rangeStart = 0;
-    while (rangeStart < entries.length) {
-      const startNum = entries[rangeStart][1];
-      let rangeEnd = rangeStart;
-
-      // Extend range while numbers are consecutive
-      while (
-        rangeEnd + 1 < entries.length &&
-        entries[rangeEnd + 1][1] === entries[rangeEnd][1] + 1
-      ) {
-        rangeEnd++;
-      }
-
-      // Create operation for this range
-      const channelIds = entries.slice(rangeStart, rangeEnd + 1).map(e => e[0]);
-      consolidated.push({
-        id: generateId(),
-        timestamp: Date.now(),
-        description: `Assign channel numbers ${startNum}-${startNum + channelIds.length - 1}`,
-        apiCall: { type: 'bulkAssignChannelNumbers', channelIds, startingNumber: startNum },
-        beforeSnapshot: [],
-        afterSnapshot: [],
-      });
-
-      rangeStart = rangeEnd + 1;
-    }
-  }
-
-  // Add consolidated reorderChannelStreams operations
-  for (const [channelId, { streamIds, lastOp }] of channelFinalStreamOrder) {
-    consolidated.push({
-      ...lastOp,
-      id: generateId(),
-      apiCall: { type: 'reorderChannelStreams', channelId, streamIds },
-    });
-  }
-
-  // Add stream add/remove operations (cancelling out pairs)
-  for (const [, { added, removed }] of streamOperations) {
-    // If both added and removed, they cancel out - skip both
-    if (added && removed) {
-      continue;
-    }
-    // Otherwise add whichever exists
-    if (added) {
-      consolidated.push(added);
-    }
-    if (removed) {
-      consolidated.push(removed);
-    }
-  }
-
-  return consolidated;
-}
-
 // Initial state for edit mode
 function createInitialState(): EditModeState {
   return {
@@ -734,7 +501,7 @@ export function useEditMode({
       if (!prev.isActive) return prev;
       // If already in a batch, don't start a new one
       if (prev.currentBatch !== null) {
-        console.warn('startBatch called while already in a batch');
+        logger.warn('startBatch called while already in a batch');
         return prev;
       }
       return {
@@ -1054,7 +821,7 @@ export function useEditMode({
 
       return false;
     } catch {
-      console.error('Failed to check for conflicts');
+      logger.error('Failed to check for conflicts');
       return false; // Assume no conflict on error
     }
   }, [state.baselineSnapshot, state.modifiedChannelIds]);
@@ -1177,14 +944,14 @@ export function useEditMode({
       return { passed: true, issues: [] };
     }
 
-    const consolidatedOps = consolidateOperations(state.stagedOperations, state.workingCopy);
-    const { bulkOperations, groupsToCreate } = buildBulkOperations(consolidatedOps);
+    const { bulkOperations, groupsToCreate } = buildBulkOperations(state.stagedOperations);
 
     try {
       const response = await api.bulkCommit({
         operations: bulkOperations,
         groupsToCreate: groupsToCreate.length > 0 ? groupsToCreate : undefined,
         validateOnly: true,
+        consolidate: true,
       });
 
       return {
@@ -1192,7 +959,7 @@ export function useEditMode({
         issues: response.validationIssues ?? [],
       };
     } catch (err) {
-      console.error('Validation failed:', err);
+      logger.error('Validation failed:', err);
       return {
         passed: false,
         issues: [{
@@ -1229,14 +996,8 @@ export function useEditMode({
       updatedChannels: [],
     };
 
-    // Consolidate operations to minimize API calls
-    // This deduplicates updates, merges channel number assignments, and cancels out add/remove pairs
-    const consolidatedOps = consolidateOperations(state.stagedOperations, state.workingCopy);
-    const originalCount = state.stagedOperations.length;
-    const consolidatedCount = consolidatedOps.length;
-    if (consolidatedCount < originalCount) {
-      console.log(`[EditMode] Consolidated ${originalCount} operations → ${consolidatedCount} operations (${originalCount - consolidatedCount} eliminated)`);
-    }
+    // Server-side consolidation: operations are sent raw, backend deduplicates
+    const consolidatedOps = state.stagedOperations;
 
     // Copy the temp ID map for tracking new channel IDs
     const tempIdMap = new Map<number, number>();
@@ -1358,6 +1119,7 @@ export function useEditMode({
           operations: createOps,
           groupsToCreate: groupsToCreate.length > 0 ? groupsToCreate : undefined,
           continueOnError: options?.continueOnError,
+          consolidate: true,
         });
 
         // Check for validation failures
@@ -1388,8 +1150,8 @@ export function useEditMode({
       // Replace temp IDs with real IDs in remaining operations
       const resolvedOps = otherOps.map(op => {
         const resolved = { ...op };
-        if (resolved.channelId && resolved.channelId < 0) {
-          const realId = tempIdMap.get(resolved.channelId);
+        if (resolved.channelId && (resolved.channelId as number) < 0) {
+          const realId = tempIdMap.get(resolved.channelId as number);
           if (realId !== undefined) {
             resolved.channelId = realId;
           }
@@ -1412,6 +1174,7 @@ export function useEditMode({
         const batchResponse = await api.bulkCommit({
           operations: batch,
           continueOnError: options?.continueOnError,
+          consolidate: true,
         });
 
         // Check for validation failures
@@ -1443,7 +1206,7 @@ export function useEditMode({
       result.operationsFailed = totalFailed;
       result.success = totalFailed === 0;
 
-      console.log(`[EditMode] Bulk commit completed: ${totalApplied} applied, ${totalFailed} failed`);
+      logger.info(`[EditMode] Bulk commit completed: ${totalApplied} applied, ${totalFailed} failed`);
 
       // Fetch updated channels with per-page progress
       const allChannels: Channel[] = [];
@@ -1526,7 +1289,7 @@ export function useEditMode({
         onError?.(errorMessage);
       }
     } catch (err) {
-      console.error('Commit failed:', err);
+      logger.error('Commit failed:', err);
       result.success = false;
       onError?.('Commit failed: ' + (err instanceof Error ? err.message : 'Unknown error'));
     } finally {
@@ -1545,25 +1308,9 @@ export function useEditMode({
     buildBulkOperations,
   ]);
 
-  // Compute edit mode duration with live updates (in seconds)
-  const [editModeDuration, setEditModeDuration] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (!state.isActive || !state.enteredAt) {
-      setEditModeDuration(null);
-      return;
-    }
-
-    // Update immediately (convert ms to seconds)
-    setEditModeDuration(Math.floor((Date.now() - state.enteredAt) / 1000));
-
-    // Update every second
-    const interval = setInterval(() => {
-      setEditModeDuration(Math.floor((Date.now() - state.enteredAt!) / 1000));
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [state.isActive, state.enteredAt]);
+  // Expose the raw timestamp so consumers can compute duration locally
+  // without causing re-renders of the entire component tree every second
+  const editModeEnteredAt = state.isActive ? state.enteredAt : null;
 
   // Sync new channels from API into the working copy (e.g., from CSV import)
   // This adds channels that exist in the API but not yet in the working copy
@@ -1574,7 +1321,7 @@ export function useEditMode({
     const newChannels = channels.filter((ch) => !workingCopyIds.has(ch.id));
 
     if (newChannels.length > 0) {
-      console.log('[useEditMode] Syncing', newChannels.length, 'new channels from API into working copy');
+      logger.debug('[useEditMode] Syncing', newChannels.length, 'new channels from API into working copy');
       setState((prev) => ({
         ...prev,
         workingCopy: [
@@ -1594,7 +1341,7 @@ export function useEditMode({
   // Compute set of group IDs that are staged for deletion (soft-deleted)
   const deletedGroupIds = useMemo(() => {
     if (!state.isActive) {
-      console.log('[useEditMode] Edit mode not active, returning empty deletedGroupIds');
+      logger.debug('[useEditMode] Edit mode not active, returning empty deletedGroupIds');
       return new Set<number>();
     }
 
@@ -1602,10 +1349,10 @@ export function useEditMode({
     for (const op of state.stagedOperations) {
       if (op.apiCall.type === 'deleteChannelGroup') {
         ids.add(op.apiCall.groupId);
-        console.log('[useEditMode] Found deleteChannelGroup operation for group:', op.apiCall.groupId);
+        logger.debug('[useEditMode] Found deleteChannelGroup operation for group:', op.apiCall.groupId);
       }
     }
-    console.log('[useEditMode] Computed deletedGroupIds:', Array.from(ids), 'from', state.stagedOperations.length, 'staged operations');
+    logger.debug('[useEditMode] Computed deletedGroupIds:', Array.from(ids), 'from', state.stagedOperations.length, 'staged operations');
     return ids;
   }, [state.isActive, state.stagedOperations]);
 
@@ -1637,7 +1384,7 @@ export function useEditMode({
     renamedGroupNames,
     canLocalUndo: state.localUndoStack.length > 0,
     canLocalRedo: state.localRedoStack.length > 0,
-    editModeDuration,
+    editModeEnteredAt,
 
     // Actions
     enterEditMode,

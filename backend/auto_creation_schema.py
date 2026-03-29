@@ -222,6 +222,7 @@ class ActionType(str, Enum):
     ASSIGN_TVG_ID = "assign_tvg_id"
     ASSIGN_EPG = "assign_epg"
     ASSIGN_PROFILE = "assign_profile"
+    ASSIGN_CHANNEL_PROFILE = "assign_channel_profile"
     SET_CHANNEL_NUMBER = "set_channel_number"
 
     # Variables
@@ -230,6 +231,7 @@ class ActionType(str, Enum):
     # Stream management
     REMOVE_FROM_CHANNEL = "remove_from_channel"
     SET_STREAM_PRIORITY = "set_stream_priority"
+    PROBE_STREAMS = "probe_streams"
 
     # Control flow
     SKIP = "skip"
@@ -404,7 +406,9 @@ class Action:
         elif action_type == ActionType.ASSIGN_LOGO:
             value = self.params.get("value")
             if value is None:
-                errors.append("assign_logo requires a 'value' (URL or 'from_stream')")
+                errors.append("assign_logo requires a 'value' (URL, 'from_stream', or 'from_epg')")
+            elif value == "from_epg" and not self.params.get("epg_id"):
+                errors.append("assign_logo with 'from_epg' requires an 'epg_id'")
 
         # Validate assign_tvg_id
         elif action_type == ActionType.ASSIGN_TVG_ID:
@@ -426,6 +430,14 @@ class Action:
             profile_id = self.params.get("profile_id")
             if profile_id is None or not isinstance(profile_id, int):
                 errors.append("assign_profile requires a 'profile_id' (integer)")
+
+        # Validate assign_channel_profile
+        elif action_type == ActionType.ASSIGN_CHANNEL_PROFILE:
+            channel_profile_ids = self.params.get("channel_profile_ids")
+            if not channel_profile_ids or not isinstance(channel_profile_ids, list):
+                errors.append("assign_channel_profile requires 'channel_profile_ids' (list of integers)")
+            elif not all(isinstance(pid, int) for pid in channel_profile_ids):
+                errors.append("assign_channel_profile 'channel_profile_ids' must all be integers")
 
         # Validate set_channel_number
         elif action_type == ActionType.SET_CHANNEL_NUMBER:
@@ -638,47 +650,3 @@ def parse_actions(actions_json: str) -> list[Action]:
     except (json.JSONDecodeError, TypeError, KeyError) as e:
         logger.error("[AUTO-CREATE-SCHEMA] Failed to parse actions JSON: %s", e)
         raise ValueError(f"Invalid actions JSON: {e}")
-
-
-# =============================================================================
-# YAML Schema Support
-# =============================================================================
-
-def conditions_to_yaml_friendly(conditions: list) -> list:
-    """
-    Convert conditions to a YAML-friendly format.
-    Simplifies single-key conditions to direct key-value pairs.
-    """
-    result = []
-    for cond in conditions:
-        if isinstance(cond, Condition):
-            cond = cond.to_dict()
-
-        cond_type = cond.get("type")
-
-        # For simple conditions, use shorthand: {type: value}
-        if cond_type not in ("and", "or", "not") and "conditions" not in cond:
-            simple = {cond_type: cond.get("value")}
-            if cond.get("case_sensitive"):
-                simple["case_sensitive"] = True
-            if cond.get("negate"):
-                simple["negate"] = True
-            result.append(simple)
-        else:
-            # For compound conditions, use full format
-            result.append(cond)
-
-    return result
-
-
-def actions_to_yaml_friendly(actions: list) -> list:
-    """
-    Convert actions to a YAML-friendly format.
-    """
-    result = []
-    for action in actions:
-        if isinstance(action, Action):
-            result.append(action.to_dict())
-        else:
-            result.append(action)
-    return result

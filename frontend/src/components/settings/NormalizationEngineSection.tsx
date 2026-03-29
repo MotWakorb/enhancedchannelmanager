@@ -4,7 +4,7 @@
  * Advanced normalization rules management UI for the Settings tab.
  * Allows viewing, creating, editing, and testing normalization rules.
  */
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -298,6 +298,13 @@ export function NormalizationEngineSection() {
   // Live preview state
   const [previewResult, setPreviewResult] = useState<TestRuleResult | null>(null);
 
+  // Import/Export state
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importYaml, setImportYaml] = useState('');
+  const [importOverwrite, setImportOverwrite] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const importFileRef = useRef<HTMLInputElement>(null);
+
   // Drag-and-drop sensors for rule reordering
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -507,7 +514,7 @@ export function NormalizationEngineSection() {
 
   // Open rule editor for editing
   const openEditRuleEditor = useCallback((rule: NormalizationRule) => {
-    const hasCompoundConditions = rule.conditions && rule.conditions.length > 0;
+    const hasCompoundConditions = !!(rule.conditions && rule.conditions.length > 0);
     setRuleEditor({
       isOpen: true,
       editingRule: rule,
@@ -516,7 +523,7 @@ export function NormalizationEngineSection() {
       description: rule.description || '',
       conditionType: rule.condition_type,
       conditionValue: rule.condition_value || '',
-      caseSensitive: rule.case_sensitive,
+      caseSensitive: rule.case_sensitive ?? false,
       useCompoundConditions: hasCompoundConditions,
       conditions: rule.conditions || [],
       conditionLogic: rule.condition_logic || 'AND',
@@ -720,6 +727,57 @@ export function NormalizationEngineSection() {
     }
   }, [ruleEditor.isOpen, ruleEditor.conditionType, ruleEditor.conditionValue, ruleEditor.caseSensitive, ruleEditor.useCompoundConditions, ruleEditor.conditions, ruleEditor.conditionLogic, ruleEditor.tagGroupId, ruleEditor.tagMatchPosition, ruleEditor.actionType, ruleEditor.actionValue, ruleEditor.hasElseBranch, ruleEditor.elseActionType, ruleEditor.elseActionValue, updatePreview]);
 
+  // Export rules as YAML
+  const handleExportRules = useCallback(async () => {
+    try {
+      const yaml = await api.exportNormalizationRulesYaml();
+      const blob = new Blob([yaml], { type: 'application/x-yaml' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'normalization-rules.yaml';
+      a.click();
+      URL.revokeObjectURL(url);
+      notifications.success('Rules exported successfully', 'Normalization');
+    } catch (err) {
+      notifications.error(err instanceof Error ? err.message : 'Failed to export rules', 'Normalization');
+    }
+  }, []);
+
+  // Import rules from YAML
+  const handleImportRules = useCallback(async () => {
+    if (!importYaml.trim()) return;
+    setImporting(true);
+    try {
+      const result = await api.importNormalizationRulesYaml(importYaml, importOverwrite);
+      notifications.success(
+        `Imported ${result.created_groups} groups, ${result.created_rules} rules` +
+        (result.skipped_groups > 0 ? ` (${result.skipped_groups} groups skipped — already exist)` : ''),
+        'Normalization'
+      );
+      setShowImportModal(false);
+      setImportYaml('');
+      setImportOverwrite(false);
+      await loadData();
+    } catch (err) {
+      notifications.error(err instanceof Error ? err.message : 'Failed to import rules', 'Normalization');
+    } finally {
+      setImporting(false);
+    }
+  }, [importYaml, importOverwrite, loadData]);
+
+  // Handle file selection for import
+  const handleImportFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      setImportYaml(ev.target?.result as string);
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  }, []);
+
   // Stats
   const stats = useMemo(() => {
     let totalRules = 0;
@@ -763,14 +821,34 @@ export function NormalizationEngineSection() {
           <span className="material-icons norm-engine-icon">auto_fix_high</span>
           <h3 className="norm-engine-title">Normalization Rules Engine</h3>
         </div>
-        <button
-          className="norm-engine-btn norm-engine-btn-primary"
-          onClick={openNewGroupEditor}
-          type="button"
-        >
-          <span className="material-icons">add</span>
-          New Group
-        </button>
+        <div className="norm-engine-header-actions">
+          <button
+            className="norm-engine-btn"
+            onClick={handleExportRules}
+            type="button"
+            title="Export rules as YAML"
+          >
+            <span className="material-icons">download</span>
+            Export
+          </button>
+          <button
+            className="norm-engine-btn"
+            onClick={() => setShowImportModal(true)}
+            type="button"
+            title="Import rules from YAML"
+          >
+            <span className="material-icons">upload</span>
+            Import
+          </button>
+          <button
+            className="norm-engine-btn norm-engine-btn-primary"
+            onClick={openNewGroupEditor}
+            type="button"
+          >
+            <span className="material-icons">add</span>
+            New Group
+          </button>
+        </div>
       </div>
 
       <p className="norm-engine-subtitle">
@@ -1414,6 +1492,78 @@ export function NormalizationEngineSection() {
                 type="button"
               >
                 {ruleEditor.editingRule ? 'Save Changes' : 'Create Rule'}
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
+
+      {/* Import Rules Modal */}
+      {showImportModal && (
+        <ModalOverlay onClose={() => setShowImportModal(false)}>
+          <div className="modal-container modal-lg">
+            <div className="modal-header">
+              <h2>Import Normalization Rules</h2>
+              <button
+                className="modal-close-btn"
+                onClick={() => setShowImportModal(false)}
+                type="button"
+              >
+                <span className="material-icons">close</span>
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="modal-form-group">
+                <label>YAML Content</label>
+                <span className="form-hint">Paste YAML content below or load from a file. Groups with duplicate names will be skipped.</span>
+                <input
+                  ref={importFileRef}
+                  type="file"
+                  accept=".yaml,.yml"
+                  onChange={handleImportFile}
+                  style={{ display: 'none' }}
+                />
+                <button
+                  className="modal-btn modal-btn-secondary"
+                  onClick={() => importFileRef.current?.click()}
+                  type="button"
+                  style={{ marginBottom: '0.5rem' }}
+                >
+                  <span className="material-icons">attach_file</span>
+                  Choose File
+                </button>
+                <textarea
+                  value={importYaml}
+                  onChange={(e) => setImportYaml(e.target.value)}
+                  placeholder="Paste YAML content here..."
+                  rows={12}
+                  style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}
+                />
+              </div>
+              <label className="modal-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={importOverwrite}
+                  onChange={(e) => setImportOverwrite(e.target.checked)}
+                />
+                Replace existing custom groups (delete all non-built-in groups first)
+              </label>
+            </div>
+            <div className="modal-footer">
+              <button
+                className="modal-btn modal-btn-secondary"
+                onClick={() => setShowImportModal(false)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="modal-btn modal-btn-primary"
+                onClick={handleImportRules}
+                disabled={!importYaml.trim() || importing}
+                type="button"
+              >
+                {importing ? 'Importing...' : 'Import'}
               </button>
             </div>
           </div>

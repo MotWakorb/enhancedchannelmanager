@@ -61,6 +61,8 @@ RUN mkdir -p /config /config/tls /config/uploads/logos \
     && chmod +x /app/entrypoint.sh
 
 # Environment
+ENV PUID=1000
+ENV PGID=1000
 ENV CONFIG_DIR=/config
 ENV ECM_PORT=6100
 ENV ECM_HTTPS_PORT=6143
@@ -73,5 +75,5 @@ EXPOSE 6100 6143
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD python -c "import urllib.request, os; port = os.environ.get('ECM_PORT', '6100'); urllib.request.urlopen(f'http://localhost:{port}/api/health')" || exit 1
 
-# Entrypoint fixes volume permissions then drops to non-root user via gosu
+# Entrypoint sets UID/GID from PUID/PGID, fixes permissions, then drops to non-root via gosu
 ENTRYPOINT ["/app/entrypoint.sh"]

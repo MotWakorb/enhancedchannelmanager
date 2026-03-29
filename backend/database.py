@@ -53,6 +53,7 @@ def init_db() -> None:
 
         # Import models to register them with Base
         from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, AutoCreationRule, AutoCreationExecution, AutoCreationConflict, FFmpegProfile, DummyEPGProfile, DummyEPGChannelAssignment  # noqa: F401
+        from export_models import PlaylistProfile, CloudStorageTarget, PublishConfiguration, PublishHistory  # noqa: F401
 
         # Create all tables
         Base.metadata.create_all(bind=_engine)
@@ -209,6 +210,12 @@ def _run_migrations(engine) -> None:
 
             # Add is_black_screen column to stream_stats (v0.15.0 - Black screen detection)
             _add_stream_stats_is_black_screen_column(conn)
+
+            # Add is_low_fps column to stream_stats (v0.15.0 - Low FPS detection)
+            _add_stream_stats_is_low_fps_column(conn)
+
+            # Add stream_sort_field and stream_sort_order columns to auto_creation_rules (v0.15.0)
+            _add_auto_creation_rules_stream_sort_columns(conn)
 
             logger.debug("[DATABASE] All migrations complete - schema is up to date")
     except Exception as e:
@@ -811,7 +818,67 @@ def _populate_builtin_tags(conn) -> None:
                 # Australian Sports
                 "AFL", "A-LEAGUE",
                 # Other
-                "OLYMPICS", "X GAMES"
+                "OLYMPICS", "X GAMES", "ACL"
+            ]
+        },
+        "State/Province Tags": {
+            "description": "US state/territory and Canadian province abbreviations",
+            "case_sensitive": True,
+            "tags": [
+                # US states
+                "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+                "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+                "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+                "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+                "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+                # US territories
+                "DC", "PR", "GU", "VI",
+                # Canadian provinces/territories
+                "AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE",
+                "QC", "SK", "YT",
+            ]
+        },
+        "Abbreviation Tags": {
+            "description": "Network and channel abbreviations to preserve during title-casing",
+            "tags": [
+                # Major US broadcast networks
+                "ABC", "CBS", "NBC", "FOX", "PBS", "CW",
+                # Cable networks
+                "ESPN", "ESPNU", "ESPN2", "HBO", "AMC", "BET", "OWN", "ION",
+                "USA", "TNT", "TBS", "FX", "FXX", "TCM", "CNN", "HLN",
+                "MSNBC", "CNBC", "HGTV", "TLC", "CMT", "VH1", "MTV",
+                "BRAVO", "STARZ", "EPIX", "REELZ", "FUSE", "VICE",
+                # Regional sports / specialty
+                "MASN", "NLSE", "NESN", "NBCSN", "NBCLX", "MSGSN",
+                "MSG", "SNY", "YES", "BALLY",
+                "OANN", "INSP", "EWTN",
+                # Callsign-pattern (W/K) stations users can add to
+                "WGN", "KGO", "WPIX",
+                # Public / government / specialty
+                "C-SPAN", "CSPAN",
+                # Tech / streaming
+                "A&E", "AT&T", "TV",
+                # Common city/location abbreviations
+                "NYC", "LA", "DC", "SF",
+                # Major sports leagues (also in League Tags for stripping)
+                "NFL", "NBA", "MLB", "NHL", "MLS", "UFC", "WWE", "AEW",
+                "PGA", "ATP", "WTA", "F1", "ACL", "NRL", "AFL",
+                "NCAA", "WNBA", "CFL", "XFL",
+                # Common suffixes to preserve
+                "HD", "SD", "FHD", "UHD", "4K",
+            ]
+        },
+        "Small Word Tags": {
+            "description": "Words to keep lowercase during title-casing (prepositions, articles, conjunctions)",
+            "tags": [
+                # English
+                "a", "an", "the", "and", "but", "or", "for", "nor",
+                "of", "at", "by", "to", "in", "on", "vs", "via", "my",
+                # Spanish / Portuguese
+                "en", "de", "el", "la", "le", "y", "del", "los", "las",
+                "dos", "das", "por", "con", "sin",
+                # French
+                "du", "des", "les", "et", "ou", "au", "aux",
             ]
         },
         "Network Tags": {
@@ -846,19 +913,27 @@ def _populate_builtin_tags(conn) -> None:
             logger.info("[DATABASE] Created built-in group '%s'", group_name)
 
         # Get existing tags for this group
-        result = conn.execute(text("SELECT value FROM tags WHERE group_id = :group_id"), {"group_id": group_id})
-        existing_tags = set(row[0] for row in result.fetchall())
+        result = conn.execute(text("SELECT value, case_sensitive FROM tags WHERE group_id = :group_id"), {"group_id": group_id})
+        existing_tags = {row[0]: row[1] for row in result.fetchall()}
 
         # Deduplicate the tag list (in case of duplicates like CPL)
         unique_tags = list(dict.fromkeys(group_data["tags"]))
+        group_case_sensitive = 1 if group_data.get("case_sensitive") else 0
 
-        # Insert missing tags
+        # Insert missing tags and fix case_sensitive if needed
         for tag_value in unique_tags:
             if tag_value not in existing_tags:
                 conn.execute(text("""
                     INSERT INTO tags (group_id, value, case_sensitive, enabled, is_builtin)
-                    VALUES (:group_id, :value, 0, 1, 1)
-                """), {"group_id": group_id, "value": tag_value})
+                    VALUES (:group_id, :value, :case_sensitive, 1, 1)
+                """), {"group_id": group_id, "value": tag_value, "case_sensitive": group_case_sensitive})
+                tags_added += 1
+            elif existing_tags[tag_value] != group_case_sensitive:
+                # Fix case_sensitive flag on existing tags
+                conn.execute(text("""
+                    UPDATE tags SET case_sensitive = :case_sensitive
+                    WHERE group_id = :group_id AND value = :value
+                """), {"case_sensitive": group_case_sensitive, "group_id": group_id, "value": tag_value})
                 tags_added += 1
 
     conn.commit()
@@ -1432,6 +1507,29 @@ def _add_auto_creation_rules_sort_regex_column(conn) -> None:
         logger.info("[DATABASE] Migration complete: added sort_regex column")
 
 
+def _add_auto_creation_rules_stream_sort_columns(conn) -> None:
+    """Add stream_sort_field and stream_sort_order columns to auto_creation_rules table."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_rules'"
+    ))
+    if not result.fetchone():
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
+    if "stream_sort_field" not in columns:
+        logger.info("[DATABASE] Adding stream_sort_field column to auto_creation_rules")
+        conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN stream_sort_field VARCHAR(50)"))
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: added stream_sort_field column")
+    if "stream_sort_order" not in columns:
+        logger.info("[DATABASE] Adding stream_sort_order column to auto_creation_rules")
+        conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN stream_sort_order VARCHAR(4) DEFAULT 'asc'"))
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: added stream_sort_order column")
+
+
 def _add_stream_stats_consecutive_failures_column(conn) -> None:
     """Add consecutive_failures column to stream_stats table (v0.12.5 - Strike rule)."""
     from sqlalchemy import text
@@ -1462,6 +1560,22 @@ def _add_stream_stats_is_black_screen_column(conn) -> None:
         ))
         conn.commit()
         logger.info("[DATABASE] Migration complete: added is_black_screen column to stream_stats")
+
+
+def _add_stream_stats_is_low_fps_column(conn) -> None:
+    """Add is_low_fps column to stream_stats table (v0.15.0 - Low FPS detection)."""
+    from sqlalchemy import text
+
+    result = conn.execute(text("PRAGMA table_info(stream_stats)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    if "is_low_fps" not in columns:
+        logger.info("[DATABASE] Adding is_low_fps column to stream_stats")
+        conn.execute(text(
+            "ALTER TABLE stream_stats ADD COLUMN is_low_fps BOOLEAN DEFAULT 0 NOT NULL"
+        ))
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: added is_low_fps column to stream_stats")
 
 
 def _add_m3u_digest_exclude_patterns_columns(conn) -> None:
@@ -1614,6 +1728,20 @@ def _perform_maintenance(engine) -> None:
 
         except Exception as e:
             logger.exception("[DATABASE] Database maintenance failed: %s", e)
+
+
+def close_db() -> None:
+    """Close the database engine and session factory.
+
+    Used during backup restore to safely replace the database file.
+    Call init_db() after to reinitialize.
+    """
+    global _engine, _SessionLocal
+    if _engine:
+        _engine.dispose()
+        logger.info("[DATABASE] Database engine disposed")
+    _engine = None
+    _SessionLocal = None
 
 
 def get_session():

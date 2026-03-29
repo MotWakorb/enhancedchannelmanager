@@ -15,7 +15,7 @@
 
 /* Provider Cards - follows tag-group-card pattern */
 .auth-provider-card {
-  background: var(--card-bg);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-xl);
   overflow: hidden;
@@ -36,7 +36,7 @@
 }
 
 .auth-provider-header:hover {
-  background: var(--hover-bg);
+  background: var(--bg-hover);
 }
 
 .auth-provider-header h4 {
@@ -83,53 +83,7 @@
   font-style: italic;
 }
 
-/* Form Fields - follows form-group pattern */
-.auth-field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
-}
-
-.auth-field label {
-  font-size: 0.8125rem;
-  font-weight: 500;
-  color: var(--text-secondary);
-}
-
-.auth-field input[type="text"],
-.auth-field input[type="url"],
-.auth-field input[type="password"],
-.auth-field input[type="number"] {
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-lg);
-  background: var(--input-bg);
-  color: var(--text-primary);
-  font-size: 0.875rem;
-}
-
-.auth-field input[type="text"]:focus,
-.auth-field input[type="url"]:focus,
-.auth-field input[type="password"]:focus,
-.auth-field input[type="number"]:focus {
-  outline: none;
-  border-color: var(--accent-primary);
-}
-
-.auth-field input[type="number"] {
-  width: 100px;
-}
-
-.auth-field-hint {
-  margin: 0;
-  font-size: 0.75rem;
-  color: var(--text-muted);
-}
-
-.auth-field-row {
-  display: flex;
-  gap: 1.5rem;
-}
+/* Form fields use shared .form-group-vertical and .form-description from SettingsTab.css */
 
 /* Actions - follows modal-footer pattern */
 .auth-settings-actions {
@@ -137,8 +91,6 @@
   justify-content: flex-end;
   gap: 0.75rem;
   padding: 1rem 0;
-  border-top: 1px solid var(--border-primary);
-  margin-top: 0.5rem;
 }
 
 /* Buttons - uses common btn-primary pattern */

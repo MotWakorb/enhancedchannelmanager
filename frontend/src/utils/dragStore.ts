@@ -4,6 +4,7 @@
  * during cross-component drag operations.
  */
 
+import { logger } from "./logger";
 export interface StreamDragData {
   type: 'stream' | 'streamGroup';
   streamIds: number[];
@@ -15,7 +16,7 @@ let currentDragData: StreamDragData | null = null;
 
 export function setStreamDragData(data: StreamDragData): void {
   currentDragData = data;
-  console.warn('[DRAG-STORE] Set drag data:', data);
+  logger.debug('[DRAG-STORE] Set drag data:', data);
 }
 
 export function getStreamDragData(): StreamDragData | null {
@@ -23,7 +24,7 @@ export function getStreamDragData(): StreamDragData | null {
 }
 
 export function clearStreamDragData(): void {
-  console.warn('[DRAG-STORE] Cleared drag data');
+  logger.debug('[DRAG-STORE] Cleared drag data');
   currentDragData = null;
 }
 

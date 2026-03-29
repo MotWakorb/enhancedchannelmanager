@@ -21,7 +21,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamStats, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings } from '../types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamStats, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings, SortMode } from '../types';
 import { logger } from '../utils/logger';
 import { getStreamDragData, hasStreamDragData, clearStreamDragData } from '../utils/dragStore';
 import { computeAutoRename } from '../utils/channelRename';
@@ -45,6 +45,7 @@ import { ChannelListItem } from './ChannelListItem';
 import { StreamListItem } from './StreamListItem';
 import { PreviewStreamModal } from './PreviewStreamModal';
 import { CSVImportModal } from './CSVImportModal';
+import { MergeChannelsModal } from './MergeChannelsModal';
 import { exportChannelsToCSV, downloadCSVTemplate } from '../services/api';
 import './ChannelsPane.css';
 import './ModalBase.css';
@@ -159,7 +160,7 @@ interface GroupState {
 
 // Reusable Sort Dropdown Button component
 interface SortDropdownButtonProps {
-  onSortByMode: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => void;
+  onSortByMode: (mode: SortMode) => void;
   disabled?: boolean;
   isLoading?: boolean;
   className?: string;
@@ -195,7 +196,7 @@ const SortDropdownButton = memo(function SortDropdownButton({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen]);
 
-  const handleModeClick = (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => {
+  const handleModeClick = (mode: SortMode) => {
     setIsOpen(false);
     onSortByMode(mode);
   };
@@ -261,194 +262,6 @@ const SortDropdownButton = memo(function SortDropdownButton({
   );
 });
 
-// Bulk Actions Dropdown - consolidates 6 bulk action buttons into a single menu
-interface BulkActionsDropdownProps {
-  onAssignEPG: () => void;
-  onFetchLCN: () => void;
-  onNormalize: () => void;
-  onRenumber: () => void;
-  onRenumberAllGroups: () => void;
-  onSortByMode: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => void;
-  onProbe: () => void;
-  hasSelection: boolean;
-  bulkEPGLoading: boolean;
-  bulkLCNLoading: boolean;
-  bulkSortingByQuality: boolean;
-  probingChannels: boolean;
-  sortEnabled?: Record<'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels', boolean>;
-}
-
-const BulkActionsDropdown = memo(function BulkActionsDropdown({
-  onAssignEPG,
-  onFetchLCN,
-  onNormalize,
-  onRenumber,
-  onRenumberAllGroups,
-  onSortByMode,
-  onProbe,
-  hasSelection,
-  bulkEPGLoading,
-  bulkLCNLoading,
-  bulkSortingByQuality,
-  probingChannels,
-  sortEnabled = { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false },
-}: BulkActionsDropdownProps) {
-  const [isOpen, setIsOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-
-  const anyLoading = bulkEPGLoading || bulkLCNLoading || bulkSortingByQuality || probingChannels;
-  const anySortEnabled = sortEnabled.resolution || sortEnabled.bitrate || sortEnabled.framerate || sortEnabled.m3u_priority || sortEnabled.audio_channels;
-
-  // Close on outside click
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isOpen]);
-
-  const handleItemClick = (action: () => void) => {
-    setIsOpen(false);
-    action();
-  };
-
-  const handleSortClick = (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => {
-    setIsOpen(false);
-    onSortByMode(mode);
-  };
-
-  return (
-    <div className="bulk-actions-dropdown" ref={dropdownRef}>
-      <button
-        className={`bulk-action-btn${anyLoading ? ' loading' : ''}`}
-        onClick={() => setIsOpen(!isOpen)}
-        title="Bulk actions"
-      >
-        <span className={`material-icons${anyLoading ? ' spinning' : ''}`}>
-          {anyLoading ? 'sync' : 'more_vert'}
-        </span>
-        <span className="material-icons sort-dropdown-arrow">arrow_drop_down</span>
-      </button>
-      {isOpen && (
-        <div className="bulk-actions-menu">
-          <button
-            className="bulk-actions-item"
-            onClick={() => handleItemClick(onRenumberAllGroups)}
-          >
-            <span className="material-icons">format_list_numbered</span>
-            <span>Renumber All Groups</span>
-          </button>
-          {hasSelection && (
-            <>
-              <div className="bulk-actions-divider" />
-              <div className="bulk-actions-section-label">Selection</div>
-              <button
-                className={`bulk-actions-item${bulkEPGLoading ? ' disabled' : ''}`}
-                onClick={() => !bulkEPGLoading && handleItemClick(onAssignEPG)}
-              >
-                <span className={`material-icons${bulkEPGLoading ? ' spinning' : ''}`}>
-                  {bulkEPGLoading ? 'sync' : 'live_tv'}
-                </span>
-                <span>Assign EPG</span>
-              </button>
-              <button
-                className={`bulk-actions-item${bulkLCNLoading ? ' disabled' : ''}`}
-                onClick={() => !bulkLCNLoading && handleItemClick(onFetchLCN)}
-              >
-                <span className={`material-icons${bulkLCNLoading ? ' spinning' : ''}`}>
-                  {bulkLCNLoading ? 'sync' : 'confirmation_number'}
-                </span>
-                <span>Fetch Gracenote IDs</span>
-              </button>
-              <button
-                className="bulk-actions-item"
-                onClick={() => handleItemClick(onNormalize)}
-              >
-                <span className="material-icons">text_format</span>
-                <span>Normalize Names</span>
-              </button>
-              <button
-                className="bulk-actions-item"
-                onClick={() => handleItemClick(onRenumber)}
-              >
-                <span className="material-icons">tag</span>
-                <span>Renumber</span>
-              </button>
-              <div className="bulk-actions-divider" />
-              <div className="bulk-actions-section-label">Sort Streams</div>
-              {anySortEnabled && (
-                <button className="bulk-actions-item" onClick={() => handleSortClick('smart')}>
-                  <span className="material-icons">auto_awesome</span>
-                  <span>Smart Sort</span>
-                </button>
-              )}
-              {sortEnabled.resolution && (
-                <button
-                  className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
-                  onClick={() => !bulkSortingByQuality && handleSortClick('resolution')}
-                >
-                  <span className="material-icons">aspect_ratio</span>
-                  <span>By Resolution</span>
-                </button>
-              )}
-              {sortEnabled.bitrate && (
-                <button
-                  className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
-                  onClick={() => !bulkSortingByQuality && handleSortClick('bitrate')}
-                >
-                  <span className="material-icons">speed</span>
-                  <span>By Bitrate</span>
-                </button>
-              )}
-              {sortEnabled.framerate && (
-                <button
-                  className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
-                  onClick={() => !bulkSortingByQuality && handleSortClick('framerate')}
-                >
-                  <span className="material-icons">slow_motion_video</span>
-                  <span>By Framerate</span>
-                </button>
-              )}
-              {sortEnabled.m3u_priority && (
-                <button
-                  className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
-                  onClick={() => !bulkSortingByQuality && handleSortClick('m3u_priority')}
-                >
-                  <span className="material-icons">low_priority</span>
-                  <span>By M3U Priority</span>
-                </button>
-              )}
-              {sortEnabled.audio_channels && (
-                <button
-                  className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
-                  onClick={() => !bulkSortingByQuality && handleSortClick('audio_channels')}
-                >
-                  <span className="material-icons">surround_sound</span>
-                  <span>By Audio Channels</span>
-                </button>
-              )}
-              <div className="bulk-actions-divider" />
-              <button
-                className={`bulk-actions-item${probingChannels ? ' disabled' : ''}`}
-                onClick={() => !probingChannels && handleItemClick(onProbe)}
-              >
-                <span className={`material-icons${probingChannels ? ' spinning' : ''}`}>
-                  {probingChannels ? 'sync' : 'speed'}
-                </span>
-                <span>Probe Streams</span>
-              </button>
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-});
-
 // Pane-level three-dot menu for toolbar actions
 interface PaneToolbarMenuProps {
   isEditMode: boolean;
@@ -457,7 +270,7 @@ interface PaneToolbarMenuProps {
   onOpenProfiles: () => void;
   onShowHiddenGroups: () => void;
   onImportCSV: () => void;
-  onSortAllByMode: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => void;
+  onSortAllByMode: (mode: SortMode) => void;
   bulkSortingByQuality: boolean;
   sortEnabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels', boolean>;
   onAssignEPG: () => void;
@@ -465,11 +278,13 @@ interface PaneToolbarMenuProps {
   onNormalize: () => void;
   onRenumber: () => void;
   onRenumberAllGroups: () => void;
-  onSortSelectedByMode: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => void;
+  onSetLogoFromM3U: () => void;
+  onSortSelectedByMode: (mode: SortMode) => void;
   onProbe: () => void;
   hasSelection: boolean;
   bulkEPGLoading: boolean;
   bulkLCNLoading: boolean;
+  bulkLogoLoading: boolean;
   probingChannels: boolean;
 }
 
@@ -488,11 +303,13 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
   onNormalize,
   onRenumber,
   onRenumberAllGroups,
+  onSetLogoFromM3U,
   onSortSelectedByMode,
   onProbe,
   hasSelection,
   bulkEPGLoading,
   bulkLCNLoading,
+  bulkLogoLoading,
   probingChannels,
 }: PaneToolbarMenuProps) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -502,7 +319,7 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
   const btnRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const anyLoading = bulkEPGLoading || bulkLCNLoading || bulkSortingByQuality || probingChannels;
+  const anyLoading = bulkEPGLoading || bulkLCNLoading || bulkLogoLoading || bulkSortingByQuality || probingChannels;
   const anySortEnabled = sortEnabledCriteria.resolution || sortEnabledCriteria.bitrate || sortEnabledCriteria.framerate || sortEnabledCriteria.m3u_priority || sortEnabledCriteria.audio_channels;
 
   useEffect(() => {
@@ -528,12 +345,12 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
     setSortSelectedSubMenuOpen(false);
   };
 
-  const handleSortAllClick = (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => {
+  const handleSortAllClick = (mode: SortMode) => {
     close();
     onSortAllByMode(mode);
   };
 
-  const handleSortSelectedClick = (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => {
+  const handleSortSelectedClick = (mode: SortMode) => {
     close();
     onSortSelectedByMode(mode);
   };
@@ -694,6 +511,16 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
                 <span className="material-icons">tag</span>
                 <span>Renumber</span>
               </button>
+              <button
+                className={`pane-toolbar-menu-item ${bulkLogoLoading ? 'loading' : ''}`}
+                onClick={() => !bulkLogoLoading && (() => { close(); onSetLogoFromM3U(); })()}
+                disabled={bulkLogoLoading}
+              >
+                <span className={`material-icons ${bulkLogoLoading ? 'spinning' : ''}`}>
+                  {bulkLogoLoading ? 'sync' : 'image'}
+                </span>
+                <span>Set Logo from M3U</span>
+              </button>
 
               {/* Sort Selected Streams submenu */}
               {anySortEnabled && (
@@ -833,7 +660,7 @@ interface DroppableGroupHeaderProps {
   onProbeGroup?: () => void;
   isProbing?: boolean;
   onSortStreamsByQuality?: () => void;
-  onSortStreamsByMode?: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => void;
+  onSortStreamsByMode?: (mode: SortMode) => void;
   isSortingByQuality?: boolean;
   enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels', boolean>;
   failedChannelCount?: number;
@@ -864,7 +691,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   onSortStreamsByQuality,
   onSortStreamsByMode,
   isSortingByQuality = false,
-  enabledCriteria = { resolution: true, bitrate: true, framerate: true },
+  enabledCriteria = { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false },
   failedChannelCount = 0,
   successChannelCount = 0,
 }: DroppableGroupHeaderProps) {
@@ -898,12 +725,23 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [groupMenuOpen]);
 
+  // Flip group menu upward if it would overflow the viewport bottom
+  useEffect(() => {
+    if (!groupMenuOpen || !groupMenuDropdownRef.current || !menuPosition) return;
+    const el = groupMenuDropdownRef.current;
+    const rect = el.getBoundingClientRect();
+    const viewportHeight = window.innerHeight;
+    if (rect.bottom > viewportHeight) {
+      el.style.top = `${Math.max(0, menuPosition.top - rect.height)}px`;
+    }
+  }, [groupMenuOpen, menuPosition]);
+
   const handleCheckboxClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onSelectAll?.();
   };
 
-  const handleSortModeClick = (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => {
+  const handleSortModeClick = (mode: SortMode) => {
     setGroupMenuOpen(false);
     setSortSubMenuOpen(false);
     if (onSortStreamsByMode) {
@@ -1325,7 +1163,6 @@ export function ChannelsPane({
 }: ChannelsPaneProps) {
   // Suppress unused variable warnings - these are passed through but handled in parent
   void _onStageBulkAssignNumbers;
-  void onLogosChange;
   // These props are no longer used directly since channel creation is routed to bulk create modal
   void onCreateChannel;
   void onStageAddStream;
@@ -1422,6 +1259,9 @@ export function ChannelsPane({
   const bulkEPGModal = useModal();
   const [bulkEPGLoading, setBulkEPGLoading] = useState(false);
 
+  // Bulk logo from M3U state
+  const [bulkLogoLoading, setBulkLogoLoading] = useState(false);
+
   // Clear EPG loading spinner when modal opens
   useEffect(() => {
     if (bulkEPGModal.isOpen && bulkEPGLoading) {
@@ -1450,6 +1290,10 @@ export function ChannelsPane({
 
   // CSV import modal state
   const csvImportModal = useModal();
+
+  // Merge channels modal state
+  const mergeModal = useModal();
+  const [mergeChannelIds, setMergeChannelIds] = useState<number[]>([]);
 
   // Context menu management
   const {
@@ -1644,7 +1488,7 @@ export function ChannelsPane({
           .filter((s): s is Stream => s !== undefined);
         setChannelStreams(orderedStreams);
       } catch (err) {
-        console.error('Failed to load streams:', err);
+        logger.error('Failed to load streams:', err);
       } finally {
         setStreamsLoading(false);
       }
@@ -1669,7 +1513,7 @@ export function ChannelsPane({
         });
       } catch (err) {
         // Stats not available is OK - they may not have been probed yet
-        console.debug('Failed to fetch stream stats:', err);
+        logger.debug('Failed to fetch stream stats:', err);
       }
     };
     fetchStreamStats();
@@ -1699,7 +1543,7 @@ export function ChannelsPane({
         });
       } catch (err) {
         // Stats not available is OK - they may not have been probed yet
-        console.debug('Failed to pre-load stream stats:', err);
+        logger.debug('Failed to pre-load stream stats:', err);
       }
     };
     preloadAllStreamStats();
@@ -1709,18 +1553,18 @@ export function ChannelsPane({
   const handleProbeChannel = useCallback(async (channel: Channel) => {
     // channel.streams is an array of stream IDs (numbers)
     const streamIds = channel.streams;
-    console.log(`[ChannelsPane] handleProbeChannel called for channel ${channel.id} (${channel.name}) with ${streamIds.length} streams`);
+    logger.debug(`[ChannelsPane] handleProbeChannel called for channel ${channel.id} (${channel.name}) with ${streamIds.length} streams`);
 
     if (streamIds.length === 0) {
-      console.log(`[ChannelsPane] No streams to probe for channel ${channel.id}`);
+      logger.debug(`[ChannelsPane] No streams to probe for channel ${channel.id}`);
       return;
     }
 
     setProbingChannels((prev) => new Set(prev).add(channel.id));
     try {
-      console.log(`[ChannelsPane] Calling probeBulkStreams for channel ${channel.id}`);
+      logger.debug(`[ChannelsPane] Calling probeBulkStreams for channel ${channel.id}`);
       const result = await api.probeBulkStreams(streamIds);
-      console.log(`[ChannelsPane] probeBulkStreams succeeded for channel ${channel.id}, probed ${result.probed} streams`);
+      logger.debug(`[ChannelsPane] probeBulkStreams succeeded for channel ${channel.id}, probed ${result.probed} streams`);
 
       // Update stats map with results
       if (result.results) {
@@ -1733,7 +1577,7 @@ export function ChannelsPane({
         });
       }
     } catch (err) {
-      console.error(`[ChannelsPane] Failed to probe channel ${channel.id} streams:`, err);
+      logger.error(`[ChannelsPane] Failed to probe channel ${channel.id} streams:`, err);
     } finally {
       setProbingChannels((prev) => {
         const next = new Set(prev);
@@ -1777,7 +1621,7 @@ export function ChannelsPane({
         notifications.success(`Probed ${result.results.length} stream${result.results.length !== 1 ? 's' : ''}: ${successCount} succeeded`, 'Probe Complete');
       }
     } catch (err) {
-      console.error('[ChannelsPane] Bulk probe failed:', err);
+      logger.error('[ChannelsPane] Bulk probe failed:', err);
       notifications.error('Failed to probe streams', 'Probe Error');
     } finally {
       setProbingChannels(prev => {
@@ -1788,13 +1632,58 @@ export function ChannelsPane({
     }
   }, [selectedChannelIds, channels, notifications]);
 
+  // Handle bulk set logo from M3U streams
+  const handleBulkSetLogoFromM3U = useCallback(async () => {
+    setBulkLogoLoading(true);
+    const logoCache = new Map<string, import('../types').Logo>();
+    let assigned = 0, skipped = 0;
+
+    logger.info(`[BulkLogoM3U] Starting bulk logo assignment for ${selectedChannelIds.size} channels`);
+
+    try {
+      for (const channelId of selectedChannelIds) {
+        const channel = channels.find(c => c.id === channelId);
+        if (!channel) continue;
+
+        try {
+          const streams = await api.getChannelStreams(channelId);
+          const logoUrl = streams.find(s => s.logo_url)?.logo_url;
+
+          if (!logoUrl) {
+            logger.debug(`[BulkLogoM3U] No logo_url found in streams for channel ${channel.name} (${channelId})`);
+            skipped++;
+            continue;
+          }
+
+          logger.debug(`[BulkLogoM3U] Assigning logo to channel ${channel.name} (${channelId}) from ${logoUrl}`);
+          const logo = await api.getOrCreateLogo(channel.name, logoUrl, logoCache);
+          await api.updateChannel(channelId, { logo_id: logo.id });
+          assigned++;
+        } catch (err) {
+          logger.warn(`[BulkLogoM3U] Failed to assign logo for channel ${channelId}:`, err);
+          skipped++;
+        }
+      }
+
+      logger.info(`[BulkLogoM3U] Complete: ${assigned} assigned, ${skipped} skipped`);
+      notifications.success(`Set logos: ${assigned} assigned, ${skipped} skipped (no M3U logo)`);
+      onChannelsChange?.();
+      onLogosChange?.();
+    } catch (err) {
+      logger.error('[BulkLogoM3U] Bulk set logo from M3U failed:', err);
+      notifications.error('Failed to set logos from M3U');
+    } finally {
+      setBulkLogoLoading(false);
+    }
+  }, [selectedChannelIds, channels, notifications, onChannelsChange, onLogosChange]);
+
   // Handle probe group request - probes all streams in all channels of a group
   // Uses the same backend probe logic as "Probe All Streams Now" but filtered to a single group
   const handleProbeGroup = useCallback(async (groupId: number | 'ungrouped', groupName: string) => {
-    console.log(`[ChannelsPane] handleProbeGroup called for group ${groupId} (${groupName})`);
+    logger.debug(`[ChannelsPane] handleProbeGroup called for group ${groupId} (${groupName})`);
 
     if (groupId === 'ungrouped') {
-      console.log(`[ChannelsPane] Cannot probe ungrouped channels via group probe`);
+      logger.debug(`[ChannelsPane] Cannot probe ungrouped channels via group probe`);
       return;
     }
 
@@ -1803,15 +1692,15 @@ export function ChannelsPane({
       // Use the same backend probe logic as Settings -> Probe All Streams Now
       // This ensures consistent filtering, logging, and channel discovery
       // Pass skipM3uRefresh=true since this is an on-demand probe from UI
-      console.log(`[ChannelsPane] Calling probeAllStreams for group '${groupName}' (skipping M3U refresh)`);
+      logger.debug(`[ChannelsPane] Calling probeAllStreams for group '${groupName}' (skipping M3U refresh)`);
       const result = await api.probeAllStreams([groupName], true);
-      console.log(`[ChannelsPane] probeAllStreams started for group '${groupName}':`, result);
+      logger.debug(`[ChannelsPane] probeAllStreams started for group '${groupName}':`, result);
 
       // Poll for probe completion to keep the spinner active
       const pollInterval = setInterval(async () => {
         try {
           const progress = await api.getProbeProgress();
-          console.log(`[ChannelsPane] Probe progress for '${groupName}':`, progress);
+          logger.debug(`[ChannelsPane] Probe progress for '${groupName}':`, progress);
 
           if (!progress.in_progress) {
             // Probe completed - clear the spinner
@@ -1821,11 +1710,11 @@ export function ChannelsPane({
               next.delete(groupId);
               return next;
             });
-            console.log(`[ChannelsPane] Probe completed for group '${groupName}'`);
+            logger.info(`[ChannelsPane] Probe completed for group '${groupName}'`);
           }
         } catch (err) {
           // If we can't get progress, stop polling and clear spinner
-          console.error(`[ChannelsPane] Failed to get probe progress:`, err);
+          logger.error(`[ChannelsPane] Failed to get probe progress:`, err);
           clearInterval(pollInterval);
           setProbingGroups((prev) => {
             const next = new Set(prev);
@@ -1836,7 +1725,7 @@ export function ChannelsPane({
       }, 2000); // Poll every 2 seconds
 
     } catch (err) {
-      console.error(`[ChannelsPane] Failed to start probe for group '${groupName}':`, err);
+      logger.error(`[ChannelsPane] Failed to start probe for group '${groupName}':`, err);
       // Clear spinner on error
       setProbingGroups((prev) => {
         const next = new Set(prev);
@@ -2084,19 +1973,19 @@ export function ChannelsPane({
 
   // Handle clearing probe stats for a stream
   const handleClearStreamStats = async (streamId: number) => {
-    console.log('handleClearStreamStats called with streamId:', streamId);
+    logger.debug('handleClearStreamStats called with streamId:', streamId);
     try {
       const result = await api.clearStreamStats([streamId]);
-      console.log('clearStreamStats result:', result);
+      logger.debug('clearStreamStats result:', result);
       // Remove from local stats map so UI updates immediately
       setStreamStatsMap((prev) => {
         const next = new Map(prev);
         next.delete(streamId);
-        console.log('Removed streamId from stats map:', streamId);
+        logger.debug('Removed streamId from stats map:', streamId);
         return next;
       });
     } catch (err) {
-      console.error('Failed to clear stream stats:', err);
+      logger.error('Failed to clear stream stats:', err);
     }
   };
 
@@ -2220,7 +2109,7 @@ export function ChannelsPane({
       setChannelToDelete(null);
       setSubsequentChannels([]);
     } catch (err) {
-      console.error('Failed to delete channel:', err);
+      logger.error('Failed to delete channel:', err);
     } finally {
       setDeleting(false);
     }
@@ -2286,7 +2175,7 @@ export function ChannelsPane({
       setGroupToDelete(null);
       setDeleteGroupChannels(false);
     } catch (err) {
-      console.error('Failed to delete group:', err);
+      logger.error('Failed to delete group:', err);
     } finally {
       setDeletingGroup(false);
     }
@@ -2344,7 +2233,7 @@ export function ChannelsPane({
       setGroupToRename(null);
       setRenameGroupName('');
     } catch (err) {
-      console.error('Failed to rename group:', err);
+      logger.error('Failed to rename group:', err);
     } finally {
       setRenamingGroup(false);
     }
@@ -2430,7 +2319,7 @@ export function ChannelsPane({
 
       bulkDeleteConfirmModal.close();
     } catch (err) {
-      console.error('Failed to bulk delete channels:', err);
+      logger.error('Failed to bulk delete channels:', err);
     } finally {
       setBulkDeleting(false);
     }
@@ -2617,8 +2506,7 @@ export function ChannelsPane({
     }
   };
 
-  // Sort mode types
-  type SortMode = 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels';
+
 
   // Sort mode labels for journal/description
   const SORT_MODE_LABELS: Record<SortMode, string> = {
@@ -2841,7 +2729,7 @@ export function ChannelsPane({
 
       handleCloseCreateGroupModal();
     } catch (err) {
-      console.error('Failed to create channel group:', err);
+      logger.error('Failed to create channel group:', err);
     } finally {
       setCreatingGroup(false);
     }
@@ -2853,7 +2741,7 @@ export function ChannelsPane({
       const groups = await api.getHiddenChannelGroups();
       setHiddenGroups(groups);
     } catch (error) {
-      console.error('Failed to load hidden groups:', error);
+      logger.error('Failed to load hidden groups:', error);
     }
   };
 
@@ -2868,7 +2756,7 @@ export function ChannelsPane({
         onChannelGroupsChange();
       }
     } catch (error) {
-      console.error('Failed to restore group:', error);
+      logger.error('Failed to restore group:', error);
     }
   };
 
@@ -3088,7 +2976,7 @@ export function ChannelsPane({
         const changeType = nameChanged ? 'channel_name_update' : 'channel_number_update';
         onChannelUpdate(updatedChannel, { type: changeType, description });
       } catch (err) {
-        console.error('Failed to update channel number:', err);
+        logger.error('Failed to update channel number:', err);
       }
     }
     setEditingChannelId(null);
@@ -3129,7 +3017,7 @@ export function ChannelsPane({
         const updatedChannel = await api.updateChannel(channelId, { name: newName });
         onChannelUpdate(updatedChannel, { type: 'channel_name_update', description });
       } catch (err) {
-        console.error('Failed to update channel name:', err);
+        logger.error('Failed to update channel name:', err);
       }
     }
     setEditingNameChannelId(null);
@@ -3155,15 +3043,6 @@ export function ChannelsPane({
     const hasStreamId = hasStreamIdFromTypes || hasStreamIdFromStore;
 
     // Log every dragover call to help debug (use warn for visibility in console)
-    console.warn(`[DRAG-DEBUG] handleStreamDragOver`, {
-      channelId,
-      isEditMode,
-      rawTypes,
-      hasStreamIdFromTypes,
-      hasStreamIdFromStore,
-      hasStreamId,
-    });
-
     logger.debug(`[DRAG-DEBUG] handleStreamDragOver called`, {
       channelId,
       isEditMode,
@@ -3175,19 +3054,16 @@ export function ChannelsPane({
 
     // Block stream drag-over when not in edit mode
     if (!isEditMode) {
-      console.warn(`[DRAG-DEBUG] Blocked: not in edit mode`);
       logger.debug(`[DRAG-DEBUG] Blocked: not in edit mode`);
       return;
     }
 
     // Allow drop if we have stream data from either source
     if (hasStreamId) {
-      console.warn(`[DRAG-DEBUG] Allowing drop - calling preventDefault`);
       logger.debug(`[DRAG-DEBUG] Allowing drop - calling preventDefault`);
       e.preventDefault();
       setDragOverChannelId(channelId);
     } else {
-      console.warn(`[DRAG-DEBUG] No stream drag data found`);
       logger.debug(`[DRAG-DEBUG] No stream drag data found, drop not allowed`);
     }
   };
@@ -3213,7 +3089,7 @@ export function ChannelsPane({
     if (bulkDrag === 'true' && streamIdsJson) {
       try {
         const streamIds = JSON.parse(streamIdsJson) as number[];
-        console.warn('[DRAG-DEBUG] Drop: using dataTransfer bulk data', { channelId, streamIds });
+        logger.debug('[DRAG-DEBUG] Drop: using dataTransfer bulk data', { channelId, streamIds });
         clearStreamDragData();
         onBulkStreamDrop(channelId, streamIds);
         return;
@@ -3224,7 +3100,7 @@ export function ChannelsPane({
 
     // Single stream from dataTransfer
     if (streamIdStr) {
-      console.warn('[DRAG-DEBUG] Drop: using dataTransfer single data', { channelId, streamId: streamIdStr });
+      logger.debug('[DRAG-DEBUG] Drop: using dataTransfer single data', { channelId, streamId: streamIdStr });
       clearStreamDragData();
       onChannelDrop(channelId, parseInt(streamIdStr, 10));
       return;
@@ -3233,7 +3109,7 @@ export function ChannelsPane({
     // Fallback: use drag store (for browsers that clear dataTransfer)
     const dragData = getStreamDragData();
     if (dragData && dragData.type === 'stream' && dragData.streamIds.length > 0) {
-      console.warn('[DRAG-DEBUG] Drop: using drag store fallback', { channelId, streamIds: dragData.streamIds });
+      logger.debug('[DRAG-DEBUG] Drop: using drag store fallback', { channelId, streamIds: dragData.streamIds });
       clearStreamDragData();
       if (dragData.streamIds.length > 1) {
         onBulkStreamDrop(channelId, dragData.streamIds);
@@ -3243,7 +3119,7 @@ export function ChannelsPane({
       return;
     }
 
-    console.warn('[DRAG-DEBUG] Drop: no stream data found');
+    logger.debug('[DRAG-DEBUG] Drop: no stream data found');
   };
 
   // Handle stream group drag over the pane (for bulk channel creation)
@@ -3294,7 +3170,7 @@ export function ChannelsPane({
           const streamIds = JSON.parse(streamIdsJson) as number[];
           onStreamGroupDrop(groupNames, streamIds, targetGroupId, suggestedStartingNumber);
         } catch {
-          console.error('Failed to parse stream group drop data');
+          logger.error('Failed to parse stream group drop data');
         }
       } else {
         // Fallback to single group (backward compatibility)
@@ -3304,7 +3180,7 @@ export function ChannelsPane({
             const streamIds = JSON.parse(streamIdsJson) as number[];
             onStreamGroupDrop([groupName], streamIds, targetGroupId, suggestedStartingNumber);
           } catch {
-            console.error('Failed to parse stream IDs from stream group drop');
+            logger.error('Failed to parse stream IDs from stream group drop');
           }
         }
       }
@@ -3334,35 +3210,6 @@ export function ChannelsPane({
 
   // Memoize expensive channel filtering and grouping operations
   const channelsByGroup = useMemo(() => {
-    // Debug: Log channel group_id distribution before filtering
-    const groupIdCounts: Record<string, number> = {};
-    localChannels.forEach((ch) => {
-      const key = ch.channel_group_id !== null ? String(ch.channel_group_id) : 'ungrouped';
-      groupIdCounts[key] = (groupIdCounts[key] || 0) + 1;
-    });
-    logger.debug('[CHANNELS-DEBUG] Frontend received channels per group_id (before filtering):', groupIdCounts);
-    logger.debug(`[CHANNELS-DEBUG] Total channels in localChannels: ${localChannels.length}`);
-
-    // Count auto_created channels for debugging
-    const autoCreatedChannels = localChannels.filter(ch => ch.auto_created);
-    const manualChannels = localChannels.filter(ch => !ch.auto_created);
-    logger.debug(`[CHANNELS-DEBUG] Channel breakdown: ${manualChannels.length} manual, ${autoCreatedChannels.length} auto_created`);
-
-    // Log auto_created channels by group for debugging
-    if (autoCreatedChannels.length > 0) {
-      const autoCreatedByGroup: Record<string, { count: number; samples: string[] }> = {};
-      autoCreatedChannels.forEach((ch) => {
-        const key = ch.channel_group_id !== null ? String(ch.channel_group_id) : 'ungrouped';
-        if (!autoCreatedByGroup[key]) autoCreatedByGroup[key] = { count: 0, samples: [] };
-        autoCreatedByGroup[key].count++;
-        if (autoCreatedByGroup[key].samples.length < 3) {
-          autoCreatedByGroup[key].samples.push(`#${ch.channel_number} ${ch.name}`);
-        }
-      });
-      logger.debug('[CHANNELS-DEBUG] Auto-created channels by group:', autoCreatedByGroup);
-      logger.debug('[CHANNELS-DEBUG] autoSyncRelatedGroups:', Array.from(autoSyncRelatedGroups));
-    }
-
     // Filter channels based on search term and auto-created filter
     const visibleChannels = localChannels.filter((ch) => {
       // First, apply search filter if there's a search term
@@ -3384,15 +3231,6 @@ export function ChannelsPane({
       // and should remain visible in ECM.
       return true;
     });
-
-    // Debug: Log after filtering
-    const afterFilterCounts: Record<string, number> = {};
-    visibleChannels.forEach((ch) => {
-      const key = ch.channel_group_id !== null ? String(ch.channel_group_id) : 'ungrouped';
-      afterFilterCounts[key] = (afterFilterCounts[key] || 0) + 1;
-    });
-    logger.debug('[CHANNELS-DEBUG] Visible channels per group_id (after filtering):', afterFilterCounts);
-    logger.debug(`[CHANNELS-DEBUG] Visible channels: ${visibleChannels.length}, filtered out: ${localChannels.length - visibleChannels.length}`);
 
     // Apply missing data filters
     const hasMissingDataFilters = channelListFilters?.filterMissingLogo
@@ -5255,6 +5093,10 @@ export function ChannelsPane({
                         const stats = streamStatsMap.get(streamId);
                         return stats && stats.probe_status === 'success' && stats.is_black_screen;
                       })}
+                      hasLowFpsStreams={channel.streams.some(streamId => {
+                        const stats = streamStatsMap.get(streamId);
+                        return stats && stats.probe_status === 'success' && stats.is_low_fps;
+                      })}
                       onPreviewChannel={() => handlePreviewChannel(channel)}
                     />
                     {selectedChannelId === channel.id && (
@@ -5524,10 +5366,12 @@ export function ChannelsPane({
               renumberAllGroupsModal.open();
             }}
             onSortSelectedByMode={handleSortSelectedStreamsByMode}
+            onSetLogoFromM3U={handleBulkSetLogoFromM3U}
             onProbe={handleBulkProbe}
             hasSelection={selectedChannelIds.size > 0}
             bulkEPGLoading={bulkEPGLoading}
             bulkLCNLoading={bulkLCNLoading}
+            bulkLogoLoading={bulkLogoLoading}
             probingChannels={probingChannels.size > 0}
           />
         </div>
@@ -5882,7 +5726,6 @@ export function ChannelsPane({
       <BulkEPGAssignModal
         isOpen={bulkEPGModal.isOpen && selectedChannelIds.size > 0}
         selectedChannels={channels.filter(c => selectedChannelIds.has(c.id))}
-        streams={allStreams}
         epgData={epgData || []}
         epgSources={epgSources || []}
         onClose={() => bulkEPGModal.close()}
@@ -5975,7 +5818,7 @@ export function ChannelsPane({
                   description,
                 });
               } catch (err) {
-                console.error('Failed to update channel:', err);
+                logger.error('Failed to update channel:', err);
               }
             }
             editChannelModal.close();
@@ -5996,7 +5839,7 @@ export function ChannelsPane({
               }
               return newLogo;
             } catch (err) {
-              console.error('Failed to create logo:', err);
+              logger.error('Failed to create logo:', err);
               throw err;
             }
           }}
@@ -6008,7 +5851,7 @@ export function ChannelsPane({
               }
               return newLogo;
             } catch (err) {
-              console.error('Failed to upload logo:', err);
+              logger.error('Failed to upload logo:', err);
               throw err;
             }
           }}
@@ -7156,6 +6999,20 @@ export function ChannelsPane({
         {contextMenu && (
           <div
             className="context-menu"
+            ref={(el) => {
+              if (!el) return;
+              const rect = el.getBoundingClientRect();
+              const viewportHeight = window.innerHeight;
+              const viewportWidth = window.innerWidth;
+              // Flip upward if menu would overflow the bottom
+              if (contextMenu.y + rect.height > viewportHeight) {
+                el.style.top = `${Math.max(0, contextMenu.y - rect.height)}px`;
+              }
+              // Flip left if menu would overflow the right
+              if (contextMenu.x + rect.width > viewportWidth) {
+                el.style.left = `${Math.max(0, contextMenu.x - rect.width)}px`;
+              }
+            }}
             style={{
               position: 'fixed',
               top: contextMenu.y,
@@ -7228,6 +7085,15 @@ export function ChannelsPane({
             <div className="context-menu-item" onClick={handleCreateGroupAndMove}>
               Create new group and move
             </div>
+            {contextMenu.metadata.channelIds.length >= 2 && (
+              <div className="context-menu-item" onClick={() => {
+                setMergeChannelIds(contextMenu.metadata.channelIds);
+                mergeModal.open();
+                hideContextMenu();
+              }}>
+                Merge channels ({contextMenu.metadata.channelIds.length})
+              </div>
+            )}
           </div>
         )}
 
@@ -7247,7 +7113,7 @@ export function ChannelsPane({
           onClose={() => csvImportModal.close()}
           onSuccess={() => {
             // Trigger a refresh of channels and groups data, adding new groups to filter
-            console.log('[ChannelsPane] CSV import onSuccess triggered, refreshing data...');
+            logger.info('[ChannelsPane] CSV import onSuccess triggered, refreshing data...');
             if (onCSVImportComplete) {
               onCSVImportComplete();
             } else {
@@ -7257,6 +7123,44 @@ export function ChannelsPane({
             }
           }}
         />
+
+        {/* Merge Channels Modal */}
+        {mergeModal.isOpen && mergeChannelIds.length >= 2 && (
+          <MergeChannelsModal
+            channels={channels.filter((c) => mergeChannelIds.includes(c.id))}
+            logos={logos}
+            epgData={epgData.map((e) => ({
+              id: e.id,
+              tvg_id: e.tvg_id,
+              name: e.name,
+              icon_url: e.icon_url,
+              epg_source: e.epg_source,
+            }))}
+            epgSources={epgSources.map((s) => ({
+              id: s.id,
+              name: s.name,
+              source_type: s.source_type,
+            }))}
+            channelGroups={channelGroups}
+            streamProfiles={streamProfiles}
+            streams={allStreams.map((s) => ({
+              id: s.id,
+              name: s.name,
+              m3u_account: s.m3u_account,
+            }))}
+            onClose={() => {
+              mergeModal.close();
+              setMergeChannelIds([]);
+            }}
+            onMerged={() => {
+              mergeModal.close();
+              setMergeChannelIds([]);
+              onClearChannelSelection?.();
+              onChannelsChange?.();
+              onChannelGroupsChange?.();
+            }}
+          />
+        )}
       </div>
     </div>
   );

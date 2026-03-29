@@ -18,11 +18,19 @@ services:
     volumes:
       - ./config:/config
     environment:
+      - PUID=1000
+      - PGID=1000
       - ECM_PORT=6100
       - ECM_HTTPS_PORT=6143
 ```
 
 That's it. Open `http://localhost:6100` and the setup wizard will guide you through creating an admin account and connecting to Dispatcharr.
+
+**User / Group Identifiers:**
+- **PUID** (default: 1000) — User ID the application runs as
+- **PGID** (default: 1000) — Group ID the application runs as
+
+Set these to match the owner of your bind-mounted volumes to avoid permission issues. Find your IDs with `id your_user`.
 
 **Port Configuration:**
 - **ECM_PORT** (default: 6100) — HTTP interface (always available as fallback)
@@ -66,7 +74,7 @@ A rules-based automation engine for channel creation, stream merging, and lifecy
 Visual interface for constructing FFmpeg commands with Simple (three-step IPTV wizard) and Advanced modes. Includes 8 built-in IPTV presets, hardware acceleration support (CUDA, QSV, VAAPI), annotated command preview with tooltips, saved profiles, and direct push to Dispatcharr as stream profiles.
 
 ### Stream Health & Probing
-Automated stream probing with configurable schedules, batch sizes, retry logic, and rate limit detection. Profile-aware probing distributes connections across M3U profiles. Results drive smart stream sorting by resolution, bitrate, framerate, and M3U priority. A strikeout system tracks consecutive failures for bulk cleanup.
+Automated stream probing with configurable schedules, batch sizes, retry logic, and rate limit detection. Profile-aware probing distributes connections across M3U profiles. Results drive smart stream sorting by resolution, bitrate, framerate, and M3U priority. Black screen detection identifies streams showing dark/blank content, and low FPS detection flags streams below a configurable threshold (5/10/15/20 FPS). Both are deprioritized in Smart Sort. A strikeout system tracks consecutive failures for bulk cleanup.
 
 ### Logo Manager
 Browse, search, upload, and assign logos to channels. Supports URL import and file upload to Dispatcharr with usage tracking and pagination.

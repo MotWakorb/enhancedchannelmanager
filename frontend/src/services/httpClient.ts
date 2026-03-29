@@ -6,6 +6,16 @@
  */
 import { logger } from '../utils/logger';
 
+/** HTTP error with status code so callers can distinguish auth errors from server errors. */
+export class HttpError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'HttpError';
+    this.status = status;
+  }
+}
+
 /** Extract a human-readable message from a FastAPI error detail field. */
 function extractDetail(detail: unknown): string {
   if (typeof detail === 'string') return detail;
@@ -110,7 +120,7 @@ export async function fetchJson<T>(url: string, options?: RequestInit, logPrefix
             if (errorBody.detail) errorDetail = extractDetail(errorBody.detail);
           } catch { /* not JSON */ }
           logger.error(`${logPrefix} error after retry: ${method} ${url} - ${retryResponse.status} ${errorDetail}`);
-          throw new Error(errorDetail);
+          throw new HttpError(errorDetail, retryResponse.status);
         }
 
         if (retryResponse.status === 204) {
@@ -134,7 +144,7 @@ export async function fetchJson<T>(url: string, options?: RequestInit, logPrefix
         // Response body isn't JSON or couldn't be parsed
       }
       logger.error(`${logPrefix} error: ${method} ${url} - ${response.status} ${errorDetail}`);
-      throw new Error(errorDetail);
+      throw new HttpError(errorDetail, response.status);
     }
 
     // 204 No Content has no body to parse
@@ -182,7 +192,7 @@ export async function fetchText(url: string, options?: RequestInit, logPrefix = 
             if (errorBody.detail) errorDetail = extractDetail(errorBody.detail);
           } catch { /* not JSON */ }
           logger.error(`${logPrefix} error after retry: ${method} ${url} - ${retryResponse.status} ${errorDetail}`);
-          throw new Error(errorDetail);
+          throw new HttpError(errorDetail, retryResponse.status);
         }
 
         const text = await retryResponse.text();
@@ -202,7 +212,7 @@ export async function fetchText(url: string, options?: RequestInit, logPrefix = 
         // Response body isn't JSON
       }
       logger.error(`${logPrefix} error: ${method} ${url} - ${response.status} ${errorDetail}`);
-      throw new Error(errorDetail);
+      throw new HttpError(errorDetail, response.status);
     }
 
     const text = await response.text();

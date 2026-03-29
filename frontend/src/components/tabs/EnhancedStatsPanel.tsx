@@ -258,7 +258,7 @@ export function EnhancedStatsPanel({ refreshTrigger }: EnhancedStatsPanelProps) 
                 >
                   <XAxis
                     dataKey="channel_name"
-                    tick={{ fontSize: 10, fill: 'var(--text-muted)', angle: -45, textAnchor: 'end' }}
+                    tick={{ fontSize: 10, fill: 'var(--text-muted)', angle: -45, textAnchor: 'end' } as Record<string, unknown>}
                     axisLine={{ stroke: 'var(--border-primary)' }}
                     tickLine={false}
                     height={60}

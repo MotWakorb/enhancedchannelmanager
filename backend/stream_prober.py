@@ -140,6 +140,11 @@ def smart_sort_streams(
             logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (black screen)", stream_name)
             return (1,) + tuple(0 for _ in active_criteria)
 
+        # Deprioritize low FPS streams (probe succeeded but FPS < 20)
+        if deprioritize_failed_streams and stat and getattr(stat, 'is_low_fps', False) is True:
+            logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (low fps)", stream_name)
+            return (1,) + tuple(0 for _ in active_criteria)
+
         if not stat or stat.probe_status != 'success':
             logger.debug("[STREAM-PROBE-SORT]   %s: No successful probe data", stream_name)
             # Still compute M3U priority for unprobed streams (M3U priority doesn't require probing)
@@ -248,6 +253,7 @@ class StreamProber:
         deprioritize_failed_streams: bool = True,  # Deprioritize failed streams in smart sort
         black_screen_detection_enabled: bool = False,  # Run ffmpeg blackdetect after successful probe
         black_screen_sample_duration: int = 5,  # Seconds to sample for black screen detection (3-30)
+        low_fps_threshold: int = 20,  # FPS below this value is considered "low FPS"
         stream_sort_priority: list[str] = None,  # Priority order for Smart Sort criteria
         stream_sort_enabled: dict[str, bool] = None,  # Which criteria are enabled for Smart Sort
         stream_fetch_page_limit: int = 200,  # Max pages when fetching streams (200 * 500 = 100K streams)
@@ -267,6 +273,7 @@ class StreamProber:
         self.probe_retry_delay = max(1, min(30, probe_retry_delay))  # Clamp 1-30
         self.deprioritize_failed_streams = deprioritize_failed_streams
         self.black_screen_detection_enabled = black_screen_detection_enabled
+        self.low_fps_threshold = max(1, min(60, low_fps_threshold))  # Clamp 1-60
         self.black_screen_sample_duration = max(3, min(30, black_screen_sample_duration))  # Clamp 3-30
         self.stream_fetch_page_limit = stream_fetch_page_limit
         logger.info("[STREAM-PROBE] auto_reorder_after_probe=%s", auto_reorder_after_probe)
@@ -290,8 +297,12 @@ class StreamProber:
         self._probe_progress_skipped_count = 0
         self._probe_black_screen_streams = []  # List of {id, name, url} for black screen probes
         self._probe_progress_black_screen_count = 0
+        self._probe_low_fps_streams = []  # List of {id, name, url} for low FPS probes
+        self._probe_progress_low_fps_count = 0
         # Probe history - list of last 5 probe runs
         self._probe_history = []  # List of {timestamp, total, success_count, failed_count, status, success_streams, failed_streams}
+        # Channel stream IDs from the last scheduled probe (used to scope reprobes)
+        self._last_probe_channel_stream_ids: set = set()
 
         # Profile-to-account mapping for connection tracking
         self._profile_to_account_map = {}  # profile_id -> account_id (built during probe_all_streams)
@@ -468,6 +479,7 @@ class StreamProber:
                     "failed": self._probe_progress_failed_count,
                     "skipped": self._probe_progress_skipped_count,
                     "black_screen": self._probe_progress_black_screen_count,
+                    "low_fps": self._probe_progress_low_fps_count,
                     "status": self._probe_progress_status,
                     "current_stream": self._probe_progress_current_stream
                 }
@@ -506,6 +518,8 @@ class StreamProber:
                 notification_type = "warning"
             elif self._probe_progress_black_screen_count > 0:
                 notification_type = "warning"
+            elif self._probe_progress_low_fps_count > 0:
+                notification_type = "warning"
             else:
                 notification_type = "success"
 
@@ -517,6 +531,8 @@ class StreamProber:
                 parts.append(f"{self._probe_progress_failed_count} failed")
             if self._probe_progress_black_screen_count > 0:
                 parts.append(f"{self._probe_progress_black_screen_count} black screen")
+            if self._probe_progress_low_fps_count > 0:
+                parts.append(f"{self._probe_progress_low_fps_count} low FPS")
             if self._probe_progress_skipped_count > 0:
                 parts.append(f"{self._probe_progress_skipped_count} skipped")
 
@@ -530,6 +546,7 @@ class StreamProber:
                     "failed": self._probe_progress_failed_count,
                     "skipped": self._probe_progress_skipped_count,
                     "black_screen": self._probe_progress_black_screen_count,
+                    "low_fps": self._probe_progress_low_fps_count,
                     "status": "completed",
                     "current_stream": ""
                 }
@@ -551,6 +568,7 @@ class StreamProber:
                     "success_count": self._probe_progress_success_count,
                     "skipped_count": self._probe_progress_skipped_count,
                     "black_screen_count": self._probe_progress_black_screen_count,
+                    "low_fps_count": self._probe_progress_low_fps_count,
                     "total_count": self._probe_progress_total,
                 }
                 await send_alert(
@@ -997,12 +1015,25 @@ class StreamProber:
             if status in ("failed", "timeout"):
                 stats.consecutive_failures = (stats.consecutive_failures or 0) + 1
                 stats.is_black_screen = False  # Reset on failure (stream state unknown)
+                stats.is_low_fps = False  # Reset on failure (stream state unknown)
             elif status == "success":
                 stats.consecutive_failures = 0
                 stats.is_black_screen = is_black_screen
 
             if ffprobe_data and status == "success":
                 self._parse_ffprobe_data(stats, ffprobe_data)
+
+            # Detect low FPS (< 20) from already-parsed fps field
+            if status == "success" and stats.fps:
+                try:
+                    fps_val = float(stats.fps)
+                    stats.is_low_fps = fps_val < self.low_fps_threshold
+                    if stats.is_low_fps:
+                        logger.warning("[STREAM-PROBE] Low FPS detected (%.1f < %d) for stream %s", fps_val, self.low_fps_threshold, stream_id)
+                except (ValueError, TypeError):
+                    stats.is_low_fps = False
+            elif status == "success":
+                stats.is_low_fps = False
 
             # Apply measured bitrate if available (overrides ffprobe metadata)
             if measured_bitrate is not None:
@@ -1693,6 +1724,8 @@ class StreamProber:
         self._probe_skipped_streams = []
         self._probe_black_screen_streams = []
         self._probe_progress_black_screen_count = 0
+        self._probe_low_fps_streams = []
+        self._probe_progress_low_fps_count = 0
         self._account_ramp_state = {}  # Fresh ramp state for each probe run
 
         probed_count = 0
@@ -1722,6 +1755,12 @@ class StreamProber:
             logger.info("[STREAM-PROBE] Fetching channel stream IDs (override groups: %s)...", channel_groups_override)
             channel_stream_ids, stream_to_channels, stream_to_channel_number = await self._fetch_channel_stream_ids(channel_groups_override)
             logger.info("[STREAM-PROBE] Found %s unique streams across all channels", len(channel_stream_ids))
+
+            # Store channel stream IDs for scheduled probes (not reprobes)
+            # so the reprobe task can scope to only these streams
+            if not stream_ids_filter:
+                self._last_probe_channel_stream_ids = set(channel_stream_ids)
+                logger.info("[STREAM-PROBE] Saved %s channel stream IDs for reprobe scoping", len(self._last_probe_channel_stream_ids))
 
             # Fetch M3U accounts to map account IDs to names and max_streams
             logger.info("[STREAM-PROBE] Fetching M3U accounts...")
@@ -1904,6 +1943,8 @@ class StreamProber:
                                     self._record_probe_success(m3u_account_id)
                                 if result.get("is_black_screen", False):
                                     stream_info["is_black_screen"] = True
+                                if result.get("is_low_fps", False):
+                                    stream_info["is_low_fps"] = True
 
                             return (probe_status, stream_info)
                         finally:
@@ -2132,6 +2173,9 @@ class StreamProber:
                                         if stream_info.get("is_black_screen"):
                                             self._probe_progress_black_screen_count += 1
                                             self._probe_black_screen_streams.append(stream_info)
+                                        if stream_info.get("is_low_fps"):
+                                            self._probe_progress_low_fps_count += 1
+                                            self._probe_low_fps_streams.append(stream_info)
                                     else:
                                         self._probe_progress_failed_count += 1
                                         self._probe_failed_streams.append(stream_info)
@@ -2274,6 +2318,9 @@ class StreamProber:
                         if result.get("is_black_screen", False):
                             self._probe_progress_black_screen_count += 1
                             self._probe_black_screen_streams.append(stream_info)
+                        if result.get("is_low_fps", False):
+                            self._probe_progress_low_fps_count += 1
+                            self._probe_low_fps_streams.append(stream_info)
                         if m3u_account_id:
                             self._record_probe_success(m3u_account_id)
                     else:
@@ -2346,6 +2393,7 @@ class StreamProber:
             "failed_count": self._probe_progress_failed_count,
             "skipped_count": self._probe_progress_skipped_count,
             "black_screen_count": self._probe_progress_black_screen_count,
+            "low_fps_count": self._probe_progress_low_fps_count,
             "percentage": round((self._probe_progress_current / self._probe_progress_total * 100) if self._probe_progress_total > 0 else 0, 1),
             "rate_limited": rate_limit_info["is_rate_limited"],
             "rate_limited_hosts": rate_limit_info["hosts"],
@@ -2383,10 +2431,12 @@ class StreamProber:
             "failed_streams": self._probe_failed_streams,
             "skipped_streams": self._probe_skipped_streams,
             "black_screen_streams": self._probe_black_screen_streams,
+            "low_fps_streams": self._probe_low_fps_streams,
             "success_count": len(self._probe_success_streams),
             "failed_count": len(self._probe_failed_streams),
             "skipped_count": len(self._probe_skipped_streams),
-            "black_screen_count": len(self._probe_black_screen_streams)
+            "black_screen_count": len(self._probe_black_screen_streams),
+            "low_fps_count": len(self._probe_low_fps_streams)
         }
 
     def _save_probe_history(self, start_time: datetime, total: int, error: str = None, reordered_channels: list = None):
@@ -2409,6 +2459,8 @@ class StreamProber:
             "skipped_streams": list(self._probe_skipped_streams),  # Copy the list
             "black_screen_count": self._probe_progress_black_screen_count,
             "black_screen_streams": list(self._probe_black_screen_streams),  # Copy the list
+            "low_fps_count": self._probe_progress_low_fps_count,
+            "low_fps_streams": list(self._probe_low_fps_streams),  # Copy the list
             "reordered_channels": reordered_channels or [],  # List of channels that were reordered
             # Include sort configuration used for this run (for UI display)
             "sort_config": {
@@ -2586,3 +2638,69 @@ def set_prober(prober: StreamProber):
     global _prober
     _prober = prober
     logger.info("[STREAM-PROBE] Stream prober instance set: %s", prober is not None)
+
+
+def ensure_prober() -> Optional[StreamProber]:
+    """Get the global prober, creating one if it doesn't exist and settings are configured.
+
+    This provides self-healing if the prober was never created at startup
+    (e.g., settings not yet configured) or was lost during a failed restart.
+    """
+    global _prober
+    if _prober is not None:
+        return _prober
+
+    try:
+        from config import get_settings
+        from dispatcharr_client import get_client
+
+        settings = get_settings()
+        if not settings.is_configured():
+            logger.debug("[STREAM-PROBE] Cannot create prober - settings not configured")
+            return None
+
+        logger.info("[STREAM-PROBE] Prober not found, creating new instance...")
+        prober = StreamProber(
+            get_client(),
+            probe_timeout=settings.stream_probe_timeout,
+            user_timezone=settings.user_timezone,
+            bitrate_sample_duration=settings.bitrate_sample_duration,
+            parallel_probing_enabled=settings.parallel_probing_enabled,
+            max_concurrent_probes=settings.max_concurrent_probes,
+            profile_distribution_strategy=settings.profile_distribution_strategy,
+            skip_recently_probed_hours=settings.skip_recently_probed_hours,
+            refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
+            auto_reorder_after_probe=settings.auto_reorder_after_probe,
+            probe_retry_count=settings.probe_retry_count,
+            probe_retry_delay=settings.probe_retry_delay,
+            deprioritize_failed_streams=settings.deprioritize_failed_streams,
+            black_screen_detection_enabled=settings.black_screen_detection_enabled,
+            black_screen_sample_duration=settings.black_screen_sample_duration,
+            low_fps_threshold=settings.low_fps_threshold,
+            stream_sort_priority=settings.stream_sort_priority,
+            stream_sort_enabled=settings.stream_sort_enabled,
+            stream_fetch_page_limit=settings.stream_fetch_page_limit,
+            m3u_account_priorities=settings.m3u_account_priorities,
+        )
+        _prober = prober
+        logger.info("[STREAM-PROBE] Auto-created prober instance")
+
+        # Wire up notification callbacks if available
+        try:
+            from services.notification_service import (
+                create_notification_internal,
+                update_notification_internal,
+                delete_notifications_by_source_internal,
+            )
+            prober.set_notification_callbacks(
+                create_callback=create_notification_internal,
+                update_callback=update_notification_internal,
+                delete_by_source_callback=delete_notifications_by_source_internal,
+            )
+        except Exception as e:
+            logger.warning("[STREAM-PROBE] Could not set notification callbacks: %s", e)
+
+        return _prober
+    except Exception as e:
+        logger.error("[STREAM-PROBE] Failed to auto-create prober: %s", e)
+        return None

@@ -1,6 +1,6 @@
 import './TabNavigation.css';
 
-export type TabId = 'm3u-manager' | 'epg-manager' | 'channel-manager' | 'guide' | 'logo-manager' | 'm3u-changes' | 'auto-creation' | 'journal' | 'stats' | 'ffmpeg-builder' | 'settings';
+export type TabId = 'm3u-manager' | 'epg-manager' | 'channel-manager' | 'guide' | 'logo-manager' | 'm3u-changes' | 'auto-creation' | 'export' | 'journal' | 'stats' | 'ffmpeg-builder' | 'settings';
 
 interface Tab {
   id: TabId;
@@ -23,6 +23,7 @@ const TABS: Tab[] = [
   { id: 'logo-manager', label: 'Logo Manager', icon: 'image' },
   { id: 'm3u-changes', label: 'M3U Changes', icon: 'compare_arrows' },
   { id: 'auto-creation', label: 'Auto-Creation', icon: 'auto_fix_high' },
+  { id: 'export', label: 'Export', icon: 'cloud_upload' },
   { id: 'journal', label: 'Journal', icon: 'history' },
   { id: 'stats', label: 'Stats', icon: 'analytics' },
   { id: 'ffmpeg-builder', label: 'FFMPEG Builder', icon: 'movie_filter' },

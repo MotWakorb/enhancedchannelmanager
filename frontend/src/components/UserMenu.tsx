@@ -4,6 +4,7 @@
  * Shows current user info, profile editing, password change, and logout.
  * Hidden when auth is not required or user not logged in.
  */
+import { logger } from '../utils/logger';
 import React, { useState, useRef, useEffect } from 'react';
 import { useAuth, useAuthRequired } from '../hooks/useAuth';
 import { useNotifications } from '../contexts/NotificationContext';
@@ -70,7 +71,7 @@ export function UserMenu() {
       await logout();
       // Page will redirect to login via ProtectedRoute
     } catch (err) {
-      console.error('Logout failed:', err);
+      logger.error('Logout failed:', err);
     } finally {
       setIsLoggingOut(false);
       setIsOpen(false);

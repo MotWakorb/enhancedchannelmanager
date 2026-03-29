@@ -2,6 +2,7 @@ import { memo, useRef, useEffect, useState, useCallback } from 'react';
 import mpegts from 'mpegts.js';
 import type { VideoPlayerProps, VideoPlayerState, VideoPlayerError } from '../types';
 import './VideoPlayer.css';
+import { logger } from '../utils/logger';
 
 /**
  * VideoPlayer component for MPEG-TS stream playback using mpegts.js
@@ -91,7 +92,7 @@ export const VideoPlayer = memo(function VideoPlayer({
 
     // Set up event handlers
     player.on(mpegts.Events.ERROR, (errorType: string, errorDetail: string, errorInfo: { code?: number; msg?: string }) => {
-      console.error('[VideoPlayer] Error:', errorType, errorDetail, errorInfo);
+      logger.error('[VideoPlayer] Error:', errorType, errorDetail, errorInfo);
 
       // Check for unsupported codec errors
       const errorMsg = errorInfo?.msg || errorDetail || '';
@@ -128,11 +129,11 @@ export const VideoPlayer = memo(function VideoPlayer({
     });
 
     player.on(mpegts.Events.LOADING_COMPLETE, () => {
-      console.log('[VideoPlayer] Loading complete');
+      logger.debug('[VideoPlayer] Loading complete');
     });
 
     player.on(mpegts.Events.MEDIA_INFO, (mediaInfo: mpegts.MSEPlayerMediaInfo) => {
-      console.log('[VideoPlayer] Media info:', mediaInfo);
+      logger.debug('[VideoPlayer] Media info:', mediaInfo);
     });
 
     // Load the stream
@@ -144,7 +145,7 @@ export const VideoPlayer = memo(function VideoPlayer({
       if (playPromise && typeof playPromise.catch === 'function') {
         playPromise.catch((e: Error) => {
           // Auto-play may be blocked by browser
-          console.warn('[VideoPlayer] Auto-play blocked:', e.message);
+          logger.warn('[VideoPlayer] Auto-play blocked:', e.message);
           updateState('paused');
         });
       }
@@ -231,7 +232,7 @@ export const VideoPlayer = memo(function VideoPlayer({
       video.pause();
     } else {
       video.play().catch((e: Error) => {
-        console.warn('[VideoPlayer] Play blocked:', e.message);
+        logger.warn('[VideoPlayer] Play blocked:', e.message);
       });
     }
   }, [isPlaying]);
@@ -266,7 +267,7 @@ export const VideoPlayer = memo(function VideoPlayer({
       container.requestFullscreen().then(() => {
         setIsFullscreen(true);
       }).catch((e) => {
-        console.warn('[VideoPlayer] Fullscreen request failed:', e);
+        logger.warn('[VideoPlayer] Fullscreen request failed:', e);
       });
     } else {
       document.exitFullscreen().then(() => {

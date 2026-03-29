@@ -11,6 +11,24 @@
   color: var(--success);
 }
 
+
+/* Hint text in empty state */
+.normalize-hint {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+}
+
+/* Loading spinner */
+.normalize-names-modal .spinning {
+  animation: normalize-spin 1s linear infinite;
+}
+
+@keyframes normalize-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* Summary bar */
 .normalize-summary {
   display: flex;
@@ -29,6 +47,17 @@
   font-size: 20px;
 }
 
+/* Select-all checkbox in summary */
+.normalize-select-all {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.normalize-select-all input[type="checkbox"] {
+  cursor: pointer;
+}
+
 /* Preview list */
 .normalize-preview-list {
   display: flex;
@@ -41,6 +70,29 @@
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   padding: 0.75rem 1rem;
+  transition: opacity 0.15s;
+}
+
+.normalize-preview-item.is-excluded {
+  opacity: 0.4;
+}
+
+/* Item header with checkbox and current name */
+.normalize-item-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.normalize-checkbox {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.normalize-checkbox input[type="checkbox"] {
+  cursor: pointer;
 }
 
 .normalize-current,
@@ -48,6 +100,8 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
 }
 
 .normalize-label {
@@ -56,6 +110,7 @@
   text-transform: uppercase;
   color: var(--text-muted);
   min-width: 50px;
+  flex-shrink: 0;
 }
 
 .normalize-name {
@@ -71,15 +126,60 @@
   opacity: 0.7;
 }
 
-.normalize-new .normalize-name {
+/* Editable name input */
+.normalize-name-input {
+  font-family: monospace;
+  font-size: 0.8125rem;
   color: var(--success);
   font-weight: 500;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  padding: 0.25rem 0.5rem;
+  flex: 1;
+  min-width: 0;
+  transition: border-color 0.15s;
+}
+
+.normalize-name-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.normalize-name-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Revert button */
+.normalize-revert-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.2rem;
+  flex-shrink: 0;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.normalize-revert-btn:hover {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
+.normalize-revert-btn .material-icons {
+  font-size: 16px;
 }
 
 .normalize-arrow {
   display: flex;
   justify-content: center;
   padding: 0.25rem 0;
+  padding-left: 1.5rem;
 }
 
 .normalize-arrow .material-icons {

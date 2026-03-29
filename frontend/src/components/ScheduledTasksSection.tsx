@@ -80,7 +80,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
       border: '1px solid var(--border-color)',
       borderRadius: '8px',
       marginBottom: '1rem',
-      overflow: 'hidden',
+      overflow: 'visible',
     }}>
       {/* Header */}
       <div style={{
@@ -202,7 +202,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
       {/* Status info */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+        gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
         gap: '1rem',
         padding: '1rem',
         backgroundColor: 'var(--bg-tertiary)',
@@ -377,22 +377,23 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
   const [runNowTask, setRunNowTask] = useState<TaskStatus | null>(null);
   const notifications = useNotifications();
 
-  const loadTasks = useCallback(async () => {
+  const loadTasks = useCallback(async (showLoading = false) => {
     try {
+      if (showLoading) setLoading(true);
       const result = await api.getTasks();
       setTasks(result.tasks);
     } catch (err) {
       logger.error('Failed to load tasks', err);
       notifications.error('Failed to load scheduled tasks', 'Tasks');
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    loadTasks();
+    loadTasks(true); // Show loading on initial load only
     // Poll for updates every 5 seconds
-    const interval = setInterval(loadTasks, 5000);
+    const interval = setInterval(() => loadTasks(false), 5000);
     return () => clearInterval(interval);
   }, [loadTasks]);
 
@@ -579,7 +580,7 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
           </p>
         </div>
         <button
-          onClick={loadTasks}
+          onClick={() => { loadTasks(); }}
           style={{
             display: 'flex',
             alignItems: 'center',

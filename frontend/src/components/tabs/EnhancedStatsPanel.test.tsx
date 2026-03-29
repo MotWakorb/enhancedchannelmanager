@@ -25,6 +25,7 @@ vi.mock('recharts', () => ({
 describe('EnhancedStatsPanel', () => {
   // Mock data
   const mockUniqueViewers: UniqueViewersSummary = {
+    period_days: 0,
     total_unique_viewers: 150,
     today_unique_viewers: 25,
     total_connections: 500,
@@ -44,15 +45,15 @@ describe('EnhancedStatsPanel', () => {
   };
 
   const mockChannelBandwidth: ChannelBandwidthStats[] = [
-    { channel_id: 'ch-1', channel_name: 'ESPN', total_bytes: 1073741824, total_connections: 100, total_watch_seconds: 36000 },
-    { channel_id: 'ch-2', channel_name: 'CNN', total_bytes: 536870912, total_connections: 80, total_watch_seconds: 28800 },
-    { channel_id: 'ch-3', channel_name: 'HBO', total_bytes: 268435456, total_connections: 60, total_watch_seconds: 21600 },
+    { channel_id: 'ch-1', channel_name: 'ESPN', total_bytes: 1073741824, total_connections: 100, total_watch_seconds: 36000, peak_clients: 0 },
+    { channel_id: 'ch-2', channel_name: 'CNN', total_bytes: 536870912, total_connections: 80, total_watch_seconds: 28800, peak_clients: 0 },
+    { channel_id: 'ch-3', channel_name: 'HBO', total_bytes: 268435456, total_connections: 60, total_watch_seconds: 21600, peak_clients: 0 },
   ];
 
   const mockChannelViewers: ChannelUniqueViewers[] = [
-    { channel_id: 'ch-1', channel_name: 'ESPN', unique_viewers: 45 },
-    { channel_id: 'ch-2', channel_name: 'CNN', unique_viewers: 35 },
-    { channel_id: 'ch-3', channel_name: 'HBO', unique_viewers: 25 },
+    { channel_id: 'ch-1', channel_name: 'ESPN', unique_viewers: 45, total_connections: 0, total_watch_seconds: 0 },
+    { channel_id: 'ch-2', channel_name: 'CNN', unique_viewers: 35, total_connections: 0, total_watch_seconds: 0 },
+    { channel_id: 'ch-3', channel_name: 'HBO', unique_viewers: 25, total_connections: 0, total_watch_seconds: 0 },
   ];
 
   beforeEach(() => {

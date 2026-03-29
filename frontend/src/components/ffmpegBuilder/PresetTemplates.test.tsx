@@ -30,8 +30,8 @@ afterAll(() => server.close());
 // ---------------------------------------------------------------------------
 
 const defaultConfig: FFMPEGBuilderState = {
-  input: { type: 'file', path: '/media/input.mp4' },
-  output: { path: '/media/output.mp4', format: 'mp4' },
+  input: { type: 'url', path: '/media/input.mp4' },
+  output: { path: '/media/output.mp4', format: 'ts' },
   videoCodec: { codec: 'libx264', rateControl: 'crf', crf: 23, preset: 'medium' },
   audioCodec: { codec: 'aac', bitrate: '192k' },
   videoFilters: [],
@@ -46,8 +46,10 @@ function renderPresetTemplates(
     currentConfig?: FFMPEGBuilderState;
   } = {}
 ) {
-  const onPresetLoad = props.onPresetLoad ?? vi.fn();
-  const onPresetSave = props.onPresetSave ?? vi.fn();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const onPresetLoad = (props.onPresetLoad ?? vi.fn()) as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const onPresetSave = (props.onPresetSave ?? vi.fn()) as any;
   const currentConfig = props.currentConfig ?? defaultConfig;
 
   return {
@@ -195,8 +197,8 @@ describe('PresetTemplates', () => {
       const { onPresetLoad } = renderPresetTemplates({
         currentConfig: {
           ...defaultConfig,
-          input: { type: 'file', path: '/my/custom/input.mp4' },
-          output: { path: '/my/custom/output.mp4', format: 'mp4' },
+          input: { type: 'url', path: '/my/custom/input.mp4' },
+          output: { path: '/my/custom/output.mp4', format: 'ts' },
         },
       });
 

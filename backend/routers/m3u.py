@@ -69,18 +69,18 @@ async def _capture_m3u_changes_after_refresh(account_id: int, account_name: str)
             for g in stream_counts
         }
 
-        # Build list of enabled group names to fetch stream names for
-        enabled_group_names = []
+        # Build list of all group names to fetch stream names for
+        all_group_names = []
         for acg in account_channel_groups:
             group_id = acg.get("channel_group")
-            if group_id and group_id in group_lookup and acg.get("enabled", False):
-                enabled_group_names.append(group_lookup[group_id])
+            if group_id and group_id in group_lookup:
+                all_group_names.append(group_lookup[group_id])
 
-        # Fetch stream names for enabled groups (limit to first 50 per group)
+        # Fetch stream names for all groups (limit to first 500 per group)
         stream_names_by_group = {}
         MAX_STREAM_NAMES = 500
-        logger.info("[M3U-CHANGE] Fetching stream names for %s enabled groups: %s%s", len(enabled_group_names), enabled_group_names[:5], '...' if len(enabled_group_names) > 5 else '')
-        for group_name in enabled_group_names:
+        logger.info("[M3U-CHANGE] Fetching stream names for %s groups: %s%s", len(all_group_names), all_group_names[:5], '...' if len(all_group_names) > 5 else '')
+        for group_name in all_group_names:
             try:
                 streams_response = await api_client.get_streams(
                     page=1,

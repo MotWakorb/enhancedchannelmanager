@@ -57,9 +57,7 @@ try:
         DispatcharrAuthSettings,
         get_auth_settings,
         save_auth_settings,
-        clear_auth_settings_cache,
         get_jwt_secret_key,
-        mark_setup_complete,
     )
     __all__.extend([
         "AuthSettings",
@@ -69,9 +67,7 @@ try:
         "DispatcharrAuthSettings",
         "get_auth_settings",
         "save_auth_settings",
-        "clear_auth_settings_cache",
         "get_jwt_secret_key",
-        "mark_setup_complete",
     ])
 except ImportError as e:
     logger.debug("[AUTH] Suppressed settings import error: %s", e)
@@ -83,22 +79,26 @@ try:
         PermissionError,
         get_token_from_request,
         get_refresh_token_from_request,
+        decode_token_safe,
         get_current_user,
-        get_current_user_optional,
         get_current_active_admin,
         require_auth_if_enabled,
         RequireAuthIfEnabled,
+        require_admin_if_enabled,
+        RequireAdminIfEnabled,
     )
     __all__.extend([
         "AuthenticationError",
         "PermissionError",
         "get_token_from_request",
         "get_refresh_token_from_request",
+        "decode_token_safe",
         "get_current_user",
-        "get_current_user_optional",
         "get_current_active_admin",
         "require_auth_if_enabled",
         "RequireAuthIfEnabled",
+        "require_admin_if_enabled",
+        "RequireAdminIfEnabled",
     ])
 except ImportError as e:
     logger.debug("[AUTH] Suppressed dependencies import error: %s", e)

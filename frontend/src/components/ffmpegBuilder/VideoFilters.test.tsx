@@ -33,7 +33,8 @@ function renderVideoFilters(
     hwAccel?: string;
   } = {}
 ) {
-  const onChange = props.onChange ?? vi.fn();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const onChange = (props.onChange ?? vi.fn()) as any;
   return {
     onChange,
     ...render(

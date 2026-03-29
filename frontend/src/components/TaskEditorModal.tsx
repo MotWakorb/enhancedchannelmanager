@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import * as api from '../services/api';
+import * as autoCreationApi from '../services/autoCreationApi';
 import type { TaskStatus, TaskSchedule, TaskScheduleCreate, TaskScheduleUpdate, TaskParameterSchema, SettingsResponse } from '../services/api';
 import type { EPGSource, M3UAccount, ChannelGroup } from '../types';
+import type { AutoCreationRule } from '../types/autoCreation';
 import { logger } from '../utils/logger';
 import { ScheduleEditor } from './ScheduleEditor';
 import { ModalOverlay } from './ModalOverlay';
@@ -41,6 +43,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   const [epgSources, setEpgSources] = useState<EPGSource[]>([]);
   const [m3uAccounts, setM3uAccounts] = useState<M3UAccount[]>([]);
   const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>([]);
+  const [autoCreationRules, setAutoCreationRules] = useState<AutoCreationRule[]>([]);
 
   // Settings for default parameter values (stream_probe)
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
@@ -75,6 +78,9 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
         }
         if (sources.has('m3u_accounts')) {
           loaders.push(api.getM3UAccounts().then(setM3uAccounts));
+        }
+        if (sources.has('auto_creation_rules')) {
+          loaders.push(autoCreationApi.getAutoCreationRules().then(setAutoCreationRules));
         }
 
         // Load settings for default parameter values (stream_probe)
@@ -121,8 +127,17 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
       }));
     }
 
+    // Auto-creation rules (for auto_creation)
+    if (autoCreationRules.length > 0) {
+      options['auto_creation_rules'] = autoCreationRules.map(r => ({
+        value: r.id,
+        label: r.name,
+        badge: r.enabled ? undefined : 'disabled',
+      }));
+    }
+
     return options;
-  }, [channelGroups, m3uAccounts, epgSources]);
+  }, [channelGroups, m3uAccounts, epgSources, autoCreationRules]);
 
   // Compute default parameters for new schedules
   const defaultParameters = useMemo(() => {
@@ -201,10 +216,10 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   };
 
   // Create new schedule
-  const handleAddSchedule = async (data: TaskScheduleCreate) => {
+  const handleAddSchedule = async (data: TaskScheduleCreate | TaskScheduleUpdate) => {
     setSavingSchedule(true);
     try {
-      await api.createTaskSchedule(task.task_id, data);
+      await api.createTaskSchedule(task.task_id, data as TaskScheduleCreate);
       await refreshSchedules();
       setIsAddingSchedule(false);
       onSaved();
@@ -411,7 +426,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                     </div>
 
                     {/* Stale groups warning */}
-                    {schedule.parameters?._stale_groups &&
+                    {Array.isArray(schedule.parameters?._stale_groups) &&
                       (schedule.parameters._stale_groups as string[]).length > 0 && (
                       <div className="schedule-stale-warning">
                         <span className="material-icons">warning</span>

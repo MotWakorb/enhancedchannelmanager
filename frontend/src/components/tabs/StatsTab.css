@@ -201,6 +201,17 @@
   text-overflow: ellipsis;
 }
 
+.stream-name-badge {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 250px;
+  flex-shrink: 1;
+  opacity: 0.8;
+}
+
 .m3u-source {
   font-size: 0.7rem;
   padding: 0.2rem 0.5rem;

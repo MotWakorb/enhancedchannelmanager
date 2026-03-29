@@ -3,6 +3,7 @@ import { importChannelsFromCSV, parseCSVPreview, CSVImportResult, CSVPreviewResu
 import { ModalOverlay } from './ModalOverlay';
 import './ModalBase.css';
 import './CSVImportModal.css';
+import { logger } from '../utils/logger';
 
 interface CSVImportModalProps {
   isOpen: boolean;
@@ -87,17 +88,17 @@ export const CSVImportModal = memo(function CSVImportModal({
     setError(null);
 
     try {
-      console.log('[CSVImportModal] Starting import...');
+      logger.debug('[CSVImportModal] Starting import...');
       const result = await importChannelsFromCSV(file);
-      console.log('[CSVImportModal] Import result:', result);
+      logger.debug('[CSVImportModal] Import result:', result);
       setImportResult(result);
       setImportState('success');
       // Refresh channels if any were created, regardless of errors
       if (result.channels_created > 0 || result.groups_created > 0) {
-        console.log('[CSVImportModal] Calling onSuccess callback...');
+        logger.debug('[CSVImportModal] Calling onSuccess callback...');
         onSuccess();
       } else {
-        console.log('[CSVImportModal] No channels/groups created, skipping refresh');
+        logger.debug('[CSVImportModal] No channels/groups created, skipping refresh');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Import failed');

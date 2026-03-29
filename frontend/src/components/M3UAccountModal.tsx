@@ -1,5 +1,6 @@
+import { logger } from '../utils/logger';
 import { useState, useEffect, memo, useRef } from 'react';
-import type { M3UAccount, M3UAccountType, ServerGroup } from '../types';
+import type { M3UAccount, M3UAccountType, M3UAccountCreateRequest, ServerGroup } from '../types';
 import * as api from '../services/api';
 import { useAsyncOperation } from '../hooks/useAsyncOperation';
 import { ModalOverlay } from './ModalOverlay';
@@ -222,14 +223,14 @@ export const M3UAccountModal = memo(function M3UAccountModal({
         await api.updateM3UAccount(account!.id, data);
       } else {
         // Create account and immediately trigger refresh to avoid "Pending Setup" state
-        const newAccount = await api.createM3UAccount(data);
+        const newAccount = await api.createM3UAccount(data as unknown as M3UAccountCreateRequest);
         try {
           await api.refreshM3UAccount(newAccount.id);
           // Wait for Dispatcharr to update state before reloading data in ECM
           await new Promise(resolve => setTimeout(resolve, 2500));
         } catch (refreshErr) {
           // Don't fail the whole operation if refresh fails - account was created successfully
-          console.warn('Auto-refresh failed after account creation:', refreshErr);
+          logger.warn('Auto-refresh failed after account creation:', refreshErr);
         }
       }
 
