@@ -16,7 +16,7 @@ Key capabilities:
 import logging
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -153,13 +153,6 @@ class StreamEnrichment:
     detected_country: Optional[str] = None
     detected_network_prefix: Optional[str] = None
     regional_variant: Optional[str] = None  # "east", "west", or None
-
-
-@dataclass
-class BatchEnrichmentResult:
-    """Result of batch stream enrichment."""
-    enrichments: dict[int, StreamEnrichment] = field(default_factory=dict)
-    elapsed_ms: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -299,11 +292,6 @@ def strip_network_suffix(name: str, custom_suffixes: Optional[list[str]] = None)
     return result
 
 
-def has_network_suffix(name: str, custom_suffixes: Optional[list[str]] = None) -> bool:
-    """Check if a stream name has a strippable network suffix."""
-    return strip_network_suffix(name, custom_suffixes) != name.strip()
-
-
 # ---------------------------------------------------------------------------
 # Country prefix
 # ---------------------------------------------------------------------------
@@ -344,45 +332,6 @@ def get_regional_suffix(name: str) -> Optional[str]:
 def strip_regional_suffix(name: str) -> str:
     """Strip East/West regional suffix from a name."""
     return _REGIONAL_STRIP_RE.sub("", name).strip()
-
-
-def detect_regional_variants(streams: list[dict]) -> bool:
-    """Detect if a list of streams has regional variants (both East and West)."""
-    base_names: dict[str, set[str]] = {}
-    for stream in streams:
-        name_no_quality = strip_quality_suffixes(stream.get("name", ""))
-        name_no_quality = re.sub(r"\s+", " ", name_no_quality).strip()
-        regional = get_regional_suffix(name_no_quality)
-        base = strip_regional_suffix(name_no_quality).lower()
-        if base not in base_names:
-            base_names[base] = set()
-        base_names[base].add(regional or "none")
-
-    for variants in base_names.values():
-        has_east_or_none = "east" in variants or "none" in variants
-        has_west = "west" in variants
-        if has_east_or_none and has_west:
-            return True
-    return False
-
-
-def filter_streams_by_timezone(
-    streams: list[dict], preference: str
-) -> list[dict]:
-    """Filter streams by timezone preference ('east', 'west', or 'both')."""
-    if preference == "both":
-        return streams
-    result = []
-    for stream in streams:
-        name_no_quality = strip_quality_suffixes(stream.get("name", ""))
-        regional = get_regional_suffix(name_no_quality)
-        if preference == "east":
-            if regional == "east" or regional is None:
-                result.append(stream)
-        elif preference == "west":
-            if regional == "west":
-                result.append(stream)
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -467,24 +416,3 @@ def enrich_stream(stream: dict) -> StreamEnrichment:
     )
 
 
-def enrich_streams_batch(streams: list[dict]) -> BatchEnrichmentResult:
-    """Enrich a batch of streams with normalization metadata.
-
-    Each stream dict must have at least 'id' and 'name' keys.
-    Returns enrichments keyed by stream id.
-    """
-    start = time.time()
-    enrichments: dict[int, StreamEnrichment] = {}
-
-    for stream in streams:
-        stream_id = stream.get("id")
-        if stream_id is None:
-            continue
-        enrichments[stream_id] = enrich_stream(stream)
-
-    elapsed = (time.time() - start) * 1000
-    logger.info(
-        "[STREAM-NORM] Enriched %d streams in %.1fms",
-        len(enrichments), elapsed,
-    )
-    return BatchEnrichmentResult(enrichments=enrichments, elapsed_ms=elapsed)
