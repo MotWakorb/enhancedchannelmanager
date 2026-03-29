@@ -1205,6 +1205,22 @@ If any M3U account has multiple profiles, a **Profile Distribution Strategy** dr
 
 This setting only affects probing — it does not change how Dispatcharr routes viewer traffic.
 
+### Black Screen Detection
+
+When enabled in Settings → Maintenance, ECM runs an ffmpeg signalstats check after each successful probe to detect streams showing dark or blank content. Black screen streams show a purple `videocam_off` icon in the channel and stream lists and are deprioritized in Smart Sort.
+
+- **Enable/Disable** — Checkbox in the Stream Probing section
+- **Sample Duration** — How long to sample each stream (3-30 seconds, default 5). Longer samples are more accurate but slower.
+
+### Low FPS Detection
+
+ECM automatically flags streams with a framerate below a configurable threshold. Low FPS streams show an amber `slow_motion_video` icon and are deprioritized in Smart Sort. This requires no extra processing — the FPS is already collected during the standard ffprobe.
+
+- **Threshold** — Configurable in Settings → Maintenance via a dropdown (5, 10, 15, or 20 FPS, default 20)
+- **Always On** — No enable/disable toggle since it has zero overhead
+
+Both black screen and low FPS counts appear in probe progress notifications, probe history, and the notification center.
+
 ### Stream Strikeout System
 
 The strikeout system helps you identify and clean up streams that consistently fail probe checks.
