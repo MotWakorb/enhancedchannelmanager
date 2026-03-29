@@ -26,6 +26,7 @@ describe('PopularityPanel', () => {
   // Mock data
   const mockRankings: ChannelPopularityScore[] = [
     {
+      id: 1,
       channel_id: 'ch-1',
       channel_name: 'ESPN',
       score: 85.5,
@@ -36,9 +37,14 @@ describe('PopularityPanel', () => {
       watch_time_7d: 36000,
       unique_viewers_7d: 150,
       bandwidth_7d: 1073741824,
+      previous_score: null,
       previous_rank: 3,
+      calculated_at: '2024-01-01T00:00:00Z',
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z',
     },
     {
+      id: 2,
       channel_id: 'ch-2',
       channel_name: 'CNN',
       score: 72.3,
@@ -49,9 +55,14 @@ describe('PopularityPanel', () => {
       watch_time_7d: 28800,
       unique_viewers_7d: 100,
       bandwidth_7d: 536870912,
+      previous_score: null,
       previous_rank: 2,
+      calculated_at: '2024-01-01T00:00:00Z',
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z',
     },
     {
+      id: 3,
       channel_id: 'ch-3',
       channel_name: 'HBO',
       score: 65.0,
@@ -62,15 +73,17 @@ describe('PopularityPanel', () => {
       watch_time_7d: 21600,
       unique_viewers_7d: 75,
       bandwidth_7d: 268435456,
+      previous_score: null,
       previous_rank: 1,
+      calculated_at: '2024-01-01T00:00:00Z',
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z',
     },
   ];
 
   const mockRankingsResponse: PopularityRankingsResponse = {
     rankings: mockRankings,
     total: 3,
-    page: 1,
-    page_size: 50,
   };
 
   const mockTrendingUp: ChannelPopularityScore[] = [
@@ -86,7 +99,7 @@ describe('PopularityPanel', () => {
 
     // Setup default mocks
     vi.mocked(api.getPopularityRankings).mockResolvedValue(mockRankingsResponse);
-    vi.mocked(api.getTrendingChannels).mockImplementation((direction: string) => {
+    vi.mocked(api.getTrendingChannels).mockImplementation((direction?: 'up' | 'down', _limit?: number) => {
       if (direction === 'up') return Promise.resolve(mockTrendingUp);
       return Promise.resolve(mockTrendingDown);
     });
@@ -94,6 +107,7 @@ describe('PopularityPanel', () => {
       channels_scored: 10,
       channels_created: 5,
       channels_updated: 5,
+      top_channels: [],
     });
   });
 
@@ -362,6 +376,7 @@ describe('PopularityPanel', () => {
           channels_scored: 10,
           channels_created: 5,
           channels_updated: 5,
+          top_channels: [],
         }), 100))
       );
 
@@ -430,8 +445,6 @@ describe('PopularityPanel', () => {
       vi.mocked(api.getPopularityRankings).mockResolvedValue({
         rankings: [],
         total: 0,
-        page: 1,
-        page_size: 50,
       });
 
       render(<PopularityPanel />);

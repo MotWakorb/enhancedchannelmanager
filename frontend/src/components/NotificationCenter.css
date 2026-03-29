@@ -346,6 +346,10 @@
   color: var(--warning);
 }
 
+.probe-stat-low-fps {
+  color: #f59e0b;
+}
+
 .probe-stat-skipped {
   color: var(--text-muted);
 }

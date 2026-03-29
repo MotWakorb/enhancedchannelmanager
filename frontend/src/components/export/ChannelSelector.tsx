@@ -42,16 +42,6 @@ export function ChannelSelector({
   useEffect(() => { loadData(); }, [loadData]);
 
   // Group channels by group
-  const channelsByGroup = useMemo(() => {
-    const map = new Map<number, Channel[]>();
-    for (const ch of channels) {
-      const gid = ch.channel_group_id ?? 0;
-      if (!map.has(gid)) map.set(gid, []);
-      map.get(gid)!.push(ch);
-    }
-    return map;
-  }, [channels]);
-
   const filteredChannels = useMemo(() => {
     if (!search) return channels;
     const q = search.toLowerCase();

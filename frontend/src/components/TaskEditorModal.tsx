@@ -216,10 +216,10 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   };
 
   // Create new schedule
-  const handleAddSchedule = async (data: TaskScheduleCreate) => {
+  const handleAddSchedule = async (data: TaskScheduleCreate | TaskScheduleUpdate) => {
     setSavingSchedule(true);
     try {
-      await api.createTaskSchedule(task.task_id, data);
+      await api.createTaskSchedule(task.task_id, data as TaskScheduleCreate);
       await refreshSchedules();
       setIsAddingSchedule(false);
       onSaved();
@@ -426,7 +426,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                     </div>
 
                     {/* Stale groups warning */}
-                    {schedule.parameters?._stale_groups &&
+                    {Array.isArray(schedule.parameters?._stale_groups) &&
                       (schedule.parameters._stale_groups as string[]).length > 0 && (
                       <div className="schedule-stale-warning">
                         <span className="material-icons">warning</span>

@@ -29,7 +29,7 @@ describe('BackupRestoreSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Mock fetch for backup download
-    global.fetch = vi.fn();
+    globalThis.fetch = vi.fn();
   });
 
   describe('when not admin', () => {
@@ -64,7 +64,7 @@ describe('BackupRestoreSection', () => {
 
     it('renders file input for zip files', () => {
       render(<BackupRestoreSection isAdmin={true} />);
-      const fileInput = screen.getByAcceptingFiles('.zip');
+      const fileInput = document.querySelector('input[type="file"][accept=".zip"]');
       expect(fileInput).toBeInTheDocument();
     });
 
@@ -89,18 +89,18 @@ describe('BackupRestoreSection', () => {
           'Content-Disposition': 'attachment; filename="ecm-backup-2026-01-01.zip"',
         }),
       };
-      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockResponse);
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockResponse);
 
       // Mock URL.createObjectURL and revokeObjectURL
       const mockUrl = 'blob:http://test/mock-url';
-      global.URL.createObjectURL = vi.fn(() => mockUrl);
-      global.URL.revokeObjectURL = vi.fn();
+      globalThis.URL.createObjectURL = vi.fn(() => mockUrl);
+      globalThis.URL.revokeObjectURL = vi.fn();
 
       render(<BackupRestoreSection isAdmin={true} />);
       fireEvent.click(screen.getByText('Download Backup'));
 
       await waitFor(() => {
-        expect(global.fetch).toHaveBeenCalledWith('/api/backup/create');
+        expect(globalThis.fetch).toHaveBeenCalledWith('/api/backup/create');
       });
 
       await waitFor(() => {
@@ -109,7 +109,7 @@ describe('BackupRestoreSection', () => {
     });
 
     it('shows error on download failure', async () => {
-      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
         ok: false,
       });
 
@@ -184,16 +184,3 @@ describe('BackupRestoreSection', () => {
   });
 });
 
-// Custom matcher helper for file input
-function getByAcceptingFiles(accept: string) {
-  return document.querySelector(`input[type="file"][accept="${accept}"]`);
-}
-
-// Extend screen with custom query
-Object.defineProperty(screen, 'getByAcceptingFiles', {
-  value: (accept: string) => {
-    const el = getByAcceptingFiles(accept);
-    if (!el) throw new Error(`No file input found with accept="${accept}"`);
-    return el;
-  },
-});

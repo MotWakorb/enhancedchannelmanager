@@ -20,8 +20,8 @@ const renderWithProviders = (ui: JSX.Element) =>
 describe('M3UChangesTab', () => {
   // Mock data
   const mockAccounts: M3UAccount[] = [
-    { id: 1, name: 'Test M3U 1', url: 'http://test1.m3u', is_active: true },
-    { id: 2, name: 'Test M3U 2', url: 'http://test2.m3u', is_active: true },
+    { id: 1, name: 'Test M3U 1', server_url: 'http://test1.m3u', is_active: true } as unknown as M3UAccount,
+    { id: 2, name: 'Test M3U 2', server_url: 'http://test2.m3u', is_active: true } as unknown as M3UAccount,
   ];
 
   const mockSummary: M3UChangeSummary = {

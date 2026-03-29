@@ -691,7 +691,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   onSortStreamsByQuality,
   onSortStreamsByMode,
   isSortingByQuality = false,
-  enabledCriteria = { resolution: true, bitrate: true, framerate: true },
+  enabledCriteria = { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false },
   failedChannelCount = 0,
   successChannelCount = 0,
 }: DroppableGroupHeaderProps) {
@@ -5104,6 +5104,10 @@ export function ChannelsPane({
                       hasBlackScreenStreams={channel.streams.some(streamId => {
                         const stats = streamStatsMap.get(streamId);
                         return stats && stats.probe_status === 'success' && stats.is_black_screen;
+                      })}
+                      hasLowFpsStreams={channel.streams.some(streamId => {
+                        const stats = streamStatsMap.get(streamId);
+                        return stats && stats.probe_status === 'success' && stats.is_low_fps;
                       })}
                       onPreviewChannel={() => handlePreviewChannel(channel)}
                     />

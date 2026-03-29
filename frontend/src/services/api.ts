@@ -18,13 +18,13 @@ import type {
   EPGSource,
   EPGData,
   EPGProgram,
+  StreamStats,
   StreamProfile,
   DummyEPGCustomProperties,
   JournalQueryParams,
   JournalResponse,
   JournalStats,
   ChannelStatsResponse,
-  ChannelStats,
   SystemEventsResponse,
   NormalizationRuleGroup,
   NormalizationRule,
@@ -35,8 +35,6 @@ import type {
   TestRuleRequest,
   TestRuleResult,
   NormalizationBatchResponse,
-  NormalizationMigrationStatus,
-  NormalizationMigrationResult,
   TagGroup,
   Tag,
   CreateTagGroupRequest,
@@ -44,9 +42,7 @@ import type {
   AddTagsRequest,
   AddTagsResponse,
   UpdateTagRequest,
-  TestTagsResponse,
   // M3U Change Tracking
-  M3USnapshot,
   M3UChangesResponse,
   M3UChangeSummary,
   M3UDigestSettings,
@@ -54,7 +50,6 @@ import type {
   M3UChangeType,
   // Authentication
   AuthStatus,
-  AuthProvidersResponse,
   LoginResponse,
   MeResponse,
   LogoutResponse,
@@ -66,7 +61,6 @@ import type {
   AuthSettingsPublic,
   AuthSettingsUpdate,
   UserListResponse,
-  UserDetailResponse,
   UserUpdateRequest,
   UserUpdateResponse,
   // User Profile
@@ -93,6 +87,7 @@ import type {
   DummyEPGPreviewRequest,
   DummyEPGPreviewResult,
   DummyEPGBatchPreviewRequest,
+  DummyEPGChannelAssignment,
 } from '../types';
 import { logger } from '../utils/logger';
 import { fetchJson, fetchText, buildQuery } from './httpClient';
@@ -118,6 +113,7 @@ import {
   normalizeStreamNamesWithBackend,
 } from './streamNormalization';
 // Re-export stream normalization utilities for backward compatibility
+export type PrefixOrder = 'number-first' | 'country-first';
 export type {
   TimezonePreference,
   NumberSeparator,
@@ -771,6 +767,7 @@ export interface SettingsResponse {
   m3u_account_priorities: M3UAccountPriorities;  // M3U account priorities for sorting (account_id -> priority)
   black_screen_detection_enabled: boolean;  // Run ffmpeg blackdetect after successful probe
   black_screen_sample_duration: number;  // Seconds to sample for black screen detection (3-30)
+  low_fps_threshold: number;  // FPS below this value is considered "low FPS"
   deprioritize_failed_streams: boolean;  // When enabled, failed/timeout/pending streams sort to bottom
   strike_threshold: number;  // Consecutive failures before flagging stream (0 = disabled)
   normalize_on_channel_create: boolean;  // Default state for normalization toggle when creating channels
@@ -843,6 +840,7 @@ export async function saveSettings(settings: {
   stream_probe_schedule_time?: string;  // Optional - time of day for probes (HH:MM), defaults to "03:00"
   bitrate_sample_duration?: number;  // Optional - duration in seconds to sample stream for bitrate (10, 20, or 30), defaults to 10
   parallel_probing_enabled?: boolean;  // Optional - probe streams from different M3Us simultaneously, defaults to true
+  max_concurrent_probes?: number;  // Optional - max simultaneous probes when parallel probing is enabled (1-16), defaults to 8
   profile_distribution_strategy?: string;  // Optional - how to distribute probes across profiles: fill_first, round_robin, least_loaded
   skip_recently_probed_hours?: number;  // Optional - skip streams probed within last N hours, defaults to 0 (always probe)
   refresh_m3us_before_probe?: boolean;  // Optional - refresh all M3U accounts before starting probe, defaults to true
@@ -855,6 +853,7 @@ export async function saveSettings(settings: {
   m3u_account_priorities?: M3UAccountPriorities;  // Optional - M3U account priorities for sorting
   black_screen_detection_enabled?: boolean;  // Optional - run ffmpeg blackdetect after successful probe, defaults to false
   black_screen_sample_duration?: number;  // Optional - seconds to sample for black screen detection (3-30), defaults to 5
+  low_fps_threshold?: number;  // Optional - FPS below this value is considered "low FPS", defaults to 20
   deprioritize_failed_streams?: boolean;  // Optional - deprioritize failed/timeout/pending streams in sort, defaults to true
   strike_threshold?: number;  // Optional - consecutive failures before flagging stream, defaults to 3
   normalize_on_channel_create?: boolean;  // Optional - default state for normalization toggle, defaults to false
@@ -1404,7 +1403,7 @@ export async function getWatchHistory(options: {
 /**
  * Get probe stats for multiple streams by their IDs.
  */
-export async function getStreamStatsByIds(streamIds: number[]): Promise<Record<number, import('../types').StreamStats>> {
+export async function getStreamStatsByIds(streamIds: number[]): Promise<Record<number, StreamStats>> {
   return fetchJson(`${API_BASE}/stream-stats/by-ids`, {
     method: 'POST',
     body: JSON.stringify({ stream_ids: streamIds }),
@@ -1483,7 +1482,12 @@ export async function getProbeProgress(): Promise<{
   success_count: number;
   failed_count: number;
   skipped_count: number;
+  black_screen_count: number;
+  low_fps_count: number;
   percentage: number;
+  rate_limited?: boolean;
+  rate_limited_hosts?: Array<{ host: string; backoff_remaining: number; consecutive_429s: number }>;
+  max_backoff_remaining?: number;
 }> {
   return fetchJson(`${API_BASE}/stream-stats/probe/progress`, {
     method: 'GET',
@@ -1496,7 +1500,12 @@ export async function getProbeProgress(): Promise<{
     success_count: number;
     failed_count: number;
     skipped_count: number;
+    black_screen_count: number;
+    low_fps_count: number;
     percentage: number;
+    rate_limited?: boolean;
+    rate_limited_hosts?: Array<{ host: string; backoff_remaining: number; consecutive_429s: number }>;
+    max_backoff_remaining?: number;
   }>;
 }
 
@@ -1524,7 +1533,7 @@ export async function clearAllStreamStats(): Promise<{ cleared: number }> {
 
 // Strike Rule API
 
-export interface StruckOutStream extends import('../types').StreamStats {
+export interface StruckOutStream extends StreamStats {
   channels: { id: number; name: string }[];
 }
 
@@ -1566,6 +1575,8 @@ export interface ProbeHistoryEntry {
   skipped_streams: Array<{ id: number; name: string; url?: string; reason?: string }>;
   black_screen_count: number;
   black_screen_streams: Array<{ id: number; name: string; url?: string }>;
+  low_fps_count: number;
+  low_fps_streams: Array<{ id: number; name: string; url?: string }>;
   reordered_channels?: Array<{
     channel_id: number;
     channel_name: string;
@@ -2795,6 +2806,37 @@ export async function regenerateDummyEPG(): Promise<{ status: string; profiles: 
 }
 
 // ============================================================================
+// Dummy EPG Channel Assignments
+// ============================================================================
+
+export async function getDummyEPGChannels(profileId: number): Promise<DummyEPGChannelAssignment[]> {
+  return fetchJson(`${API_BASE}/dummy-epg/profiles/${profileId}/channels`, { credentials: 'include' });
+}
+
+export async function assignDummyEPGChannels(profileId: number, channelIds: number[]): Promise<{ created: number }> {
+  return fetchJson(`${API_BASE}/dummy-epg/profiles/${profileId}/channels`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ channel_ids: channelIds }),
+    credentials: 'include',
+  });
+}
+
+export async function removeDummyEPGChannel(profileId: number, channelId: number): Promise<void> {
+  await fetchJson(`${API_BASE}/dummy-epg/profiles/${profileId}/channels/${channelId}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  });
+}
+
+export async function assignDummyEPGChannelsFromGroup(profileId: number, groupId: number): Promise<{ created: number }> {
+  return fetchJson(`${API_BASE}/dummy-epg/profiles/${profileId}/channels/from-group/${groupId}`, {
+    method: 'POST',
+    credentials: 'include',
+  });
+}
+
+// ============================================================================
 // Backup & Restore
 // ============================================================================
 
@@ -2841,4 +2883,55 @@ export async function restoreBackupInitial(file: File): Promise<RestoreResult> {
   }
 
   return response.json();
+}
+
+// ── Status / Monitoring API ────────────────────────────────────────
+
+import type { ServiceWithStatus, ServiceAlertRule } from '../types';
+
+export async function getServices(): Promise<ServiceWithStatus[]> {
+  return fetchJson(`${API_BASE}/services`);
+}
+
+export async function enableService(serviceId: string): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/services/${serviceId}/enable`, { method: 'POST' });
+}
+
+export async function disableService(serviceId: string): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/services/${serviceId}/disable`, { method: 'POST' });
+}
+
+export async function restartService(serviceId: string): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/services/${serviceId}/restart`, { method: 'POST' });
+}
+
+export async function triggerHealthCheck(serviceId: string): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/services/${serviceId}/health-check`, { method: 'POST' });
+}
+
+export async function getServiceAlertRules(): Promise<ServiceAlertRule[]> {
+  return fetchJson(`${API_BASE}/services/alert-rules`);
+}
+
+export async function createServiceAlertRule(
+  data: Omit<ServiceAlertRule, 'id'>
+): Promise<ServiceAlertRule> {
+  return fetchJson(`${API_BASE}/services/alert-rules`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateServiceAlertRule(
+  ruleId: number,
+  data: Partial<ServiceAlertRule>
+): Promise<ServiceAlertRule> {
+  return fetchJson(`${API_BASE}/services/alert-rules/${ruleId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteServiceAlertRule(ruleId: number): Promise<void> {
+  return fetchJson(`${API_BASE}/services/alert-rules/${ruleId}`, { method: 'DELETE' });
 }

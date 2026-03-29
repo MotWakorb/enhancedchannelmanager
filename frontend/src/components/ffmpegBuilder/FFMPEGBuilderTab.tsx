@@ -308,7 +308,7 @@ export function FFMPEGBuilderTab() {
           ...prev.output,
           format: opt.format,
           path: isPipe ? 'pipe:1' : baseName + opt.extension,
-          movflags: opt.format === 'mp4' ? ['faststart'] : undefined,
+          movflags: (opt.format as string) === 'mp4' ? ['faststart'] : undefined,
         },
       };
     });

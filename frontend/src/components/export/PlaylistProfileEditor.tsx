@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import type { PlaylistProfile, ProfileCreateRequest, SelectionMode, StreamUrlMode, SortOrder } from '../../types/export';
 import * as exportApi from '../../services/exportApi';
 import { useNotifications } from '../../contexts/NotificationContext';

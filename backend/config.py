@@ -102,6 +102,7 @@ class DispatcharrSettings(BaseModel):
     # Black screen detection - run ffmpeg blackdetect after successful probe
     black_screen_detection_enabled: bool = False
     black_screen_sample_duration: int = 5  # Seconds to sample for black screen detection (3-30)
+    low_fps_threshold: int = 20  # FPS below this value is considered "low FPS" (5, 10, 15, or 20)
     deprioritize_failed_streams: bool = True
     # Strike rule - flag streams with consecutive probe failures (0 = disabled)
     strike_threshold: int = 3

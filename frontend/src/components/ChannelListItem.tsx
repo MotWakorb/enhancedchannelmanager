@@ -43,6 +43,7 @@ export interface ChannelListItemProps {
   isProbing?: boolean;
   hasFailedStreams?: boolean;
   hasBlackScreenStreams?: boolean;
+  hasLowFpsStreams?: boolean;
   onPreviewChannel?: () => void;
 }
 
@@ -234,6 +235,7 @@ export const ChannelListItem = memo(function ChannelListItem({
   isProbing = false,
   hasFailedStreams = false,
   hasBlackScreenStreams = false,
+  hasLowFpsStreams = false,
   onPreviewChannel,
 }: ChannelListItemProps) {
   const {
@@ -378,13 +380,16 @@ export const ChannelListItem = memo(function ChannelListItem({
           {channelUrl}
         </span>
       )}
-      <span className={`channel-streams-count ${channel.streams.length === 0 ? 'no-streams' : ''} ${hasFailedStreams ? 'has-failed' : !hasFailedStreams && hasBlackScreenStreams ? 'has-black-screen' : ''}`}>
+      <span className={`channel-streams-count ${channel.streams.length === 0 ? 'no-streams' : ''} ${hasFailedStreams ? 'has-failed' : hasBlackScreenStreams ? 'has-black-screen' : hasLowFpsStreams ? 'has-low-fps' : ''}`}>
         {channel.streams.length === 0 && <span className="material-icons warning-icon">warning</span>}
         {hasFailedStreams && channel.streams.length > 0 && (
           <span className="material-icons failed-stream-icon" title="One or more streams failed probe">error</span>
         )}
         {!hasFailedStreams && hasBlackScreenStreams && channel.streams.length > 0 && (
           <span className="material-icons black-screen-icon" title="One or more streams detected as black screen">videocam_off</span>
+        )}
+        {!hasFailedStreams && !hasBlackScreenStreams && hasLowFpsStreams && channel.streams.length > 0 && (
+          <span className="material-icons low-fps-icon" title="One or more streams have low FPS">slow_motion_video</span>
         )}
         {channel.streams.length} stream{channel.streams.length !== 1 ? 's' : ''}
       </span>
