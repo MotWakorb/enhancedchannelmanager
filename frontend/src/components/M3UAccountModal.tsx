@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { useState, useEffect, memo, useRef } from 'react';
 import type { M3UAccount, M3UAccountType, M3UAccountCreateRequest, ServerGroup } from '../types';
 import * as api from '../services/api';
@@ -229,7 +230,7 @@ export const M3UAccountModal = memo(function M3UAccountModal({
           await new Promise(resolve => setTimeout(resolve, 2500));
         } catch (refreshErr) {
           // Don't fail the whole operation if refresh fails - account was created successfully
-          console.warn('Auto-refresh failed after account creation:', refreshErr);
+          logger.warn('Auto-refresh failed after account creation:', refreshErr);
         }
       }
 

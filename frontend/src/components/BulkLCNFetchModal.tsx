@@ -5,6 +5,7 @@
  * selected channels at once. Uses batch API for efficient lookup.
  */
 
+import { logger } from '../utils/logger';
 import { useState, useEffect, useMemo, useRef, memo } from 'react';
 import type { Channel, EPGData } from '../types';
 import { getEPGLcnBatch, type LCNLookupItem } from '../services/api';
@@ -144,7 +145,7 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
             }
           }
         } catch (err) {
-          console.error('Failed to fetch LCNs:', err);
+          logger.error('Failed to fetch LCNs:', err);
           notifications.error('Failed to fetch Gracenote IDs from EPG sources', 'Gracenote');
           // Still show channels without LCN data
           for (const [tvgId, channels] of tvgIdToChannels.entries()) {

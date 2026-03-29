@@ -501,7 +501,7 @@ export function useEditMode({
       if (!prev.isActive) return prev;
       // If already in a batch, don't start a new one
       if (prev.currentBatch !== null) {
-        console.warn('startBatch called while already in a batch');
+        logger.warn('startBatch called while already in a batch');
         return prev;
       }
       return {
@@ -821,7 +821,7 @@ export function useEditMode({
 
       return false;
     } catch {
-      console.error('Failed to check for conflicts');
+      logger.error('Failed to check for conflicts');
       return false; // Assume no conflict on error
     }
   }, [state.baselineSnapshot, state.modifiedChannelIds]);
@@ -959,7 +959,7 @@ export function useEditMode({
         issues: response.validationIssues ?? [],
       };
     } catch (err) {
-      console.error('Validation failed:', err);
+      logger.error('Validation failed:', err);
       return {
         passed: false,
         issues: [{
@@ -1206,7 +1206,7 @@ export function useEditMode({
       result.operationsFailed = totalFailed;
       result.success = totalFailed === 0;
 
-      console.log(`[EditMode] Bulk commit completed: ${totalApplied} applied, ${totalFailed} failed`);
+      logger.info(`[EditMode] Bulk commit completed: ${totalApplied} applied, ${totalFailed} failed`);
 
       // Fetch updated channels with per-page progress
       const allChannels: Channel[] = [];
@@ -1289,7 +1289,7 @@ export function useEditMode({
         onError?.(errorMessage);
       }
     } catch (err) {
-      console.error('Commit failed:', err);
+      logger.error('Commit failed:', err);
       result.success = false;
       onError?.('Commit failed: ' + (err instanceof Error ? err.message : 'Unknown error'));
     } finally {
@@ -1321,7 +1321,7 @@ export function useEditMode({
     const newChannels = channels.filter((ch) => !workingCopyIds.has(ch.id));
 
     if (newChannels.length > 0) {
-      console.log('[useEditMode] Syncing', newChannels.length, 'new channels from API into working copy');
+      logger.debug('[useEditMode] Syncing', newChannels.length, 'new channels from API into working copy');
       setState((prev) => ({
         ...prev,
         workingCopy: [
@@ -1341,7 +1341,7 @@ export function useEditMode({
   // Compute set of group IDs that are staged for deletion (soft-deleted)
   const deletedGroupIds = useMemo(() => {
     if (!state.isActive) {
-      console.log('[useEditMode] Edit mode not active, returning empty deletedGroupIds');
+      logger.debug('[useEditMode] Edit mode not active, returning empty deletedGroupIds');
       return new Set<number>();
     }
 
@@ -1349,10 +1349,10 @@ export function useEditMode({
     for (const op of state.stagedOperations) {
       if (op.apiCall.type === 'deleteChannelGroup') {
         ids.add(op.apiCall.groupId);
-        console.log('[useEditMode] Found deleteChannelGroup operation for group:', op.apiCall.groupId);
+        logger.debug('[useEditMode] Found deleteChannelGroup operation for group:', op.apiCall.groupId);
       }
     }
-    console.log('[useEditMode] Computed deletedGroupIds:', Array.from(ids), 'from', state.stagedOperations.length, 'staged operations');
+    logger.debug('[useEditMode] Computed deletedGroupIds:', Array.from(ids), 'from', state.stagedOperations.length, 'staged operations');
     return ids;
   }, [state.isActive, state.stagedOperations]);
 

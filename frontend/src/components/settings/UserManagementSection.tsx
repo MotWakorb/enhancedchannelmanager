@@ -4,6 +4,7 @@
  * Admin panel for managing user accounts.
  * Allows viewing, editing, and deleting users.
  */
+import { logger } from '../../utils/logger';
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../services/api';
 import type { User, UserUpdateRequest } from '../../types';
@@ -44,7 +45,7 @@ export function UserManagementSection({ isAdmin, currentUserId }: Props) {
         setUsers(response.users);
       } catch (err) {
         setError('Failed to load users');
-        console.error('Failed to load users:', err);
+        logger.error('Failed to load users:', err);
       } finally {
         setLoading(false);
       }

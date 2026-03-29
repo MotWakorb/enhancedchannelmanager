@@ -1,3 +1,4 @@
+import { logger } from '../../utils/logger';
 import { useState, useEffect, useCallback } from 'react';
 import type { M3UChangeLog, M3UChangeSummary, M3UChangeType, M3UAccount } from '../../types';
 import * as api from '../../services/api';
@@ -100,7 +101,7 @@ export function M3UChangesTab() {
 
   // Fetch M3U accounts for filter dropdown
   useEffect(() => {
-    api.getM3UAccounts().then(setAccounts).catch(console.error);
+    api.getM3UAccounts().then(setAccounts).catch((err: unknown) => logger.error('Failed to load M3U accounts:', err));
   }, []);
 
   // Fetch changes

@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
 import type { AutoSyncCustomProperties, ChannelGroup, ChannelProfile, StreamProfile, EPGSource, Logo } from '../types';
 import * as api from '../services/api';
@@ -74,7 +75,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
       setLoadingLogos(true);
       api.getLogos({ pageSize: 10000 })
         .then(response => setLogos(response.results))
-        .catch(err => console.error('Failed to load logos:', err))
+        .catch(err => logger.error('Failed to load logos:', err))
         .finally(() => setLoadingLogos(false));
     }
   }, [isOpen]);
@@ -241,7 +242,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
       setLogoUrlInput('');
       setLogoDropdownOpen(false);
     } catch (err) {
-      console.error('Failed to create logo:', err);
+      logger.error('Failed to create logo:', err);
     } finally {
       setUploadingLogo(false);
     }
@@ -264,7 +265,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
         onGroupsChange();
       }
     } catch (err) {
-      console.error('Failed to create group:', err);
+      logger.error('Failed to create group:', err);
     } finally {
       setCreatingGroup(false);
     }

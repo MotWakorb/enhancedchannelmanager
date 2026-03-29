@@ -10,6 +10,7 @@ import * as api from '../../services/api';
 import type { TagGroup, Tag } from '../../types';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { ModalOverlay } from '../ModalOverlay';
+import { logger } from '../../utils/logger';
 import './TagEngineSection.css';
 import '../ModalBase.css';
 
@@ -45,7 +46,7 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
       setTags(data.tags || []);
     } catch (err) {
       setError('Failed to load tags');
-      console.error(err);
+      logger.error('Tag operation failed:', err);
     } finally {
       setLoading(false);
     }
@@ -66,7 +67,7 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
       setNewTagInput('');
     } catch (err) {
       setError('Failed to add tag');
-      console.error(err);
+      logger.error('Tag operation failed:', err);
     }
   };
 
@@ -89,7 +90,7 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
       }
     } catch (err) {
       setError('Failed to add tags');
-      console.error(err);
+      logger.error('Tag operation failed:', err);
     }
   };
 
@@ -105,7 +106,7 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
       } else {
         setError('Failed to delete tag');
       }
-      console.error(err);
+      logger.error('Tag operation failed:', err);
     }
   };
 
@@ -115,7 +116,7 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
       setTags(tags.map(t => t.id === tag.id ? updated : t));
     } catch (err) {
       setError('Failed to update tag');
-      console.error(err);
+      logger.error('Tag operation failed:', err);
     }
   };
 
@@ -126,7 +127,7 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
       onRefresh();
     } catch (err) {
       setError('Failed to update description');
-      console.error(err);
+      logger.error('Tag operation failed:', err);
     }
   };
 
@@ -305,7 +306,7 @@ export function TagEngineSection() {
       setGroups(data.groups);
     } catch (err) {
       notifications.error('Failed to load tag groups', 'Tags');
-      console.error(err);
+      logger.error('Tag operation failed:', err);
     } finally {
       setLoading(false);
     }
@@ -329,7 +330,7 @@ export function TagEngineSection() {
       setNewGroupDescription('');
     } catch (err) {
       notifications.error('Failed to create tag group', 'Tags');
-      console.error(err);
+      logger.error('Tag operation failed:', err);
     }
   };
 
@@ -344,7 +345,7 @@ export function TagEngineSection() {
       await loadGroups();
     } catch (err) {
       notifications.error('Failed to delete tag group', 'Tags');
-      console.error(err);
+      logger.error('Tag operation failed:', err);
     }
   };
 

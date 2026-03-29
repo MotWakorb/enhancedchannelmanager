@@ -6,6 +6,7 @@
  * This file contains utility functions for quality detection, sorting, and prefix/suffix handling.
  */
 
+import { logger } from '../utils/logger';
 import {
   QUALITY_SUFFIXES,
   NETWORK_PREFIXES,
@@ -68,7 +69,7 @@ const UNICODE_TO_ASCII_MAP: Record<string, string> = {
  * Converts superscript, subscript, small caps, and full-width characters to standard ASCII.
  * This allows quality suffixes like "ᵁᴴᴰ" to be detected as "UHD".
  */
-export function normalizeUnicodeToAscii(input: string): string {
+function normalizeUnicodeToAscii(input: string): string {
   let result = '';
   for (const char of input) {
     result += UNICODE_TO_ASCII_MAP[char] ?? char;
@@ -501,7 +502,7 @@ export async function normalizeStreamNamesWithBackend(names: string[]): Promise<
 
     return resultMap;
   } catch (error) {
-    console.error('Backend normalization failed:', error);
+    logger.error('Backend normalization failed:', error);
     // Return original names as fallback
     const resultMap = new Map<string, string>();
     for (const name of names) {
@@ -511,13 +512,4 @@ export async function normalizeStreamNamesWithBackend(names: string[]): Promise<
   }
 }
 
-/**
- * Normalize a single stream name using the backend normalization engine.
- *
- * @param name Stream name to normalize
- * @returns Promise resolving to normalized name
- */
-export async function normalizeStreamNameWithBackend(name: string): Promise<string> {
-  const results = await normalizeStreamNamesWithBackend([name]);
-  return results.get(name) ?? name;
-}
+// normalizeStreamNameWithBackend (singular) removed — use normalizeStreamNamesWithBackend (plural) instead

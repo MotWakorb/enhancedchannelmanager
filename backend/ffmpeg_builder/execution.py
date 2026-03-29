@@ -141,16 +141,6 @@ def parse_progress_line(line: str, total_duration: Optional[str] = None) -> Prog
 # Executor
 # ---------------------------------------------------------------------------
 
-def execute_command(command: List[str], timeout: Optional[int] = None) -> ExecutionResult:
-    """Execute an ffmpeg command and return the result.
-
-    This is a simple synchronous wrapper. For production use, prefer
-    FFMPEGExecutor which adds event emission, cancellation, etc.
-    """
-    executor = FFMPEGExecutor()
-    return executor.run(command, timeout=timeout)
-
-
 class FFMPEGExecutor:
     """Executes ffmpeg commands with progress parsing and event emission."""
 

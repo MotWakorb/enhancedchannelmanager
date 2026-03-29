@@ -206,7 +206,7 @@ export function StreamsPane({
     }
 
     // DEBUG: Log filtering info
-    console.log('[StreamsPane] Channel groups filter debug:', {
+    logger.debug('[StreamsPane] Channel groups filter debug:', {
       allGroups: channelGroups.map(g => ({ id: g.id, name: g.name })),
       m3uGroupIds: Array.from(m3uGroupIds),
       deletedGroupIds: deletedGroupIds ? Array.from(deletedGroupIds) : 'undefined',
@@ -220,7 +220,7 @@ export function StreamsPane({
       !m3uGroupIds.has(group.id) && !deletedGroupIds?.has(group.id)
     );
 
-    console.log('[StreamsPane] Filtered groups:', filtered.map(g => ({ id: g.id, name: g.name })));
+    logger.debug('[StreamsPane] Filtered groups:', filtered.map(g => ({ id: g.id, name: g.name })));
 
     return filtered;
   }, [channelGroups, providerGroupSettings, deletedGroupIds, isEditMode]);
@@ -494,15 +494,8 @@ export function StreamsPane({
           streamIds: selectedStreamIds,
         });
 
-        // Debug logging - use console.warn for visibility
+        // Debug logging
         const typesAfterSet = Array.from(e.dataTransfer.types);
-        console.warn(`[DRAG-DEBUG] Drag started (bulk)`, {
-          streamId: stream.id,
-          streamName: stream.name,
-          selectedCount,
-          typesAfterSet,
-          effectAllowed: e.dataTransfer.effectAllowed
-        });
         logger.debug(`[DRAG-DEBUG] Drag started (bulk)`, {
           streamId: stream.id,
           selectedCount,
@@ -537,14 +530,8 @@ export function StreamsPane({
           streamIds: [stream.id],
         });
 
-        // Debug logging - use console.warn for visibility
+        // Debug logging
         const typesAfterSet = Array.from(e.dataTransfer.types);
-        console.warn(`[DRAG-DEBUG] Drag started (single)`, {
-          streamId: stream.id,
-          streamName: stream.name,
-          typesAfterSet,
-          effectAllowed: e.dataTransfer.effectAllowed
-        });
         logger.debug(`[DRAG-DEBUG] Drag started (single)`, {
           streamId: stream.id,
           streamName: stream.name,
@@ -1125,7 +1112,7 @@ export function StreamsPane({
         const normalizedMap = await normalizeStreamNamesWithBackend(streamNames);
         setNormalizedNamesPreview(normalizedMap);
       } catch (error) {
-        console.error('Failed to fetch normalization preview:', error);
+        logger.error('Failed to fetch normalization preview:', error);
         setNormalizedNamesPreview(new Map());
       } finally {
         setNormalizationPreviewLoading(false);
@@ -1179,7 +1166,7 @@ export function StreamsPane({
 
         closeBulkCreateModal();
       } catch (err) {
-        console.error('Failed to create channel:', err);
+        logger.error('Failed to create channel:', err);
         alert('Failed to create channel: ' + (err instanceof Error ? err.message : 'Unknown error'));
       } finally {
         setBulkCreateLoading(false);
@@ -1294,7 +1281,7 @@ export function StreamsPane({
 
       closeBulkCreateModal();
     } catch (error) {
-      console.error('Bulk create failed:', error);
+      logger.error('Bulk create failed:', error);
       alert(`Bulk create failed: ${error}`);
     } finally {
       setBulkCreateLoading(false);

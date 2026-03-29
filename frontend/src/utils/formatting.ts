@@ -102,6 +102,22 @@ export function formatDateTime(isoString: string | null): string {
 }
 
 /**
+ * Format ISO timestamp to compact locale string (e.g. "Mar 29, 2026, 02:35 PM"), or "Never" if null.
+ * Uses short month, no seconds.
+ */
+export function formatDateCompact(isoString: string | null): string {
+  if (!isoString) return 'Never';
+  const date = new Date(isoString);
+  return date.toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+/**
  * Format seconds to compact duration string (e.g. "2h 15m", "45m 30s", "12s").
  * For simple numeric seconds only.
  */

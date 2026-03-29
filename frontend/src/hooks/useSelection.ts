@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 
-export interface SelectionState<T extends number | string> {
+interface SelectionState<T extends number | string> {
   selectedIds: Set<T>;
   lastSelectedId: T | null;
 }

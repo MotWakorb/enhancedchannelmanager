@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { memo } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -203,7 +204,7 @@ export const StreamListItem = memo(function StreamListItem({
           className="clear-stats-btn"
           onClick={(e) => {
             e.stopPropagation();
-            console.log('Clear stats button clicked for stream:', stream.id);
+            logger.debug('Clear stats button clicked for stream:', stream.id);
             onClearStats(stream.id);
           }}
           title="Reset probe status"

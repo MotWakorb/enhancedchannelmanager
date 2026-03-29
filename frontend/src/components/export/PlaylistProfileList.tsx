@@ -5,16 +5,13 @@ import { useNotifications } from '../../contexts/NotificationContext';
 import { PlaylistProfileEditor } from './PlaylistProfileEditor';
 import { GenerateControls } from './GenerateControls';
 import { ModalOverlay } from '../ModalOverlay';
+import { formatDateTime } from '../../utils/formatting';
 import '../ModalBase.css';
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString();
 }
 
 const SELECTION_LABELS: Record<string, string> = {
@@ -127,7 +124,7 @@ export function PlaylistProfileList() {
                     <span>URL Mode: {profile.stream_url_mode}</span>
                     <span>Sort: {profile.sort_order}</span>
                     <span>Prefix: {profile.filename_prefix}</span>
-                    <span>Created: {formatDate(profile.created_at)}</span>
+                    <span>Created: {formatDateTime(profile.created_at)}</span>
                   </div>
                   <GenerateControls profile={profile} onGenerated={loadProfiles} />
                 </div>

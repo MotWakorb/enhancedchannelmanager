@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, memo } from 'react';
 import type { Channel, Logo } from '../types';
 import * as api from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
+import { logger } from '../utils/logger';
 import './ModalBase.css';
 
 export interface ChannelMetadataChanges {
@@ -176,7 +177,7 @@ export const EditChannelModal = memo(function EditChannelModal({
       setSelectedLogoId(newLogo.id);
       setNewLogoUrl('');
     } catch (err) {
-      console.error('Failed to add logo:', err);
+      logger.error('Failed to add logo:', err);
     } finally {
       setAddingLogo(false);
     }
@@ -187,7 +188,7 @@ export const EditChannelModal = memo(function EditChannelModal({
     if (!file) return;
 
     if (!file.type.startsWith('image/')) {
-      console.error('Invalid file type. Please select an image file.');
+      logger.warn('Invalid file type. Please select an image file.');
       return;
     }
 
@@ -195,7 +196,7 @@ export const EditChannelModal = memo(function EditChannelModal({
     try {
       await onLogoUpload(file);
     } catch (err) {
-      console.error('Failed to upload logo:', err);
+      logger.error('Failed to upload logo:', err);
     } finally {
       setUploadingLogo(false);
       if (fileInputRef.current) {
@@ -216,7 +217,7 @@ export const EditChannelModal = memo(function EditChannelModal({
         setSelectedLogoId(newLogo.id);
       }
     } catch (err) {
-      console.error('Failed to create logo from EPG:', err);
+      logger.error('Failed to create logo from EPG:', err);
       setImmediateLogoUrl(null);
     } finally {
       setAddingEpgLogo(false);
@@ -234,7 +235,7 @@ export const EditChannelModal = memo(function EditChannelModal({
         setSelectedLogoId(newLogo.id);
       }
     } catch (err) {
-      console.error('Failed to create logo from stream:', err);
+      logger.error('Failed to create logo from stream:', err);
       setImmediateLogoUrl(null);
     } finally {
       setAddingStreamLogo(false);
@@ -246,11 +247,11 @@ export const EditChannelModal = memo(function EditChannelModal({
     api.getChannelStreams(channel.id).then(streams => {
       const url = streams.find(s => s.logo_url)?.logo_url || null;
       if (url) {
-        console.log(`[EditChannelModal] Found stream logo for channel ${channel.id}: ${url}`);
+        logger.debug(`[EditChannelModal] Found stream logo for channel ${channel.id}: ${url}`);
       }
       setStreamLogoUrl(url);
     }).catch((err) => {
-      console.error(`[EditChannelModal] Failed to fetch streams for channel ${channel.id}:`, err);
+      logger.error(`[EditChannelModal] Failed to fetch streams for channel ${channel.id}:`, err);
     });
   }, [channel.id, channel.streams.length]);
 

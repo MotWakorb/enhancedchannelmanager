@@ -1,3 +1,4 @@
+import { logger } from '../../utils/logger';
 import { useState, useEffect, useCallback } from 'react';
 import type { JournalEntry, JournalCategory, JournalActionType, JournalStats, JournalQueryParams } from '../../types';
 import * as api from '../../services/api';
@@ -123,7 +124,7 @@ export function JournalTab() {
       const result = await api.getJournalStats();
       setStats(result);
     } catch (err) {
-      console.error('Failed to load journal stats:', err);
+      logger.error('Failed to load journal stats:', err);
     }
   }, []);
 
