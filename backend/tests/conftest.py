@@ -16,6 +16,8 @@ sys.path.insert(0, str(backend_dir))
 
 # Set test config directory before importing modules
 os.environ["CONFIG_DIR"] = "/tmp/ecm_test_config"
+# Disable rate limiting in tests
+os.environ["RATE_LIMIT_ENABLED"] = "0"
 
 # Ensure test config directory exists
 Path("/tmp/ecm_test_config").mkdir(parents=True, exist_ok=True)

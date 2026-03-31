@@ -4,6 +4,7 @@ Authentication API endpoints.
 Provides login, logout, token refresh, and password management.
 """
 import logging
+import os
 import secrets
 import smtplib
 import ssl
@@ -14,6 +15,8 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from config import get_settings
@@ -39,6 +42,8 @@ from .dependencies import (
 
 
 logger = logging.getLogger(__name__)
+
+limiter = Limiter(key_func=get_remote_address, enabled=os.environ.get("RATE_LIMIT_ENABLED", "1") != "0")
 
 
 def _cleanup_expired_sessions(session: Session, user_id: int) -> int:
@@ -452,6 +457,7 @@ async def initial_setup(
 
 
 @router.post("/login", response_model=LoginResponse)
+@limiter.limit("5/minute")
 async def login(
     login_request: LoginRequest,
     request: Request,
@@ -479,8 +485,10 @@ async def login(
         # Fallback to direct user lookup for backwards compatibility
         user = session.query(User).filter(User.username == login_request.username).first()
 
+    client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+
     if user is None:
-        logger.warning("[AUTH] Login attempt for nonexistent user: %s", login_request.username)
+        logger.warning("[AUTH] Login attempt for nonexistent user: %s from %s", login_request.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
@@ -494,7 +502,7 @@ async def login(
 
     # If no local identity, check if user was created with local auth_provider (legacy)
     if not has_local_identity and user.auth_provider != "local":
-        logger.warning("[AUTH] Non-local user attempted local login: %s", login_request.username)
+        logger.warning("[AUTH] Non-local user attempted local login: %s from %s", login_request.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Please use your configured authentication provider to log in",
@@ -502,7 +510,7 @@ async def login(
 
     # Verify password
     if not user.password_hash or not verify_password(login_request.password, user.password_hash):
-        logger.warning("[AUTH] Failed login attempt for user: %s", login_request.username)
+        logger.warning("[AUTH] Failed login attempt for user: %s from %s", login_request.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
@@ -514,7 +522,7 @@ async def login(
 
     # Check if user is active
     if not user.is_active:
-        logger.warning("[AUTH] Login attempt for disabled user: %s", login_request.username)
+        logger.warning("[AUTH] Login attempt for disabled user: %s from %s", login_request.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User account is disabled",
@@ -942,6 +950,7 @@ class DispatcharrLoginRequest(BaseModel):
 
 
 @router.post("/dispatcharr/login", response_model=LoginResponse)
+@limiter.limit("5/minute")
 async def dispatcharr_login(
     login_request: DispatcharrLoginRequest,
     request: Request,
@@ -976,7 +985,8 @@ async def dispatcharr_login(
                 login_request.password,
             )
     except DispatcharrAuthenticationError as e:
-        logger.warning("[AUTH] Dispatcharr auth failed for user: %s", login_request.username)
+        client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+        logger.warning("[AUTH] Dispatcharr auth failed for user: %s from %s", login_request.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e),
