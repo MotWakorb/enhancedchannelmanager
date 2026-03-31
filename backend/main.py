@@ -104,7 +104,7 @@ handle authentication automatically when accessed through the web UI.
 ## Rate Limiting
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
-    version="0.15.1",
+    version="0.16.0-0002",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -219,6 +219,10 @@ async def auth_middleware(request: Request, call_next):
             # Check if path is exempt
             if path not in AUTH_EXEMPT_PATHS:
                 token = get_token_from_request(request)
+                # Allow MCP API key as alternative to JWT
+                settings = get_settings()
+                if settings.mcp_api_key and token == settings.mcp_api_key:
+                    return await call_next(request)
                 if not token or not decode_token_safe(token):
                     return JSONResponse(
                         status_code=401,

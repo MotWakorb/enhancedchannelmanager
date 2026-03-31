@@ -78,6 +78,7 @@ def _mock_settings(**overrides):
         "auto_creation_excluded_terms": [],
         "auto_creation_excluded_groups": [],
         "auto_creation_exclude_auto_sync_groups": False,
+        "mcp_api_key": "",
     }
     defaults.update(overrides)
     mock = MagicMock()
@@ -325,3 +326,170 @@ class TestResetStats:
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
+
+
+class TestMCPApiKeyGenerate:
+    """Tests for POST /api/settings/mcp-api-key."""
+
+    @pytest.mark.asyncio
+    async def test_generates_key(self, async_client):
+        """Generates a new MCP API key."""
+        mock = _mock_settings()
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings.save_settings") as save_mock, \
+             patch("routers.settings.clear_settings_cache"):
+            response = await async_client.post("/api/settings/mcp-api-key")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "mcp_api_key" in data
+        assert len(data["mcp_api_key"]) > 20  # token_urlsafe(32) produces 43 chars
+        save_mock.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_replaces_existing_key(self, async_client):
+        """Generating a new key replaces the old one."""
+        mock = _mock_settings(mcp_api_key="old-key-value")
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings.save_settings") as save_mock, \
+             patch("routers.settings.clear_settings_cache"):
+            response = await async_client.post("/api/settings/mcp-api-key")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["mcp_api_key"] != "old-key-value"
+        save_mock.assert_called_once()
+
+
+class TestMCPApiKeyRevoke:
+    """Tests for DELETE /api/settings/mcp-api-key."""
+
+    @pytest.mark.asyncio
+    async def test_revokes_key(self, async_client):
+        """Revokes the MCP API key."""
+        mock = _mock_settings(mcp_api_key="existing-key")
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings.save_settings") as save_mock, \
+             patch("routers.settings.clear_settings_cache"):
+            response = await async_client.delete("/api/settings/mcp-api-key")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "revoked"
+        save_mock.assert_called_once()
+        # Verify the key was cleared on the mock
+        assert mock.mcp_api_key == ""
+
+    @pytest.mark.asyncio
+    async def test_revoke_when_no_key(self, async_client):
+        """Revoking when no key exists still succeeds."""
+        mock = _mock_settings(mcp_api_key="")
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"):
+            response = await async_client.delete("/api/settings/mcp-api-key")
+
+        assert response.status_code == 200
+
+
+class TestMCPApiKeyConfiguredInResponse:
+    """Tests that mcp_api_key_configured appears in GET /api/settings."""
+
+    @pytest.mark.asyncio
+    async def test_shows_configured_true(self, async_client):
+        """Settings response shows mcp_api_key_configured=true when key exists."""
+        mock = _mock_settings(mcp_api_key="some-key")
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        assert response.json()["mcp_api_key_configured"] is True
+
+    @pytest.mark.asyncio
+    async def test_shows_configured_false(self, async_client):
+        """Settings response shows mcp_api_key_configured=false when no key."""
+        mock = _mock_settings(mcp_api_key="")
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        assert response.json()["mcp_api_key_configured"] is False
+
+
+class TestMCPApiKeyAuthMiddleware:
+    """Tests that the auth middleware accepts MCP API key as Bearer token."""
+
+    @pytest.mark.asyncio
+    async def test_api_key_authenticates(self, async_client):
+        """Valid MCP API key in Authorization header passes auth middleware."""
+        from config import DispatcharrSettings
+
+        settings = DispatcharrSettings(
+            url="http://test", username="u", password="p",
+            mcp_api_key="test-mcp-key-123",
+        )
+
+        with patch("main.get_settings", return_value=settings), \
+             patch("main.get_auth_settings") as auth_mock:
+            auth_mock.return_value.require_auth = True
+            auth_mock.return_value.setup_complete = True
+
+            response = await async_client.get(
+                "/api/settings",
+                headers={"Authorization": "Bearer test-mcp-key-123"},
+            )
+
+        # Should not be 401 — the API key should have passed auth
+        assert response.status_code != 401
+
+    @pytest.mark.asyncio
+    async def test_invalid_api_key_rejected(self, async_client):
+        """Invalid API key is rejected with 401."""
+        from config import DispatcharrSettings
+
+        settings = DispatcharrSettings(
+            url="http://test", username="u", password="p",
+            mcp_api_key="real-key",
+        )
+
+        with patch("main.get_settings", return_value=settings), \
+             patch("main.get_auth_settings") as auth_mock:
+            auth_mock.return_value.require_auth = True
+            auth_mock.return_value.setup_complete = True
+
+            response = await async_client.get(
+                "/api/settings",
+                headers={"Authorization": "Bearer wrong-key"},
+            )
+
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_empty_mcp_key_does_not_match(self, async_client):
+        """When mcp_api_key is empty, Bearer tokens don't match it."""
+        from config import DispatcharrSettings
+
+        settings = DispatcharrSettings(
+            url="http://test", username="u", password="p",
+            mcp_api_key="",  # Not configured
+        )
+
+        with patch("main.get_settings", return_value=settings), \
+             patch("main.get_auth_settings") as auth_mock:
+            auth_mock.return_value.require_auth = True
+            auth_mock.return_value.setup_complete = True
+
+            response = await async_client.get(
+                "/api/settings",
+                headers={"Authorization": "Bearer some-random-token"},
+            )
+
+        assert response.status_code == 401

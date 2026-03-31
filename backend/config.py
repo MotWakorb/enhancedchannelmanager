@@ -158,6 +158,8 @@ class DispatcharrSettings(BaseModel):
     auto_creation_excluded_terms: list[str] = []  # Terms that exclude streams by name (case-insensitive substring)
     auto_creation_excluded_groups: list[str] = []  # M3U group names to exclude (case-insensitive exact match)
     auto_creation_exclude_auto_sync_groups: bool = False  # Exclude streams in Dispatcharr auto-sync groups
+    # MCP server API key for Claude integration (empty = not configured)
+    mcp_api_key: str = ""
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)
@@ -218,6 +220,22 @@ def _migrate_normalization_settings(data: dict) -> dict:
     return data
 
 
+def _sanitize_settings_data(data: dict) -> dict:
+    """Replace null values with field defaults to prevent Pydantic validation failures.
+
+    When settings.json contains null for non-Optional fields (e.g., from manual edits,
+    older versions, or corrupted backups), Pydantic v2 raises ValidationError, causing
+    a silent fallback to empty defaults — effectively "clearing" user settings on restart.
+    """
+    defaults = DispatcharrSettings()
+    for field_name, field_info in DispatcharrSettings.model_fields.items():
+        if field_name in data and data[field_name] is None:
+            default_val = getattr(defaults, field_name)
+            logger.warning("[CONFIG] Field '%s' is null in settings file, using default: %s", field_name, default_val)
+            data[field_name] = default_val
+    return data
+
+
 def load_settings() -> DispatcharrSettings:
     """Load settings from file or return defaults."""
     global _cached_settings
@@ -233,9 +251,13 @@ def load_settings() -> DispatcharrSettings:
             data = json.loads(CONFIG_FILE.read_text())
             # Apply migrations
             data = _migrate_normalization_settings(data)
+            # Sanitize nulls to prevent Pydantic validation failures
+            data = _sanitize_settings_data(data)
             _cached_settings = DispatcharrSettings(**data)
             logger.info("[CONFIG] Loaded settings successfully, configured: %s", _cached_settings.is_configured())
             return _cached_settings
+        except json.JSONDecodeError as e:
+            logger.error("[CONFIG] Settings file is not valid JSON: %s", e)
         except Exception as e:
             logger.exception("[CONFIG] Failed to load settings from %s: %s", CONFIG_FILE, e)
 
