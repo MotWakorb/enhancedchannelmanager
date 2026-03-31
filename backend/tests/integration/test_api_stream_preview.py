@@ -101,7 +101,7 @@ class TestStreamPreview:
                 with patch("subprocess.Popen", side_effect=FileNotFoundError("ffmpeg not found")):
                     response = await async_client.get("/api/stream-preview/1")
                     assert response.status_code == 500
-                    assert "FFmpeg not found" in response.json()["detail"]
+                    assert response.json()["detail"] == "Internal server error"
 
 
 class TestChannelPreview:
@@ -212,7 +212,7 @@ class TestChannelPreview:
                 with patch("subprocess.Popen", side_effect=FileNotFoundError("ffmpeg not found")):
                     response = await async_client.get("/api/channel-preview/1")
                     assert response.status_code == 500
-                    assert "FFmpeg not found" in response.json()["detail"]
+                    assert response.json()["detail"] == "Internal server error"
 
     @pytest.mark.asyncio
     async def test_channel_preview_video_only_ffmpeg_not_found(self, async_client):
@@ -232,7 +232,7 @@ class TestChannelPreview:
                 with patch("subprocess.Popen", side_effect=FileNotFoundError("ffmpeg not found")):
                     response = await async_client.get("/api/channel-preview/1")
                     assert response.status_code == 500
-                    assert "FFmpeg not found" in response.json()["detail"]
+                    assert response.json()["detail"] == "Internal server error"
 
 
 class TestStreamPreviewModeSettings:

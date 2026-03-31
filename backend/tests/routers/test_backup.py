@@ -1,7 +1,8 @@
 """
 Unit tests for backup endpoints.
 
-Tests: GET /api/backup/create, POST /api/backup/restore, POST /api/backup/restore-initial
+Tests: GET /api/backup/create, POST /api/backup/restore, POST /api/backup/restore-initial,
+       GET /api/backup/export
 Mocks: get_settings(), get_engine(), close_db(), init_db(), clear_settings_cache(), reset_client()
 """
 import io
@@ -9,7 +10,18 @@ import json
 import zipfile
 
 import pytest
-from unittest.mock import MagicMock, patch, call
+import yaml
+from unittest.mock import AsyncMock, MagicMock, patch, call
+
+from models import (
+    AutoCreationRule,
+    FFmpegProfile,
+    NormalizationRuleGroup,
+    NormalizationRule,
+    ScheduledTask,
+    TagGroup,
+    Tag,
+)
 
 
 def _make_backup_zip(
@@ -387,3 +399,147 @@ class TestRestoreInitial:
 
         assert response.status_code == 400
         assert "not a valid zip" in response.json()["detail"]
+
+
+class TestExportYaml:
+    """Tests for GET /api/backup/export."""
+
+    @pytest.mark.asyncio
+    async def test_returns_yaml_with_all_sections(self, async_client, test_session):
+        """Export returns YAML with settings, database, and dispatcharr sections."""
+        mock_settings = MagicMock()
+        mock_settings.model_dump.return_value = {"url": "http://test:9191", "username": "admin", "password": "secret"}
+
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = [{"id": 1}]
+        mock_client.get_channel_groups.return_value = [{"id": 1, "name": "News"}]
+        mock_client.get_m3u_accounts.return_value = [{"id": 1, "name": "Provider", "url": "http://m3u"}]
+        mock_client.get_epg_sources.return_value = [{"id": 1, "name": "EPG1", "url": "http://epg"}]
+        mock_client.get_stream_profiles.return_value = [{"id": 1, "name": "Default"}]
+        mock_client.get_channel_profiles.return_value = [{"id": 1, "name": "HD"}]
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch("routers.backup.get_client", return_value=mock_client):
+            response = await async_client.get("/api/backup/export")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "text/yaml; charset=utf-8"
+        assert "ecm-export-" in response.headers["content-disposition"]
+
+        data = yaml.safe_load(response.text)
+        assert "ecm_export" in data
+        assert "settings" in data
+        assert "database" in data
+        assert "dispatcharr" in data
+
+    @pytest.mark.asyncio
+    async def test_redacts_passwords(self, async_client, test_session):
+        """Export redacts sensitive fields from settings."""
+        mock_settings = MagicMock()
+        mock_settings.model_dump.return_value = {
+            "url": "http://test:9191",
+            "password": "supersecret",
+            "smtp_password": "smtpsecret",
+            "username": "admin",
+        }
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch("routers.backup.get_client", return_value=None):
+            response = await async_client.get("/api/backup/export")
+
+        assert response.status_code == 200
+        data = yaml.safe_load(response.text)
+        assert data["settings"]["password"] == "***REDACTED***"
+        assert data["settings"]["smtp_password"] == "***REDACTED***"
+        assert data["settings"]["username"] == "admin"
+
+    @pytest.mark.asyncio
+    async def test_exports_db_tables(self, async_client, test_session):
+        """Export includes DB records from key tables."""
+        # Seed test data
+        tg = TagGroup(name="Countries", description="Country tags", is_builtin=False)
+        test_session.add(tg)
+        test_session.flush()
+        test_session.add(Tag(group_id=tg.id, value="US", case_sensitive=False, enabled=True, is_builtin=False))
+
+        ng = NormalizationRuleGroup(name="TestGroup", description="Test", enabled=True, priority=1, is_builtin=False)
+        test_session.add(ng)
+        test_session.flush()
+        test_session.add(NormalizationRule(
+            group_id=ng.id, name="Rule1", enabled=True, priority=1,
+            condition_type="contains", condition_value="HD",
+            action_type="remove", action_value="HD",
+            is_builtin=False,
+        ))
+
+        test_session.add(FFmpegProfile(name="TestProfile", config='{"test": true}'))
+        test_session.commit()
+
+        mock_settings = MagicMock()
+        mock_settings.model_dump.return_value = {"url": "http://test:9191"}
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch("routers.backup.get_client", return_value=None):
+            response = await async_client.get("/api/backup/export")
+
+        assert response.status_code == 200
+        data = yaml.safe_load(response.text)
+        db = data["database"]
+
+        assert len(db["tag_groups"]) >= 1
+        assert db["tag_groups"][0]["name"] == "Countries"
+        assert len(db["tag_groups"][0]["tags"]) == 1
+
+        assert len(db["normalization_rule_groups"]) >= 1
+        assert db["normalization_rule_groups"][0]["rules"][0]["name"] == "Rule1"
+
+        assert len(db["ffmpeg_profiles"]) >= 1
+        assert db["ffmpeg_profiles"][0]["name"] == "TestProfile"
+
+    @pytest.mark.asyncio
+    async def test_dispatcharr_not_connected(self, async_client, test_session):
+        """Export handles Dispatcharr not connected gracefully."""
+        mock_settings = MagicMock()
+        mock_settings.model_dump.return_value = {"url": ""}
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch("routers.backup.get_client", return_value=None):
+            response = await async_client.get("/api/backup/export")
+
+        assert response.status_code == 200
+        data = yaml.safe_load(response.text)
+        assert "_warning" in data["dispatcharr"]
+        assert "not connected" in data["dispatcharr"]["_warning"]
+
+    @pytest.mark.asyncio
+    async def test_dispatcharr_error_graceful(self, async_client, test_session):
+        """Export handles Dispatcharr API errors gracefully."""
+        mock_settings = MagicMock()
+        mock_settings.model_dump.return_value = {"url": "http://test:9191"}
+
+        mock_client = AsyncMock()
+        mock_client.get_channels.side_effect = Exception("Connection refused")
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch("routers.backup.get_client", return_value=mock_client):
+            response = await async_client.get("/api/backup/export")
+
+        assert response.status_code == 200
+        data = yaml.safe_load(response.text)
+        assert "_warning" in data["dispatcharr"]
+        assert "Connection refused" in data["dispatcharr"]["_warning"]
+
+    @pytest.mark.asyncio
+    async def test_export_metadata(self, async_client, test_session):
+        """Export includes version and timestamp in metadata."""
+        mock_settings = MagicMock()
+        mock_settings.model_dump.return_value = {}
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch("routers.backup.get_client", return_value=None):
+            response = await async_client.get("/api/backup/export")
+
+        assert response.status_code == 200
+        data = yaml.safe_load(response.text)
+        assert "version" in data["ecm_export"]
+        assert "exported_at" in data["ecm_export"]
