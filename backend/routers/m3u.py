@@ -13,7 +13,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 
 from cache import get_cache
-from config import CONFIG_DIR, get_settings, save_settings
+from config import CONFIG_DIR, get_settings, save_settings, validate_url_scheme
 from database import get_session
 from dispatcharr_client import get_client
 from alert_methods import send_alert
@@ -396,6 +396,8 @@ async def create_m3u_account(request: Request):
     start = time.time()
     try:
         data = await request.json()
+        if data.get("server_url"):
+            validate_url_scheme(data["server_url"], "server URL")
         result = await client.create_m3u_account(data)
         elapsed_ms = (time.time() - start) * 1000
 
@@ -411,6 +413,8 @@ async def create_m3u_account(request: Request):
 
         logger.info("[M3U] Created M3U account id=%s name='%s' in %.1fms", result.get("id"), result.get("name"), elapsed_ms)
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -481,6 +485,8 @@ async def update_m3u_account(account_id: int, request: Request):
     try:
         before_account = await client.get_m3u_account(account_id)
         data = await request.json()
+        if data.get("server_url"):
+            validate_url_scheme(data["server_url"], "server URL")
         result = await client.update_m3u_account(account_id, data)
 
         # Log to journal
@@ -497,6 +503,8 @@ async def update_m3u_account(account_id: int, request: Request):
         elapsed_ms = (time.time() - start) * 1000
         logger.info("[M3U] Updated M3U account id=%s name='%s' in %.1fms", account_id, result.get("name"), elapsed_ms)
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -510,6 +518,8 @@ async def patch_m3u_account(account_id: int, request: Request):
         start = time.time()
         before_account = await client.get_m3u_account(account_id)
         data = await request.json()
+        if data.get("server_url"):
+            validate_url_scheme(data["server_url"], "server URL")
         result = await client.patch_m3u_account(account_id, data)
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[M3U] Patched M3U account %s in %.1fms", account_id, elapsed_ms)
@@ -533,6 +543,8 @@ async def patch_m3u_account(account_id: int, request: Request):
             )
 
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal server error")
 

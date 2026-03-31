@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from alert_methods import send_alert
 from cache import get_cache
+from config import validate_url_scheme
 from dispatcharr_client import get_client
 from epg_matching import batch_find_epg_matches
 import journal
@@ -88,6 +89,8 @@ async def create_epg_source(request: Request):
     start = time.time()
     try:
         data = await request.json()
+        if data.get("url"):
+            validate_url_scheme(data["url"], "EPG source URL")
         result = await client.create_epg_source(data)
         elapsed_ms = (time.time() - start) * 1000
 
@@ -103,6 +106,8 @@ async def create_epg_source(request: Request):
 
         logger.info("[EPG] Created EPG source id=%s name='%s' in %.1fms", result.get("id"), result.get("name"), elapsed_ms)
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -117,6 +122,8 @@ async def update_epg_source(source_id: int, request: Request):
         # Get before state
         before_source = await client.get_epg_source(source_id)
         data = await request.json()
+        if data.get("url"):
+            validate_url_scheme(data["url"], "EPG source URL")
         result = await client.update_epg_source(source_id, data)
         elapsed_ms = (time.time() - start) * 1000
 
@@ -133,6 +140,8 @@ async def update_epg_source(source_id: int, request: Request):
 
         logger.info("[EPG] Updated EPG source id=%s name='%s' in %.1fms", source_id, result.get("name"), elapsed_ms)
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal server error")
 

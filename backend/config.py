@@ -1,3 +1,5 @@
+from urllib.parse import urlparse
+
 from pydantic import BaseModel
 import json
 import os
@@ -10,6 +12,23 @@ logger = logging.getLogger(__name__)
 # Config file location
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
 CONFIG_FILE = CONFIG_DIR / "settings.json"
+
+
+ALLOWED_URL_SCHEMES = {"http", "https"}
+
+
+def validate_url_scheme(url: str, field_name: str = "URL") -> None:
+    """Validate that a URL uses an allowed scheme (http/https only).
+
+    Raises HTTPException 400 if the scheme is not allowed.
+    """
+    from fastapi import HTTPException
+    parsed = urlparse(url)
+    if parsed.scheme.lower() not in ALLOWED_URL_SCHEMES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {field_name}: only http and https URLs are allowed",
+        )
 
 
 class DispatcharrSettings(BaseModel):
