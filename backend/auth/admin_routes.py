@@ -14,7 +14,7 @@ from sqlalchemy import or_
 
 from database import get_session
 from models import User
-from .password import hash_password
+from .password import hash_password, validate_password
 from .dependencies import get_current_active_admin
 from .routes import UserResponse
 
@@ -155,12 +155,12 @@ async def admin_create_user(
                 detail="Email already registered",
             )
 
-    # Admin-created users have relaxed password requirements
-    # Just check minimum length
-    if len(create_request.password) < 6:
+    # Validate password (same policy for all users per NIST 800-63B)
+    password_result = validate_password(create_request.password, create_request.username)
+    if not password_result.valid:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Password must be at least 6 characters",
+            detail=password_result.error,
         )
 
     # Create user
@@ -237,10 +237,11 @@ async def admin_update_user(
         user.is_active = update_request.is_active
 
     if update_request.password is not None:
-        if len(update_request.password) < 6:
+        password_result = validate_password(update_request.password, user.username)
+        if not password_result.valid:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Password must be at least 6 characters",
+                detail=password_result.error,
             )
         user.password_hash = hash_password(update_request.password)
 

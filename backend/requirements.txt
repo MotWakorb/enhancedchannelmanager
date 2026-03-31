@@ -7,6 +7,7 @@ python-multipart>=0.0.18
 
 # Authentication
 bcrypt>=4.0.0
+slowapi>=0.1.9
 python-jose[cryptography]>=3.3.0
 cryptography>=42.0.0
 

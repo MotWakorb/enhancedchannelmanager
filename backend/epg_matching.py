@@ -53,6 +53,9 @@ _BROADCAST_CALL_SIGN_RE = re.compile(
     r"\b([KW][A-Z]{2,4})(?:[-]?(?:DT|TV|HD|LP|CD|CA|LD))?\b", re.IGNORECASE
 )
 
+# Strip channel number prefix (e.g., "535 | ESPN" -> "ESPN")
+_CHANNEL_NUMBER_PREFIX_RE = re.compile(r"^\d+\s*\|\s*")
+
 # Strip non-alphanumeric characters for normalization
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]")
 
@@ -224,8 +227,11 @@ def normalize_for_epg_match(name: str) -> str:
     if not name:
         return ""
 
+    # Strip channel number prefix (e.g., "535 | ESPN" -> "ESPN")
+    result = _CHANNEL_NUMBER_PREFIX_RE.sub("", name)
+
     # Strip country prefix
-    result = strip_country_prefix(name)
+    result = strip_country_prefix(result)
 
     # Lowercase for processing
     result = result.lower()

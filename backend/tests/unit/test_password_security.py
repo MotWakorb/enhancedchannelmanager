@@ -76,48 +76,40 @@ class TestPasswordValidation:
         result = validate_password("Valid1!!")
         assert "8 characters" not in (result.error or "")
 
-    def test_password_requires_uppercase(self):
-        """Password must contain uppercase letter."""
+    def test_no_composition_rules(self):
+        """NIST 800-63B: no uppercase/lowercase/number requirements."""
         from auth.password import validate_password
 
-        result = validate_password("alllowercase123!")
-        assert result.valid is False
-        assert "uppercase" in result.error.lower()
+        # All lowercase — should pass (no composition rules)
+        result = validate_password("alllowercase")
+        assert result.valid is True
 
-    def test_password_requires_lowercase(self):
-        """Password must contain lowercase letter."""
-        from auth.password import validate_password
+        # All uppercase — should pass
+        result = validate_password("ALLUPPERCASE")
+        assert result.valid is True
 
-        result = validate_password("ALLUPPERCASE123!")
-        assert result.valid is False
-        assert "lowercase" in result.error.lower()
-
-    def test_password_requires_number(self):
-        """Password must contain a number."""
-        from auth.password import validate_password
-
-        result = validate_password("NoNumbers!!")
-        assert result.valid is False
-        assert "number" in result.error.lower()
+        # No numbers — should pass
+        result = validate_password("nonumbershere")
+        assert result.valid is True
 
     def test_valid_password_passes_validation(self):
         """Valid password passes all validation rules."""
         from auth.password import validate_password
 
-        result = validate_password("ValidPass123!")
+        result = validate_password("mysecurepassphrase")
         assert result.valid is True
         assert result.error is None
 
     def test_password_cannot_be_common(self):
-        """Password cannot be common/weak password."""
+        """Password cannot be common/breached password."""
         from auth.password import validate_password
 
         common_passwords = [
-            "Password123!",
-            "Qwerty123!",
-            "Admin123!",
-            "Welcome123!",
-            "Letmein123!",
+            "password",
+            "trustno1",
+            "12345678",
+            "qwerty123",
+            "iloveyou",
         ]
         for password in common_passwords:
             result = validate_password(password)

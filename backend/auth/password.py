@@ -3,24 +3,37 @@ Password hashing and validation utilities.
 
 Uses bcrypt directly for secure password hashing with automatic salt generation.
 No dependency on unmaintained passlib library.
+
+Password policy follows NIST 800-63B guidelines:
+- Minimum 8 characters
+- Check against common/breached password list
+- No composition rules (uppercase/lowercase/number)
+- No periodic rotation requirements
 """
-import re
+import logging
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import bcrypt
 
 
+logger = logging.getLogger(__name__)
+
 # bcrypt cost factor (rounds = 2^BCRYPT_ROUNDS)
 # 12 provides good security (~300ms hash time on modern hardware)
 BCRYPT_ROUNDS = 12
 
+# Common/breached passwords loaded from file (NIST 800-63B)
+_common_passwords: Optional[set] = None
+_COMMON_PASSWORDS_FILE = Path(__file__).parent / "common_passwords.txt"
 
-# Common/weak passwords to reject
-COMMON_PASSWORDS = {
+# Inline fallback if file is missing
+_FALLBACK_PASSWORDS = {
     "password", "password123", "password1", "password!",
     "qwerty", "qwerty123", "qwerty1",
-    "123456", "12345678", "123456789",
+    "123456", "12345678", "123456789", "1234567890",
     "admin", "admin123", "admin1", "administrator",
     "welcome", "welcome123", "welcome1",
     "letmein", "letmein123", "letmein1",
@@ -30,6 +43,28 @@ COMMON_PASSWORDS = {
     "football", "baseball", "soccer",
     "passw0rd", "p@ssword", "p@ssw0rd",
 }
+
+
+def _load_common_passwords() -> set:
+    """Load common passwords from file, falling back to inline set."""
+    global _common_passwords
+    if _common_passwords is not None:
+        return _common_passwords
+
+    if _COMMON_PASSWORDS_FILE.exists():
+        try:
+            _common_passwords = {
+                line.strip().lower()
+                for line in _COMMON_PASSWORDS_FILE.read_text().splitlines()
+                if line.strip() and not line.startswith("#")
+            }
+            logger.info("[AUTH] Loaded %d common passwords from %s", len(_common_passwords), _COMMON_PASSWORDS_FILE)
+            return _common_passwords
+        except Exception as e:
+            logger.warning("[AUTH] Failed to load common passwords file: %s", e)
+
+    _common_passwords = _FALLBACK_PASSWORDS
+    return _common_passwords
 
 
 @dataclass
@@ -79,14 +114,11 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 def validate_password(password: str, username: Optional[str] = None) -> PasswordValidationResult:
     """
-    Validate password strength and security.
+    Validate password strength per NIST 800-63B guidelines.
 
     Requirements:
     - At least 8 characters
-    - Contains uppercase letter
-    - Contains lowercase letter
-    - Contains number
-    - Not a common/weak password
+    - Not a common/breached password
     - Does not contain username
 
     Args:
@@ -103,30 +135,9 @@ def validate_password(password: str, username: Optional[str] = None) -> Password
             error="Password must be at least 8 characters long."
         )
 
-    # Uppercase check
-    if not re.search(r"[A-Z]", password):
-        return PasswordValidationResult(
-            valid=False,
-            error="Password must contain at least one uppercase letter."
-        )
-
-    # Lowercase check
-    if not re.search(r"[a-z]", password):
-        return PasswordValidationResult(
-            valid=False,
-            error="Password must contain at least one lowercase letter."
-        )
-
-    # Number check
-    if not re.search(r"\d", password):
-        return PasswordValidationResult(
-            valid=False,
-            error="Password must contain at least one number."
-        )
-
     password_lower = password.lower()
 
-    # Username check (before common password check to provide better feedback)
+    # Username check
     if username:
         username_lower = username.lower()
         if username_lower in password_lower:
@@ -135,21 +146,12 @@ def validate_password(password: str, username: Optional[str] = None) -> Password
                 error="Password cannot contain your username."
             )
 
-    # Common password check (case-insensitive)
-    # Check base password without numbers/symbols
-    base_password = re.sub(r"[^a-z]", "", password_lower)
-    if base_password in COMMON_PASSWORDS or password_lower in COMMON_PASSWORDS:
+    # Common/breached password check (case-insensitive)
+    common = _load_common_passwords()
+    if password_lower in common:
         return PasswordValidationResult(
             valid=False,
-            error="Password is too common. Please choose a stronger password."
+            error="This password is too common. Please choose a stronger password."
         )
-
-    # Also check if password starts with a common word
-    for common in COMMON_PASSWORDS:
-        if password_lower.startswith(common) and len(common) >= 4:
-            return PasswordValidationResult(
-                valid=False,
-                error="Password is too common. Please choose a stronger password."
-            )
 
     return PasswordValidationResult(valid=True)

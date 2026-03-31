@@ -101,7 +101,7 @@ class TestStreamPreview:
             response = await async_client.get("/api/stream-preview/1")
 
         assert response.status_code == 500
-        assert "FFmpeg" in response.json()["detail"]
+        assert response.json()["detail"] == "Internal server error"
 
 
 class TestChannelPreview:
@@ -185,4 +185,4 @@ class TestChannelPreview:
             response = await async_client.get("/api/channel-preview/1")
 
         assert response.status_code == 500
-        assert "FFmpeg" in response.json()["detail"]
+        assert response.json()["detail"] == "Internal server error"
