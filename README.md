@@ -22,6 +22,20 @@ services:
       - PGID=1000
       - ECM_PORT=6100
       - ECM_HTTPS_PORT=6143
+
+  # Optional: MCP server for Claude AI integration
+  ecm-mcp:
+    image: ghcr.io/motwakorb/enhancedchannelmanager-mcp:latest
+    ports:
+      - "6101:6101"
+    volumes:
+      - ./config:/config:ro
+    environment:
+      - ECM_URL=http://ecm:6100
+      - MCP_PORT=6101
+    depends_on:
+      ecm:
+        condition: service_healthy
 ```
 
 That's it. Open `http://localhost:6100` and the setup wizard will guide you through creating an admin account and connecting to Dispatcharr.
@@ -96,14 +110,15 @@ In-app notification bell with history, active task pinning, and external alert m
 
 ## MCP Server (Claude Integration)
 
-ECM includes an MCP (Model Context Protocol) server that lets Claude manage your channels through natural language. Ask Claude to list channels, refresh M3U accounts, probe stream health, run auto-creation pipelines, and more.
+ECM includes an MCP (Model Context Protocol) server that lets Claude manage your channels through natural language. Ask Claude to list channels, refresh M3U accounts, probe stream health, run auto-creation pipelines, view stats, and more — 80 tools across 13 domains.
 
 ### Setup
 
 1. **Generate an API key** in ECM Settings > MCP Integration
 2. **Start the MCP container** — it's included in `docker-compose.yml` and starts automatically alongside ECM on port 6101
-3. **Connect Claude Desktop** — add this to your Claude Desktop config (replace `YOUR_ECM_HOST` with your server IP):
+3. **Connect Claude** using one of the methods below (replace `YOUR_ECM_HOST` and `YOUR_API_KEY`):
 
+**Claude Desktop** — add to your Claude Desktop config:
 ```json
 {
   "mcpServers": {
@@ -114,11 +129,23 @@ ECM includes an MCP (Model Context Protocol) server that lets Claude manage your
 }
 ```
 
-### Available Tools (33)
+**Claude Code** — add a `.mcp.json` file in your project root:
+```json
+{
+  "mcpServers": {
+    "ecm": {
+      "type": "sse",
+      "url": "http://YOUR_ECM_HOST:6101/sse?api_key=YOUR_API_KEY"
+    }
+  }
+}
+```
+
+### Available Tools (80)
 
 | Tool | Description |
 |-|-|
-| **Channels** | |
+| **Channels (12)** | |
 | `list_channels` | List channels with optional group/search filtering |
 | `get_channel` | Get detailed channel info (streams, EPG, logo) |
 | `create_channel` | Create a new channel |
@@ -129,38 +156,90 @@ ECM includes an MCP (Model Context Protocol) server that lets Claude manage your
 | `reorder_streams` | Reorder streams within a channel by priority |
 | `assign_channel_numbers` | Bulk-assign sequential channel numbers |
 | `get_streams_for_channel` | Get detailed stream info for a channel |
-| **Groups** | |
+| `merge_channels` | Merge multiple channels into one |
+| `clear_auto_created` | Remove auto-created channels by group |
+| **Groups (6)** | |
 | `list_channel_groups` | List all groups with channel counts |
 | `create_channel_group` | Create a new group |
 | `get_orphaned_groups` | Find groups with no channels |
-| **Streams** | |
+| `delete_channel_group` | Delete a channel group |
+| `get_hidden_groups` | List hidden channel groups |
+| `get_auto_created_groups` | List auto-created groups |
+| **Streams (11)** | |
 | `list_streams` | List streams with group/provider/search filtering |
 | `search_streams` | Search streams by name across all providers |
 | `get_stream_health` | Stream health summary from last probe |
 | `probe_streams` | Start probing all streams (background) |
-| **M3U** | |
+| `probe_single_stream` | Probe one specific stream |
+| `get_probe_progress` | Check ongoing probe status |
+| `get_probe_results` | Results from the most recent probe |
+| `get_struck_out_streams` | List streams with consecutive failures |
+| `cancel_probe` | Cancel a running probe |
+| `get_streams_for_channel` | Get streams assigned to a channel |
+| `search_streams` | Search streams by name |
+| **M3U (8)** | |
 | `list_m3u_accounts` | List all M3U provider accounts |
+| `get_m3u_account` | Get detailed account info |
+| `create_m3u_account` | Create a new M3U account |
+| `update_m3u_account` | Update account name or URL |
+| `delete_m3u_account` | Delete an M3U account |
 | `refresh_m3u` | Refresh a specific M3U account |
 | `refresh_all_m3u` | Refresh all M3U accounts |
-| **EPG** | |
+| `update_m3u_group_settings` | Enable/disable stream groups on an account |
+| **EPG (7)** | |
 | `list_epg_sources` | List EPG data sources |
+| `create_epg_source` | Create a new EPG source |
+| `update_epg_source` | Update an EPG source |
+| `delete_epg_source` | Delete an EPG source |
 | `refresh_epg` | Refresh a specific EPG source |
 | `match_channels_epg` | Auto-match channels to EPG data |
-| **Auto-Creation** | |
-| `list_auto_creation_rules` | List all auto-creation rules |
+| `get_epg_grid` | What's on TV now — EPG schedule grid |
+| **Auto-Creation (9)** | |
+| `list_auto_creation_rules` | List all rules |
+| `get_auto_creation_rule` | Get rule details |
+| `delete_auto_creation_rule` | Delete a rule |
+| `toggle_auto_creation_rule` | Enable/disable a rule |
+| `duplicate_auto_creation_rule` | Duplicate a rule |
 | `run_auto_creation` | Run pipeline (dry_run=true by default) |
-| **Export** | |
+| `list_auto_creation_executions` | View execution history |
+| `rollback_auto_creation` | Undo an execution |
+| **Export (6)** | |
 | `list_export_profiles` | List export profiles |
+| `create_export_profile` | Create an export profile |
+| `delete_export_profile` | Delete an export profile |
 | `generate_export` | Generate M3U/XMLTV for a profile |
-| **Tasks** | |
+| `list_cloud_targets` | List cloud storage targets |
+| `publish_export` | Publish to a cloud target |
+| **Tasks (7)** | |
 | `list_tasks` | List scheduled tasks and status |
 | `run_task` | Run a task immediately |
-| **Stats** | |
+| `cancel_task` | Cancel a running task |
+| `get_task_history` | View task execution history |
+| `list_task_schedules` | List schedules for a task |
+| `create_task_schedule` | Create a cron schedule |
+| `delete_task_schedule` | Delete a schedule |
+| **Stats (6)** | |
 | `get_channel_stats` | Channel viewing stats and active viewers |
-| **System** | |
+| `get_top_watched` | Most-watched channels by viewing time |
+| `get_bandwidth` | Bandwidth usage (today, week, month, all-time) |
+| `get_popularity_rankings` | Channel popularity scores and trending |
+| `get_watch_history` | Recent watch history |
+| `get_unique_viewers` | Unique viewer counts by channel |
+| **System (3)** | |
 | `get_settings` | ECM settings overview |
 | `create_backup` | Create config backup |
 | `get_journal` | Activity audit log (with limit/category filters) |
+| **Notifications (3)** | |
+| `list_notifications` | List notifications with unread count |
+| `mark_notifications_read` | Mark all as read |
+| `delete_all_notifications` | Clear all notifications |
+| **Profiles (3)** | |
+| `list_channel_profiles` | List channel profiles |
+| `list_stream_profiles` | List stream profiles |
+| `apply_profile_to_channels` | Bulk-assign a profile to channels |
+| **Normalization (2)** | |
+| `test_normalization` | Test how stream names normalize |
+| `list_normalization_rules` | List normalization rule groups |
 
 Three read-only MCP resources provide quick context without a tool call: `ecm://stats/overview`, `ecm://channels/summary`, and `ecm://tasks/status`.
 
@@ -191,7 +270,8 @@ docker exec enhancedchannelmanager python /app/reset_password.py -u admin -p 'si
 |-|-|
 | Frontend | React 18, TypeScript, Vite, @dnd-kit |
 | Backend | Python, FastAPI, 20+ modular API routers |
-| Deployment | Docker, single container, static frontend |
+| MCP Server | Python, FastMCP, SSE transport, 80 tools |
+| Deployment | Docker Compose, two containers (ECM + MCP) |
 
 ## API Reference
 
@@ -199,11 +279,15 @@ Interactive API docs are available at `/api/docs` (Swagger UI) and `/api/redoc`.
 
 ## Roadmap
 
-### v0.14.0 — Enhanced Dummy EPG
-Text transforms, conditionals, lookup tables, per-source inline lookups, and enhanced live preview for dummy EPG templates.
+### Completed
 
-### v0.15.0 — Move Logic Server-Side
-Migrate heavy client-side computation (EPG matching, stream normalization, print guide generation, edit mode consolidation) to backend APIs.
+- **v0.15.1** — OWASP hardening (security headers, CORS, rate limiting, NIST password policy, log redaction, path validation)
+- **v0.15.0** — Server-side EPG matching, stream normalization, PUID/PGID support, low FPS detection, export/publish pipeline
+- **v0.14.0** — Dummy EPG profiles, auto-creation pipeline, normalization engine
+- **v0.13.0** — Backend modularization (20+ routers), auth system, task engine
 
-### v0.16.0 — M3U/EPG Export & Cloud Distribution
-Generate M3U playlists and XMLTV EPG from managed channels. Playlist profiles, cloud adapters (S3, Google Drive, OneDrive, Dropbox), scheduled publish pipeline, and full management UI.
+### v0.16.0 — MCP Server & Claude Integration (Current)
+MCP server for natural language channel management via Claude. 80 tools across 13 domains, SSE transport with API key auth, separate Docker container, frontend settings UI with connection status. Settings persistence hardening (null sanitization, auth file protection).
+
+### v0.17.0 — Dashboard & Analytics
+Enhanced dashboard with real-time stream monitoring, historical analytics, and customizable widgets.
