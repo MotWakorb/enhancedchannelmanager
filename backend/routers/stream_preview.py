@@ -17,6 +17,9 @@ from dispatcharr_client import get_client
 
 logger = logging.getLogger(__name__)
 
+# Restrict ffmpeg to safe network protocols only — blocks file://, data://, concat:, etc.
+FFMPEG_PROTOCOL_WHITELIST = "http,https,tcp,udp,rtp,rtmp,pipe"
+
 router = APIRouter(tags=["Stream Preview"])
 
 
@@ -101,6 +104,7 @@ async def stream_preview(stream_id: int):
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "error",
+            "-protocol_whitelist", FFMPEG_PROTOCOL_WHITELIST,
             "-fflags", "+genpts+discardcorrupt",  # Generate pts, handle corruption
             "-analyzeduration", "2000000",        # 2 seconds to analyze stream
             "-probesize", "2000000",              # 2MB probe size
@@ -146,6 +150,7 @@ async def stream_preview(stream_id: int):
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "error",
+            "-protocol_whitelist", FFMPEG_PROTOCOL_WHITELIST,
             "-fflags", "+genpts+discardcorrupt",  # Generate pts, handle corruption
             "-analyzeduration", "2000000",        # 2 seconds to analyze stream
             "-probesize", "2000000",              # 2MB probe size
@@ -269,6 +274,7 @@ async def channel_preview(channel_id: int):
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "error",
+            "-protocol_whitelist", FFMPEG_PROTOCOL_WHITELIST,
             "-fflags", "+genpts+discardcorrupt",
             "-analyzeduration", "2000000",
             "-probesize", "2000000",
@@ -316,6 +322,7 @@ async def channel_preview(channel_id: int):
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "error",
+            "-protocol_whitelist", FFMPEG_PROTOCOL_WHITELIST,
             "-fflags", "+genpts+discardcorrupt",
             "-analyzeduration", "2000000",
             "-probesize", "2000000",

@@ -13,6 +13,9 @@ FFPROBE_BIN = "ffprobe"
 FFMPEG_BIN = "ffmpeg"
 DEFAULT_TIMEOUT = 30
 
+# Restrict ffprobe to safe network protocols only — blocks file://, data://, concat:, etc.
+FFPROBE_PROTOCOL_WHITELIST = "http,https,tcp,udp,rtp,rtmp,pipe"
+
 
 @dataclass
 class ProbeResult:
@@ -80,6 +83,7 @@ def probe_source(path: str, timeout: int = DEFAULT_TIMEOUT) -> ProbeResult:
     cmd = [
         FFPROBE_BIN,
         "-v", "quiet",
+        "-protocol_whitelist", FFPROBE_PROTOCOL_WHITELIST,
         "-print_format", "json",
         "-show_format",
         "-show_streams",
