@@ -793,6 +793,8 @@ export interface SettingsResponse {
   auto_creation_excluded_terms: string[];
   auto_creation_excluded_groups: string[];
   auto_creation_exclude_auto_sync_groups: boolean;
+  // MCP integration
+  mcp_api_key_configured: boolean;
 }
 
 // Stream preview mode for browser playback
@@ -881,6 +883,25 @@ export async function saveSettings(settings: {
     method: 'POST',
     body: JSON.stringify(settings),
   });
+}
+
+export async function generateMCPApiKey(): Promise<{ mcp_api_key: string }> {
+  return fetchJson(`${API_BASE}/settings/mcp-api-key`, { method: 'POST' });
+}
+
+export async function revokeMCPApiKey(): Promise<{ status: string }> {
+  return fetchJson(`${API_BASE}/settings/mcp-api-key`, { method: 'DELETE' });
+}
+
+export async function getMCPStatus(): Promise<{
+  reachable: boolean;
+  status?: string;
+  api_key_configured?: boolean;
+  tools_available?: number;
+  resources_available?: number;
+  error?: string;
+}> {
+  return fetchJson(`${API_BASE}/settings/mcp-status`);
 }
 
 export async function testConnection(settings: {

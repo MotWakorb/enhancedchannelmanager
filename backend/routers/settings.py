@@ -4,6 +4,7 @@ Settings router — Dispatcharr connection, preferences, and service management 
 Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 """
 import logging
+import secrets
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -182,6 +183,8 @@ class SettingsResponse(BaseModel):
     auto_creation_excluded_terms: list[str]
     auto_creation_excluded_groups: list[str]
     auto_creation_exclude_auto_sync_groups: bool
+    # MCP integration
+    mcp_api_key_configured: bool  # Whether an MCP API key has been generated
 
 
 class TestConnectionRequest(BaseModel):
@@ -310,6 +313,7 @@ async def get_current_settings():
         auto_creation_excluded_terms=settings.auto_creation_excluded_terms,
         auto_creation_excluded_groups=settings.auto_creation_excluded_groups,
         auto_creation_exclude_auto_sync_groups=settings.auto_creation_exclude_auto_sync_groups,
+        mcp_api_key_configured=bool(settings.mcp_api_key),
     )
 
 
@@ -905,3 +909,49 @@ async def reset_stats():
     except Exception as e:
         logger.exception("[SETTINGS] Failed to reset stats: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# ============================================================================
+# MCP API Key Management
+# ============================================================================
+
+@router.post("/mcp-api-key")
+async def generate_mcp_api_key():
+    """Generate a new MCP API key (replaces any existing key)."""
+    settings = get_settings()
+    settings.mcp_api_key = secrets.token_urlsafe(32)
+    save_settings(settings)
+    clear_settings_cache()
+    logger.info("[SETTINGS] MCP API key generated")
+    return {"mcp_api_key": settings.mcp_api_key}
+
+
+@router.delete("/mcp-api-key")
+async def revoke_mcp_api_key():
+    """Revoke the current MCP API key."""
+    settings = get_settings()
+    settings.mcp_api_key = ""
+    save_settings(settings)
+    clear_settings_cache()
+    logger.info("[SETTINGS] MCP API key revoked")
+    return {"status": "revoked"}
+
+
+@router.get("/mcp-status")
+async def get_mcp_status():
+    """Check MCP server health by calling its /health endpoint."""
+    import os
+    import httpx
+
+    mcp_port = os.environ.get("MCP_PORT", "6101")
+    mcp_url = f"http://localhost:{mcp_port}/health"
+
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            r = await client.get(mcp_url)
+            r.raise_for_status()
+            return {"reachable": True, **r.json()}
+    except Exception as e:
+        logger.debug("[SETTINGS] MCP health check failed: %s", e)
+        return {"reachable": False, "error": str(e)}
+    return {"status": "revoked"}

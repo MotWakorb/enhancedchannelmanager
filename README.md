@@ -94,6 +94,76 @@ First-run setup wizard, local auth with bcrypt hashing, Dispatcharr SSO, account
 ### Notification Center
 In-app notification bell with history, active task pinning, and external alert methods (Discord webhooks, Telegram bots, SMTP email) with digest batching and source filtering.
 
+## MCP Server (Claude Integration)
+
+ECM includes an MCP (Model Context Protocol) server that lets Claude manage your channels through natural language. Ask Claude to list channels, refresh M3U accounts, probe stream health, run auto-creation pipelines, and more.
+
+### Setup
+
+1. **Generate an API key** in ECM Settings > MCP Integration
+2. **Start the MCP container** — it's included in `docker-compose.yml` and starts automatically alongside ECM on port 6101
+3. **Connect Claude Desktop** — add this to your Claude Desktop config (replace `YOUR_ECM_HOST` with your server IP):
+
+```json
+{
+  "mcpServers": {
+    "ecm": {
+      "url": "http://YOUR_ECM_HOST:6101/sse?api_key=YOUR_API_KEY"
+    }
+  }
+}
+```
+
+### Available Tools (33)
+
+| Tool | Description |
+|-|-|
+| **Channels** | |
+| `list_channels` | List channels with optional group/search filtering |
+| `get_channel` | Get detailed channel info (streams, EPG, logo) |
+| `create_channel` | Create a new channel |
+| `update_channel` | Update channel name, number, or group |
+| `delete_channel` | Delete a channel |
+| `add_stream_to_channel` | Add a stream to a channel |
+| `remove_stream_from_channel` | Remove a stream from a channel |
+| `reorder_streams` | Reorder streams within a channel by priority |
+| `assign_channel_numbers` | Bulk-assign sequential channel numbers |
+| `get_streams_for_channel` | Get detailed stream info for a channel |
+| **Groups** | |
+| `list_channel_groups` | List all groups with channel counts |
+| `create_channel_group` | Create a new group |
+| `get_orphaned_groups` | Find groups with no channels |
+| **Streams** | |
+| `list_streams` | List streams with group/provider/search filtering |
+| `search_streams` | Search streams by name across all providers |
+| `get_stream_health` | Stream health summary from last probe |
+| `probe_streams` | Start probing all streams (background) |
+| **M3U** | |
+| `list_m3u_accounts` | List all M3U provider accounts |
+| `refresh_m3u` | Refresh a specific M3U account |
+| `refresh_all_m3u` | Refresh all M3U accounts |
+| **EPG** | |
+| `list_epg_sources` | List EPG data sources |
+| `refresh_epg` | Refresh a specific EPG source |
+| `match_channels_epg` | Auto-match channels to EPG data |
+| **Auto-Creation** | |
+| `list_auto_creation_rules` | List all auto-creation rules |
+| `run_auto_creation` | Run pipeline (dry_run=true by default) |
+| **Export** | |
+| `list_export_profiles` | List export profiles |
+| `generate_export` | Generate M3U/XMLTV for a profile |
+| **Tasks** | |
+| `list_tasks` | List scheduled tasks and status |
+| `run_task` | Run a task immediately |
+| **Stats** | |
+| `get_channel_stats` | Channel viewing stats and active viewers |
+| **System** | |
+| `get_settings` | ECM settings overview |
+| `create_backup` | Create config backup |
+| `get_journal` | Activity audit log (with limit/category filters) |
+
+Three read-only MCP resources provide quick context without a tool call: `ecm://stats/overview`, `ecm://channels/summary`, and `ecm://tasks/status`.
+
 ## CLI Utilities
 
 ### Password Reset
