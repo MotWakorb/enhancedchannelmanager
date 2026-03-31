@@ -258,7 +258,7 @@ class TestGenerate:
         mock_mgr.generate = AsyncMock(side_effect=Exception("Connection refused"))
         response = await async_client.post(f"/api/export/profiles/{profile.id}/generate")
         assert response.status_code == 500
-        assert "Connection refused" in response.json()["detail"]
+        assert response.json()["detail"] == "Internal server error"
 
     @pytest.mark.asyncio
     @patch("routers.export.journal")
