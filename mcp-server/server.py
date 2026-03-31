@@ -84,7 +84,7 @@ async def handle_health(request):
         "status": "ok" if configured else "not_configured",
         "server": "ecm-mcp",
         "api_key_configured": configured,
-        "tools_available": 33,
+        "tools_available": 80,
         "resources_available": 3,
     }
     if not configured:

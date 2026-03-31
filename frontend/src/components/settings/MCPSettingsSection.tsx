@@ -273,20 +273,23 @@ export function MCPSettingsSection({ isAdmin }: Props) {
         <div className="settings-section">
           <div className="settings-section-header">
             <span className="material-icons">build</span>
-            <h3>Available Tools (33)</h3>
+            <h3>Available Tools (80)</h3>
           </div>
           <div className="mcp-tools-grid">
             {[
-              { category: 'Channels', count: 10, icon: 'tv', desc: 'CRUD, stream assignment, reorder, bulk numbering' },
-              { category: 'Groups', count: 3, icon: 'folder', desc: 'Manage channel groups' },
-              { category: 'Streams', count: 5, icon: 'stream', desc: 'List, search, health, probe, channel streams' },
-              { category: 'M3U', count: 3, icon: 'playlist_play', desc: 'List & refresh M3U accounts' },
-              { category: 'EPG', count: 3, icon: 'schedule', desc: 'EPG sources, refresh, auto-match' },
-              { category: 'Auto-Create', count: 2, icon: 'auto_fix_high', desc: 'List rules, run pipeline' },
-              { category: 'Export', count: 2, icon: 'file_download', desc: 'Profiles & generation' },
-              { category: 'Tasks', count: 2, icon: 'timer', desc: 'List & run scheduled tasks' },
-              { category: 'Stats', count: 1, icon: 'analytics', desc: 'Channel viewing stats' },
+              { category: 'Channels', count: 12, icon: 'tv', desc: 'CRUD, streams, merge, bulk numbering' },
+              { category: 'Groups', count: 6, icon: 'folder', desc: 'CRUD, hidden, orphaned, auto-created' },
+              { category: 'Streams', count: 11, icon: 'stream', desc: 'List, search, probe, health, struck-out' },
+              { category: 'M3U', count: 8, icon: 'playlist_play', desc: 'Account CRUD, refresh, group settings' },
+              { category: 'EPG', count: 7, icon: 'schedule', desc: 'Source CRUD, grid, refresh, auto-match' },
+              { category: 'Auto-Create', count: 9, icon: 'auto_fix_high', desc: 'Rule CRUD, toggle, executions, rollback' },
+              { category: 'Export', count: 6, icon: 'file_download', desc: 'Profiles, cloud targets, publish' },
+              { category: 'Tasks', count: 7, icon: 'timer', desc: 'Run, cancel, history, schedules' },
+              { category: 'Stats', count: 6, icon: 'analytics', desc: 'Top watched, bandwidth, popularity, viewers' },
               { category: 'System', count: 3, icon: 'settings', desc: 'Settings, backup, journal' },
+              { category: 'Notifications', count: 3, icon: 'notifications', desc: 'List, mark read, clear' },
+              { category: 'Profiles', count: 3, icon: 'tune', desc: 'Channel/stream profiles, bulk assign' },
+              { category: 'Normalize', count: 2, icon: 'text_format', desc: 'Test normalization, list rules' },
             ].map(t => (
               <div key={t.category} className="mcp-tool-card">
                 <div className="mcp-tool-card-header">
