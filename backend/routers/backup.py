@@ -2,6 +2,7 @@
 Backup & Restore router — create and restore ECM configuration backups.
 
 Backs up: settings.json, journal.db, uploads/logos/, tls/, m3u_uploads/
+YAML export: settings + DB tables + Dispatcharr state in a single file.
 """
 import io
 import json
@@ -11,14 +12,27 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import yaml
 from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from sqlalchemy import text
 
 from auth import RequireAdminIfEnabled
 from config import CONFIG_DIR, CONFIG_FILE, get_settings, clear_settings_cache
-from database import close_db, get_engine, init_db, JOURNAL_DB_FILE
-from dispatcharr_client import reset_client
+from database import close_db, get_engine, get_session, init_db, JOURNAL_DB_FILE
+from dispatcharr_client import get_client, reset_client
+from models import (
+    AutoCreationRule,
+    DummyEPGProfile,
+    DummyEPGChannelAssignment,
+    FFmpegProfile,
+    NormalizationRuleGroup,
+    NormalizationRule,
+    ScheduledTask,
+    TaskSchedule,
+    TagGroup,
+    Tag,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +42,7 @@ router = APIRouter(prefix="/api/backup", tags=["Backup"])
 BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 
 # App version for manifest (imported at call time to avoid circular imports)
-APP_VERSION = "0.15.0"
+APP_VERSION = "0.16.0"
 
 
 def _get_backup_filename() -> str:
@@ -126,6 +140,10 @@ def _validate_backup_zip(zf: zipfile.ZipFile) -> dict:
     # Check for path traversal in zip entries
     for name in zf.namelist():
         if name.startswith("/") or ".." in name:
+            raise HTTPException(status_code=400, detail="Backup contains unsafe file paths")
+        # Canonicalize and verify resolved path stays within CONFIG_DIR
+        resolved = (CONFIG_DIR / name).resolve()
+        if not str(resolved).startswith(str(CONFIG_DIR.resolve())):
             raise HTTPException(status_code=400, detail="Backup contains unsafe file paths")
 
     return manifest
@@ -276,3 +294,169 @@ async def restore_backup_initial(file: UploadFile = File(...)):
         "backup_date": manifest.get("created_at", "unknown"),
         "restored_files": restored,
     }
+
+
+def _gather_settings() -> dict:
+    """Read settings.json and return as dict (excluding sensitive fields)."""
+    settings = get_settings()
+    data = settings.model_dump()
+    # Redact credentials — the export is for review/portability, not secret storage
+    for key in ("password", "smtp_password"):
+        if key in data:
+            data[key] = "***REDACTED***"
+    return data
+
+
+def _gather_db_tables() -> dict:
+    """Export key DB tables as lists of dicts."""
+    session = get_session()
+    try:
+        sections = {}
+
+        # Scheduled tasks
+        tasks = session.query(ScheduledTask).all()
+        sections["scheduled_tasks"] = [t.to_dict() for t in tasks]
+
+        # Task schedules
+        schedules = session.query(TaskSchedule).all()
+        sections["task_schedules"] = [
+            {
+                "task_id": s.task_id,
+                "name": s.name,
+                "enabled": s.enabled,
+                "schedule_type": s.schedule_type,
+                "interval_seconds": s.interval_seconds,
+                "schedule_time": s.schedule_time,
+                "timezone": s.timezone,
+                "days_of_week": s.days_of_week,
+                "day_of_month": s.day_of_month,
+                "week_parity": s.week_parity,
+                "parameters": json.loads(s.parameters) if s.parameters else None,
+            }
+            for s in schedules
+        ]
+
+        # Normalization rules
+        groups = session.query(NormalizationRuleGroup).all()
+        norm_groups = []
+        for g in groups:
+            rules = session.query(NormalizationRule).filter_by(group_id=g.id).order_by(NormalizationRule.priority).all()
+            norm_groups.append({
+                **g.to_dict(),
+                "rules": [
+                    {
+                        "name": r.name,
+                        "enabled": r.enabled,
+                        "priority": r.priority,
+                        "condition_type": r.condition_type,
+                        "condition_value": r.condition_value,
+                        "conditions": json.loads(r.conditions) if r.conditions else None,
+                        "condition_logic": r.condition_logic,
+                        "action_type": r.action_type,
+                        "action_value": r.action_value,
+                        "else_action_type": r.else_action_type,
+                        "else_action_value": r.else_action_value,
+                        "stop_processing": r.stop_processing,
+                        "is_builtin": r.is_builtin,
+                    }
+                    for r in rules
+                ],
+            })
+        sections["normalization_rule_groups"] = norm_groups
+
+        # Tag groups
+        tag_groups = session.query(TagGroup).all()
+        tag_groups_out = []
+        for tg in tag_groups:
+            tags = session.query(Tag).filter_by(group_id=tg.id).all()
+            tag_groups_out.append({
+                **tg.to_dict(),
+                "tags": [t.to_dict() for t in tags],
+            })
+        sections["tag_groups"] = tag_groups_out
+
+        # Auto-creation rules
+        ac_rules = session.query(AutoCreationRule).all()
+        sections["auto_creation_rules"] = [r.to_dict() for r in ac_rules]
+
+        # FFmpeg profiles
+        profiles = session.query(FFmpegProfile).all()
+        sections["ffmpeg_profiles"] = [p.to_dict() for p in profiles]
+
+        # Dummy EPG profiles
+        depg = session.query(DummyEPGProfile).all()
+        depg_out = []
+        for d in depg:
+            assignments = session.query(DummyEPGChannelAssignment).filter_by(profile_id=d.id).all()
+            depg_out.append({
+                **d.to_dict(),
+                "channel_assignments": [a.to_dict() for a in assignments],
+            })
+        sections["dummy_epg_profiles"] = depg_out
+
+        return sections
+    finally:
+        session.close()
+
+
+async def _gather_dispatcharr() -> dict:
+    """Fetch summary data from Dispatcharr. Returns empty dict + warning on failure."""
+    try:
+        client = get_client()
+        if not client:
+            return {"_warning": "Dispatcharr not connected — section empty"}
+
+        channels = await client.get_channels()
+        channel_groups = await client.get_channel_groups()
+        m3u_accounts = await client.get_m3u_accounts()
+        epg_sources = await client.get_epg_sources()
+        stream_profiles = await client.get_stream_profiles()
+        channel_profiles = await client.get_channel_profiles()
+
+        return {
+            "channels_count": len(channels) if channels else 0,
+            "channel_groups": channel_groups or [],
+            "m3u_accounts": [
+                {"id": a.get("id"), "name": a.get("name"), "url": a.get("url")}
+                for a in (m3u_accounts or [])
+            ],
+            "epg_sources": [
+                {"id": e.get("id"), "name": e.get("name"), "url": e.get("url")}
+                for e in (epg_sources or [])
+            ],
+            "stream_profiles": stream_profiles or [],
+            "channel_profiles": channel_profiles or [],
+        }
+    except Exception as e:
+        logger.warning("[BACKUP] Failed to fetch Dispatcharr data: %s", e)
+        return {"_warning": "Dispatcharr not connected — %s" % str(e)}
+
+
+@router.get("/export")
+async def export_yaml(_admin=RequireAdminIfEnabled):
+    """Export full ECM configuration as a YAML file download.
+
+    Gathers settings, DB tables, and Dispatcharr state into one file.
+    """
+    logger.info("[BACKUP] YAML export requested")
+
+    export_data = {
+        "ecm_export": {
+            "version": APP_VERSION,
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+        },
+        "settings": _gather_settings(),
+        "database": _gather_db_tables(),
+        "dispatcharr": await _gather_dispatcharr(),
+    }
+
+    yaml_str = yaml.dump(export_data, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
+    filename = f"ecm-export-{now}.yaml"
+
+    logger.info("[BACKUP] YAML export complete, %d bytes", len(yaml_str))
+    return PlainTextResponse(
+        content=yaml_str,
+        media_type="text/yaml",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
