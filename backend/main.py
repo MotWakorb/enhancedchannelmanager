@@ -1,9 +1,11 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 import asyncio
 from fastapi.exceptions import RequestValidationError
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 import os
 import logging
 import time
@@ -100,9 +102,9 @@ and include it as a Bearer token or session cookie. The interactive docs at `/ap
 handle authentication automatically when accessed through the web UI.
 
 ## Rate Limiting
-No rate limiting is enforced, but rapid polling is logged for diagnostics.
+Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
-    version="0.15.0-0034",
+    version="0.15.1",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -147,15 +149,30 @@ def custom_openapi():
 
 app.openapi = custom_openapi
 
+# Rate limiting (login endpoints only — configured via @limiter.limit in auth/routes.py)
+from auth.routes import limiter
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS for development
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://localhost:3000"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Accept", "Authorization"],
 )
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """Add security headers to all responses."""
+    response = await call_next(request)
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
 
 # ============================================================================
 # Global Auth Middleware — secure-by-default for all /api/* endpoints
@@ -332,18 +349,28 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     """Log detailed validation errors for debugging."""
     logger.error("[VALIDATION-ERROR] Request path: %s", request.url.path)
     logger.error("[VALIDATION-ERROR] Request method: %s", request.method)
-    logger.error("[VALIDATION-ERROR] Request headers: %s", dict(request.headers))
 
-    # Try to read the body
+    # Redact sensitive headers before logging
+    _redacted_headers = {"authorization", "cookie", "x-api-key"}
+    safe_headers = {
+        k: "[REDACTED]" if k.lower() in _redacted_headers else v
+        for k, v in request.headers.items()
+    }
+    logger.error("[VALIDATION-ERROR] Request headers: %s", safe_headers)
+
+    # Log body but redact on auth paths (may contain passwords)
+    is_auth_path = request.url.path.startswith("/api/auth")
     try:
         body = await request.body()
-        logger.error("[VALIDATION-ERROR] Request body (raw): %s", body)
-        logger.error("[VALIDATION-ERROR] Request body (decoded): %s", body.decode())
+        if is_auth_path:
+            logger.error("[VALIDATION-ERROR] Request body: [REDACTED — auth endpoint]")
+        else:
+            logger.error("[VALIDATION-ERROR] Request body (decoded): %s", body.decode())
     except Exception as e:
         logger.error("[VALIDATION-ERROR] Could not read body: %s", e)
 
     logger.error("[VALIDATION-ERROR] Validation errors: %s", exc.errors())
-    logger.error("[VALIDATION-ERROR] Validation body: %s", exc.body)
+    logger.error("[VALIDATION-ERROR] Validation body: %s", "[REDACTED]" if is_auth_path else exc.body)
 
     # Sanitize errors for JSON serialization — ctx.error may contain
     # non-serializable ValueError objects from field_validator
@@ -357,6 +384,20 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(
         status_code=422,
         content={"detail": safe_errors, "body": str(exc.body)},
+    )
+
+
+@app.exception_handler(HTTPException)
+async def sanitized_http_exception_handler(request: Request, exc: HTTPException):
+    """Scrub internal details from 500 responses to prevent information leakage."""
+    if exc.status_code == 500:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error"},
+        )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
     )
 
 
