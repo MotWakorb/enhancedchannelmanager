@@ -234,3 +234,47 @@ def register(mcp: FastMCP):
         except Exception as e:
             logger.error("[MCP] assign_channel_numbers failed: %s", e)
             return f"Error assigning channel numbers: {e}"
+
+    @mcp.tool()
+    async def merge_channels(
+        target_channel_id: int,
+        source_channel_ids: list[int],
+    ) -> str:
+        """Merge multiple channels into one, combining all their streams.
+
+        Args:
+            target_channel_id: The channel to merge INTO (keeps this channel)
+            source_channel_ids: Channels to merge FROM (these get deleted after merge)
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.post("/api/channels/merge", json_data={
+                "target_channel_id": target_channel_id,
+                "source_channel_ids": source_channel_ids,
+            })
+            merged = len(source_channel_ids)
+            return f"Merged {merged} channels into channel {target_channel_id}."
+        except Exception as e:
+            logger.error("[MCP] merge_channels failed: %s", e)
+            return f"Error merging channels: {e}"
+
+    @mcp.tool()
+    async def clear_auto_created(group_ids: list[int] | None = None) -> str:
+        """Clear channels that were created by the auto-creation pipeline.
+
+        Args:
+            group_ids: Optional list of group IDs to limit clearing to specific groups.
+                       If omitted, clears all auto-created channels.
+        """
+        try:
+            client = get_ecm_client()
+            payload = {}
+            if group_ids is not None:
+                payload["group_ids"] = group_ids
+            result = await client.post("/api/channels/clear-auto-created", json_data=payload)
+            deleted = result.get("deleted", result.get("count", 0))
+            scope = f"in {len(group_ids)} groups" if group_ids else "across all groups"
+            return f"Cleared {deleted} auto-created channels {scope}."
+        except Exception as e:
+            logger.error("[MCP] clear_auto_created failed: %s", e)
+            return f"Error clearing auto-created channels: {e}"

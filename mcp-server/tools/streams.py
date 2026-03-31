@@ -94,6 +94,120 @@ def register(mcp: FastMCP):
             return f"Error starting stream probe: {e}"
 
     @mcp.tool()
+    async def get_probe_progress() -> str:
+        """Check the progress of an ongoing stream probe."""
+        try:
+            client = get_ecm_client()
+            p = await client.get("/api/stream-stats/probe/progress")
+
+            if not p.get("in_progress"):
+                return "No probe is currently running."
+
+            total = p.get("total", 0)
+            current = p.get("current", 0)
+            pct = (current / total * 100) if total else 0
+            lines = [
+                f"Probe in progress: {current}/{total} ({pct:.0f}%)",
+                f"  Success: {p.get('success_count', 0)}",
+                f"  Failed: {p.get('failed_count', 0)}",
+                f"  Skipped: {p.get('skipped_count', 0)}",
+            ]
+            cur_stream = p.get("current_stream", "")
+            if cur_stream:
+                lines.append(f"  Currently probing: {cur_stream}")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] get_probe_progress failed: %s", e)
+            return f"Error getting probe progress: {e}"
+
+    @mcp.tool()
+    async def probe_single_stream(stream_id: int) -> str:
+        """Probe a single stream to check its health.
+
+        Args:
+            stream_id: The stream ID to probe
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.post(f"/api/stream-stats/probe/{stream_id}")
+            status = result.get("status", result.get("probe_status", "unknown"))
+            return f"Stream {stream_id} probe complete. Status: {status}"
+        except Exception as e:
+            logger.error("[MCP] probe_single_stream failed: %s", e)
+            return f"Error probing stream {stream_id}: {e}"
+
+    @mcp.tool()
+    async def get_struck_out_streams() -> str:
+        """List streams that have been struck out due to consecutive probe failures."""
+        try:
+            client = get_ecm_client()
+            result = await client.get("/api/stream-stats/struck-out")
+
+            streams = result.get("streams", []) if isinstance(result, dict) else result
+            threshold = result.get("threshold", "?") if isinstance(result, dict) else "?"
+            enabled = result.get("enabled", True) if isinstance(result, dict) else True
+
+            if not enabled:
+                return "Strike detection is disabled."
+
+            if not streams:
+                return f"No struck-out streams (threshold: {threshold} consecutive failures)."
+
+            lines = [f"Struck-out streams ({len(streams)}, threshold: {threshold} failures):"]
+            for s in streams[:30]:
+                name = s.get("stream_name", s.get("name", "Unknown"))
+                sid = s.get("stream_id", s.get("id", "?"))
+                failures = s.get("consecutive_failures", s.get("strike_count", "?"))
+                lines.append(f"  {name} (id={sid}) — {failures} consecutive failures")
+
+            if len(streams) > 30:
+                lines.append(f"  ... and {len(streams) - 30} more")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] get_struck_out_streams failed: %s", e)
+            return f"Error getting struck-out streams: {e}"
+
+    @mcp.tool()
+    async def cancel_probe() -> str:
+        """Cancel the currently running stream probe."""
+        try:
+            client = get_ecm_client()
+            result = await client.post("/api/stream-stats/probe/cancel")
+            return f"Probe cancelled. {result.get('message', '')}"
+        except Exception as e:
+            logger.error("[MCP] cancel_probe failed: %s", e)
+            return f"Error cancelling probe: {e}"
+
+    @mcp.tool()
+    async def get_probe_results() -> str:
+        """Get results from the most recent completed probe run."""
+        try:
+            client = get_ecm_client()
+            result = await client.get("/api/stream-stats/probe/results")
+
+            if not result:
+                return "No probe results available."
+
+            if isinstance(result, dict):
+                lines = ["Latest Probe Results:"]
+                for key, value in result.items():
+                    label = key.replace("_", " ").title()
+                    lines.append(f"  {label}: {value}")
+                return "\n".join(lines)
+
+            # If it's a list of per-stream results
+            lines = [f"Probe results for {len(result)} streams:"]
+            healthy = sum(1 for s in result if s.get("status") == "success")
+            failed = sum(1 for s in result if s.get("status") == "failed")
+            lines.append(f"  Healthy: {healthy}, Failed: {failed}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] get_probe_results failed: %s", e)
+            return f"Error getting probe results: {e}"
+
+    @mcp.tool()
     async def get_streams_for_channel(channel_id: int) -> str:
         """Get detailed stream information for a specific channel, including stream names and metadata.
 

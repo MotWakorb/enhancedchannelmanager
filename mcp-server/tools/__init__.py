@@ -12,6 +12,9 @@ from . import (
     tasks,
     stats,
     system,
+    notifications,
+    profiles,
+    normalization,
 )
 
 _MODULES = [
@@ -25,6 +28,9 @@ _MODULES = [
     tasks,
     stats,
     system,
+    notifications,
+    profiles,
+    normalization,
 ]
 
 
