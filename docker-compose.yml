@@ -1,5 +1,4 @@
 services:
-  # Production mode - single container with settings stored in config volume
   ecm:
     build:
       context: .
@@ -17,24 +16,6 @@ services:
       - ECM_HTTPS_PORT=${ECM_HTTPS_PORT:-6143}
     extra_hosts:
       - "host.docker.internal:host-gateway"
-
-  # MCP server — exposes ECM tools for Claude Desktop/Code
-  ecm-mcp:
-    build:
-      context: ./mcp-server
-      dockerfile: Dockerfile
-    ports:
-      - "${MCP_PORT:-6101}:${MCP_PORT:-6101}"
-    volumes:
-      - ecm-config:/config:ro
-    environment:
-      - CONFIG_DIR=/config
-      - ECM_URL=http://ecm:${ECM_PORT:-6100}
-      - MCP_PORT=${MCP_PORT:-6101}
-    depends_on:
-      ecm:
-        condition: service_healthy
-    restart: unless-stopped
 
 volumes:
   ecm-config:

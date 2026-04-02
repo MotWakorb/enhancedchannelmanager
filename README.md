@@ -22,8 +22,27 @@ services:
       - PGID=1000
       - ECM_PORT=6100
       - ECM_HTTPS_PORT=6143
+```
 
-  # Optional: MCP server for Claude AI integration
+That's it. Open `http://localhost:6100` and the setup wizard will guide you through creating an admin account and connecting to Dispatcharr.
+
+### With MCP Server (Claude AI Integration)
+
+To add the optional MCP server for managing ECM through Claude, add the MCP service to your compose file:
+
+```yaml
+services:
+  ecm:
+    image: ghcr.io/motwakorb/enhancedchannelmanager:latest
+    ports:
+      - "6100:6100"
+      - "6143:6143"
+    volumes:
+      - ./config:/config
+    environment:
+      - PUID=1000
+      - PGID=1000
+
   ecm-mcp:
     image: ghcr.io/motwakorb/enhancedchannelmanager-mcp:latest
     ports:
@@ -38,7 +57,13 @@ services:
         condition: service_healthy
 ```
 
-That's it. Open `http://localhost:6100` and the setup wizard will guide you through creating an admin account and connecting to Dispatcharr.
+Or if you're building from source, use the MCP compose overlay:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.mcp.yml up -d
+```
+
+See [MCP Server (Claude Integration)](#mcp-server-claude-integration) for setup instructions.
 
 **User / Group Identifiers:**
 - **PUID** (default: 1000) — User ID the application runs as
@@ -115,7 +140,7 @@ ECM includes an MCP (Model Context Protocol) server that lets Claude manage your
 ### Setup
 
 1. **Generate an API key** in ECM Settings > MCP Integration
-2. **Start the MCP container** — it's included in `docker-compose.yml` and starts automatically alongside ECM on port 6101
+2. **Start the MCP container** — add the `ecm-mcp` service to your compose file (see [With MCP Server](#with-mcp-server-claude-ai-integration)) and start it on port 6101
 3. **Connect Claude** using one of the methods below (replace `YOUR_ECM_HOST` and `YOUR_API_KEY`):
 
 **Claude Desktop** — add to your Claude Desktop config:
