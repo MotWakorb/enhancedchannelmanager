@@ -35,6 +35,7 @@ import { BulkLCNFetchModal, type LCNAssignment } from './BulkLCNFetchModal';
 import { GracenoteConflictModal, type GracenoteConflict } from './GracenoteConflictModal';
 import { EditChannelModal, type ChannelMetadataChanges } from './EditChannelModal';
 import { NormalizeNamesModal } from './NormalizeNamesModal';
+import { FindDuplicatesModal } from './FindDuplicatesModal';
 import { naturalCompare } from '../utils/naturalSort';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { useNotifications } from '../contexts/NotificationContext';
@@ -276,6 +277,7 @@ interface PaneToolbarMenuProps {
   onAssignEPG: () => void;
   onFetchLCN: () => void;
   onNormalize: () => void;
+  onFindDuplicates: () => void;
   onRenumber: () => void;
   onRenumberAllGroups: () => void;
   onSetLogoFromM3U: () => void;
@@ -301,6 +303,7 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
   onAssignEPG,
   onFetchLCN,
   onNormalize,
+  onFindDuplicates,
   onRenumber,
   onRenumberAllGroups,
   onSetLogoFromM3U,
@@ -506,6 +509,10 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
               <button className="pane-toolbar-menu-item" onClick={() => { close(); onNormalize(); }}>
                 <span className="material-icons">text_format</span>
                 <span>Normalize Names</span>
+              </button>
+              <button className="pane-toolbar-menu-item" onClick={() => { close(); onFindDuplicates(); }}>
+                <span className="material-icons">merge_type</span>
+                <span>Find Duplicates</span>
               </button>
               <button className="pane-toolbar-menu-item" onClick={() => { close(); onRenumber(); }}>
                 <span className="material-icons">tag</span>
@@ -1287,6 +1294,7 @@ export function ChannelsPane({
 
   // Normalize names modal state
   const normalizeModal = useModal();
+  const findDuplicatesModal = useModal();
 
   // CSV import modal state
   const csvImportModal = useModal();
@@ -5358,6 +5366,7 @@ export function ChannelsPane({
               setTimeout(() => bulkLCNModal.open(), 50);
             }}
             onNormalize={() => normalizeModal.open()}
+            onFindDuplicates={() => findDuplicatesModal.open()}
             onRenumber={handleMassRenumberClick}
             onRenumberAllGroups={() => {
               setRenumberAllStartingNumber('1');
@@ -5756,6 +5765,17 @@ export function ChannelsPane({
           channels={channels.filter(c => selectedChannelIds.has(c.id))}
           onConfirm={handleNormalizeNames}
           onCancel={() => normalizeModal.close()}
+        />
+      )}
+
+      {/* Find Duplicates Modal */}
+      {findDuplicatesModal.isOpen && (
+        <FindDuplicatesModal
+          onClose={() => findDuplicatesModal.close()}
+          onMerged={() => {
+            findDuplicatesModal.close();
+            fetchChannels();
+          }}
         />
       )}
 

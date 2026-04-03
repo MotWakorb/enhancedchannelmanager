@@ -282,6 +282,81 @@ def register(mcp: FastMCP):
             return f"Error creating rule: {e}"
 
     @mcp.tool()
+    async def update_auto_creation_rule(
+        rule_id: int,
+        name: str | None = None,
+        description: str | None = None,
+        enabled: bool | None = None,
+        priority: int | None = None,
+        m3u_account_id: int | None = None,
+        target_group_id: int | None = None,
+        conditions: list[dict] | None = None,
+        actions: list[dict] | None = None,
+        run_on_refresh: bool | None = None,
+        stop_on_first_match: bool | None = None,
+        sort_field: str | None = None,
+        sort_order: str | None = None,
+        probe_on_sort: bool | None = None,
+        sort_regex: str | None = None,
+        stream_sort_field: str | None = None,
+        stream_sort_order: str | None = None,
+        normalize_names: bool | None = None,
+        skip_struck_streams: bool | None = None,
+        orphan_action: str | None = None,
+    ) -> str:
+        """Update an existing auto-creation rule. Only provided fields are changed.
+
+        Args:
+            rule_id: The rule ID to update
+            name: New rule name
+            description: New description
+            enabled: Enable/disable the rule
+            priority: Execution priority (lower = first)
+            m3u_account_id: M3U account filter
+            target_group_id: Target channel group ID
+            conditions: Replacement conditions list (see create_auto_creation_rule for types)
+            actions: Replacement actions list (see create_auto_creation_rule for types)
+            run_on_refresh: Run automatically when M3U refreshes
+            stop_on_first_match: Stop matching after first rule matches a stream
+            sort_field: Field to sort channels by
+            sort_order: 'asc' or 'desc'
+            probe_on_sort: Probe streams when sorting
+            sort_regex: Regex for extracting sort keys
+            stream_sort_field: How to sort streams within channels
+            stream_sort_order: 'asc' or 'desc'
+            normalize_names: Apply normalization rules to stream names
+            skip_struck_streams: Skip streams with consecutive probe failures
+            orphan_action: What to do with orphaned channels ('delete', 'keep', 'disable')
+        """
+        try:
+            client = get_ecm_client()
+            payload = {}
+            # Only include fields that were explicitly provided
+            for field_name, value in [
+                ("name", name), ("description", description), ("enabled", enabled),
+                ("priority", priority), ("m3u_account_id", m3u_account_id),
+                ("target_group_id", target_group_id), ("conditions", conditions),
+                ("actions", actions), ("run_on_refresh", run_on_refresh),
+                ("stop_on_first_match", stop_on_first_match), ("sort_field", sort_field),
+                ("sort_order", sort_order), ("probe_on_sort", probe_on_sort),
+                ("sort_regex", sort_regex), ("stream_sort_field", stream_sort_field),
+                ("stream_sort_order", stream_sort_order), ("normalize_names", normalize_names),
+                ("skip_struck_streams", skip_struck_streams), ("orphan_action", orphan_action),
+            ]:
+                if value is not None:
+                    payload[field_name] = value
+
+            if not payload:
+                return "No fields to update."
+
+            result = await client.put(f"/api/auto-creation/rules/{rule_id}", json_data=payload)
+            rule = result.get("rule", result)
+            return f"Updated rule '{rule.get('name', rule_id)}' (id={rule_id}). Changed: {', '.join(payload.keys())}"
+        except Exception as e:
+            logger.error("[MCP] update_auto_creation_rule failed: %s", e)
+            return f"Error updating rule {rule_id}: {e}"
+
+    @mcp.tool()
     async def list_auto_creation_executions(limit: int = 10) -> str:
         """List recent auto-creation pipeline executions.
 

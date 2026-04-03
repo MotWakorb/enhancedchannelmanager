@@ -367,6 +367,78 @@ def register(mcp: FastMCP):
             return f"Error clearing auto-created channels: {e}"
 
     @mcp.tool()
+    async def find_duplicate_channels() -> str:
+        """Scan all channels for duplicates by applying normalization rules to names.
+
+        Returns groups of channels that resolve to the same normalized name.
+        Useful for finding channels like "ESPN" and "◉ ESPN" that should be merged.
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.post("/api/channels/find-duplicates", timeout=120.0)
+            groups = result.get("groups", [])
+
+            if not groups:
+                return "No duplicate channels found."
+
+            total = result.get("total_duplicate_channels", 0)
+            lines = [f"Found {len(groups)} duplicate groups ({total} channels total):\n"]
+            for g in groups[:30]:
+                norm = g.get("normalized_name", "?")
+                channels = g.get("channels", [])
+                lines.append(f"  '{norm}' ({len(channels)} channels):")
+                for ch in channels:
+                    num = ch.get("channel_number", "?")
+                    name = ch.get("name", "?")
+                    streams = ch.get("stream_count", 0)
+                    cid = ch.get("id", "?")
+                    group_name = ch.get("channel_group_name", "")
+                    group_info = f" [{group_name}]" if group_name else ""
+                    lines.append(f"    #{num}: {name} (id={cid}, {streams} streams){group_info}")
+
+            if len(groups) > 30:
+                lines.append(f"\n  ... and {len(groups) - 30} more groups")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] find_duplicate_channels failed: %s", e)
+            return f"Error finding duplicates: {e}"
+
+    @mcp.tool()
+    async def bulk_merge_duplicate_channels(
+        merges: list[dict],
+    ) -> str:
+        """Merge groups of duplicate channels.
+
+        Args:
+            merges: List of merge operations. Each dict has:
+                target_channel_id (int): Channel to keep
+                source_channel_ids (list[int]): Channels to absorb and delete
+            Example: [{"target_channel_id": 100, "source_channel_ids": [101, 102]}]
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.post(
+                "/api/channels/bulk-merge",
+                json_data={"merges": merges},
+                timeout=300.0,
+            )
+            merged = result.get("merged", 0)
+            failed = result.get("failed", 0)
+
+            lines = [f"Bulk merge complete: {merged} merged, {failed} failed."]
+            for r in result.get("results", []):
+                if r.get("success"):
+                    lines.append(f"  ✓ '{r.get('target_name')}': absorbed {r.get('sources_deleted', 0)} channels, {r.get('total_streams', 0)} streams")
+                else:
+                    lines.append(f"  ✗ Channel {r.get('target_channel_id')}: {r.get('error', 'unknown')}")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] bulk_merge_duplicate_channels failed: %s", e)
+            return f"Error in bulk merge: {e}"
+
+    @mcp.tool()
     async def bulk_commit_channels(
         operations: list[dict],
         validate_only: bool = False,
