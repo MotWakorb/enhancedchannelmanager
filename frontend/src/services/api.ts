@@ -228,6 +228,50 @@ export async function mergeChannels(request: MergeChannelsRequest): Promise<Chan
   });
 }
 
+// Find & merge duplicate channels
+export interface DuplicateGroup {
+  normalized_name: string;
+  channels: {
+    id: number;
+    name: string;
+    normalized_name: string;
+    channel_number: number | null;
+    stream_count: number;
+    channel_group_id: number | null;
+    channel_group_name: string;
+  }[];
+}
+
+export interface FindDuplicatesResponse {
+  groups: DuplicateGroup[];
+  total_groups: number;
+  total_duplicate_channels: number;
+}
+
+export interface BulkMergeItem {
+  target_channel_id: number;
+  source_channel_ids: number[];
+}
+
+export interface BulkMergeResponse {
+  merged: number;
+  failed: number;
+  results: { target_channel_id: number; target_name?: string; sources_deleted?: number; total_streams?: number; success: boolean; error?: string }[];
+}
+
+export async function findDuplicateChannels(): Promise<FindDuplicatesResponse> {
+  return fetchJson(`${API_BASE}/channels/find-duplicates`, {
+    method: 'POST',
+  });
+}
+
+export async function bulkMergeChannels(merges: BulkMergeItem[]): Promise<BulkMergeResponse> {
+  return fetchJson(`${API_BASE}/channels/bulk-merge`, {
+    method: 'POST',
+    body: JSON.stringify({ merges }),
+  });
+}
+
 // Bulk operation types for bulk commit
 export interface BulkOperation {
   type: string;
