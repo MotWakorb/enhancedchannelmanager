@@ -199,6 +199,10 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 wait_duration = (datetime.utcnow() - wait_start).total_seconds()
                 logger.info("[M3U-REFRESH] '%s' refresh complete in %.1fs", account_name, wait_duration)
 
+                # Invalidate stream groups cache so UI picks up new/removed groups
+                cache = get_cache()
+                cache.invalidate_prefix("stream_groups_with_counts")
+
                 # Capture M3U changes after refresh
                 await _capture_m3u_changes_after_refresh(account_id, account_name)
 
@@ -241,6 +245,10 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 # After 30 seconds, assume complete if no timestamp field available
                 wait_duration = (datetime.utcnow() - wait_start).total_seconds()
                 logger.info("[M3U-REFRESH] '%s' - assuming complete after %.0fs (no timestamp field)", account_name, wait_duration)
+
+                # Invalidate stream groups cache so UI picks up new/removed groups
+                cache = get_cache()
+                cache.invalidate_prefix("stream_groups_with_counts")
 
                 # Capture M3U changes after refresh
                 await _capture_m3u_changes_after_refresh(account_id, account_name)
