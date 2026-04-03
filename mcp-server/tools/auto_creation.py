@@ -42,18 +42,34 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post("/api/auto-creation/run", json_data={"dry_run": dry_run})
+            result = await client.post("/api/auto-creation/run", json_data={"dry_run": dry_run}, timeout=300.0)
 
             mode = "Dry run" if dry_run else "Execution"
-            created = result.get("created", 0)
-            skipped = result.get("skipped", 0)
-            errors = result.get("errors", 0)
-
             lines = [f"Auto-creation {mode} complete:"]
-            lines.append(f"  Channels {'would be ' if dry_run else ''}created: {created}")
-            lines.append(f"  Skipped: {skipped}")
-            if errors:
-                lines.append(f"  Errors: {errors}")
+            lines.append(f"  Streams evaluated: {result.get('streams_evaluated', 0)}")
+            lines.append(f"  Streams matched: {result.get('streams_matched', 0)}")
+            lines.append(f"  Channels {'would be ' if dry_run else ''}created: {result.get('channels_created', 0)}")
+            lines.append(f"  Channels updated: {result.get('channels_updated', 0)}")
+            lines.append(f"  Groups created: {result.get('groups_created', 0)}")
+            lines.append(f"  Streams skipped: {result.get('streams_skipped', 0)}")
+            lines.append(f"  Duration: {result.get('duration_seconds', 0):.1f}s")
+
+            # Show rule match breakdown
+            rule_counts = result.get("rule_match_counts", {})
+            if rule_counts:
+                lines.append(f"  Rule matches: {rule_counts}")
+
+            # Show sample of created entities
+            created = result.get("created_entities", [])
+            if created:
+                lines.append(f"\n  Sample channels ({'would be ' if dry_run else ''}created):")
+                for entity in created[:20]:
+                    name = entity.get("channel_name", entity.get("name", "?"))
+                    num = entity.get("channel_number", "")
+                    num_str = f" #{num}" if num else ""
+                    lines.append(f"    {name}{num_str}")
+                if len(created) > 20:
+                    lines.append(f"    ... and {len(created) - 20} more")
 
             return "\n".join(lines)
         except Exception as e:
@@ -143,6 +159,129 @@ def register(mcp: FastMCP):
             return f"Error deleting rule {rule_id}: {e}"
 
     @mcp.tool()
+    async def create_auto_creation_rule(
+        name: str,
+        conditions: list[dict],
+        actions: list[dict],
+        description: str | None = None,
+        enabled: bool = True,
+        priority: int = 0,
+        m3u_account_id: int | None = None,
+        target_group_id: int | None = None,
+        run_on_refresh: bool = False,
+        stop_on_first_match: bool = True,
+        sort_field: str | None = None,
+        sort_order: str = "asc",
+        probe_on_sort: bool = False,
+        sort_regex: str | None = None,
+        stream_sort_field: str | None = None,
+        stream_sort_order: str = "asc",
+        normalize_names: bool = False,
+        skip_struck_streams: bool = False,
+        orphan_action: str = "delete",
+    ) -> str:
+        """Create a new auto-creation rule.
+
+        Args:
+            name: Rule name
+            conditions: List of condition dicts. Each has 'type', 'value', and optional 'connector' ("and"/"or").
+                Condition types:
+                  stream_name_contains — substring match on stream name
+                  stream_name_matches — regex match on stream name
+                  stream_group_contains — substring match on group name
+                  stream_group_matches — regex match on group name
+                  provider_is — from specific M3U account (value = account ID)
+                  tvg_id_exists — stream has EPG ID (no value needed)
+                  tvg_id_matches — regex match on EPG ID
+                  logo_exists — stream has logo URL
+                  quality_min / quality_max — min/max resolution height
+                  codec_is — video codec filter
+                  has_audio_tracks — minimum audio tracks
+                  has_channel — stream already assigned to a channel
+                  channel_exists_with_name — exact channel name exists
+                  channel_exists_matching — regex match on existing channels
+                  normalized_name_in_group / normalized_name_not_in_group
+                  normalized_name_exists / normalized_name_not_exists
+                  always / never — always or never matches
+                Example: [{"type": "stream_group_contains", "value": "USA | Entertainment 📺", "connector": "and"}]
+            actions: List of action dicts. Each has 'type' and type-specific fields.
+                Action types:
+                  create_group — params: name_template, if_exists (skip/use_existing)
+                  create_channel — params: name_template, if_exists (skip/merge/merge_only/update),
+                                   channel_number (e.g. "800-99999" for range)
+                  merge_streams — params: name_template, match_by (tvg_id/normalized_name/stream_group)
+                  assign_logo — params: value (URL or empty for stream logo)
+                  assign_tvg_id — params: value
+                  assign_epg — params: epg_id, set_tvg_id (bool)
+                  assign_profile — params: profile_id
+                  assign_channel_profile — params: channel_profile_ids (list)
+                  set_channel_number — params: value
+                  set_variable — params: name, value
+                  remove_from_channel — remove stream from current channel
+                  set_stream_priority — params: value
+                  probe_streams — trigger probe
+                  skip — skip this stream
+                  stop_processing — stop processing further rules
+                  log_match — log when matched
+                Example: [{"type": "create_group", "name_template": "Entertainment", "if_exists": "use_existing"},
+                          {"type": "create_channel", "name_template": "{stream_name}", "if_exists": "merge"}]
+            description: Optional description
+            enabled: Whether the rule is enabled (default true)
+            priority: Execution priority (lower = first, default 0)
+            m3u_account_id: Optional M3U account filter
+            target_group_id: Optional target channel group ID
+            run_on_refresh: Run automatically when M3U refreshes
+            stop_on_first_match: Stop matching after first rule matches a stream
+            sort_field: Field to sort channels by (e.g. 'stream_name', 'stream_name_regex')
+            sort_order: 'asc' or 'desc'
+            probe_on_sort: Probe streams when sorting
+            sort_regex: Regex for extracting sort keys
+            stream_sort_field: How to sort streams within channels ('smart_sort', 'resolution', etc.)
+            stream_sort_order: 'asc' or 'desc'
+            normalize_names: Apply normalization rules to stream names
+            skip_struck_streams: Skip streams with consecutive probe failures
+            orphan_action: What to do with orphaned channels ('delete', 'keep', 'disable')
+        """
+        try:
+            client = get_ecm_client()
+            payload = {
+                "name": name,
+                "conditions": conditions,
+                "actions": actions,
+                "enabled": enabled,
+                "priority": priority,
+                "run_on_refresh": run_on_refresh,
+                "stop_on_first_match": stop_on_first_match,
+                "sort_order": sort_order,
+                "probe_on_sort": probe_on_sort,
+                "stream_sort_order": stream_sort_order,
+                "normalize_names": normalize_names,
+                "skip_struck_streams": skip_struck_streams,
+                "orphan_action": orphan_action,
+            }
+            if description is not None:
+                payload["description"] = description
+            if m3u_account_id is not None:
+                payload["m3u_account_id"] = m3u_account_id
+            if target_group_id is not None:
+                payload["target_group_id"] = target_group_id
+            if sort_field is not None:
+                payload["sort_field"] = sort_field
+            if sort_regex is not None:
+                payload["sort_regex"] = sort_regex
+            if stream_sort_field is not None:
+                payload["stream_sort_field"] = stream_sort_field
+
+            result = await client.post("/api/auto-creation/rules", json_data=payload)
+
+            rule = result.get("rule", result)
+            new_id = rule.get("id", "?")
+            return f"Created auto-creation rule '{name}' (id={new_id})."
+        except Exception as e:
+            logger.error("[MCP] create_auto_creation_rule failed: %s", e)
+            return f"Error creating rule: {e}"
+
+    @mcp.tool()
     async def list_auto_creation_executions(limit: int = 10) -> str:
         """List recent auto-creation pipeline executions.
 
@@ -181,7 +320,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(f"/api/auto-creation/executions/{execution_id}/rollback")
+            result = await client.post(f"/api/auto-creation/executions/{execution_id}/rollback", timeout=300.0)
             deleted = result.get("deleted", result.get("channels_deleted", 0))
             return f"Execution {execution_id} rolled back. {deleted} channels deleted."
         except Exception as e:

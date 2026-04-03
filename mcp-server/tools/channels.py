@@ -13,38 +13,95 @@ def register(mcp: FastMCP):
     async def list_channels(
         group_id: int | None = None,
         search: str | None = None,
+        max_streams: int | None = None,
+        min_streams: int | None = None,
+        limit: int = 50,
+        compact: bool = False,
     ) -> str:
-        """List all channels, optionally filtered by group or search term.
+        """List all channels, optionally filtered by group, search, or stream count.
 
         Args:
             group_id: Filter by channel group ID
             search: Search channels by name
+            max_streams: Only show channels with at most this many streams (e.g., 0 for empty channels)
+            min_streams: Only show channels with at least this many streams
+            limit: Maximum results to return (default 50)
+            compact: If True, output pipe-delimited format optimized for agent consumption (ignores limit, shows all)
         """
         try:
             client = get_ecm_client()
-            result = await client.get("/api/channels", group_id=group_id, search=search, page_size=50)
+            filtering_by_streams = max_streams is not None or min_streams is not None
 
-            # Handle paginated response (Dispatcharr API returns {count, results})
-            if isinstance(result, dict):
-                channels = result.get("results", result.get("channels", []))
-                total = result.get("count", len(channels))
-            else:
-                channels = result
+            # When filtering by stream count or compact mode, fetch all pages
+            if filtering_by_streams or compact:
+                all_channels = []
+                page = 1
+                while True:
+                    result = await client.get(
+                        "/api/channels", group_id=group_id, search=search,
+                        page=page, page_size=500,
+                    )
+                    if isinstance(result, dict):
+                        batch = result.get("results", result.get("channels", []))
+                    else:
+                        batch = result
+                    if not batch:
+                        break
+                    all_channels.extend(batch)
+                    # Stop if no next page
+                    if isinstance(result, dict) and not result.get("next"):
+                        break
+                    page += 1
+
+                # Apply stream count filters
+                filtered = all_channels
+                if min_streams is not None:
+                    filtered = [c for c in filtered if len(c.get("streams", [])) >= min_streams]
+                if max_streams is not None:
+                    filtered = [c for c in filtered if len(c.get("streams", [])) <= max_streams]
+
+                channels = filtered
                 total = len(channels)
+            else:
+                result = await client.get(
+                    "/api/channels", group_id=group_id, search=search, page_size=limit,
+                )
+                if isinstance(result, dict):
+                    channels = result.get("results", result.get("channels", []))
+                    total = result.get("count", len(channels))
+                else:
+                    channels = result
+                    total = len(channels)
 
             if not channels:
-                return "No channels found."
+                filter_desc = ""
+                if max_streams is not None:
+                    filter_desc += f" with at most {max_streams} streams"
+                if min_streams is not None:
+                    filter_desc += f" with at least {min_streams} streams"
+                return f"No channels found{filter_desc}."
 
-            lines = [f"Found {total} channels (showing first {len(channels)}):"]
-            for c in channels:
+            if compact:
+                lines = ["number|id|name|streams"]
+                for c in channels:
+                    num = c.get("channel_number", "?")
+                    cid = c.get("id", "?")
+                    name = c.get("name", "Unknown")
+                    stream_count = len(c.get("streams", []))
+                    lines.append(f"{num}|{cid}|{name}|{stream_count}")
+                return "\n".join(lines)
+
+            shown = channels[:limit]
+            lines = [f"Found {total} channels (showing {len(shown)}):"]
+            for c in shown:
                 num = c.get("channel_number", "?")
                 name = c.get("name", "Unknown")
                 cid = c.get("id", "?")
                 stream_count = len(c.get("streams", []))
                 lines.append(f"  #{num}: {name} (id={cid}) — {stream_count} streams")
 
-            if total > len(channels):
-                lines.append(f"  ... and {total - len(channels)} more")
+            if total > len(shown):
+                lines.append(f"  ... and {total - len(shown)} more")
 
             return "\n".join(lines)
         except Exception as e:
@@ -155,6 +212,36 @@ def register(mcp: FastMCP):
         except Exception as e:
             logger.error("[MCP] delete_channel failed: %s", e)
             return f"Error deleting channel {channel_id}: {e}"
+
+    @mcp.tool()
+    async def bulk_delete_channels(channel_ids: list[int]) -> str:
+        """Delete multiple channels at once.
+
+        Args:
+            channel_ids: List of channel IDs to delete
+        """
+        try:
+            client = get_ecm_client()
+            deleted = 0
+            errors = 0
+            error_details = []
+            for cid in channel_ids:
+                try:
+                    await client.delete(f"/api/channels/{cid}")
+                    deleted += 1
+                except Exception as e:
+                    errors += 1
+                    if errors <= 3:
+                        error_details.append(f"  Channel {cid}: {e}")
+
+            lines = [f"Bulk delete complete: {deleted} deleted, {errors} errors out of {len(channel_ids)} requested."]
+            if error_details:
+                lines.append("First errors:")
+                lines.extend(error_details)
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] bulk_delete_channels failed: %s", e)
+            return f"Error in bulk delete: {e}"
 
     @mcp.tool()
     async def add_stream_to_channel(channel_id: int, stream_id: int) -> str:
@@ -278,3 +365,192 @@ def register(mcp: FastMCP):
         except Exception as e:
             logger.error("[MCP] clear_auto_created failed: %s", e)
             return f"Error clearing auto-created channels: {e}"
+
+    @mcp.tool()
+    async def bulk_commit_channels(
+        operations: list[dict],
+        validate_only: bool = False,
+        continue_on_error: bool = False,
+    ) -> str:
+        """Commit a batch of channel operations atomically.
+
+        Supported operation types: createChannel, updateChannel, deleteChannel,
+        addStreamToChannel, removeStreamFromChannel, reorderChannelStreams,
+        createGroup, deleteChannelGroup, renameChannelGroup.
+
+        Args:
+            operations: List of operation dicts, each with a "type" key and type-specific fields.
+            validate_only: If True, validate without applying changes.
+            continue_on_error: If True, keep processing after individual operation failures.
+        """
+        try:
+            client = get_ecm_client()
+            payload = {
+                "operations": operations,
+                "validateOnly": validate_only,
+                "continueOnError": continue_on_error,
+            }
+            result = await client.post("/api/channels/bulk-commit", json_data=payload)
+            success = result.get("success", False)
+            results = result.get("results", [])
+            id_mappings = result.get("idMappings", {})
+            issues = result.get("validationIssues", [])
+
+            lines = []
+            status = "SUCCESS" if success else "FAILED"
+            lines.append(f"Bulk commit {status}: {len(operations)} operations submitted.")
+            if validate_only:
+                lines.append("(validate-only mode — no changes applied)")
+            if id_mappings:
+                mapped = ", ".join(f"{k} -> {v}" for k, v in id_mappings.items())
+                lines.append(f"ID mappings: {mapped}")
+            if issues:
+                lines.append(f"Validation issues ({len(issues)}):")
+                for issue in issues[:10]:
+                    lines.append(f"  - {issue}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] bulk_commit_channels failed: %s", e)
+            return f"Error in bulk commit: {e}"
+
+    @mcp.tool()
+    async def build_channel_lineup(
+        channels: list[dict],
+        group_id: int,
+        provider_id: int | None = None,
+        market: str = "east",
+    ) -> str:
+        """Build a channel lineup: bulk-create channels, then fuzzy-match and assign streams.
+
+        Args:
+            channels: List of dicts with 'name' (str) and 'number' (int/float) for each channel.
+            group_id: Channel group ID to create channels in.
+            provider_id: Optional M3U provider ID to limit stream search.
+            market: Market preference for stream matching ('east' or 'west'). Default 'east'.
+        """
+        try:
+            client = get_ecm_client()
+
+            # Step 1: Bulk-create all channels
+            operations = []
+            for i, ch in enumerate(channels):
+                operations.append({
+                    "type": "createChannel",
+                    "tempId": -(i + 1),
+                    "name": ch["name"],
+                    "channelNumber": ch["number"],
+                    "groupId": group_id,
+                })
+            bulk_result = await client.post("/api/channels/bulk-commit", json_data={
+                "operations": operations,
+                "continueOnError": True,
+            })
+            if not bulk_result.get("success"):
+                issues = bulk_result.get("validationIssues", [])
+                return f"Bulk create failed: {issues[:5]}"
+
+            # Step 2: Fetch newly created channels from the group
+            created_channels = []
+            page = 1
+            while True:
+                result = await client.get(
+                    "/api/channels", group_id=group_id, page=page, page_size=500,
+                )
+                if isinstance(result, dict):
+                    batch = result.get("results", result.get("channels", []))
+                else:
+                    batch = result
+                if not batch:
+                    break
+                created_channels.extend(batch)
+                if isinstance(result, dict) and not result.get("next"):
+                    break
+                page += 1
+
+            # Step 3: For each channel with 0 streams, fuzzy-match a stream
+            # Import shared fuzzy matching from streams module
+            from tools.streams import _fuzzy_helpers
+            _generate_variants = _fuzzy_helpers["generate_variants"]
+            _score_match = _fuzzy_helpers["score_match"]
+
+            matches = []
+            unmatched = []
+
+            for ch in created_channels:
+                if len(ch.get("streams", [])) > 0:
+                    continue
+
+                ch_name = ch.get("name", "")
+                best_stream = None
+                best_score = -999
+
+                variants = _generate_variants(ch_name)
+                seen_streams = set()
+
+                for variant in variants:
+                    params = {"search": variant, "page_size": 10}
+                    if provider_id is not None:
+                        params["provider_id"] = provider_id
+                    try:
+                        sr = await client.get("/api/streams", **params)
+                        if isinstance(sr, dict):
+                            stream_list = sr.get("results", sr.get("streams", []))
+                        else:
+                            stream_list = sr
+                    except Exception:
+                        continue
+
+                    for s in stream_list:
+                        sid = s.get("id")
+                        if sid in seen_streams:
+                            continue
+                        seen_streams.add(sid)
+                        s_name = s.get("name", "")
+                        score = _score_match(ch_name, s_name, market)
+                        if score > best_score:
+                            best_score = score
+                            best_stream = s
+
+                if best_stream and best_score > 0:
+                    matches.append((ch, best_stream, best_score))
+                else:
+                    unmatched.append(ch)
+
+            # Step 4: Assign matched streams
+            assign_errors = 0
+            for ch, stream, _score in matches:
+                try:
+                    await client.post(
+                        f"/api/channels/{ch['id']}/add-stream",
+                        json_data={"stream_id": stream["id"]},
+                    )
+                except Exception:
+                    assign_errors += 1
+
+            # Step 5: Build summary
+            lines = [
+                f"Lineup built: {len(created_channels)} channels created, "
+                f"{len(matches)} streams matched, {len(unmatched)} unmatched.",
+            ]
+            if assign_errors:
+                lines.append(f"  ({assign_errors} stream assignments failed)")
+
+            if matches:
+                lines.append("Matches:")
+                for ch, stream, score in matches[:30]:
+                    s_name = stream.get("name", "?")
+                    lines.append(f"  #{ch.get('channel_number', '?')} {ch.get('name')} -> {s_name} (score={score})")
+                if len(matches) > 30:
+                    lines.append(f"  ... and {len(matches) - 30} more")
+
+            if unmatched:
+                lines.append("Unmatched:")
+                for ch in unmatched[:30]:
+                    lines.append(f"  #{ch.get('channel_number', '?')} {ch.get('name')}")
+                if len(unmatched) > 30:
+                    lines.append(f"  ... and {len(unmatched) - 30} more")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] build_channel_lineup failed: %s", e)
+            return f"Error building channel lineup: {e}"

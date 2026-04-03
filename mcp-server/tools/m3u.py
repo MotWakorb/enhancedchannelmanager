@@ -41,7 +41,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(f"/api/m3u/refresh/{account_id}")
+            result = await client.post(f"/api/m3u/refresh/{account_id}", timeout=300.0)
             return f"M3U account {account_id} refresh started. {result.get('message', '')}"
         except Exception as e:
             logger.error("[MCP] refresh_m3u failed: %s", e)
@@ -52,7 +52,7 @@ def register(mcp: FastMCP):
         """Refresh all M3U accounts to fetch the latest stream lists."""
         try:
             client = get_ecm_client()
-            result = await client.post("/api/m3u/refresh")
+            result = await client.post("/api/m3u/refresh", timeout=300.0)
             return f"M3U refresh started for all accounts. {result.get('message', '')}"
         except Exception as e:
             logger.error("[MCP] refresh_all_m3u failed: %s", e)

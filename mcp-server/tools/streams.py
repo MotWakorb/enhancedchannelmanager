@@ -329,7 +329,7 @@ def register(mcp: FastMCP):
         """Start probing all streams to check their health. This runs in the background and may take a while."""
         try:
             client = get_ecm_client()
-            result = await client.post("/api/stream-stats/probe/all")
+            result = await client.post("/api/stream-stats/probe/all", timeout=300.0)
             return f"Stream probe started. {result.get('message', 'Check progress in ECM.')}"
         except Exception as e:
             logger.error("[MCP] probe_streams failed: %s", e)
@@ -702,6 +702,7 @@ def register(mcp: FastMCP):
             result = await client.post(
                 "/api/stream-stats/probe/bulk",
                 json_data={"stream_ids": stream_ids},
+                timeout=300.0,
             )
 
             if isinstance(result, dict):
