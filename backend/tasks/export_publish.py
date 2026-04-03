@@ -22,6 +22,7 @@ class ExportPublishTask(TaskScheduler):
     task_id = "export_publish"
     task_name = "Export Publish"
     task_description = "Evaluates cron-based publish schedules and triggers export generation + cloud upload"
+    default_enabled = False  # Opt-in: only users with publish configs need this
 
     def __init__(self, schedule_config: ScheduleConfig | None = None):
         if schedule_config is None:

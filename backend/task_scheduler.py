@@ -155,6 +155,7 @@ class TaskScheduler(ABC):
     task_id: str = ""
     task_name: str = ""
     task_description: str = ""
+    default_enabled: bool = True  # Whether new installs start with this task enabled
 
     def __init__(self, schedule_config: Optional[ScheduleConfig] = None):
         """Initialize the task scheduler."""
@@ -167,7 +168,7 @@ class TaskScheduler(ABC):
         self._next_run: Optional[datetime] = None
         self._history: list[TaskResult] = []
         self._max_history = 50
-        self._enabled = True
+        self._enabled = self.__class__.default_enabled
         # Notification callbacks (set by task_engine)
         self._notification_id: Optional[int] = None
         self._create_notification_callback = None
