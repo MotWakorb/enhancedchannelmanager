@@ -2150,6 +2150,14 @@ def _smart_sort_streams(
             if not stats or stats.get("probe_status") in ("failed", "timeout", "pending"):
                 return (1,) + tuple(0 for _ in active_criteria)
 
+        # Deprioritize black screen streams (probe succeeded but content is black)
+        if deprioritize_failed and stats and stats.get("is_black_screen"):
+            return (1,) + tuple(0 for _ in active_criteria)
+
+        # Deprioritize low FPS streams (probe succeeded but FPS below threshold)
+        if deprioritize_failed and stats and stats.get("is_low_fps"):
+            return (1,) + tuple(0 for _ in active_criteria)
+
         if not stats or stats.get("probe_status") != "success":
             return (0,) + tuple(0 for _ in active_criteria)
 
