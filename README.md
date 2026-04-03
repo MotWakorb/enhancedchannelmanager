@@ -135,7 +135,7 @@ In-app notification bell with history, active task pinning, and external alert m
 
 ## MCP Server (Claude Integration)
 
-ECM includes an MCP (Model Context Protocol) server that lets Claude manage your channels through natural language. Ask Claude to list channels, refresh M3U accounts, probe stream health, run auto-creation pipelines, view stats, and more — 80 tools across 13 domains.
+ECM includes an MCP (Model Context Protocol) server that lets Claude manage your channels through natural language. Ask Claude to list channels, refresh M3U accounts, probe stream health, run auto-creation pipelines, find and merge duplicate channels, view stats, and more — 98 tools across 14 domains.
 
 ### Setup
 
@@ -154,7 +154,7 @@ ECM includes an MCP (Model Context Protocol) server that lets Claude manage your
 }
 ```
 
-**Claude Code** — add a `.mcp.json` file in your project root:
+**Claude Code** — create a `.mcp.json` file in any project directory where you want ECM tools available:
 ```json
 {
   "mcpServers": {
@@ -166,42 +166,59 @@ ECM includes an MCP (Model Context Protocol) server that lets Claude manage your
 }
 ```
 
+To connect:
+1. Create the `.mcp.json` file above in your project root (replace `YOUR_ECM_HOST` and `YOUR_API_KEY`)
+2. Start Claude Code in that directory — it auto-detects `.mcp.json` on launch
+3. Run `/mcp` to reconnect if the MCP server restarts
+4. Ask Claude to manage your channels — e.g. "list my channels", "create an auto-creation rule for sports", "probe all streams"
+
+If running ECM locally, use `localhost` as your host. If the MCP container is on the same Docker network as Claude Code, use the container name (`ecm-mcp`).
+
 ### Available Tools (80)
 
 | Tool | Description |
 |-|-|
-| **Channels (12)** | |
-| `list_channels` | List channels with optional group/search filtering |
+| **Channels (16)** | |
+| `list_channels` | List channels with optional group/search/stream count filtering |
 | `get_channel` | Get detailed channel info (streams, EPG, logo) |
 | `create_channel` | Create a new channel |
 | `update_channel` | Update channel name, number, or group |
 | `delete_channel` | Delete a channel |
+| `bulk_delete_channels` | Delete multiple channels at once |
 | `add_stream_to_channel` | Add a stream to a channel |
 | `remove_stream_from_channel` | Remove a stream from a channel |
 | `reorder_streams` | Reorder streams within a channel by priority |
 | `assign_channel_numbers` | Bulk-assign sequential channel numbers |
-| `get_streams_for_channel` | Get detailed stream info for a channel |
 | `merge_channels` | Merge multiple channels into one |
+| `find_duplicate_channels` | Scan for channels with matching normalized names |
+| `bulk_merge_duplicate_channels` | Merge multiple groups of duplicates at once |
+| `bulk_commit_channels` | Commit a batch of channel operations atomically |
+| `build_channel_lineup` | Bulk-create channels and fuzzy-match streams |
 | `clear_auto_created` | Remove auto-created channels by group |
-| **Groups (6)** | |
+| **Groups (8)** | |
 | `list_channel_groups` | List all groups with channel counts |
 | `create_channel_group` | Create a new group |
 | `get_orphaned_groups` | Find groups with no channels |
-| `delete_channel_group` | Delete a channel group |
+| `delete_channel_group` | Delete a group, optionally deleting its channels |
+| `delete_orphaned_groups` | Delete groups with no channels assigned |
 | `get_hidden_groups` | List hidden channel groups |
 | `get_auto_created_groups` | List auto-created groups |
-| **Streams (11)** | |
+| `get_groups_with_streams` | List groups with stream count info |
+| **Streams (14)** | |
 | `list_streams` | List streams with group/provider/search filtering |
 | `search_streams` | Search streams by name across all providers |
+| `get_streams_by_ids` | Fetch detailed info for specific stream IDs |
+| `get_streams_for_channel` | Get streams assigned to a channel |
 | `get_stream_health` | Stream health summary from last probe |
 | `probe_streams` | Start probing all streams (background) |
 | `probe_single_stream` | Probe one specific stream |
+| `probe_bulk_streams` | Probe multiple streams at once |
 | `get_probe_progress` | Check ongoing probe status |
 | `get_probe_results` | Results from the most recent probe |
 | `get_struck_out_streams` | List streams with consecutive failures |
+| `cleanup_struck_out_streams` | Remove struck-out streams from channels |
+| `bulk_remove_streams` | Remove multiple streams from a channel |
 | `cancel_probe` | Cancel a running probe |
-| `get_streams_for_channel` | Get streams assigned to a channel |
-| `search_streams` | Search streams by name |
 | **M3U (8)** | |
 | `list_m3u_accounts` | List all M3U provider accounts |
 | `get_m3u_account` | Get detailed account info |
@@ -219,9 +236,11 @@ ECM includes an MCP (Model Context Protocol) server that lets Claude manage your
 | `refresh_epg` | Refresh a specific EPG source |
 | `match_channels_epg` | Auto-match channels to EPG data |
 | `get_epg_grid` | What's on TV now — EPG schedule grid |
-| **Auto-Creation (9)** | |
+| **Auto-Creation (11)** | |
 | `list_auto_creation_rules` | List all rules |
 | `get_auto_creation_rule` | Get rule details |
+| `create_auto_creation_rule` | Create a rule with conditions and actions |
+| `update_auto_creation_rule` | Update an existing rule |
 | `delete_auto_creation_rule` | Delete a rule |
 | `toggle_auto_creation_rule` | Enable/disable a rule |
 | `duplicate_auto_creation_rule` | Duplicate a rule |
@@ -295,7 +314,7 @@ docker exec enhancedchannelmanager python /app/reset_password.py -u admin -p 'si
 |-|-|
 | Frontend | React 18, TypeScript, Vite, @dnd-kit |
 | Backend | Python, FastAPI, 20+ modular API routers |
-| MCP Server | Python, FastMCP, SSE transport, 80 tools |
+| MCP Server | Python, FastMCP, SSE transport, 98 tools |
 | Deployment | Docker Compose, two containers (ECM + MCP) |
 
 ## API Reference
