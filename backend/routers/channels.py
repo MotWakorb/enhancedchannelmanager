@@ -1126,7 +1126,7 @@ async def bulk_commit_operations(request: BulkCommitRequest):
 
         # Validate each operation
         for idx, op in enumerate(request.operations):
-            if op.type in ("updateChannel", "deleteChannel"):
+            if op.type == "updateChannel":
                 if op.channelId >= 0 and op.channelId not in existing_channels:
                     ch_name = f"Channel {op.channelId}"
                     result["validationIssues"].append({
@@ -1138,6 +1138,10 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                         "channelName": ch_name,
                     })
                     result["validationPassed"] = False
+            elif op.type == "deleteChannel":
+                if op.channelId >= 0 and op.channelId not in existing_channels:
+                    # Deleting a channel that doesn't exist is a no-op, not an error
+                    logger.debug("[CHANNELS-BULK] deleteChannel: channel %s already gone, skipping", op.channelId)
 
             elif op.type == "addStreamToChannel":
                 if op.channelId >= 0 and op.channelId not in existing_channels:
@@ -1400,9 +1404,15 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                 elif op.type == "deleteChannel":
                     channel_id = resolve_id(op.channelId)
                     logger.debug("[CHANNELS-BULK] [%s/%s] deleteChannel: channel_id=%s", idx+1, len(request.operations), channel_id)
-                    await client.delete_channel(channel_id)
+                    try:
+                        await client.delete_channel(channel_id)
+                        logger.debug("[CHANNELS-BULK] Deleted channel %s", channel_id)
+                    except Exception as del_err:
+                        if "404" in str(del_err) or "not found" in str(del_err).lower():
+                            logger.debug("[CHANNELS-BULK] Channel %s already deleted, skipping", channel_id)
+                        else:
+                            raise
                     result["operationsApplied"] += 1
-                    logger.debug("[CHANNELS-BULK] Deleted channel %s", channel_id)
 
                 elif op.type == "createGroup":
                     logger.debug("[CHANNELS-BULK] [%s/%s] createGroup: name='%s'", idx+1, len(request.operations), op.name)
