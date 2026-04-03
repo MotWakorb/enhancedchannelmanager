@@ -104,7 +104,7 @@ handle authentication automatically when accessed through the web UI.
 ## Rate Limiting
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
-    version="0.16.0-0002",
+    version="0.16.0-0003",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

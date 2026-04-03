@@ -391,6 +391,87 @@ async def probe_bulk_streams(request: BulkProbeRequest):
         raise HTTPException(status_code=500, detail="Internal server error")
 
     logger.info("[STREAM-STATS-PROBE] Bulk probe completed: %s streams probed", len(results))
+
+    # Trigger smart sort if auto_reorder_after_probe is enabled
+    settings = get_settings()
+    if getattr(settings, 'auto_reorder_after_probe', False):
+        logger.info("[STREAM-STATS-PROBE] auto_reorder_after_probe=True, sorting channels with probed streams")
+        try:
+            from stream_prober import smart_sort_streams, extract_m3u_account_id
+
+            # Find which channels contain the probed streams
+            client = get_client()
+            probed_ids = set(request.stream_ids)
+
+            # Fetch all channels and find those containing probed streams
+            all_channels = []
+            page = 1
+            while True:
+                ch_result = await client.get_channels(page=page, page_size=500)
+                batch = ch_result.get("results", [])
+                if not batch:
+                    break
+                all_channels.extend(batch)
+                if not ch_result.get("next"):
+                    break
+                page += 1
+
+            affected_channels = [
+                ch for ch in all_channels
+                if any(sid in probed_ids for sid in ch.get("streams", []))
+            ]
+
+            if affected_channels:
+                # Build stats map from DB
+                all_stream_ids = list({sid for ch in affected_channels for sid in ch.get("streams", [])})
+                from models import StreamStats as StreamStatsModel
+                session = get_session()
+                try:
+                    stats_map = {}
+                    for i in range(0, len(all_stream_ids), 500):
+                        batch = all_stream_ids[i:i + 500]
+                        stats = session.query(StreamStatsModel).filter(
+                            StreamStatsModel.stream_id.in_(batch)
+                        ).all()
+                        for s in stats:
+                            stats_map[s.stream_id] = s
+                finally:
+                    session.close()
+
+                # Build M3U map
+                stream_m3u_map = {}
+                try:
+                    streams_data = await client.get_streams_by_ids(all_stream_ids)
+                    for s in streams_data:
+                        stream_m3u_map[s["id"]] = extract_m3u_account_id(s.get("m3u_account"))
+                except Exception as e:
+                    logger.warning("[STREAM-STATS-PROBE] Failed to fetch M3U data for sort: %s", e)
+
+                reordered = 0
+                for ch in affected_channels:
+                    stream_ids = ch.get("streams", [])
+                    if len(stream_ids) < 2:
+                        continue
+                    sorted_ids = smart_sort_streams(
+                        stream_ids=stream_ids,
+                        stats_map=stats_map,
+                        stream_m3u_map=stream_m3u_map,
+                        stream_sort_priority=settings.stream_sort_priority,
+                        stream_sort_enabled=settings.stream_sort_enabled,
+                        m3u_account_priorities=settings.m3u_account_priorities,
+                        deprioritize_failed_streams=settings.deprioritize_failed_streams,
+                        channel_name=ch.get("name", f"channel-{ch['id']}"),
+                    )
+                    if sorted_ids != stream_ids:
+                        await client.update_channel(ch["id"], {"streams": sorted_ids})
+                        reordered += 1
+                        logger.info("[STREAM-STATS-PROBE] Reordered streams in '%s'", ch.get("name"))
+
+                logger.info("[STREAM-STATS-PROBE] Smart sort after bulk probe: %d/%d channels reordered",
+                           reordered, len(affected_channels))
+        except Exception as e:
+            logger.warning("[STREAM-STATS-PROBE] Smart sort after bulk probe failed: %s", e)
+
     return {"probed": len(results), "results": results}
 
 
