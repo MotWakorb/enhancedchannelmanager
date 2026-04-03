@@ -192,10 +192,10 @@ class TaskRegistry:
         ).first()
 
         if db_task:
-            # Update existing
+            # Update existing — preserve user's enabled setting from DB
             db_task.task_name = instance.task_name
             db_task.description = instance.task_description
-            db_task.enabled = instance._enabled
+            instance._enabled = db_task.enabled  # Restore user's choice
             db_task.schedule_type = instance.schedule_config.schedule_type.value
             db_task.interval_seconds = instance.schedule_config.interval_seconds or None
             db_task.cron_expression = instance.schedule_config.cron_expression or None
