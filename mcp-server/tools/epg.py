@@ -41,7 +41,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(f"/api/epg/sources/{source_id}/refresh")
+            result = await client.post(f"/api/epg/sources/{source_id}/refresh", timeout=300.0)
             return f"EPG source {source_id} refresh started. {result.get('message', '')}"
         except Exception as e:
             logger.error("[MCP] refresh_epg failed: %s", e)
@@ -52,7 +52,7 @@ def register(mcp: FastMCP):
         """Auto-match channels to EPG data based on channel names."""
         try:
             client = get_ecm_client()
-            result = await client.post("/api/epg/match")
+            result = await client.post("/api/epg/match", timeout=300.0)
 
             matched = result.get("matched", 0)
             unmatched = result.get("unmatched", 0)
