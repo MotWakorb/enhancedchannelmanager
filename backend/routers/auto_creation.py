@@ -1262,12 +1262,45 @@ async def generate_debug_bundle():
         finally:
             session.close()
 
-        # -- 5. logs.txt — recent logs, obfuscated -----------------------
+        # -- 5. settings.json — user settings with secrets redacted -------
+        from config import get_settings as get_config_settings
+        settings_obj = get_config_settings()
+        settings_dict = settings_obj.model_dump()
+        # Redact sensitive fields
+        _REDACTED = "***REDACTED***"
+        for key in ("password", "smtp_password", "discord_webhook_url",
+                     "telegram_bot_token", "telegram_chat_id", "mcp_api_key"):
+            if settings_dict.get(key):
+                settings_dict[key] = _REDACTED
+        # Redact Dispatcharr URL credentials (keep host/port for debugging)
+        if settings_dict.get("url"):
+            from urllib.parse import urlparse, urlunparse
+            parsed = urlparse(settings_dict["url"])
+            if parsed.username or parsed.password:
+                clean = parsed._replace(netloc=f"{parsed.hostname}:{parsed.port}" if parsed.port else parsed.hostname)
+                settings_dict["url"] = urlunparse(clean)
+        if settings_dict.get("username"):
+            settings_dict["username"] = _REDACTED
+        settings_json_str = json.dumps(settings_dict, indent=2)
+
+        # -- 6. task_schedules.json — scheduled task configuration --------
+        from models import TaskSchedule
+        sched_session = get_session()
+        try:
+            schedules = sched_session.query(TaskSchedule).order_by(
+                TaskSchedule.task_id, TaskSchedule.id
+            ).all()
+            schedules_data = [s.to_dict() for s in schedules]
+        finally:
+            sched_session.close()
+        task_schedules_str = json.dumps(schedules_data, indent=2)
+
+        # -- 7. logs.txt — recent logs, obfuscated -----------------------
         log_lines = get_recent_logs()
         obfuscated_lines = [obfuscate_text(line) for line in log_lines]
         logs_text = "\n".join(obfuscated_lines)
 
-        # -- 6. manifest.json --------------------------------------------
+        # -- 8. manifest.json --------------------------------------------
         manifest = {
             "ecm_version": APP_VERSION,
             "generated_at": datetime.utcnow().isoformat() + "Z",
@@ -1277,12 +1310,14 @@ async def generate_debug_bundle():
         }
         manifest_str = json.dumps(manifest, indent=2)
 
-        # -- 7. Pack into tar.gz -----------------------------------------
+        # -- 9. Pack into tar.gz -----------------------------------------
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tf:
             _add_tar_entry(tf, "channels.json", channels_json_str)
             _add_tar_entry(tf, "channels.csv", csv_content)
             _add_tar_entry(tf, "rules.yaml", yaml_content)
+            _add_tar_entry(tf, "settings.json", settings_json_str)
+            _add_tar_entry(tf, "task_schedules.json", task_schedules_str)
             _add_tar_entry(tf, "logs.txt", logs_text)
             _add_tar_entry(tf, "manifest.json", manifest_str)
         buf.seek(0)
