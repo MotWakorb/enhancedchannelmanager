@@ -732,6 +732,32 @@ class AutoCreationEngine:
                         await self.client.update_channel(channel_id, {"streams": sorted_streams})
                         # Update cache
                         channel["streams"] = sorted_streams
+
+                        # Collect deprioritization reasons
+                        deprioritized = []
+                        for sid in sorted_streams:
+                            stats = self._stream_stats_cache.get(sid)
+                            if stats:
+                                if stats.get("is_black_screen"):
+                                    deprioritized.append({"id": sid, "name": stats.get("stream_name", f"Stream {sid}"), "reason": "black_screen"})
+                                elif stats.get("is_low_fps"):
+                                    deprioritized.append({"id": sid, "name": stats.get("stream_name", f"Stream {sid}"), "reason": "low_fps"})
+                                elif stats.get("probe_status") in ("failed", "timeout"):
+                                    deprioritized.append({"id": sid, "name": stats.get("stream_name", f"Stream {sid}"), "reason": stats.get("probe_status")})
+
+                        desc_parts = [f"Reordered {len(sorted_streams)} streams in '{channel_name}' by smart sort ({rule.stream_sort_field})"]
+                        if deprioritized:
+                            reasons = {}
+                            for d in deprioritized:
+                                reasons.setdefault(d["reason"], []).append(d["name"])
+                            reason_strs = []
+                            for reason, names in reasons.items():
+                                label = {"black_screen": "black screen", "low_fps": "low FPS", "failed": "failed", "timeout": "timed out"}.get(reason, reason)
+                                reason_strs.append(f"{len(names)} {label}")
+                            desc_parts.append(f"({', '.join(reason_strs)} deprioritized)")
+
+                        reorder_desc = " ".join(desc_parts)
+
                         results["execution_log"].append({
                             "stream_id": None,
                             "stream_name": f"[AUTO-CREATE-ENGINE] {channel_name}",
@@ -739,17 +765,14 @@ class AutoCreationEngine:
                             "rules_evaluated": [],
                             "actions_executed": [{
                                 "type": "reorder_streams",
-                                "description": f"Reordered {len(sorted_streams)} streams in '{channel_name}' "
-                                              f"by smart sort ({rule.stream_sort_field})",
+                                "description": reorder_desc,
                                 "success": True,
                                 "entity_id": channel_id,
                                 "error": None
                             }]
                         })
                         logger.info(
-                            "[AUTO-CREATE-ENGINE] Reordered %s streams in "
-                            "'%s' by smart sort",
-                            len(sorted_streams), channel_name
+                            "[AUTO-CREATE-ENGINE] %s", reorder_desc
                         )
                     except Exception as e:
                         logger.error(

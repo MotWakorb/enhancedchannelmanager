@@ -14,6 +14,8 @@ from pathlib import Path
 import os
 import re
 
+import journal
+
 import httpx
 
 from database import get_session
@@ -1650,6 +1652,43 @@ class StreamProber:
                             except Exception as update_err:
                                 logger.error("[STREAM-PROBE-SORT] Failed to update channel %s (%s): %s", channel_id, channel_name, update_err)
                                 raise  # Re-raise to be caught by outer exception handler
+
+                            # Collect deprioritization reasons for journal
+                            deprioritized = []
+                            for sid in sorted_stream_ids:
+                                stat = stats_map.get(sid)
+                                if stat:
+                                    if getattr(stat, 'is_black_screen', False):
+                                        deprioritized.append({"id": sid, "name": stat.stream_name, "reason": "black_screen"})
+                                    elif getattr(stat, 'is_low_fps', False):
+                                        deprioritized.append({"id": sid, "name": stat.stream_name, "reason": "low_fps"})
+                                    elif stat.probe_status in ('failed', 'timeout'):
+                                        deprioritized.append({"id": sid, "name": stat.stream_name, "reason": stat.probe_status})
+
+                            # Build journal description
+                            desc_parts = [f"Smart sort reordered {len(stream_ids)} streams in '{channel_name}'"]
+                            if deprioritized:
+                                reasons = {}
+                                for d in deprioritized:
+                                    reasons.setdefault(d["reason"], []).append(d["name"])
+                                reason_strs = []
+                                for reason, names in reasons.items():
+                                    label = {"black_screen": "black screen", "low_fps": "low FPS", "failed": "failed", "timeout": "timed out"}.get(reason, reason)
+                                    reason_strs.append(f"{len(names)} {label}")
+                                desc_parts.append(f"({', '.join(reason_strs)} deprioritized)")
+
+                            journal.log_entry(
+                                category="channel",
+                                action_type="smart_sort",
+                                entity_id=channel_id,
+                                entity_name=channel_name,
+                                description=" ".join(desc_parts),
+                                before_value={"streams": [s["name"] for s in streams_before]},
+                                after_value={
+                                    "streams": [s["name"] for s in streams_after],
+                                    "deprioritized": deprioritized,
+                                },
+                            )
 
                             reordered.append({
                                 "channel_id": channel_id,

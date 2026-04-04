@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from config import get_settings
 from database import get_session
+import journal
 from dispatcharr_client import get_client
 from stream_prober import StreamProber, get_prober, ensure_prober
 
@@ -465,7 +466,40 @@ async def probe_bulk_streams(request: BulkProbeRequest):
                     if sorted_ids != stream_ids:
                         await client.update_channel(ch["id"], {"streams": sorted_ids})
                         reordered += 1
-                        logger.info("[STREAM-STATS-PROBE] Reordered streams in '%s'", ch.get("name"))
+                        ch_name = ch.get("name", f"channel-{ch['id']}")
+                        logger.info("[STREAM-STATS-PROBE] Reordered streams in '%s'", ch_name)
+
+                        # Journal with deprioritization details
+                        deprioritized = []
+                        for sid in sorted_ids:
+                            stat = stats_map.get(sid)
+                            if stat:
+                                if getattr(stat, 'is_black_screen', False):
+                                    deprioritized.append({"id": sid, "name": stat.stream_name, "reason": "black_screen"})
+                                elif getattr(stat, 'is_low_fps', False):
+                                    deprioritized.append({"id": sid, "name": stat.stream_name, "reason": "low_fps"})
+                                elif stat.probe_status in ('failed', 'timeout'):
+                                    deprioritized.append({"id": sid, "name": stat.stream_name, "reason": stat.probe_status})
+
+                        desc_parts = [f"Smart sort reordered {len(stream_ids)} streams in '{ch_name}'"]
+                        if deprioritized:
+                            reasons = {}
+                            for d in deprioritized:
+                                reasons.setdefault(d["reason"], []).append(d["name"])
+                            reason_strs = []
+                            for reason, names in reasons.items():
+                                label = {"black_screen": "black screen", "low_fps": "low FPS", "failed": "failed", "timeout": "timed out"}.get(reason, reason)
+                                reason_strs.append(f"{len(names)} {label}")
+                            desc_parts.append(f"({', '.join(reason_strs)} deprioritized)")
+
+                        journal.log_entry(
+                            category="channel",
+                            action_type="smart_sort",
+                            entity_id=ch["id"],
+                            entity_name=ch_name,
+                            description=" ".join(desc_parts),
+                            after_value={"deprioritized": deprioritized} if deprioritized else None,
+                        )
 
                 logger.info("[STREAM-STATS-PROBE] Smart sort after bulk probe: %d/%d channels reordered",
                            reordered, len(affected_channels))
