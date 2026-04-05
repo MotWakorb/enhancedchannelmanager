@@ -2,6 +2,7 @@ import { logger } from '../utils/logger';
 import { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
 import type { AutoSyncCustomProperties, ChannelGroup, ChannelProfile, StreamProfile, EPGSource, Logo } from '../types';
 import * as api from '../services/api';
+import { useNotifications } from '../contexts/NotificationContext';
 import './ModalBase.css';
 import './AutoSyncSettingsModal.css';
 import { ModalOverlay } from './ModalOverlay';
@@ -31,6 +32,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
   streamProfiles,
   onGroupsChange,
 }: AutoSyncSettingsModalProps) {
+  const notifications = useNotifications();
   // Form state
   const [epgSourceId, setEpgSourceId] = useState<string>('');
   const [groupOverride, setGroupOverride] = useState<string>('');
@@ -255,6 +257,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
     setCreatingGroup(true);
     try {
       const newGroup = await api.createChannelGroup(newGroupName.trim());
+      notifications.success(`Created group "${newGroup.name}"`, 'Auto-Sync Settings');
       setGroupOverride(newGroup.id.toString());
       setNewGroupName('');
       setShowNewGroupInput(false);
@@ -266,6 +269,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
       }
     } catch (err) {
       logger.error('Failed to create group:', err);
+      notifications.error(err instanceof Error ? err.message : 'Failed to create group', 'Auto-Sync Settings');
     } finally {
       setCreatingGroup(false);
     }
