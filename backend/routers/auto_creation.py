@@ -1160,26 +1160,14 @@ async def generate_debug_bundle():
         groups = await client.get_channel_groups() or []
         group_lookup = {g.get("id"): g.get("name", "") for g in groups}
 
-        # -- 2. channels.json — minimal channel list ----------------------
-        channels_json_data = [
-            {
-                "id": ch.get("id"),
-                "name": ch.get("name", ""),
-                "channel_number": ch.get("channel_number"),
-                "channel_group_name": group_lookup.get(ch.get("channel_group_id"), ""),
-            }
-            for ch in all_channels
-        ]
-        channels_json_str = json.dumps(channels_json_data, indent=2)
-
-        # -- 3. channels.csv — full export with obfuscated URLs -----------
-        # Collect stream IDs
+        # -- 2. channels.json — channels with streams and stats -----------
+        # Collect all stream IDs across channels
         all_stream_ids = set()
         for ch in all_channels:
             all_stream_ids.update(ch.get("streams", []))
 
-        # Fetch stream URLs in batches
-        stream_url_lookup = {}
+        # Fetch stream details in batches (for names and M3U info)
+        stream_detail_lookup = {}  # stream_id -> {name, m3u_account_id, url}
         stream_ids_list = list(all_stream_ids)
         for i in range(0, len(stream_ids_list), 100):
             batch = stream_ids_list[i:i + 100]
@@ -1187,15 +1175,80 @@ async def generate_debug_bundle():
                 try:
                     streams = await client.get_streams_by_ids(batch)
                     for s in streams:
-                        url = s.get("url", "")
-                        stream_url_lookup[s.get("id")] = obfuscate_url(url) if url else ""
+                        m3u_acct = s.get("m3u_account")
+                        if isinstance(m3u_acct, dict):
+                            m3u_id = m3u_acct.get("id")
+                        else:
+                            m3u_id = m3u_acct
+                        stream_detail_lookup[s.get("id")] = {
+                            "name": s.get("name", ""),
+                            "m3u_account_id": m3u_id,
+                            "url": obfuscate_url(s.get("url", "")) if s.get("url") else "",
+                        }
                 except Exception as e:
                     logger.warning("[AUTO-CREATE] Debug bundle: failed to fetch stream batch: %s", e)
 
+        # Load stream stats from DB
+        from models import StreamStats
+        stats_session = get_session()
+        try:
+            stats_records = stats_session.query(StreamStats).filter(
+                StreamStats.stream_id.in_(stream_ids_list)
+            ).all() if stream_ids_list else []
+            stream_stats_lookup = {s.stream_id: s for s in stats_records}
+        finally:
+            stats_session.close()
+
+        # Build channels with embedded stream info
+        channels_json_data = []
+        for ch in all_channels:
+            stream_ids = ch.get("streams", [])
+            streams_data = []
+            for sid in stream_ids:
+                detail = stream_detail_lookup.get(sid, {})
+                stat = stream_stats_lookup.get(sid)
+                stream_entry = {
+                    "id": sid,
+                    "name": detail.get("name", ""),
+                    "m3u_account_id": detail.get("m3u_account_id"),
+                    "url": detail.get("url", ""),
+                }
+                if stat:
+                    stream_entry["stats"] = {
+                        "probe_status": stat.probe_status,
+                        "resolution": stat.resolution,
+                        "fps": stat.fps,
+                        "video_codec": stat.video_codec,
+                        "audio_codec": stat.audio_codec,
+                        "audio_channels": stat.audio_channels,
+                        "bitrate": stat.bitrate,
+                        "video_bitrate": stat.video_bitrate,
+                        "is_black_screen": stat.is_black_screen or False,
+                        "is_low_fps": stat.is_low_fps or False,
+                        "consecutive_failures": stat.consecutive_failures or 0,
+                        "last_probed": stat.last_probed.isoformat() + "Z" if stat.last_probed else None,
+                    }
+                streams_data.append(stream_entry)
+
+            channels_json_data.append({
+                "id": ch.get("id"),
+                "name": ch.get("name", ""),
+                "channel_number": ch.get("channel_number"),
+                "channel_group_name": group_lookup.get(ch.get("channel_group_id"), ""),
+                "stream_count": len(stream_ids),
+                "streams": streams_data,
+            })
+        channels_json_str = json.dumps(channels_json_data, indent=2)
+
+        # -- 3. channels.csv — full export with obfuscated URLs -----------
         csv_channels = []
         for ch in sorted(all_channels, key=lambda c: c.get("channel_number", 0) or 0):
             stream_ids = ch.get("streams", [])
-            stream_urls = [stream_url_lookup.get(sid, "") for sid in stream_ids if stream_url_lookup.get(sid)]
+            stream_urls = [
+                stream_detail_lookup.get(sid, {}).get("url", "")
+                for sid in stream_ids
+                if stream_detail_lookup.get(sid, {}).get("url")
+            ]
             csv_channels.append({
                 "channel_number": ch.get("channel_number"),
                 "name": ch.get("name", ""),
@@ -1301,12 +1354,27 @@ async def generate_debug_bundle():
         logs_text = "\n".join(obfuscated_lines)
 
         # -- 8. manifest.json --------------------------------------------
+        # Compute stream stats summary
+        total_streams = len(all_stream_ids)
+        probed_success = sum(1 for s in stream_stats_lookup.values() if s.probe_status == "success")
+        probed_failed = sum(1 for s in stream_stats_lookup.values() if s.probe_status in ("failed", "timeout"))
+        black_screen_count = sum(1 for s in stream_stats_lookup.values() if s.is_black_screen)
+        low_fps_count = sum(1 for s in stream_stats_lookup.values() if s.is_low_fps)
+
         manifest = {
             "ecm_version": APP_VERSION,
             "generated_at": datetime.utcnow().isoformat() + "Z",
             "channel_count": len(all_channels),
             "rule_count": rule_count,
             "group_count": len(groups),
+            "stream_count": total_streams,
+            "stream_stats": {
+                "probed_success": probed_success,
+                "probed_failed": probed_failed,
+                "unprobed": total_streams - probed_success - probed_failed,
+                "black_screen": black_screen_count,
+                "low_fps": low_fps_count,
+            },
         }
         manifest_str = json.dumps(manifest, indent=2)
 
