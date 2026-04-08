@@ -179,3 +179,26 @@ def register(mcp: FastMCP):
         except Exception as e:
             logger.error("[MCP] update_m3u_group_settings failed: %s", e)
             return f"Error updating group settings: {e}"
+
+    @mcp.tool()
+    async def bulk_update_m3u_group_settings(
+        account_id: int,
+        groups: dict[str, bool],
+    ) -> str:
+        """Enable or disable multiple stream groups on an M3U account at once.
+
+        Args:
+            account_id: The M3U account ID
+            groups: Dict of group_name -> enabled. Example: {"Sports": false, "News": false, "Movies": true}
+        """
+        try:
+            client = get_ecm_client()
+            await client.patch(
+                f"/api/m3u/accounts/{account_id}/group-settings",
+                json_data=groups,
+            )
+            changes = [f"{'enabled' if v else 'disabled'} '{k}'" for k, v in groups.items()]
+            return f"Updated {len(groups)} groups on M3U account {account_id}:\n  " + "\n  ".join(changes)
+        except Exception as e:
+            logger.error("[MCP] bulk_update_m3u_group_settings failed: %s", e)
+            return f"Error updating group settings: {e}"

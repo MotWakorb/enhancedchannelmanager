@@ -62,3 +62,56 @@ def register(mcp: FastMCP):
         except Exception as e:
             logger.error("[MCP] delete_all_notifications failed: %s", e)
             return f"Error deleting notifications: {e}"
+
+    @mcp.tool()
+    async def list_alert_methods() -> str:
+        """List all configured alert methods (Discord, Telegram, email)."""
+        try:
+            client = get_ecm_client()
+            methods = await client.get("/api/alert-methods")
+
+            if not methods:
+                return "No alert methods configured."
+
+            lines = [f"Alert Methods ({len(methods)}):"]
+            for m in methods:
+                name = m.get("name", "Unnamed")
+                mid = m.get("id", "?")
+                mtype = m.get("method_type", "?")
+                enabled = "enabled" if m.get("enabled") else "disabled"
+                levels = []
+                if m.get("notify_error"):
+                    levels.append("error")
+                if m.get("notify_warning"):
+                    levels.append("warning")
+                if m.get("notify_success"):
+                    levels.append("success")
+                if m.get("notify_info"):
+                    levels.append("info")
+                level_str = f" [{', '.join(levels)}]" if levels else ""
+                lines.append(f"  {name} (id={mid}) — {mtype}, {enabled}{level_str}")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] list_alert_methods failed: %s", e)
+            return f"Error listing alert methods: {e}"
+
+    @mcp.tool()
+    async def test_alert_method(method_id: int) -> str:
+        """Send a test notification through an alert method.
+
+        Args:
+            method_id: The alert method ID to test
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.post(f"/api/alert-methods/{method_id}/test")
+            success = result.get("success", False)
+            message = result.get("message", "")
+            if success:
+                return f"Test alert sent successfully. {message}"
+            else:
+                return f"Test alert failed: {message}"
+        except Exception as e:
+            logger.error("[MCP] test_alert_method failed: %s", e)
+            return f"Error testing alert method {method_id}: {e}"

@@ -151,6 +151,38 @@ def register(mcp: FastMCP):
             return f"Error toggling rule {rule_id}: {e}"
 
     @mcp.tool()
+    async def bulk_toggle_auto_creation_rules(rule_ids: list[int]) -> str:
+        """Toggle multiple auto-creation rules at once (enable/disable).
+
+        Args:
+            rule_ids: List of rule IDs to toggle
+        """
+        try:
+            client = get_ecm_client()
+            results = []
+            errors = []
+            for rid in rule_ids:
+                try:
+                    result = await client.post(f"/api/auto-creation/rules/{rid}/toggle")
+                    enabled = result.get("enabled", "unknown")
+                    state = "enabled" if enabled else "disabled"
+                    results.append(f"Rule {rid}: {state}")
+                except Exception as e:
+                    errors.append(f"Rule {rid}: {e}")
+
+            lines = [f"Toggled {len(results)}/{len(rule_ids)} rules:"]
+            for r in results:
+                lines.append(f"  - {r}")
+            if errors:
+                lines.append(f"Errors ({len(errors)}):")
+                for err in errors:
+                    lines.append(f"  - {err}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] bulk_toggle_auto_creation_rules failed: %s", e)
+            return f"Error toggling rules: {e}"
+
+    @mcp.tool()
     async def duplicate_auto_creation_rule(rule_id: int) -> str:
         """Duplicate an auto-creation rule.
 
