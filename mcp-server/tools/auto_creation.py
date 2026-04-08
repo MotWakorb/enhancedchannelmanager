@@ -94,17 +94,40 @@ def register(mcp: FastMCP):
                 f"  Priority: {r.get('priority', '?')}",
             ]
 
+            if r.get("description"):
+                lines.append(f"  Description: {r['description']}")
+
+            lines.append(f"  Run on refresh: {r.get('run_on_refresh', False)}")
+            lines.append(f"  Stop on first match: {r.get('stop_on_first_match', True)}")
+            lines.append(f"  Skip struck streams: {r.get('skip_struck_streams', False)}")
+            lines.append(f"  Orphan action: {r.get('orphan_action', 'delete')}")
+
+            # Sort settings
+            if r.get("sort_field"):
+                lines.append(f"  Channel sort: {r['sort_field']} {r.get('sort_order', 'asc')}")
+            if r.get("stream_sort_field"):
+                lines.append(f"  Stream sort: {r['stream_sort_field']} {r.get('stream_sort_order', 'asc')}")
+
+            # Normalization groups
+            norm_ids = r.get("normalization_group_ids", [])
+            if norm_ids:
+                lines.append(f"  Normalization groups: {norm_ids}")
+
             conditions = r.get("conditions", [])
             if conditions:
                 lines.append(f"  Conditions ({len(conditions)}):")
-                for c in conditions[:5]:
+                for c in conditions[:10]:
                     lines.append(f"    - {c.get('type', '?')}: {c.get('value', c.get('pattern', '?'))}")
+                if len(conditions) > 10:
+                    lines.append(f"    ... and {len(conditions) - 10} more")
 
             actions = r.get("actions", [])
             if actions:
                 lines.append(f"  Actions ({len(actions)}):")
-                for a in actions[:5]:
+                for a in actions[:10]:
                     lines.append(f"    - {a.get('type', '?')}: {a.get('value', a.get('target', '?'))}")
+                if len(actions) > 10:
+                    lines.append(f"    ... and {len(actions) - 10} more")
 
             return "\n".join(lines)
         except Exception as e:
@@ -176,7 +199,7 @@ def register(mcp: FastMCP):
         sort_regex: str | None = None,
         stream_sort_field: str | None = None,
         stream_sort_order: str = "asc",
-        normalize_names: bool = False,
+        normalization_group_ids: list[int] | None = None,
         skip_struck_streams: bool = False,
         orphan_action: str = "delete",
     ) -> str:
@@ -203,7 +226,7 @@ def register(mcp: FastMCP):
                   normalized_name_in_group / normalized_name_not_in_group
                   normalized_name_exists / normalized_name_not_exists
                   always / never — always or never matches
-                Example: [{"type": "stream_group_contains", "value": "USA | Entertainment 📺", "connector": "and"}]
+                Example: [{"type": "stream_group_contains", "value": "USA | Entertainment", "connector": "and"}]
             actions: List of action dicts. Each has 'type' and type-specific fields.
                 Action types:
                   create_group — params: name_template, if_exists (skip/use_existing)
@@ -236,9 +259,9 @@ def register(mcp: FastMCP):
             sort_order: 'asc' or 'desc'
             probe_on_sort: Probe streams when sorting
             sort_regex: Regex for extracting sort keys
-            stream_sort_field: How to sort streams within channels ('smart_sort', 'resolution', etc.)
+            stream_sort_field: How to sort streams within channels ('smart_sort', 'resolution', 'video_codec', etc.)
             stream_sort_order: 'asc' or 'desc'
-            normalize_names: Apply normalization rules to stream names
+            normalization_group_ids: List of normalization group IDs to apply (use list_normalization_rules to see available groups)
             skip_struck_streams: Skip streams with consecutive probe failures
             orphan_action: What to do with orphaned channels ('delete', 'keep', 'disable')
         """
@@ -255,7 +278,6 @@ def register(mcp: FastMCP):
                 "sort_order": sort_order,
                 "probe_on_sort": probe_on_sort,
                 "stream_sort_order": stream_sort_order,
-                "normalize_names": normalize_names,
                 "skip_struck_streams": skip_struck_streams,
                 "orphan_action": orphan_action,
             }
@@ -271,6 +293,8 @@ def register(mcp: FastMCP):
                 payload["sort_regex"] = sort_regex
             if stream_sort_field is not None:
                 payload["stream_sort_field"] = stream_sort_field
+            if normalization_group_ids is not None:
+                payload["normalization_group_ids"] = normalization_group_ids
 
             result = await client.post("/api/auto-creation/rules", json_data=payload)
 
@@ -300,7 +324,7 @@ def register(mcp: FastMCP):
         sort_regex: str | None = None,
         stream_sort_field: str | None = None,
         stream_sort_order: str | None = None,
-        normalize_names: bool | None = None,
+        normalization_group_ids: list[int] | None = None,
         skip_struck_streams: bool | None = None,
         orphan_action: str | None = None,
     ) -> str:
@@ -322,9 +346,9 @@ def register(mcp: FastMCP):
             sort_order: 'asc' or 'desc'
             probe_on_sort: Probe streams when sorting
             sort_regex: Regex for extracting sort keys
-            stream_sort_field: How to sort streams within channels
+            stream_sort_field: How to sort streams within channels ('smart_sort', 'resolution', 'video_codec', etc.)
             stream_sort_order: 'asc' or 'desc'
-            normalize_names: Apply normalization rules to stream names
+            normalization_group_ids: List of normalization group IDs to apply (use list_normalization_rules to see available groups)
             skip_struck_streams: Skip streams with consecutive probe failures
             orphan_action: What to do with orphaned channels ('delete', 'keep', 'disable')
         """
@@ -340,7 +364,7 @@ def register(mcp: FastMCP):
                 ("stop_on_first_match", stop_on_first_match), ("sort_field", sort_field),
                 ("sort_order", sort_order), ("probe_on_sort", probe_on_sort),
                 ("sort_regex", sort_regex), ("stream_sort_field", stream_sort_field),
-                ("stream_sort_order", stream_sort_order), ("normalize_names", normalize_names),
+                ("stream_sort_order", stream_sort_order), ("normalization_group_ids", normalization_group_ids),
                 ("skip_struck_streams", skip_struck_streams), ("orphan_action", orphan_action),
             ]:
                 if value is not None:
@@ -401,3 +425,21 @@ def register(mcp: FastMCP):
         except Exception as e:
             logger.error("[MCP] rollback_auto_creation failed: %s", e)
             return f"Error rolling back execution {execution_id}: {e}"
+
+    @mcp.tool()
+    async def get_auto_creation_debug_bundle() -> str:
+        """Get info about the auto-creation debug bundle for troubleshooting.
+
+        The debug bundle is a tar.gz file that must be downloaded from the ECM UI.
+        This tool describes what it contains and how to get it.
+        """
+        return ("The debug bundle is available at: GET /api/auto-creation/debug-bundle\n"
+                "Download it from the ECM UI: Auto-Creation page > Debug Bundle button\n\n"
+                "Bundle contains (all data obfuscated for safe sharing):\n"
+                "  - channels.json — channel data with stream details and stats\n"
+                "  - rules.json — auto-creation rules configuration\n"
+                "  - streams.csv — all streams with metadata\n"
+                "  - stream_stats.json — probe results and health data\n"
+                "  - settings.json — app settings (credentials redacted)\n"
+                "  - task_schedules.json — scheduled task configuration\n"
+                "  - logs.txt — recent application logs")
