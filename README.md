@@ -135,7 +135,7 @@ In-app notification bell with history, active task pinning, and external alert m
 
 ## MCP Server (Claude Integration)
 
-ECM includes an MCP (Model Context Protocol) server that lets Claude manage your channels through natural language. Ask Claude to list channels, refresh M3U accounts, probe stream health, run auto-creation pipelines, find and merge duplicate channels, view stats, and more — 115 tools across 14 domains.
+ECM includes an MCP (Model Context Protocol) server that lets Claude manage your channels through natural language. Ask Claude to list channels, refresh M3U accounts, probe stream health, run auto-creation pipelines, find and merge duplicate channels, view stats, and more — 124 tools across 14 domains.
 
 ### Setup
 
@@ -174,11 +174,11 @@ To connect:
 
 If running ECM locally, use `localhost` as your host. If the MCP container is on the same Docker network as Claude Code, use the container name (`ecm-mcp`).
 
-### Available Tools (115)
+### Available Tools (124)
 
 | Tool | Description |
 |-|-|
-| **Channels (16)** | |
+| **Channels (18)** | |
 | `list_channels` | List channels with optional group/search/stream count filtering |
 | `get_channel` | Get detailed channel info (streams, EPG, logo) |
 | `create_channel` | Create a new channel |
@@ -195,6 +195,8 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `bulk_commit_channels` | Commit a batch of channel operations atomically |
 | `build_channel_lineup` | Bulk-create channels and fuzzy-match streams |
 | `clear_auto_created` | Remove auto-created channels by group |
+| `bulk_add_streams_to_channel` | Add multiple streams to a channel at once |
+| `bulk_assign_epg` | Assign EPG IDs (tvg_id) to multiple channels |
 | **Groups (8)** | |
 | `list_channel_groups` | List all groups with channel counts |
 | `create_channel_group` | Create a new group |
@@ -222,7 +224,7 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `bulk_search_streams` | Search multiple stream names in one call |
 | `fuzzy_match_stream` | Find best fuzzy match for a stream name |
 | `match_streams_to_channels` | Match streams to channels by name similarity |
-| **M3U (8)** | |
+| **M3U (9)** | |
 | `list_m3u_accounts` | List all M3U provider accounts |
 | `get_m3u_account` | Get detailed account info |
 | `create_m3u_account` | Create a new M3U account |
@@ -231,15 +233,19 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `refresh_m3u` | Refresh a specific M3U account |
 | `refresh_all_m3u` | Refresh all M3U accounts |
 | `update_m3u_group_settings` | Enable/disable stream groups on an account |
-| **EPG (7)** | |
+| `bulk_update_m3u_group_settings` | Enable/disable multiple stream groups at once |
+| **EPG (10)** | |
 | `list_epg_sources` | List EPG data sources |
 | `create_epg_source` | Create a new EPG source |
 | `update_epg_source` | Update an EPG source |
 | `delete_epg_source` | Delete an EPG source |
 | `refresh_epg` | Refresh a specific EPG source |
 | `match_channels_epg` | Auto-match channels to EPG data |
+| `refresh_all_epg` | Refresh multiple or all EPG sources at once |
 | `get_epg_grid` | What's on TV now — EPG schedule grid |
-| **Auto-Creation (11)** | |
+| `list_dummy_epg_profiles` | List dummy EPG profiles |
+| `generate_dummy_epg` | Regenerate dummy EPG XMLTV data |
+| **Auto-Creation (12)** | |
 | `list_auto_creation_rules` | List all rules |
 | `get_auto_creation_rule` | Get rule details (conditions, actions, normalization groups, sort config) |
 | `create_auto_creation_rule` | Create a rule with conditions, actions, and per-rule normalization groups |
@@ -251,6 +257,7 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `list_auto_creation_executions` | View execution history |
 | `rollback_auto_creation` | Undo an execution |
 | `get_auto_creation_debug_bundle` | Info about the diagnostic debug bundle for troubleshooting |
+| `bulk_toggle_auto_creation_rules` | Toggle multiple rules at once |
 | **Export (6)** | |
 | `list_export_profiles` | List export profiles |
 | `create_export_profile` | Create an export profile |
@@ -296,10 +303,12 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `list_saved_backups` | List saved YAML backup files |
 | `delete_saved_backup` | Delete a saved backup file |
 | `get_journal` | Activity audit log (with limit/category filters) |
-| **Notifications (3)** | |
+| **Notifications (5)** | |
 | `list_notifications` | List notifications with unread count |
 | `mark_notifications_read` | Mark all as read |
 | `delete_all_notifications` | Clear all notifications |
+| `list_alert_methods` | List configured alert methods (Discord, Telegram, email) |
+| `test_alert_method` | Send a test notification through an alert method |
 | **Profiles (3)** | |
 | `list_channel_profiles` | List channel profiles |
 | `list_stream_profiles` | List stream profiles |
@@ -337,7 +346,7 @@ docker exec enhancedchannelmanager python /app/reset_password.py -u admin -p 'si
 |-|-|
 | Frontend | React 18, TypeScript, Vite, @dnd-kit |
 | Backend | Python, FastAPI, 20+ modular API routers |
-| MCP Server | Python, FastMCP, SSE transport, 115 tools |
+| MCP Server | Python, FastMCP, SSE transport, 124 tools |
 | Deployment | Docker Compose, two containers (ECM + MCP) |
 
 ## API Reference
@@ -354,7 +363,7 @@ Interactive API docs are available at `/api/docs` (Swagger UI) and `/api/redoc`.
 - **v0.13.0** — Backend modularization (20+ routers), auth system, task engine
 
 ### v0.16.0 — MCP Server & Claude Integration (Current)
-MCP server for natural language channel management via Claude. 115 tools across 14 domains, SSE transport with API key auth, separate Docker container, frontend settings UI with connection status. Per-rule normalization group selection, video codec as smart sort criterion, configurable deprioritized stream ordering, diagnostic debug bundles, user identification in watch history and stats, and settings persistence hardening.
+MCP server for natural language channel management via Claude. 124 tools across 14 domains, SSE transport with API key auth, separate Docker container, frontend settings UI with connection status. Per-rule normalization group selection, video codec as smart sort criterion, configurable deprioritized stream ordering, diagnostic debug bundles, user identification in watch history and stats, and settings persistence hardening.
 
 ### v0.17.0 — Dashboard & Analytics
 Enhanced dashboard with real-time stream monitoring, historical analytics, and customizable widgets.
