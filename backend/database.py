@@ -220,6 +220,9 @@ def _run_migrations(engine) -> None:
             # Migrate normalize_names -> normalization_group_ids (v0.16.0 - Per-rule normalization)
             _migrate_normalize_names_to_normalization_group_ids(conn)
 
+            # Add user_id and username columns to unique_client_connections (v0.16.0 - User tracking)
+            _add_unique_client_connections_user_columns(conn)
+
             logger.debug("[DATABASE] All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception("[DATABASE] Migration failed: %s", e)
@@ -1785,6 +1788,29 @@ def close_db() -> None:
         logger.info("[DATABASE] Database engine disposed")
     _engine = None
     _SessionLocal = None
+
+
+def _add_unique_client_connections_user_columns(conn) -> None:
+    """Add user_id and username columns to unique_client_connections table."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='unique_client_connections'"
+    ))
+    if not result.fetchone():
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(unique_client_connections)")).fetchall()]
+
+    if "user_id" not in columns:
+        logger.info("[DATABASE] Adding user_id column to unique_client_connections")
+        conn.execute(text("ALTER TABLE unique_client_connections ADD COLUMN user_id INTEGER"))
+        conn.commit()
+
+    if "username" not in columns:
+        logger.info("[DATABASE] Adding username column to unique_client_connections")
+        conn.execute(text("ALTER TABLE unique_client_connections ADD COLUMN username VARCHAR(255)"))
+        conn.commit()
 
 
 def get_session():
