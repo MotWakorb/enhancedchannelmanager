@@ -1430,8 +1430,8 @@ class AutoCreationRule(Base):
     stream_sort_field = Column(String(50), nullable=True)  # None = no stream reorder
     stream_sort_order = Column(String(4), default="asc")   # "asc" or "desc"
 
-    # Normalization - apply normalization engine rules to channel names
-    normalize_names = Column(Boolean, default=False, nullable=False)
+    # Normalization - JSON array of NormalizationRuleGroup IDs to apply, null/empty = disabled
+    normalization_group_ids = Column(Text, nullable=True)
 
     # Strike filtering - skip streams that have been struck out (consecutive_failures >= strike_threshold)
     skip_struck_streams = Column(Boolean, default=False, nullable=False)
@@ -1512,6 +1512,19 @@ class AutoCreationRule(Base):
         """Set managed_channel_ids from list of ints."""
         self.managed_channel_ids = json.dumps(sorted(set(ids))) if ids else None
 
+    def get_normalization_group_ids(self) -> list[int]:
+        """Parse normalization_group_ids JSON into list of ints."""
+        if not self.normalization_group_ids:
+            return []
+        try:
+            return json.loads(self.normalization_group_ids)
+        except (ValueError, TypeError):
+            return []
+
+    def set_normalization_group_ids(self, ids: list[int]) -> None:
+        """Set normalization_group_ids from list of ints."""
+        self.normalization_group_ids = json.dumps(sorted(set(ids))) if ids else None
+
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
         return {
@@ -1532,7 +1545,7 @@ class AutoCreationRule(Base):
             "sort_regex": self.sort_regex,
             "stream_sort_field": self.stream_sort_field,
             "stream_sort_order": self.stream_sort_order or "asc",
-            "normalize_names": self.normalize_names or False,
+            "normalization_group_ids": self.get_normalization_group_ids(),
             "skip_struck_streams": self.skip_struck_streams or False,
             "orphan_action": self.orphan_action or "delete",
             "last_run_at": self.last_run_at.isoformat() + "Z" if self.last_run_at else None,
