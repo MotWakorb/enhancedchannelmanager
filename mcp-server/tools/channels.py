@@ -263,6 +263,75 @@ def register(mcp: FastMCP):
             return f"Error adding stream {stream_id} to channel {channel_id}: {e}"
 
     @mcp.tool()
+    async def bulk_add_streams_to_channel(channel_id: int, stream_ids: list[int]) -> str:
+        """Add multiple streams to a channel at once.
+
+        Args:
+            channel_id: The channel to add streams to
+            stream_ids: List of stream IDs to add
+        """
+        try:
+            client = get_ecm_client()
+            added = 0
+            errors = []
+            for sid in stream_ids:
+                try:
+                    await client.post(
+                        f"/api/channels/{channel_id}/add-stream",
+                        json_data={"stream_id": sid},
+                    )
+                    added += 1
+                except Exception as e:
+                    errors.append(f"stream {sid}: {e}")
+
+            lines = [f"Added {added}/{len(stream_ids)} streams to channel {channel_id}."]
+            if errors:
+                lines.append(f"Errors ({len(errors)}):")
+                for err in errors[:10]:
+                    lines.append(f"  - {err}")
+                if len(errors) > 10:
+                    lines.append(f"  ... and {len(errors) - 10} more")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] bulk_add_streams_to_channel failed: %s", e)
+            return f"Error adding streams to channel {channel_id}: {e}"
+
+    @mcp.tool()
+    async def bulk_assign_epg(mappings: list[dict]) -> str:
+        """Assign EPG IDs (tvg_id) to multiple channels at once.
+
+        Args:
+            mappings: List of dicts, each with 'channel_id' (int) and 'tvg_id' (str).
+                Example: [{"channel_id": 1, "tvg_id": "ESPN.us"}, {"channel_id": 2, "tvg_id": "CNN.us"}]
+                Set tvg_id to "" to clear the EPG assignment.
+        """
+        try:
+            client = get_ecm_client()
+            updated = 0
+            errors = []
+            for m in mappings:
+                cid = m.get("channel_id")
+                tvg = m.get("tvg_id", "")
+                if cid is None:
+                    errors.append("missing channel_id in mapping")
+                    continue
+                try:
+                    await client.patch(f"/api/channels/{cid}", json_data={"tvg_id": tvg})
+                    updated += 1
+                except Exception as e:
+                    errors.append(f"channel {cid}: {e}")
+
+            lines = [f"Updated EPG assignments for {updated}/{len(mappings)} channels."]
+            if errors:
+                lines.append(f"Errors ({len(errors)}):")
+                for err in errors[:10]:
+                    lines.append(f"  - {err}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] bulk_assign_epg failed: %s", e)
+            return f"Error assigning EPG IDs: {e}"
+
+    @mcp.tool()
     async def remove_stream_from_channel(channel_id: int, stream_id: int) -> str:
         """Remove a stream from a channel.
 

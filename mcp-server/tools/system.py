@@ -54,6 +54,54 @@ def register(mcp: FastMCP):
             return f"Error creating backup: {e}"
 
     @mcp.tool()
+    async def get_export_sections() -> str:
+        """List available YAML export sections (for selective backup)."""
+        try:
+            client = get_ecm_client()
+            sections = await client.get("/api/backup/export-sections")
+            if not sections:
+                return "No export sections available."
+            lines = ["Available export sections:"]
+            for s in sections:
+                lines.append(f"  - {s['key']}: {s['label']}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] get_export_sections failed: %s", e)
+            return f"Error: {e}"
+
+    @mcp.tool()
+    async def list_saved_backups() -> str:
+        """List saved YAML backup files on the server (created by scheduled backup task)."""
+        try:
+            client = get_ecm_client()
+            backups = await client.get("/api/backup/saved")
+            if not backups:
+                return "No saved backups."
+            lines = [f"Saved backups ({len(backups)}):"]
+            for b in backups:
+                size_kb = b.get("size_bytes", 0) / 1024
+                lines.append(f"  {b['filename']} — {size_kb:.1f} KB ({b.get('created_at', '?')})")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] list_saved_backups failed: %s", e)
+            return f"Error: {e}"
+
+    @mcp.tool()
+    async def delete_saved_backup(filename: str) -> str:
+        """Delete a saved YAML backup file from the server.
+
+        Args:
+            filename: The backup filename (e.g., ecm-backup-2026-04-07_120000.yaml)
+        """
+        try:
+            client = get_ecm_client()
+            await client.delete(f"/api/backup/saved/{filename}")
+            return f"Deleted backup: {filename}"
+        except Exception as e:
+            logger.error("[MCP] delete_saved_backup failed: %s", e)
+            return f"Error: {e}"
+
+    @mcp.tool()
     async def get_journal(
         limit: int = 20,
         category: str | None = None,

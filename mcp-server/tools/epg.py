@@ -48,6 +48,44 @@ def register(mcp: FastMCP):
             return f"Error refreshing EPG source {source_id}: {e}"
 
     @mcp.tool()
+    async def refresh_all_epg(source_ids: list[int] | None = None) -> str:
+        """Refresh multiple EPG sources at once. If no source_ids provided, refreshes all.
+
+        Args:
+            source_ids: Optional list of EPG source IDs to refresh. If omitted, refreshes all sources.
+        """
+        try:
+            client = get_ecm_client()
+
+            if source_ids is None:
+                sources = await client.get("/api/epg/sources")
+                if isinstance(sources, dict):
+                    sources = sources.get("sources", sources.get("results", []))
+                source_ids = [s.get("id") for s in sources if s.get("id")]
+
+            if not source_ids:
+                return "No EPG sources found to refresh."
+
+            refreshed = 0
+            errors = []
+            for sid in source_ids:
+                try:
+                    await client.post(f"/api/epg/sources/{sid}/refresh", timeout=300.0)
+                    refreshed += 1
+                except Exception as e:
+                    errors.append(f"source {sid}: {e}")
+
+            lines = [f"Refreshed {refreshed}/{len(source_ids)} EPG sources."]
+            if errors:
+                lines.append(f"Errors ({len(errors)}):")
+                for err in errors:
+                    lines.append(f"  - {err}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] refresh_all_epg failed: %s", e)
+            return f"Error refreshing EPG sources: {e}"
+
+    @mcp.tool()
     async def match_channels_epg() -> str:
         """Auto-match channels to EPG data based on channel names."""
         try:
@@ -158,3 +196,38 @@ def register(mcp: FastMCP):
         except Exception as e:
             logger.error("[MCP] get_epg_grid failed: %s", e)
             return f"Error getting EPG grid: {e}"
+
+    @mcp.tool()
+    async def list_dummy_epg_profiles() -> str:
+        """List all dummy EPG profiles used to generate placeholder guide data."""
+        try:
+            client = get_ecm_client()
+            profiles = await client.get("/api/dummy-epg/profiles")
+
+            if not profiles:
+                return "No dummy EPG profiles configured."
+
+            lines = [f"Dummy EPG Profiles ({len(profiles)}):"]
+            for p in profiles:
+                name = p.get("name", "Unnamed")
+                pid = p.get("id", "?")
+                enabled = "enabled" if p.get("enabled") else "disabled"
+                groups = p.get("group_count", 0)
+                lines.append(f"  {name} (id={pid}) — {enabled}, {groups} channel groups")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] list_dummy_epg_profiles failed: %s", e)
+            return f"Error listing dummy EPG profiles: {e}"
+
+    @mcp.tool()
+    async def generate_dummy_epg() -> str:
+        """Force regeneration of all dummy EPG XMLTV data from enabled profiles."""
+        try:
+            client = get_ecm_client()
+            result = await client.post("/api/dummy-epg/generate", timeout=60.0)
+            count = result.get("profiles_generated", 0)
+            return f"Dummy EPG regenerated for {count} enabled profiles."
+        except Exception as e:
+            logger.error("[MCP] generate_dummy_epg failed: %s", e)
+            return f"Error generating dummy EPG: {e}"
