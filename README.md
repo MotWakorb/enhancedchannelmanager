@@ -107,19 +107,19 @@ Configure multiple XMLTV and Schedules Direct EPG sources with drag-and-drop pri
 EPG grid view with now-playing highlights, date/time navigation, channel profile filtering, and click-to-edit channel metadata.
 
 ### Auto-Creation Pipeline
-A rules-based automation engine for channel creation, stream merging, and lifecycle management. Build complex conditions (stream name, group, quality, codec, normalized matching, etc.) with AND/OR logic, then define actions (create channel/group, merge streams, assign metadata, set variables, name transforms). Supports dry-run preview, execution rollback, YAML import/export, and orphan reconciliation.
+A rules-based automation engine for channel creation, stream merging, and lifecycle management. Build complex conditions (stream name, group, quality, codec, normalized matching, etc.) with AND/OR logic, then define actions (create channel/group, merge streams, assign metadata, set variables, name transforms). Per-rule normalization group selection lets each rule apply specific normalization groups. Supports dry-run preview, execution rollback, YAML import/export, orphan reconciliation, and a diagnostic debug bundle for troubleshooting.
 
 ### FFMPEG Builder
 Visual interface for constructing FFmpeg commands with Simple (three-step IPTV wizard) and Advanced modes. Includes 8 built-in IPTV presets, hardware acceleration support (CUDA, QSV, VAAPI), annotated command preview with tooltips, saved profiles, and direct push to Dispatcharr as stream profiles.
 
 ### Stream Health & Probing
-Automated stream probing with configurable schedules, batch sizes, retry logic, and rate limit detection. Profile-aware probing distributes connections across M3U profiles. Results drive smart stream sorting by resolution, bitrate, framerate, and M3U priority. Black screen detection identifies streams showing dark/blank content, and low FPS detection flags streams below a configurable threshold (5/10/15/20 FPS). Both are deprioritized in Smart Sort. A strikeout system tracks consecutive failures for bulk cleanup.
+Automated stream probing with configurable schedules, batch sizes, retry logic, and rate limit detection. Profile-aware probing distributes connections across M3U profiles. Results drive smart stream sorting by resolution, bitrate, framerate, video codec, and M3U priority with configurable ordering for deprioritized stream categories. Black screen detection identifies streams showing dark/blank content, and low FPS detection flags streams below a configurable threshold (5/10/15/20 FPS). Both are deprioritized in Smart Sort. A strikeout system tracks consecutive failures for bulk cleanup.
 
 ### Logo Manager
 Browse, search, upload, and assign logos to channels. Supports URL import and file upload to Dispatcharr with usage tracking and pagination.
 
 ### Stats & Monitoring
-Live dashboard showing active channels, M3U connection counts, per-channel FFmpeg metrics (speed, FPS, bitrate), and bandwidth charts. Enhanced analytics include unique viewer tracking, per-channel bandwidth, popularity scoring with trend analysis, and watch history.
+Live dashboard showing active channels, M3U connection counts, per-channel FFmpeg metrics (speed, FPS, bitrate), and bandwidth charts. Enhanced analytics include unique viewer tracking with Dispatcharr user identification, per-channel bandwidth, popularity scoring with trend analysis, and watch history with user attribution.
 
 ### Journal
 Activity log tracking all changes to channels, EPG, and M3U accounts with filtering by category, action type, and time range.
@@ -135,7 +135,7 @@ In-app notification bell with history, active task pinning, and external alert m
 
 ## MCP Server (Claude Integration)
 
-ECM includes an MCP (Model Context Protocol) server that lets Claude manage your channels through natural language. Ask Claude to list channels, refresh M3U accounts, probe stream health, run auto-creation pipelines, find and merge duplicate channels, view stats, and more — 98 tools across 14 domains.
+ECM includes an MCP (Model Context Protocol) server that lets Claude manage your channels through natural language. Ask Claude to list channels, refresh M3U accounts, probe stream health, run auto-creation pipelines, find and merge duplicate channels, view stats, and more — 115 tools across 14 domains.
 
 ### Setup
 
@@ -174,7 +174,7 @@ To connect:
 
 If running ECM locally, use `localhost` as your host. If the MCP container is on the same Docker network as Claude Code, use the container name (`ecm-mcp`).
 
-### Available Tools (80)
+### Available Tools (115)
 
 | Tool | Description |
 |-|-|
@@ -204,7 +204,7 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `get_hidden_groups` | List hidden channel groups |
 | `get_auto_created_groups` | List auto-created groups |
 | `get_groups_with_streams` | List groups with stream count info |
-| **Streams (14)** | |
+| **Streams (17)** | |
 | `list_streams` | List streams with group/provider/search filtering |
 | `search_streams` | Search streams by name across all providers |
 | `get_streams_by_ids` | Fetch detailed info for specific stream IDs |
@@ -219,6 +219,9 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `cleanup_struck_out_streams` | Remove struck-out streams from channels |
 | `bulk_remove_streams` | Remove multiple streams from a channel |
 | `cancel_probe` | Cancel a running probe |
+| `bulk_search_streams` | Search multiple stream names in one call |
+| `fuzzy_match_stream` | Find best fuzzy match for a stream name |
+| `match_streams_to_channels` | Match streams to channels by name similarity |
 | **M3U (8)** | |
 | `list_m3u_accounts` | List all M3U provider accounts |
 | `get_m3u_account` | Get detailed account info |
@@ -238,15 +241,16 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `get_epg_grid` | What's on TV now — EPG schedule grid |
 | **Auto-Creation (11)** | |
 | `list_auto_creation_rules` | List all rules |
-| `get_auto_creation_rule` | Get rule details |
-| `create_auto_creation_rule` | Create a rule with conditions and actions |
-| `update_auto_creation_rule` | Update an existing rule |
+| `get_auto_creation_rule` | Get rule details (conditions, actions, normalization groups, sort config) |
+| `create_auto_creation_rule` | Create a rule with conditions, actions, and per-rule normalization groups |
+| `update_auto_creation_rule` | Update an existing rule (supports normalization_group_ids) |
 | `delete_auto_creation_rule` | Delete a rule |
 | `toggle_auto_creation_rule` | Enable/disable a rule |
 | `duplicate_auto_creation_rule` | Duplicate a rule |
 | `run_auto_creation` | Run pipeline (dry_run=true by default) |
 | `list_auto_creation_executions` | View execution history |
 | `rollback_auto_creation` | Undo an execution |
+| `get_auto_creation_debug_bundle` | Info about the diagnostic debug bundle for troubleshooting |
 | **Export (6)** | |
 | `list_export_profiles` | List export profiles |
 | `create_export_profile` | Create an export profile |
@@ -254,6 +258,21 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `generate_export` | Generate M3U/XMLTV for a profile |
 | `list_cloud_targets` | List cloud storage targets |
 | `publish_export` | Publish to a cloud target |
+| **FFmpeg (14)** | |
+| `ffmpeg_capabilities` | Detect system FFmpeg capabilities |
+| `ffmpeg_probe` | Probe a media source for stream info |
+| `ffmpeg_list_configs` | List saved FFmpeg configurations |
+| `ffmpeg_create_config` | Create new FFmpeg configuration |
+| `ffmpeg_get_config` | Get specific configuration |
+| `ffmpeg_update_config` | Update configuration |
+| `ffmpeg_delete_config` | Delete configuration |
+| `ffmpeg_validate` | Validate builder state |
+| `ffmpeg_generate_command` | Generate annotated FFmpeg command |
+| `ffmpeg_list_jobs` | List transcoding jobs |
+| `ffmpeg_create_job` | Create and queue transcoding job |
+| `ffmpeg_get_job` | Get job status and progress |
+| `ffmpeg_cancel_job` | Cancel running job |
+| `ffmpeg_delete_job` | Delete job record |
 | **Tasks (7)** | |
 | `list_tasks` | List scheduled tasks and status |
 | `run_task` | Run a task immediately |
@@ -262,16 +281,20 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `list_task_schedules` | List schedules for a task |
 | `create_task_schedule` | Create a cron schedule |
 | `delete_task_schedule` | Delete a schedule |
-| **Stats (6)** | |
+| **Stats (7)** | |
 | `get_channel_stats` | Channel viewing stats and active viewers |
 | `get_top_watched` | Most-watched channels by viewing time |
 | `get_bandwidth` | Bandwidth usage (today, week, month, all-time) |
 | `get_popularity_rankings` | Channel popularity scores and trending |
-| `get_watch_history` | Recent watch history |
+| `get_watch_history` | Watch history with user attribution and filters (channel, IP, days) |
 | `get_unique_viewers` | Unique viewer counts by channel |
-| **System (3)** | |
+| `compute_stream_sort` | Compute optimal stream sort order (resolution, bitrate, video codec, etc.) |
+| **System (6)** | |
 | `get_settings` | ECM settings overview |
 | `create_backup` | Create config backup |
+| `get_export_sections` | List available YAML export sections |
+| `list_saved_backups` | List saved YAML backup files |
+| `delete_saved_backup` | Delete a saved backup file |
 | `get_journal` | Activity audit log (with limit/category filters) |
 | **Notifications (3)** | |
 | `list_notifications` | List notifications with unread count |
@@ -314,7 +337,7 @@ docker exec enhancedchannelmanager python /app/reset_password.py -u admin -p 'si
 |-|-|
 | Frontend | React 18, TypeScript, Vite, @dnd-kit |
 | Backend | Python, FastAPI, 20+ modular API routers |
-| MCP Server | Python, FastMCP, SSE transport, 98 tools |
+| MCP Server | Python, FastMCP, SSE transport, 115 tools |
 | Deployment | Docker Compose, two containers (ECM + MCP) |
 
 ## API Reference
@@ -331,7 +354,7 @@ Interactive API docs are available at `/api/docs` (Swagger UI) and `/api/redoc`.
 - **v0.13.0** — Backend modularization (20+ routers), auth system, task engine
 
 ### v0.16.0 — MCP Server & Claude Integration (Current)
-MCP server for natural language channel management via Claude. 80 tools across 13 domains, SSE transport with API key auth, separate Docker container, frontend settings UI with connection status. Settings persistence hardening (null sanitization, auth file protection).
+MCP server for natural language channel management via Claude. 115 tools across 14 domains, SSE transport with API key auth, separate Docker container, frontend settings UI with connection status. Per-rule normalization group selection, video codec as smart sort criterion, configurable deprioritized stream ordering, diagnostic debug bundles, user identification in watch history and stats, and settings persistence hardening.
 
 ### v0.17.0 — Dashboard & Analytics
 Enhanced dashboard with real-time stream monitoring, historical analytics, and customizable widgets.

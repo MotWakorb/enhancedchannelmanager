@@ -134,31 +134,54 @@ def register(mcp: FastMCP):
             return f"Error getting popularity rankings: {e}"
 
     @mcp.tool()
-    async def get_watch_history(limit: int = 20) -> str:
-        """Get recent channel watch history.
+    async def get_watch_history(
+        limit: int = 20,
+        channel_id: str | None = None,
+        ip_address: str | None = None,
+        days: int | None = None,
+    ) -> str:
+        """Get recent channel watch history with optional filters.
 
         Args:
             limit: Number of history entries to return (default 20)
+            channel_id: Filter by specific channel UUID
+            ip_address: Filter by specific IP address
+            days: Filter to last N days (e.g. 1, 7, 30)
         """
         try:
             client = get_ecm_client()
-            result = await client.get("/api/stats/watch-history", limit=limit)
+            params = {"page_size": limit}
+            if channel_id:
+                params["channel_id"] = channel_id
+            if ip_address:
+                params["ip_address"] = ip_address
+            if days:
+                params["days"] = days
+            result = await client.get("/api/stats/watch-history", **params)
 
-            entries = result.get("summary", result.get("history", [])) if isinstance(result, dict) else result
+            entries = result.get("history", []) if isinstance(result, dict) else result
             total = result.get("total", len(entries)) if isinstance(result, dict) else len(entries)
+            summary = result.get("summary", {}) if isinstance(result, dict) else {}
 
             if not entries:
                 return "No watch history available."
 
-            lines = [f"Watch History ({total} total, showing {min(len(entries), limit)}):"]
-            for e in entries[:limit]:
-                name = e.get("channel_name", e.get("name", "Unknown"))
-                started = e.get("started_at", e.get("timestamp", "?"))
-                duration = e.get("duration_seconds", e.get("watch_seconds", 0))
+            lines = [f"Watch History ({total} total, showing {len(entries)}):"]
+            if summary:
+                lines.append(f"  Summary: {summary.get('unique_channels', 0)} channels, "
+                             f"{summary.get('unique_ips', 0)} viewers, "
+                             f"{(summary.get('total_watch_seconds', 0) / 3600):.1f}h total")
+            lines.append("")
+            for e in entries:
+                name = e.get("channel_name", "Unknown")
+                connected = e.get("connected_at", "?")
+                duration = e.get("watch_seconds", 0)
                 mins = duration / 60 if duration else 0
-                client_ip = e.get("client_ip", "")
-                ip_info = f" from {client_ip}" if client_ip else ""
-                lines.append(f"  {name} — {mins:.0f}min{ip_info} ({started})")
+                ip = e.get("ip_address", "")
+                username = e.get("username")
+                user_info = f" ({username})" if username else ""
+                status = "watching" if not e.get("disconnected_at") else "done"
+                lines.append(f"  {name} — {mins:.0f}min from {ip}{user_info} [{status}] ({connected})")
 
             return "\n".join(lines)
         except Exception as e:
@@ -199,3 +222,44 @@ def register(mcp: FastMCP):
         except Exception as e:
             logger.error("[MCP] get_unique_viewers failed: %s", e)
             return f"Error getting unique viewers: {e}"
+
+    @mcp.tool()
+    async def compute_stream_sort(
+        channels: list[dict],
+        mode: str = "smart",
+    ) -> str:
+        """Compute optimal stream sort order for channels using smart sorting criteria.
+
+        Uses server-side sort settings (priority, enabled criteria, M3U priorities) to
+        determine the best stream order. Supports video_codec as a sort criterion.
+
+        Args:
+            channels: List of channel dicts, each with 'channel_id' (int) and 'stream_ids' (list of int).
+                Example: [{"channel_id": 1, "stream_ids": [10, 20, 30]}]
+            mode: Sort mode — 'smart' (uses all enabled criteria), 'resolution', 'bitrate',
+                  'framerate', 'video_codec', 'm3u_priority', or 'audio_channels'
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.post("/api/stream-stats/compute-sort", json_data={
+                "channels": channels,
+                "mode": mode,
+            }, timeout=60.0)
+
+            results = result.get("results", []) if isinstance(result, dict) else result
+
+            if not results:
+                return "No sort results."
+
+            changed_count = sum(1 for r in results if r.get("changed"))
+            lines = [f"Stream Sort Results ({len(results)} channels, {changed_count} changed):"]
+            for r in results:
+                cid = r.get("channel_id", "?")
+                changed = "changed" if r.get("changed") else "unchanged"
+                ids = r.get("sorted_stream_ids", [])
+                lines.append(f"  Channel {cid}: [{', '.join(str(i) for i in ids)}] ({changed})")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] compute_stream_sort failed: %s", e)
+            return f"Error computing stream sort: {e}"
