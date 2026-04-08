@@ -426,6 +426,58 @@
   }
 }
 
+.norm-groups-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin-top: 0.25rem;
+}
+
+.form-label-inline {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.norm-group-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.norm-group-actions .text-button {
+  background: none;
+  border: none;
+  color: var(--accent-primary, #3b82f6);
+  font-size: 0.75rem;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.norm-group-actions .text-button:hover {
+  color: var(--text-primary);
+}
+
+.norm-group-actions .text-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.norm-groups-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem;
+  background: var(--input-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+}
+
+.norm-group-disabled {
+  opacity: 0.5;
+  font-style: italic;
+}
+
 .norm-hint {
   display: inline-flex;
   align-items: center;

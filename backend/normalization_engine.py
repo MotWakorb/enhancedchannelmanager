@@ -815,9 +815,9 @@ class NormalizationEngine:
             logger.warning("[NORMALIZE] Unknown else action type: %s", action_type)
             return text
 
-    def normalize(self, name: str) -> NormalizationResult:
+    def normalize(self, name: str, group_ids: list[int] | None = None) -> NormalizationResult:
         """
-        Apply all enabled rules to normalize a stream name.
+        Apply enabled rules to normalize a stream name.
 
         Rules are applied in multiple passes until no more changes occur.
         This handles cases like "4K/UHD" (both quality tags) or "HD (NA)"
@@ -825,6 +825,8 @@ class NormalizationEngine:
 
         Args:
             name: The stream name to normalize
+            group_ids: Optional list of NormalizationRuleGroup IDs to apply.
+                       None = all enabled groups (default behavior).
 
         Returns:
             NormalizationResult with original, normalized name, and applied rules
@@ -842,6 +844,11 @@ class NormalizationEngine:
         current = convert_superscripts(current)
 
         grouped_rules = self._load_rules()
+
+        # Filter to specific groups if requested (per-rule normalization)
+        if group_ids is not None:
+            allowed = set(group_ids)
+            grouped_rules = [(g, r) for g, r in grouped_rules if g.id in allowed]
 
         # Multi-pass normalization: keep applying rules until no changes occur
         max_passes = 10  # Safety limit to prevent infinite loops

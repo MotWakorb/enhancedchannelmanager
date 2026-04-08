@@ -205,7 +205,7 @@ export interface AutoCreationRule {
   sort_regex?: string | null;
   stream_sort_field?: string | null;
   stream_sort_order?: 'asc' | 'desc';
-  normalize_names?: boolean;
+  normalization_group_ids?: number[];
   skip_struck_streams?: boolean;
   orphan_action?: 'delete' | 'move_uncategorized' | 'delete_and_cleanup_groups' | 'none';
   last_run_at?: string;
@@ -234,7 +234,7 @@ export interface CreateRuleData {
   sort_regex?: string | null;
   stream_sort_field?: string | null;
   stream_sort_order?: string;
-  normalize_names?: boolean;
+  normalization_group_ids?: number[];
   skip_struck_streams?: boolean;
   orphan_action?: string;
 }
