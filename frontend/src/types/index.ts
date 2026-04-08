@@ -1047,6 +1047,8 @@ export interface WatchHistoryEntry {
   channel_id: string;
   channel_name: string;
   ip_address: string;
+  user_id: number | null;
+  username: string | null;
   date: string;  // ISO date string (YYYY-MM-DD)
   connected_at: string;  // ISO timestamp
   disconnected_at: string | null;  // ISO timestamp or null if still watching

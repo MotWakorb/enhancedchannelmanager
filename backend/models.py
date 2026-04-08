@@ -1058,6 +1058,8 @@ class UniqueClientConnection(Base):
     ip_address = Column(String(45), nullable=False)  # IPv4 or IPv6
     channel_id = Column(String(64), nullable=False)  # Dispatcharr channel UUID
     channel_name = Column(String(255), nullable=False)  # Cached for display
+    user_id = Column(Integer, nullable=True)  # Dispatcharr user ID (null if not available)
+    username = Column(String(255), nullable=True)  # Cached username from Dispatcharr
     date = Column(Date, nullable=False)  # Date of connection (for daily aggregation)
     connected_at = Column(DateTime, nullable=False)  # When connection started
     disconnected_at = Column(DateTime, nullable=True)  # When connection ended (null if still active)
@@ -1082,6 +1084,8 @@ class UniqueClientConnection(Base):
             "ip_address": self.ip_address,
             "channel_id": self.channel_id,
             "channel_name": self.channel_name,
+            "user_id": self.user_id,
+            "username": self.username,
             "date": self.date.isoformat() if self.date else None,
             "connected_at": self.connected_at.isoformat() + "Z" if self.connected_at else None,
             "disconnected_at": self.disconnected_at.isoformat() + "Z" if self.disconnected_at else None,

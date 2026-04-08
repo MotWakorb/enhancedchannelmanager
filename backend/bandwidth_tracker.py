@@ -319,9 +319,15 @@ class BandwidthTracker:
             client_count = channel.get("client_count", 0) or 0
             avg_bitrate_kbps = channel.get("avg_bitrate_kbps", 0) or 0
 
-            # Extract client IP addresses
+            # Extract client IP addresses and user_id mappings
             clients = channel.get("clients", [])
             client_ips = [c.get("ip_address") for c in clients if c.get("ip_address")]
+            client_user_map = {}
+            for c in clients:
+                ip = c.get("ip_address")
+                uid = c.get("user_id")
+                if ip and uid:
+                    client_user_map[ip] = uid
             current_channel_clients[channel_id] = set(client_ips)
 
             current_bytes[channel_id] = bytes_now
@@ -363,6 +369,7 @@ class BandwidthTracker:
                         "channel_id": channel_id,
                         "channel_name": channel_name,
                         "client_ips": client_ips,
+                        "client_user_map": client_user_map,
                         "client_count": client_count,
                     })
                 else:
@@ -371,6 +378,7 @@ class BandwidthTracker:
                         "channel_id": channel_id,
                         "channel_name": channel_name,
                         "client_ips": client_ips,
+                        "client_user_map": client_user_map,
                         "new_clients": list(new_clients),
                         "continuing_clients": list(continuing_clients),
                         "client_count": client_count,
@@ -414,6 +422,24 @@ class BandwidthTracker:
         # Update per-channel bandwidth (v0.11.0)
         if channel_bandwidth_updates:
             self._update_channel_bandwidth(channel_bandwidth_updates)
+
+        # Resolve user_id → username for any channels with user IDs
+        all_channel_data = newly_active_channels + still_active_channels
+        has_user_ids = any(
+            ch.get("client_user_map") for ch in all_channel_data
+        )
+        if has_user_ids:
+            try:
+                users = await self.client.get_users()
+                user_map = {str(u["id"]): u.get("username", "") for u in users}
+                for ch in all_channel_data:
+                    client_user_map = ch.get("client_user_map", {})
+                    ch["client_username_map"] = {
+                        ip: user_map.get(str(uid), "")
+                        for ip, uid in client_user_map.items()
+                    }
+            except Exception as e:
+                logger.warning("[BANDWIDTH] Failed to resolve usernames for watch history: %s", e)
 
         # Update watch counts for newly active channels (and log start events)
         if newly_active_channels:
@@ -533,6 +559,8 @@ class BandwidthTracker:
                 channel_id = ch["channel_id"]
                 channel_name = ch["channel_name"]
                 client_ips = ch.get("client_ips", [])
+                client_user_map = ch.get("client_user_map", {})
+                client_username_map = ch.get("client_username_map", {})
                 # Get or create watch stats record
                 record = session.query(ChannelWatchStats).filter(
                     ChannelWatchStats.channel_id == channel_id
@@ -559,6 +587,8 @@ class BandwidthTracker:
                         ip_address=ip,
                         channel_id=channel_id,
                         channel_name=channel_name,
+                        user_id=client_user_map.get(ip),
+                        username=client_username_map.get(ip) or None,
                         date=today,
                         connected_at=now,
                         watch_seconds=0,
@@ -613,6 +643,8 @@ class BandwidthTracker:
                 channel_name = ch["channel_name"]
                 new_clients = ch.get("new_clients", [])
                 continuing_clients = ch.get("continuing_clients", [])
+                client_user_map = ch.get("client_user_map", {})
+                client_username_map = ch.get("client_username_map", {})
                 record = session.query(ChannelWatchStats).filter(
                     ChannelWatchStats.channel_id == channel_id
                 ).first()
@@ -629,6 +661,8 @@ class BandwidthTracker:
                         ip_address=ip,
                         channel_id=channel_id,
                         channel_name=channel_name,
+                        user_id=client_user_map.get(ip),
+                        username=client_username_map.get(ip) or None,
                         date=today,
                         connected_at=now,
                         watch_seconds=0,

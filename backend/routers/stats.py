@@ -286,6 +286,8 @@ async def get_watch_history(
                         "channel_id": r.channel_id,
                         "channel_name": r.channel_name,
                         "ip_address": r.ip_address,
+                        "user_id": r.user_id,
+                        "username": r.username,
                         "date": r.date.isoformat() if r.date else None,
                         "connected_at": r.connected_at.isoformat() + "Z" if r.connected_at else None,
                         "disconnected_at": r.disconnected_at.isoformat() + "Z" if r.disconnected_at else None,
