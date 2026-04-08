@@ -69,6 +69,25 @@ def extract_m3u_account_id(m3u_account):
     return m3u_account
 
 
+# Video codec ranking for smart sort (higher = more efficient/preferred)
+# Newer codecs deliver better quality at lower bitrates
+CODEC_RANK = {
+    "av1": 5,
+    "hevc": 4, "h265": 4,
+    "vp9": 3,
+    "h264": 2, "avc": 2,
+    "vp8": 1,
+    "mpeg2video": 0, "mpeg2": 0,
+}
+
+
+def get_codec_rank(codec_name: str | None) -> int:
+    """Return a numeric rank for a video codec (higher = preferred)."""
+    if not codec_name:
+        return 0
+    return CODEC_RANK.get(codec_name.lower(), 0)
+
+
 def smart_sort_streams(
     stream_ids: list[int],
     stats_map: dict,
@@ -97,9 +116,9 @@ def smart_sort_streams(
     if stream_m3u_map is None:
         stream_m3u_map = {}
     if stream_sort_priority is None:
-        stream_sort_priority = ["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"]
+        stream_sort_priority = ["resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels"]
     if stream_sort_enabled is None:
-        stream_sort_enabled = {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}
+        stream_sort_enabled = {"resolution": True, "bitrate": True, "framerate": True, "video_codec": False, "m3u_priority": False, "audio_channels": False}
     if m3u_account_priorities is None:
         m3u_account_priorities = {}
     if failed_stream_sort_order is None:
@@ -221,11 +240,17 @@ def smart_sort_streams(
                 # Negate for descending sort (more channels first)
                 sort_values.append(-audio_channels_value)
 
+            elif criterion == "video_codec":
+                # Sort by codec efficiency: AV1 > HEVC > VP9 > H.264 > VP8 > MPEG2
+                codec_value = get_codec_rank(stat.video_codec)
+                # Negate for descending sort (more efficient codec first)
+                sort_values.append(-codec_value)
+
         m3u_account_id = stream_m3u_map.get(stream_id)
         logger.debug("[STREAM-PROBE-SORT]   %s: sort_tuple=%s "
-                    "(res=%s, br=%s, fps=%s, m3u=%s, audio_ch=%s)",
+                    "(res=%s, br=%s, fps=%s, m3u=%s, audio_ch=%s, codec=%s)",
                     stream_name, tuple(sort_values),
-                    stat.resolution, stat.bitrate, stat.fps, m3u_account_id, stat.audio_channels)
+                    stat.resolution, stat.bitrate, stat.fps, m3u_account_id, stat.audio_channels, stat.video_codec)
         return tuple(sort_values)
 
     # Sort stream IDs by their stats

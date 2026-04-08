@@ -2151,7 +2151,7 @@ def _smart_sort_streams(
 
     # Get active sort criteria (enabled and in priority order)
     sort_priority = getattr(settings, 'stream_sort_priority',
-                            ["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"])
+                            ["resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels"])
     sort_enabled = getattr(settings, 'stream_sort_enabled',
                            {"resolution": True, "bitrate": True, "framerate": True})
     deprioritize_failed = getattr(settings, 'deprioritize_failed_streams', True)
@@ -2227,6 +2227,11 @@ def _smart_sort_streams(
             elif criterion == "audio_channels":
                 audio_ch = stats.get("audio_channels") or 0
                 sort_values.append(-audio_ch)
+
+            elif criterion == "video_codec":
+                from stream_prober import get_codec_rank
+                codec_value = get_codec_rank(stats.get("video_codec"))
+                sort_values.append(-codec_value)
 
         return tuple(sort_values)
 

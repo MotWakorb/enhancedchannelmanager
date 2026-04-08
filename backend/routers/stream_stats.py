@@ -229,7 +229,7 @@ async def compute_sort(request: ComputeSortRequest):
     settings = get_settings()
 
     # Determine sort priority based on mode
-    valid_criteria = {"resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"}
+    valid_criteria = {"resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels"}
     if request.mode == "smart":
         sort_priority = [c for c in settings.stream_sort_priority if settings.stream_sort_enabled.get(c, False)]
         sort_enabled = {c: True for c in sort_priority}

@@ -167,7 +167,7 @@ interface SortDropdownButtonProps {
   className?: string;
   showLabel?: boolean;
   labelText?: string;
-  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels', boolean>;
+  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels', boolean>;
 }
 
 const SortDropdownButton = memo(function SortDropdownButton({
@@ -177,13 +177,13 @@ const SortDropdownButton = memo(function SortDropdownButton({
   className = '',
   showLabel = false,
   labelText = 'Sort',
-  enabledCriteria = { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false },
+  enabledCriteria = { resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false },
 }: SortDropdownButtonProps) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Check if any criteria are enabled (for Smart Sort to be useful)
-  const anyEnabled = enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate || enabledCriteria.m3u_priority || enabledCriteria.audio_channels;
+  const anyEnabled = enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate || enabledCriteria.video_codec || enabledCriteria.m3u_priority || enabledCriteria.audio_channels;
 
   // Close on outside click
   useEffect(() => {
@@ -243,6 +243,12 @@ const SortDropdownButton = memo(function SortDropdownButton({
             <button className="sort-dropdown-item" onClick={() => handleModeClick('framerate')}>
               <span className="material-icons">slow_motion_video</span>
               <span>By Framerate</span>
+            </button>
+          )}
+          {enabledCriteria.video_codec && (
+            <button className="sort-dropdown-item" onClick={() => handleModeClick('video_codec')}>
+              <span className="material-icons">movie_filter</span>
+              <span>By Video Codec</span>
             </button>
           )}
           {enabledCriteria.m3u_priority && (
@@ -669,7 +675,7 @@ interface DroppableGroupHeaderProps {
   onSortStreamsByQuality?: () => void;
   onSortStreamsByMode?: (mode: SortMode) => void;
   isSortingByQuality?: boolean;
-  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels', boolean>;
+  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels', boolean>;
   failedChannelCount?: number;
   successChannelCount?: number;
 }
@@ -698,7 +704,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   onSortStreamsByQuality,
   onSortStreamsByMode,
   isSortingByQuality = false,
-  enabledCriteria = { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false },
+  enabledCriteria = { resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false },
   failedChannelCount = 0,
   successChannelCount = 0,
 }: DroppableGroupHeaderProps) {

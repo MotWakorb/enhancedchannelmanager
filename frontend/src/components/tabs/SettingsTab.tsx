@@ -44,6 +44,7 @@ const SORT_CRITERION_CONFIG: Record<SortCriterion, { icon: string; label: string
   resolution: { icon: 'aspect_ratio', label: 'Resolution', description: '4K > 1080p > 720p' },
   bitrate: { icon: 'speed', label: 'Bitrate', description: 'Higher bitrate first' },
   framerate: { icon: 'slow_motion_video', label: 'Framerate', description: '60fps > 30fps' },
+  video_codec: { icon: 'movie_filter', label: 'Video Codec', description: 'AV1 > HEVC > H.264 > MPEG2' },
   m3u_priority: { icon: 'low_priority', label: 'M3U Priority', description: 'Higher priority M3U first' },
   audio_channels: { icon: 'surround_sound', label: 'Audio Channels', description: '5.1 > Stereo > Mono' },
 };
@@ -58,13 +59,14 @@ const FAILED_CATEGORY_CONFIG: Record<FailedStreamCategory, { icon: string; label
 const DEFAULT_FAILED_STREAM_ORDER: FailedStreamCategory[] = ['failed', 'black_screen', 'low_fps'];
 
 // All known sort criteria - used to merge new criteria into saved settings
-const ALL_SORT_CRITERIA: SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels'];
+const ALL_SORT_CRITERIA: SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels'];
 
 // Default enabled state for each criterion
 const DEFAULT_SORT_ENABLED: SortEnabledMap = {
   resolution: true,
   bitrate: true,
   framerate: true,
+  video_codec: false,
   m3u_priority: false,
   audio_channels: false,
 };

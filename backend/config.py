@@ -109,10 +109,10 @@ class DispatcharrSettings(BaseModel):
     # Stream sort priority order for "Smart Sort" feature
     # Order determines priority: first element is primary sort key, subsequent elements are tie-breakers
     # Valid values: "resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"
-    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"]
+    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels"]
     # Which sort criteria are enabled (users can disable criteria they don't want to use)
     # Only enabled criteria appear in sort dropdown and are used by Smart Sort
-    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}
+    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "video_codec": False, "m3u_priority": False, "audio_channels": False}
     # M3U account priorities for sorting - maps M3U account ID (as string) to priority value
     # Higher priority value = preferred (sorted first). Accounts not in this map get priority 0.
     # Example: {"1": 100, "2": 50} means M3U account 1 is preferred over account 2
