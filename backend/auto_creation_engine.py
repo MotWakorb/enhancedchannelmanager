@@ -2156,6 +2156,8 @@ def _smart_sort_streams(
                            {"resolution": True, "bitrate": True, "framerate": True})
     deprioritize_failed = getattr(settings, 'deprioritize_failed_streams', True)
     m3u_priorities = getattr(settings, 'm3u_account_priorities', {})
+    fail_order = getattr(settings, 'failed_stream_sort_order', ["failed", "black_screen", "low_fps"])
+    failed_rank = {cat: idx for idx, cat in enumerate(fail_order)}
 
     active_criteria = [c for c in sort_priority if sort_enabled.get(c, False)]
 
@@ -2171,20 +2173,23 @@ def _smart_sort_streams(
         # Deprioritize failed/missing streams
         if deprioritize_failed:
             if not stats or stats.get("probe_status") in ("failed", "timeout", "pending"):
-                return (1,) + tuple(0 for _ in active_criteria)
+                rank = failed_rank.get('failed', 0)
+                return (1, rank) + tuple(0 for _ in active_criteria)
 
         # Deprioritize black screen streams (probe succeeded but content is black)
         if deprioritize_failed and stats and stats.get("is_black_screen"):
-            return (1,) + tuple(0 for _ in active_criteria)
+            rank = failed_rank.get('black_screen', 1)
+            return (1, rank) + tuple(0 for _ in active_criteria)
 
         # Deprioritize low FPS streams (probe succeeded but FPS below threshold)
         if deprioritize_failed and stats and stats.get("is_low_fps"):
-            return (1,) + tuple(0 for _ in active_criteria)
+            rank = failed_rank.get('low_fps', 2)
+            return (1, rank) + tuple(0 for _ in active_criteria)
 
         if not stats or stats.get("probe_status") != "success":
-            return (0,) + tuple(0 for _ in active_criteria)
+            return (0, 0) + tuple(0 for _ in active_criteria)
 
-        sort_values = [0]  # 0 = successful stream
+        sort_values = [0, 0]  # 0 = successful stream, 0 = sub-rank (unused)
 
         for criterion in active_criteria:
             if criterion == "resolution":

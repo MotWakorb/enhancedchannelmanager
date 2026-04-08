@@ -77,6 +77,7 @@ def smart_sort_streams(
     stream_sort_enabled: dict[str, bool] = None,
     m3u_account_priorities: dict[str, int] = None,
     deprioritize_failed_streams: bool = True,
+    failed_stream_sort_order: list[str] = None,
     channel_name: str = "unknown",
 ) -> list[int]:
     """
@@ -90,6 +91,7 @@ def smart_sort_streams(
         stream_sort_enabled: Which criteria are enabled
         m3u_account_priorities: M3U account priorities (account_id_str -> priority)
         deprioritize_failed_streams: Whether to push failed streams to bottom
+        failed_stream_sort_order: Order of deprioritized categories (first = sorted higher)
         channel_name: Channel name for logging purposes
     """
     if stream_m3u_map is None:
@@ -100,6 +102,11 @@ def smart_sort_streams(
         stream_sort_enabled = {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}
     if m3u_account_priorities is None:
         m3u_account_priorities = {}
+    if failed_stream_sort_order is None:
+        failed_stream_sort_order = ["failed", "black_screen", "low_fps"]
+
+    # Build rank map for deprioritized categories (lower rank = sorted first)
+    failed_rank = {cat: idx for idx, cat in enumerate(failed_stream_sort_order)}
 
     # Get active sort criteria (enabled and in priority order)
     active_criteria = [
@@ -133,24 +140,26 @@ def smart_sort_streams(
         # Deprioritize failed streams if enabled
         if deprioritize_failed_streams:
             if not stat or stat.probe_status in ('failed', 'timeout', 'pending'):
-                logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (status=%s)", stream_name, stat.probe_status if stat else 'no_stats')
-                # Return tuple with 1 as first element to sort to bottom
-                return (1,) + tuple(0 for _ in active_criteria)
+                rank = failed_rank.get('failed', 0)
+                logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (status=%s, rank=%s)", stream_name, stat.probe_status if stat else 'no_stats', rank)
+                return (1, rank) + tuple(0 for _ in active_criteria)
 
         # Deprioritize black screen streams (probe succeeded but content is black)
         if deprioritize_failed_streams and stat and getattr(stat, 'is_black_screen', False) is True:
-            logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (black screen)", stream_name)
-            return (1,) + tuple(0 for _ in active_criteria)
+            rank = failed_rank.get('black_screen', 1)
+            logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (black screen, rank=%s)", stream_name, rank)
+            return (1, rank) + tuple(0 for _ in active_criteria)
 
         # Deprioritize low FPS streams (probe succeeded but FPS < 20)
         if deprioritize_failed_streams and stat and getattr(stat, 'is_low_fps', False) is True:
-            logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (low fps)", stream_name)
-            return (1,) + tuple(0 for _ in active_criteria)
+            rank = failed_rank.get('low_fps', 2)
+            logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (low fps, rank=%s)", stream_name, rank)
+            return (1, rank) + tuple(0 for _ in active_criteria)
 
         if not stat or stat.probe_status != 'success':
             logger.debug("[STREAM-PROBE-SORT]   %s: No successful probe data", stream_name)
             # Still compute M3U priority for unprobed streams (M3U priority doesn't require probing)
-            sort_values = [0]
+            sort_values = [0, 0]
             for criterion in active_criteria:
                 if criterion == "m3u_priority":
                     m3u_priority_value = 0
@@ -163,7 +172,7 @@ def smart_sort_streams(
             return tuple(sort_values)
 
         # Build sort values based on active criteria in priority order
-        sort_values = [0]  # First element: 0 = successful stream
+        sort_values = [0, 0]  # First element: 0 = successful stream, second: sub-rank (unused for good streams)
 
         for criterion in active_criteria:
             if criterion == "resolution":

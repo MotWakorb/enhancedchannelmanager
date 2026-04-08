@@ -760,6 +760,9 @@ export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'WARNING' | 'ERROR' | 'CRITIC
 export type SortCriterion = 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels';
 export type SortEnabledMap = Record<SortCriterion, boolean>;
 
+// Deprioritized stream categories for ordering within the "failed" group
+export type FailedStreamCategory = 'failed' | 'black_screen' | 'low_fps';
+
 // M3U account priorities for sorting - maps account ID (as string) to priority value
 export type M3UAccountPriorities = Record<string, number>;
 
@@ -813,6 +816,7 @@ export interface SettingsResponse {
   black_screen_sample_duration: number;  // Seconds to sample for black screen detection (3-30)
   low_fps_threshold: number;  // FPS below this value is considered "low FPS"
   deprioritize_failed_streams: boolean;  // When enabled, failed/timeout/pending streams sort to bottom
+  failed_stream_sort_order: FailedStreamCategory[];  // Order of deprioritized categories (first = sorted higher)
   strike_threshold: number;  // Consecutive failures before flagging stream (0 = disabled)
   normalize_on_channel_create: boolean;  // Default state for normalization toggle when creating channels
   // Shared SMTP settings
@@ -901,6 +905,7 @@ export async function saveSettings(settings: {
   black_screen_sample_duration?: number;  // Optional - seconds to sample for black screen detection (3-30), defaults to 5
   low_fps_threshold?: number;  // Optional - FPS below this value is considered "low FPS", defaults to 20
   deprioritize_failed_streams?: boolean;  // Optional - deprioritize failed/timeout/pending streams in sort, defaults to true
+  failed_stream_sort_order?: FailedStreamCategory[];  // Optional - order of deprioritized categories
   strike_threshold?: number;  // Optional - consecutive failures before flagging stream, defaults to 3
   normalize_on_channel_create?: boolean;  // Optional - default state for normalization toggle, defaults to false
   // Shared SMTP settings
@@ -2905,6 +2910,8 @@ export async function assignDummyEPGChannelsFromGroup(profileId: number, groupId
 // Backup & Restore
 // ============================================================================
 
+// ── ZIP Backup (legacy) ──
+
 export function getBackupDownloadUrl(): string {
   return `${API_BASE}/backup/create`;
 }
@@ -2940,6 +2947,115 @@ export async function restoreBackupInitial(file: File): Promise<RestoreResult> {
   const response = await fetch(`${API_BASE}/backup/restore-initial`, {
     method: 'POST',
     body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Restore failed' }));
+    throw new Error(error.detail || 'Restore failed');
+  }
+
+  return response.json();
+}
+
+// ── YAML Export / Validate / Selective Restore ──
+
+export interface BackupSectionInfo {
+  key: string;
+  label: string;
+  item_count: number;
+  available: boolean;
+}
+
+export interface BackupValidation {
+  valid: boolean;
+  version: string | null;
+  exported_at: string | null;
+  sections: BackupSectionInfo[];
+}
+
+export interface BackupRestoreResult {
+  success: boolean;
+  sections_restored: string[];
+  sections_failed: string[];
+  warnings: string[];
+  errors: string[];
+}
+
+export async function getExportSections(): Promise<{key: string; label: string}[]> {
+  return fetchJson(`${API_BASE}/backup/export-sections`);
+}
+
+export async function exportBackup(sections?: string[]): Promise<Blob> {
+  let url = `${API_BASE}/backup/export`;
+  if (sections && sections.length > 0) {
+    url += `?sections=${sections.join(',')}`;
+  }
+  const response = await fetch(url, {
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Export failed' }));
+    throw new Error(error.detail || 'Export failed');
+  }
+
+  return response.blob();
+}
+
+// Saved backups (on-disk files from scheduled task)
+
+export interface SavedBackup {
+  filename: string;
+  size_bytes: number;
+  created_at: string;
+}
+
+export async function listSavedBackups(): Promise<SavedBackup[]> {
+  return fetchJson(`${API_BASE}/backup/saved`);
+}
+
+export function getSavedBackupDownloadUrl(filename: string): string {
+  return `${API_BASE}/backup/saved/${encodeURIComponent(filename)}`;
+}
+
+export async function deleteSavedBackup(filename: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/backup/saved/${encodeURIComponent(filename)}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Delete failed' }));
+    throw new Error(error.detail || 'Delete failed');
+  }
+}
+
+export async function validateBackup(file: File): Promise<BackupValidation> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch(`${API_BASE}/backup/validate`, {
+    method: 'POST',
+    body: formData,
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Validation failed' }));
+    throw new Error(error.detail || 'Validation failed');
+  }
+
+  return response.json();
+}
+
+export async function restoreBackupYaml(file: File, sections: string[]): Promise<BackupRestoreResult> {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('sections', JSON.stringify(sections));
+
+  const response = await fetch(`${API_BASE}/backup/restore-yaml`, {
+    method: 'POST',
+    body: formData,
+    credentials: 'include',
   });
 
   if (!response.ok) {

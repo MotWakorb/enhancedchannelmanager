@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import * as api from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
-import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode, StreamPreviewMode } from '../../services/api';
+import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, FailedStreamCategory, GracenoteConflictMode, StreamPreviewMode } from '../../services/api';
 import { NormalizationEngineSection } from '../settings/NormalizationEngineSection';
 import { TagEngineSection } from '../settings/TagEngineSection';
 import { AuthSettingsSection } from '../settings/AuthSettingsSection';
@@ -47,6 +47,15 @@ const SORT_CRITERION_CONFIG: Record<SortCriterion, { icon: string; label: string
   m3u_priority: { icon: 'low_priority', label: 'M3U Priority', description: 'Higher priority M3U first' },
   audio_channels: { icon: 'surround_sound', label: 'Audio Channels', description: '5.1 > Stereo > Mono' },
 };
+
+// Failed stream category configuration for drag-and-drop ordering
+const FAILED_CATEGORY_CONFIG: Record<FailedStreamCategory, { icon: string; label: string; description: string }> = {
+  failed: { icon: 'error', label: 'Failed Streams', description: 'Dead, timeout, or pending' },
+  black_screen: { icon: 'videocam_off', label: 'Black Screen', description: 'Probe OK but no video content' },
+  low_fps: { icon: 'slow_motion_video', label: 'Low FPS', description: 'Below FPS threshold' },
+};
+
+const DEFAULT_FAILED_STREAM_ORDER: FailedStreamCategory[] = ['failed', 'black_screen', 'low_fps'];
 
 // All known sort criteria - used to merge new criteria into saved settings
 const ALL_SORT_CRITERIA: SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels'];
@@ -181,6 +190,83 @@ function SortablePriorityItem({
   );
 }
 
+// Sortable item for failed stream category ordering (no checkbox, always active)
+function SortableFailedCategoryItem({
+  id,
+  index,
+}: {
+  id: FailedStreamCategory;
+  index: number;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
+
+  const config = FAILED_CATEGORY_CONFIG[id];
+
+  const containerStyle: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.75rem',
+    padding: '0.75rem 1rem',
+    backgroundColor: 'var(--input-bg)',
+    border: '1px solid var(--border-primary)',
+    borderRadius: '6px',
+    opacity: isDragging ? 0.5 : 1,
+    boxShadow: isDragging ? '0 4px 12px rgba(0, 0, 0, 0.3)' : undefined,
+  };
+
+  return (
+    <div ref={setNodeRef} style={containerStyle}>
+      <span
+        {...attributes}
+        {...listeners}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          cursor: 'grab',
+          color: 'var(--text-muted)',
+          touchAction: 'none',
+        }}
+      >
+        <span className="material-icons" style={{ fontSize: '20px' }}>drag_indicator</span>
+      </span>
+      <span
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: '24px',
+          height: '24px',
+          borderRadius: '50%',
+          backgroundColor: 'var(--text-muted, #6b7280)',
+          color: 'var(--bg-primary, #1e1e23)',
+          fontSize: '0.75rem',
+          fontWeight: 600,
+          flexShrink: 0,
+          lineHeight: 1,
+        }}
+      >
+        {index + 1}
+      </span>
+      <span className="material-icons" style={{ fontSize: '20px', color: 'var(--text-secondary)', flexShrink: 0 }}>
+        {config.icon}
+      </span>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.125rem', minWidth: 0 }}>
+        <span style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text-primary)' }}>{config.label}</span>
+        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{config.description}</span>
+      </div>
+    </div>
+  );
+}
+
 interface SettingsTabProps {
   onSaved: () => void;
   onThemeChange?: (theme: Theme) => void;
@@ -256,6 +342,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false });
   const [m3uAccountPriorities, setM3uAccountPriorities] = useState<Record<string, number>>({});
   const [deprioritizeFailedStreams, setDeprioritizeFailedStreams] = useState(true);
+  const [failedStreamSortOrder, setFailedStreamSortOrder] = useState<FailedStreamCategory[]>(DEFAULT_FAILED_STREAM_ORDER);
   const [strikeThreshold, setStrikeThreshold] = useState(3);
 
   // Appearance settings
@@ -424,6 +511,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setStreamSortPriority((items) => {
         const oldIndex = items.indexOf(active.id as SortCriterion);
         const newIndex = items.indexOf(over.id as SortCriterion);
+        return arrayMove(items, oldIndex, newIndex);
+      });
+    }
+  };
+
+  const handleFailedOrderDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      setFailedStreamSortOrder((items) => {
+        const oldIndex = items.indexOf(active.id as FailedStreamCategory);
+        const newIndex = items.indexOf(over.id as FailedStreamCategory);
         return arrayMove(items, oldIndex, newIndex);
       });
     }
@@ -643,6 +741,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setStreamSortEnabled(merged.enabled);
       setM3uAccountPriorities(settings.m3u_account_priorities ?? {});
       setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
+      setFailedStreamSortOrder(settings.failed_stream_sort_order ?? DEFAULT_FAILED_STREAM_ORDER);
       setStrikeThreshold(settings.strike_threshold ?? 3);
       // Shared SMTP settings
       setSmtpHost(settings.smtp_host ?? '');
@@ -767,6 +866,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         stream_sort_enabled: streamSortEnabled,
         m3u_account_priorities: m3uAccountPriorities,
         deprioritize_failed_streams: deprioritizeFailedStreams,
+        failed_stream_sort_order: failedStreamSortOrder,
         strike_threshold: strikeThreshold,
         // Shared SMTP settings
         smtp_host: smtpHost,
@@ -1989,6 +2089,33 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             This ensures working streams are prioritized for playback.
           </p>
         </div>
+
+        {deprioritizeFailedStreams && (
+          <div className="form-group">
+            <label className="form-label">Failed Stream Ordering</label>
+            <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
+              Drag to set the order of deprioritized streams. Streams in the first category sort higher (closer to working streams).
+            </p>
+
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleFailedOrderDragEnd}
+            >
+              <SortableContext items={failedStreamSortOrder} strategy={verticalListSortingStrategy}>
+                <div className="sort-priority-list">
+                  {failedStreamSortOrder.map((category, index) => (
+                    <SortableFailedCategoryItem
+                      key={category}
+                      id={category}
+                      index={index}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+          </div>
+        )}
       </div>
 
       <div className="settings-actions">
