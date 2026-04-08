@@ -364,6 +364,8 @@ export interface StreamClient {
   bytes_sent?: number;
   avg_rate_KBps?: number;
   current_rate_KBps?: number;
+  user_id?: string;
+  username?: string;
 }
 
 // Active channel stats from /proxy/ts/status
