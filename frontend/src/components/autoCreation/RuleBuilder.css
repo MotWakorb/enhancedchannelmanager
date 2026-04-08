@@ -426,29 +426,26 @@
   }
 }
 
-.norm-groups-section {
-  display: flex;
+.checkbox-group.vertical {
   flex-direction: column;
-  gap: 0.375rem;
-  margin-top: 0.25rem;
-}
-
-.form-label-inline {
-  font-size: 0.85rem;
-  font-weight: 500;
-  color: var(--text-primary);
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--input-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
 }
 
 .norm-group-actions {
   display: flex;
-  gap: 0.75rem;
+  gap: 12px;
+  margin-top: 4px;
 }
 
 .norm-group-actions .text-button {
   background: none;
   border: none;
   color: var(--accent-primary, #3b82f6);
-  font-size: 0.75rem;
+  font-size: 12px;
   cursor: pointer;
   padding: 0;
   text-decoration: underline;
@@ -461,16 +458,6 @@
 .norm-group-actions .text-button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.norm-groups-picker {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.5rem;
-  background: var(--input-bg);
-  border: 1px solid var(--border-primary);
-  border-radius: 6px;
 }
 
 .norm-group-disabled {
