@@ -395,6 +395,14 @@
   min-width: 0;
 }
 
+.client-user {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--accent, #646cff);
+  font-weight: 500;
+}
+
 .client-ip {
   color: var(--text-primary);
   font-family: monospace;

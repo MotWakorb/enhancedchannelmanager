@@ -944,6 +944,12 @@ class DispatcharrClient:
     # Stats & Monitoring
     # -------------------------------------------------------------------------
 
+    async def get_users(self) -> list:
+        """Get all Dispatcharr user accounts."""
+        response = await self._request("GET", "/api/accounts/users/")
+        response.raise_for_status()
+        return response.json()
+
     async def get_channel_stats(self) -> dict:
         """Get status of all active channels.
 

@@ -28,6 +28,7 @@ async def get_channel_stats():
     """Get status of all active channels.
 
     Returns summary including active channels, client counts, bitrates, speeds, etc.
+    Enriches client data with usernames resolved from Dispatcharr user accounts.
     """
     logger.debug("[STATS] GET /api/stats/channels")
     client = get_client()
@@ -36,6 +37,25 @@ async def get_channel_stats():
         result = await client.get_channel_stats()
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[STATS] get_channel_stats completed in %.1fms", elapsed_ms)
+
+        # Resolve user_id → username for connected clients
+        has_user_ids = any(
+            c.get("user_id")
+            for ch in result.get("channels", [])
+            for c in ch.get("clients", [])
+        )
+        if has_user_ids:
+            try:
+                users = await client.get_users()
+                user_map = {str(u["id"]): u.get("username", "") for u in users}
+                for ch in result.get("channels", []):
+                    for c in ch.get("clients", []):
+                        uid = c.get("user_id")
+                        if uid and str(uid) in user_map:
+                            c["username"] = user_map[str(uid)]
+            except Exception as e:
+                logger.warning("[STATS] Failed to resolve usernames: %s", e)
+
         return result
     except Exception as e:
         logger.exception("[STATS] Failed to get channel stats")
