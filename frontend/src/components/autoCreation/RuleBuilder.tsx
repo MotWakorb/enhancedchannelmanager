@@ -310,55 +310,6 @@ export function RuleBuilder({
                 />
                 <span>Stop on first match</span>
               </label>
-              <div className="norm-groups-section">
-                <label className="form-label-inline">Normalization Groups</label>
-                {availableNormGroups.length === 0 ? (
-                  <span className="norm-hint">
-                    <span className="material-icons norm-hint-icon">info</span>
-                    No normalization rule groups configured
-                  </span>
-                ) : (
-                  <>
-                    <div className="norm-group-actions">
-                      <button type="button" className="text-button" disabled={isLoading}
-                        onClick={() => setNormalizationGroupIds(availableNormGroups.filter(g => g.enabled).map(g => g.id))}>
-                        Select all enabled
-                      </button>
-                      <button type="button" className="text-button" disabled={isLoading}
-                        onClick={() => setNormalizationGroupIds([])}>
-                        Clear all
-                      </button>
-                    </div>
-                    <div className="norm-groups-picker">
-                      {availableNormGroups.map(group => (
-                        <label key={group.id} className="checkbox-item">
-                          <input
-                            type="checkbox"
-                            checked={normalizationGroupIds.includes(group.id)}
-                            onChange={e => {
-                              if (e.target.checked) {
-                                setNormalizationGroupIds([...normalizationGroupIds, group.id]);
-                              } else {
-                                setNormalizationGroupIds(normalizationGroupIds.filter(id => id !== group.id));
-                              }
-                            }}
-                            disabled={isLoading}
-                          />
-                          <span className={!group.enabled ? 'norm-group-disabled' : ''}>
-                            {group.name}{!group.enabled ? ' (disabled)' : ''}
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                    {normalizationGroupIds.length === 0 && availableNormGroups.some(g => g.enabled) && (
-                      <span className="norm-hint">
-                        <span className="material-icons norm-hint-icon">info</span>
-                        No normalization groups selected — names won't be normalized
-                      </span>
-                    )}
-                  </>
-                )}
-              </div>
               <label className="checkbox-item">
                 <input
                   type="checkbox"
@@ -370,6 +321,57 @@ export function RuleBuilder({
                 <span>Skip struck-out streams</span>
               </label>
             </div>
+          </div>
+
+          <div className="form-field">
+            <label>Normalization Groups</label>
+            <span className="field-hint">Select which normalization rule groups to apply to channel names</span>
+            {availableNormGroups.length === 0 ? (
+              <span className="norm-hint">
+                <span className="material-icons norm-hint-icon">info</span>
+                No normalization rule groups configured
+              </span>
+            ) : (
+              <>
+                <div className="norm-group-actions">
+                  <button type="button" className="text-button" disabled={isLoading}
+                    onClick={() => setNormalizationGroupIds(availableNormGroups.filter(g => g.enabled).map(g => g.id))}>
+                    Select all enabled
+                  </button>
+                  <button type="button" className="text-button" disabled={isLoading}
+                    onClick={() => setNormalizationGroupIds([])}>
+                    Clear all
+                  </button>
+                </div>
+                <div className="checkbox-group vertical">
+                  {availableNormGroups.map(group => (
+                    <label key={group.id} className="checkbox-item">
+                      <input
+                        type="checkbox"
+                        checked={normalizationGroupIds.includes(group.id)}
+                        onChange={e => {
+                          if (e.target.checked) {
+                            setNormalizationGroupIds([...normalizationGroupIds, group.id]);
+                          } else {
+                            setNormalizationGroupIds(normalizationGroupIds.filter(id => id !== group.id));
+                          }
+                        }}
+                        disabled={isLoading}
+                      />
+                      <span className={!group.enabled ? 'norm-group-disabled' : ''}>
+                        {group.name}{!group.enabled ? ' (disabled)' : ''}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                {normalizationGroupIds.length === 0 && availableNormGroups.some(g => g.enabled) && (
+                  <span className="norm-hint">
+                    <span className="material-icons norm-hint-icon">info</span>
+                    No normalization groups selected — names won't be normalized
+                  </span>
+                )}
+              </>
+            )}
           </div>
 
           <div className="form-field">
