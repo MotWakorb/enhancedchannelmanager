@@ -2163,8 +2163,8 @@ def _smart_sort_streams(
 
     logger.info(
         "[AUTO-CREATE-ENGINE] Channel '%s': smart sort with "
-        "active_criteria=%s, deprioritize_failed=%s",
-        channel_name, active_criteria, deprioritize_failed
+        "active_criteria=%s, deprioritize_failed=%s, failed_order=%s",
+        channel_name, active_criteria, deprioritize_failed, fail_order
     )
 
     def get_sort_value(sid: int) -> tuple:

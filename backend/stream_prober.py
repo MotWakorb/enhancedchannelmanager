@@ -119,6 +119,8 @@ def smart_sort_streams(
     logger.info("[STREAM-PROBE-SORT] Sort config: priority=%s, enabled=%s", stream_sort_priority, stream_sort_enabled)
     logger.info("[STREAM-PROBE-SORT] Active criteria (in order): %s", active_criteria)
     logger.info("[STREAM-PROBE-SORT] Deprioritize failed streams: %s", deprioritize_failed_streams)
+    if deprioritize_failed_streams:
+        logger.info("[STREAM-PROBE-SORT] Failed stream sort order: %s", failed_stream_sort_order)
 
     # Log each stream's stats before sorting
     for stream_id in stream_ids:
