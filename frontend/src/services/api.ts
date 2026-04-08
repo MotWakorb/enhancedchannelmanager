@@ -757,7 +757,7 @@ export type Theme = 'dark' | 'light' | 'high-contrast';
 export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'WARNING' | 'ERROR' | 'CRITICAL';
 
 // Sort criteria for stream sorting
-export type SortCriterion = 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels';
+export type SortCriterion = 'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels';
 export type SortEnabledMap = Record<SortCriterion, boolean>;
 
 // Deprioritized stream categories for ordering within the "failed" group
