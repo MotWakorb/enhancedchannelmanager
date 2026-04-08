@@ -217,6 +217,9 @@ def _run_migrations(engine) -> None:
             # Add stream_sort_field and stream_sort_order columns to auto_creation_rules (v0.15.0)
             _add_auto_creation_rules_stream_sort_columns(conn)
 
+            # Migrate normalize_names -> normalization_group_ids (v0.16.0 - Per-rule normalization)
+            _migrate_normalize_names_to_normalization_group_ids(conn)
+
             logger.debug("[DATABASE] All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception("[DATABASE] Migration failed: %s", e)
@@ -1528,6 +1531,46 @@ def _add_auto_creation_rules_stream_sort_columns(conn) -> None:
         conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN stream_sort_order VARCHAR(4) DEFAULT 'asc'"))
         conn.commit()
         logger.info("[DATABASE] Migration complete: added stream_sort_order column")
+
+
+def _migrate_normalize_names_to_normalization_group_ids(conn) -> None:
+    """Migrate normalize_names boolean to normalization_group_ids JSON array."""
+    import json
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_rules'"
+    ))
+    if not result.fetchone():
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
+
+    if "normalization_group_ids" not in columns:
+        logger.info("[DATABASE] Adding normalization_group_ids column to auto_creation_rules")
+        conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN normalization_group_ids TEXT"))
+
+        # Migrate existing data: rules with normalize_names=1 get all enabled group IDs
+        if "normalize_names" in columns:
+            # Check if normalization_rule_groups table exists
+            has_groups = conn.execute(text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='normalization_rule_groups'"
+            )).fetchone()
+            if has_groups:
+                groups = conn.execute(text(
+                    "SELECT id FROM normalization_rule_groups WHERE enabled = 1 ORDER BY priority"
+                )).fetchall()
+                all_group_ids = json.dumps([g[0] for g in groups]) if groups else "[]"
+            else:
+                all_group_ids = "[]"
+
+            # Rules with normalize_names=True get all enabled groups
+            conn.execute(text(
+                "UPDATE auto_creation_rules SET normalization_group_ids = :ids WHERE normalize_names = 1"
+            ), {"ids": all_group_ids})
+
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: added normalization_group_ids column")
 
 
 def _add_stream_stats_consecutive_failures_column(conn) -> None:

@@ -821,10 +821,10 @@ class AutoCreationEngine:
             getattr(settings, 'deprioritize_failed_streams', True)
         )
 
-        # Create normalization engine if any rule uses normalize_names
+        # Create normalization engine if any rule uses normalization_group_ids
         # or if any condition needs it (normalized_name_in_group)
         norm_engine = None
-        needs_norm = any(getattr(r, 'normalize_names', False) for r in rules)
+        needs_norm = any(r.get_normalization_group_ids() for r in rules)
         if not needs_norm:
             # Check if any condition uses normalized_name_in_group
             for r in rules:
@@ -1130,7 +1130,7 @@ class AutoCreationEngine:
 
                 action_result = await executor.execute(
                     action, stream, exec_ctx, winning_rule.target_group_id,
-                    normalize_names=getattr(winning_rule, 'normalize_names', False)
+                    normalization_group_ids=winning_rule.get_normalization_group_ids()
                 )
 
                 action_entry = {

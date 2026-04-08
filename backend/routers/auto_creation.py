@@ -48,7 +48,7 @@ class CreateAutoCreationRuleRequest(BaseModel):
     sort_regex: Optional[str] = None
     stream_sort_field: Optional[str] = None
     stream_sort_order: str = "asc"
-    normalize_names: bool = False
+    normalization_group_ids: list[int] = []
     skip_struck_streams: bool = False
     orphan_action: str = "delete"
 
@@ -71,7 +71,7 @@ class UpdateAutoCreationRuleRequest(BaseModel):
     sort_regex: Optional[str] = None
     stream_sort_field: Optional[str] = None
     stream_sort_order: Optional[str] = None
-    normalize_names: Optional[bool] = None
+    normalization_group_ids: Optional[list[int]] = None
     skip_struck_streams: Optional[bool] = None
     orphan_action: Optional[str] = None
 
@@ -87,6 +87,21 @@ class ImportYAMLRequest(BaseModel):
     """Request to import rules from YAML."""
     yaml_content: str
     overwrite: bool = False
+
+
+def _resolve_normalization_group_ids(rule_data: dict, session) -> str | None:
+    """Resolve normalization_group_ids from rule data, with backward compat for normalize_names."""
+    norm_ids = rule_data.get("normalization_group_ids")
+    if norm_ids is not None:
+        return json.dumps(norm_ids) if norm_ids else None
+    # Legacy: normalize_names=true -> all enabled groups
+    if rule_data.get("normalize_names"):
+        from models import NormalizationRuleGroup
+        groups = session.query(NormalizationRuleGroup.id).filter(
+            NormalizationRuleGroup.enabled == True
+        ).order_by(NormalizationRuleGroup.priority).all()
+        return json.dumps([g.id for g in groups]) if groups else None
+    return None
 
 
 # =============================================================================
@@ -185,7 +200,7 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
                 sort_regex=request.sort_regex,
                 stream_sort_field=request.stream_sort_field,
                 stream_sort_order=request.stream_sort_order,
-                normalize_names=request.normalize_names,
+                normalization_group_ids=json.dumps(request.normalization_group_ids) if request.normalization_group_ids else None,
                 skip_struck_streams=request.skip_struck_streams,
                 orphan_action=request.orphan_action
             )
@@ -257,8 +272,8 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
                 rule.stream_sort_field = request.stream_sort_field or None
             if request.stream_sort_order is not None:
                 rule.stream_sort_order = request.stream_sort_order
-            if request.normalize_names is not None:
-                rule.normalize_names = request.normalize_names
+            if request.normalization_group_ids is not None:
+                rule.set_normalization_group_ids(request.normalization_group_ids)
             if request.skip_struck_streams is not None:
                 rule.skip_struck_streams = request.skip_struck_streams
             if request.orphan_action is not None:
@@ -426,7 +441,7 @@ async def duplicate_auto_creation_rule(rule_id: int):
                 sort_order=rule.sort_order,
                 stream_sort_field=rule.stream_sort_field,
                 stream_sort_order=rule.stream_sort_order,
-                normalize_names=rule.normalize_names,
+                normalization_group_ids=rule.normalization_group_ids,
                 skip_struck_streams=rule.skip_struck_streams
             )
             session.add(new_rule)
@@ -679,7 +694,7 @@ async def export_auto_creation_rules_yaml():
                     "sort_regex": rule.sort_regex,
                     "stream_sort_field": rule.stream_sort_field,
                     "stream_sort_order": rule.stream_sort_order or "asc",
-                    "normalize_names": rule.normalize_names or False,
+                    "normalization_group_ids": rule.get_normalization_group_ids(),
                     "skip_struck_streams": rule.skip_struck_streams or False,
                     "probe_on_sort": rule.probe_on_sort or False,
                     "orphan_action": rule.orphan_action or "delete"
@@ -843,7 +858,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         existing.sort_regex = rule_data.get("sort_regex")
                         existing.stream_sort_field = rule_data.get("stream_sort_field")
                         existing.stream_sort_order = rule_data.get("stream_sort_order", "asc")
-                        existing.normalize_names = rule_data.get("normalize_names", False)
+                        existing.normalization_group_ids = _resolve_normalization_group_ids(rule_data, session)
                         existing.skip_struck_streams = rule_data.get("skip_struck_streams", False)
                         existing.probe_on_sort = rule_data.get("probe_on_sort", False)
                         existing.orphan_action = rule_data.get("orphan_action", "delete")
@@ -874,7 +889,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         sort_regex=rule_data.get("sort_regex"),
                         stream_sort_field=rule_data.get("stream_sort_field"),
                         stream_sort_order=rule_data.get("stream_sort_order", "asc"),
-                        normalize_names=rule_data.get("normalize_names", False),
+                        normalization_group_ids=_resolve_normalization_group_ids(rule_data, session),
                         skip_struck_streams=rule_data.get("skip_struck_streams", False),
                         probe_on_sort=rule_data.get("probe_on_sort", False),
                         orphan_action=rule_data.get("orphan_action", "delete")
@@ -1299,7 +1314,7 @@ async def generate_debug_bundle():
                     "sort_regex": rule.sort_regex,
                     "stream_sort_field": rule.stream_sort_field,
                     "stream_sort_order": rule.stream_sort_order or "asc",
-                    "normalize_names": rule.normalize_names or False,
+                    "normalization_group_ids": rule.get_normalization_group_ids(),
                     "skip_struck_streams": rule.skip_struck_streams or False,
                     "probe_on_sort": rule.probe_on_sort or False,
                     "orphan_action": rule.orphan_action or "delete",
