@@ -475,14 +475,22 @@ class ActionExecutor:
         # Apply normalization engine if enabled (non-empty group IDs list)
         pre_norm_name = channel_name
         if normalization_group_ids and self._normalization_engine:
+            logger.debug("[AUTO-CREATE-EXEC] Applying normalization groups %s to '%s'", normalization_group_ids, channel_name)
             try:
                 norm_result = self._normalization_engine.normalize(channel_name, group_ids=normalization_group_ids)
                 if norm_result.normalized != channel_name:
                     logger.debug("[AUTO-CREATE-EXEC] Normalized channel name: '%s' -> '%s'", channel_name, norm_result.normalized)
+                    for rule_id, before, after in norm_result.transformations:
+                        logger.debug("[AUTO-CREATE-EXEC]   Rule %s: '%s' -> '%s'", rule_id, before, after)
                     action_details.append(f"Name normalized: '{channel_name}' \u2192 '{norm_result.normalized}'")
                     channel_name = norm_result.normalized
+                else:
+                    logger.debug("[AUTO-CREATE-EXEC] Normalization applied %d groups but no changes for '%s'",
+                                len(normalization_group_ids), channel_name)
             except Exception as e:
                 logger.warning("[AUTO-CREATE-EXEC] Failed to normalize channel name '%s': %s", channel_name, e)
+        elif self._normalization_engine:
+            logger.debug("[AUTO-CREATE-EXEC] Normalization skipped for '%s' (no groups selected)", channel_name)
 
         if_exists = params.get("if_exists", "skip")
         group_id = params.get("group_id") or exec_ctx.current_group_id or rule_target_group_id

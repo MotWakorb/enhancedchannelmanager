@@ -847,8 +847,11 @@ class NormalizationEngine:
 
         # Filter to specific groups if requested (per-rule normalization)
         if group_ids is not None:
+            all_count = len(grouped_rules)
             allowed = set(group_ids)
             grouped_rules = [(g, r) for g, r in grouped_rules if g.id in allowed]
+            logger.debug("[NORMALIZE] Filtered to %d/%d groups (ids=%s) for '%s'",
+                        len(grouped_rules), all_count, group_ids, name)
 
         # Multi-pass normalization: keep applying rules until no changes occur
         max_passes = 10  # Safety limit to prevent infinite loops
@@ -896,8 +899,8 @@ class NormalizationEngine:
                         result.transformations.append((rule.id, before, current))
 
                         logger.debug(
-                            "[NORMALIZE] Rule %s (%s): '%s' -> '%s'",
-                            rule.id, rule.name, before, current
+                            "[NORMALIZE] Rule %s (%s, group '%s'): '%s' -> '%s'",
+                            rule.id, rule.name, group.name, before, current
                         )
 
                     # Stop processing if rule says so
