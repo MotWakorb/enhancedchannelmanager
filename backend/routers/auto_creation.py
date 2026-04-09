@@ -1214,16 +1214,17 @@ async def generate_debug_bundle():
         finally:
             stats_session.close()
 
-        # Build channels with embedded stream info
+        # Build channels with embedded stream info, sorted by channel_number
         channels_json_data = []
-        for ch in all_channels:
+        for ch in sorted(all_channels, key=lambda c: c.get("channel_number", 0) or 0):
             stream_ids = ch.get("streams", [])
             streams_data = []
-            for sid in stream_ids:
+            for position, sid in enumerate(stream_ids, start=1):
                 detail = stream_detail_lookup.get(sid, {})
                 stat = stream_stats_lookup.get(sid)
                 stream_entry = {
                     "id": sid,
+                    "position": position,
                     "name": detail.get("name", ""),
                     "m3u_account_id": detail.get("m3u_account_id"),
                     "url": detail.get("url", ""),
