@@ -225,6 +225,14 @@ class BlackScreenScanTask(TaskScheduler):
                         skipped_count=error_count,
                     )
 
+        # Save group names before finally block clears them (needed for post-scan reorder)
+        reorder_group_names = None
+        if self._channel_groups and not self._auto_sync_groups:
+            try:
+                reorder_group_names = await self._resolve_group_names()
+            except Exception:
+                pass
+
         try:
             tasks = [scan_one(sid, name, url) for sid, name, url in work_items]
             await asyncio.gather(*tasks)
@@ -257,10 +265,23 @@ class BlackScreenScanTask(TaskScheduler):
             skipped_count=error_count,
         )
 
+        # Re-sort channels if black screens were found and auto-reorder is enabled
+        reorder_count = 0
+        if black_count > 0 and not self._cancel_requested and self._prober.auto_reorder_after_probe:
+            logger.info("[%s] %d black screen streams found, triggering smart sort reorder", self.task_id, black_count)
+            self._set_progress(status="reordering", current_item="Reordering streams after black screen scan...")
+            try:
+                reordered = await self._prober._auto_reorder_channels(reorder_group_names)
+                reorder_count = len(reordered)
+                logger.info("[%s] Reordered %d channels after black screen scan", self.task_id, reorder_count)
+            except Exception as e:
+                logger.error("[%s] Auto-reorder after black screen scan failed: %s", self.task_id, e)
+
         details = {
             "black_screen_streams": black_streams[:50],
             "error_streams": error_streams[:50],
             "sample_duration": self._prober.black_screen_sample_duration,
+            "reordered_channels": reorder_count,
         }
 
         if self._cancel_requested:
@@ -277,9 +298,10 @@ class BlackScreenScanTask(TaskScheduler):
                 details=details,
             )
 
+        reorder_msg = f", reordered {reorder_count} channels" if reorder_count else ""
         return TaskResult(
             success=True,
-            message=f"Scanned {total} streams: {black_count} black screen, {clear_count} clear, {error_count} errors",
+            message=f"Scanned {total} streams: {black_count} black screen, {clear_count} clear, {error_count} errors{reorder_msg}",
             started_at=started_at,
             completed_at=datetime.utcnow(),
             total_items=total,
