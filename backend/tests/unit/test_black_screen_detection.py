@@ -197,8 +197,8 @@ class TestSaveProbeResultBlackScreen:
     """Tests for is_black_screen persistence in _save_probe_result."""
 
     def test_stores_black_screen_on_success(self):
-        """is_black_screen is stored when probe succeeds."""
-        prober = create_prober()
+        """is_black_screen is stored when probe succeeds and detection is enabled."""
+        prober = create_prober(black_screen_detection_enabled=True)
         mock_stats = Mock(spec=StreamStats)
         mock_stats.consecutive_failures = 0
 
@@ -228,8 +228,8 @@ class TestSaveProbeResultBlackScreen:
         assert mock_stats.is_black_screen is False
 
     def test_stores_false_when_not_black(self):
-        """is_black_screen=False is stored when probe succeeds and stream is not black."""
-        prober = create_prober()
+        """is_black_screen=False is stored when probe succeeds and detection is enabled."""
+        prober = create_prober(black_screen_detection_enabled=True)
         mock_stats = Mock(spec=StreamStats)
         mock_stats.consecutive_failures = 0
 
@@ -241,6 +241,23 @@ class TestSaveProbeResultBlackScreen:
             prober._save_probe_result(1, "Test", {}, "success", None, is_black_screen=False)
 
         assert mock_stats.is_black_screen is False
+
+    def test_preserves_black_screen_when_detection_disabled(self):
+        """is_black_screen is NOT overwritten when detection is disabled."""
+        prober = create_prober(black_screen_detection_enabled=False)
+        mock_stats = Mock(spec=StreamStats)
+        mock_stats.consecutive_failures = 0
+        mock_stats.is_black_screen = True  # Set by prior black screen scan
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = mock_stats
+        mock_stats.to_dict.return_value = {"is_black_screen": True}
+
+        with patch("stream_prober.get_session", return_value=mock_session):
+            prober._save_probe_result(1, "Test", {}, "success", None, is_black_screen=False)
+
+        # Should still be True — probe didn't run detection, so it preserves the existing value
+        assert mock_stats.is_black_screen is True
 
 
 class TestConstructorBlackScreenSettings:

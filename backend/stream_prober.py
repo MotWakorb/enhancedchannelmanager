@@ -1056,7 +1056,10 @@ class StreamProber:
                 stats.is_low_fps = False  # Reset on failure (stream state unknown)
             elif status == "success":
                 stats.consecutive_failures = 0
-                stats.is_black_screen = is_black_screen
+                # Only update is_black_screen when detection actually ran;
+                # preserve existing value from black screen scan otherwise
+                if self.black_screen_detection_enabled:
+                    stats.is_black_screen = is_black_screen
 
             if ffprobe_data and status == "success":
                 self._parse_ffprobe_data(stats, ffprobe_data)
