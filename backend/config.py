@@ -338,8 +338,13 @@ def set_log_level(level: str) -> None:
     # Set root logger level
     logging.getLogger().setLevel(numeric_level)
 
-    # Set level for all existing loggers
+    # Set level for all existing loggers, but keep noisy third-party
+    # loggers (e.g. sqlalchemy.engine) at WARNING to avoid flooding
+    # the console and ring buffer with SQL dumps.
+    _NOISY_LOGGERS = {"sqlalchemy", "httpcore"}
     for logger_name in logging.root.manager.loggerDict:
+        if any(logger_name.startswith(prefix) for prefix in _NOISY_LOGGERS):
+            continue
         logger_obj = logging.getLogger(logger_name)
         logger_obj.setLevel(numeric_level)
 

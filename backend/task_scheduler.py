@@ -523,6 +523,7 @@ class TaskScheduler(ABC):
         # Validate configuration
         is_valid, error_msg = await self.validate_config()
         if not is_valid:
+            logger.error("[%s] Configuration validation failed: %s", self.task_id, error_msg)
             return TaskResult(
                 success=False,
                 message=f"Configuration validation failed: {error_msg}",
