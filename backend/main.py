@@ -41,6 +41,9 @@ logging.basicConfig(
     level=getattr(logging, initial_log_level),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+# Keep noisy third-party loggers quiet regardless of app log level
+logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 # Sanitize all log arguments to prevent log injection (CWE-117)
 from log_utils import install_safe_logging, install_ring_buffer  # noqa: E402
 install_safe_logging()
