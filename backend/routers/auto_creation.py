@@ -442,7 +442,10 @@ async def duplicate_auto_creation_rule(rule_id: int):
                 stream_sort_field=rule.stream_sort_field,
                 stream_sort_order=rule.stream_sort_order,
                 normalization_group_ids=rule.normalization_group_ids,
-                skip_struck_streams=rule.skip_struck_streams
+                skip_struck_streams=rule.skip_struck_streams,
+                probe_on_sort=rule.probe_on_sort,
+                sort_regex=rule.sort_regex,
+                orphan_action=rule.orphan_action
             )
             session.add(new_rule)
             session.commit()
