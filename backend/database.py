@@ -1575,6 +1575,15 @@ def _migrate_normalize_names_to_normalization_group_ids(conn) -> None:
         conn.commit()
         logger.info("[DATABASE] Migration complete: added normalization_group_ids column")
 
+    # Drop legacy normalize_names column now that data is migrated
+    # Re-read columns in case they changed above
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
+    if "normalize_names" in columns:
+        logger.info("[DATABASE] Dropping legacy normalize_names column from auto_creation_rules")
+        conn.execute(text("ALTER TABLE auto_creation_rules DROP COLUMN normalize_names"))
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: dropped normalize_names column")
+
 
 def _add_stream_stats_consecutive_failures_column(conn) -> None:
     """Add consecutive_failures column to stream_stats table (v0.12.5 - Strike rule)."""
