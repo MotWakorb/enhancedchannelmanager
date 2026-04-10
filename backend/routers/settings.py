@@ -850,19 +850,15 @@ async def restart_services():
             logger.info("[SETTINGS] Notification callbacks configured for stream prober")
             set_prober(new_prober)
 
-            # Connect the new prober to the StreamProbeTask
+            # Connect the new prober to all prober-dependent tasks
             try:
                 from task_registry import get_registry
                 registry = get_registry()
-                stream_probe_task = registry.get_task_instance("stream_probe")
-                if stream_probe_task:
-                    stream_probe_task.set_prober(new_prober)
-                    logger.info("[SETTINGS] Connected new StreamProber to StreamProbeTask")
-
-                failed_reprobe_task = registry.get_task_instance("failed_stream_reprobe")
-                if failed_reprobe_task:
-                    failed_reprobe_task.set_prober(new_prober)
-                    logger.info("[SETTINGS] Connected new StreamProber to FailedStreamReprobeTask")
+                for tid in ("stream_probe", "failed_stream_reprobe", "black_screen_scan"):
+                    task_instance = registry.get_task_instance(tid)
+                    if task_instance:
+                        task_instance.set_prober(new_prober)
+                        logger.info("[SETTINGS] Connected new StreamProber to %s", tid)
             except Exception as e:
                 logger.warning("[SETTINGS] Failed to connect prober to task: %s", e)
 
