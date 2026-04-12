@@ -2,7 +2,7 @@
 Unit tests for backup endpoints.
 
 Tests: GET /api/backup/create, POST /api/backup/restore, POST /api/backup/restore-initial,
-       GET /api/backup/export
+       GET /api/backup/export, POST /api/backup/validate, POST /api/backup/restore-yaml
 Mocks: get_settings(), get_engine(), close_db(), init_db(), clear_settings_cache(), reset_client()
 """
 import io
@@ -15,10 +15,13 @@ from unittest.mock import AsyncMock, MagicMock, patch, call
 
 from models import (
     AutoCreationRule,
+    DummyEPGProfile,
+    DummyEPGChannelAssignment,
     FFmpegProfile,
     NormalizationRuleGroup,
     NormalizationRule,
     ScheduledTask,
+    TaskSchedule,
     TagGroup,
     Tag,
 )
@@ -508,8 +511,9 @@ class TestExportYaml:
 
         assert response.status_code == 200
         data = yaml.safe_load(response.text)
-        assert "_warning" in data["dispatcharr"]
-        assert "not connected" in data["dispatcharr"]["_warning"]
+        dispatcharr = data.get("dispatcharr", {})
+        assert "_warning" in dispatcharr
+        assert "not connected" in dispatcharr["_warning"]
 
     @pytest.mark.asyncio
     async def test_dispatcharr_error_graceful(self, async_client, test_session):
@@ -518,7 +522,7 @@ class TestExportYaml:
         mock_settings.model_dump.return_value = {"url": "http://test:9191"}
 
         mock_client = AsyncMock()
-        mock_client.get_channels.side_effect = Exception("Connection refused")
+        mock_client.get_m3u_accounts.side_effect = Exception("Connection refused")
 
         with patch("routers.backup.get_settings", return_value=mock_settings), \
              patch("routers.backup.get_client", return_value=mock_client):
@@ -526,8 +530,9 @@ class TestExportYaml:
 
         assert response.status_code == 200
         data = yaml.safe_load(response.text)
-        assert "_warning" in data["dispatcharr"]
-        assert "Connection refused" in data["dispatcharr"]["_warning"]
+        dispatcharr = data.get("dispatcharr", {})
+        assert "_warning" in dispatcharr
+        assert "Connection refused" in dispatcharr["_warning"]
 
     @pytest.mark.asyncio
     async def test_export_metadata(self, async_client, test_session):
@@ -543,3 +548,542 @@ class TestExportYaml:
         data = yaml.safe_load(response.text)
         assert "version" in data["ecm_export"]
         assert "exported_at" in data["ecm_export"]
+
+
+class TestExportSections:
+    """Tests for GET /api/backup/export-sections."""
+
+    @pytest.mark.asyncio
+    async def test_returns_section_list(self, async_client):
+        """Returns available section keys and labels."""
+        response = await async_client.get("/api/backup/export-sections")
+        assert response.status_code == 200
+        sections = response.json()
+        assert len(sections) == 13
+        keys = {s["key"] for s in sections}
+        assert "settings" in keys
+        assert "tag_groups" in keys
+        assert "ffmpeg_profiles" in keys
+        assert all("label" in s for s in sections)
+
+
+class TestSelectiveExport:
+    """Tests for selective GET /api/backup/export?sections=..."""
+
+    @pytest.mark.asyncio
+    async def test_export_specific_sections(self, async_client, test_session):
+        """Export with sections param only includes requested sections."""
+        mock_settings = MagicMock()
+        mock_settings.model_dump.return_value = {"url": "http://test:9191"}
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch("routers.backup.get_client", return_value=None):
+            response = await async_client.get("/api/backup/export?sections=settings,tag_groups")
+
+        assert response.status_code == 200
+        data = yaml.safe_load(response.text)
+        assert "settings" in data
+        assert "database" in data
+        assert "tag_groups" in data["database"]
+        # These should NOT be in the export
+        assert "scheduled_tasks" not in data.get("database", {})
+        assert "auto_creation_rules" not in data.get("database", {})
+        # Metadata should list selected sections
+        assert sorted(data["ecm_export"]["sections_included"]) == ["settings", "tag_groups"]
+
+    @pytest.mark.asyncio
+    async def test_export_no_sections_returns_all(self, async_client, test_session):
+        """Export without sections param includes everything."""
+        mock_settings = MagicMock()
+        mock_settings.model_dump.return_value = {"url": "http://test:9191"}
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch("routers.backup.get_client", return_value=None):
+            response = await async_client.get("/api/backup/export")
+
+        assert response.status_code == 200
+        data = yaml.safe_load(response.text)
+        assert "settings" in data
+        assert "database" in data
+        assert len(data["ecm_export"]["sections_included"]) == 13
+
+    @pytest.mark.asyncio
+    async def test_export_invalid_section_returns_400(self, async_client):
+        """Export with unknown section key returns 400."""
+        response = await async_client.get("/api/backup/export?sections=bogus")
+        assert response.status_code == 400
+        assert "Unknown sections" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_export_db_only_sections(self, async_client, test_session):
+        """Export with only DB sections omits settings."""
+        mock_settings = MagicMock()
+        mock_settings.model_dump.return_value = {"url": "http://test:9191"}
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch("routers.backup.get_client", return_value=None):
+            response = await async_client.get("/api/backup/export?sections=ffmpeg_profiles")
+
+        assert response.status_code == 200
+        data = yaml.safe_load(response.text)
+        assert "settings" not in data
+        assert "ffmpeg_profiles" in data.get("database", {})
+
+
+class TestSavedBackups:
+    """Tests for saved backup endpoints (list/download/delete)."""
+
+    @pytest.mark.asyncio
+    async def test_list_empty(self, async_client, tmp_path):
+        """Returns empty list when no backups directory."""
+        with patch("routers.backup.BACKUPS_DIR", tmp_path / "nonexistent"):
+            response = await async_client.get("/api/backup/saved")
+        assert response.status_code == 200
+        assert response.json() == []
+
+    @pytest.mark.asyncio
+    async def test_list_with_files(self, async_client, tmp_path):
+        """Returns backup files sorted newest first."""
+        backups_dir = tmp_path / "backups"
+        backups_dir.mkdir()
+        (backups_dir / "ecm-backup-2026-01-01_000000.yaml").write_text("yaml1")
+        (backups_dir / "ecm-backup-2026-01-02_000000.yaml").write_text("yaml2longer")
+
+        with patch("routers.backup.BACKUPS_DIR", backups_dir):
+            response = await async_client.get("/api/backup/saved")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 2
+        # Newest first
+        assert data[0]["filename"] == "ecm-backup-2026-01-02_000000.yaml"
+        assert data[0]["size_bytes"] == 11
+        assert "created_at" in data[0]
+
+    @pytest.mark.asyncio
+    async def test_download(self, async_client, tmp_path):
+        """Downloads a saved backup file."""
+        backups_dir = tmp_path / "backups"
+        backups_dir.mkdir()
+        (backups_dir / "ecm-backup-2026-01-01_000000.yaml").write_text("yaml_content")
+
+        with patch("routers.backup.BACKUPS_DIR", backups_dir):
+            response = await async_client.get("/api/backup/saved/ecm-backup-2026-01-01_000000.yaml")
+
+        assert response.status_code == 200
+        assert response.text == "yaml_content"
+        assert "text/yaml" in response.headers["content-type"]
+
+    @pytest.mark.asyncio
+    async def test_download_nonexistent_returns_404(self, async_client, tmp_path):
+        """Returns 404 for missing backup file."""
+        backups_dir = tmp_path / "backups"
+        backups_dir.mkdir()
+
+        with patch("routers.backup.BACKUPS_DIR", backups_dir):
+            response = await async_client.get("/api/backup/saved/ecm-backup-2026-01-01_000000.yaml")
+
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_download_invalid_filename_returns_400(self, async_client):
+        """Returns 400 for invalid filenames."""
+        response = await async_client.get("/api/backup/saved/evil-file.txt")
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_delete(self, async_client, tmp_path):
+        """Deletes a saved backup file."""
+        backups_dir = tmp_path / "backups"
+        backups_dir.mkdir()
+        f = backups_dir / "ecm-backup-2026-01-01_000000.yaml"
+        f.write_text("yaml_content")
+
+        with patch("routers.backup.BACKUPS_DIR", backups_dir):
+            response = await async_client.delete("/api/backup/saved/ecm-backup-2026-01-01_000000.yaml")
+
+        assert response.status_code == 200
+        assert not f.exists()
+
+    @pytest.mark.asyncio
+    async def test_delete_invalid_filename_returns_400(self, async_client):
+        """Returns 400 for invalid filename on delete."""
+        response = await async_client.delete("/api/backup/saved/evil-file.txt")
+        assert response.status_code == 400
+
+
+def _make_yaml_export(**overrides):
+    """Create a YAML export string for testing.
+
+    Returns bytes suitable for upload via async_client.
+    """
+    data = {
+        "ecm_export": {"version": "0.16.0", "exported_at": "2026-01-01T00:00:00+00:00"},
+        "settings": {"url": "http://test:9191", "username": "admin", "password": "***REDACTED***"},
+        "database": {
+            "scheduled_tasks": [
+                {
+                    "task_id": "stream_probe",
+                    "task_name": "Stream Prober",
+                    "description": "Probes streams",
+                    "enabled": True,
+                    "schedule_type": "manual",
+                    "config": {"timeout": 30},
+                },
+            ],
+            "task_schedules": [
+                {
+                    "task_id": "stream_probe",
+                    "name": "Daily probe",
+                    "enabled": True,
+                    "schedule_type": "daily",
+                    "schedule_time": "03:00",
+                    "timezone": "US/Eastern",
+                    "parameters": {"max_concurrent": 8},
+                },
+            ],
+            "normalization_rule_groups": [
+                {
+                    "name": "Quality Tags",
+                    "description": "Remove quality tags",
+                    "enabled": True,
+                    "priority": 1,
+                    "is_builtin": False,
+                    "rules": [
+                        {
+                            "name": "Strip HD",
+                            "enabled": True,
+                            "priority": 1,
+                            "condition_type": "ends_with",
+                            "condition_value": "HD",
+                            "action_type": "remove",
+                            "is_builtin": False,
+                        },
+                    ],
+                },
+            ],
+            "tag_groups": [
+                {
+                    "name": "Countries",
+                    "description": "Country tags",
+                    "is_builtin": False,
+                    "tags": [
+                        {"value": "US", "case_sensitive": False, "enabled": True, "is_builtin": False},
+                        {"value": "UK", "case_sensitive": False, "enabled": True, "is_builtin": False},
+                    ],
+                },
+            ],
+            "auto_creation_rules": [
+                {
+                    "name": "Sports Rule",
+                    "enabled": True,
+                    "priority": 1,
+                    "conditions": [{"type": "group_name", "operator": "contains", "value": "Sports"}],
+                    "actions": [{"type": "create_channel"}],
+                    "run_on_refresh": False,
+                    "stop_on_first_match": True,
+                },
+            ],
+            "ffmpeg_profiles": [
+                {"name": "Test Profile", "config": {"codec": "libx264", "bitrate": "5000k"}},
+            ],
+            "dummy_epg_profiles": [
+                {
+                    "name": "Sports EPG",
+                    "enabled": True,
+                    "name_source": "channel",
+                    "stream_index": 1,
+                    "title_pattern": "(?P<title>.+)",
+                    "event_timezone": "US/Eastern",
+                    "program_duration": 180,
+                    "tvg_id_template": "ecm-{channel_number}",
+                    "channel_assignments": [
+                        {"channel_id": 1, "channel_name": "ESPN", "tvg_id_override": None},
+                    ],
+                },
+            ],
+        },
+        "dispatcharr": {"_warning": "Dispatcharr not connected — section empty"},
+    }
+    data.update(overrides)
+    return yaml.dump(data, default_flow_style=False).encode()
+
+
+class TestValidateYaml:
+    """Tests for POST /api/backup/validate."""
+
+    @pytest.mark.asyncio
+    async def test_validates_valid_yaml(self, async_client):
+        """Returns section metadata with item counts for valid export."""
+        content = _make_yaml_export()
+        response = await async_client.post(
+            "/api/backup/validate",
+            files={"file": ("export.yaml", content, "text/yaml")},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["valid"] is True
+        assert data["version"] == "0.16.0"
+        assert len(data["sections"]) == 13
+
+        # Check a few sections
+        by_key = {s["key"]: s for s in data["sections"]}
+        assert by_key["settings"]["item_count"] == 3
+        assert by_key["settings"]["available"] is True
+        assert by_key["tag_groups"]["item_count"] == 1
+        assert by_key["ffmpeg_profiles"]["item_count"] == 1
+        assert by_key["scheduled_tasks"]["item_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_yaml(self, async_client):
+        """Returns 400 for invalid YAML content."""
+        response = await async_client.post(
+            "/api/backup/validate",
+            files={"file": ("bad.yaml", b": : : {{{invalid", "text/yaml")},
+        )
+        assert response.status_code == 400
+        assert "Invalid YAML" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_ecm_yaml(self, async_client):
+        """Returns 400 for YAML without ecm_export header."""
+        content = yaml.dump({"some_other": "data"}).encode()
+        response = await async_client.post(
+            "/api/backup/validate",
+            files={"file": ("other.yaml", content, "text/yaml")},
+        )
+        assert response.status_code == 400
+        assert "missing ecm_export" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_empty_sections_marked_unavailable(self, async_client):
+        """Sections with no items are marked as unavailable."""
+        content = _make_yaml_export(database={
+            "scheduled_tasks": [],
+            "task_schedules": [],
+            "normalization_rule_groups": [],
+            "tag_groups": [],
+            "auto_creation_rules": [],
+            "ffmpeg_profiles": [],
+            "dummy_epg_profiles": [],
+        })
+        response = await async_client.post(
+            "/api/backup/validate",
+            files={"file": ("export.yaml", content, "text/yaml")},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        by_key = {s["key"]: s for s in data["sections"]}
+        for key in ("scheduled_tasks", "tag_groups", "ffmpeg_profiles"):
+            assert by_key[key]["item_count"] == 0
+            assert by_key[key]["available"] is False
+
+
+class TestRestoreYaml:
+    """Tests for POST /api/backup/restore-yaml."""
+
+    @pytest.mark.asyncio
+    async def test_restores_all_sections(self, async_client, test_session):
+        """Restores all sections from a valid YAML export."""
+        content = _make_yaml_export()
+        all_sections = json.dumps([
+            "settings", "scheduled_tasks", "task_schedules",
+            "normalization_rule_groups", "tag_groups",
+            "auto_creation_rules", "ffmpeg_profiles", "dummy_epg_profiles",
+        ])
+
+        mock_settings = MagicMock()
+        mock_settings.model_dump.return_value = {"url": "", "username": "", "password": "existing_pass", "smtp_password": "existing_smtp"}
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch("routers.backup.save_settings") as mock_save, \
+             patch("routers.backup.clear_settings_cache"):
+            response = await async_client.post(
+                "/api/backup/restore-yaml",
+                data={"sections": all_sections},
+                files={"file": ("export.yaml", content, "text/yaml")},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert len(data["sections_restored"]) == 8
+        assert data["sections_failed"] == []
+
+        # Verify DB records were created
+        assert test_session.query(ScheduledTask).count() == 1
+        assert test_session.query(TaskSchedule).count() == 1
+        assert test_session.query(TagGroup).count() == 1
+        assert test_session.query(Tag).count() == 2
+        assert test_session.query(NormalizationRuleGroup).count() == 1
+        assert test_session.query(NormalizationRule).count() == 1
+        assert test_session.query(AutoCreationRule).count() == 1
+        assert test_session.query(FFmpegProfile).count() == 1
+        assert test_session.query(DummyEPGProfile).count() == 1
+        assert test_session.query(DummyEPGChannelAssignment).count() == 1
+
+    @pytest.mark.asyncio
+    async def test_selective_restore(self, async_client, test_session):
+        """Only restores selected sections."""
+        content = _make_yaml_export()
+        sections = json.dumps(["tag_groups", "ffmpeg_profiles"])
+
+        response = await async_client.post(
+            "/api/backup/restore-yaml",
+            data={"sections": sections},
+            files={"file": ("export.yaml", content, "text/yaml")},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert set(data["sections_restored"]) == {"tag_groups", "ffmpeg_profiles"}
+
+        # Only selected sections should have data
+        assert test_session.query(TagGroup).count() == 1
+        assert test_session.query(FFmpegProfile).count() == 1
+        # Unselected sections should be empty
+        assert test_session.query(ScheduledTask).count() == 0
+        assert test_session.query(AutoCreationRule).count() == 0
+
+    @pytest.mark.asyncio
+    async def test_settings_restore_preserves_redacted(self, async_client, test_session):
+        """Redacted password fields are kept from existing settings."""
+        content = _make_yaml_export()
+
+        mock_settings = MagicMock()
+        mock_settings.model_dump.return_value = {
+            "url": "http://old:9191",
+            "username": "old_user",
+            "password": "real_password",
+            "smtp_password": "real_smtp",
+        }
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch("routers.backup.save_settings") as mock_save, \
+             patch("routers.backup.clear_settings_cache"):
+            response = await async_client.post(
+                "/api/backup/restore-yaml",
+                data={"sections": json.dumps(["settings"])},
+                files={"file": ("export.yaml", content, "text/yaml")},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "Skipped redacted field: password" in data["warnings"][0]
+
+        # Verify save_settings was called with merged data
+        saved = mock_save.call_args[0][0]
+        assert saved.password == "real_password"
+        assert saved.smtp_password == "real_smtp"
+        assert saved.url == "http://test:9191"
+        assert saved.username == "admin"
+
+    @pytest.mark.asyncio
+    async def test_partial_failure_handling(self, async_client, test_session):
+        """Reports partial failures without aborting other sections."""
+        content = _make_yaml_export()
+        sections = json.dumps(["tag_groups", "auto_creation_rules"])
+
+        # Make auto_creation_rules restore fail by patching the registry
+        with patch.dict("routers.backup._SECTION_RESTORERS", {"auto_creation_rules": MagicMock(side_effect=Exception("DB error"))}):
+            response = await async_client.post(
+                "/api/backup/restore-yaml",
+                data={"sections": sections},
+                files={"file": ("export.yaml", content, "text/yaml")},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is False
+        assert "tag_groups" in data["sections_restored"]
+        assert "auto_creation_rules" in data["sections_failed"]
+        assert any("auto_creation_rules: DB error" in e for e in data["errors"])
+
+        # tag_groups should still have been restored
+        assert test_session.query(TagGroup).count() == 1
+
+    @pytest.mark.asyncio
+    async def test_channel_groups_restore_upserts_by_name(self):
+        """Channel groups restore must NOT delete existing groups — channels and
+        streams reference them by ID, so deleting would orphan those FKs. Only
+        groups missing by name should be created."""
+        from routers.backup import _restore_channel_groups
+
+        mock_client = AsyncMock()
+        mock_client.get_channel_groups.return_value = [
+            {"id": 1, "name": "My Teams"},
+            {"id": 2, "name": "Local"},
+        ]
+
+        items = [
+            {"id": 99, "name": "My Teams"},
+            {"id": 100, "name": "Local"},
+            {"id": 101, "name": "Sports"},
+        ]
+
+        with patch("routers.backup.get_client", return_value=mock_client):
+            result = await _restore_channel_groups(items)
+
+        mock_client.delete_channel_group.assert_not_called()
+        mock_client.create_channel_group.assert_called_once_with("Sports")
+        assert result["warnings"] == []
+
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_yaml(self, async_client):
+        """Returns 400 for invalid YAML content."""
+        response = await async_client.post(
+            "/api/backup/restore-yaml",
+            data={"sections": json.dumps(["settings"])},
+            files={"file": ("bad.yaml", b":: invalid yaml {{", "text/yaml")},
+        )
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_rejects_unknown_sections(self, async_client):
+        """Returns 400 for unknown section keys."""
+        content = _make_yaml_export()
+        response = await async_client.post(
+            "/api/backup/restore-yaml",
+            data={"sections": json.dumps(["nonexistent_section"])},
+            files={"file": ("export.yaml", content, "text/yaml")},
+        )
+        assert response.status_code == 400
+        assert "Unknown sections" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_rejects_empty_sections(self, async_client):
+        """Returns 400 when no sections selected."""
+        content = _make_yaml_export()
+        response = await async_client.post(
+            "/api/backup/restore-yaml",
+            data={"sections": json.dumps([])},
+            files={"file": ("export.yaml", content, "text/yaml")},
+        )
+        assert response.status_code == 400
+        assert "at least one section" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_restore_replaces_existing_data(self, async_client, test_session):
+        """Restore deletes existing records before recreating."""
+        # Seed existing data
+        test_session.add(TagGroup(name="OldGroup", is_builtin=False))
+        test_session.add(FFmpegProfile(name="OldProfile", config='{}'))
+        test_session.commit()
+
+        assert test_session.query(TagGroup).count() == 1
+        assert test_session.query(FFmpegProfile).count() == 1
+
+        content = _make_yaml_export()
+        response = await async_client.post(
+            "/api/backup/restore-yaml",
+            data={"sections": json.dumps(["tag_groups", "ffmpeg_profiles"])},
+            files={"file": ("export.yaml", content, "text/yaml")},
+        )
+
+        assert response.status_code == 200
+        # Old records replaced with new ones
+        assert test_session.query(TagGroup).count() == 1
+        assert test_session.query(TagGroup).first().name == "Countries"
+        assert test_session.query(FFmpegProfile).count() == 1
+        assert test_session.query(FFmpegProfile).first().name == "Test Profile"
