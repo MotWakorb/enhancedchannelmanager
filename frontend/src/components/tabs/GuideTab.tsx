@@ -234,8 +234,8 @@ export function GuideTab({
           api.getChannelGroups(),
         ]);
 
-        if (!propChannels) setChannels((channelsData as { results: Channel[] }).results);
-        if (!propLogos) setLogos((logosData as { results: Logo[] }).results);
+        setChannels((channelsData as { results: Channel[] }).results);
+        setLogos((logosData as { results: Logo[] }).results);
         setPrograms(programsData);
         setChannelProfiles(profilesData);
         setChannelGroups(groupsData);
