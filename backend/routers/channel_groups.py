@@ -148,66 +148,141 @@ async def update_channel_group(group_id: int, data: dict):
 # Static routes — MUST be defined before /api/channel-groups/{group_id}
 # ---------------------------------------------------------------------------
 
-@router.get("/diagnostic")
-async def diagnose_channel_groups():
-    """Dump everything needed to root-cause Channel Manager group/channel mismatches.
+def build_channel_groups_diagnostic(groups: list[dict], channels: list[dict]) -> dict:
+    """Build the Channel Manager group/channel diagnostic from pre-fetched data.
 
-    Logs at INFO so it appears in default logs. Returns the same payload as JSON
-    so the user can share it directly. Investigates four hypotheses at once:
+    Logs the analysis at INFO under [GROUPS-DIAG] and returns a JSON-serializable
+    dict. Investigates four hypotheses at once:
 
     1. Stale hidden_channel_groups records (IDs reassigned by a server move)
     2. Duplicate channel groups by name in Dispatcharr
     3. Channels whose channel_group_id has no match in /api/channel-groups
     4. Channels with channel_group_id null but a non-null channel_group_name
     """
+    from collections import Counter, defaultdict
+    from models import HiddenChannelGroup
+
     logger.info("[GROUPS-DIAG] === Channel groups diagnostic START ===")
-    client = get_client()
-    try:
-        from collections import Counter, defaultdict
-        from models import HiddenChannelGroup
 
-        # 1) Raw Dispatcharr groups
-        groups = await client.get_channel_groups() or []
-        groups_by_id = {g.get("id"): g for g in groups}
-        logger.info("[GROUPS-DIAG] Dispatcharr returned %s channel groups total", len(groups))
+    groups_by_id = {g.get("id"): g for g in groups}
+    logger.info("[GROUPS-DIAG] Dispatcharr returned %s channel groups total", len(groups))
 
-        # 2) Duplicate names
-        name_counts = Counter(g.get("name") for g in groups)
-        duplicate_names = {n: c for n, c in name_counts.items() if c > 1}
-        if duplicate_names:
-            logger.info("[GROUPS-DIAG] Duplicate group names in Dispatcharr (%s):", len(duplicate_names))
-            for name, count in sorted(duplicate_names.items(), key=lambda x: -x[1]):
-                ids = [g.get("id") for g in groups if g.get("name") == name]
-                logger.info("[GROUPS-DIAG]   %r x%s ids=%s", name, count, ids)
-        else:
-            logger.info("[GROUPS-DIAG] No duplicate group names in Dispatcharr")
+    name_counts = Counter(g.get("name") for g in groups)
+    duplicate_names = {n: c for n, c in name_counts.items() if c > 1}
+    if duplicate_names:
+        logger.info("[GROUPS-DIAG] Duplicate group names in Dispatcharr (%s):", len(duplicate_names))
+        for name, count in sorted(duplicate_names.items(), key=lambda x: -x[1]):
+            ids = [g.get("id") for g in groups if g.get("name") == name]
+            logger.info("[GROUPS-DIAG]   %r x%s ids=%s", name, count, ids)
+    else:
+        logger.info("[GROUPS-DIAG] No duplicate group names in Dispatcharr")
 
-        # 3) Hidden records analysis
-        with get_session() as db:
-            hidden_records = db.query(HiddenChannelGroup).all()
-            hidden_analysis = []
-            for h in hidden_records:
-                live = groups_by_id.get(h.group_id)
-                if live is None:
-                    status = "MISSING_FROM_DISPATCHARR"
-                elif live.get("name") == h.group_name:
-                    status = "VALID"
-                else:
-                    status = "STALE_NAME_MISMATCH"
-                hidden_analysis.append({
-                    "id": h.group_id,
-                    "stored_name": h.group_name,
-                    "live_name": live.get("name") if live else None,
-                    "status": status,
-                })
-        logger.info("[GROUPS-DIAG] hidden_channel_groups records: %s total", len(hidden_analysis))
-        for h in hidden_analysis:
-            logger.info(
-                "[GROUPS-DIAG]   id=%s stored=%r live=%r status=%s",
-                h["id"], h["stored_name"], h["live_name"], h["status"],
+    with get_session() as db:
+        hidden_records = db.query(HiddenChannelGroup).all()
+        hidden_analysis = []
+        for h in hidden_records:
+            live = groups_by_id.get(h.group_id)
+            if live is None:
+                status = "MISSING_FROM_DISPATCHARR"
+            elif live.get("name") == h.group_name:
+                status = "VALID"
+            else:
+                status = "STALE_NAME_MISMATCH"
+            hidden_analysis.append({
+                "id": h.group_id,
+                "stored_name": h.group_name,
+                "live_name": live.get("name") if live else None,
+                "status": status,
+            })
+    logger.info("[GROUPS-DIAG] hidden_channel_groups records: %s total", len(hidden_analysis))
+    for h in hidden_analysis:
+        logger.info(
+            "[GROUPS-DIAG]   id=%s stored=%r live=%r status=%s",
+            h["id"], h["stored_name"], h["live_name"], h["status"],
+        )
+
+    by_group_id: dict = defaultdict(list)
+    null_id_with_name: list[dict] = []
+    orphaned: list[dict] = []
+    for ch in channels:
+        gid = ch.get("channel_group_id")
+        gname = ch.get("channel_group_name")
+        entry = {"id": ch.get("id"), "name": ch.get("name"), "channel_number": ch.get("channel_number"), "channel_group_name": gname}
+        if gid is None:
+            if gname:
+                null_id_with_name.append(entry)
+            continue
+        by_group_id[gid].append(entry)
+        if gid not in groups_by_id:
+            orphaned.append({**entry, "channel_group_id": gid})
+
+    logger.info("[GROUPS-DIAG] Channels indexed by channel_group_id: %s distinct ids", len(by_group_id))
+    for gid, chans in sorted(by_group_id.items(), key=lambda x: -len(x[1])):
+        live_name = groups_by_id.get(gid, {}).get("name", "<NOT IN /api/channel-groups>")
+        sample = [f"#{c['channel_number']} {c['name']}" for c in chans[:3]]
+        logger.info("[GROUPS-DIAG]   gid=%s name=%r count=%s sample=%s", gid, live_name, len(chans), sample)
+
+    if orphaned:
+        logger.warning("[GROUPS-DIAG] %s channels reference a channel_group_id NOT in /api/channel-groups:", len(orphaned))
+        for o in orphaned[:30]:
+            logger.warning(
+                "[GROUPS-DIAG]   channel id=%s #%s %r -> gid=%s (group_name from Dispatcharr=%r)",
+                o["id"], o["channel_number"], o["name"], o["channel_group_id"], o["channel_group_name"],
+            )
+    else:
+        logger.info("[GROUPS-DIAG] No orphaned channel_group_id references")
+
+    if null_id_with_name:
+        logger.warning(
+            "[GROUPS-DIAG] %s channels have channel_group_id=null but channel_group_name is set "
+            "(Dispatcharr denormalization quirk):", len(null_id_with_name),
+        )
+        for n in null_id_with_name[:20]:
+            logger.warning(
+                "[GROUPS-DIAG]   channel id=%s #%s %r group_name=%r",
+                n["id"], n["channel_number"], n["name"], n["channel_group_name"],
             )
 
-        # 4) Walk all channels and build group_id -> [channels] map
+    by_group_name: dict = defaultdict(list)
+    for ch in channels:
+        gname = ch.get("channel_group_name")
+        if gname:
+            by_group_name[gname].append(ch.get("id"))
+    logger.info("[GROUPS-DIAG] Channels indexed by channel_group_name: %s distinct names", len(by_group_name))
+
+    logger.info("[GROUPS-DIAG] === Channel groups diagnostic END ===")
+
+    return {
+        "dispatcharr_group_count": len(groups),
+        "duplicate_group_names": duplicate_names,
+        "hidden_records": hidden_analysis,
+        "channel_count": len(channels),
+        "channels_by_group_id": {
+            str(gid): {
+                "live_name": groups_by_id.get(gid, {}).get("name"),
+                "count": len(chans),
+                "sample": [f"#{c['channel_number']} {c['name']}" for c in chans[:3]],
+            }
+            for gid, chans in by_group_id.items()
+        },
+        "channels_by_group_name_count": {n: len(ids) for n, ids in by_group_name.items()},
+        "orphaned_channel_group_id_count": len(orphaned),
+        "orphaned_sample": orphaned[:30],
+        "null_id_with_name_count": len(null_id_with_name),
+        "null_id_with_name_sample": null_id_with_name[:20],
+    }
+
+
+@router.get("/diagnostic")
+async def diagnose_channel_groups():
+    """Run the Channel Manager group/channel diagnostic and return JSON.
+
+    Also called by the debug bundle generator to write channel_groups_diagnostic.json.
+    """
+    client = get_client()
+    try:
+        groups = await client.get_channel_groups() or []
+
         channels: list[dict] = []
         page = 1
         while True:
@@ -220,79 +295,8 @@ async def diagnose_channel_groups():
             if page > 50:
                 logger.warning("[GROUPS-DIAG] Pagination safety stop at page 50")
                 break
-        logger.info("[GROUPS-DIAG] Walked %s channels across %s page(s)", len(channels), page)
 
-        by_group_id: dict = defaultdict(list)
-        null_id_with_name: list[dict] = []
-        orphaned: list[dict] = []
-        for ch in channels:
-            gid = ch.get("channel_group_id")
-            gname = ch.get("channel_group_name")
-            entry = {"id": ch.get("id"), "name": ch.get("name"), "channel_number": ch.get("channel_number"), "channel_group_name": gname}
-            if gid is None:
-                if gname:
-                    null_id_with_name.append(entry)
-                continue
-            by_group_id[gid].append(entry)
-            if gid not in groups_by_id:
-                orphaned.append({**entry, "channel_group_id": gid})
-
-        logger.info("[GROUPS-DIAG] Channels indexed by channel_group_id: %s distinct ids", len(by_group_id))
-        for gid, chans in sorted(by_group_id.items(), key=lambda x: -len(x[1])):
-            live_name = groups_by_id.get(gid, {}).get("name", "<NOT IN /api/channel-groups>")
-            sample = [f"#{c['channel_number']} {c['name']}" for c in chans[:3]]
-            logger.info("[GROUPS-DIAG]   gid=%s name=%r count=%s sample=%s", gid, live_name, len(chans), sample)
-
-        if orphaned:
-            logger.warning("[GROUPS-DIAG] %s channels reference a channel_group_id NOT in /api/channel-groups:", len(orphaned))
-            for o in orphaned[:30]:
-                logger.warning(
-                    "[GROUPS-DIAG]   channel id=%s #%s %r -> gid=%s (group_name from Dispatcharr=%r)",
-                    o["id"], o["channel_number"], o["name"], o["channel_group_id"], o["channel_group_name"],
-                )
-        else:
-            logger.info("[GROUPS-DIAG] No orphaned channel_group_id references")
-
-        if null_id_with_name:
-            logger.warning(
-                "[GROUPS-DIAG] %s channels have channel_group_id=null but channel_group_name is set "
-                "(Dispatcharr denormalization quirk):", len(null_id_with_name),
-            )
-            for n in null_id_with_name[:20]:
-                logger.warning(
-                    "[GROUPS-DIAG]   channel id=%s #%s %r group_name=%r",
-                    n["id"], n["channel_number"], n["name"], n["channel_group_name"],
-                )
-
-        # Group channels by NAME for cross-check (e.g. all "My Teams" channels regardless of which dup id they point at)
-        by_group_name: dict = defaultdict(list)
-        for ch in channels:
-            gname = ch.get("channel_group_name")
-            if gname:
-                by_group_name[gname].append(ch.get("id"))
-        logger.info("[GROUPS-DIAG] Channels indexed by channel_group_name: %s distinct names", len(by_group_name))
-
-        logger.info("[GROUPS-DIAG] === Channel groups diagnostic END ===")
-
-        return {
-            "dispatcharr_group_count": len(groups),
-            "duplicate_group_names": duplicate_names,
-            "hidden_records": hidden_analysis,
-            "channel_count": len(channels),
-            "channels_by_group_id": {
-                str(gid): {
-                    "live_name": groups_by_id.get(gid, {}).get("name"),
-                    "count": len(chans),
-                    "sample": [f"#{c['channel_number']} {c['name']}" for c in chans[:3]],
-                }
-                for gid, chans in by_group_id.items()
-            },
-            "channels_by_group_name_count": {n: len(ids) for n, ids in by_group_name.items()},
-            "orphaned_channel_group_id_count": len(orphaned),
-            "orphaned_sample": orphaned[:30],
-            "null_id_with_name_count": len(null_id_with_name),
-            "null_id_with_name_sample": null_id_with_name[:20],
-        }
+        return build_channel_groups_diagnostic(groups, channels)
     except Exception as e:
         logger.exception("[GROUPS-DIAG] Diagnostic failed: %s", e)
         raise HTTPException(status_code=500, detail="Diagnostic failed: %s" % str(e))

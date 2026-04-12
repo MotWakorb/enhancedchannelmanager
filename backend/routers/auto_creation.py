@@ -1367,7 +1367,17 @@ async def generate_debug_bundle():
             sched_session.close()
         task_schedules_str = json.dumps(schedules_data, indent=2)
 
-        # -- 7. logs.txt — recent logs, obfuscated -----------------------
+        # -- 7. channel_groups_diagnostic.json — Channel Manager mismatch diagnosis
+        # Run BEFORE logs.txt is captured so [GROUPS-DIAG] lines land in the log dump too.
+        from routers.channel_groups import build_channel_groups_diagnostic
+        try:
+            cg_diagnostic = build_channel_groups_diagnostic(groups, all_channels)
+            cg_diagnostic_str = json.dumps(cg_diagnostic, indent=2, default=str)
+        except Exception as e:
+            logger.warning("[AUTO-CREATE] Debug bundle: channel groups diagnostic failed: %s", e)
+            cg_diagnostic_str = json.dumps({"error": str(e)})
+
+        # -- 8. logs.txt — recent logs, obfuscated -----------------------
         log_lines = get_recent_logs()
         obfuscated_lines = [obfuscate_text(line) for line in log_lines]
         logs_text = "\n".join(obfuscated_lines)
@@ -1405,6 +1415,7 @@ async def generate_debug_bundle():
             _add_tar_entry(tf, "rules.yaml", yaml_content)
             _add_tar_entry(tf, "settings.json", settings_json_str)
             _add_tar_entry(tf, "task_schedules.json", task_schedules_str)
+            _add_tar_entry(tf, "channel_groups_diagnostic.json", cg_diagnostic_str)
             _add_tar_entry(tf, "logs.txt", logs_text)
             _add_tar_entry(tf, "manifest.json", manifest_str)
         buf.seek(0)
