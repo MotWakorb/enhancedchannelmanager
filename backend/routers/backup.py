@@ -1046,22 +1046,30 @@ async def _restore_epg_sources(items: list) -> dict:
 
 
 async def _restore_channel_groups(items: list) -> dict:
-    """Delete all channel groups and recreate from YAML via Dispatcharr API."""
+    """Upsert channel groups by name via Dispatcharr API.
+
+    Channel groups are referenced by ID from channels and streams. Deleting and
+    recreating them would orphan those references, so we only create groups that
+    don't already exist (matched by name) and leave existing groups intact.
+    """
     client = get_client()
     if not client:
         return {"warnings": ["Dispatcharr not connected — skipped channel groups restore"]}
     warnings = []
     existing = await client.get_channel_groups() or []
-    for grp in existing:
-        try:
-            await client.delete_channel_group(grp["id"])
-        except Exception as e:
-            warnings.append("Failed to delete channel group %s: %s" % (grp.get("name"), e))
+    existing_names = {g.get("name") for g in existing}
+    created = 0
     for item in items:
+        name = item.get("name")
+        if not name or name in existing_names:
+            continue
         try:
-            await client.create_channel_group(item["name"])
+            await client.create_channel_group(name)
+            existing_names.add(name)
+            created += 1
         except Exception as e:
-            warnings.append("Failed to create channel group %s: %s" % (item.get("name"), e))
+            warnings.append("Failed to create channel group %s: %s" % (name, e))
+    logger.info("[BACKUP] Channel groups restore: created %d new groups, kept %d existing", created, len(existing))
     return {"warnings": warnings}
 
 

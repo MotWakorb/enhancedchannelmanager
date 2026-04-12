@@ -61,6 +61,35 @@ class TestGetChannelGroups:
         assert data[0]["name"] == "Sports"
 
     @pytest.mark.asyncio
+    async def test_prunes_stale_hidden_records_after_id_reassignment(self, async_client, test_session):
+        """A hidden_channel_groups record whose stored name no longer matches
+        Dispatcharr's current group at that ID is stale (e.g. after moving to
+        a new Dispatcharr server) — it must be pruned and the live group must
+        be returned, not filtered out."""
+        # Old server hid group ID 2 named "News".
+        # On the new server, ID 2 belongs to "My Teams" instead.
+        _create_hidden_group(test_session, group_id=2, group_name="News")
+
+        mock_client = AsyncMock()
+        mock_client.get_channel_groups.return_value = [
+            {"id": 1, "name": "Sports"},
+            {"id": 2, "name": "My Teams"},
+        ]
+        mock_client.get_all_m3u_group_settings.return_value = {}
+
+        with patch("routers.channel_groups.get_client", return_value=mock_client):
+            response = await async_client.get("/api/channel-groups")
+
+        assert response.status_code == 200
+        data = response.json()
+        names = sorted(g["name"] for g in data)
+        assert names == ["My Teams", "Sports"]
+
+        # Stale record was pruned from the DB.
+        test_session.expire_all()
+        assert test_session.query(HiddenChannelGroup).filter_by(group_id=2).first() is None
+
+    @pytest.mark.asyncio
     async def test_adds_auto_sync_flag(self, async_client, test_session):
         """Adds is_auto_sync flag to groups with auto_channel_sync."""
         mock_client = AsyncMock()

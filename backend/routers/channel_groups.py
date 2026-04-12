@@ -48,11 +48,34 @@ async def get_channel_groups():
         start = time.time()
         groups = await client.get_channel_groups()
 
-        # Filter out hidden groups
+        # Filter out hidden groups, but validate the stored name still matches
+        # Dispatcharr's current name for that ID. After moving to a new
+        # Dispatcharr instance (or restoring an ECM backup against a fresh
+        # Dispatcharr), the numeric IDs in hidden_channel_groups can collide
+        # with unrelated groups on the new server. Auto-prune stale records.
         from models import HiddenChannelGroup
 
+        groups_by_id = {g.get("id"): g for g in groups}
         with get_session() as db:
-            hidden_ids = {h.group_id for h in db.query(HiddenChannelGroup).all()}
+            hidden_records = db.query(HiddenChannelGroup).all()
+            valid_hidden_ids: set[int] = set()
+            stale_to_delete: list[HiddenChannelGroup] = []
+            for h in hidden_records:
+                live = groups_by_id.get(h.group_id)
+                if live is not None and live.get("name") == h.group_name:
+                    valid_hidden_ids.add(h.group_id)
+                else:
+                    stale_to_delete.append(h)
+            if stale_to_delete:
+                logger.warning(
+                    "[GROUPS] Pruning %s stale hidden_channel_groups records "
+                    "(IDs reassigned by Dispatcharr or no longer present): %s",
+                    len(stale_to_delete),
+                    [(h.group_id, h.group_name) for h in stale_to_delete],
+                )
+                for h in stale_to_delete:
+                    db.delete(h)
+                db.commit()
 
         # Get M3U group settings to identify auto-sync groups
         m3u_group_settings = await client.get_all_m3u_group_settings()
@@ -64,7 +87,7 @@ async def get_channel_groups():
         # Return groups with is_auto_sync flag, filtered by hidden status
         result = []
         for g in groups:
-            if g.get("id") not in hidden_ids:
+            if g.get("id") not in valid_hidden_ids:
                 group_data = dict(g)
                 group_data["is_auto_sync"] = g.get("id") in auto_sync_group_ids
                 result.append(group_data)
