@@ -806,6 +806,7 @@ export interface SettingsResponse {
   skip_recently_probed_hours: number;  // Skip streams probed within last N hours (0 = always probe)
   refresh_m3us_before_probe: boolean;  // Refresh all M3U accounts before starting probe
   auto_reorder_after_probe: boolean;  // Automatically reorder streams in channels after probe completes
+  push_stream_stats_to_dispatcharr: boolean;  // Push probe stats back to Dispatcharr after probe
   probe_retry_count: number;   // Retries on transient ffprobe failure (0 = no retry, max 5)
   probe_retry_delay: number;   // Seconds between retries (1-30)
   stream_fetch_page_limit: number;  // Max pages when fetching streams (pages * 500 = max streams)
@@ -895,6 +896,7 @@ export async function saveSettings(settings: {
   skip_recently_probed_hours?: number;  // Optional - skip streams probed within last N hours, defaults to 0 (always probe)
   refresh_m3us_before_probe?: boolean;  // Optional - refresh all M3U accounts before starting probe, defaults to true
   auto_reorder_after_probe?: boolean;  // Optional - automatically reorder streams after probe, defaults to false
+  push_stream_stats_to_dispatcharr?: boolean;  // Optional - reflect probe stats to Dispatcharr, defaults to false
   probe_retry_count?: number;   // Optional - retries on transient ffprobe failure (0 = no retry, max 5), defaults to 1
   probe_retry_delay?: number;   // Optional - seconds between retries (1-30), defaults to 2
   stream_fetch_page_limit?: number;  // Optional - max pages when fetching streams, defaults to 200 (100K streams)

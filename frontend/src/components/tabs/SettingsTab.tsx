@@ -437,6 +437,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [skipRecentlyProbedHours, setSkipRecentlyProbedHours] = useState(0);
   const [refreshM3usBeforeProbe, setRefreshM3usBeforeProbe] = useState(true);
   const [autoReorderAfterProbe, setAutoReorderAfterProbe] = useState(false);
+  const [pushStreamStatsToDispatcharr, setPushStreamStatsToDispatcharr] = useState(false);
   const [probeRetryCount, setProbeRetryCount] = useState(1);
   const [probeRetryDelay, setProbeRetryDelay] = useState(2);
   const [blackScreenDetectionEnabled, setBlackScreenDetectionEnabled] = useState(false);
@@ -756,6 +757,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setOriginalRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
       setAutoReorderAfterProbe(settings.auto_reorder_after_probe ?? false);
       setOriginalAutoReorder(settings.auto_reorder_after_probe ?? false);
+      setPushStreamStatsToDispatcharr(settings.push_stream_stats_to_dispatcharr ?? false);
       setProbeRetryCount(settings.probe_retry_count ?? 1);
       setProbeRetryDelay(settings.probe_retry_delay ?? 2);
       setBlackScreenDetectionEnabled(settings.black_screen_detection_enabled ?? false);
@@ -883,6 +885,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         skip_recently_probed_hours: skipRecentlyProbedHours,
         refresh_m3us_before_probe: refreshM3usBeforeProbe,
         auto_reorder_after_probe: autoReorderAfterProbe,
+        push_stream_stats_to_dispatcharr: pushStreamStatsToDispatcharr,
         probe_retry_count: probeRetryCount,
         probe_retry_delay: probeRetryDelay,
         black_screen_detection_enabled: blackScreenDetectionEnabled,
@@ -3408,6 +3411,22 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               <span className="form-description">
                 When enabled, streams within channels will be automatically reordered using smart sort after probe completes.
                 Failed streams are deprioritized, and working streams are sorted by resolution, bitrate, and framerate.
+              </span>
+            </div>
+
+            <div className="form-group-vertical">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={pushStreamStatsToDispatcharr}
+                  onChange={(e) => setPushStreamStatsToDispatcharr(e.target.checked)}
+                />
+                Reflect stream stats to Dispatcharr
+              </label>
+              <span className="form-description">
+                After each successful probe, push resolution, codec, fps, and bitrate back to
+                Dispatcharr so its UI shows them without needing playback. Existing keys set by
+                Dispatcharr are preserved.
               </span>
             </div>
 

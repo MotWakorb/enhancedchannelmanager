@@ -850,9 +850,13 @@ class StreamProber:
                 is_black = await self._detect_black_screen(url)
 
             # Save probe result with both ffprobe metadata and measured bitrate
-            return self._save_probe_result(
+            saved = self._save_probe_result(
                 stream_id, name, result, "success", None, measured_bitrate, is_black
             )
+            # Optionally reflect stats back to Dispatcharr. Fire-and-forget semantics:
+            # any failure is logged but never fails the probe.
+            await self._push_stats_to_dispatcharr(stream_id, saved)
+            return saved
         except asyncio.TimeoutError:
             logger.warning("[STREAM-PROBE] Stream %s probe timed out after %ss", stream_id, self.probe_timeout)
             return self._save_probe_result(
@@ -1091,6 +1095,72 @@ class StreamProber:
             raise
         finally:
             session.close()
+
+    async def _push_stats_to_dispatcharr(self, stream_id: int, ecm_stats: dict) -> None:
+        """Reflect ECM probe stats back to Dispatcharr via PATCH.
+
+        Reads the `push_stream_stats_to_dispatcharr` setting at call time so
+        toggling it takes effect without restarting the prober. On any failure,
+        logs and returns — probing is never blocked by this.
+
+        GET-then-merge-then-PATCH preserves keys Dispatcharr wrote itself
+        (e.g. pixel_format, audio_bitrate from playback) that ECM doesn't know.
+        """
+        try:
+            from config import get_settings
+            if not get_settings().push_stream_stats_to_dispatcharr:
+                return
+            if ecm_stats.get("probe_status") != "success":
+                return
+
+            # Build the payload in Dispatcharr's schema. ECM's "fps" is "source_fps"
+            # in Dispatcharr. Omit None values so we don't blank out real data on merge.
+            mapped: dict = {}
+            if ecm_stats.get("resolution") is not None:
+                mapped["resolution"] = ecm_stats["resolution"]
+            if ecm_stats.get("video_codec") is not None:
+                mapped["video_codec"] = ecm_stats["video_codec"]
+            if ecm_stats.get("audio_codec") is not None:
+                mapped["audio_codec"] = ecm_stats["audio_codec"]
+            if ecm_stats.get("audio_channels") is not None:
+                mapped["audio_channels"] = ecm_stats["audio_channels"]
+            if ecm_stats.get("video_bitrate") is not None:
+                mapped["video_bitrate"] = ecm_stats["video_bitrate"]
+            if ecm_stats.get("fps") is not None:
+                mapped["source_fps"] = ecm_stats["fps"]
+            if ecm_stats.get("stream_type") is not None:
+                mapped["stream_type"] = ecm_stats["stream_type"]
+
+            if not mapped:
+                logger.debug("[STREAM-PROBE] No stats to push for stream %s", stream_id)
+                return
+
+            # Read existing stream_stats so we merge instead of replace.
+            try:
+                existing = await self.client.get_stream(stream_id)
+            except Exception as e:
+                logger.warning(
+                    "[STREAM-PROBE] Could not fetch stream %s for stats push (skipping): %s",
+                    stream_id, e,
+                )
+                return
+
+            merged = dict(existing.get("stream_stats") or {})
+            merged.update(mapped)
+
+            await self.client.update_stream(stream_id, {
+                "stream_stats": merged,
+                "stream_stats_updated_at": datetime.utcnow().isoformat() + "Z",
+            })
+            logger.info(
+                "[STREAM-PROBE] Pushed stream_stats to Dispatcharr for stream %s (keys=%s)",
+                stream_id, sorted(mapped.keys()),
+            )
+        except Exception as e:
+            logger.warning(
+                "[STREAM-PROBE] Failed to push stream_stats to Dispatcharr for stream %s: %s",
+                stream_id, e,
+            )
 
     def _parse_ffprobe_data(self, stats: StreamStats, data: dict):
         """Extract relevant fields from ffprobe JSON output."""

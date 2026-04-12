@@ -286,6 +286,14 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
+    async def update_stream(self, stream_id: int, data: dict) -> dict:
+        """PATCH a stream by ID. Used to reflect ECM probe stats back to Dispatcharr."""
+        response = await self._request(
+            "PATCH", f"/api/channels/streams/{stream_id}/", json=data
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def get_streams_by_ids(self, ids: list[int]) -> list:
         """Get multiple streams by IDs."""
         response = await self._request(
