@@ -75,6 +75,7 @@ class SettingsRequest(BaseModel):
     skip_recently_probed_hours: int = 0  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool = True  # Refresh all M3U accounts before starting probe
     auto_reorder_after_probe: bool = False  # Automatically reorder streams in channels after probe completes
+    push_stream_stats_to_dispatcharr: bool = False  # Reflect probe stats back to Dispatcharr after each probe
     probe_retry_count: int = 1  # Retries on transient ffprobe failure (0 = no retry, max 5)
     probe_retry_delay: int = 2  # Seconds between retries (1-30)
     stream_fetch_page_limit: int = 200  # Max pages when fetching streams (200 pages * 500 = 100K streams)
@@ -148,6 +149,7 @@ class SettingsResponse(BaseModel):
     skip_recently_probed_hours: int  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool  # Refresh all M3U accounts before starting probe
     auto_reorder_after_probe: bool  # Automatically reorder streams in channels after probe completes
+    push_stream_stats_to_dispatcharr: bool  # Reflect probe stats back to Dispatcharr after each probe
     probe_retry_count: int  # Retries on transient ffprobe failure (0 = no retry, max 5)
     probe_retry_delay: int  # Seconds between retries (1-30)
     stream_fetch_page_limit: int  # Max pages when fetching streams (200 pages * 500 = 100K streams)
@@ -274,6 +276,7 @@ async def get_current_settings():
         skip_recently_probed_hours=settings.skip_recently_probed_hours,
         refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
         auto_reorder_after_probe=settings.auto_reorder_after_probe,
+        push_stream_stats_to_dispatcharr=settings.push_stream_stats_to_dispatcharr,
         probe_retry_count=settings.probe_retry_count,
         probe_retry_delay=settings.probe_retry_delay,
         stream_fetch_page_limit=settings.stream_fetch_page_limit,
@@ -379,6 +382,7 @@ async def update_settings(request: SettingsRequest):
         skip_recently_probed_hours=request.skip_recently_probed_hours,
         refresh_m3us_before_probe=request.refresh_m3us_before_probe,
         auto_reorder_after_probe=request.auto_reorder_after_probe,
+        push_stream_stats_to_dispatcharr=request.push_stream_stats_to_dispatcharr,
         probe_retry_count=request.probe_retry_count,
         probe_retry_delay=request.probe_retry_delay,
         stream_fetch_page_limit=request.stream_fetch_page_limit,
