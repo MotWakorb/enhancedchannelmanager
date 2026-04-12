@@ -294,6 +294,8 @@ interface PaneToolbarMenuProps {
   bulkLCNLoading: boolean;
   bulkLogoLoading: boolean;
   probingChannels: boolean;
+  channelProfiles: ChannelProfile[];
+  onBulkAssignProfile: (profileId: number, enable: boolean) => void;
 }
 
 const PaneToolbarMenu = memo(function PaneToolbarMenu({
@@ -320,10 +322,14 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
   bulkLCNLoading,
   bulkLogoLoading,
   probingChannels,
+  channelProfiles,
+  onBulkAssignProfile,
 }: PaneToolbarMenuProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [sortSubMenuOpen, setSortSubMenuOpen] = useState(false);
   const [sortSelectedSubMenuOpen, setSortSelectedSubMenuOpen] = useState(false);
+  const [enableProfileSubMenuOpen, setEnableProfileSubMenuOpen] = useState(false);
+  const [disableProfileSubMenuOpen, setDisableProfileSubMenuOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -342,6 +348,8 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
         setMenuOpen(false);
         setSortSubMenuOpen(false);
         setSortSelectedSubMenuOpen(false);
+        setEnableProfileSubMenuOpen(false);
+        setDisableProfileSubMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -352,6 +360,8 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
     setMenuOpen(false);
     setSortSubMenuOpen(false);
     setSortSelectedSubMenuOpen(false);
+    setEnableProfileSubMenuOpen(false);
+    setDisableProfileSubMenuOpen(false);
   };
 
   const handleSortAllClick = (mode: SortMode) => {
@@ -602,6 +612,69 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
                 </span>
                 <span>Probe Streams</span>
               </button>
+
+              {channelProfiles.length > 0 && (
+                <>
+                  <button
+                    className={`pane-toolbar-menu-item has-submenu ${enableProfileSubMenuOpen ? 'submenu-open' : ''}`}
+                    onClick={() => {
+                      setEnableProfileSubMenuOpen(!enableProfileSubMenuOpen);
+                      setDisableProfileSubMenuOpen(false);
+                      setSortSubMenuOpen(false);
+                      setSortSelectedSubMenuOpen(false);
+                    }}
+                  >
+                    <span className="material-icons">visibility</span>
+                    <span>Enable in Profile</span>
+                    <span className="material-icons submenu-arrow">
+                      {enableProfileSubMenuOpen ? 'expand_less' : 'expand_more'}
+                    </span>
+                  </button>
+                  {enableProfileSubMenuOpen && (
+                    <div className="pane-toolbar-menu-submenu">
+                      {channelProfiles.map(profile => (
+                        <button
+                          key={profile.id}
+                          className="pane-toolbar-menu-item submenu-item"
+                          onClick={() => { close(); onBulkAssignProfile(profile.id, true); }}
+                        >
+                          <span className="material-icons">group</span>
+                          <span>{profile.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <button
+                    className={`pane-toolbar-menu-item has-submenu ${disableProfileSubMenuOpen ? 'submenu-open' : ''}`}
+                    onClick={() => {
+                      setDisableProfileSubMenuOpen(!disableProfileSubMenuOpen);
+                      setEnableProfileSubMenuOpen(false);
+                      setSortSubMenuOpen(false);
+                      setSortSelectedSubMenuOpen(false);
+                    }}
+                  >
+                    <span className="material-icons">visibility_off</span>
+                    <span>Disable in Profile</span>
+                    <span className="material-icons submenu-arrow">
+                      {disableProfileSubMenuOpen ? 'expand_less' : 'expand_more'}
+                    </span>
+                  </button>
+                  {disableProfileSubMenuOpen && (
+                    <div className="pane-toolbar-menu-submenu">
+                      {channelProfiles.map(profile => (
+                        <button
+                          key={profile.id}
+                          className="pane-toolbar-menu-item submenu-item"
+                          onClick={() => { close(); onBulkAssignProfile(profile.id, false); }}
+                        >
+                          <span className="material-icons">group</span>
+                          <span>{profile.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
             </>
           )}
         </div>,
@@ -1179,7 +1252,6 @@ export function ChannelsPane({
   // These props are no longer used directly since channel creation is routed to bulk create modal
   void onCreateChannel;
   void onStageAddStream;
-  void channelProfiles;
   const [expandedGroups, setExpandedGroups] = useState<GroupState>({});
   const [groupOrder, setGroupOrder] = useState<number[]>([]); // Custom order for groups
   const [dragOverChannelId, setDragOverChannelId] = useState<number | null>(null);
@@ -1922,6 +1994,51 @@ export function ChannelsPane({
     createGroupModal.open();
     setNewGroupName('');
   };
+
+  const handleBulkAssignProfile = useCallback(async (
+    profileId: number,
+    channelIds: number[],
+    enable: boolean,
+  ) => {
+    const profile = channelProfiles.find(p => p.id === profileId);
+    if (!profile || channelIds.length === 0) return;
+
+    const verb = enable ? 'Enabling' : 'Disabling';
+    notifications.info(
+      `${verb} ${channelIds.length} channel${channelIds.length !== 1 ? 's' : ''} in profile "${profile.name}"...`,
+      'Channel Profile',
+    );
+
+    const BATCH_SIZE = 10;
+    let succeeded = 0;
+    let failed = 0;
+    for (let i = 0; i < channelIds.length; i += BATCH_SIZE) {
+      const batch = channelIds.slice(i, i + BATCH_SIZE);
+      const results = await Promise.allSettled(
+        batch.map(chId => api.updateProfileChannel(profileId, chId, { enabled: enable })),
+      );
+      for (const r of results) {
+        if (r.status === 'fulfilled') succeeded++;
+        else failed++;
+      }
+    }
+
+    if (failed === 0) {
+      notifications.success(
+        `${enable ? 'Enabled' : 'Disabled'} ${succeeded} channel${succeeded !== 1 ? 's' : ''} in profile "${profile.name}"`,
+        'Channel Profile',
+      );
+    } else {
+      notifications.error(
+        `${enable ? 'Enabled' : 'Disabled'} ${succeeded}, ${failed} failed in profile "${profile.name}"`,
+        'Channel Profile',
+      );
+    }
+
+    if (onChannelProfilesChange) {
+      await onChannelProfilesChange();
+    }
+  }, [channelProfiles, notifications, onChannelProfilesChange]);
 
   // Handle context menu on group header (when entire group is selected)
   const handleGroupContextMenu = (groupChannelIds: number[], e: React.MouseEvent) => {
@@ -5388,6 +5505,10 @@ export function ChannelsPane({
             bulkLCNLoading={bulkLCNLoading}
             bulkLogoLoading={bulkLogoLoading}
             probingChannels={probingChannels.size > 0}
+            channelProfiles={channelProfiles}
+            onBulkAssignProfile={(profileId, enable) =>
+              handleBulkAssignProfile(profileId, Array.from(selectedChannelIds), enable)
+            }
           />
         </div>
       </div>
@@ -7111,6 +7232,49 @@ export function ChannelsPane({
             <div className="context-menu-item" onClick={handleCreateGroupAndMove}>
               Create new group and move
             </div>
+            {channelProfiles.length > 0 && (() => {
+              const renderProfileSubmenu = (enable: boolean) => {
+                const submenu = document.createElement('div');
+                submenu.className = 'context-menu-submenu';
+                submenu.style.position = 'fixed';
+                submenu.style.top = `${contextMenu.y}px`;
+                submenu.style.left = `${contextMenu.x + 200}px`;
+
+                const channelIds = contextMenu.metadata.channelIds;
+                channelProfiles.forEach(profile => {
+                  const option = document.createElement('div');
+                  option.className = 'context-menu-item';
+                  option.textContent = profile.name;
+                  option.onclick = () => {
+                    handleBulkAssignProfile(profile.id, channelIds, enable);
+                    if (submenu.parentNode) document.body.removeChild(submenu);
+                    hideContextMenu();
+                  };
+                  submenu.appendChild(option);
+                });
+
+                document.body.appendChild(submenu);
+
+                const closeSubmenu = (e: MouseEvent) => {
+                  if (!submenu.contains(e.target as Node)) {
+                    if (submenu.parentNode) document.body.removeChild(submenu);
+                    document.removeEventListener('mousedown', closeSubmenu);
+                  }
+                };
+                setTimeout(() => document.addEventListener('mousedown', closeSubmenu), 0);
+              };
+
+              return (
+                <>
+                  <div className="context-menu-item" onClick={() => renderProfileSubmenu(true)}>
+                    Enable in profile... <span className="context-menu-arrow">▶</span>
+                  </div>
+                  <div className="context-menu-item" onClick={() => renderProfileSubmenu(false)}>
+                    Disable in profile... <span className="context-menu-arrow">▶</span>
+                  </div>
+                </>
+              );
+            })()}
             {contextMenu.metadata.channelIds.length >= 2 && (
               <div className="context-menu-item" onClick={() => {
                 setMergeChannelIds(contextMenu.metadata.channelIds);
