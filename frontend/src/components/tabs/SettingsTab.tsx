@@ -365,6 +365,31 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // Log level settings
   const [backendLogLevel, setBackendLogLevel] = useState('INFO');
   const [frontendLogLevel, setFrontendLogLevel] = useState('INFO');
+  const [debugBundleLoading, setDebugBundleLoading] = useState(false);
+
+  const handleDownloadDebugBundle = async () => {
+    setDebugBundleLoading(true);
+    try {
+      const response = await fetch('/api/auto-creation/debug-bundle', { credentials: 'include' });
+      if (!response.ok) throw new Error('Failed to generate debug bundle');
+      const blob = await response.blob();
+      const disposition = response.headers.get('Content-Disposition');
+      const filename = disposition?.match(/filename="(.+)"/)?.[1] || 'ecm-debug-bundle.tar.gz';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      notifications.success('Debug bundle downloaded', 'Logging');
+    } catch (err) {
+      notifications.error(err instanceof Error ? err.message : 'Failed to generate debug bundle', 'Logging');
+    } finally {
+      setDebugBundleLoading(false);
+    }
+  };
 
   // Auto-creation exclusion settings
   const [autoCreationExcludedTerms, setAutoCreationExcludedTerms] = useState<string[]>([]);
@@ -1578,6 +1603,24 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               { value: 'ERROR', label: 'ERROR - Show errors only' },
             ]}
           />
+        </div>
+
+        <div className="form-group-vertical">
+          <label>Debug Bundle</label>
+          <span className="form-description">
+            Download a tar.gz containing channels, rules, settings, recent logs, and a
+            channel groups diagnostic. Sensitive fields (URLs, passwords, tokens) are redacted.
+            Share this when reporting issues.
+          </span>
+          <button
+            className="btn-secondary"
+            onClick={handleDownloadDebugBundle}
+            disabled={debugBundleLoading}
+            style={{ alignSelf: 'flex-start' }}
+          >
+            <span className="material-icons">{debugBundleLoading ? 'hourglass_empty' : 'bug_report'}</span>
+            {debugBundleLoading ? 'Generating...' : 'Generate Debug Bundle'}
+          </button>
         </div>
       </div>
 
