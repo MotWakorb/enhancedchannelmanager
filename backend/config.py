@@ -100,6 +100,10 @@ class DispatcharrSettings(BaseModel):
     refresh_m3us_before_probe: bool = True
     # Automatically reorder streams in channels after probe completes
     auto_reorder_after_probe: bool = False
+    # Reflect probe stats back to Dispatcharr via PATCH /api/channels/streams/{id}/
+    # so Dispatcharr's UI shows resolution/codec/fps without requiring playback.
+    # Uses GET-then-merge-then-PATCH to avoid clobbering keys Dispatcharr wrote itself.
+    push_stream_stats_to_dispatcharr: bool = False
     # Probe retry settings for transient ffprobe failures
     probe_retry_count: int = 1  # Number of retries when ffprobe fails but HTTP returns 200 (0 = no retry)
     probe_retry_delay: int = 2  # Seconds to wait between retries
