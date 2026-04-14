@@ -287,6 +287,7 @@ interface PaneToolbarMenuProps {
   onRenumber: () => void;
   onRenumberAllGroups: () => void;
   onSetLogoFromM3U: () => void;
+  onSetLogoFromEPG: () => void;
   onSortSelectedByMode: (mode: SortMode) => void;
   onProbe: () => void;
   hasSelection: boolean;
@@ -315,6 +316,7 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
   onRenumber,
   onRenumberAllGroups,
   onSetLogoFromM3U,
+  onSetLogoFromEPG,
   onSortSelectedByMode,
   onProbe,
   hasSelection,
@@ -543,6 +545,16 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
                   {bulkLogoLoading ? 'sync' : 'image'}
                 </span>
                 <span>Set Logo from M3U</span>
+              </button>
+              <button
+                className={`pane-toolbar-menu-item ${bulkLogoLoading ? 'loading' : ''}`}
+                onClick={() => !bulkLogoLoading && (() => { close(); onSetLogoFromEPG(); })()}
+                disabled={bulkLogoLoading}
+              >
+                <span className={`material-icons ${bulkLogoLoading ? 'spinning' : ''}`}>
+                  {bulkLogoLoading ? 'sync' : 'image'}
+                </span>
+                <span>Set Logo from EPG</span>
               </button>
 
               {/* Sort Selected Streams submenu */}
@@ -1762,6 +1774,58 @@ export function ChannelsPane({
       setBulkLogoLoading(false);
     }
   }, [selectedChannelIds, channels, notifications, onChannelsChange, onLogosChange]);
+
+  // Handle bulk set logo from linked EPG entry's icon_url
+  const handleBulkSetLogoFromEPG = useCallback(async () => {
+    setBulkLogoLoading(true);
+    const logoCache = new Map<string, import('../types').Logo>();
+    const epgById = new Map((epgData || []).map((e) => [e.id, e]));
+    let assigned = 0, skipped = 0;
+
+    logger.info(`[BulkLogoEPG] Starting bulk EPG-logo assignment for ${selectedChannelIds.size} channels`);
+
+    try {
+      for (const channelId of selectedChannelIds) {
+        const channel = channels.find(c => c.id === channelId);
+        if (!channel) continue;
+
+        try {
+          if (channel.epg_data_id == null) {
+            logger.debug(`[BulkLogoEPG] Channel ${channel.name} (${channelId}) has no epg_data_id`);
+            skipped++;
+            continue;
+          }
+
+          const epgEntry = epgById.get(channel.epg_data_id);
+          const logoUrl = epgEntry?.icon_url || null;
+
+          if (!logoUrl) {
+            logger.debug(`[BulkLogoEPG] No icon_url on EPG entry ${channel.epg_data_id} for channel ${channel.name} (${channelId})`);
+            skipped++;
+            continue;
+          }
+
+          logger.debug(`[BulkLogoEPG] Assigning EPG logo to channel ${channel.name} (${channelId}) from ${logoUrl}`);
+          const logo = await api.getOrCreateLogo(channel.name, logoUrl, logoCache);
+          await api.updateChannel(channelId, { logo_id: logo.id });
+          assigned++;
+        } catch (err) {
+          logger.warn(`[BulkLogoEPG] Failed to assign EPG logo for channel ${channelId}:`, err);
+          skipped++;
+        }
+      }
+
+      logger.info(`[BulkLogoEPG] Complete: ${assigned} assigned, ${skipped} skipped`);
+      notifications.success(`Set logos: ${assigned} assigned, ${skipped} skipped (no EPG logo)`);
+      onChannelsChange?.();
+      onLogosChange?.();
+    } catch (err) {
+      logger.error('[BulkLogoEPG] Bulk set logo from EPG failed:', err);
+      notifications.error('Failed to set logos from EPG');
+    } finally {
+      setBulkLogoLoading(false);
+    }
+  }, [selectedChannelIds, channels, epgData, notifications, onChannelsChange, onLogosChange]);
 
   // Handle probe group request - probes all streams in all channels of a group
   // Uses the same backend probe logic as "Probe All Streams Now" but filtered to a single group
@@ -5499,6 +5563,7 @@ export function ChannelsPane({
             }}
             onSortSelectedByMode={handleSortSelectedStreamsByMode}
             onSetLogoFromM3U={handleBulkSetLogoFromM3U}
+            onSetLogoFromEPG={handleBulkSetLogoFromEPG}
             onProbe={handleBulkProbe}
             hasSelection={selectedChannelIds.size > 0}
             bulkEPGLoading={bulkEPGLoading}
