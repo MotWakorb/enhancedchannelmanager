@@ -86,6 +86,7 @@ class SettingsRequest(BaseModel):
     black_screen_sample_duration: int = 5  # Seconds to sample for black screen detection (3-30)
     low_fps_threshold: int = 20  # FPS below this value is considered "low FPS" (5, 10, 15, or 20)
     deprioritize_failed_streams: bool = True  # When enabled, failed/timeout/pending streams sort to bottom
+    failed_stream_sort_order: list[str] = ["failed", "black_screen", "low_fps"]  # Order of deprioritized categories (first = sorted higher)
     strike_threshold: int = 3  # Consecutive failures before flagging stream (0 = disabled)
     normalization_settings: Optional[NormalizationSettings] = None  # User-configurable normalization tags
     normalize_on_channel_create: bool = False  # Default state for normalization toggle when creating channels
@@ -160,6 +161,7 @@ class SettingsResponse(BaseModel):
     black_screen_sample_duration: int  # Seconds to sample for black screen detection (3-30)
     low_fps_threshold: int  # FPS below this value is considered "low FPS"
     deprioritize_failed_streams: bool  # When enabled, failed/timeout/pending streams sort to bottom
+    failed_stream_sort_order: list[str]  # Order of deprioritized categories (first = sorted higher)
     strike_threshold: int  # Consecutive failures before flagging stream (0 = disabled)
     normalization_settings: NormalizationSettings  # User-configurable normalization tags
     normalize_on_channel_create: bool  # Default state for normalization toggle when creating channels
@@ -287,6 +289,7 @@ async def get_current_settings():
         black_screen_sample_duration=settings.black_screen_sample_duration,
         low_fps_threshold=settings.low_fps_threshold,
         deprioritize_failed_streams=settings.deprioritize_failed_streams,
+        failed_stream_sort_order=settings.failed_stream_sort_order,
         strike_threshold=settings.strike_threshold,
         normalization_settings=NormalizationSettings(
             disabledBuiltinTags=settings.disabled_builtin_tags,
@@ -393,6 +396,7 @@ async def update_settings(request: SettingsRequest):
         black_screen_sample_duration=request.black_screen_sample_duration,
         low_fps_threshold=request.low_fps_threshold,
         deprioritize_failed_streams=request.deprioritize_failed_streams,
+        failed_stream_sort_order=request.failed_stream_sort_order,
         strike_threshold=request.strike_threshold,
         # Convert normalization_settings from API format to backend format
         disabled_builtin_tags=(
@@ -481,13 +485,15 @@ async def update_settings(request: SettingsRequest):
     # Update prober's sort settings without requiring restart
     if (new_settings.stream_sort_priority != current_settings.stream_sort_priority or
             new_settings.stream_sort_enabled != current_settings.stream_sort_enabled or
-            new_settings.m3u_account_priorities != current_settings.m3u_account_priorities):
+            new_settings.m3u_account_priorities != current_settings.m3u_account_priorities or
+            new_settings.failed_stream_sort_order != current_settings.failed_stream_sort_order):
         prober = get_prober()
         if prober:
             prober.update_sort_settings(
                 new_settings.stream_sort_priority,
                 new_settings.stream_sort_enabled,
-                new_settings.m3u_account_priorities
+                new_settings.m3u_account_priorities,
+                failed_stream_sort_order=new_settings.failed_stream_sort_order,
             )
             logger.info("[SETTINGS] Updated prober sort settings from settings")
 
@@ -845,6 +851,7 @@ async def restart_services():
                 stream_sort_enabled=settings.stream_sort_enabled,
                 stream_fetch_page_limit=settings.stream_fetch_page_limit,
                 m3u_account_priorities=settings.m3u_account_priorities,
+                failed_stream_sort_order=settings.failed_stream_sort_order,
             )
             new_prober.set_notification_callbacks(
                 create_callback=create_notification_internal,
