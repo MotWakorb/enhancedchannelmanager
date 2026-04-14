@@ -555,6 +555,74 @@ def register(mcp: FastMCP):
             return f"Error in bulk commit: {e}"
 
     @mcp.tool()
+    async def set_logo_from_epg(channel_ids: list[int]) -> str:
+        """Set channel logos from their linked EPG entry's icon_url.
+
+        For each channel: reads its epg_data_id, fetches the linked EPG entry from
+        Dispatcharr (/api/epg/data/{id}), creates-or-finds a Logo from the entry's
+        icon_url, then PATCHes the channel with the resulting logo_id. Mirrors the
+        UI's "Set Logo from EPG" bulk action and uses Dispatcharr's APIs end to end.
+
+        Args:
+            channel_ids: List of channel IDs to assign EPG-sourced logos to.
+                         Pass a single-element list for the single-channel case.
+        """
+        try:
+            client = get_ecm_client()
+            assigned = 0
+            skipped_no_epg = 0
+            skipped_no_icon = 0
+            errors: list[str] = []
+            logo_cache: dict[str, int] = {}
+
+            for cid in channel_ids:
+                try:
+                    channel = await client.get(f"/api/channels/{cid}")
+                    epg_data_id = channel.get("epg_data_id")
+                    if not epg_data_id:
+                        skipped_no_epg += 1
+                        continue
+
+                    epg_entry = await client.get(f"/api/epg/data/{epg_data_id}")
+                    icon_url = epg_entry.get("icon_url") or epg_entry.get("icon")
+                    if not icon_url:
+                        skipped_no_icon += 1
+                        continue
+
+                    if icon_url in logo_cache:
+                        logo_id = logo_cache[icon_url]
+                    else:
+                        logo = await client.post(
+                            "/api/channels/logos",
+                            json_data={"name": channel.get("name") or f"channel-{cid}", "url": icon_url},
+                        )
+                        logo_id = logo.get("id")
+                        if logo_id is None:
+                            errors.append(f"channel {cid}: logo create returned no id")
+                            continue
+                        logo_cache[icon_url] = logo_id
+
+                    await client.patch(f"/api/channels/{cid}", json_data={"logo_id": logo_id})
+                    assigned += 1
+                except Exception as e:
+                    errors.append(f"channel {cid}: {e}")
+
+            lines = [
+                f"Set logos from EPG: {assigned} assigned, "
+                f"{skipped_no_epg} skipped (no EPG link), "
+                f"{skipped_no_icon} skipped (no icon_url), "
+                f"{len(errors)} errors out of {len(channel_ids)} requested.",
+            ]
+            if errors:
+                lines.append("First errors:")
+                for err in errors[:5]:
+                    lines.append(f"  - {err}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] set_logo_from_epg failed: %s", e)
+            return f"Error setting logos from EPG: {e}"
+
+    @mcp.tool()
     async def build_channel_lineup(
         channels: list[dict],
         group_id: int,
