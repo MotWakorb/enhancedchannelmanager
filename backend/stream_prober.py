@@ -1126,6 +1126,12 @@ class StreamProber:
             mapped: dict = {}
             if ecm_stats.get("resolution") is not None:
                 mapped["resolution"] = ecm_stats["resolution"]
+                try:
+                    w, h = ecm_stats["resolution"].split("x")
+                    mapped["width"] = int(w)
+                    mapped["height"] = int(h)
+                except (ValueError, AttributeError):
+                    pass
             if ecm_stats.get("video_codec") is not None:
                 mapped["video_codec"] = ecm_stats["video_codec"]
             if ecm_stats.get("audio_codec") is not None:
@@ -1139,7 +1145,10 @@ class StreamProber:
             if ecm_stats.get("video_bitrate") is not None:
                 mapped["ffmpeg_output_bitrate"] = round(ecm_stats["video_bitrate"] / 1000, 1)
             if ecm_stats.get("fps") is not None:
-                mapped["source_fps"] = ecm_stats["fps"]
+                try:
+                    mapped["source_fps"] = float(ecm_stats["fps"])
+                except (ValueError, TypeError):
+                    pass
             if ecm_stats.get("stream_type") is not None:
                 mapped["stream_type"] = ecm_stats["stream_type"]
 
