@@ -98,8 +98,8 @@ async def test_push_merges_with_existing_stats_and_maps_fps():
     # Other ECM fields present
     assert merged["resolution"] == "1920x1080"
     assert merged["audio_codec"] == "aac"
-    assert merged["audio_channels"] == 2
-    assert merged["video_bitrate"] == 5000000
+    assert merged["audio_channels"] == "stereo"
+    assert merged["ffmpeg_output_bitrate"] == 5000.0
     # Timestamp written
     assert "stream_stats_updated_at" in sent_payload
 

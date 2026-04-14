@@ -1131,9 +1131,13 @@ class StreamProber:
             if ecm_stats.get("audio_codec") is not None:
                 mapped["audio_codec"] = ecm_stats["audio_codec"]
             if ecm_stats.get("audio_channels") is not None:
-                mapped["audio_channels"] = ecm_stats["audio_channels"]
+                _channel_names = {1: "mono", 2: "stereo", 6: "5.1", 8: "7.1"}
+                raw_ch = ecm_stats["audio_channels"]
+                mapped["audio_channels"] = (
+                    _channel_names.get(raw_ch, str(raw_ch)) if isinstance(raw_ch, int) else raw_ch
+                )
             if ecm_stats.get("video_bitrate") is not None:
-                mapped["video_bitrate"] = ecm_stats["video_bitrate"]
+                mapped["ffmpeg_output_bitrate"] = round(ecm_stats["video_bitrate"] / 1000, 1)
             if ecm_stats.get("fps") is not None:
                 mapped["source_fps"] = ecm_stats["fps"]
             if ecm_stats.get("stream_type") is not None:
