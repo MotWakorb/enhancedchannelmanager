@@ -296,6 +296,7 @@ class StreamProber:
         stream_sort_enabled: dict[str, bool] = None,  # Which criteria are enabled for Smart Sort
         stream_fetch_page_limit: int = 200,  # Max pages when fetching streams (200 * 500 = 100K streams)
         m3u_account_priorities: dict[str, int] = None,  # M3U account priorities (account_id -> priority)
+        failed_stream_sort_order: list[str] = None,  # Order of deprioritized categories (first = sorted higher)
     ):
         self.client = client
         self.probe_timeout = probe_timeout
@@ -319,6 +320,7 @@ class StreamProber:
         self.stream_sort_priority = stream_sort_priority or ["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"]
         self.stream_sort_enabled = stream_sort_enabled or {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}
         self.m3u_account_priorities = m3u_account_priorities or {}
+        self.failed_stream_sort_order = failed_stream_sort_order or ["failed", "black_screen", "low_fps"]
         self._probe_cancelled = False  # Controls cancellation of in-progress probe
         self._probe_paused = False  # Controls pausing of in-progress probe
         self._probing_in_progress = False
@@ -407,7 +409,8 @@ class StreamProber:
         self,
         stream_sort_priority: list[str],
         stream_sort_enabled: dict[str, bool],
-        m3u_account_priorities: dict[str, int]
+        m3u_account_priorities: dict[str, int],
+        failed_stream_sort_order: list[str] = None,
     ) -> None:
         """Update the sort settings.
 
@@ -422,15 +425,20 @@ class StreamProber:
         old_priority = self.stream_sort_priority
         old_enabled = self.stream_sort_enabled
         old_m3u_priorities = self.m3u_account_priorities
+        old_failed_order = self.failed_stream_sort_order
         self.stream_sort_priority = stream_sort_priority
         self.stream_sort_enabled = stream_sort_enabled
         self.m3u_account_priorities = m3u_account_priorities
+        if failed_stream_sort_order is not None:
+            self.failed_stream_sort_order = failed_stream_sort_order
         logger.info("[STREAM-PROBE] Updated sort settings: priority=%s->%s, "
                     "enabled=%s->%s, "
-                    "m3u_priorities=%s->%s",
+                    "m3u_priorities=%s->%s, "
+                    "failed_order=%s->%s",
                     old_priority, self.stream_sort_priority,
                     old_enabled, self.stream_sort_enabled,
-                    old_m3u_priorities, self.m3u_account_priorities)
+                    old_m3u_priorities, self.m3u_account_priorities,
+                    old_failed_order, self.failed_stream_sort_order)
 
     def set_notification_callbacks(self, create_callback, update_callback, delete_by_source_callback=None):
         """Set notification callback functions for probe progress updates.
@@ -1827,10 +1835,15 @@ class StreamProber:
     ) -> list[int]:
         """Sort stream IDs using smart sort logic. Delegates to module-level function."""
         return smart_sort_streams(
-            stream_ids, stats_map, stream_m3u_map or {},
-            self.stream_sort_priority, self.stream_sort_enabled,
-            self.m3u_account_priorities, self.deprioritize_failed_streams,
-            channel_name
+            stream_ids,
+            stats_map,
+            stream_m3u_map=stream_m3u_map or {},
+            stream_sort_priority=self.stream_sort_priority,
+            stream_sort_enabled=self.stream_sort_enabled,
+            m3u_account_priorities=self.m3u_account_priorities,
+            deprioritize_failed_streams=self.deprioritize_failed_streams,
+            failed_stream_sort_order=self.failed_stream_sort_order,
+            channel_name=channel_name,
         )
 
     async def probe_all_streams(self, channel_groups_override: list[str] = None, skip_m3u_refresh: bool = False, stream_ids_filter: list[int] = None):

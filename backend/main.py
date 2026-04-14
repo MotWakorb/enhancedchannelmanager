@@ -575,6 +575,7 @@ async def startup_event():
                 stream_sort_enabled=settings.stream_sort_enabled,
                 stream_fetch_page_limit=settings.stream_fetch_page_limit,
                 m3u_account_priorities=settings.m3u_account_priorities,
+                failed_stream_sort_order=settings.failed_stream_sort_order,
             )
             prober.set_notification_callbacks(
                 create_callback=create_notification_internal,
