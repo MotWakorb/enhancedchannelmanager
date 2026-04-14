@@ -92,11 +92,13 @@ async def test_push_merges_with_existing_stats_and_maps_fps():
     assert merged["pixel_format"] == "yuv420p"
     # ECM overwrote the stale codec
     assert merged["video_codec"] == "h264"
-    # fps -> source_fps mapping
-    assert merged["source_fps"] == "29.97"
+    # fps -> source_fps mapping (float, not string)
+    assert merged["source_fps"] == 29.97
     assert "fps" not in merged
     # Other ECM fields present
     assert merged["resolution"] == "1920x1080"
+    assert merged["width"] == 1920
+    assert merged["height"] == 1080
     assert merged["audio_codec"] == "aac"
     assert merged["audio_channels"] == "stereo"
     assert merged["ffmpeg_output_bitrate"] == 5000.0
