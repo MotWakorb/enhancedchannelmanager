@@ -1,4 +1,5 @@
 fastapi>=0.115.0
+starlette<1.0  # Pin to 0.x series until we explicitly upgrade
 uvicorn[standard]>=0.32.0
 httpx>=0.28.0
 pydantic>=2.10.0
