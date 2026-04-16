@@ -815,7 +815,8 @@ class NormalizationEngine:
             logger.warning("[NORMALIZE] Unknown else action type: %s", action_type)
             return text
 
-    def normalize(self, name: str, group_ids: list[int] | None = None) -> NormalizationResult:
+    def normalize(self, name: str, group_ids: list[int] | None = None,
+                  preserve_superscripts: bool = False) -> NormalizationResult:
         """
         Apply enabled rules to normalize a stream name.
 
@@ -827,6 +828,9 @@ class NormalizationEngine:
             name: The stream name to normalize
             group_ids: Optional list of NormalizationRuleGroup IDs to apply.
                        None = all enabled groups (default behavior).
+            preserve_superscripts: If True, skip Unicode superscript-to-ASCII
+                conversion.  Used when normalizing the *output* channel name
+                so that intentional superscripts (e.g. ESPN²) survive.
 
         Returns:
             NormalizationResult with original, normalized name, and applied rules
@@ -841,7 +845,9 @@ class NormalizationEngine:
         current = name.strip()
 
         # Convert Unicode superscripts to ASCII (e.g., ᴴᴰ -> HD, ᵁᴴᴰ -> UHD, ᴿᴬᵂ -> RAW)
-        current = convert_superscripts(current)
+        # Skipped when preserve_superscripts=True so intentional chars survive.
+        if not preserve_superscripts:
+            current = convert_superscripts(current)
 
         grouped_rules = self._load_rules()
 

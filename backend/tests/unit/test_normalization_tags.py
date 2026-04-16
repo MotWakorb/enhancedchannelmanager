@@ -535,3 +535,67 @@ class TestCapitalizeAction:
         )
         result = engine._apply_else_action("ATLANTA HAWKS", rule)
         assert result == "Atlanta hawks"
+
+
+class TestPreserveSuperscripts:
+    """Tests for preserve_superscripts flag on normalize() (GitHub #61)."""
+
+    @pytest.fixture(autouse=True)
+    def clear_cache(self):
+        _tag_group_cache.clear()
+        yield
+        _tag_group_cache.clear()
+
+    @pytest.fixture
+    def engine(self, test_session):
+        return NormalizationEngine(test_session)
+
+    def test_normalize_converts_superscripts_by_default(self, engine):
+        """Default normalize() converts superscript letters to ASCII."""
+        result = engine.normalize("ESPN News \u1D34\u1D30")  # ᴴᴰ
+        assert "\u1D34" not in result.normalized  # ᴴ gone
+        assert "\u1D30" not in result.normalized  # ᴰ gone
+
+    def test_normalize_preserves_superscripts_when_flag_set(self, engine):
+        """preserve_superscripts=True keeps Unicode superscripts intact."""
+        result = engine.normalize("ESPN\u00B2", preserve_superscripts=True)  # ESPN²
+        assert result.normalized == "ESPN\u00B2"
+
+    def test_preserve_superscripts_keeps_superscript_letters(self, engine):
+        """Superscript letters like ᴴᴰ also survive when flag is set."""
+        result = engine.normalize("ESPN \u1D34\u1D30", preserve_superscripts=True)
+        assert "\u1D34" in result.normalized
+        assert "\u1D30" in result.normalized
+
+    def test_normalization_rules_still_apply_with_preserve(self, engine, test_session):
+        """Tag-stripping rules still fire even when superscripts are preserved."""
+        from tests.fixtures.factories import (
+            create_tag_group, create_tag,
+            create_normalization_rule_group, create_normalization_rule,
+        )
+
+        tag_group = create_tag_group(test_session, name="Quality Tags")
+        create_tag(test_session, group_id=tag_group.id, value="HD")
+
+        rule_group = create_normalization_rule_group(
+            test_session, name="Strip quality", enabled=True,
+        )
+        create_normalization_rule(
+            test_session,
+            group_id=rule_group.id,
+            name="Strip HD suffix",
+            condition_type="tag_group",
+            condition_value=str(tag_group.id),
+            action_type="remove",
+            tag_group_id=tag_group.id,
+            tag_match_position="suffix",
+        )
+
+        result = engine.normalize(
+            "ESPN\u00B2 HD",
+            group_ids=[rule_group.id],
+            preserve_superscripts=True,
+        )
+        # HD stripped by the rule, but ² survives
+        assert "HD" not in result.normalized
+        assert "\u00B2" in result.normalized
