@@ -287,6 +287,8 @@ async def compute_sort(request: ComputeSortRequest):
             stream_sort_enabled=sort_enabled,
             m3u_account_priorities=settings.m3u_account_priorities,
             deprioritize_failed_streams=settings.deprioritize_failed_streams,
+            deprioritize_black_screen=getattr(settings, 'deprioritize_black_screen', True),
+            deprioritize_low_fps=getattr(settings, 'deprioritize_low_fps', True),
             failed_stream_sort_order=getattr(settings, 'failed_stream_sort_order', None),
             channel_name=f"channel-{ch.channel_id}",
         )
@@ -462,6 +464,8 @@ async def probe_bulk_streams(request: BulkProbeRequest):
                         stream_sort_enabled=settings.stream_sort_enabled,
                         m3u_account_priorities=settings.m3u_account_priorities,
                         deprioritize_failed_streams=settings.deprioritize_failed_streams,
+                        deprioritize_black_screen=getattr(settings, 'deprioritize_black_screen', True),
+                        deprioritize_low_fps=getattr(settings, 'deprioritize_low_fps', True),
                         failed_stream_sort_order=getattr(settings, 'failed_stream_sort_order', None),
                         channel_name=ch.get("name", f"channel-{ch['id']}"),
                     )

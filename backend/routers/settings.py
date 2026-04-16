@@ -86,6 +86,8 @@ class SettingsRequest(BaseModel):
     black_screen_sample_duration: int = 5  # Seconds to sample for black screen detection (3-30)
     low_fps_threshold: int = 20  # FPS below this value is considered "low FPS" (5, 10, 15, or 20)
     deprioritize_failed_streams: bool = True  # When enabled, failed/timeout/pending streams sort to bottom
+    deprioritize_black_screen: bool = True  # When disabled, black screen streams sort by quality stats
+    deprioritize_low_fps: bool = True  # When disabled, low FPS streams sort by quality stats
     failed_stream_sort_order: list[str] = ["failed", "black_screen", "low_fps"]  # Order of deprioritized categories (first = sorted higher)
     strike_threshold: int = 3  # Consecutive failures before flagging stream (0 = disabled)
     normalization_settings: Optional[NormalizationSettings] = None  # User-configurable normalization tags
@@ -161,6 +163,8 @@ class SettingsResponse(BaseModel):
     black_screen_sample_duration: int  # Seconds to sample for black screen detection (3-30)
     low_fps_threshold: int  # FPS below this value is considered "low FPS"
     deprioritize_failed_streams: bool  # When enabled, failed/timeout/pending streams sort to bottom
+    deprioritize_black_screen: bool = True  # When disabled, black screen streams sort by quality stats
+    deprioritize_low_fps: bool = True  # When disabled, low FPS streams sort by quality stats
     failed_stream_sort_order: list[str]  # Order of deprioritized categories (first = sorted higher)
     strike_threshold: int  # Consecutive failures before flagging stream (0 = disabled)
     normalization_settings: NormalizationSettings  # User-configurable normalization tags
@@ -289,6 +293,8 @@ async def get_current_settings():
         black_screen_sample_duration=settings.black_screen_sample_duration,
         low_fps_threshold=settings.low_fps_threshold,
         deprioritize_failed_streams=settings.deprioritize_failed_streams,
+        deprioritize_black_screen=settings.deprioritize_black_screen,
+        deprioritize_low_fps=settings.deprioritize_low_fps,
         failed_stream_sort_order=settings.failed_stream_sort_order,
         strike_threshold=settings.strike_threshold,
         normalization_settings=NormalizationSettings(
@@ -396,6 +402,8 @@ async def update_settings(request: SettingsRequest):
         black_screen_sample_duration=request.black_screen_sample_duration,
         low_fps_threshold=request.low_fps_threshold,
         deprioritize_failed_streams=request.deprioritize_failed_streams,
+        deprioritize_black_screen=request.deprioritize_black_screen,
+        deprioritize_low_fps=request.deprioritize_low_fps,
         failed_stream_sort_order=request.failed_stream_sort_order,
         strike_threshold=request.strike_threshold,
         # Convert normalization_settings from API format to backend format
@@ -486,7 +494,9 @@ async def update_settings(request: SettingsRequest):
     if (new_settings.stream_sort_priority != current_settings.stream_sort_priority or
             new_settings.stream_sort_enabled != current_settings.stream_sort_enabled or
             new_settings.m3u_account_priorities != current_settings.m3u_account_priorities or
-            new_settings.failed_stream_sort_order != current_settings.failed_stream_sort_order):
+            new_settings.failed_stream_sort_order != current_settings.failed_stream_sort_order or
+            new_settings.deprioritize_black_screen != current_settings.deprioritize_black_screen or
+            new_settings.deprioritize_low_fps != current_settings.deprioritize_low_fps):
         prober = get_prober()
         if prober:
             prober.update_sort_settings(
@@ -494,6 +504,8 @@ async def update_settings(request: SettingsRequest):
                 new_settings.stream_sort_enabled,
                 new_settings.m3u_account_priorities,
                 failed_stream_sort_order=new_settings.failed_stream_sort_order,
+                deprioritize_black_screen=new_settings.deprioritize_black_screen,
+                deprioritize_low_fps=new_settings.deprioritize_low_fps,
             )
             logger.info("[SETTINGS] Updated prober sort settings from settings")
 
@@ -542,6 +554,12 @@ async def update_settings(request: SettingsRequest):
         if new_settings.deprioritize_failed_streams != current_settings.deprioritize_failed_streams:
             prober.deprioritize_failed_streams = new_settings.deprioritize_failed_streams
             changed.append(f"deprioritize_failed_streams={new_settings.deprioritize_failed_streams}")
+        if new_settings.deprioritize_black_screen != current_settings.deprioritize_black_screen:
+            prober.deprioritize_black_screen = new_settings.deprioritize_black_screen
+            changed.append(f"deprioritize_black_screen={new_settings.deprioritize_black_screen}")
+        if new_settings.deprioritize_low_fps != current_settings.deprioritize_low_fps:
+            prober.deprioritize_low_fps = new_settings.deprioritize_low_fps
+            changed.append(f"deprioritize_low_fps={new_settings.deprioritize_low_fps}")
         if new_settings.stream_fetch_page_limit != current_settings.stream_fetch_page_limit:
             prober.stream_fetch_page_limit = new_settings.stream_fetch_page_limit
             changed.append(f"stream_fetch_page_limit={new_settings.stream_fetch_page_limit}")
@@ -844,6 +862,8 @@ async def restart_services():
                 probe_retry_count=settings.probe_retry_count,
                 probe_retry_delay=settings.probe_retry_delay,
                 deprioritize_failed_streams=settings.deprioritize_failed_streams,
+                deprioritize_black_screen=settings.deprioritize_black_screen,
+                deprioritize_low_fps=settings.deprioritize_low_fps,
                 black_screen_detection_enabled=settings.black_screen_detection_enabled,
                 black_screen_sample_duration=settings.black_screen_sample_duration,
                 low_fps_threshold=settings.low_fps_threshold,

@@ -817,6 +817,8 @@ export interface SettingsResponse {
   black_screen_sample_duration: number;  // Seconds to sample for black screen detection (3-30)
   low_fps_threshold: number;  // FPS below this value is considered "low FPS"
   deprioritize_failed_streams: boolean;  // When enabled, failed/timeout/pending streams sort to bottom
+  deprioritize_black_screen: boolean;  // When disabled, black screen streams sort by quality stats
+  deprioritize_low_fps: boolean;  // When disabled, low FPS streams sort by quality stats
   failed_stream_sort_order: FailedStreamCategory[];  // Order of deprioritized categories (first = sorted higher)
   strike_threshold: number;  // Consecutive failures before flagging stream (0 = disabled)
   normalize_on_channel_create: boolean;  // Default state for normalization toggle when creating channels
@@ -907,6 +909,8 @@ export async function saveSettings(settings: {
   black_screen_sample_duration?: number;  // Optional - seconds to sample for black screen detection (3-30), defaults to 5
   low_fps_threshold?: number;  // Optional - FPS below this value is considered "low FPS", defaults to 20
   deprioritize_failed_streams?: boolean;  // Optional - deprioritize failed/timeout/pending streams in sort, defaults to true
+  deprioritize_black_screen?: boolean;  // Optional - deprioritize black screen streams, defaults to true
+  deprioritize_low_fps?: boolean;  // Optional - deprioritize low FPS streams, defaults to true
   failed_stream_sort_order?: FailedStreamCategory[];  // Optional - order of deprioritized categories
   strike_threshold?: number;  // Optional - consecutive failures before flagging stream, defaults to 3
   normalize_on_channel_create?: boolean;  // Optional - default state for normalization toggle, defaults to false

@@ -569,6 +569,8 @@ async def startup_event():
                 probe_retry_count=settings.probe_retry_count,
                 probe_retry_delay=settings.probe_retry_delay,
                 deprioritize_failed_streams=settings.deprioritize_failed_streams,
+                deprioritize_black_screen=settings.deprioritize_black_screen,
+                deprioritize_low_fps=settings.deprioritize_low_fps,
                 black_screen_detection_enabled=settings.black_screen_detection_enabled,
                 black_screen_sample_duration=settings.black_screen_sample_duration,
                 stream_sort_priority=settings.stream_sort_priority,
