@@ -44,6 +44,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   const [m3uAccounts, setM3uAccounts] = useState<M3UAccount[]>([]);
   const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>([]);
   const [autoCreationRules, setAutoCreationRules] = useState<AutoCreationRule[]>([]);
+  const [backupSections, setBackupSections] = useState<{key: string; label: string}[]>([]);
 
   // Settings for default parameter values (stream_probe)
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
@@ -81,6 +82,9 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
         }
         if (sources.has('auto_creation_rules')) {
           loaders.push(autoCreationApi.getAutoCreationRules().then(setAutoCreationRules));
+        }
+        if (sources.has('backup_sections')) {
+          loaders.push(api.getExportSections().then(setBackupSections));
         }
 
         // Load settings for default parameter values (stream_probe)
@@ -136,8 +140,16 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
       }));
     }
 
+    // Backup sections (for yaml_backup)
+    if (backupSections.length > 0) {
+      options['backup_sections'] = backupSections.map(s => ({
+        value: s.key,
+        label: s.label,
+      }));
+    }
+
     return options;
-  }, [channelGroups, m3uAccounts, epgSources, autoCreationRules]);
+  }, [channelGroups, m3uAccounts, epgSources, autoCreationRules, backupSections]);
 
   // Compute default parameters for new schedules
   const defaultParameters = useMemo(() => {
