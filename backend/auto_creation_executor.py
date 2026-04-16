@@ -477,7 +477,9 @@ class ActionExecutor:
         if normalization_group_ids and self._normalization_engine:
             logger.debug("[AUTO-CREATE-EXEC] Applying normalization groups %s to '%s'", normalization_group_ids, channel_name)
             try:
-                norm_result = self._normalization_engine.normalize(channel_name, group_ids=normalization_group_ids)
+                norm_result = self._normalization_engine.normalize(
+                    channel_name, group_ids=normalization_group_ids,
+                    preserve_superscripts=True)
                 if norm_result.normalized != channel_name:
                     logger.debug("[AUTO-CREATE-EXEC] Normalized channel name: '%s' -> '%s'", channel_name, norm_result.normalized)
                     for rule_id, before, after in norm_result.transformations:
