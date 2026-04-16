@@ -42,7 +42,7 @@ bd sync                       # Sync beads data only (NOT for code commits)
 | Pytest Conventions | `docs/pytest_conventions.md` |
 | Project Architecture | `docs/project_architecture.md` |
 | CSS Guidelines | `docs/css_guidelines.md` |
-| Beads (Issue Tracking) | `/home/user/.claude/projects/-home-user/memory/beads.md` |
+| Beads (Issue Tracking) | `~/.claude/projects/<project-slug>/memory/beads.md` |
 | Dispatcharr API | `docs/dispatcharr_api.md` |
 | Discord Release Notes | `docs/discord_release_notes.md` |
 | Testing Details | `docs/testing.md` |
@@ -62,7 +62,7 @@ docker cp <local-file> ecm-ecm-1:/app/<destination-path>
 
 **Frontend deploy:**
 ```bash
-cd /home/user/ecm/enhancedchannelmanager/frontend && npm run build
+cd frontend && npm run build
 docker exec ecm-ecm-1 sh -c 'rm -rf /app/static/assets/*'
 docker cp dist/. ecm-ecm-1:/app/static/
 ```
