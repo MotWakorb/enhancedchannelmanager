@@ -161,6 +161,8 @@ function App() {
     streamSortPriority: ['resolution', 'bitrate', 'framerate'] as api.SortCriterion[],
     streamSortEnabled: DEFAULT_SORT_ENABLED as api.SortEnabledMap,
     deprioritizeFailedStreams: true,
+    deprioritizeBlackScreen: true,
+    deprioritizeLowFps: true,
     m3uAccountPriorities: {} as api.M3UAccountPriorities,
   });
   // Also keep separate state for use in callbacks (to avoid stale closure issues)
@@ -508,6 +510,8 @@ function App() {
             return { streamSortPriority: merged.priority, streamSortEnabled: merged.enabled };
           })(),
           deprioritizeFailedStreams: settings.deprioritize_failed_streams ?? true,
+          deprioritizeBlackScreen: settings.deprioritize_black_screen ?? true,
+          deprioritizeLowFps: settings.deprioritize_low_fps ?? true,
           m3uAccountPriorities: settings.m3u_account_priorities ?? {},
         });
         setDefaultChannelProfileIds(settings.default_channel_profile_ids);
@@ -721,6 +725,8 @@ function App() {
           return { streamSortPriority: merged.priority, streamSortEnabled: merged.enabled };
         })(),
         deprioritizeFailedStreams: settings.deprioritize_failed_streams ?? true,
+        deprioritizeBlackScreen: settings.deprioritize_black_screen ?? true,
+        deprioritizeLowFps: settings.deprioritize_low_fps ?? true,
         m3uAccountPriorities: settings.m3u_account_priorities ?? {},
       });
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);

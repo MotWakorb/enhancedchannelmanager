@@ -38,6 +38,7 @@ def create_mock_stats(
     stats.audio_channels = audio_channels
     stats.probe_status = probe_status
     stats.is_black_screen = False
+    stats.is_low_fps = False
     return stats
 
 
@@ -637,3 +638,108 @@ class TestExtractM3uAccountId:
     def test_extract_dict_without_id(self):
         """Dict without 'id' key returns None."""
         assert extract_m3u_account_id({"name": "Provider"}) is None
+
+
+class TestPerCategoryDeprioritization:
+    """Tests for per-category deprioritize_black_screen / deprioritize_low_fps (GitHub #56)."""
+
+    def _make_stats(self, stream_id, resolution="1920x1080", is_black_screen=False, is_low_fps=False):
+        stats = create_mock_stats(stream_id, resolution=resolution)
+        stats.is_black_screen = is_black_screen
+        stats.is_low_fps = is_low_fps
+        return stats
+
+    # -- Black screen --
+
+    def test_black_screen_deprioritized_by_default(self):
+        """With defaults, black screen streams sort to the bottom."""
+        result = smart_sort_streams(
+            [1, 2],
+            {
+                1: self._make_stats(1, resolution="1280x720"),
+                2: self._make_stats(2, resolution="1920x1080", is_black_screen=True),
+            },
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+        )
+        assert result == [1, 2]
+
+    def test_black_screen_sorted_by_quality_when_not_deprioritized(self):
+        """When deprioritize_black_screen=False, black screen streams sort by quality."""
+        result = smart_sort_streams(
+            [1, 2],
+            {
+                1: self._make_stats(1, resolution="1280x720"),
+                2: self._make_stats(2, resolution="1920x1080", is_black_screen=True),
+            },
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+            deprioritize_black_screen=False,
+        )
+        # Stream 2 has higher resolution and should sort first
+        assert result == [2, 1]
+
+    def test_black_screen_still_deprioritized_when_master_off(self):
+        """When master deprioritize_failed_streams=False, per-category flag is irrelevant."""
+        result = smart_sort_streams(
+            [1, 2],
+            {
+                1: self._make_stats(1, resolution="1280x720"),
+                2: self._make_stats(2, resolution="1920x1080", is_black_screen=True),
+            },
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+            deprioritize_failed_streams=False,
+            deprioritize_black_screen=True,
+        )
+        # Master toggle is off, so black screen sorts by quality
+        assert result == [2, 1]
+
+    # -- Low FPS --
+
+    def test_low_fps_deprioritized_by_default(self):
+        """With defaults, low FPS streams sort to the bottom."""
+        result = smart_sort_streams(
+            [1, 2],
+            {
+                1: self._make_stats(1, resolution="1280x720"),
+                2: self._make_stats(2, resolution="1920x1080", is_low_fps=True),
+            },
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+        )
+        assert result == [1, 2]
+
+    def test_low_fps_sorted_by_quality_when_not_deprioritized(self):
+        """When deprioritize_low_fps=False, low FPS streams sort by quality."""
+        result = smart_sort_streams(
+            [1, 2],
+            {
+                1: self._make_stats(1, resolution="1280x720"),
+                2: self._make_stats(2, resolution="1920x1080", is_low_fps=True),
+            },
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+            deprioritize_low_fps=False,
+        )
+        assert result == [2, 1]
+
+    # -- Mixed --
+
+    def test_independent_per_category_flags(self):
+        """Can deprioritize black screen but not low FPS (or vice versa)."""
+        bs = self._make_stats(1, resolution="1920x1080", is_black_screen=True)
+        lf = self._make_stats(2, resolution="1920x1080", is_low_fps=True)
+        ok = self._make_stats(3, resolution="1280x720")
+
+        result = smart_sort_streams(
+            [1, 2, 3],
+            {1: bs, 2: lf, 3: ok},
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+            deprioritize_black_screen=True,
+            deprioritize_low_fps=False,
+        )
+        # Low FPS sorts by quality (1080), ok by quality (720), black screen at bottom
+        assert result[0] == 2  # Low FPS 1080 first
+        assert result[-1] == 1  # Black screen last

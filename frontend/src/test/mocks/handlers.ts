@@ -393,6 +393,8 @@ export const mockDataStore: MockDataStore = {
     stream_sort_enabled: { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false },
     m3u_account_priorities: {},
     deprioritize_failed_streams: true,
+    deprioritize_black_screen: true,
+    deprioritize_low_fps: true,
     hide_auto_sync_groups: false,
     frontend_log_level: 'INFO',
   },

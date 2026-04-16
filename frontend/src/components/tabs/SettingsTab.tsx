@@ -344,6 +344,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false });
   const [m3uAccountPriorities, setM3uAccountPriorities] = useState<Record<string, number>>({});
   const [deprioritizeFailedStreams, setDeprioritizeFailedStreams] = useState(true);
+  const [deprioritizeBlackScreen, setDeprioritizeBlackScreen] = useState(true);
+  const [deprioritizeLowFps, setDeprioritizeLowFps] = useState(true);
   const [failedStreamSortOrder, setFailedStreamSortOrder] = useState<FailedStreamCategory[]>(DEFAULT_FAILED_STREAM_ORDER);
   const [strikeThreshold, setStrikeThreshold] = useState(3);
 
@@ -770,6 +772,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setStreamSortEnabled(merged.enabled);
       setM3uAccountPriorities(settings.m3u_account_priorities ?? {});
       setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
+      setDeprioritizeBlackScreen(settings.deprioritize_black_screen ?? true);
+      setDeprioritizeLowFps(settings.deprioritize_low_fps ?? true);
       setFailedStreamSortOrder(settings.failed_stream_sort_order ?? DEFAULT_FAILED_STREAM_ORDER);
       setStrikeThreshold(settings.strike_threshold ?? 3);
       // Shared SMTP settings
@@ -896,6 +900,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         stream_sort_enabled: streamSortEnabled,
         m3u_account_priorities: m3uAccountPriorities,
         deprioritize_failed_streams: deprioritizeFailedStreams,
+        deprioritize_black_screen: deprioritizeBlackScreen,
+        deprioritize_low_fps: deprioritizeLowFps,
         failed_stream_sort_order: failedStreamSortOrder,
         strike_threshold: strikeThreshold,
         // Shared SMTP settings
@@ -2139,6 +2145,35 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
 
         {deprioritizeFailedStreams && (
+          <>
+          <div className="form-group">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={deprioritizeBlackScreen}
+                onChange={(e) => setDeprioritizeBlackScreen(e.target.checked)}
+              />
+              <span>Deprioritize Black Screen Streams</span>
+            </label>
+            <p className="form-hint">
+              When disabled, streams detected as black screen will be sorted by their actual quality stats (resolution, bitrate, etc.) instead of being pushed to the bottom.
+            </p>
+          </div>
+
+          <div className="form-group">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={deprioritizeLowFps}
+                onChange={(e) => setDeprioritizeLowFps(e.target.checked)}
+              />
+              <span>Deprioritize Low FPS Streams</span>
+            </label>
+            <p className="form-hint">
+              When disabled, streams with low frame rates will be sorted by their actual quality stats instead of being pushed to the bottom.
+            </p>
+          </div>
+
           <div className="form-group">
             <label className="form-label">Failed Stream Ordering</label>
             <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
@@ -2163,6 +2198,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               </SortableContext>
             </DndContext>
           </div>
+          </>
         )}
       </div>
 

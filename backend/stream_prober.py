@@ -96,6 +96,8 @@ def smart_sort_streams(
     stream_sort_enabled: dict[str, bool] = None,
     m3u_account_priorities: dict[str, int] = None,
     deprioritize_failed_streams: bool = True,
+    deprioritize_black_screen: bool = True,
+    deprioritize_low_fps: bool = True,
     failed_stream_sort_order: list[str] = None,
     channel_name: str = "unknown",
 ) -> list[int]:
@@ -110,6 +112,10 @@ def smart_sort_streams(
         stream_sort_enabled: Which criteria are enabled
         m3u_account_priorities: M3U account priorities (account_id_str -> priority)
         deprioritize_failed_streams: Whether to push failed streams to bottom
+        deprioritize_black_screen: Whether to push black screen streams to bottom
+            (only effective when deprioritize_failed_streams is also True)
+        deprioritize_low_fps: Whether to push low FPS streams to bottom
+            (only effective when deprioritize_failed_streams is also True)
         failed_stream_sort_order: Order of deprioritized categories (first = sorted higher)
         channel_name: Channel name for logging purposes
     """
@@ -166,13 +172,13 @@ def smart_sort_streams(
                 return (1, rank) + tuple(0 for _ in active_criteria)
 
         # Deprioritize black screen streams (probe succeeded but content is black)
-        if deprioritize_failed_streams and stat and getattr(stat, 'is_black_screen', False) is True:
+        if deprioritize_failed_streams and deprioritize_black_screen and stat and getattr(stat, 'is_black_screen', False) is True:
             rank = failed_rank.get('black_screen', 1)
             logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (black screen, rank=%s)", stream_name, rank)
             return (1, rank) + tuple(0 for _ in active_criteria)
 
         # Deprioritize low FPS streams (probe succeeded but FPS < 20)
-        if deprioritize_failed_streams and stat and getattr(stat, 'is_low_fps', False) is True:
+        if deprioritize_failed_streams and deprioritize_low_fps and stat and getattr(stat, 'is_low_fps', False) is True:
             rank = failed_rank.get('low_fps', 2)
             logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (low fps, rank=%s)", stream_name, rank)
             return (1, rank) + tuple(0 for _ in active_criteria)
@@ -289,6 +295,8 @@ class StreamProber:
         probe_retry_count: int = 1,   # Retries on transient ffprobe failure (0 = no retry)
         probe_retry_delay: int = 2,   # Seconds between retries
         deprioritize_failed_streams: bool = True,  # Deprioritize failed streams in smart sort
+        deprioritize_black_screen: bool = True,  # Deprioritize black screen streams in smart sort
+        deprioritize_low_fps: bool = True,  # Deprioritize low FPS streams in smart sort
         black_screen_detection_enabled: bool = False,  # Run ffmpeg blackdetect after successful probe
         black_screen_sample_duration: int = 5,  # Seconds to sample for black screen detection (3-30)
         low_fps_threshold: int = 20,  # FPS below this value is considered "low FPS"
@@ -311,6 +319,8 @@ class StreamProber:
         self.probe_retry_count = max(0, min(5, probe_retry_count))  # Clamp 0-5
         self.probe_retry_delay = max(1, min(30, probe_retry_delay))  # Clamp 1-30
         self.deprioritize_failed_streams = deprioritize_failed_streams
+        self.deprioritize_black_screen = deprioritize_black_screen
+        self.deprioritize_low_fps = deprioritize_low_fps
         self.black_screen_detection_enabled = black_screen_detection_enabled
         self.low_fps_threshold = max(1, min(60, low_fps_threshold))  # Clamp 1-60
         self.black_screen_sample_duration = max(3, min(30, black_screen_sample_duration))  # Clamp 3-30
@@ -411,6 +421,8 @@ class StreamProber:
         stream_sort_enabled: dict[str, bool],
         m3u_account_priorities: dict[str, int],
         failed_stream_sort_order: list[str] = None,
+        deprioritize_black_screen: bool = None,
+        deprioritize_low_fps: bool = None,
     ) -> None:
         """Update the sort settings.
 
@@ -421,6 +433,8 @@ class StreamProber:
             stream_sort_priority: Priority order for sort criteria.
             stream_sort_enabled: Which criteria are enabled.
             m3u_account_priorities: M3U account priorities (account_id -> priority value).
+            deprioritize_black_screen: Per-category override for black screen streams.
+            deprioritize_low_fps: Per-category override for low FPS streams.
         """
         old_priority = self.stream_sort_priority
         old_enabled = self.stream_sort_enabled
@@ -431,6 +445,10 @@ class StreamProber:
         self.m3u_account_priorities = m3u_account_priorities
         if failed_stream_sort_order is not None:
             self.failed_stream_sort_order = failed_stream_sort_order
+        if deprioritize_black_screen is not None:
+            self.deprioritize_black_screen = deprioritize_black_screen
+        if deprioritize_low_fps is not None:
+            self.deprioritize_low_fps = deprioritize_low_fps
         logger.info("[STREAM-PROBE] Updated sort settings: priority=%s->%s, "
                     "enabled=%s->%s, "
                     "m3u_priorities=%s->%s, "
@@ -1855,6 +1873,8 @@ class StreamProber:
             stream_sort_enabled=self.stream_sort_enabled,
             m3u_account_priorities=self.m3u_account_priorities,
             deprioritize_failed_streams=self.deprioritize_failed_streams,
+            deprioritize_black_screen=self.deprioritize_black_screen,
+            deprioritize_low_fps=self.deprioritize_low_fps,
             failed_stream_sort_order=self.failed_stream_sort_order,
             channel_name=channel_name,
         )
@@ -2641,6 +2661,8 @@ class StreamProber:
                 "priority": list(self.stream_sort_priority),
                 "enabled": dict(self.stream_sort_enabled),
                 "deprioritize_failed": self.deprioritize_failed_streams,
+                "deprioritize_black_screen": self.deprioritize_black_screen,
+                "deprioritize_low_fps": self.deprioritize_low_fps,
             } if reordered_channels else None,
         }
 
@@ -2848,6 +2870,8 @@ def ensure_prober() -> Optional[StreamProber]:
             probe_retry_count=settings.probe_retry_count,
             probe_retry_delay=settings.probe_retry_delay,
             deprioritize_failed_streams=settings.deprioritize_failed_streams,
+            deprioritize_black_screen=settings.deprioritize_black_screen,
+            deprioritize_low_fps=settings.deprioritize_low_fps,
             black_screen_detection_enabled=settings.black_screen_detection_enabled,
             black_screen_sample_duration=settings.black_screen_sample_duration,
             low_fps_threshold=settings.low_fps_threshold,
