@@ -44,8 +44,11 @@ ENV RELEASE_CHANNEL=$RELEASE_CHANNEL
 
 WORKDIR /app
 
-# Install gosu for proper user switching, ffmpeg for stream probing, and create non-root user
-RUN apt-get update && apt-get install -y --no-install-recommends gosu ffmpeg \
+# Install gosu for proper user switching, ffmpeg for stream probing, and create non-root user.
+# apt-get upgrade pulls in Debian security updates (e.g. openssl CVE fixes) that the base image lags behind on.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends gosu ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --shell /bin/bash appuser
 
