@@ -1083,4 +1083,66 @@ export const handlers = [
       errors: [],
     })
   }),
+
+  // ── Backup & Restore ──
+
+  http.get(`${API_BASE}/backup/create`, () => {
+    return new HttpResponse(new Blob(['mock-zip'], { type: 'application/zip' }), {
+      headers: {
+        'Content-Disposition': 'attachment; filename="ecm-backup-2026-01-01.zip"',
+        'Content-Type': 'application/zip',
+      },
+    })
+  }),
+
+  http.get(`${API_BASE}/backup/export`, () => {
+    return new HttpResponse('ecm_export:\n  version: 0.16.0\nsettings: {}\n', {
+      headers: {
+        'Content-Disposition': 'attachment; filename="ecm-export-2026-01-01.yaml"',
+        'Content-Type': 'text/yaml',
+      },
+    })
+  }),
+
+  http.post(`${API_BASE}/backup/validate`, () => {
+    return HttpResponse.json({
+      valid: true,
+      version: '0.16.0',
+      exported_at: '2026-01-01T00:00:00+00:00',
+      sections: [
+        { key: 'settings', label: 'Settings', item_count: 10, available: true },
+        { key: 'scheduled_tasks', label: 'Scheduled Tasks', item_count: 3, available: true },
+        { key: 'tag_groups', label: 'Tag Groups', item_count: 2, available: true },
+        { key: 'ffmpeg_profiles', label: 'FFmpeg Profiles', item_count: 0, available: false },
+      ],
+    })
+  }),
+
+  http.post(`${API_BASE}/backup/restore`, () => {
+    return HttpResponse.json({
+      status: 'ok',
+      backup_version: '0.16.0',
+      backup_date: '2026-01-01T00:00:00+00:00',
+      restored_files: ['settings.json', 'journal.db'],
+    })
+  }),
+
+  http.post(`${API_BASE}/backup/restore-yaml`, () => {
+    return HttpResponse.json({
+      success: true,
+      sections_restored: ['settings', 'scheduled_tasks', 'tag_groups'],
+      sections_failed: [],
+      warnings: [],
+      errors: [],
+    })
+  }),
+
+  http.post(`${API_BASE}/backup/restore-initial`, () => {
+    return HttpResponse.json({
+      status: 'ok',
+      backup_version: '0.16.0',
+      backup_date: '2026-01-01T00:00:00+00:00',
+      restored_files: ['settings.json', 'journal.db'],
+    })
+  }),
 ]
