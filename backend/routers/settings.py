@@ -39,8 +39,10 @@ class NormalizationSettings(BaseModel):
 
 class SettingsRequest(BaseModel):
     url: str
-    username: str
+    auth_method: str = "password"  # "password" or "api_key"
+    username: str = ""
     password: Optional[str] = None  # Optional - only required if changing auth settings
+    api_key: Optional[str] = None  # Optional - only required if changing to/rotating api_key
     auto_rename_channel_number: bool = False
     include_channel_number_in_name: bool = False
     channel_number_separator: str = "-"
@@ -116,7 +118,10 @@ class SettingsRequest(BaseModel):
 
 class SettingsResponse(BaseModel):
     url: str
+    auth_method: str
     username: str
+    # Non-empty signal that an API key is stored, without returning the secret.
+    api_key_configured: bool
     configured: bool
     auto_rename_channel_number: bool
     include_channel_number_in_name: bool
@@ -197,8 +202,10 @@ class SettingsResponse(BaseModel):
 
 class TestConnectionRequest(BaseModel):
     url: str
-    username: str
-    password: str
+    auth_method: str = "password"  # "password" or "api_key"
+    username: str = ""
+    password: str = ""
+    api_key: str = ""
 
 
 class SMTPTestRequest(BaseModel):
@@ -247,7 +254,9 @@ async def get_current_settings():
     logger.debug("[SETTINGS] Settings retrieved - configured: %s, log level: %s", settings.is_configured(), settings.backend_log_level)
     return SettingsResponse(
         url=settings.url,
+        auth_method=settings.auth_method,
         username=settings.username,
+        api_key_configured=bool(settings.api_key),
         configured=settings.is_configured(),
         auto_rename_channel_number=settings.auto_rename_channel_number,
         include_channel_number_in_name=settings.include_channel_number_in_name,
@@ -335,29 +344,58 @@ async def update_settings(request: SettingsRequest):
     logger.debug("[SETTINGS] POST /api/settings - URL: %s, username: %s", request.url, request.username)
     current_settings = get_settings()
 
-    # If password is not provided, keep the existing password
-    # This allows updating non-auth settings without re-entering password
+    # If password is not provided, keep the existing password (preserve-on-omit
+    # lets the UI update non-auth fields without re-asking for the secret).
     password = request.password if request.password else current_settings.password
+    api_key = request.api_key if request.api_key else current_settings.api_key
 
     # Same for SMTP password - preserve existing if not provided
     smtp_password = request.smtp_password if request.smtp_password else current_settings.smtp_password
 
-    # Check if auth settings are being changed and password is required
-    auth_changed = (
-        request.url != current_settings.url or
-        request.username != current_settings.username
-    )
-    if auth_changed and not request.password:
-        logger.warning("[SETTINGS] Settings update failed: password required when changing URL or username")
+    if request.auth_method not in ("password", "api_key"):
         raise HTTPException(
             status_code=400,
-            detail="Password is required when changing URL or username"
+            detail=f"Invalid auth_method: {request.auth_method!r} (expected 'password' or 'api_key')",
         )
+
+    mode_changed = request.auth_method != current_settings.auth_method
+    # auth_changed tracks whether any credential-relevant field changed,
+    # used downstream for the save-success log line. Default False so it's
+    # always defined even in api_key mode.
+    auth_changed = mode_changed or request.url != current_settings.url
+    if request.auth_method == "api_key":
+        # api_key mode: url + api_key required; ignore password entirely.
+        # Require a new key when switching modes or rotating an empty key.
+        if mode_changed and not request.api_key:
+            raise HTTPException(
+                status_code=400,
+                detail="API key is required when switching to API key authentication",
+            )
+        if not api_key:
+            raise HTTPException(
+                status_code=400,
+                detail="API key is required when auth_method is 'api_key'",
+            )
+    else:
+        # password mode: url + username + password required. Ask for the password
+        # again if url/username/mode changed, to avoid silently reusing an old one.
+        auth_changed = (
+            auth_changed
+            or request.username != current_settings.username
+        )
+        if auth_changed and not request.password:
+            logger.warning("[SETTINGS] Settings update failed: password required when changing auth mode, URL or username")
+            raise HTTPException(
+                status_code=400,
+                detail="Password is required when changing auth method, URL or username",
+            )
 
     new_settings = DispatcharrSettings(
         url=request.url,
+        auth_method=request.auth_method,
         username=request.username,
         password=password,
+        api_key=api_key,
         auto_rename_channel_number=request.auto_rename_channel_number,
         include_channel_number_in_name=request.include_channel_number_in_name,
         channel_number_separator=request.channel_number_separator,
@@ -587,6 +625,28 @@ async def test_connection(request: TestConnectionRequest):
     base_url = urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
+            if request.auth_method == "api_key":
+                # API key auth: probe /api/accounts/users/me/ with X-API-Key.
+                # A 2xx means the key authenticates to an active user.
+                if not request.api_key:
+                    return {"success": False, "message": "API key is required"}
+                target_url = f"{base_url}/api/accounts/users/me/"
+                response = await client.get(
+                    target_url,
+                    headers={"X-API-Key": request.api_key},
+                )
+                if 200 <= response.status_code < 300:
+                    logger.info("[SETTINGS-TEST] API key connection test successful - %s", parsed.hostname)
+                    return {"success": True, "message": "Connection successful"}
+                if response.status_code == 401:
+                    logger.warning("[SETTINGS-TEST] API key rejected - %s", parsed.hostname)
+                    return {"success": False, "message": "Invalid API key"}
+                if response.status_code == 403:
+                    logger.warning("[SETTINGS-TEST] API key denied by network policy - %s", parsed.hostname)
+                    return {"success": False, "message": "Dispatcharr rejected this server by network policy"}
+                logger.warning("[SETTINGS-TEST] API key test failed - %s - status: %s", parsed.hostname, response.status_code)
+                return {"success": False, "message": f"Authentication failed: {response.status_code}"}
+
             target_url = f"{base_url}/api/accounts/token/"
             response = await client.post(
                 target_url,
@@ -598,12 +658,20 @@ async def test_connection(request: TestConnectionRequest):
             if response.status_code == 200:
                 logger.info("[SETTINGS-TEST] Connection test successful - %s", parsed.hostname)
                 return {"success": True, "message": "Connection successful"}
-            else:
-                logger.warning("[SETTINGS-TEST] Connection test failed - %s - status: %s", parsed.hostname, response.status_code)
+            if response.status_code == 429:
+                logger.warning("[SETTINGS-TEST] Login throttled by Dispatcharr - %s", parsed.hostname)
                 return {
                     "success": False,
-                    "message": f"Authentication failed: {response.status_code}",
+                    "message": "Dispatcharr is rate-limiting login (3/min per IP). Wait a minute or switch to API key auth.",
                 }
+            if response.status_code == 403:
+                logger.warning("[SETTINGS-TEST] Login denied by network policy - %s", parsed.hostname)
+                return {"success": False, "message": "Dispatcharr rejected this server by network policy"}
+            logger.warning("[SETTINGS-TEST] Connection test failed - %s - status: %s", parsed.hostname, response.status_code)
+            return {
+                "success": False,
+                "message": f"Authentication failed: {response.status_code}",
+            }
     except httpx.ConnectError as e:
         logger.error("[SETTINGS-TEST] Connection test failed - could not connect to %s: %s", parsed.hostname, e)
         return {"success": False, "message": "Could not connect to server"}

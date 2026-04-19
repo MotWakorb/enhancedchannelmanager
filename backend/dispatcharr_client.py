@@ -27,12 +27,22 @@ class DispatcharrClient:
         # This prevents race conditions when many requests arrive simultaneously
         self._auth_lock = asyncio.Lock()
 
+    @property
+    def _uses_api_key(self) -> bool:
+        return self.settings.auth_method == "api_key"
+
     async def _ensure_authenticated(self) -> None:
         """Ensure we have a valid access token.
 
         Uses a lock to prevent multiple concurrent requests from all
         triggering authentication at the same time (race condition).
+
+        API-key mode is stateless: the key is attached per-request in
+        ``_request``, so this is a no-op.
         """
+        if self._uses_api_key:
+            return
+
         # Quick check without lock - if we have a token, we're good
         if self.access_token:
             return
@@ -97,7 +107,10 @@ class DispatcharrClient:
         await self._ensure_authenticated()
 
         headers = kwargs.pop("headers", {})
-        headers["Authorization"] = f"Bearer {self.access_token}"
+        if self._uses_api_key:
+            headers["X-API-Key"] = self.settings.api_key
+        else:
+            headers["Authorization"] = f"Bearer {self.access_token}"
 
         # Use extended timeout for EPG grid endpoint (large channel counts)
         request_timeout = kwargs.pop("timeout", None)
@@ -114,8 +127,9 @@ class DispatcharrClient:
                 **kwargs,
             )
 
-            # If unauthorized, try refreshing token and retry
-            if response.status_code == 401:
+            # If unauthorized in JWT mode, try refreshing token and retry.
+            # In api-key mode a 401 is terminal (the key is invalid or revoked).
+            if response.status_code == 401 and not self._uses_api_key:
                 logger.debug("[DISPATCHARR] Got 401, refreshing token and retrying: %s %s", method, path)
                 await self._refresh_access_token()
                 headers["Authorization"] = f"Bearer {self.access_token}"
@@ -1025,7 +1039,7 @@ _client_settings_hash: Optional[str] = None
 
 def _settings_hash(settings: DispatcharrSettings) -> str:
     """Get a hash of settings to detect changes."""
-    return f"{settings.url}:{settings.username}:{settings.password}"
+    return f"{settings.url}:{settings.auth_method}:{settings.username}:{settings.password}:{settings.api_key}"
 
 
 def get_client() -> DispatcharrClient:
