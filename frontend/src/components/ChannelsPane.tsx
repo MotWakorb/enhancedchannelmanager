@@ -55,6 +55,7 @@ interface ChannelsPaneProps {
   channelGroups: ChannelGroup[];
   channels: Channel[];
   streams: Stream[];
+  seenStreamsMap?: Map<number, Stream>;
   providers: M3UAccount[];
   selectedChannelId: number | null;
   onChannelSelect: (channel: Channel | null) => void;
@@ -1166,6 +1167,7 @@ export function ChannelsPane({
   channelGroups,
   channels,
   streams: allStreams,
+  seenStreamsMap,
   providers,
   selectedChannelId,
   onChannelSelect,
@@ -1546,8 +1548,15 @@ export function ChannelsPane({
         return;
       }
 
-      // Build a map of locally available streams (for edit mode staged streams)
-      const localStreamMap = new Map(allStreams.map((s) => [s.id, s]));
+      // Build a map of locally available streams (for edit mode staged streams).
+      // Seed with streams previously seen in any search so staged streams whose
+      // objects only appeared in a prior search term still resolve correctly.
+      const localStreamMap = new Map<number, Stream>(
+        seenStreamsMap ? Array.from(seenStreamsMap) : []
+      );
+      for (const s of allStreams) {
+        localStreamMap.set(s.id, s);
+      }
 
       // For new channels (negative IDs), never call API - only use local streams
       // The channel doesn't exist on the server yet
@@ -1577,6 +1586,7 @@ export function ChannelsPane({
         const streamDetails = await api.getChannelStreams(selectedChannelId);
         // Combine API results with local streams (local takes precedence for staged changes)
         const combinedMap = new Map<number, Stream>([
+          ...(seenStreamsMap ? Array.from(seenStreamsMap) : []),
           ...streamDetails.map((s: Stream) => [s.id, s] as [number, Stream]),
           ...allStreams.map((s) => [s.id, s] as [number, Stream]),
         ]);
@@ -1592,7 +1602,7 @@ export function ChannelsPane({
       }
     };
     loadStreams();
-  }, [selectedChannelId, channels, allStreams]);
+  }, [selectedChannelId, channels, allStreams, seenStreamsMap]);
 
   // Fetch stream stats when channelStreams changes
   useEffect(() => {
@@ -2709,6 +2719,7 @@ export function ChannelsPane({
     resolution: 'resolution',
     bitrate: 'bitrate',
     framerate: 'framerate',
+    video_codec: 'video codec',
     m3u_priority: 'M3U priority',
     audio_channels: 'audio channels',
   };
@@ -5966,7 +5977,7 @@ export function ChannelsPane({
           onClose={() => findDuplicatesModal.close()}
           onMerged={() => {
             findDuplicatesModal.close();
-            fetchChannels();
+            onChannelsChange?.();
           }}
         />
       )}
