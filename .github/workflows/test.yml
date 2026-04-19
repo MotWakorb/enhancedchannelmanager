@@ -64,7 +64,13 @@ jobs:
           RATE_LIMIT_ENABLED: '0'
           ECM_CI_DB_PATH: /tmp/ecm-test.db
         run: |
-          python -m pytest -m "not slow" --tb=short --no-header -p no:warnings
+          # tests/e2e/ hits a running ECM container at localhost:6100.
+          # That path is exercised by the separate `e2e` job (Playwright +
+          # docker build). Skip it here so the backend unit+integration
+          # suite can run without a live service.
+          python -m pytest \
+            --ignore=tests/e2e \
+            -m "not slow" --tb=short --no-header -p no:warnings
 
   # ─── Frontend lint / typecheck / unit tests ───────────────────────────
   frontend:
