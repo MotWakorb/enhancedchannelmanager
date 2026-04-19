@@ -115,8 +115,13 @@ class TestDetectBlackScreen:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_returns_false_on_timeout(self):
-        """Returns False when ffmpeg times out (not black, just failed)."""
+    async def test_returns_none_on_timeout(self):
+        """Timeout is indeterminate, not 'clean'. Callers must preserve prior state.
+
+        Regression: pre-fix, timeout returned False and the scan task happily
+        wrote is_black_screen=False into StreamStats, silently overwriting
+        manual probe findings on every cold-start timeout.
+        """
         prober = create_prober(black_screen_detection_enabled=True, black_screen_sample_duration=5)
         mock_process = AsyncMock()
 
@@ -130,11 +135,12 @@ class TestDetectBlackScreen:
         with patch("stream_prober.asyncio.create_subprocess_exec", return_value=mock_process):
             result = await prober._detect_black_screen("http://example.com/stream")
 
-        assert result is False
+        assert result is None
 
     @pytest.mark.asyncio
-    async def test_returns_false_when_no_yavg_data(self):
-        """Returns False when signalstats produces no YAVG output."""
+    async def test_returns_none_when_no_yavg_data(self):
+        """No YAVG output means signalstats couldn't decode any frames;
+        that's indeterminate, not clean."""
         prober = create_prober(black_screen_detection_enabled=True, black_screen_sample_duration=5)
         stderr_output = b"frame=  150 fps= 30 q=-0.0 Lsize=N/A time=00:00:05.00\n"
         mock_process = self._make_mock_process(stderr_output)
@@ -142,7 +148,7 @@ class TestDetectBlackScreen:
         with patch("stream_prober.asyncio.create_subprocess_exec", return_value=mock_process):
             result = await prober._detect_black_screen("http://example.com/stream")
 
-        assert result is False
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_borderline_at_threshold(self):
@@ -257,6 +263,29 @@ class TestSaveProbeResultBlackScreen:
             prober._save_probe_result(1, "Test", {}, "success", None, is_black_screen=False)
 
         # Should still be True — probe didn't run detection, so it preserves the existing value
+        assert mock_stats.is_black_screen is True
+
+    def test_preserves_black_screen_when_detection_indeterminate(self):
+        """is_black_screen is NOT overwritten when detection returns None.
+
+        Regression: pre-fix, _detect_black_screen's timeout branch returned
+        False, and that False got written into StreamStats on the success
+        path — silently erasing findings from a prior manual probe or scan.
+        The fix routes timeouts through is_black_screen=None, which this
+        test pins.
+        """
+        prober = create_prober(black_screen_detection_enabled=True)
+        mock_stats = Mock(spec=StreamStats)
+        mock_stats.consecutive_failures = 0
+        mock_stats.is_black_screen = True  # Earlier detection flagged this stream
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = mock_stats
+        mock_stats.to_dict.return_value = {"is_black_screen": True}
+
+        with patch("stream_prober.get_session", return_value=mock_session):
+            prober._save_probe_result(1, "Test", {}, "success", None, is_black_screen=None)
+
         assert mock_stats.is_black_screen is True
 
 

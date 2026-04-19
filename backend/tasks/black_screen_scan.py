@@ -194,21 +194,33 @@ class BlackScreenScanTask(TaskScheduler):
                 try:
                     is_black = await self._prober._detect_black_screen(url)
 
-                    # Update StreamStats
-                    db = get_session()
-                    try:
-                        stats = db.query(StreamStats).filter_by(stream_id=stream_id).first()
-                        if stats:
-                            stats.is_black_screen = is_black
-                            db.commit()
-                    finally:
-                        db.close()
-
-                    if is_black:
-                        black_count += 1
-                        black_streams.append({"id": stream_id, "name": name})
+                    # None = indeterminate (ffmpeg timed out or returned no
+                    # YAVG samples). Count as an error and leave the existing
+                    # is_black_screen value in the DB alone — overwriting it
+                    # with False on timeout was erasing findings from manual
+                    # probes earlier in the pipeline.
+                    if is_black is None:
+                        error_count += 1
+                        error_streams.append({
+                            "id": stream_id,
+                            "name": name,
+                            "error": "detection indeterminate (timeout or no video samples)",
+                        })
                     else:
-                        clear_count += 1
+                        db = get_session()
+                        try:
+                            stats = db.query(StreamStats).filter_by(stream_id=stream_id).first()
+                            if stats:
+                                stats.is_black_screen = is_black
+                                db.commit()
+                        finally:
+                            db.close()
+
+                        if is_black:
+                            black_count += 1
+                            black_streams.append({"id": stream_id, "name": name})
+                        else:
+                            clear_count += 1
                 except Exception as e:
                     error_count += 1
                     error_streams.append({"id": stream_id, "name": name, "error": str(e)})
