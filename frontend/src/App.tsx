@@ -21,9 +21,9 @@ import ECMLogo from './assets/ECMLogo.png';
 import './App.css';
 
 // All known sort criteria - used to merge new criteria into saved settings
-const ALL_SORT_CRITERIA: api.SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels'];
+const ALL_SORT_CRITERIA: api.SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels'];
 const DEFAULT_SORT_ENABLED: api.SortEnabledMap = {
-  resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false
+  resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false
 };
 
 // Merge saved sort criteria with any new criteria that may have been added
@@ -104,6 +104,24 @@ function App() {
   const [streams, setStreams] = useState<Stream[]>([]);
   const [providers, setProviders] = useState<M3UAccount[]>([]);
   const [streamGroups, setStreamGroups] = useState<StreamGroupInfo[]>([]);
+
+  // Accumulates every stream ever returned by a search so ChannelsPane can
+  // resolve staged stream IDs even after the stream search term has changed.
+  const [seenStreams, setSeenStreams] = useState<Map<number, Stream>>(new Map());
+  const rememberSeenStreams = useCallback((list: Stream[]) => {
+    if (list.length === 0) return;
+    setSeenStreams((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const s of list) {
+        if (!next.has(s.id)) {
+          next.set(s.id, s);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, []);
 
   // Stream filters - grouped state (with localStorage initialization)
   const [streamFilters, setStreamFilters] = useState(() => {
@@ -1002,6 +1020,7 @@ function App() {
         signal,
       });
       setStreams(response.results);
+      rememberSeenStreams(response.results);
 
       // Also refresh group metadata so groups show correct filtered counts
       const m3uAccountId = streamFilters.selectedProviders?.length === 1
@@ -1071,6 +1090,7 @@ function App() {
         const newStreams = allGroupStreams.filter(s => !existingIds.has(s.id));
         return [...prevStreams, ...newStreams];
       });
+      rememberSeenStreams(allGroupStreams);
     } catch (err) {
       // Remove from loaded set on error so user can retry
       loadedStreamGroupsRef.current.delete(groupName);
@@ -1078,7 +1098,7 @@ function App() {
         logger.error(`Failed to load streams for group ${groupName}:`, err);
       }
     }
-  }, [streamFilters.search]);
+  }, [streamFilters.search, rememberSeenStreams]);
 
   // Reload channels when search changes
   useEffect(() => {
@@ -2309,6 +2329,7 @@ function App() {
 
               // Streams
               allStreams={streams}
+              seenStreamsMap={seenStreams}
               streams={filteredStreams}
               providers={providers}
               streamGroups={streamGroups}
