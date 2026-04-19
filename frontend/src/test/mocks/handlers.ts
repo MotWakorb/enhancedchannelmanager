@@ -1145,4 +1145,117 @@ export const handlers = [
       restored_files: ['settings.json', 'journal.db'],
     })
   }),
+
+  // ==========================================================================
+  // Lookup Tables — /api/lookup-tables
+  // ==========================================================================
+
+  http.get(`${API_BASE}/lookup-tables`, () => {
+    return HttpResponse.json([
+      {
+        id: 1,
+        name: 'callsigns',
+        description: 'Channel call signs',
+        entry_count: 2,
+        created_at: '2026-04-19T00:00:00Z',
+        updated_at: '2026-04-19T00:00:00Z',
+      },
+    ])
+  }),
+
+  http.post(`${API_BASE}/lookup-tables`, async ({ request }) => {
+    const body = (await request.json()) as {
+      name: string
+      description?: string | null
+      entries?: Record<string, string>
+    }
+    return HttpResponse.json(
+      {
+        id: nextId(),
+        name: body.name,
+        description: body.description ?? null,
+        entries: body.entries ?? {},
+        entry_count: Object.keys(body.entries ?? {}).length,
+        created_at: '2026-04-19T00:00:00Z',
+        updated_at: '2026-04-19T00:00:00Z',
+      },
+      { status: 201 },
+    )
+  }),
+
+  http.get(`${API_BASE}/lookup-tables/:id`, ({ params }) => {
+    return HttpResponse.json({
+      id: Number(params.id),
+      name: 'callsigns',
+      description: 'Channel call signs',
+      entries: { ESPN: 'espn.com', CNN: 'cnn.com' },
+      entry_count: 2,
+      created_at: '2026-04-19T00:00:00Z',
+      updated_at: '2026-04-19T00:00:00Z',
+    })
+  }),
+
+  http.patch(`${API_BASE}/lookup-tables/:id`, async ({ params, request }) => {
+    const body = (await request.json()) as {
+      name?: string
+      description?: string | null
+      entries?: Record<string, string>
+    }
+    return HttpResponse.json({
+      id: Number(params.id),
+      name: body.name ?? 'callsigns',
+      description: body.description ?? null,
+      entries: body.entries ?? { ESPN: 'espn.com' },
+      entry_count: Object.keys(body.entries ?? { ESPN: 'espn.com' }).length,
+      created_at: '2026-04-19T00:00:00Z',
+      updated_at: '2026-04-19T00:00:01Z',
+    })
+  }),
+
+  http.delete(`${API_BASE}/lookup-tables/:id`, () => {
+    return new HttpResponse(null, { status: 204 })
+  }),
+
+  // ==========================================================================
+  // Dummy EPG — /api/dummy-epg/preview (subset used by the modal)
+  // ==========================================================================
+
+  http.post(`${API_BASE}/dummy-epg/preview`, async ({ request }) => {
+    const body = (await request.json()) as {
+      sample_name: string
+      title_template?: string
+      description_template?: string
+      include_trace?: boolean
+    }
+    const rendered = {
+      title: body.title_template ?? body.sample_name,
+      description: body.description_template ?? '',
+      upcoming_title: '',
+      upcoming_description: '',
+      ended_title: '',
+      ended_description: '',
+      fallback_title: '',
+      fallback_description: '',
+      channel_logo_url: '',
+      program_poster_url: '',
+    }
+    const response: Record<string, unknown> = {
+      original_name: body.sample_name,
+      substituted_name: body.sample_name,
+      substitution_steps: [],
+      matched: true,
+      matched_variant: null,
+      groups: { name: body.sample_name },
+      time_variables: null,
+      rendered,
+    }
+    if (body.include_trace) {
+      response.traces = {
+        title_template: body.title_template
+          ? [{ kind: 'literal', text: rendered.title }]
+          : [],
+      }
+    }
+    return HttpResponse.json(response)
+  }),
 ]

@@ -66,6 +66,10 @@ export interface DummyEPGCustomProperties {
   include_date_tag?: boolean;                // Add <date> tag to EPG output
   include_live_tag?: boolean;                // Mark programs as live content
   include_new_tag?: boolean;                 // Mark programs as new content
+
+  // Lookup tables used by the template engine's {key|lookup:<name>} pipe.
+  inline_lookups?: Record<string, Record<string, string>>;  // Per-source tables (name → entries)
+  global_lookup_ids?: number[];                             // IDs from /api/lookup-tables to attach
 }
 
 export interface EPGSource {
@@ -1532,6 +1536,38 @@ export interface DummyEPGPreviewRequest {
   channel_logo_url_template?: string;
   program_poster_url_template?: string;
   pattern_variants?: PatternVariant[];
+  inline_lookups?: Record<string, Record<string, string>>;
+  global_lookup_ids?: number[];
+  include_trace?: boolean;
+}
+
+// One step in the per-field trace returned when include_trace=true.
+export type DummyEPGPreviewTraceStep =
+  | { kind: 'literal'; text: string }
+  | {
+      kind: 'placeholder';
+      raw: string;
+      group_name: string;
+      initial_value: string;
+      pipes: DummyEPGPreviewPipeStep[];
+      final_value: string;
+    }
+  | {
+      kind: 'conditional';
+      condition: string;
+      kind_detail: 'truthy' | 'equality' | 'regex';
+      taken: boolean;
+      value: string;
+      body: DummyEPGPreviewTraceStep[];
+    };
+
+export interface DummyEPGPreviewPipeStep {
+  transform: string;
+  arg: string | null;
+  input: string;
+  output: string;
+  source?: string;
+  matched?: boolean;
 }
 
 // Batch preview request
@@ -1578,6 +1614,10 @@ export interface DummyEPGPreviewResult {
     channel_logo_url: string;
     program_poster_url: string;
   };
+  // Present when the request set include_trace=true. Keys are template field
+  // names (title_template, description_template, etc.); values are the
+  // step-by-step render trace for that field.
+  traces?: Record<string, DummyEPGPreviewTraceStep[]>;
 }
 
 // Channel assignment for Dummy EPG profiles

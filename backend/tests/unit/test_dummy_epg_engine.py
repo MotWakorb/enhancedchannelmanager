@@ -264,10 +264,12 @@ def test_render_normalize_placeholder():
     assert result == "wolvesvshawks"
 
 
-def test_render_missing_key_left_as_is():
-    """Unknown placeholders remain in the output."""
+def test_render_missing_key_renders_empty():
+    """Unknown placeholders render as empty — matches the template engine
+    semantics shared with the frontend applyTemplate so previews and XMLTV
+    output never leak raw template tokens."""
     result = render_template("{unknown}", {})
-    assert result == "{unknown}"
+    assert result == ""
 
 
 def test_render_empty_template():

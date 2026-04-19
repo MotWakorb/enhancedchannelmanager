@@ -406,6 +406,26 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `GET /api/dummy-epg/profiles/export/yaml` | Export profiles as YAML |
 | `POST /api/dummy-epg/profiles/import/yaml` | Import profiles from YAML |
 
+`POST /api/dummy-epg/preview` accepts the full profile config plus:
+
+- `inline_lookups: {<name>: {<key>: <value>, ...}, ...}` — per-source lookup tables referenced by `{key|lookup:<name>}`. Inline tables override globals of the same name.
+- `global_lookup_ids: [id, ...]` — IDs of saved tables from `/api/lookup-tables`.
+- `include_trace: bool` — when true, the response carries a `traces` dict keyed by template field (`title_template`, `description_template`, …). Trace entries describe literals, placeholders (with per-pipe input/output and lookup hit/miss), and conditionals (taken/skipped + branch kind).
+
+## Lookup Tables
+
+Named key → value tables used by the dummy EPG template engine's `{key|lookup:<name>}` pipe.
+
+| Endpoint | Description |
+|-|-|
+| `GET /api/lookup-tables` | List all tables (summary — entry counts, no entries) |
+| `POST /api/lookup-tables` | Create a table (`{name, description?, entries?}`) |
+| `GET /api/lookup-tables/{id}` | Get a single table with full `entries` dict |
+| `PATCH /api/lookup-tables/{id}` | Rename, edit description, and/or replace entries |
+| `DELETE /api/lookup-tables/{id}` | Delete a table (cascades to any source still referencing it by ID — the preview path skips missing IDs silently) |
+
+Names are unique. Each table is capped at 10 000 entries.
+
 ## Export
 
 | Endpoint | Description |
