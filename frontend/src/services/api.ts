@@ -3130,3 +3130,58 @@ export async function updateServiceAlertRule(
 export async function deleteServiceAlertRule(ruleId: number): Promise<void> {
   return fetchJson(`${API_BASE}/services/alert-rules/${ruleId}`, { method: 'DELETE' });
 }
+
+// ---------------------------------------------------------------------------
+// Lookup Tables (dummy EPG template engine |lookup:<name> pipe)
+// ---------------------------------------------------------------------------
+
+export interface LookupTableSummary {
+  id: number;
+  name: string;
+  description: string | null;
+  entry_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface LookupTable extends LookupTableSummary {
+  entries: Record<string, string>;
+}
+
+export interface LookupTableCreateRequest {
+  name: string;
+  description?: string;
+  entries?: Record<string, string>;
+}
+
+export interface LookupTableUpdateRequest {
+  name?: string;
+  description?: string;
+  entries?: Record<string, string>;
+}
+
+export async function listLookupTables(): Promise<LookupTableSummary[]> {
+  return fetchJson(`${API_BASE}/lookup-tables`);
+}
+
+export async function getLookupTable(id: number): Promise<LookupTable> {
+  return fetchJson(`${API_BASE}/lookup-tables/${id}`);
+}
+
+export async function createLookupTable(data: LookupTableCreateRequest): Promise<LookupTable> {
+  return fetchJson(`${API_BASE}/lookup-tables`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateLookupTable(id: number, data: LookupTableUpdateRequest): Promise<LookupTable> {
+  return fetchJson(`${API_BASE}/lookup-tables/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteLookupTable(id: number): Promise<void> {
+  return fetchJson(`${API_BASE}/lookup-tables/${id}`, { method: 'DELETE' });
+}

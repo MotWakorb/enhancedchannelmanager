@@ -26,6 +26,7 @@ from routers.channel_groups import router as channel_groups_router
 from routers.dummy_epg import router as dummy_epg_router
 from routers.export import router as export_router
 from routers.backup import router as backup_router
+from routers.lookup_tables import router as lookup_tables_router
 
 all_routers = [
     tasks_router,
@@ -51,4 +52,5 @@ all_routers = [
     dummy_epg_router,
     export_router,
     backup_router,
+    lookup_tables_router,
 ]

@@ -10,6 +10,7 @@ import { LinkedAccountsSection } from '../settings/LinkedAccountsSection';
 import { TLSSettingsSection } from '../settings/TLSSettingsSection';
 import { BackupRestoreSection } from '../settings/BackupRestoreSection';
 import { MCPSettingsSection } from '../settings/MCPSettingsSection';
+import { LookupTableSection } from '../settings/LookupTableSection';
 import { useAuth } from '../../hooks/useAuth';
 import type { ChannelProfile, M3UDigestSettings, M3UDigestFrequency } from '../../types';
 import { logger } from '../../utils/logger';
@@ -4223,6 +4224,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Tags
           </li>
           <li
+            className={`settings-nav-item ${activePage === 'lookup-tables' ? 'active' : ''}`}
+            onClick={() => setActivePage('lookup-tables')}
+          >
+            <span className="material-icons">table_view</span>
+            Lookup Tables
+          </li>
+          <li
             className={`settings-nav-item ${activePage === 'appearance' ? 'active' : ''}`}
             onClick={() => setActivePage('appearance')}
           >
@@ -4319,6 +4327,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
         {activePage === 'normalization' && renderNormalizationPage()}
         {activePage === 'tag-engine' && <TagEngineSection />}
+        {activePage === 'lookup-tables' && <LookupTableSection />}
         {activePage === 'appearance' && renderAppearancePage()}
         {activePage === 'email' && renderEmailSettingsPage()}
         {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}

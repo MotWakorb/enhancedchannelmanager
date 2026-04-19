@@ -52,7 +52,7 @@ def init_db() -> None:
         _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
         # Import models to register them with Base
-        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, AutoCreationRule, AutoCreationExecution, AutoCreationConflict, FFmpegProfile, DummyEPGProfile, DummyEPGChannelAssignment  # noqa: F401
+        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, AutoCreationRule, AutoCreationExecution, AutoCreationConflict, FFmpegProfile, DummyEPGProfile, DummyEPGChannelAssignment, LookupTable  # noqa: F401
         from export_models import PlaylistProfile, CloudStorageTarget, PublishConfiguration, PublishHistory  # noqa: F401
 
         # Create all tables

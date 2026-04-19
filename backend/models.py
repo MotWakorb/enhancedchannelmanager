@@ -2057,3 +2057,43 @@ class DummyEPGChannelAssignment(Base):
 
     def __repr__(self):
         return f"<DummyEPGChannelAssignment(id={self.id}, profile_id={self.profile_id}, channel_id={self.channel_id})>"
+
+
+class LookupTable(Base):
+    """
+    Named key→value lookup tables used by the dummy EPG template engine.
+
+    Referenced via the `|lookup:<name>` pipe transform. `entries` is a JSON
+    object (str → str); key miss falls back to the input value at render time.
+    """
+    __tablename__ = "lookup_tables"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False, unique=True)
+    description = Column(Text, nullable=True)
+    entries = Column(Text, nullable=False, default="{}")  # JSON-encoded dict[str, str]
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_lookup_table_name", name),
+    )
+
+    def to_dict(self) -> dict:
+        import json as _json
+        try:
+            entries_obj = _json.loads(self.entries) if self.entries else {}
+        except (ValueError, TypeError):
+            entries_obj = {}
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "entries": entries_obj,
+            "entry_count": len(entries_obj),
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<LookupTable(id={self.id}, name={self.name})>"

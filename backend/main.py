@@ -82,6 +82,7 @@ tags_metadata = [
     {"name": "Admin", "description": "User management (admin only)"},
     {"name": "FFMPEG Profiles", "description": "Save and load FFMPEG Builder profiles"},
     {"name": "Backup", "description": "Backup and restore ECM configuration"},
+    {"name": "Lookup Tables", "description": "Named key→value tables used by the dummy EPG template engine"},
 ]
 
 app = FastAPI(

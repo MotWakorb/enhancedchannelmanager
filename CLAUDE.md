@@ -47,6 +47,7 @@ bd sync                       # Sync beads data only (NOT for code commits)
 | Discord Release Notes | `docs/discord_release_notes.md` |
 | Testing Details | `docs/testing.md` |
 | Shipping Workflow | `docs/shipping.md` |
+| Dummy EPG Template Engine | `docs/template_engine.md` |
 
 ## Development Workflow
 
