@@ -10,7 +10,12 @@ import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
 from auth.settings import AuthSettings, DispatcharrAuthSettings, LocalAuthSettings
-from auth.providers.dispatcharr import DispatcharrAuthResult, DispatcharrAuthenticationError
+from auth.providers.dispatcharr import (
+    DispatcharrAuthResult,
+    DispatcharrAuthenticationError,
+    DispatcharrNetworkPolicyError,
+    DispatcharrRateLimitError,
+)
 
 
 def mock_dispatcharr_enabled_settings():
@@ -151,6 +156,41 @@ class TestDispatcharrAuthentication:
 
                 assert response.status_code == 401
                 assert "detail" in response.json()
+
+    @pytest.mark.asyncio
+    async def test_dispatcharr_rate_limit_returns_429(self, async_client):
+        """Dispatcharr 0.23.0+ 3/min login throttle surfaces as 429 with Retry-After."""
+        mock_client = create_mock_dispatcharr_client(
+            auth_error=DispatcharrRateLimitError("Rate limited")
+        )
+
+        with patch("auth.routes.get_auth_settings", return_value=mock_dispatcharr_enabled_settings()):
+            with patch("auth.providers.dispatcharr.DispatcharrClient", return_value=mock_client):
+                response = await async_client.post(
+                    "/api/auth/dispatcharr/login",
+                    json={"username": "user", "password": "password"},
+                )
+
+                assert response.status_code == 429
+                assert response.headers.get("retry-after") == "60"
+                assert "rate-limit" in response.json()["detail"].lower() or "rate limited" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_dispatcharr_network_policy_returns_403(self, async_client):
+        """Dispatcharr network-policy rejection surfaces as 403 with actionable detail."""
+        mock_client = create_mock_dispatcharr_client(
+            auth_error=DispatcharrNetworkPolicyError("Network policy denied")
+        )
+
+        with patch("auth.routes.get_auth_settings", return_value=mock_dispatcharr_enabled_settings()):
+            with patch("auth.providers.dispatcharr.DispatcharrClient", return_value=mock_client):
+                response = await async_client.post(
+                    "/api/auth/dispatcharr/login",
+                    json={"username": "user", "password": "password"},
+                )
+
+                assert response.status_code == 403
+                assert "network policy" in response.json()["detail"].lower()
 
     @pytest.mark.asyncio
     async def test_dispatcharr_timeout_returns_503(self, async_client):

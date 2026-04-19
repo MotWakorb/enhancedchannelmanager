@@ -16,8 +16,10 @@ def _mock_settings(**overrides):
     """Create a mock settings object with sensible defaults."""
     defaults = {
         "url": "http://dispatcharr:8000",
+        "auth_method": "password",
         "username": "admin",
         "password": "secret",
+        "api_key": "",
         "auto_rename_channel_number": False,
         "include_channel_number_in_name": False,
         "channel_number_separator": "-",
@@ -147,6 +149,63 @@ class TestUpdateSettings:
         assert response.status_code == 400
         assert "password" in response.json()["detail"].lower()
 
+    @pytest.mark.asyncio
+    async def test_switch_to_api_key_saves_successfully(self, async_client):
+        """Switching auth_method to api_key with a fresh key saves without crashing."""
+        current = _mock_settings(auth_method="password")
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "auth_method": "api_key",
+                "username": current.username,
+                "api_key": "newly-generated-key",
+            })
+
+        assert response.status_code == 200, response.json()
+        assert response.json()["status"] == "saved"
+
+    @pytest.mark.asyncio
+    async def test_api_key_mode_preserves_stored_key_when_omitted(self, async_client):
+        """Saving in api_key mode without re-sending the key keeps the stored one."""
+        current = _mock_settings(auth_method="api_key", api_key="stored-key")
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "auth_method": "api_key",
+                "username": current.username,
+            })
+
+        assert response.status_code == 200, response.json()
+
+    @pytest.mark.asyncio
+    async def test_api_key_mode_rejects_empty_key_on_switch(self, async_client):
+        """Switching to api_key without providing a key is rejected with 400."""
+        current = _mock_settings(auth_method="password", api_key="")
+
+        with patch("routers.settings.get_settings", return_value=current):
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "auth_method": "api_key",
+                "username": current.username,
+            })
+
+        assert response.status_code == 400
+        assert "api key" in response.json()["detail"].lower()
+
 
 class TestTestConnection:
     """Tests for POST /api/settings/test."""
@@ -192,6 +251,88 @@ class TestTestConnection:
 
         assert response.status_code == 200
         assert response.json()["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_password_mode_429_reports_rate_limit(self, async_client):
+        """Dispatcharr 429 on the token endpoint surfaces a human-readable message."""
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+
+        mock_http_client = AsyncMock()
+        mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
+        mock_http_client.__aexit__ = AsyncMock(return_value=False)
+        mock_http_client.post = AsyncMock(return_value=mock_response)
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "password",
+                "username": "admin",
+                "password": "secret",
+            })
+
+        body = response.json()
+        assert body["success"] is False
+        assert "rate-limit" in body["message"].lower() or "rate limit" in body["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_api_key_mode_success(self, async_client):
+        """API-key mode probes /users/me/ with X-API-Key and treats 2xx as success."""
+        me_response = MagicMock()
+        me_response.status_code = 200
+
+        mock_http_client = AsyncMock()
+        mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
+        mock_http_client.__aexit__ = AsyncMock(return_value=False)
+        mock_http_client.get = AsyncMock(return_value=me_response)
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        # Header should have been set on the GET.
+        get_kwargs = mock_http_client.get.await_args.kwargs
+        assert get_kwargs["headers"]["X-API-Key"] == "abc123"
+
+    @pytest.mark.asyncio
+    async def test_api_key_mode_invalid_key(self, async_client):
+        """401 from /users/me/ in api_key mode reports invalid key."""
+        me_response = MagicMock()
+        me_response.status_code = 401
+
+        mock_http_client = AsyncMock()
+        mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
+        mock_http_client.__aexit__ = AsyncMock(return_value=False)
+        mock_http_client.get = AsyncMock(return_value=me_response)
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "bad-key",
+            })
+
+        body = response.json()
+        assert body["success"] is False
+        assert "invalid api key" in body["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_api_key_mode_missing_key(self, async_client):
+        """api_key mode without a key returns a clear error without hitting the network."""
+        response = await async_client.post("/api/settings/test", json={
+            "url": "http://dispatcharr:8000",
+            "auth_method": "api_key",
+            "api_key": "",
+        })
+
+        body = response.json()
+        assert body["success"] is False
+        assert "api key" in body["message"].lower()
 
 
 class TestTestSMTP:

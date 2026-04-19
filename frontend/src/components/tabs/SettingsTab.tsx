@@ -323,8 +323,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   // Connection settings
   const [url, setUrl] = useState('');
+  const [authMethod, setAuthMethod] = useState<'password' | 'api_key'>('password');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
 
   // Channel defaults
   const [autoRenameChannelNumber, setAutoRenameChannelNumber] = useState(false);
@@ -340,8 +342,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [customNetworkSuffixes, setCustomNetworkSuffixes] = useState<string[]>([]);
   const [normalizeOnChannelCreate, setNormalizeOnChannelCreate] = useState(false);
 
-  const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels']);
-  const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false });
+  const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels']);
+  const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false });
   const [m3uAccountPriorities, setM3uAccountPriorities] = useState<Record<string, number>>({});
   const [deprioritizeFailedStreams, setDeprioritizeFailedStreams] = useState(true);
   const [deprioritizeBlackScreen, setDeprioritizeBlackScreen] = useState(true);
@@ -357,7 +359,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [hideM3uUrls, setHideM3uUrls] = useState(false);
   const [gracenoteConflictMode, setGracenoteConflictMode] = useState<GracenoteConflictMode>('ask');
   const [theme, setTheme] = useState<Theme>('dark');
-  const [vlcOpenBehavior, setVlcOpenBehavior] = useState('m3u_fallback');
+  const [vlcOpenBehavior, setVlcOpenBehavior] = useState<'protocol_only' | 'm3u_fallback' | 'm3u_only'>('m3u_fallback');
   const [streamPreviewMode, setStreamPreviewMode] = useState<StreamPreviewMode>('passthrough');
 
   // Stats settings
@@ -707,10 +709,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     try {
       const settings = await api.getSettings();
       setUrl(settings.url);
+      setAuthMethod(settings.auth_method || 'password');
       setUsername(settings.username);
       setOriginalUrl(settings.url);
       setOriginalUsername(settings.username);
       setPassword(''); // Never load password from server
+      setApiKeyConfigured(settings.api_key_configured);
       setAutoRenameChannelNumber(settings.auto_rename_channel_number);
       setIncludeChannelNumberInName(settings.include_channel_number_in_name);
       setChannelNumberSeparator(settings.channel_number_separator);
@@ -725,7 +729,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setHideM3uUrls(settings.hide_m3u_urls ?? false);
       setGracenoteConflictMode(settings.gracenote_conflict_mode || 'ask');
       setTheme(settings.theme || 'dark');
-      setVlcOpenBehavior(settings.vlc_open_behavior || 'm3u_fallback');
+      const vlcBehavior = settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only';
+      setVlcOpenBehavior(vlcBehavior || 'm3u_fallback');
       setStreamPreviewMode(settings.stream_preview_mode || 'passthrough');
       setAutoCreationExcludedTerms(settings.auto_creation_excluded_terms ?? []);
       setAutoCreationExcludedGroups(settings.auto_creation_excluded_groups ?? []);
@@ -828,19 +833,25 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   };
 
   const handleSave = async () => {
-    // Check if auth settings (URL or username) have changed
+    // Check if password-auth fields have changed (only meaningful in password mode)
     const authChanged = url !== originalUrl || username !== originalUsername;
 
-    // Validate required fields
-    if (!url || !username) {
-      notifications.error('URL and username are required');
+    if (!url) {
+      notifications.error('URL is required');
       return;
     }
 
-    // Password is only required if auth settings changed
-    if (authChanged && !password) {
-      notifications.error('Password is required when changing URL or username');
-      return;
+    // Validation only for password-mode; api_key mode validation lives in the
+    // connection modal since the key field isn't on this page.
+    if (authMethod === 'password') {
+      if (!username) {
+        notifications.error('URL and username are required');
+        return;
+      }
+      if (authChanged && !password) {
+        notifications.error('Password is required when changing URL or username');
+        return;
+      }
     }
 
     setLoading(true);
@@ -848,6 +859,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     try {
       const result = await api.saveSettings({
         url,
+        auth_method: authMethod,
         username,
         // Only send password if it was entered
         ...(password ? { password } : {}),
@@ -1470,13 +1482,28 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <span className="connection-value">{url || 'Not configured'}</span>
           </div>
           <div className="connection-info-row">
-            <span className="connection-label">Username:</span>
-            <span className="connection-value">{username || 'Not configured'}</span>
+            <span className="connection-label">Auth Method:</span>
+            <span className="connection-value">
+              {authMethod === 'api_key' ? 'API Key' : 'Username & Password'}
+            </span>
           </div>
-          <div className="connection-info-row">
-            <span className="connection-label">Password:</span>
-            <span className="connection-value">••••••••</span>
-          </div>
+          {authMethod === 'api_key' ? (
+            <div className="connection-info-row">
+              <span className="connection-label">API Key:</span>
+              <span className="connection-value">{apiKeyConfigured ? '••••••••' : 'Not configured'}</span>
+            </div>
+          ) : (
+            <>
+              <div className="connection-info-row">
+                <span className="connection-label">Username:</span>
+                <span className="connection-value">{username || 'Not configured'}</span>
+              </div>
+              <div className="connection-info-row">
+                <span className="connection-label">Password:</span>
+                <span className="connection-value">••••••••</span>
+              </div>
+            </>
+          )}
         </div>
         <div className="connection-actions">
           <button
@@ -1819,7 +1846,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           <label htmlFor="vlcOpenBehavior">Open in VLC Behavior</label>
           <CustomSelect
             value={vlcOpenBehavior}
-            onChange={(val) => setVlcOpenBehavior(val)}
+            onChange={(val) => setVlcOpenBehavior(val as 'protocol_only' | 'm3u_fallback' | 'm3u_only')}
             options={[
               { value: 'protocol_only', label: 'Try VLC Protocol (show helper if it fails)' },
               { value: 'm3u_fallback', label: 'Try VLC Protocol, then fallback to M3U download' },

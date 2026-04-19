@@ -34,8 +34,16 @@ def validate_url_scheme(url: str, field_name: str = "URL") -> None:
 class DispatcharrSettings(BaseModel):
     """User-configurable Dispatcharr connection settings."""
     url: str = ""
+    # Outbound auth method for service-to-service calls:
+    #   "password" — legacy flow: username + password → JWT token (subject to
+    #                Dispatcharr 0.23.0+ 3/min IP-shared login throttle).
+    #   "api_key"  — X-API-Key header on every request, no token refresh.
+    auth_method: str = "password"
     username: str = ""
     password: str = ""
+    # Personal API key generated in Dispatcharr (Account → API Keys). Stored
+    # plaintext at rest, same as password.
+    api_key: str = ""
     # Channel naming defaults
     auto_rename_channel_number: bool = False
     include_channel_number_in_name: bool = False
@@ -175,7 +183,11 @@ class DispatcharrSettings(BaseModel):
     mcp_api_key: str = ""
 
     def is_configured(self) -> bool:
-        return bool(self.url and self.username and self.password)
+        if not self.url:
+            return False
+        if self.auth_method == "api_key":
+            return bool(self.api_key)
+        return bool(self.username and self.password)
 
     def is_smtp_configured(self) -> bool:
         """Check if shared SMTP settings are configured."""

@@ -768,9 +768,13 @@ export type M3UAccountPriorities = Record<string, number>;
 
 export type GracenoteConflictMode = 'ask' | 'skip' | 'overwrite';
 
+export type DispatcharrAuthMethod = 'password' | 'api_key';
+
 export interface SettingsResponse {
   url: string;
+  auth_method: DispatcharrAuthMethod;
   username: string;
+  api_key_configured: boolean;  // True if an api_key is stored (value never returned)
   configured: boolean;
   auto_rename_channel_number: boolean;
   include_channel_number_in_name: boolean;
@@ -862,8 +866,10 @@ export async function getSettings(): Promise<SettingsResponse> {
 
 export async function saveSettings(settings: {
   url: string;
+  auth_method: DispatcharrAuthMethod;
   username: string;
   password?: string;  // Optional - only required when changing URL or username
+  api_key?: string;   // Optional - only required when (re)setting API key mode
   auto_rename_channel_number: boolean;
   include_channel_number_in_name: boolean;
   channel_number_separator: string;
@@ -961,8 +967,10 @@ export async function getMCPStatus(): Promise<{
 
 export async function testConnection(settings: {
   url: string;
-  username: string;
-  password: string;
+  auth_method: DispatcharrAuthMethod;
+  username?: string;
+  password?: string;
+  api_key?: string;
 }): Promise<TestConnectionResult> {
   return fetchJson(`${API_BASE}/settings/test`, {
     method: 'POST',
