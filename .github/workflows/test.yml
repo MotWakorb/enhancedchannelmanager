@@ -1,0 +1,281 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+      # Scratch validation branch for bead enhancedchannelmanager-t8xw3.
+      # Remove this line before merging back to dev.
+      - ci/test-t8xw3
+    paths-ignore:
+      - '.beads/**'
+      - '**.md'
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - '.beads/**'
+      - '**.md'
+  schedule:
+    # Nightly E2E on dev — 07:00 UTC. The job itself short-circuits if no new
+    # commits have landed on dev since the last successful run.
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+jobs:
+  # ─── Backend tests ────────────────────────────────────────────────────
+  backend:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Prepare CI SQLite database
+        working-directory: backend
+        run: |
+          mkdir -p /tmp/ecm_test_config
+          rm -f /tmp/ecm-test.db
+          # Materialize an empty SQLite file — tests that opt into the
+          # `ci_seed_db` fixture load their own tmp DBs; this file exists so
+          # smoke checks (e.g. DB driver import, write permissions) work.
+          python -c "import sqlite3; sqlite3.connect('/tmp/ecm-test.db').close()"
+
+      - name: Run pytest
+        working-directory: backend
+        env:
+          CONFIG_DIR: /tmp/ecm_test_config
+          RATE_LIMIT_ENABLED: '0'
+          ECM_CI_DB_PATH: /tmp/ecm-test.db
+        run: |
+          python -m pytest -m "not slow" --tb=short --no-header -p no:warnings
+
+  # ─── Frontend lint / typecheck / unit tests ───────────────────────────
+  frontend:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          # Need full history so we can diff against origin/main in PR mode.
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint changed files (PR mode — blocking)
+        if: github.event_name == 'pull_request'
+        run: |
+          # Enforce lint only on files touched by this PR. Existing errors
+          # elsewhere are grandfathered and tracked via companion bead
+          # enhancedchannelmanager-zjge5. New violations on changed files
+          # block the PR via --max-warnings 0.
+          git fetch --no-tags --depth=0 origin "${{ github.base_ref }}"
+          BASE_REF="origin/${{ github.base_ref }}"
+          CHANGED=$(git diff --name-only --diff-filter=ACMR "${BASE_REF}...HEAD" \
+            | grep -E '^frontend/.*\.(ts|tsx|js|mjs|cjs)$' \
+            | grep -v '^frontend/node_modules/' \
+            | sed 's|^frontend/||' || true)
+          if [ -z "$CHANGED" ]; then
+            echo "No lintable frontend files changed in this PR."
+            exit 0
+          fi
+          echo "Linting changed files:"
+          echo "$CHANGED"
+          cd frontend
+          echo "$CHANGED" | xargs npx eslint --report-unused-disable-directives --max-warnings 0
+
+      - name: Full lint (push mode — informational only)
+        if: github.event_name != 'pull_request'
+        working-directory: frontend
+        continue-on-error: true
+        run: |
+          echo "Full-repo lint — NON-BLOCKING. Tracking baseline via bead enhancedchannelmanager-zjge5."
+          npm run lint
+
+      - name: Typecheck
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Unit tests
+        working-directory: frontend
+        run: npm test
+
+      - name: Coverage report (informational only)
+        working-directory: frontend
+        continue-on-error: true
+        run: |
+          echo "Coverage report — NON-BLOCKING. Threshold enforcement tracked in bead enhancedchannelmanager-nmlxi."
+          npm run test:coverage
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: frontend/coverage/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ─── E2E tests ────────────────────────────────────────────────────────
+  e2e-should-run:
+    name: E2E — Skip-if-no-new-commits guard
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    outputs:
+      run: ${{ steps.guard.outputs.run }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Check for new commits on dev since last successful run
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CURRENT_SHA="$(git rev-parse HEAD)"
+          echo "Current dev HEAD: ${CURRENT_SHA}"
+          # Find the most recent successful scheduled run of this workflow.
+          LAST_SHA=$(gh run list --workflow test.yml --branch dev \
+            --event schedule --status success --limit 1 \
+            --json headSha --jq '.[0].headSha // empty')
+          if [ -z "$LAST_SHA" ]; then
+            echo "No previous successful scheduled run — will run."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Last successful scheduled run SHA: ${LAST_SHA}"
+          if [ "$LAST_SHA" = "$CURRENT_SHA" ]; then
+            echo "No new commits since last successful run — skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New commits detected — will run."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    needs: [e2e-should-run]
+    # PR to main: always run. Nightly cron on dev: run only when guard says so.
+    # workflow_dispatch: always run. Push to dev/main: skip (handled by build pipeline).
+    if: >-
+      always() &&
+      (
+        (github.event_name == 'pull_request' && github.base_ref == 'main') ||
+        (github.event_name == 'schedule' && needs.e2e-should-run.outputs.run == 'true') ||
+        github.event_name == 'workflow_dispatch'
+      )
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=$(jq -r '.version' frontend/package.json)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Build ECM image locally
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: ecm:e2e-test
+          platforms: linux/amd64
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            ECM_VERSION=${{ steps.version.outputs.version }}
+            RELEASE_CHANNEL=ci
+          cache-from: type=gha,scope=amd64
+
+      - name: Start ECM container
+        run: |
+          docker run -d --name ecm-e2e -p 6100:6100 \
+            -e DISPATCHARR_URL=http://localhost:9999 \
+            ecm:e2e-test
+
+          echo "Waiting for application to become healthy..."
+          READY=false
+          for i in {1..30}; do
+            if curl -sf http://localhost:6100/api/health > /dev/null 2>&1; then
+              echo "Application is ready."
+              READY=true
+              break
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 2
+          done
+
+          if [ "$READY" = "false" ]; then
+            echo "Application failed to start within 60 seconds."
+            docker logs ecm-e2e
+            exit 1
+          fi
+
+      - name: Install root dependencies (Playwright)
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        env:
+          E2E_BASE_URL: http://localhost:6100
+          CI: '1'
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Stop container and collect logs
+        if: always()
+        run: |
+          docker logs ecm-e2e || true
+          docker stop ecm-e2e || true
+          docker rm ecm-e2e || true
