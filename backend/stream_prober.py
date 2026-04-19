@@ -869,8 +869,11 @@ class StreamProber:
             logger.debug("[STREAM-PROBE] Measuring bitrate for stream %s", stream_id)
             measured_bitrate = await self._measure_stream_bitrate(url)
 
-            # Black screen detection (opt-in)
-            is_black = False
+            # Black screen detection (opt-in). `is_black` stays None when
+            # detection is disabled OR when it returned indeterminate (timeout
+            # / no YAVG data), so _save_probe_result knows not to overwrite
+            # any prior is_black_screen value.
+            is_black: Optional[bool] = None
             if self.black_screen_detection_enabled:
                 logger.debug("[STREAM-PROBE] Running black screen detection for stream %s", stream_id)
                 is_black = await self._detect_black_screen(url)
@@ -1011,38 +1014,67 @@ class StreamProber:
     # Threshold of 20 catches: pure black, dark slates, off-air screens with small logos.
     BLACK_SCREEN_YAVG_THRESHOLD = 20
 
-    async def _detect_black_screen(self, url: str) -> bool:
+    async def _detect_black_screen(self, url: str) -> Optional[bool]:
         """Detect dark/black screens by measuring average brightness (YAVG) via signalstats.
 
         Uses ffmpeg signalstats to compute per-frame average luma (YAVG).
         In YUV TV range: 16 = pure black, ~88 = typical content.
-        Returns True if average YAVG across the sample is below threshold.
+
+        Returns:
+            True  — average YAVG across the sample is below threshold (dark/black).
+            False — average YAVG is above threshold (clean content).
+            None  — detection was indeterminate (ffmpeg timed out, produced no
+                    YAVG samples, or exited abnormally). Callers MUST NOT treat
+                    None as "clean"; prior is_black_screen state should be
+                    preserved so a scan-task timeout cannot silently overwrite
+                    a manual probe's finding.
+
+        Why: this method runs both inline from probe_stream() (where ffprobe
+        plus bitrate measurement have already warmed the upstream connection)
+        and cold from the standalone Black Screen Scan task. Cold starts on
+        slow-to-buffer IPTV providers can exceed a tight asyncio budget. We
+        add an ffmpeg input -timeout for network stall detection and give the
+        wait_for a generous grace window so cold-start false-timeouts don't
+        flip streams to "clean".
         """
         cmd = [
             "ffmpeg",
             "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
+            # Network stall guard (microseconds). If the upstream stops
+            # delivering data for this long, ffmpeg bails on its own rather
+            # than hanging until the asyncio wait_for budget runs out.
+            "-timeout", "15000000",
             "-i", url,
             "-t", str(self.black_screen_sample_duration),
             "-vf", "signalstats,metadata=mode=print:key=lavfi.signalstats.YAVG",
             "-an", "-f", "null", "-",
         ]
+        # Grace window: sample duration + ample headroom for cold-start
+        # buffering, connection setup, and ffmpeg startup. The previous 15-s
+        # grace was too tight for cold scans and caused every timeout to be
+        # silently treated as a clean stream.
+        total_timeout = self.black_screen_sample_duration + 30
+
         process = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         try:
             _, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=self.black_screen_sample_duration + 15
+                process.communicate(), timeout=total_timeout
             )
         except asyncio.TimeoutError:
             process.kill()
             await process.wait()
-            logger.warning("[STREAM-PROBE] Black screen detection timed out: %s", url[:80])
-            return False
+            logger.warning(
+                "[STREAM-PROBE] Black screen detection timed out after %ss: %s",
+                total_timeout, url[:80],
+            )
+            return None
         output = stderr.decode()
         yavg_values = re.findall(r'lavfi\.signalstats\.YAVG=([\d.]+)', output)
         if not yavg_values:
             logger.debug("[STREAM-PROBE] No YAVG data from signalstats: %s", url[:80])
-            return False
+            return None
         avg_brightness = sum(float(v) for v in yavg_values) / len(yavg_values)
         is_dark = avg_brightness < self.BLACK_SCREEN_YAVG_THRESHOLD
         if is_dark:
@@ -1060,7 +1092,7 @@ class StreamProber:
         status: str,
         error_message: Optional[str],
         measured_bitrate: Optional[int] = None,
-        is_black_screen: bool = False,
+        is_black_screen: Optional[bool] = None,
     ) -> dict:
         """Parse ffprobe output and save to database."""
         session = get_session()
@@ -1086,9 +1118,12 @@ class StreamProber:
                 stats.is_low_fps = False  # Reset on failure (stream state unknown)
             elif status == "success":
                 stats.consecutive_failures = 0
-                # Only update is_black_screen when detection actually ran;
-                # preserve existing value from black screen scan otherwise
-                if self.black_screen_detection_enabled:
+                # Only update is_black_screen when detection actually produced
+                # a definitive result. is_black_screen=None means detection
+                # timed out or returned no YAVG samples — preserve whatever
+                # the prior state was so a scan-task cold-start timeout can't
+                # silently wipe out a manual probe's finding.
+                if self.black_screen_detection_enabled and is_black_screen is not None:
                     stats.is_black_screen = is_black_screen
 
             if ffprobe_data and status == "success":
