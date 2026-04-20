@@ -147,6 +147,12 @@ def smart_sort_streams(
     ]
 
     safe_name = str(channel_name).replace('\n', '').replace('\r', '')
+    if not active_criteria:
+        logger.warning(
+            "[STREAM-PROBE-SORT] Channel '%s': no criteria enabled in Settings → Smart Sort; "
+            "sorting will only use stream id as a tiebreaker",
+            safe_name,
+        )
     logger.info("[STREAM-PROBE-SORT] Channel '%s': Sorting %s streams", safe_name, len(stream_ids))
     logger.info("[STREAM-PROBE-SORT] Sort config: priority=%s, enabled=%s", stream_sort_priority, stream_sort_enabled)
     logger.info("[STREAM-PROBE-SORT] Active criteria (in order): %s", active_criteria)
@@ -232,21 +238,21 @@ def smart_sort_streams(
                 rank = failed_rank.get('failed', 0)
                 logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (status=%s, rank=%s)", stream_name, stat.probe_status if stat else 'no_stats', rank)
                 # bd-sw883: apply primary criteria within the failed bucket too.
-                return (1, rank) + tuple(compute_criteria_values(stat, stream_id))
+                return (1, rank) + tuple(compute_criteria_values(stat, stream_id)) + (stream_id,)
 
         # Deprioritize black screen streams (probe succeeded but content is black)
         if deprioritize_failed_streams and deprioritize_black_screen and stat and getattr(stat, 'is_black_screen', False) is True:
             rank = failed_rank.get('black_screen', 1)
             logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (black screen, rank=%s)", stream_name, rank)
             # bd-sw883: apply primary criteria within the black_screen bucket too.
-            return (1, rank) + tuple(compute_criteria_values(stat, stream_id))
+            return (1, rank) + tuple(compute_criteria_values(stat, stream_id)) + (stream_id,)
 
         # Deprioritize low FPS streams (probe succeeded but FPS < 20)
         if deprioritize_failed_streams and deprioritize_low_fps and stat and getattr(stat, 'is_low_fps', False) is True:
             rank = failed_rank.get('low_fps', 2)
             logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (low fps, rank=%s)", stream_name, rank)
             # bd-sw883: apply primary criteria within the low_fps bucket too.
-            return (1, rank) + tuple(compute_criteria_values(stat, stream_id))
+            return (1, rank) + tuple(compute_criteria_values(stat, stream_id)) + (stream_id,)
 
         if not stat or stat.probe_status != 'success':
             logger.debug("[STREAM-PROBE-SORT]   %s: No successful probe data", stream_name)
@@ -261,7 +267,7 @@ def smart_sort_streams(
                     sort_values.append(-m3u_priority_value)
                 else:
                     sort_values.append(0)
-            return tuple(sort_values)
+            return tuple(sort_values) + (stream_id,)
 
         # Build sort values based on active criteria in priority order
         sort_values = [0, 0]  # First element: 0 = successful stream, second: sub-rank (unused for good streams)
@@ -322,7 +328,7 @@ def smart_sort_streams(
                     "(res=%s, br=%s, fps=%s, m3u=%s, audio_ch=%s, codec=%s)",
                     stream_name, tuple(sort_values),
                     stat.resolution, stat.bitrate, stat.fps, m3u_account_id, stat.audio_channels, stat.video_codec)
-        return tuple(sort_values)
+        return tuple(sort_values) + (stream_id,)
 
     # Sort stream IDs by their stats
     sorted_ids = sorted(stream_ids, key=get_sort_value)
