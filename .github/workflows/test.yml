@@ -258,6 +258,29 @@ jobs:
             exit 1
           fi
 
+      - name: Seed E2E test admin user
+        env:
+          E2E_TEST_USERNAME: e2etester
+          # Password must pass validate_password: >=8 chars, not contain the
+          # username, not a common/breached password. 'Ch4nn3lM4nager!' fits.
+          E2E_TEST_PASSWORD: 'Ch4nn3lM4nager!'
+        run: |
+          # The Playwright suite expects an admin user matching testCredentials
+          # in e2e/fixtures/test-data.ts (overridable via E2E_TEST_USERNAME /
+          # E2E_TEST_PASSWORD env vars). On a fresh container, /api/auth/setup
+          # is required (and only succeeds) before any user exists. Calling it
+          # here creates the first admin so the login fixture can sign in.
+          # Broader state needed by individual specs (orphaned groups, M3U
+          # accounts, etc.) is out of scope here and is tracked in bead
+          # enhancedchannelmanager-2lw25.
+          curl -sSf -X POST http://localhost:6100/api/auth/setup \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"${E2E_TEST_USERNAME}\",\"email\":\"e2e@test.local\",\"password\":\"${E2E_TEST_PASSWORD}\"}" \
+            -o /tmp/setup-response.json
+          echo "Setup response:"
+          cat /tmp/setup-response.json
+          echo
+
       - name: Install root dependencies (Playwright)
         run: npm ci
 
@@ -267,6 +290,8 @@ jobs:
       - name: Run Playwright tests
         env:
           E2E_BASE_URL: http://localhost:6100
+          E2E_TEST_USERNAME: e2etester
+          E2E_TEST_PASSWORD: 'Ch4nn3lM4nager!'
           CI: '1'
         run: npx playwright test
 
