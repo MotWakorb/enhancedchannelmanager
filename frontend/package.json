@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:ci": "vitest run --coverage --reporter=verbose",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@dnd-kit/core": "6.3.1",
@@ -43,7 +44,6 @@
     "vitest": "4.1.4"
   },
   "overrides": {
-    "minimatch": ">=10.2.1",
-    "ajv": ">=8.18.0"
+    "minimatch": ">=10.2.1"
   }
 }
