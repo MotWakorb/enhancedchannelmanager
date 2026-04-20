@@ -5,15 +5,13 @@ on:
     branches:
       - main
       - dev
-      # Scratch validation branch for bead enhancedchannelmanager-t8xw3.
-      # Remove this line before merging back to dev.
-      - ci/test-t8xw3
     paths-ignore:
       - '.beads/**'
       - '**.md'
   pull_request:
     branches:
       - main
+      - dev
     paths-ignore:
       - '.beads/**'
       - '**.md'
