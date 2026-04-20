@@ -573,6 +573,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     if (activePage === 'm3u-digest' && !digestSettings && !digestLoading) {
       loadDigestSettings();
     }
+    // loadDigestSettings is a local function reference that never changes
+    // identity in a harmful way (no closed-over state that would stale).
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- safe local function reference
   }, [activePage, digestSettings, digestLoading]);
 
   // Load available stream groups when auto-creation page is activated
@@ -582,6 +585,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         setAvailableStreamGroups(groups.map(g => g.name).sort((a, b) => a.localeCompare(b)));
       }).catch(() => {});
     }
+    // The `length === 0` guard makes repeated activations safe even if
+    // availableStreamGroups changes identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: fetch only when first activated
   }, [activePage]);
 
   // Load M3U accounts to show guidance for max concurrent probes
@@ -682,7 +688,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     return () => {
       clearInterval(interval);
     };
-  }, [probingAll]);
+    // onProbeComplete is an optional parent callback; not including it is fine
+    // since the polling shuts down on progress completion regardless.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- polling lifecycle is owned by `probingAll`; parent callback identity doesn't need to restart polling
+  }, [probingAll, notifications]);
 
   const loadStreamCount = async () => {
     try {

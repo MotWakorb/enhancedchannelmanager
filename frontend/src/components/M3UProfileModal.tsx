@@ -32,12 +32,13 @@ const emptyProfile: EditingProfile = {
   replace_pattern: '$1',
 };
 
-export const M3UProfileModal = memo(function M3UProfileModal({
-  isOpen,
+// Body runs only while open (outer wrapper unmounts on close) so per-open state
+// resets naturally, and loadProfiles is a simple on-mount effect.
+function M3UProfileModalInner({
   onClose,
   onSaved,
   account,
-}: M3UProfileModalProps) {
+}: Omit<M3UProfileModalProps, 'isOpen'>) {
   const [profiles, setProfiles] = useState<M3UAccountProfile[]>([]);
   const [editingProfile, setEditingProfile] = useState<EditingProfile | null>(null);
   const [isAddingNew, setIsAddingNew] = useState(false);
@@ -55,14 +56,15 @@ export const M3UProfileModal = memo(function M3UProfileModal({
     }
   }, [account.id, executeLoad]);
 
-  // Load profiles when modal opens
+  // Load profiles once on mount. The outer wrapper remounts this component
+  // on every open, so we don't need to re-run on prop changes. The fetch
+  // resolves asynchronously — the setState lands in a microtask, not
+  // synchronously in the effect body, so cascading-render concerns don't
+  // apply here.
   useEffect(() => {
-    if (isOpen) {
-      loadProfiles();
-      setEditingProfile(null);
-      setIsAddingNew(false);
-    }
-  }, [isOpen, loadProfiles]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- setState is async (inside .then), not synchronous in effect body
+    void loadProfiles();
+  }, [loadProfiles]);
 
   const handleAddNew = () => {
     setEditingProfile({ ...emptyProfile, max_streams: account.max_streams });
@@ -164,7 +166,7 @@ export const M3UProfileModal = memo(function M3UProfileModal({
     });
   };
 
-  if (!isOpen) return null;
+  // isOpen gating handled by outer wrapper.
 
   const isEditingDefault = editingProfile?.is_default === true;
 
@@ -381,5 +383,18 @@ export const M3UProfileModal = memo(function M3UProfileModal({
         </div>
       </div>
     </ModalOverlay>
+  );
+}
+
+export const M3UProfileModal = memo(function M3UProfileModal(
+  props: M3UProfileModalProps,
+) {
+  if (!props.isOpen) return null;
+  return (
+    <M3UProfileModalInner
+      onClose={props.onClose}
+      onSaved={props.onSaved}
+      account={props.account}
+    />
   );
 });

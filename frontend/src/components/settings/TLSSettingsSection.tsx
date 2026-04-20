@@ -83,7 +83,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
     };
 
     loadData();
-  }, [isAdmin]);
+  }, [isAdmin, notifications]);
 
   const handleSave = useCallback(async () => {
     setSaving(true);

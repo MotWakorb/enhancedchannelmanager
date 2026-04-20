@@ -319,7 +319,7 @@ export function M3UManagerTab({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   useEffect(() => {
     loadData();

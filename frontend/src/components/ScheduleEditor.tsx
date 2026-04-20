@@ -88,10 +88,12 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
   const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const tzInList = TIMEZONE_OPTIONS.some(tz => tz.value === browserTz);
 
-  // Check if current interval matches a preset
+  // Check if current interval matches a preset on mount. Only runs once:
+  // intervalSeconds is an initial prop; subsequent user toggles own the state.
   useEffect(() => {
     const isPreset = INTERVAL_PRESETS.some(p => p.value === intervalSeconds);
     setUseCustomInterval(!isPreset);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount; user owns this toggle afterward
   }, []);
 
   // Helper to update a single parameter

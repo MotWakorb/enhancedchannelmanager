@@ -75,7 +75,7 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   useEffect(() => {
     loadProfiles();
@@ -178,7 +178,7 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
     } catch {
       notifications.error('Failed to export profiles', 'Dummy EPG');
     }
-  }, []);
+  }, [notifications]);
 
   const handleImportYaml = async () => {
     setImportYamlLoading(true);
