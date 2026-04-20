@@ -94,7 +94,8 @@ jobs:
           # elsewhere are grandfathered and tracked via companion bead
           # enhancedchannelmanager-zjge5. New violations on changed files
           # block the PR via --max-warnings 0.
-          git fetch --no-tags --depth=0 origin "${{ github.base_ref }}"
+          # Checkout step uses fetch-depth: 0, so origin/<base_ref> is already
+          # available — no extra fetch required.
           BASE_REF="origin/${{ github.base_ref }}"
           CHANGED=$(git diff --name-only --diff-filter=ACMR "${BASE_REF}...HEAD" \
             | grep -E '^frontend/.*\.(ts|tsx|js|mjs|cjs)$' \
