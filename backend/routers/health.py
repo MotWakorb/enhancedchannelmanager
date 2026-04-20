@@ -1,21 +1,170 @@
 """
 Health & cache router — health check and cache management endpoints.
 
-Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
-"""
-import os
-from typing import Optional
+Two health endpoints with distinct purposes:
 
-from fastapi import APIRouter
+- ``/api/health``: cheap liveness probe. Returns 200 with version metadata.
+  Called every 30s by the Dockerfile HEALTHCHECK, so it must stay fast and
+  must NOT depend on external subsystems (DB, Dispatcharr, ffprobe). If this
+  endpoint returns non-200, the container is considered unhealthy — we don't
+  want a transient Dispatcharr outage to mark the whole app as down.
+
+- ``/api/health/ready``: rich readiness probe. Verifies the app can actually
+  do work by checking DB connectivity, Dispatcharr reachability (cached 30s
+  to avoid hammering), and ffprobe availability. Returns 200 when all
+  subsystems are healthy, 503 when any required subsystem is degraded
+  (standard readiness convention).
+
+Extracted from main.py (Phase 2 of v0.13.0 backend refactor). Rich readiness
+added per bead enhancedchannelmanager-w0iyw (SRE operability improvement).
+"""
+import asyncio
+import logging
+import os
+import shutil
+import time
+from typing import Any, Optional
+
+from fastapi import APIRouter, Response
+from sqlalchemy import text
 
 from cache import get_cache
+from config import get_settings
+from database import get_session
+from dispatcharr_client import get_client
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Health"])
 
 
+# ============================================================================
+# Readiness-check helpers
+# ============================================================================
+# Cache the Dispatcharr reachability result to avoid hammering Dispatcharr
+# when /api/health/ready is polled rapidly (e.g., by a load balancer). A
+# simple module-level dict is sufficient — the cache lives as long as the
+# process and has a single key. A full cache library would be overkill.
+_DISPATCHARR_CACHE_TTL_SECONDS = 30.0
+_DISPATCHARR_PING_TIMEOUT_SECONDS = 3.0
+_dispatcharr_cache: dict = {"expires_at": 0.0, "result": None}
+
+# Track last-known readiness state so we only log transitions, not every poll.
+_last_ready_state: Optional[bool] = None
+
+
+async def _check_database() -> dict:
+    """Run a cheap ``SELECT 1`` to confirm the DB is reachable.
+
+    Returns a dict with ``status`` ("ok" or "fail") and a ``detail`` string.
+    Never raises — failures are captured as a "fail" result.
+    """
+    try:
+        db = get_session()
+        try:
+            db.execute(text("SELECT 1"))
+        finally:
+            db.close()
+        return {"status": "ok", "detail": "SELECT 1 succeeded"}
+    except Exception as e:
+        logger.warning("[HEALTH] Database readiness check failed: %s", e)
+        return {"status": "fail", "detail": f"{type(e).__name__}: {e}"}
+
+
+async def _ping_dispatcharr() -> dict:
+    """Attempt to reach Dispatcharr with a short timeout.
+
+    Only verifies the URL is reachable (TCP + HTTP response). Does NOT
+    authenticate — we don't want a transient auth problem to mark readiness
+    as failed, and authenticating on every readiness poll would defeat the
+    purpose of a cheap probe.
+
+    Uses the Dispatcharr client's underlying httpx client so we inherit the
+    configured connection limits. Returns a dict with ``status``, ``detail``,
+    and ``cached_until`` fields.
+    """
+    settings = get_settings()
+    if not settings.url:
+        return {"status": "skipped", "detail": "not configured"}
+
+    try:
+        client = get_client()
+        # Hit the base URL — any response (including 4xx) means Dispatcharr
+        # is up and responding, which is all readiness needs to confirm.
+        response = await asyncio.wait_for(
+            client._client.get(client.base_url),
+            timeout=_DISPATCHARR_PING_TIMEOUT_SECONDS,
+        )
+        return {
+            "status": "ok",
+            "detail": f"reachable (HTTP {response.status_code})",
+        }
+    except asyncio.TimeoutError:
+        return {
+            "status": "fail",
+            "detail": f"timeout after {_DISPATCHARR_PING_TIMEOUT_SECONDS}s",
+        }
+    except Exception as e:
+        return {"status": "fail", "detail": f"{type(e).__name__}: {e}"}
+
+
+async def _check_dispatcharr() -> dict:
+    """Ping Dispatcharr, caching the result for 30s.
+
+    The readiness endpoint may be polled rapidly (load balancer, k8s probe),
+    and pinging Dispatcharr on every call would add avoidable load to the
+    downstream service. Caching for 30s gives us a fresh-enough signal
+    without creating a thundering herd.
+    """
+    now = time.monotonic()
+    cached = _dispatcharr_cache.get("result")
+    expires_at = _dispatcharr_cache.get("expires_at", 0.0)
+    if cached is not None and now < expires_at:
+        # Echo the cached result with a wall-clock hint for observers.
+        return {**cached, "cached_until": _dispatcharr_cache.get("cached_until_iso", "")}
+
+    result = await _ping_dispatcharr()
+    expires_at = now + _DISPATCHARR_CACHE_TTL_SECONDS
+    # Use wall-clock time for the "cached_until" field so callers can read it
+    # meaningfully. Monotonic time is used internally for the TTL check.
+    import datetime
+    cached_until_iso = (
+        datetime.datetime.now(datetime.timezone.utc)
+        + datetime.timedelta(seconds=_DISPATCHARR_CACHE_TTL_SECONDS)
+    ).isoformat()
+
+    _dispatcharr_cache["result"] = result
+    _dispatcharr_cache["expires_at"] = expires_at
+    _dispatcharr_cache["cached_until_iso"] = cached_until_iso
+    return {**result, "cached_until": cached_until_iso}
+
+
+def _check_ffprobe() -> dict:
+    """Check whether ffprobe is available on PATH."""
+    ffprobe_path = shutil.which("ffprobe")
+    if ffprobe_path:
+        return {"status": "ok", "detail": ffprobe_path}
+    return {"status": "fail", "detail": "ffprobe not found on PATH"}
+
+
+def _reset_dispatcharr_cache() -> None:
+    """Reset the Dispatcharr readiness cache. Intended for tests."""
+    _dispatcharr_cache["expires_at"] = 0.0
+    _dispatcharr_cache["result"] = None
+    _dispatcharr_cache["cached_until_iso"] = ""
+
+
+# ============================================================================
+# Endpoints
+# ============================================================================
 @router.get("/api/health")
 async def health_check():
-    """Health check endpoint returning version and connection status."""
+    """Cheap liveness check — no subsystem probing.
+
+    The Dockerfile HEALTHCHECK calls this every 30s; it must stay fast and
+    must not fail for transient downstream issues. For rich subsystem
+    verification, callers should hit ``/api/health/ready`` instead.
+    """
     version = os.environ.get("ECM_VERSION", "unknown")
     release_channel = os.environ.get("RELEASE_CHANNEL", "latest")
     git_commit = os.environ.get("GIT_COMMIT", "unknown")
@@ -29,6 +178,63 @@ async def health_check():
     }
 
 
+@router.get("/api/health/ready")
+async def readiness_check(response: Response) -> dict:
+    """Rich readiness check — verifies DB, Dispatcharr, and ffprobe.
+
+    Returns 200 when every required subsystem is "ok" (or Dispatcharr is
+    "skipped" because no URL is configured — first-run state). Returns 503
+    when any required subsystem fails, so load balancers and orchestrators
+    can route traffic accordingly.
+
+    The Dispatcharr ping is cached for 30s to avoid hammering the downstream
+    service when readiness is polled rapidly.
+    """
+    global _last_ready_state
+
+    db_result = await _check_database()
+    dispatcharr_result = await _check_dispatcharr()
+    ffprobe_result = _check_ffprobe()
+
+    checks = {
+        "database": db_result,
+        "dispatcharr": dispatcharr_result,
+        "ffprobe": ffprobe_result,
+    }
+
+    # "skipped" counts as acceptable — no Dispatcharr configured yet is a
+    # valid first-run state, not a failure.
+    is_ready = all(
+        check["status"] in ("ok", "skipped") for check in checks.values()
+    )
+
+    # Log transitions only, not every poll, to keep log volume sane.
+    if _last_ready_state is not None and _last_ready_state != is_ready:
+        if is_ready:
+            logger.info("[HEALTH] Readiness transitioned fail -> ok")
+        else:
+            failing = [
+                f"{name}={check['status']} ({check['detail']})"
+                for name, check in checks.items()
+                if check["status"] == "fail"
+            ]
+            logger.info("[HEALTH] Readiness transitioned ok -> fail: %s", "; ".join(failing))
+    _last_ready_state = is_ready
+
+    payload: dict[str, Any] = {
+        "status": "ready" if is_ready else "not_ready",
+        "checks": checks,
+    }
+
+    if not is_ready:
+        response.status_code = 503
+
+    return payload
+
+
+# ============================================================================
+# Cache management endpoints (unchanged)
+# ============================================================================
 @router.post("/api/cache/invalidate", tags=["Cache"])
 async def invalidate_cache(prefix: Optional[str] = None):
     """Invalidate cached data. If prefix is provided, only invalidate matching keys."""

@@ -185,6 +185,8 @@ async def security_headers_middleware(request: Request, call_next):
 AUTH_EXEMPT_PATHS = {
     # Health check (Docker, load balancers)
     "/api/health",
+    # Rich readiness check (load balancers, orchestrators)
+    "/api/health/ready",
     # Auth flow (must be public by definition)
     "/api/auth/login",
     "/api/auth/refresh",
@@ -277,7 +279,7 @@ async def request_timing_middleware(request: Request, call_next):
     method = request.method
 
     # Skip static files and health checks for timing logs
-    skip_timing = path.startswith("/assets") or path == "/api/health"
+    skip_timing = path.startswith("/assets") or path == "/api/health" or path == "/api/health/ready"
 
     # Process the request
     response = await call_next(request)
