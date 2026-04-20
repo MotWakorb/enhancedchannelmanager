@@ -100,6 +100,8 @@ pluggy==1.6.0
     # via
     #   pytest
     #   pytest-cov
+prometheus-client==0.25.0
+    # via -r backend/requirements.in
 propcache==0.4.1
     # via
     #   aiohttp
