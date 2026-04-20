@@ -228,6 +228,50 @@ export async function mergeChannels(request: MergeChannelsRequest): Promise<Chan
   });
 }
 
+// Find & merge duplicate channels
+export interface DuplicateGroup {
+  normalized_name: string;
+  channels: {
+    id: number;
+    name: string;
+    normalized_name: string;
+    channel_number: number | null;
+    stream_count: number;
+    channel_group_id: number | null;
+    channel_group_name: string;
+  }[];
+}
+
+export interface FindDuplicatesResponse {
+  groups: DuplicateGroup[];
+  total_groups: number;
+  total_duplicate_channels: number;
+}
+
+export interface BulkMergeItem {
+  target_channel_id: number;
+  source_channel_ids: number[];
+}
+
+export interface BulkMergeResponse {
+  merged: number;
+  failed: number;
+  results: { target_channel_id: number; target_name?: string; sources_deleted?: number; total_streams?: number; success: boolean; error?: string }[];
+}
+
+export async function findDuplicateChannels(): Promise<FindDuplicatesResponse> {
+  return fetchJson(`${API_BASE}/channels/find-duplicates`, {
+    method: 'POST',
+  });
+}
+
+export async function bulkMergeChannels(merges: BulkMergeItem[]): Promise<BulkMergeResponse> {
+  return fetchJson(`${API_BASE}/channels/bulk-merge`, {
+    method: 'POST',
+    body: JSON.stringify({ merges }),
+  });
+}
+
 // Bulk operation types for bulk commit
 export interface BulkOperation {
   type: string;
@@ -713,17 +757,24 @@ export type Theme = 'dark' | 'light' | 'high-contrast';
 export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'WARNING' | 'ERROR' | 'CRITICAL';
 
 // Sort criteria for stream sorting
-export type SortCriterion = 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels';
+export type SortCriterion = 'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels';
 export type SortEnabledMap = Record<SortCriterion, boolean>;
+
+// Deprioritized stream categories for ordering within the "failed" group
+export type FailedStreamCategory = 'failed' | 'black_screen' | 'low_fps';
 
 // M3U account priorities for sorting - maps account ID (as string) to priority value
 export type M3UAccountPriorities = Record<string, number>;
 
 export type GracenoteConflictMode = 'ask' | 'skip' | 'overwrite';
 
+export type DispatcharrAuthMethod = 'password' | 'api_key';
+
 export interface SettingsResponse {
   url: string;
+  auth_method: DispatcharrAuthMethod;
   username: string;
+  api_key_configured: boolean;  // True if an api_key is stored (value never returned)
   configured: boolean;
   auto_rename_channel_number: boolean;
   include_channel_number_in_name: boolean;
@@ -759,6 +810,7 @@ export interface SettingsResponse {
   skip_recently_probed_hours: number;  // Skip streams probed within last N hours (0 = always probe)
   refresh_m3us_before_probe: boolean;  // Refresh all M3U accounts before starting probe
   auto_reorder_after_probe: boolean;  // Automatically reorder streams in channels after probe completes
+  push_stream_stats_to_dispatcharr: boolean;  // Push probe stats back to Dispatcharr after probe
   probe_retry_count: number;   // Retries on transient ffprobe failure (0 = no retry, max 5)
   probe_retry_delay: number;   // Seconds between retries (1-30)
   stream_fetch_page_limit: number;  // Max pages when fetching streams (pages * 500 = max streams)
@@ -769,6 +821,9 @@ export interface SettingsResponse {
   black_screen_sample_duration: number;  // Seconds to sample for black screen detection (3-30)
   low_fps_threshold: number;  // FPS below this value is considered "low FPS"
   deprioritize_failed_streams: boolean;  // When enabled, failed/timeout/pending streams sort to bottom
+  deprioritize_black_screen: boolean;  // When disabled, black screen streams sort by quality stats
+  deprioritize_low_fps: boolean;  // When disabled, low FPS streams sort by quality stats
+  failed_stream_sort_order: FailedStreamCategory[];  // Order of deprioritized categories (first = sorted higher)
   strike_threshold: number;  // Consecutive failures before flagging stream (0 = disabled)
   normalize_on_channel_create: boolean;  // Default state for normalization toggle when creating channels
   // Shared SMTP settings
@@ -793,6 +848,8 @@ export interface SettingsResponse {
   auto_creation_excluded_terms: string[];
   auto_creation_excluded_groups: string[];
   auto_creation_exclude_auto_sync_groups: boolean;
+  // MCP integration
+  mcp_api_key_configured: boolean;
 }
 
 // Stream preview mode for browser playback
@@ -809,8 +866,10 @@ export async function getSettings(): Promise<SettingsResponse> {
 
 export async function saveSettings(settings: {
   url: string;
+  auth_method: DispatcharrAuthMethod;
   username: string;
   password?: string;  // Optional - only required when changing URL or username
+  api_key?: string;   // Optional - only required when (re)setting API key mode
   auto_rename_channel_number: boolean;
   include_channel_number_in_name: boolean;
   channel_number_separator: string;
@@ -845,6 +904,7 @@ export async function saveSettings(settings: {
   skip_recently_probed_hours?: number;  // Optional - skip streams probed within last N hours, defaults to 0 (always probe)
   refresh_m3us_before_probe?: boolean;  // Optional - refresh all M3U accounts before starting probe, defaults to true
   auto_reorder_after_probe?: boolean;  // Optional - automatically reorder streams after probe, defaults to false
+  push_stream_stats_to_dispatcharr?: boolean;  // Optional - reflect probe stats to Dispatcharr, defaults to false
   probe_retry_count?: number;   // Optional - retries on transient ffprobe failure (0 = no retry, max 5), defaults to 1
   probe_retry_delay?: number;   // Optional - seconds between retries (1-30), defaults to 2
   stream_fetch_page_limit?: number;  // Optional - max pages when fetching streams, defaults to 200 (100K streams)
@@ -855,6 +915,9 @@ export async function saveSettings(settings: {
   black_screen_sample_duration?: number;  // Optional - seconds to sample for black screen detection (3-30), defaults to 5
   low_fps_threshold?: number;  // Optional - FPS below this value is considered "low FPS", defaults to 20
   deprioritize_failed_streams?: boolean;  // Optional - deprioritize failed/timeout/pending streams in sort, defaults to true
+  deprioritize_black_screen?: boolean;  // Optional - deprioritize black screen streams, defaults to true
+  deprioritize_low_fps?: boolean;  // Optional - deprioritize low FPS streams, defaults to true
+  failed_stream_sort_order?: FailedStreamCategory[];  // Optional - order of deprioritized categories
   strike_threshold?: number;  // Optional - consecutive failures before flagging stream, defaults to 3
   normalize_on_channel_create?: boolean;  // Optional - default state for normalization toggle, defaults to false
   // Shared SMTP settings
@@ -883,10 +946,31 @@ export async function saveSettings(settings: {
   });
 }
 
+export async function generateMCPApiKey(): Promise<{ mcp_api_key: string }> {
+  return fetchJson(`${API_BASE}/settings/mcp-api-key`, { method: 'POST' });
+}
+
+export async function revokeMCPApiKey(): Promise<{ status: string }> {
+  return fetchJson(`${API_BASE}/settings/mcp-api-key`, { method: 'DELETE' });
+}
+
+export async function getMCPStatus(): Promise<{
+  reachable: boolean;
+  status?: string;
+  api_key_configured?: boolean;
+  tools_available?: number;
+  resources_available?: number;
+  error?: string;
+}> {
+  return fetchJson(`${API_BASE}/settings/mcp-status`);
+}
+
 export async function testConnection(settings: {
   url: string;
-  username: string;
-  password: string;
+  auth_method: DispatcharrAuthMethod;
+  username?: string;
+  password?: string;
+  api_key?: string;
 }): Promise<TestConnectionResult> {
   return fetchJson(`${API_BASE}/settings/test`, {
     method: 'POST',
@@ -2840,6 +2924,8 @@ export async function assignDummyEPGChannelsFromGroup(profileId: number, groupId
 // Backup & Restore
 // ============================================================================
 
+// ── ZIP Backup (legacy) ──
+
 export function getBackupDownloadUrl(): string {
   return `${API_BASE}/backup/create`;
 }
@@ -2875,6 +2961,115 @@ export async function restoreBackupInitial(file: File): Promise<RestoreResult> {
   const response = await fetch(`${API_BASE}/backup/restore-initial`, {
     method: 'POST',
     body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Restore failed' }));
+    throw new Error(error.detail || 'Restore failed');
+  }
+
+  return response.json();
+}
+
+// ── YAML Export / Validate / Selective Restore ──
+
+export interface BackupSectionInfo {
+  key: string;
+  label: string;
+  item_count: number;
+  available: boolean;
+}
+
+export interface BackupValidation {
+  valid: boolean;
+  version: string | null;
+  exported_at: string | null;
+  sections: BackupSectionInfo[];
+}
+
+export interface BackupRestoreResult {
+  success: boolean;
+  sections_restored: string[];
+  sections_failed: string[];
+  warnings: string[];
+  errors: string[];
+}
+
+export async function getExportSections(): Promise<{key: string; label: string}[]> {
+  return fetchJson(`${API_BASE}/backup/export-sections`);
+}
+
+export async function exportBackup(sections?: string[]): Promise<Blob> {
+  let url = `${API_BASE}/backup/export`;
+  if (sections && sections.length > 0) {
+    url += `?sections=${sections.join(',')}`;
+  }
+  const response = await fetch(url, {
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Export failed' }));
+    throw new Error(error.detail || 'Export failed');
+  }
+
+  return response.blob();
+}
+
+// Saved backups (on-disk files from scheduled task)
+
+export interface SavedBackup {
+  filename: string;
+  size_bytes: number;
+  created_at: string;
+}
+
+export async function listSavedBackups(): Promise<SavedBackup[]> {
+  return fetchJson(`${API_BASE}/backup/saved`);
+}
+
+export function getSavedBackupDownloadUrl(filename: string): string {
+  return `${API_BASE}/backup/saved/${encodeURIComponent(filename)}`;
+}
+
+export async function deleteSavedBackup(filename: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/backup/saved/${encodeURIComponent(filename)}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Delete failed' }));
+    throw new Error(error.detail || 'Delete failed');
+  }
+}
+
+export async function validateBackup(file: File): Promise<BackupValidation> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch(`${API_BASE}/backup/validate`, {
+    method: 'POST',
+    body: formData,
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Validation failed' }));
+    throw new Error(error.detail || 'Validation failed');
+  }
+
+  return response.json();
+}
+
+export async function restoreBackupYaml(file: File, sections: string[]): Promise<BackupRestoreResult> {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('sections', JSON.stringify(sections));
+
+  const response = await fetch(`${API_BASE}/backup/restore-yaml`, {
+    method: 'POST',
+    body: formData,
+    credentials: 'include',
   });
 
   if (!response.ok) {
@@ -2934,4 +3129,59 @@ export async function updateServiceAlertRule(
 
 export async function deleteServiceAlertRule(ruleId: number): Promise<void> {
   return fetchJson(`${API_BASE}/services/alert-rules/${ruleId}`, { method: 'DELETE' });
+}
+
+// ---------------------------------------------------------------------------
+// Lookup Tables (dummy EPG template engine |lookup:<name> pipe)
+// ---------------------------------------------------------------------------
+
+export interface LookupTableSummary {
+  id: number;
+  name: string;
+  description: string | null;
+  entry_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface LookupTable extends LookupTableSummary {
+  entries: Record<string, string>;
+}
+
+export interface LookupTableCreateRequest {
+  name: string;
+  description?: string;
+  entries?: Record<string, string>;
+}
+
+export interface LookupTableUpdateRequest {
+  name?: string;
+  description?: string;
+  entries?: Record<string, string>;
+}
+
+export async function listLookupTables(): Promise<LookupTableSummary[]> {
+  return fetchJson(`${API_BASE}/lookup-tables`);
+}
+
+export async function getLookupTable(id: number): Promise<LookupTable> {
+  return fetchJson(`${API_BASE}/lookup-tables/${id}`);
+}
+
+export async function createLookupTable(data: LookupTableCreateRequest): Promise<LookupTable> {
+  return fetchJson(`${API_BASE}/lookup-tables`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateLookupTable(id: number, data: LookupTableUpdateRequest): Promise<LookupTable> {
+  return fetchJson(`${API_BASE}/lookup-tables/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteLookupTable(id: number): Promise<void> {
+  return fetchJson(`${API_BASE}/lookup-tables/${id}`, { method: 'DELETE' });
 }

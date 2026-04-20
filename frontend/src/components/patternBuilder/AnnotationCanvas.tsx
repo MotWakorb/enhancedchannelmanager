@@ -85,7 +85,7 @@ export const AnnotationCanvas = memo(function AnnotationCanvas({
   const canvasRef = useRef<HTMLDivElement>(null);
   const wrapperPositionsRef = useRef<Record<string, WrapperPos>>({});
   const selectionJustProcessed = useRef(false);
-  const [, forceUpdate] = useReducer(x => x + 1, 0);
+  const [, forceUpdate] = useReducer((x: number) => x + 1, 0);
 
   const handleMouseUp = useCallback(() => {
     selectionJustProcessed.current = false;
@@ -134,7 +134,9 @@ export const AnnotationCanvas = memo(function AnnotationCanvas({
   const wrappers = annotations.filter(a => isWrapperAnnotation(a, annotations));
 
   // Measure actual DOM positions of segments to align wrapper bars.
-  // Uses a ref to avoid re-render loops; only triggers forceUpdate when positions change.
+  // Uses a ref (not state) because reading measured geometry after layout is a
+  // synchronization-with-DOM pattern, not React-owned state. A forceUpdate is
+  // triggered only when measurements actually change, preventing loops.
   useLayoutEffect(() => {
     if (!wrappers.length || !canvasRef.current) {
       if (Object.keys(wrapperPositionsRef.current).length > 0) {
@@ -205,7 +207,7 @@ export const AnnotationCanvas = memo(function AnnotationCanvas({
       }
     }
 
-    // Only update if positions actually changed
+    // Only update if positions actually changed (avoids re-render loop).
     const prev = wrapperPositionsRef.current;
     const changed = Object.keys(newPositions).length !== Object.keys(prev).length ||
       Object.entries(newPositions).some(([k, v]) =>
@@ -260,6 +262,12 @@ export const AnnotationCanvas = memo(function AnnotationCanvas({
       </div>
       {wrappers.length > 0 && (
         <div className="pb-canvas-wrappers">
+          {/* Reading measured geometry from wrapperPositionsRef during render is a
+              DOM-synchronization pattern: the ref is only written inside the
+              useLayoutEffect above, and only when positions actually change
+              (with a change guard + forceUpdate). State would cause re-render
+              loops here. */}
+          {/* eslint-disable-next-line react-hooks/refs -- intentional ref read for measured layout, see useLayoutEffect above */}
           {wrappers.map(ann => {
             const color = getVariableColor(ann.variableName);
             const pos = wrapperPositionsRef.current[ann.variableName];

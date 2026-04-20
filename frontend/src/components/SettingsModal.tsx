@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, memo } from 'react';
 import * as api from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
 import { ModalOverlay } from './ModalOverlay';
-import type { Theme } from '../services/api';
+import type { DispatcharrAuthMethod, Theme } from '../services/api';
 import './ModalBase.css';
 import './SettingsModal.css';
 
@@ -16,8 +16,11 @@ interface SettingsModalProps {
 export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) {
   const notifications = useNotifications();
   const [url, setUrl] = useState('');
+  const [authMethod, setAuthMethod] = useState<DispatcharrAuthMethod>('password');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [apiKeyStored, setApiKeyStored] = useState(false);
   // Channel defaults (stored but not edited in this modal - use Settings tab)
   const [includeChannelNumberInName, setIncludeChannelNumberInName] = useState(false);
   const [channelNumberSeparator, setChannelNumberSeparator] = useState('-');
@@ -56,10 +59,13 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
       const settings = await api.getSettings();
       setFullSettings(settings as unknown as Record<string, unknown>);
       setUrl(settings.url);
+      setAuthMethod(settings.auth_method || 'password');
       setUsername(settings.username);
       setOriginalUrl(settings.url);
       setOriginalUsername(settings.username);
       setPassword(''); // Never load password from server
+      setApiKey(''); // Never load api_key from server
+      setApiKeyStored(settings.api_key_configured);
       setIncludeChannelNumberInName(settings.include_channel_number_in_name);
       setChannelNumberSeparator(settings.channel_number_separator);
       setRemoveCountryPrefix(settings.remove_country_prefix);
@@ -76,7 +82,15 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
   };
 
   const handleTest = async () => {
-    if (!url || !username || !password) {
+    if (!url) {
+      setConnectionVerified(false);
+      return;
+    }
+    if (authMethod === 'password' && (!username || !password)) {
+      setConnectionVerified(false);
+      return;
+    }
+    if (authMethod === 'api_key' && !apiKey) {
       setConnectionVerified(false);
       return;
     }
@@ -85,9 +99,17 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
     setConnectionVerified(null);
 
     try {
-      const result = await api.testConnection({ url, username, password });
+      const result = await api.testConnection(
+        authMethod === 'api_key'
+          ? { url, auth_method: 'api_key', api_key: apiKey }
+          : { url, auth_method: 'password', username, password }
+      );
       setConnectionVerified(result.success);
+      if (!result.success && result.message) {
+        notifications.error(result.message, 'Connection Failed');
+      }
     } catch (err) {
+      logger.error('SettingsModal: connection test failed', err);
       setConnectionVerified(false);
     } finally {
       setTesting(false);
@@ -109,9 +131,12 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
       await api.saveSettings({
         ...fullSettings,
         url,
+        auth_method: authMethod,
         username,
-        // Only send password if it was entered
+        // Only send password / api_key if the user entered a new value;
+        // omitting preserves the stored secret on the backend.
         ...(password ? { password } : {}),
+        ...(apiKey ? { api_key: apiKey } : {}),
         include_channel_number_in_name: includeChannelNumberInName,
         channel_number_separator: channelNumberSeparator,
         remove_country_prefix: removeCountryPrefix,
@@ -189,32 +214,86 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
               </div>
 
               <div className="modal-form-group">
-                <label htmlFor="username">Username</label>
-                <input
-                  id="username"
-                  type="text"
-                  placeholder="admin"
-                  value={username}
-                  onChange={(e) => {
-                    setUsername(e.target.value);
-                    setConnectionVerified(null);
-                  }}
-                />
+                <label>Authentication Method</label>
+                <div className="auth-method-toggle" role="tablist" aria-label="Authentication method">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={authMethod === 'password'}
+                    className={`auth-method-option ${authMethod === 'password' ? 'is-active' : ''}`}
+                    onClick={() => {
+                      setAuthMethod('password');
+                      setConnectionVerified(null);
+                    }}
+                  >
+                    Username &amp; Password
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={authMethod === 'api_key'}
+                    className={`auth-method-option ${authMethod === 'api_key' ? 'is-active' : ''}`}
+                    onClick={() => {
+                      setAuthMethod('api_key');
+                      setConnectionVerified(null);
+                    }}
+                  >
+                    API Key
+                  </button>
+                </div>
+                <span className="setup-hint">
+                  {authMethod === 'api_key'
+                    ? 'Recommended for Dispatcharr 0.23.0+. Generate a key in Dispatcharr under Account → API Keys.'
+                    : 'Legacy mode. Dispatcharr 0.23.0+ limits logins to 3/min per IP — API key auth is unaffected.'}
+                </span>
               </div>
 
-              <div className="modal-form-group">
-                <label htmlFor="password">Password</label>
-                <input
-                  id="password"
-                  type="password"
-                  placeholder="Enter password"
-                  value={password}
-                  onChange={(e) => {
-                    setPassword(e.target.value);
-                    setConnectionVerified(null);
-                  }}
-                />
-              </div>
+              {authMethod === 'password' ? (
+                <>
+                  <div className="modal-form-group">
+                    <label htmlFor="username">Username</label>
+                    <input
+                      id="username"
+                      type="text"
+                      placeholder="admin"
+                      value={username}
+                      onChange={(e) => {
+                        setUsername(e.target.value);
+                        setConnectionVerified(null);
+                      }}
+                    />
+                  </div>
+
+                  <div className="modal-form-group">
+                    <label htmlFor="password">Password</label>
+                    <input
+                      id="password"
+                      type="password"
+                      placeholder="Enter password"
+                      value={password}
+                      onChange={(e) => {
+                        setPassword(e.target.value);
+                        setConnectionVerified(null);
+                      }}
+                    />
+                  </div>
+                </>
+              ) : (
+                <div className="modal-form-group">
+                  <label htmlFor="api-key">API Key</label>
+                  <input
+                    id="api-key"
+                    type="password"
+                    placeholder={apiKeyStored ? 'Leave blank to keep stored key' : 'Paste API key'}
+                    value={apiKey}
+                    onChange={(e) => {
+                      setApiKey(e.target.value);
+                      setConnectionVerified(null);
+                    }}
+                    autoComplete="off"
+                  />
+                </div>
+              )}
             </>
           ) : (
             <div className="settings-modal-restore">

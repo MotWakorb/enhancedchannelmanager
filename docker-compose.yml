@@ -1,5 +1,4 @@
 services:
-  # Production mode - single container with settings stored in config volume
   ecm:
     build:
       context: .

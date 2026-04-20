@@ -242,7 +242,7 @@ class ActionExecutor:
 
     async def execute(self, action: Action | dict, stream_ctx: StreamContext,
                       exec_ctx: ExecutionContext, rule_target_group_id: int = None,
-                      normalize_names: bool = False) -> ActionResult:
+                      normalization_group_ids: list[int] = None) -> ActionResult:
         """
         Execute a single action.
 
@@ -251,6 +251,7 @@ class ActionExecutor:
             stream_ctx: Stream context with stream data
             exec_ctx: Execution context for tracking results
             rule_target_group_id: Default target group from rule
+            normalization_group_ids: List of normalization rule group IDs to apply (empty/None = disabled)
 
         Returns:
             ActionResult with execution details
@@ -283,13 +284,13 @@ class ActionExecutor:
         if action_type == ActionType.CREATE_CHANNEL:
             result = await self._execute_create_channel(
                 action, stream_ctx, exec_ctx, template_ctx, rule_target_group_id,
-                normalize_names=normalize_names
+                normalization_group_ids=normalization_group_ids
             )
         elif action_type == ActionType.CREATE_GROUP:
             result = await self._execute_create_group(action, stream_ctx, exec_ctx, template_ctx)
         elif action_type == ActionType.MERGE_STREAMS:
             result = await self._execute_merge_streams(action, stream_ctx, exec_ctx, template_ctx,
-                                                         normalize_names=normalize_names)
+                                                         normalization_group_ids=normalization_group_ids)
         elif action_type == ActionType.ASSIGN_LOGO:
             result = await self._execute_assign_logo(action, stream_ctx, exec_ctx, template_ctx)
         elif action_type == ActionType.ASSIGN_TVG_ID:
@@ -460,7 +461,7 @@ class ActionExecutor:
     async def _execute_create_channel(self, action: Action, stream_ctx: StreamContext,
                                        exec_ctx: ExecutionContext, template_ctx: dict,
                                        rule_target_group_id: int = None,
-                                       normalize_names: bool = False) -> ActionResult:
+                                       normalization_group_ids: list[int] = None) -> ActionResult:
         """Execute create_channel action."""
         params = action.params
         name_template = params.get("name_template", "{stream_name}")
@@ -471,17 +472,27 @@ class ActionExecutor:
         # Track details for the execution log
         action_details = []
 
-        # Apply normalization engine if enabled
+        # Apply normalization engine if enabled (non-empty group IDs list)
         pre_norm_name = channel_name
-        if normalize_names and self._normalization_engine:
+        if normalization_group_ids and self._normalization_engine:
+            logger.debug("[AUTO-CREATE-EXEC] Applying normalization groups %s to '%s'", normalization_group_ids, channel_name)
             try:
-                norm_result = self._normalization_engine.normalize(channel_name)
+                norm_result = self._normalization_engine.normalize(
+                    channel_name, group_ids=normalization_group_ids,
+                    preserve_superscripts=True)
                 if norm_result.normalized != channel_name:
                     logger.debug("[AUTO-CREATE-EXEC] Normalized channel name: '%s' -> '%s'", channel_name, norm_result.normalized)
+                    for rule_id, before, after in norm_result.transformations:
+                        logger.debug("[AUTO-CREATE-EXEC]   Rule %s: '%s' -> '%s'", rule_id, before, after)
                     action_details.append(f"Name normalized: '{channel_name}' \u2192 '{norm_result.normalized}'")
                     channel_name = norm_result.normalized
+                else:
+                    logger.debug("[AUTO-CREATE-EXEC] Normalization applied %d groups but no changes for '%s'",
+                                len(normalization_group_ids), channel_name)
             except Exception as e:
                 logger.warning("[AUTO-CREATE-EXEC] Failed to normalize channel name '%s': %s", channel_name, e)
+        elif self._normalization_engine:
+            logger.debug("[AUTO-CREATE-EXEC] Normalization skipped for '%s' (no groups selected)", channel_name)
 
         if_exists = params.get("if_exists", "skip")
         group_id = params.get("group_id") or exec_ctx.current_group_id or rule_target_group_id
@@ -514,7 +525,7 @@ class ActionExecutor:
                 )
 
             # Rename channel if normalization produces a different name than what's stored
-            if normalize_names and self._normalization_engine:
+            if normalization_group_ids and self._normalization_engine:
                 existing_name = existing["name"]
                 _num_pfx = re.match(r'^(\d+\s*\|\s*)', existing_name)
                 existing_base = _num_pfx.group(0) if _num_pfx else ""
@@ -935,7 +946,7 @@ class ActionExecutor:
 
     async def _execute_merge_streams(self, action: Action, stream_ctx: StreamContext,
                                       exec_ctx: ExecutionContext, template_ctx: dict,
-                                      normalize_names: bool = False) -> ActionResult:
+                                      normalization_group_ids: list[int] = None) -> ActionResult:
         """Execute merge_streams action."""
         params = action.params
         target = params.get("target", "auto")
@@ -978,7 +989,7 @@ class ActionExecutor:
 
             # Core-name fallback: strip country prefix + quality suffix using
             # tag groups directly (works even when normalization rules are disabled)
-            if not channel and normalize_names and self._normalization_engine:
+            if not channel and normalization_group_ids and self._normalization_engine:
                 try:
                     core_name = self._normalization_engine.extract_core_name(stream_ctx.stream_name)
                     if core_name:
@@ -1022,7 +1033,7 @@ class ActionExecutor:
 
             # Call-sign fallback: match local affiliates by FCC call sign
             # (W/K + 2-3 letters) extracted from both stream and channel names
-            if not channel and normalize_names and self._normalization_engine:
+            if not channel and normalization_group_ids and self._normalization_engine:
                 try:
                     cs = self._normalization_engine.extract_call_sign(stream_ctx.stream_name)
                     if cs:

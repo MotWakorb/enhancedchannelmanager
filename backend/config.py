@@ -34,8 +34,16 @@ def validate_url_scheme(url: str, field_name: str = "URL") -> None:
 class DispatcharrSettings(BaseModel):
     """User-configurable Dispatcharr connection settings."""
     url: str = ""
+    # Outbound auth method for service-to-service calls:
+    #   "password" — legacy flow: username + password → JWT token (subject to
+    #                Dispatcharr 0.23.0+ 3/min IP-shared login throttle).
+    #   "api_key"  — X-API-Key header on every request, no token refresh.
+    auth_method: str = "password"
     username: str = ""
     password: str = ""
+    # Personal API key generated in Dispatcharr (Account → API Keys). Stored
+    # plaintext at rest, same as password.
+    api_key: str = ""
     # Channel naming defaults
     auto_rename_channel_number: bool = False
     include_channel_number_in_name: bool = False
@@ -100,6 +108,10 @@ class DispatcharrSettings(BaseModel):
     refresh_m3us_before_probe: bool = True
     # Automatically reorder streams in channels after probe completes
     auto_reorder_after_probe: bool = False
+    # Reflect probe stats back to Dispatcharr via PATCH /api/channels/streams/{id}/
+    # so Dispatcharr's UI shows resolution/codec/fps without requiring playback.
+    # Uses GET-then-merge-then-PATCH to avoid clobbering keys Dispatcharr wrote itself.
+    push_stream_stats_to_dispatcharr: bool = False
     # Probe retry settings for transient ffprobe failures
     probe_retry_count: int = 1  # Number of retries when ffprobe fails but HTTP returns 200 (0 = no retry)
     probe_retry_delay: int = 2  # Seconds to wait between retries
@@ -109,10 +121,10 @@ class DispatcharrSettings(BaseModel):
     # Stream sort priority order for "Smart Sort" feature
     # Order determines priority: first element is primary sort key, subsequent elements are tie-breakers
     # Valid values: "resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"
-    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"]
+    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels"]
     # Which sort criteria are enabled (users can disable criteria they don't want to use)
     # Only enabled criteria appear in sort dropdown and are used by Smart Sort
-    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}
+    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "video_codec": False, "m3u_priority": False, "audio_channels": False}
     # M3U account priorities for sorting - maps M3U account ID (as string) to priority value
     # Higher priority value = preferred (sorted first). Accounts not in this map get priority 0.
     # Example: {"1": 100, "2": 50} means M3U account 1 is preferred over account 2
@@ -123,6 +135,15 @@ class DispatcharrSettings(BaseModel):
     black_screen_sample_duration: int = 5  # Seconds to sample for black screen detection (3-30)
     low_fps_threshold: int = 20  # FPS below this value is considered "low FPS" (5, 10, 15, or 20)
     deprioritize_failed_streams: bool = True
+    # Per-category deprioritization overrides.  When False the category's
+    # streams are sorted by their actual quality stats instead of being
+    # pushed to the bottom.  Only relevant when deprioritize_failed_streams
+    # is True (if the master toggle is False, nothing is deprioritized).
+    deprioritize_black_screen: bool = True
+    deprioritize_low_fps: bool = True
+    # Order of deprioritized stream categories (first = sorted higher among deprioritized)
+    # Valid values: "failed", "black_screen", "low_fps"
+    failed_stream_sort_order: list[str] = ["failed", "black_screen", "low_fps"]
     # Strike rule - flag streams with consecutive probe failures (0 = disabled)
     strike_threshold: int = 3
     # Normalization settings - user-configurable tags for stream name normalization
@@ -158,9 +179,15 @@ class DispatcharrSettings(BaseModel):
     auto_creation_excluded_terms: list[str] = []  # Terms that exclude streams by name (case-insensitive substring)
     auto_creation_excluded_groups: list[str] = []  # M3U group names to exclude (case-insensitive exact match)
     auto_creation_exclude_auto_sync_groups: bool = False  # Exclude streams in Dispatcharr auto-sync groups
+    # MCP server API key for Claude integration (empty = not configured)
+    mcp_api_key: str = ""
 
     def is_configured(self) -> bool:
-        return bool(self.url and self.username and self.password)
+        if not self.url:
+            return False
+        if self.auth_method == "api_key":
+            return bool(self.api_key)
+        return bool(self.username and self.password)
 
     def is_smtp_configured(self) -> bool:
         """Check if shared SMTP settings are configured."""
@@ -218,6 +245,22 @@ def _migrate_normalization_settings(data: dict) -> dict:
     return data
 
 
+def _sanitize_settings_data(data: dict) -> dict:
+    """Replace null values with field defaults to prevent Pydantic validation failures.
+
+    When settings.json contains null for non-Optional fields (e.g., from manual edits,
+    older versions, or corrupted backups), Pydantic v2 raises ValidationError, causing
+    a silent fallback to empty defaults — effectively "clearing" user settings on restart.
+    """
+    defaults = DispatcharrSettings()
+    for field_name, field_info in DispatcharrSettings.model_fields.items():
+        if field_name in data and data[field_name] is None:
+            default_val = getattr(defaults, field_name)
+            logger.warning("[CONFIG] Field '%s' is null in settings file, using default: %s", field_name, default_val)
+            data[field_name] = default_val
+    return data
+
+
 def load_settings() -> DispatcharrSettings:
     """Load settings from file or return defaults."""
     global _cached_settings
@@ -233,9 +276,13 @@ def load_settings() -> DispatcharrSettings:
             data = json.loads(CONFIG_FILE.read_text())
             # Apply migrations
             data = _migrate_normalization_settings(data)
+            # Sanitize nulls to prevent Pydantic validation failures
+            data = _sanitize_settings_data(data)
             _cached_settings = DispatcharrSettings(**data)
             logger.info("[CONFIG] Loaded settings successfully, configured: %s", _cached_settings.is_configured())
             return _cached_settings
+        except json.JSONDecodeError as e:
+            logger.error("[CONFIG] Settings file is not valid JSON: %s", e)
         except Exception as e:
             logger.exception("[CONFIG] Failed to load settings from %s: %s", CONFIG_FILE, e)
 
@@ -313,8 +360,13 @@ def set_log_level(level: str) -> None:
     # Set root logger level
     logging.getLogger().setLevel(numeric_level)
 
-    # Set level for all existing loggers
+    # Set level for all existing loggers, but keep noisy third-party
+    # loggers (e.g. sqlalchemy.engine) at WARNING to avoid flooding
+    # the console and ring buffer with SQL dumps.
+    _NOISY_LOGGERS = {"sqlalchemy", "httpcore"}
     for logger_name in logging.root.manager.loggerDict:
+        if any(logger_name.startswith(prefix) for prefix in _NOISY_LOGGERS):
+            continue
         logger_obj = logging.getLogger(logger_name)
         logger_obj.setLevel(numeric_level)
 

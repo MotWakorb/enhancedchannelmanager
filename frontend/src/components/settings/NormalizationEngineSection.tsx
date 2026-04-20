@@ -332,7 +332,7 @@ export function NormalizationEngineSection() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   useEffect(() => {
     loadData();
@@ -383,7 +383,7 @@ export function NormalizationEngineSection() {
       notifications.error(err instanceof Error ? err.message : 'Failed to reorder rules', 'Normalization');
       await loadData();
     }
-  }, [loadData]);
+  }, [loadData, notifications]);
 
   // Handle group drag end for reordering
   const handleGroupDragEnd = useCallback(async (event: DragEndEvent) => {
@@ -413,7 +413,7 @@ export function NormalizationEngineSection() {
       notifications.error(err instanceof Error ? err.message : 'Failed to reorder groups', 'Normalization');
       await loadData();
     }
-  }, [groups, loadData]);
+  }, [groups, loadData, notifications]);
 
   // Toggle group enabled state
   const toggleGroupEnabled = useCallback(async (group: NormalizationRuleGroup) => {
@@ -431,7 +431,7 @@ export function NormalizationEngineSection() {
       );
       notifications.error(err instanceof Error ? err.message : 'Failed to update group', 'Normalization');
     }
-  }, []);
+  }, [notifications]);
 
   // Toggle rule enabled state
   const toggleRuleEnabled = useCallback(async (rule: NormalizationRule) => {
@@ -459,7 +459,7 @@ export function NormalizationEngineSection() {
       );
       notifications.error(err instanceof Error ? err.message : 'Failed to update rule', 'Normalization');
     }
-  }, []);
+  }, [notifications]);
 
   // Delete rule
   const deleteRule = useCallback(async (rule: NormalizationRule) => {
@@ -473,7 +473,7 @@ export function NormalizationEngineSection() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to delete rule', 'Normalization');
     }
-  }, [loadData, selectedRule]);
+  }, [loadData, selectedRule, notifications]);
 
   // Delete group
   const deleteGroup = useCallback(async (group: NormalizationRuleGroup) => {
@@ -484,7 +484,7 @@ export function NormalizationEngineSection() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to delete group', 'Normalization');
     }
-  }, [loadData]);
+  }, [loadData, notifications]);
 
   // Open rule editor for new rule
   const openNewRuleEditor = useCallback((groupId: number) => {
@@ -607,7 +607,7 @@ export function NormalizationEngineSection() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to save rule', 'Normalization');
     }
-  }, [ruleEditor, closeRuleEditor, loadData]);
+  }, [ruleEditor, closeRuleEditor, loadData, notifications]);
 
   // Open group editor for new group
   const openNewGroupEditor = useCallback(() => {
@@ -655,7 +655,7 @@ export function NormalizationEngineSection() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to save group', 'Normalization');
     }
-  }, [groupEditor, groups, closeGroupEditor, loadData]);
+  }, [groupEditor, groups, closeGroupEditor, loadData, notifications]);
 
   // Test normalization
   const runTest = useCallback(async () => {
@@ -672,7 +672,7 @@ export function NormalizationEngineSection() {
     } finally {
       setTesting(false);
     }
-  }, [testInput]);
+  }, [testInput, notifications]);
 
   // Live preview for rule editor
   const updatePreview = useCallback(async () => {
@@ -742,7 +742,7 @@ export function NormalizationEngineSection() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to export rules', 'Normalization');
     }
-  }, []);
+  }, [notifications]);
 
   // Import rules from YAML
   const handleImportRules = useCallback(async () => {
@@ -764,7 +764,7 @@ export function NormalizationEngineSection() {
     } finally {
       setImporting(false);
     }
-  }, [importYaml, importOverwrite, loadData]);
+  }, [importYaml, importOverwrite, loadData, notifications]);
 
   // Handle file selection for import
   const handleImportFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {

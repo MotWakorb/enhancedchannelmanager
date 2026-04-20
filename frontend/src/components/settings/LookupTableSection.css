@@ -1,0 +1,208 @@
+/* Lookup Tables settings section */
+
+.lookup-tables-empty {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  padding: 1rem 0;
+}
+
+.lookup-tables-list {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.lookup-tables-list th,
+.lookup-tables-list td {
+  padding: 0.625rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.lookup-tables-list th {
+  color: var(--text-secondary);
+  font-weight: 500;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.lookup-tables-list th.num,
+.lookup-tables-list td.num {
+  text-align: right;
+  width: 6rem;
+}
+
+.lookup-tables-list th.actions,
+.lookup-tables-list td.actions {
+  text-align: right;
+  width: 6rem;
+  white-space: nowrap;
+}
+
+.lookup-tables-name {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.lookup-tables-desc {
+  color: var(--text-secondary);
+}
+
+.btn-icon {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  padding: 0.375rem;
+  border-radius: var(--radius-sm, 0.25rem);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.btn-icon:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.btn-icon-danger:hover {
+  color: var(--error, #ef4444);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.btn-icon .material-icons {
+  font-size: 1.125rem;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Editor modal — entries list + bulk import                              */
+/* ---------------------------------------------------------------------- */
+
+.lookup-table-editor code {
+  background: var(--bg-primary);
+  padding: 0.0625rem 0.25rem;
+  border-radius: 0.125rem;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+}
+
+.lookup-entries {
+  margin-top: 0.75rem;
+}
+
+.lookup-entries-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5rem;
+}
+
+.lookup-entries-empty {
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  margin: 0;
+  padding: 0.75rem;
+  background: var(--bg-primary);
+  border: 1px dashed var(--border-primary);
+  border-radius: var(--radius-md, 0.5rem);
+  text-align: center;
+}
+
+.lookup-entries-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.lookup-entry-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.lookup-entry-row input {
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md, 0.375rem);
+  font-size: 0.8125rem;
+}
+
+.lookup-entry-arrow {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.lookup-entry-remove {
+  background: transparent;
+  color: var(--text-secondary);
+  border: none;
+  padding: 0.25rem;
+  border-radius: var(--radius-sm, 0.25rem);
+  cursor: pointer;
+  display: inline-flex;
+}
+
+.lookup-entry-remove:hover {
+  color: var(--error, #ef4444);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.lookup-entry-remove .material-icons {
+  font-size: 1rem;
+}
+
+.lookup-bulk {
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md, 0.5rem);
+}
+
+.lookup-bulk summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  user-select: none;
+}
+
+.lookup-bulk summary:hover {
+  color: var(--text-primary);
+}
+
+.lookup-bulk textarea {
+  width: 100%;
+  margin: 0.5rem 0;
+  padding: 0.5rem;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md, 0.375rem);
+  font-family: ui-monospace, 'SF Mono', Consolas, monospace;
+  font-size: 0.8125rem;
+  resize: vertical;
+}
+
+.btn-small {
+  padding: 0.25rem 0.625rem;
+  font-size: 0.8125rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.btn-small .material-icons {
+  font-size: 1rem;
+}

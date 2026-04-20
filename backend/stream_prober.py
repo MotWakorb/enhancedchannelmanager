@@ -14,6 +14,8 @@ from pathlib import Path
 import os
 import re
 
+import journal
+
 import httpx
 
 from database import get_session
@@ -24,6 +26,13 @@ logger = logging.getLogger(__name__)
 # Default configuration
 DEFAULT_PROBE_TIMEOUT = 30  # seconds
 BITRATE_SAMPLE_DURATION = 8  # seconds to sample stream for bitrate measurement
+
+# Restrict ffprobe/ffmpeg to safe network protocols only — blocks file://, data://,
+# concat:, subfile:, etc. URLs fed to these invocations come from Dispatcharr stream
+# rows, which an attacker who can write a stream URL could otherwise weaponise for
+# local-file exfiltration or DoS on the ECM host. Matches the whitelist used in
+# backend/ffmpeg_builder/probe.py and backend/routers/stream_preview.py.
+FFPROBE_PROTOCOL_WHITELIST = "http,https,tcp,udp,rtp,rtmp,pipe"
 
 # Per-account ramp-up configuration
 RAMP_INITIAL_LIMIT = 1         # Start each account at 1 concurrent probe
@@ -67,6 +76,25 @@ def extract_m3u_account_id(m3u_account):
     return m3u_account
 
 
+# Video codec ranking for smart sort (higher = more efficient/preferred)
+# Newer codecs deliver better quality at lower bitrates
+CODEC_RANK = {
+    "av1": 5,
+    "hevc": 4, "h265": 4,
+    "vp9": 3,
+    "h264": 2, "avc": 2,
+    "vp8": 1,
+    "mpeg2video": 0, "mpeg2": 0,
+}
+
+
+def get_codec_rank(codec_name: str | None) -> int:
+    """Return a numeric rank for a video codec (higher = preferred)."""
+    if not codec_name:
+        return 0
+    return CODEC_RANK.get(codec_name.lower(), 0)
+
+
 def smart_sort_streams(
     stream_ids: list[int],
     stats_map: dict,
@@ -75,6 +103,9 @@ def smart_sort_streams(
     stream_sort_enabled: dict[str, bool] = None,
     m3u_account_priorities: dict[str, int] = None,
     deprioritize_failed_streams: bool = True,
+    deprioritize_black_screen: bool = True,
+    deprioritize_low_fps: bool = True,
+    failed_stream_sort_order: list[str] = None,
     channel_name: str = "unknown",
 ) -> list[int]:
     """
@@ -88,16 +119,26 @@ def smart_sort_streams(
         stream_sort_enabled: Which criteria are enabled
         m3u_account_priorities: M3U account priorities (account_id_str -> priority)
         deprioritize_failed_streams: Whether to push failed streams to bottom
+        deprioritize_black_screen: Whether to push black screen streams to bottom
+            (only effective when deprioritize_failed_streams is also True)
+        deprioritize_low_fps: Whether to push low FPS streams to bottom
+            (only effective when deprioritize_failed_streams is also True)
+        failed_stream_sort_order: Order of deprioritized categories (first = sorted higher)
         channel_name: Channel name for logging purposes
     """
     if stream_m3u_map is None:
         stream_m3u_map = {}
     if stream_sort_priority is None:
-        stream_sort_priority = ["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"]
+        stream_sort_priority = ["resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels"]
     if stream_sort_enabled is None:
-        stream_sort_enabled = {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}
+        stream_sort_enabled = {"resolution": True, "bitrate": True, "framerate": True, "video_codec": False, "m3u_priority": False, "audio_channels": False}
     if m3u_account_priorities is None:
         m3u_account_priorities = {}
+    if failed_stream_sort_order is None:
+        failed_stream_sort_order = ["failed", "black_screen", "low_fps"]
+
+    # Build rank map for deprioritized categories (lower rank = sorted first)
+    failed_rank = {cat: idx for idx, cat in enumerate(failed_stream_sort_order)}
 
     # Get active sort criteria (enabled and in priority order)
     active_criteria = [
@@ -106,10 +147,18 @@ def smart_sort_streams(
     ]
 
     safe_name = str(channel_name).replace('\n', '').replace('\r', '')
+    if not active_criteria:
+        logger.warning(
+            "[STREAM-PROBE-SORT] Channel '%s': no criteria enabled in Settings → Smart Sort; "
+            "sorting will only use stream id as a tiebreaker",
+            safe_name,
+        )
     logger.info("[STREAM-PROBE-SORT] Channel '%s': Sorting %s streams", safe_name, len(stream_ids))
     logger.info("[STREAM-PROBE-SORT] Sort config: priority=%s, enabled=%s", stream_sort_priority, stream_sort_enabled)
     logger.info("[STREAM-PROBE-SORT] Active criteria (in order): %s", active_criteria)
     logger.info("[STREAM-PROBE-SORT] Deprioritize failed streams: %s", deprioritize_failed_streams)
+    if deprioritize_failed_streams:
+        logger.info("[STREAM-PROBE-SORT] Failed stream sort order: %s", failed_stream_sort_order)
 
     # Log each stream's stats before sorting
     for stream_id in stream_ids:
@@ -124,6 +173,61 @@ def smart_sort_streams(
         else:
             logger.debug("[STREAM-PROBE-SORT]   Stream %s: NO STATS AVAILABLE", stream_id)
 
+    def compute_criteria_values(stat, stream_id: int) -> list:
+        """Compute sort-key values for active_criteria in priority order.
+
+        Used for both successful streams (primary ordering) and deprioritized
+        streams (within-bucket tiebreaker — bd-sw883 / issue #73). For a
+        deprioritized stream where ``stat`` is None (no probe row at all),
+        only m3u_priority can be computed; all other criteria are 0.
+        """
+        values = []
+        for criterion in active_criteria:
+            if criterion == "resolution":
+                resolution_value = 0
+                if stat and stat.resolution:
+                    try:
+                        parts = stat.resolution.split('x')
+                        if len(parts) == 2:
+                            resolution_value = int(parts[1])  # height only
+                    except (ValueError, IndexError) as e:
+                        logger.debug("[STREAM-PROBE] Suppressed resolution parse error: %s", e)
+                values.append(-resolution_value)
+
+            elif criterion == "bitrate":
+                bitrate_value = 0
+                if stat:
+                    bitrate_value = stat.video_bitrate or stat.bitrate or 0
+                values.append(-bitrate_value)
+
+            elif criterion == "framerate":
+                framerate_value = 0
+                if stat and stat.fps:
+                    try:
+                        framerate_value = float(stat.fps)
+                    except (ValueError, TypeError) as e:
+                        logger.debug("[STREAM-PROBE] Suppressed fps parse error: %s", e)
+                values.append(-framerate_value)
+
+            elif criterion == "m3u_priority":
+                # m3u_priority does NOT require a successful probe — it comes
+                # from the m3u account map, so it's always meaningful.
+                m3u_priority_value = 0
+                m3u_account_id = stream_m3u_map.get(stream_id)
+                if m3u_account_id is not None:
+                    m3u_priority_value = m3u_account_priorities.get(str(m3u_account_id), 0)
+                values.append(-m3u_priority_value)
+
+            elif criterion == "audio_channels":
+                audio_channels_value = stat.audio_channels if stat and stat.audio_channels else 0
+                values.append(-audio_channels_value)
+
+            elif criterion == "video_codec":
+                codec_value = get_codec_rank(stat.video_codec) if stat else 0
+                values.append(-codec_value)
+
+        return values
+
     def get_sort_value(stream_id: int) -> tuple:
         stat = stats_map.get(stream_id)
         stream_name = stat.stream_name if stat else f"Stream {stream_id}"
@@ -131,24 +235,29 @@ def smart_sort_streams(
         # Deprioritize failed streams if enabled
         if deprioritize_failed_streams:
             if not stat or stat.probe_status in ('failed', 'timeout', 'pending'):
-                logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (status=%s)", stream_name, stat.probe_status if stat else 'no_stats')
-                # Return tuple with 1 as first element to sort to bottom
-                return (1,) + tuple(0 for _ in active_criteria)
+                rank = failed_rank.get('failed', 0)
+                logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (status=%s, rank=%s)", stream_name, stat.probe_status if stat else 'no_stats', rank)
+                # bd-sw883: apply primary criteria within the failed bucket too.
+                return (1, rank) + tuple(compute_criteria_values(stat, stream_id)) + (stream_id,)
 
         # Deprioritize black screen streams (probe succeeded but content is black)
-        if deprioritize_failed_streams and stat and getattr(stat, 'is_black_screen', False) is True:
-            logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (black screen)", stream_name)
-            return (1,) + tuple(0 for _ in active_criteria)
+        if deprioritize_failed_streams and deprioritize_black_screen and stat and getattr(stat, 'is_black_screen', False) is True:
+            rank = failed_rank.get('black_screen', 1)
+            logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (black screen, rank=%s)", stream_name, rank)
+            # bd-sw883: apply primary criteria within the black_screen bucket too.
+            return (1, rank) + tuple(compute_criteria_values(stat, stream_id)) + (stream_id,)
 
         # Deprioritize low FPS streams (probe succeeded but FPS < 20)
-        if deprioritize_failed_streams and stat and getattr(stat, 'is_low_fps', False) is True:
-            logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (low fps)", stream_name)
-            return (1,) + tuple(0 for _ in active_criteria)
+        if deprioritize_failed_streams and deprioritize_low_fps and stat and getattr(stat, 'is_low_fps', False) is True:
+            rank = failed_rank.get('low_fps', 2)
+            logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (low fps, rank=%s)", stream_name, rank)
+            # bd-sw883: apply primary criteria within the low_fps bucket too.
+            return (1, rank) + tuple(compute_criteria_values(stat, stream_id)) + (stream_id,)
 
         if not stat or stat.probe_status != 'success':
             logger.debug("[STREAM-PROBE-SORT]   %s: No successful probe data", stream_name)
             # Still compute M3U priority for unprobed streams (M3U priority doesn't require probing)
-            sort_values = [0]
+            sort_values = [0, 0]
             for criterion in active_criteria:
                 if criterion == "m3u_priority":
                     m3u_priority_value = 0
@@ -158,10 +267,10 @@ def smart_sort_streams(
                     sort_values.append(-m3u_priority_value)
                 else:
                     sort_values.append(0)
-            return tuple(sort_values)
+            return tuple(sort_values) + (stream_id,)
 
         # Build sort values based on active criteria in priority order
-        sort_values = [0]  # First element: 0 = successful stream
+        sort_values = [0, 0]  # First element: 0 = successful stream, second: sub-rank (unused for good streams)
 
         for criterion in active_criteria:
             if criterion == "resolution":
@@ -208,12 +317,18 @@ def smart_sort_streams(
                 # Negate for descending sort (more channels first)
                 sort_values.append(-audio_channels_value)
 
+            elif criterion == "video_codec":
+                # Sort by codec efficiency: AV1 > HEVC > VP9 > H.264 > VP8 > MPEG2
+                codec_value = get_codec_rank(stat.video_codec)
+                # Negate for descending sort (more efficient codec first)
+                sort_values.append(-codec_value)
+
         m3u_account_id = stream_m3u_map.get(stream_id)
         logger.debug("[STREAM-PROBE-SORT]   %s: sort_tuple=%s "
-                    "(res=%s, br=%s, fps=%s, m3u=%s, audio_ch=%s)",
+                    "(res=%s, br=%s, fps=%s, m3u=%s, audio_ch=%s, codec=%s)",
                     stream_name, tuple(sort_values),
-                    stat.resolution, stat.bitrate, stat.fps, m3u_account_id, stat.audio_channels)
-        return tuple(sort_values)
+                    stat.resolution, stat.bitrate, stat.fps, m3u_account_id, stat.audio_channels, stat.video_codec)
+        return tuple(sort_values) + (stream_id,)
 
     # Sort stream IDs by their stats
     sorted_ids = sorted(stream_ids, key=get_sort_value)
@@ -251,6 +366,8 @@ class StreamProber:
         probe_retry_count: int = 1,   # Retries on transient ffprobe failure (0 = no retry)
         probe_retry_delay: int = 2,   # Seconds between retries
         deprioritize_failed_streams: bool = True,  # Deprioritize failed streams in smart sort
+        deprioritize_black_screen: bool = True,  # Deprioritize black screen streams in smart sort
+        deprioritize_low_fps: bool = True,  # Deprioritize low FPS streams in smart sort
         black_screen_detection_enabled: bool = False,  # Run ffmpeg blackdetect after successful probe
         black_screen_sample_duration: int = 5,  # Seconds to sample for black screen detection (3-30)
         low_fps_threshold: int = 20,  # FPS below this value is considered "low FPS"
@@ -258,6 +375,7 @@ class StreamProber:
         stream_sort_enabled: dict[str, bool] = None,  # Which criteria are enabled for Smart Sort
         stream_fetch_page_limit: int = 200,  # Max pages when fetching streams (200 * 500 = 100K streams)
         m3u_account_priorities: dict[str, int] = None,  # M3U account priorities (account_id -> priority)
+        failed_stream_sort_order: list[str] = None,  # Order of deprioritized categories (first = sorted higher)
     ):
         self.client = client
         self.probe_timeout = probe_timeout
@@ -272,6 +390,8 @@ class StreamProber:
         self.probe_retry_count = max(0, min(5, probe_retry_count))  # Clamp 0-5
         self.probe_retry_delay = max(1, min(30, probe_retry_delay))  # Clamp 1-30
         self.deprioritize_failed_streams = deprioritize_failed_streams
+        self.deprioritize_black_screen = deprioritize_black_screen
+        self.deprioritize_low_fps = deprioritize_low_fps
         self.black_screen_detection_enabled = black_screen_detection_enabled
         self.low_fps_threshold = max(1, min(60, low_fps_threshold))  # Clamp 1-60
         self.black_screen_sample_duration = max(3, min(30, black_screen_sample_duration))  # Clamp 3-30
@@ -281,6 +401,7 @@ class StreamProber:
         self.stream_sort_priority = stream_sort_priority or ["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"]
         self.stream_sort_enabled = stream_sort_enabled or {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}
         self.m3u_account_priorities = m3u_account_priorities or {}
+        self.failed_stream_sort_order = failed_stream_sort_order or ["failed", "black_screen", "low_fps"]
         self._probe_cancelled = False  # Controls cancellation of in-progress probe
         self._probe_paused = False  # Controls pausing of in-progress probe
         self._probing_in_progress = False
@@ -369,7 +490,10 @@ class StreamProber:
         self,
         stream_sort_priority: list[str],
         stream_sort_enabled: dict[str, bool],
-        m3u_account_priorities: dict[str, int]
+        m3u_account_priorities: dict[str, int],
+        failed_stream_sort_order: list[str] = None,
+        deprioritize_black_screen: bool = None,
+        deprioritize_low_fps: bool = None,
     ) -> None:
         """Update the sort settings.
 
@@ -380,19 +504,30 @@ class StreamProber:
             stream_sort_priority: Priority order for sort criteria.
             stream_sort_enabled: Which criteria are enabled.
             m3u_account_priorities: M3U account priorities (account_id -> priority value).
+            deprioritize_black_screen: Per-category override for black screen streams.
+            deprioritize_low_fps: Per-category override for low FPS streams.
         """
         old_priority = self.stream_sort_priority
         old_enabled = self.stream_sort_enabled
         old_m3u_priorities = self.m3u_account_priorities
+        old_failed_order = self.failed_stream_sort_order
         self.stream_sort_priority = stream_sort_priority
         self.stream_sort_enabled = stream_sort_enabled
         self.m3u_account_priorities = m3u_account_priorities
+        if failed_stream_sort_order is not None:
+            self.failed_stream_sort_order = failed_stream_sort_order
+        if deprioritize_black_screen is not None:
+            self.deprioritize_black_screen = deprioritize_black_screen
+        if deprioritize_low_fps is not None:
+            self.deprioritize_low_fps = deprioritize_low_fps
         logger.info("[STREAM-PROBE] Updated sort settings: priority=%s->%s, "
                     "enabled=%s->%s, "
-                    "m3u_priorities=%s->%s",
+                    "m3u_priorities=%s->%s, "
+                    "failed_order=%s->%s",
                     old_priority, self.stream_sort_priority,
                     old_enabled, self.stream_sort_enabled,
-                    old_m3u_priorities, self.m3u_account_priorities)
+                    old_m3u_priorities, self.m3u_account_priorities,
+                    old_failed_order, self.failed_stream_sort_order)
 
     def set_notification_callbacks(self, create_callback, update_callback, delete_by_source_callback=None):
         """Set notification callback functions for probe progress updates.
@@ -805,16 +940,23 @@ class StreamProber:
             logger.debug("[STREAM-PROBE] Measuring bitrate for stream %s", stream_id)
             measured_bitrate = await self._measure_stream_bitrate(url)
 
-            # Black screen detection (opt-in)
-            is_black = False
+            # Black screen detection (opt-in). `is_black` stays None when
+            # detection is disabled OR when it returned indeterminate (timeout
+            # / no YAVG data), so _save_probe_result knows not to overwrite
+            # any prior is_black_screen value.
+            is_black: Optional[bool] = None
             if self.black_screen_detection_enabled:
                 logger.debug("[STREAM-PROBE] Running black screen detection for stream %s", stream_id)
                 is_black = await self._detect_black_screen(url)
 
             # Save probe result with both ffprobe metadata and measured bitrate
-            return self._save_probe_result(
+            saved = self._save_probe_result(
                 stream_id, name, result, "success", None, measured_bitrate, is_black
             )
+            # Optionally reflect stats back to Dispatcharr. Fire-and-forget semantics:
+            # any failure is logged but never fails the probe.
+            await self._push_stats_to_dispatcharr(stream_id, saved)
+            return saved
         except asyncio.TimeoutError:
             logger.warning("[STREAM-PROBE] Stream %s probe timed out after %ss", stream_id, self.probe_timeout)
             return self._save_probe_result(
@@ -835,6 +977,7 @@ class StreamProber:
             "ffprobe",
             "-v",
             "error",  # Show errors in stderr (was "quiet" which suppressed everything)
+            "-protocol_whitelist", FFPROBE_PROTOCOL_WHITELIST,
             "-print_format",
             "json",
             "-show_format",
@@ -943,38 +1086,68 @@ class StreamProber:
     # Threshold of 20 catches: pure black, dark slates, off-air screens with small logos.
     BLACK_SCREEN_YAVG_THRESHOLD = 20
 
-    async def _detect_black_screen(self, url: str) -> bool:
+    async def _detect_black_screen(self, url: str) -> Optional[bool]:
         """Detect dark/black screens by measuring average brightness (YAVG) via signalstats.
 
         Uses ffmpeg signalstats to compute per-frame average luma (YAVG).
         In YUV TV range: 16 = pure black, ~88 = typical content.
-        Returns True if average YAVG across the sample is below threshold.
+
+        Returns:
+            True  — average YAVG across the sample is below threshold (dark/black).
+            False — average YAVG is above threshold (clean content).
+            None  — detection was indeterminate (ffmpeg timed out, produced no
+                    YAVG samples, or exited abnormally). Callers MUST NOT treat
+                    None as "clean"; prior is_black_screen state should be
+                    preserved so a scan-task timeout cannot silently overwrite
+                    a manual probe's finding.
+
+        Why: this method runs both inline from probe_stream() (where ffprobe
+        plus bitrate measurement have already warmed the upstream connection)
+        and cold from the standalone Black Screen Scan task. Cold starts on
+        slow-to-buffer IPTV providers can exceed a tight asyncio budget. We
+        add an ffmpeg input -timeout for network stall detection and give the
+        wait_for a generous grace window so cold-start false-timeouts don't
+        flip streams to "clean".
         """
         cmd = [
             "ffmpeg",
+            "-protocol_whitelist", FFPROBE_PROTOCOL_WHITELIST,
             "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
+            # Network stall guard (microseconds). If the upstream stops
+            # delivering data for this long, ffmpeg bails on its own rather
+            # than hanging until the asyncio wait_for budget runs out.
+            "-timeout", "15000000",
             "-i", url,
             "-t", str(self.black_screen_sample_duration),
             "-vf", "signalstats,metadata=mode=print:key=lavfi.signalstats.YAVG",
             "-an", "-f", "null", "-",
         ]
+        # Grace window: sample duration + ample headroom for cold-start
+        # buffering, connection setup, and ffmpeg startup. The previous 15-s
+        # grace was too tight for cold scans and caused every timeout to be
+        # silently treated as a clean stream.
+        total_timeout = self.black_screen_sample_duration + 30
+
         process = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         try:
             _, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=self.black_screen_sample_duration + 15
+                process.communicate(), timeout=total_timeout
             )
         except asyncio.TimeoutError:
             process.kill()
             await process.wait()
-            logger.warning("[STREAM-PROBE] Black screen detection timed out: %s", url[:80])
-            return False
+            logger.warning(
+                "[STREAM-PROBE] Black screen detection timed out after %ss: %s",
+                total_timeout, url[:80],
+            )
+            return None
         output = stderr.decode()
         yavg_values = re.findall(r'lavfi\.signalstats\.YAVG=([\d.]+)', output)
         if not yavg_values:
             logger.debug("[STREAM-PROBE] No YAVG data from signalstats: %s", url[:80])
-            return False
+            return None
         avg_brightness = sum(float(v) for v in yavg_values) / len(yavg_values)
         is_dark = avg_brightness < self.BLACK_SCREEN_YAVG_THRESHOLD
         if is_dark:
@@ -992,7 +1165,7 @@ class StreamProber:
         status: str,
         error_message: Optional[str],
         measured_bitrate: Optional[int] = None,
-        is_black_screen: bool = False,
+        is_black_screen: Optional[bool] = None,
     ) -> dict:
         """Parse ffprobe output and save to database."""
         session = get_session()
@@ -1018,7 +1191,13 @@ class StreamProber:
                 stats.is_low_fps = False  # Reset on failure (stream state unknown)
             elif status == "success":
                 stats.consecutive_failures = 0
-                stats.is_black_screen = is_black_screen
+                # Only update is_black_screen when detection actually produced
+                # a definitive result. is_black_screen=None means detection
+                # timed out or returned no YAVG samples — preserve whatever
+                # the prior state was so a scan-task cold-start timeout can't
+                # silently wipe out a manual probe's finding.
+                if self.black_screen_detection_enabled and is_black_screen is not None:
+                    stats.is_black_screen = is_black_screen
 
             if ffprobe_data and status == "success":
                 self._parse_ffprobe_data(stats, ffprobe_data)
@@ -1050,6 +1229,85 @@ class StreamProber:
             raise
         finally:
             session.close()
+
+    async def _push_stats_to_dispatcharr(self, stream_id: int, ecm_stats: dict) -> None:
+        """Reflect ECM probe stats back to Dispatcharr via PATCH.
+
+        Reads the `push_stream_stats_to_dispatcharr` setting at call time so
+        toggling it takes effect without restarting the prober. On any failure,
+        logs and returns — probing is never blocked by this.
+
+        GET-then-merge-then-PATCH preserves keys Dispatcharr wrote itself
+        (e.g. pixel_format, audio_bitrate from playback) that ECM doesn't know.
+        """
+        try:
+            from config import get_settings
+            if not get_settings().push_stream_stats_to_dispatcharr:
+                return
+            if ecm_stats.get("probe_status") != "success":
+                return
+
+            # Build the payload in Dispatcharr's schema. ECM's "fps" is "source_fps"
+            # in Dispatcharr. Omit None values so we don't blank out real data on merge.
+            mapped: dict = {}
+            if ecm_stats.get("resolution") is not None:
+                mapped["resolution"] = ecm_stats["resolution"]
+                try:
+                    w, h = ecm_stats["resolution"].split("x")
+                    mapped["width"] = int(w)
+                    mapped["height"] = int(h)
+                except (ValueError, AttributeError):
+                    pass
+            if ecm_stats.get("video_codec") is not None:
+                mapped["video_codec"] = ecm_stats["video_codec"]
+            if ecm_stats.get("audio_codec") is not None:
+                mapped["audio_codec"] = ecm_stats["audio_codec"]
+            if ecm_stats.get("audio_channels") is not None:
+                _channel_names = {1: "mono", 2: "stereo", 6: "5.1", 8: "7.1"}
+                raw_ch = ecm_stats["audio_channels"]
+                mapped["audio_channels"] = (
+                    _channel_names.get(raw_ch, str(raw_ch)) if isinstance(raw_ch, int) else raw_ch
+                )
+            if ecm_stats.get("video_bitrate") is not None:
+                mapped["ffmpeg_output_bitrate"] = round(ecm_stats["video_bitrate"] / 1000, 1)
+            if ecm_stats.get("fps") is not None:
+                try:
+                    mapped["source_fps"] = float(ecm_stats["fps"])
+                except (ValueError, TypeError):
+                    pass
+            if ecm_stats.get("stream_type") is not None:
+                mapped["stream_type"] = ecm_stats["stream_type"]
+
+            if not mapped:
+                logger.debug("[STREAM-PROBE] No stats to push for stream %s", stream_id)
+                return
+
+            # Read existing stream_stats so we merge instead of replace.
+            try:
+                existing = await self.client.get_stream(stream_id)
+            except Exception as e:
+                logger.warning(
+                    "[STREAM-PROBE] Could not fetch stream %s for stats push (skipping): %s",
+                    stream_id, e,
+                )
+                return
+
+            merged = dict(existing.get("stream_stats") or {})
+            merged.update(mapped)
+
+            await self.client.update_stream(stream_id, {
+                "stream_stats": merged,
+                "stream_stats_updated_at": datetime.utcnow().isoformat() + "Z",
+            })
+            logger.info(
+                "[STREAM-PROBE] Pushed stream_stats to Dispatcharr for stream %s (keys=%s)",
+                stream_id, sorted(mapped.keys()),
+            )
+        except Exception as e:
+            logger.warning(
+                "[STREAM-PROBE] Failed to push stream_stats to Dispatcharr for stream %s: %s",
+                stream_id, e,
+            )
 
     def _parse_ffprobe_data(self, stats: StreamStats, data: dict):
         """Extract relevant fields from ffprobe JSON output."""
@@ -1585,9 +1843,24 @@ class StreamProber:
                     streams_data = await self.client.get_streams_by_ids(stream_ids)
                     # Log raw stream data for debugging
                     for s in streams_data:
-                        logger.debug("[STREAM-PROBE-SORT] Channel %s: Stream %s ('%s') has raw m3u_account=%r", channel_id, s['id'], s.get('name', 'Unknown'), s.get('m3u_account'))
+                        stream_id = s.get("id", s.get("stream_id"))
+                        logger.debug(
+                            "[STREAM-PROBE-SORT] Channel %s: Stream %s ('%s') has raw m3u_account=%r",
+                            channel_id,
+                            stream_id,
+                            s.get("name", "Unknown"),
+                            s.get("m3u_account"),
+                        )
                     # Extract M3U account IDs (handles both direct ID and nested object formats)
-                    stream_m3u_map = {s["id"]: self._extract_m3u_account_id(s.get("m3u_account")) for s in streams_data}
+                    # Dispatcharr may return either "id" or "stream_id" depending on version/endpoint.
+                    stream_m3u_map = {}
+                    for s in streams_data:
+                        stream_id = s.get("id", s.get("stream_id"))
+                        if stream_id is None:
+                            continue
+                        stream_m3u_map[int(stream_id)] = self._extract_m3u_account_id(
+                            s.get("m3u_account")
+                        )
                     logger.debug("[STREAM-PROBE-SORT] Channel %s: Built M3U map for %s streams: %s", channel_id, len(stream_m3u_map), stream_m3u_map)
 
                     # Fetch stream stats for this channel's streams (uses get_session and StreamStats imported at top of file)
@@ -1651,6 +1924,43 @@ class StreamProber:
                                 logger.error("[STREAM-PROBE-SORT] Failed to update channel %s (%s): %s", channel_id, channel_name, update_err)
                                 raise  # Re-raise to be caught by outer exception handler
 
+                            # Collect deprioritization reasons for journal
+                            deprioritized = []
+                            for sid in sorted_stream_ids:
+                                stat = stats_map.get(sid)
+                                if stat:
+                                    if getattr(stat, 'is_black_screen', False):
+                                        deprioritized.append({"id": sid, "name": stat.stream_name, "reason": "black_screen"})
+                                    elif getattr(stat, 'is_low_fps', False):
+                                        deprioritized.append({"id": sid, "name": stat.stream_name, "reason": "low_fps"})
+                                    elif stat.probe_status in ('failed', 'timeout'):
+                                        deprioritized.append({"id": sid, "name": stat.stream_name, "reason": stat.probe_status})
+
+                            # Build journal description
+                            desc_parts = [f"Smart sort reordered {len(stream_ids)} streams in '{channel_name}'"]
+                            if deprioritized:
+                                reasons = {}
+                                for d in deprioritized:
+                                    reasons.setdefault(d["reason"], []).append(d["name"])
+                                reason_strs = []
+                                for reason, names in reasons.items():
+                                    label = {"black_screen": "black screen", "low_fps": "low FPS", "failed": "failed", "timeout": "timed out"}.get(reason, reason)
+                                    reason_strs.append(f"{len(names)} {label}")
+                                desc_parts.append(f"({', '.join(reason_strs)} deprioritized)")
+
+                            journal.log_entry(
+                                category="channel",
+                                action_type="smart_sort",
+                                entity_id=channel_id,
+                                entity_name=channel_name,
+                                description=" ".join(desc_parts),
+                                before_value={"streams": [s["name"] for s in streams_before]},
+                                after_value={
+                                    "streams": [s["name"] for s in streams_after],
+                                    "deprioritized": deprioritized,
+                                },
+                            )
+
                             reordered.append({
                                 "channel_id": channel_id,
                                 "channel_name": channel_name,
@@ -1679,10 +1989,17 @@ class StreamProber:
     ) -> list[int]:
         """Sort stream IDs using smart sort logic. Delegates to module-level function."""
         return smart_sort_streams(
-            stream_ids, stats_map, stream_m3u_map or {},
-            self.stream_sort_priority, self.stream_sort_enabled,
-            self.m3u_account_priorities, self.deprioritize_failed_streams,
-            channel_name
+            stream_ids,
+            stats_map,
+            stream_m3u_map=stream_m3u_map or {},
+            stream_sort_priority=self.stream_sort_priority,
+            stream_sort_enabled=self.stream_sort_enabled,
+            m3u_account_priorities=self.m3u_account_priorities,
+            deprioritize_failed_streams=self.deprioritize_failed_streams,
+            deprioritize_black_screen=self.deprioritize_black_screen,
+            deprioritize_low_fps=self.deprioritize_low_fps,
+            failed_stream_sort_order=self.failed_stream_sort_order,
+            channel_name=channel_name,
         )
 
     async def probe_all_streams(self, channel_groups_override: list[str] = None, skip_m3u_refresh: bool = False, stream_ids_filter: list[int] = None):
@@ -2467,6 +2784,8 @@ class StreamProber:
                 "priority": list(self.stream_sort_priority),
                 "enabled": dict(self.stream_sort_enabled),
                 "deprioritize_failed": self.deprioritize_failed_streams,
+                "deprioritize_black_screen": self.deprioritize_black_screen,
+                "deprioritize_low_fps": self.deprioritize_low_fps,
             } if reordered_channels else None,
         }
 
@@ -2674,6 +2993,8 @@ def ensure_prober() -> Optional[StreamProber]:
             probe_retry_count=settings.probe_retry_count,
             probe_retry_delay=settings.probe_retry_delay,
             deprioritize_failed_streams=settings.deprioritize_failed_streams,
+            deprioritize_black_screen=settings.deprioritize_black_screen,
+            deprioritize_low_fps=settings.deprioritize_low_fps,
             black_screen_detection_enabled=settings.black_screen_detection_enabled,
             black_screen_sample_duration=settings.black_screen_sample_duration,
             low_fps_threshold=settings.low_fps_threshold,

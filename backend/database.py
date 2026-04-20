@@ -3,7 +3,8 @@ SQLite database setup for the Journal feature.
 Uses SQLAlchemy with async support via aiosqlite.
 """
 import logging
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.pool import StaticPool
 
@@ -20,6 +21,79 @@ Base = declarative_base()
 # Engine and session factory (initialized on startup)
 _engine = None
 _SessionLocal = None
+
+# Track whether we've logged PRAGMA state at least once so the startup log is
+# informative without spamming once-per-connection lines.
+_pragma_logged = False
+
+
+@event.listens_for(Engine, "connect")
+def _set_sqlite_pragmas(dbapi_connection, connection_record):
+    """Apply SQLite PRAGMAs on every new connection.
+
+    Set at connection time because SQLite PRAGMAs are per-connection, not
+    per-database. Without this, `journal_mode` defaults to rollback journal
+    (which serializes readers vs writers → `database is locked` errors under
+    concurrent probe/task/HTTP load) and `foreign_keys=OFF` (which silently
+    ignores FK constraints declared in models.py → orphan rows).
+
+    SQLite-only: guarded by dialect check so this is a no-op for non-SQLite
+    engines if the backend is ever swapped.
+
+    In-memory databases (`:memory:`) cannot use WAL mode, so we skip
+    journal_mode for them but still enforce foreign keys.
+    """
+    global _pragma_logged
+
+    # Identify SQLite connections. The sqlite3 DB-API module exposes
+    # `Connection` objects from the stdlib `sqlite3` package; non-SQLite
+    # drivers will not match, so we stay safe for future engine swaps.
+    try:
+        import sqlite3
+        if not isinstance(dbapi_connection, sqlite3.Connection):
+            return
+    except Exception:
+        return
+
+    cursor = dbapi_connection.cursor()
+    try:
+        # Detect in-memory DB — WAL mode requires a file on disk. Tests using
+        # `sqlite:///:memory:` expose the database via a connection with no
+        # backing file; `PRAGMA database_list` returns an empty `file` column
+        # for those.
+        is_memory = False
+        try:
+            cursor.execute("PRAGMA database_list")
+            rows = cursor.fetchall()
+            # rows like (seq, name, file). Main DB is first.
+            if rows and len(rows[0]) >= 3:
+                main_file = rows[0][2]
+                if not main_file:
+                    is_memory = True
+        except Exception:
+            # If we can't determine, fall through and attempt WAL — SQLite
+            # will return the actual mode we land in.
+            pass
+
+        resulting_mode = None
+        if not is_memory:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            row = cursor.fetchone()
+            if row is not None:
+                resulting_mode = row[0]
+
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA foreign_keys=ON")
+
+        if not _pragma_logged:
+            logger.info(
+                "[DATABASE] SQLite PRAGMAs applied: journal_mode=%s synchronous=NORMAL foreign_keys=ON (memory=%s)",
+                resulting_mode or "memory",
+                is_memory,
+            )
+            _pragma_logged = True
+    finally:
+        cursor.close()
 
 
 def get_database_url() -> str:
@@ -52,7 +126,7 @@ def init_db() -> None:
         _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
         # Import models to register them with Base
-        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, AutoCreationRule, AutoCreationExecution, AutoCreationConflict, FFmpegProfile, DummyEPGProfile, DummyEPGChannelAssignment  # noqa: F401
+        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, AutoCreationRule, AutoCreationExecution, AutoCreationConflict, FFmpegProfile, DummyEPGProfile, DummyEPGChannelAssignment, LookupTable  # noqa: F401
         from export_models import PlaylistProfile, CloudStorageTarget, PublishConfiguration, PublishHistory  # noqa: F401
 
         # Create all tables
@@ -216,6 +290,12 @@ def _run_migrations(engine) -> None:
 
             # Add stream_sort_field and stream_sort_order columns to auto_creation_rules (v0.15.0)
             _add_auto_creation_rules_stream_sort_columns(conn)
+
+            # Migrate normalize_names -> normalization_group_ids (v0.16.0 - Per-rule normalization)
+            _migrate_normalize_names_to_normalization_group_ids(conn)
+
+            # Add user_id and username columns to unique_client_connections (v0.16.0 - User tracking)
+            _add_unique_client_connections_user_columns(conn)
 
             logger.debug("[DATABASE] All migrations complete - schema is up to date")
     except Exception as e:
@@ -1530,6 +1610,55 @@ def _add_auto_creation_rules_stream_sort_columns(conn) -> None:
         logger.info("[DATABASE] Migration complete: added stream_sort_order column")
 
 
+def _migrate_normalize_names_to_normalization_group_ids(conn) -> None:
+    """Migrate normalize_names boolean to normalization_group_ids JSON array."""
+    import json
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_rules'"
+    ))
+    if not result.fetchone():
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
+
+    if "normalization_group_ids" not in columns:
+        logger.info("[DATABASE] Adding normalization_group_ids column to auto_creation_rules")
+        conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN normalization_group_ids TEXT"))
+
+        # Migrate existing data: rules with normalize_names=1 get all enabled group IDs
+        if "normalize_names" in columns:
+            # Check if normalization_rule_groups table exists
+            has_groups = conn.execute(text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='normalization_rule_groups'"
+            )).fetchone()
+            if has_groups:
+                groups = conn.execute(text(
+                    "SELECT id FROM normalization_rule_groups WHERE enabled = 1 ORDER BY priority"
+                )).fetchall()
+                all_group_ids = json.dumps([g[0] for g in groups]) if groups else "[]"
+            else:
+                all_group_ids = "[]"
+
+            # Rules with normalize_names=True get all enabled groups
+            conn.execute(text(
+                "UPDATE auto_creation_rules SET normalization_group_ids = :ids WHERE normalize_names = 1"
+            ), {"ids": all_group_ids})
+
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: added normalization_group_ids column")
+
+    # Drop legacy normalize_names column now that data is migrated
+    # Re-read columns in case they changed above
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
+    if "normalize_names" in columns:
+        logger.info("[DATABASE] Dropping legacy normalize_names column from auto_creation_rules")
+        conn.execute(text("ALTER TABLE auto_creation_rules DROP COLUMN normalize_names"))
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: dropped normalize_names column")
+
+
 def _add_stream_stats_consecutive_failures_column(conn) -> None:
     """Add consecutive_failures column to stream_stats table (v0.12.5 - Strike rule)."""
     from sqlalchemy import text
@@ -1742,6 +1871,29 @@ def close_db() -> None:
         logger.info("[DATABASE] Database engine disposed")
     _engine = None
     _SessionLocal = None
+
+
+def _add_unique_client_connections_user_columns(conn) -> None:
+    """Add user_id and username columns to unique_client_connections table."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='unique_client_connections'"
+    ))
+    if not result.fetchone():
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(unique_client_connections)")).fetchall()]
+
+    if "user_id" not in columns:
+        logger.info("[DATABASE] Adding user_id column to unique_client_connections")
+        conn.execute(text("ALTER TABLE unique_client_connections ADD COLUMN user_id INTEGER"))
+        conn.commit()
+
+    if "username" not in columns:
+        logger.info("[DATABASE] Adding username column to unique_client_connections")
+        conn.execute(text("ALTER TABLE unique_client_connections ADD COLUMN username VARCHAR(255)"))
+        conn.commit()
 
 
 def get_session():

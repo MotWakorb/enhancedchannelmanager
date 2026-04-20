@@ -393,6 +393,8 @@ export const mockDataStore: MockDataStore = {
     stream_sort_enabled: { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false },
     m3u_account_priorities: {},
     deprioritize_failed_streams: true,
+    deprioritize_black_screen: true,
+    deprioritize_low_fps: true,
     hide_auto_sync_groups: false,
     frontend_log_level: 'INFO',
   },
@@ -1080,5 +1082,180 @@ export const handlers = [
       imported: [{ name: 'Imported Rule', action: 'created' }],
       errors: [],
     })
+  }),
+
+  // ── Backup & Restore ──
+
+  http.get(`${API_BASE}/backup/create`, () => {
+    return new HttpResponse(new Blob(['mock-zip'], { type: 'application/zip' }), {
+      headers: {
+        'Content-Disposition': 'attachment; filename="ecm-backup-2026-01-01.zip"',
+        'Content-Type': 'application/zip',
+      },
+    })
+  }),
+
+  http.get(`${API_BASE}/backup/export`, () => {
+    return new HttpResponse('ecm_export:\n  version: 0.16.0\nsettings: {}\n', {
+      headers: {
+        'Content-Disposition': 'attachment; filename="ecm-export-2026-01-01.yaml"',
+        'Content-Type': 'text/yaml',
+      },
+    })
+  }),
+
+  http.post(`${API_BASE}/backup/validate`, () => {
+    return HttpResponse.json({
+      valid: true,
+      version: '0.16.0',
+      exported_at: '2026-01-01T00:00:00+00:00',
+      sections: [
+        { key: 'settings', label: 'Settings', item_count: 10, available: true },
+        { key: 'scheduled_tasks', label: 'Scheduled Tasks', item_count: 3, available: true },
+        { key: 'tag_groups', label: 'Tag Groups', item_count: 2, available: true },
+        { key: 'ffmpeg_profiles', label: 'FFmpeg Profiles', item_count: 0, available: false },
+      ],
+    })
+  }),
+
+  http.post(`${API_BASE}/backup/restore`, () => {
+    return HttpResponse.json({
+      status: 'ok',
+      backup_version: '0.16.0',
+      backup_date: '2026-01-01T00:00:00+00:00',
+      restored_files: ['settings.json', 'journal.db'],
+    })
+  }),
+
+  http.post(`${API_BASE}/backup/restore-yaml`, () => {
+    return HttpResponse.json({
+      success: true,
+      sections_restored: ['settings', 'scheduled_tasks', 'tag_groups'],
+      sections_failed: [],
+      warnings: [],
+      errors: [],
+    })
+  }),
+
+  http.post(`${API_BASE}/backup/restore-initial`, () => {
+    return HttpResponse.json({
+      status: 'ok',
+      backup_version: '0.16.0',
+      backup_date: '2026-01-01T00:00:00+00:00',
+      restored_files: ['settings.json', 'journal.db'],
+    })
+  }),
+
+  // ==========================================================================
+  // Lookup Tables — /api/lookup-tables
+  // ==========================================================================
+
+  http.get(`${API_BASE}/lookup-tables`, () => {
+    return HttpResponse.json([
+      {
+        id: 1,
+        name: 'callsigns',
+        description: 'Channel call signs',
+        entry_count: 2,
+        created_at: '2026-04-19T00:00:00Z',
+        updated_at: '2026-04-19T00:00:00Z',
+      },
+    ])
+  }),
+
+  http.post(`${API_BASE}/lookup-tables`, async ({ request }) => {
+    const body = (await request.json()) as {
+      name: string
+      description?: string | null
+      entries?: Record<string, string>
+    }
+    return HttpResponse.json(
+      {
+        id: nextId(),
+        name: body.name,
+        description: body.description ?? null,
+        entries: body.entries ?? {},
+        entry_count: Object.keys(body.entries ?? {}).length,
+        created_at: '2026-04-19T00:00:00Z',
+        updated_at: '2026-04-19T00:00:00Z',
+      },
+      { status: 201 },
+    )
+  }),
+
+  http.get(`${API_BASE}/lookup-tables/:id`, ({ params }) => {
+    return HttpResponse.json({
+      id: Number(params.id),
+      name: 'callsigns',
+      description: 'Channel call signs',
+      entries: { ESPN: 'espn.com', CNN: 'cnn.com' },
+      entry_count: 2,
+      created_at: '2026-04-19T00:00:00Z',
+      updated_at: '2026-04-19T00:00:00Z',
+    })
+  }),
+
+  http.patch(`${API_BASE}/lookup-tables/:id`, async ({ params, request }) => {
+    const body = (await request.json()) as {
+      name?: string
+      description?: string | null
+      entries?: Record<string, string>
+    }
+    return HttpResponse.json({
+      id: Number(params.id),
+      name: body.name ?? 'callsigns',
+      description: body.description ?? null,
+      entries: body.entries ?? { ESPN: 'espn.com' },
+      entry_count: Object.keys(body.entries ?? { ESPN: 'espn.com' }).length,
+      created_at: '2026-04-19T00:00:00Z',
+      updated_at: '2026-04-19T00:00:01Z',
+    })
+  }),
+
+  http.delete(`${API_BASE}/lookup-tables/:id`, () => {
+    return new HttpResponse(null, { status: 204 })
+  }),
+
+  // ==========================================================================
+  // Dummy EPG — /api/dummy-epg/preview (subset used by the modal)
+  // ==========================================================================
+
+  http.post(`${API_BASE}/dummy-epg/preview`, async ({ request }) => {
+    const body = (await request.json()) as {
+      sample_name: string
+      title_template?: string
+      description_template?: string
+      include_trace?: boolean
+    }
+    const rendered = {
+      title: body.title_template ?? body.sample_name,
+      description: body.description_template ?? '',
+      upcoming_title: '',
+      upcoming_description: '',
+      ended_title: '',
+      ended_description: '',
+      fallback_title: '',
+      fallback_description: '',
+      channel_logo_url: '',
+      program_poster_url: '',
+    }
+    const response: Record<string, unknown> = {
+      original_name: body.sample_name,
+      substituted_name: body.sample_name,
+      substitution_steps: [],
+      matched: true,
+      matched_variant: null,
+      groups: { name: body.sample_name },
+      time_variables: null,
+      rendered,
+    }
+    if (body.include_trace) {
+      response.traces = {
+        title_template: body.title_template
+          ? [{ kind: 'literal', text: rendered.title }]
+          : [],
+      }
+    }
+    return HttpResponse.json(response)
   }),
 ]
