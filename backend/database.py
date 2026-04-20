@@ -3,7 +3,8 @@ SQLite database setup for the Journal feature.
 Uses SQLAlchemy with async support via aiosqlite.
 """
 import logging
-from sqlalchemy import create_engine, event
+from pathlib import Path
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.pool import StaticPool
@@ -14,6 +15,10 @@ logger = logging.getLogger(__name__)
 
 # Database file location
 JOURNAL_DB_FILE = CONFIG_DIR / "journal.db"
+
+# Alembic config location. Bead bd-c5wf5 introduced Alembic as the migration
+# system; see ``docs/database_migrations.md``.
+ALEMBIC_INI_PATH = Path(__file__).resolve().parent / "alembic.ini"
 
 # SQLAlchemy Base for model declarations
 Base = declarative_base()
@@ -101,6 +106,77 @@ def get_database_url() -> str:
     return f"sqlite:///{JOURNAL_DB_FILE}"
 
 
+def _bootstrap_alembic(engine) -> None:
+    """Ensure ``alembic_version`` tracks the deployed schema state.
+
+    - Fresh install (no tables): ``alembic upgrade head`` creates everything.
+    - Existing install from before Alembic (tables exist, no ``alembic_version``):
+      ``alembic stamp head`` records the current revision without re-running
+      DDL that would crash on duplicate-table errors.
+    - Already on Alembic (``alembic_version`` row present): ``upgrade head`` is
+      a no-op when at head, otherwise applies pending revisions.
+    """
+    from alembic import command
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    if not ALEMBIC_INI_PATH.exists():
+        logger.warning(
+            "[DATABASE] alembic.ini not found at %s — skipping migrations",
+            ALEMBIC_INI_PATH,
+        )
+        return
+
+    alembic_cfg = Config(str(ALEMBIC_INI_PATH))
+    alembic_cfg.set_main_option("sqlalchemy.url", str(engine.url))
+
+    with engine.connect() as conn:
+        has_alembic_version = conn.execute(text(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='alembic_version'"
+        )).fetchone() is not None
+        has_any_user_table = conn.execute(text(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%' AND name != 'alembic_version' LIMIT 1"
+        )).fetchone() is not None
+
+    if not has_alembic_version and has_any_user_table:
+        head = ScriptDirectory.from_config(alembic_cfg).get_current_head()
+        logger.info(
+            "[DATABASE] Pre-Alembic install detected — stamping as revision %s",
+            head,
+        )
+        command.stamp(alembic_cfg, "head")
+        return
+
+    logger.info("[DATABASE] Running alembic upgrade head")
+    command.upgrade(alembic_cfg, "head")
+
+
+def get_current_schema_revision(engine=None) -> str:
+    """Return the ``alembic_version`` currently applied to the DB, or ``""``."""
+    eng = engine if engine is not None else _engine
+    if eng is None:
+        return ""
+    try:
+        with eng.connect() as conn:
+            row = conn.execute(text("SELECT version_num FROM alembic_version")).fetchone()
+            return row[0] if row else ""
+    except Exception:
+        return ""
+
+
+def get_alembic_head_revision() -> str:
+    """Return the head revision declared in ``alembic/versions/``."""
+    try:
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        cfg = Config(str(ALEMBIC_INI_PATH))
+        return ScriptDirectory.from_config(cfg).get_current_head() or ""
+    except Exception:
+        return ""
+
+
 def init_db() -> None:
     """Initialize the database, creating tables if they don't exist."""
     global _engine, _SessionLocal
@@ -129,7 +205,19 @@ def init_db() -> None:
         from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, AutoCreationRule, AutoCreationExecution, AutoCreationConflict, FFmpegProfile, DummyEPGProfile, DummyEPGChannelAssignment, LookupTable  # noqa: F401
         from export_models import PlaylistProfile, CloudStorageTarget, PublishConfiguration, PublishHistory  # noqa: F401
 
-        # Create all tables
+        # Apply Alembic migrations first so schema tracking is authoritative
+        # (see ``docs/database_migrations.md``). For legacy installs we stamp
+        # to head rather than re-run DDL that would fail on duplicate tables.
+        try:
+            _bootstrap_alembic(_engine)
+        except Exception:
+            logger.exception(
+                "[DATABASE] Alembic bootstrap failed; falling back to create_all()"
+            )
+
+        # Create all tables (idempotent; no-op on clean Alembic installs but
+        # keeps legacy in-process additions working until a proper revision
+        # lands for them).
         Base.metadata.create_all(bind=_engine)
         logger.debug("[DATABASE] Database tables created/verified")
 
@@ -142,7 +230,10 @@ def init_db() -> None:
         # Perform maintenance: purge old entries and vacuum
         _perform_maintenance(_engine)
 
-        logger.info("[DATABASE] Journal database initialized successfully")
+        logger.info(
+            "[DATABASE] Journal database initialized successfully (schema rev=%s)",
+            get_current_schema_revision(_engine) or "unstamped",
+        )
     except Exception as e:
         logger.exception("[DATABASE] Failed to initialize database: %s", e)
         raise

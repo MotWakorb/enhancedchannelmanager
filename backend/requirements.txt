@@ -8,6 +8,8 @@ aiohttp==3.13.5
     # via -r backend/requirements.in
 aiosignal==1.4.0
     # via aiohttp
+alembic==1.18.4
+    # via -r backend/requirements.in
 annotated-doc==0.0.4
     # via fastapi
 annotated-types==0.7.0
@@ -21,9 +23,9 @@ attrs==26.1.0
     # via aiohttp
 bcrypt==5.0.0
     # via -r backend/requirements.in
-boto3==1.42.90
+boto3==1.42.92
     # via -r backend/requirements.in
-botocore==1.42.90
+botocore==1.42.92
     # via
     #   boto3
     #   s3transfer
@@ -88,6 +90,10 @@ josepy==2.2.0
     # via -r backend/requirements.in
 limits==5.8.0
     # via slowapi
+mako==1.3.11
+    # via alembic
+markupsafe==3.0.3
+    # via mako
 multidict==6.7.1
     # via
     #   aiohttp
@@ -110,11 +116,11 @@ pyasn1==0.6.3
     #   rsa
 pycparser==3.0
     # via cffi
-pydantic==2.13.1
+pydantic==2.13.3
     # via
     #   -r backend/requirements.in
     #   fastapi
-pydantic-core==2.46.1
+pydantic-core==2.46.3
     # via pydantic
 pygments==2.20.0
     # via pytest
@@ -154,7 +160,9 @@ six==1.17.0
 slowapi==0.1.9
     # via -r backend/requirements.in
 sqlalchemy==2.0.49
-    # via -r backend/requirements.in
+    # via
+    #   -r backend/requirements.in
+    #   alembic
 starlette==0.52.1
     # via
     #   -r backend/requirements.in
@@ -162,6 +170,7 @@ starlette==0.52.1
 typing-extensions==4.15.0
     # via
     #   aiosignal
+    #   alembic
     #   anyio
     #   fastapi
     #   limits
