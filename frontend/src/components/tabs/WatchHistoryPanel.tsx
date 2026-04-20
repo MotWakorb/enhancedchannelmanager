@@ -51,7 +51,7 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, channelFilter, ipFilter, daysFilter]);
+  }, [page, pageSize, channelFilter, ipFilter, daysFilter, notifications]);
 
   useEffect(() => {
     fetchData();

@@ -67,7 +67,7 @@ export function PopularityPanel({ refreshTrigger }: PopularityPanelProps) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   useEffect(() => {
     fetchData();

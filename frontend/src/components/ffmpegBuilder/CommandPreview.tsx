@@ -245,6 +245,7 @@ function getGlobalOptionExplanation(key: string, value: string): string {
   return `Global option: -${key} ${value}`;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- co-located pure builder used by the component; splitting is mechanical churn with no runtime benefit
 export function generateCommand(config: FFMPEGBuilderState): GeneratedCommand {
   const flags: CommandFlag[] = [];
   const warnings: string[] = [];

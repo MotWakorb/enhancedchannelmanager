@@ -62,7 +62,7 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
       setError(null);
       setIsDragging(false);
     }
-  }, [isOpen, logo]);
+  }, [isOpen, logo, setPreviewUrl]);
 
   // Clean up preview URL when file changes
   useEffect(() => {
@@ -71,7 +71,7 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
       setPreviewUrl(objectUrl);
       return () => URL.revokeObjectURL(objectUrl);
     }
-  }, [file]);
+  }, [file, setPreviewUrl]);
 
   // Update preview when URL changes (debounced)
   useEffect(() => {
@@ -81,7 +81,7 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
       }, 500);
       return () => clearTimeout(timer);
     }
-  }, [url, file]);
+  }, [url, file, setPreviewUrl]);
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault();

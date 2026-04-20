@@ -7,6 +7,32 @@ import { useState, useRef, useEffect, memo } from 'react';
 import type { Annotation, VariableType } from './types';
 import { VARIABLE_TYPE_LABELS, NAME_TYPE_HINTS } from './types';
 
+/**
+ * Derive the initial { name, type } for the popover based on whether we're
+ * editing an existing annotation or creating a new one from selected text.
+ * Pure function — safe to call inside useState initializers.
+ */
+function computeInitialNameType(
+  editing: Annotation | undefined,
+  selectedText: string,
+  isEditing: boolean,
+): { name: string; type: VariableType } {
+  if (isEditing && editing) {
+    return { name: editing.variableName, type: editing.variableType };
+  }
+  // Auto-detect type from selectedText on first render.
+  if (/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}/i.test(selectedText) ||
+      /\d{1,2}\/\d{1,2}/.test(selectedText)) {
+    return { name: 'date', type: 'date' };
+  }
+  if (/\d{1,2}\s*:\s*\d{2}\s*[AaPp][Mm]/.test(selectedText) ||
+      /\d{1,2}\s*[AaPp][Mm]/.test(selectedText)) {
+    return { name: 'time', type: 'time' };
+  }
+  if (/^\d+$/.test(selectedText)) return { name: '', type: 'number' };
+  return { name: '', type: 'text' };
+}
+
 interface AnnotationPopoverProps {
   /** Position to anchor the popover (from getBoundingClientRect). */
   anchorRect: DOMRect;
@@ -33,14 +59,17 @@ export const AnnotationPopover = memo(function AnnotationPopover({
   editingAnnotation,
   onDelete,
 }: AnnotationPopoverProps) {
-  const [name, setName] = useState(editingAnnotation?.variableName || '');
-  const [type, setType] = useState<VariableType>(editingAnnotation?.variableType || 'text');
+  const isEditing = Boolean(editingAnnotation);
+
+  // Compute initial name+type from the selected text (for new annotations) or
+  // editingAnnotation (edit mode). Done in useState initializers so we don't
+  // need a setState-in-effect sync pattern.
+  const [name, setName] = useState(() => computeInitialNameType(editingAnnotation, selectedText, isEditing).name);
+  const [type, setType] = useState<VariableType>(() => computeInitialNameType(editingAnnotation, selectedText, isEditing).type);
   const [customRegex, setCustomRegex] = useState(editingAnnotation?.customRegex || '');
   const [error, setError] = useState('');
   const popoverRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  const isEditing = Boolean(editingAnnotation);
 
   // Auto-focus the name input
   useEffect(() => {
@@ -67,35 +96,24 @@ export const AnnotationPopover = memo(function AnnotationPopover({
     return () => document.removeEventListener('keydown', handleKey);
   }, [onCancel]);
 
-  // Auto-detect type based on selected text (only for new annotations)
-  useEffect(() => {
-    if (isEditing) return;
-    // Check for date expressions (e.g. "Feb 15", "02/15", "Feb 15, 2025")
-    if (/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}/i.test(selectedText) ||
-        /\d{1,2}\/\d{1,2}/.test(selectedText)) {
-      setType('date');
-      setName('date');
-    // Check for time expressions (e.g. "8:00PM ET", "2:30 PM", "8PM")
-    } else if (/\d{1,2}\s*:\s*\d{2}\s*[AaPp][Mm]/.test(selectedText) ||
-        /\d{1,2}\s*[AaPp][Mm]/.test(selectedText)) {
-      setType('time');
-      setName('time');
-    } else if (/^\d+$/.test(selectedText)) setType('number');
-    else setType('text');
-  }, [selectedText, isEditing]);
+  // Handler: updating the name may imply a type (via NAME_TYPE_HINTS). Do this
+  // in the event handler, not an effect, so state stays in sync in one pass.
+  const handleNameChange = (value: string) => {
+    setName(value);
+    setError('');
+    if (!isEditing) {
+      const hint = NAME_TYPE_HINTS[value.trim().toLowerCase()];
+      if (hint) setType(hint);
+    }
+  };
 
-  // Override type when user enters a recognized variable name (e.g. "hours" → day)
-  useEffect(() => {
-    if (isEditing) return;
-    const hint = NAME_TYPE_HINTS[name.trim().toLowerCase()];
-    if (hint) setType(hint);
-  }, [name, isEditing]);
-
-  // Force name to "time"/"date" when compound type is selected
-  useEffect(() => {
-    if (type === 'time') setName('time');
-    if (type === 'date') setName('date');
-  }, [type]);
+  // Handler: selecting "time"/"date" forces a canonical name. Again, in the
+  // handler rather than a follow-up effect.
+  const handleTypeChange = (newType: VariableType) => {
+    setType(newType);
+    if (newType === 'time') setName('time');
+    else if (newType === 'date') setName('date');
+  };
 
   const handleConfirm = () => {
     const trimmed = name.trim();
@@ -173,7 +191,7 @@ export const AnnotationPopover = memo(function AnnotationPopover({
             type="text"
             className="pb-popover-input"
             value={name}
-            onChange={(e) => { setName(e.target.value); setError(''); }}
+            onChange={(e) => handleNameChange(e.target.value)}
             placeholder="e.g. team1, league, hour"
             autoComplete="off"
             spellCheck={false}
@@ -194,7 +212,7 @@ export const AnnotationPopover = memo(function AnnotationPopover({
                 key={v}
                 type="button"
                 className="pb-popover-suggestion"
-                onClick={() => setName(v)}
+                onClick={() => handleNameChange(v)}
               >
                 {v}
               </button>
@@ -210,7 +228,7 @@ export const AnnotationPopover = memo(function AnnotationPopover({
                 key={t}
                 type="button"
                 className={`pb-popover-type-btn${type === t ? ' active' : ''}`}
-                onClick={() => setType(t)}
+                onClick={() => handleTypeChange(t)}
               >
                 {typeButtonLabel(t)}
               </button>

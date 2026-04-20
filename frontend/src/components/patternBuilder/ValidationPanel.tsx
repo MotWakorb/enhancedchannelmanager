@@ -45,6 +45,18 @@ export const ValidationPanel = memo(function ValidationPanel({
   results,
   hasAnnotations,
 }: ValidationPanelProps) {
+  // Compute failure details for non-matching examples.
+  // Must be called before any early return so hook order is stable (rules-of-hooks).
+  const failureDetails = useMemo(() => {
+    const details: Record<number, FailureInfo[]> = {};
+    results.forEach((r, i) => {
+      if (!r.matched) {
+        details[i] = getFailureDetail(r.text, titlePattern, timePattern, datePattern);
+      }
+    });
+    return details;
+  }, [results, titlePattern, timePattern, datePattern]);
+
   if (!hasAnnotations) {
     return (
       <div className="pb-validation pb-validation-empty">
@@ -56,17 +68,6 @@ export const ValidationPanel = memo(function ValidationPanel({
 
   const matchCount = results.filter(r => r.matched).length;
   const totalCount = results.length;
-
-  // Compute failure details for non-matching examples
-  const failureDetails = useMemo(() => {
-    const details: Record<number, FailureInfo[]> = {};
-    results.forEach((r, i) => {
-      if (!r.matched) {
-        details[i] = getFailureDetail(r.text, titlePattern, timePattern, datePattern);
-      }
-    });
-    return details;
-  }, [results, titlePattern, timePattern, datePattern]);
 
   return (
     <div className="pb-validation">

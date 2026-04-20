@@ -441,7 +441,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   useEffect(() => {
     loadSources();

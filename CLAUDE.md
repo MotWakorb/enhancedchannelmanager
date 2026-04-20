@@ -45,6 +45,7 @@ bd sync                       # Sync beads data only (NOT for code commits)
 | Beads (Issue Tracking) | `~/.claude/projects/<project-slug>/memory/beads.md` |
 | Dispatcharr API | `docs/dispatcharr_api.md` |
 | Discord Release Notes | `docs/discord_release_notes.md` |
+| Frontend Lint Policy | `docs/frontend_lint.md` |
 | Testing Details | `docs/testing.md` |
 | Shipping Workflow | `docs/shipping.md` |
 | Dummy EPG Template Engine | `docs/template_engine.md` |
