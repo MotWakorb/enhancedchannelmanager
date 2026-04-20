@@ -27,6 +27,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_PROBE_TIMEOUT = 30  # seconds
 BITRATE_SAMPLE_DURATION = 8  # seconds to sample stream for bitrate measurement
 
+# Restrict ffprobe/ffmpeg to safe network protocols only — blocks file://, data://,
+# concat:, subfile:, etc. URLs fed to these invocations come from Dispatcharr stream
+# rows, which an attacker who can write a stream URL could otherwise weaponise for
+# local-file exfiltration or DoS on the ECM host. Matches the whitelist used in
+# backend/ffmpeg_builder/probe.py and backend/routers/stream_preview.py.
+FFPROBE_PROTOCOL_WHITELIST = "http,https,tcp,udp,rtp,rtmp,pipe"
+
 # Per-account ramp-up configuration
 RAMP_INITIAL_LIMIT = 1         # Start each account at 1 concurrent probe
 RAMP_INCREMENT = 1             # Increase allowed concurrency by 1 after each successful window
@@ -906,6 +913,7 @@ class StreamProber:
             "ffprobe",
             "-v",
             "error",  # Show errors in stderr (was "quiet" which suppressed everything)
+            "-protocol_whitelist", FFPROBE_PROTOCOL_WHITELIST,
             "-print_format",
             "json",
             "-show_format",
@@ -1039,6 +1047,7 @@ class StreamProber:
         """
         cmd = [
             "ffmpeg",
+            "-protocol_whitelist", FFPROBE_PROTOCOL_WHITELIST,
             "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
             # Network stall guard (microseconds). If the upstream stops
             # delivering data for this long, ffmpeg bails on its own rather
