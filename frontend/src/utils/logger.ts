@@ -37,9 +37,19 @@ class Logger {
   }
 
   /**
-   * Format a log message with timestamp and level
+   * Format a log message with timestamp and level.
+   *
+   * `args` is typed as `unknown[]` because callers pass arbitrary structured
+   * payloads (errors, objects, primitives) that are forwarded verbatim to
+   * `console.*`. We never introspect them here — we just prepend the formatted
+   * prefix and hand them through — so `unknown` is the correct contract: we
+   * accept anything and make no assumptions.
    */
-  private formatMessage(level: LogLevel, message: string, ...args: any[]): [string, ...any[]] {
+  private formatMessage(
+    level: LogLevel,
+    message: string,
+    ...args: unknown[]
+  ): [string, ...unknown[]] {
     const timestamp = new Date().toISOString();
     const formattedMessage = `[${timestamp}] [${level}] ${message}`;
     return [formattedMessage, ...args];
@@ -48,7 +58,7 @@ class Logger {
   /**
    * Log a debug message
    */
-  debug(message: string, ...args: any[]): void {
+  debug(message: string, ...args: unknown[]): void {
     if (this.shouldLog('DEBUG')) {
       console.log(...this.formatMessage('DEBUG', message, ...args));
     }
@@ -57,7 +67,7 @@ class Logger {
   /**
    * Log an info message
    */
-  info(message: string, ...args: any[]): void {
+  info(message: string, ...args: unknown[]): void {
     if (this.shouldLog('INFO')) {
       console.log(...this.formatMessage('INFO', message, ...args));
     }
@@ -66,7 +76,7 @@ class Logger {
   /**
    * Log a warning message
    */
-  warn(message: string, ...args: any[]): void {
+  warn(message: string, ...args: unknown[]): void {
     if (this.shouldLog('WARN')) {
       console.warn(...this.formatMessage('WARN', message, ...args));
     }
@@ -75,7 +85,7 @@ class Logger {
   /**
    * Log an error message
    */
-  error(message: string, ...args: any[]): void {
+  error(message: string, ...args: unknown[]): void {
     if (this.shouldLog('ERROR')) {
       console.error(...this.formatMessage('ERROR', message, ...args));
     }
@@ -84,7 +94,7 @@ class Logger {
   /**
    * Log an error with stack trace
    */
-  exception(message: string, error: Error, ...args: any[]): void {
+  exception(message: string, error: Error, ...args: unknown[]): void {
     if (this.shouldLog('ERROR')) {
       console.error(...this.formatMessage('ERROR', message, ...args));
       console.error('Stack trace:', error.stack);
