@@ -281,6 +281,50 @@ async def readiness_check(response: Response) -> dict:
     return payload
 
 
+@router.get("/api/health/schema")
+async def schema_version() -> dict:
+    """Report the applied Alembic schema revision and SQLite PRAGMA state.
+
+    Exposed so DBAS restore/sync flows (bd-gb5r5.3 / bd-gb5r5.4) can gate on
+    the target deployment's schema version and detect drift before importing
+    a backup taken against a different revision.
+
+    Public endpoint (see ``main.AUTH_EXEMPT_PATHS``): no auth, no rate limit,
+    no subsystem probing beyond two cheap PRAGMA reads.
+    """
+    import database
+
+    current_rev = database.get_current_schema_revision()
+    head_rev = database.get_alembic_head_revision()
+
+    fk_enabled: Optional[bool] = None
+    journal_mode: Optional[str] = None
+    try:
+        # Prefer the live engine; fall back to the session's bound engine so
+        # tests that only patch _SessionLocal can still probe PRAGMA state.
+        try:
+            engine = database.get_engine()
+        except RuntimeError:
+            session_local = getattr(database, "_SessionLocal", None)
+            engine = session_local().get_bind() if session_local else None
+        if engine is not None:
+            with engine.connect() as conn:
+                fk_row = conn.execute(text("PRAGMA foreign_keys")).fetchone()
+                jm_row = conn.execute(text("PRAGMA journal_mode")).fetchone()
+                fk_enabled = bool(fk_row[0]) if fk_row else None
+                journal_mode = jm_row[0] if jm_row else None
+    except Exception:
+        logger.warning("[HEALTH] Could not query SQLite PRAGMA state", exc_info=True)
+
+    return {
+        "current_revision": current_rev,
+        "head_revision": head_rev,
+        "up_to_date": bool(current_rev) and current_rev == head_rev,
+        "foreign_keys_enabled": fk_enabled,
+        "journal_mode": journal_mode,
+    }
+
+
 # ============================================================================
 # Cache management endpoints (unchanged)
 # ============================================================================
