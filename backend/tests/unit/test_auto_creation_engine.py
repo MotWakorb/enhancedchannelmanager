@@ -13,6 +13,8 @@ from auto_creation_engine import (
     set_auto_creation_engine,
     init_auto_creation_engine,
     _sort_key,
+    _sort_streams_by_m3u_account_priority,
+    _reorder_streams_for_rule,
 )
 from auto_creation_evaluator import StreamContext
 from auto_creation_evaluator import StreamContext
@@ -880,6 +882,42 @@ class TestAutoCreationEngineIntegration:
         assert result["streams_matched"] == 1  # Only ESPN2 matches
         assert len(result["dry_run_results"]) == 1
         assert "ESPN2" in result["dry_run_results"][0]["stream_name"]
+
+
+class TestStreamReorderByRule:
+    """Tests for Pass 3.5 reorder respecting rule.stream_sort_field."""
+
+    def test_m3u_account_priority_desc(self):
+        """Higher M3U priority value sorts first when order is desc."""
+        settings = MagicMock()
+        settings.m3u_account_priorities = {"1": 10, "2": 6}
+        stream_m3u_map = {100: 2, 101: 1}
+        out = _sort_streams_by_m3u_account_priority(
+            [100, 101], stream_m3u_map, settings, "desc", "Test"
+        )
+        assert out == [101, 100]
+
+    def test_m3u_account_priority_asc(self):
+        """Lower M3U priority value sorts first when order is asc."""
+        settings = MagicMock()
+        settings.m3u_account_priorities = {"1": 10, "2": 6}
+        stream_m3u_map = {100: 2, 101: 1}
+        out = _sort_streams_by_m3u_account_priority(
+            [100, 101], stream_m3u_map, settings, "asc", "Test"
+        )
+        assert out == [100, 101]
+
+    def test_reorder_streams_for_rule_uses_provider_order(self):
+        rule = MagicMock()
+        rule.stream_sort_field = "provider_order"
+        rule.stream_sort_order = "desc"
+        settings = MagicMock()
+        settings.m3u_account_priorities = {"1": 10, "2": 6}
+        stream_m3u_map = {100: 2, 101: 1}
+        out = _reorder_streams_for_rule(
+            [100, 101], rule, {}, stream_m3u_map, "Ch", settings
+        )
+        assert out == [101, 100]
 
 
 class TestSortKey:
