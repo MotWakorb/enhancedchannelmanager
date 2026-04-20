@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 import asyncio
 from fastapi.exceptions import RequestValidationError
 from slowapi import _rate_limit_exceeded_handler
@@ -48,6 +48,23 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 from log_utils import install_safe_logging, install_ring_buffer  # noqa: E402
 install_safe_logging()
 install_ring_buffer()
+
+# Install structured JSON logging + Prometheus metric registry. Must run
+# before any logger handler captures output so every line gets rendered as
+# JSON with a trace_id attached. Safe to call repeatedly (idempotent).
+from observability import (  # noqa: E402
+    install_observability,
+    get_metric,
+    get_trace_id,
+    set_trace_id,
+    reset_trace_id,
+    generate_trace_id,
+    render_metrics,
+    CONTENT_TYPE_LATEST,
+)
+
+install_observability(level=getattr(logging, initial_log_level))
+
 logger = logging.getLogger(__name__)
 
 # OpenAPI tags for organizing endpoints in Swagger UI
@@ -176,6 +193,138 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     return response
+
+
+# ============================================================================
+# Observability Middleware — trace-id correlation + Prometheus instrumentation
+# ============================================================================
+# The trace-id middleware must run first so every downstream handler (and
+# every log line) can pick up the id from the contextvar. The metrics
+# middleware piggy-backs on the same request cycle to emit counter/histogram
+# samples labeled by route *pattern* — NOT raw path — so cardinality stays
+# bounded regardless of traffic mix.
+@app.middleware("http")
+async def observability_middleware(request: Request, call_next):
+    """Correlate requests and instrument them for Prometheus.
+
+    Correlation rules:
+    - If the caller sent ``X-Request-ID``, we honor it (trim to a sane
+      length to defend against pathological inputs).
+    - Otherwise we mint a fresh UUIDv4.
+    - Either way the id is stashed in the ``trace_id`` contextvar so every
+      log line emitted during the request carries it, and echoed back in
+      the response so callers (and downstream services they call) can
+      continue the chain.
+
+    Instrumentation rules:
+    - Increment ``ecm_http_requests_total`` and record a latency sample on
+      ``ecm_http_request_duration_seconds`` for every request, successful
+      or not.
+    - Label by ``method`` and route pattern (``request.scope["route"].path``
+      when FastAPI has resolved a route, else the literal request path with
+      the query string stripped). This keeps the label set bounded —
+      /api/channels/123 and /api/channels/456 both collapse to
+      /api/channels/{channel_id}.
+    - Skip the ``/metrics`` endpoint itself so the exporter doesn't pollute
+      its own time series.
+    """
+    incoming = request.headers.get("x-request-id")
+    if incoming:
+        # Defensive length cap — a client supplying a 1 MB header should not
+        # be allowed to balloon our log volume per line. 128 chars is more
+        # than enough for a UUID with surrounding decoration (e.g. a prefix
+        # added by a proxy).
+        trace_id = incoming[:128]
+    else:
+        trace_id = generate_trace_id()
+    token = set_trace_id(trace_id)
+
+    start = time.perf_counter()
+    status_code = "500"
+    try:
+        response = await call_next(request)
+        status_code = str(response.status_code)
+        response.headers["X-Request-ID"] = trace_id
+        return response
+    finally:
+        duration = time.perf_counter() - start
+        path_label = _metric_path_label(request)
+        method = request.method
+        # Skip the exporter itself — self-instrumentation would inflate
+        # counters every time Prometheus scrapes.
+        if path_label != "/metrics":
+            try:
+                get_metric("http_requests_total").labels(
+                    method=method, path=path_label, status=status_code
+                ).inc()
+                get_metric("http_request_duration_seconds").labels(
+                    method=method, path=path_label
+                ).observe(duration)
+            except Exception as metric_exc:  # pragma: no cover — never block requests
+                logger.warning("[OBSERVABILITY] Metric emit failed: %s", metric_exc)
+            # Emit one structured line per request while the trace id is
+            # still bound. This is the log line operators grep for when
+            # they have a user report of "this failed" — the trace id on
+            # this record correlates to everything else the request did.
+            try:
+                _access_log.info(
+                    "%s %s -> %s in %.1fms",
+                    method, path_label, status_code, duration * 1000.0,
+                    extra={
+                        "event": "http_request",
+                        "method": method,
+                        "path": path_label,
+                        "status": status_code,
+                        "duration_ms": round(duration * 1000.0, 2),
+                    },
+                )
+            except Exception:  # pragma: no cover
+                pass
+        reset_trace_id(token)
+
+
+# Dedicated access logger — kept separate from the per-module ``logger`` so
+# operators can tune its level (or route it to a different handler) without
+# dialing down every module's log verbosity.
+_access_log = logging.getLogger("ecm.access")
+
+
+def _metric_path_label(request: Request) -> str:
+    """Return the bounded-cardinality path label for a request.
+
+    Prefers the matched FastAPI route pattern (``/api/channels/{channel_id}``)
+    because raw paths include arbitrary ids and would explode the Prometheus
+    label set. Falls back to the literal path (query string stripped) when
+    no route matched — 404s and static file requests mostly land here, and
+    their set is still bounded in practice.
+    """
+    route = request.scope.get("route")
+    pattern = getattr(route, "path", None)
+    if pattern:
+        return pattern
+    # Strip query string just in case — request.url.path already excludes it
+    # but this is defensive for any caller that reconstructs a URL.
+    raw = request.url.path or "/"
+    return raw
+
+
+# ``/metrics`` — Prometheus scrape endpoint. Intentionally open (no auth).
+#
+# Auth decision (documented in docs/backend_architecture.md): Prometheus
+# scrapers have no session context. Gating /metrics behind the JWT
+# middleware would make the exporter unusable. For now the endpoint is
+# reachable without authentication, on the assumption that ECM's network
+# surface is trusted (LAN / reverse proxy / tailnet). If that assumption
+# ever stops holding, the follow-up is either:
+#   - IP allowlist at the reverse proxy (simplest, no code change), or
+#   - a separate bearer-token scrape credential validated in the handler.
+# Both are future beads — this commit ships the substrate only.
+@app.get("/metrics", include_in_schema=False)
+async def metrics_endpoint():
+    return Response(
+        content=render_metrics(),
+        media_type=CONTENT_TYPE_LATEST,
+    )
 
 
 # ============================================================================
