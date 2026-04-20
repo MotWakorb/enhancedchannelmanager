@@ -167,6 +167,61 @@ def smart_sort_streams(
         else:
             logger.debug("[STREAM-PROBE-SORT]   Stream %s: NO STATS AVAILABLE", stream_id)
 
+    def compute_criteria_values(stat, stream_id: int) -> list:
+        """Compute sort-key values for active_criteria in priority order.
+
+        Used for both successful streams (primary ordering) and deprioritized
+        streams (within-bucket tiebreaker — bd-sw883 / issue #73). For a
+        deprioritized stream where ``stat`` is None (no probe row at all),
+        only m3u_priority can be computed; all other criteria are 0.
+        """
+        values = []
+        for criterion in active_criteria:
+            if criterion == "resolution":
+                resolution_value = 0
+                if stat and stat.resolution:
+                    try:
+                        parts = stat.resolution.split('x')
+                        if len(parts) == 2:
+                            resolution_value = int(parts[1])  # height only
+                    except (ValueError, IndexError) as e:
+                        logger.debug("[STREAM-PROBE] Suppressed resolution parse error: %s", e)
+                values.append(-resolution_value)
+
+            elif criterion == "bitrate":
+                bitrate_value = 0
+                if stat:
+                    bitrate_value = stat.video_bitrate or stat.bitrate or 0
+                values.append(-bitrate_value)
+
+            elif criterion == "framerate":
+                framerate_value = 0
+                if stat and stat.fps:
+                    try:
+                        framerate_value = float(stat.fps)
+                    except (ValueError, TypeError) as e:
+                        logger.debug("[STREAM-PROBE] Suppressed fps parse error: %s", e)
+                values.append(-framerate_value)
+
+            elif criterion == "m3u_priority":
+                # m3u_priority does NOT require a successful probe — it comes
+                # from the m3u account map, so it's always meaningful.
+                m3u_priority_value = 0
+                m3u_account_id = stream_m3u_map.get(stream_id)
+                if m3u_account_id is not None:
+                    m3u_priority_value = m3u_account_priorities.get(str(m3u_account_id), 0)
+                values.append(-m3u_priority_value)
+
+            elif criterion == "audio_channels":
+                audio_channels_value = stat.audio_channels if stat and stat.audio_channels else 0
+                values.append(-audio_channels_value)
+
+            elif criterion == "video_codec":
+                codec_value = get_codec_rank(stat.video_codec) if stat else 0
+                values.append(-codec_value)
+
+        return values
+
     def get_sort_value(stream_id: int) -> tuple:
         stat = stats_map.get(stream_id)
         stream_name = stat.stream_name if stat else f"Stream {stream_id}"
@@ -176,19 +231,22 @@ def smart_sort_streams(
             if not stat or stat.probe_status in ('failed', 'timeout', 'pending'):
                 rank = failed_rank.get('failed', 0)
                 logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (status=%s, rank=%s)", stream_name, stat.probe_status if stat else 'no_stats', rank)
-                return (1, rank) + tuple(0 for _ in active_criteria)
+                # bd-sw883: apply primary criteria within the failed bucket too.
+                return (1, rank) + tuple(compute_criteria_values(stat, stream_id))
 
         # Deprioritize black screen streams (probe succeeded but content is black)
         if deprioritize_failed_streams and deprioritize_black_screen and stat and getattr(stat, 'is_black_screen', False) is True:
             rank = failed_rank.get('black_screen', 1)
             logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (black screen, rank=%s)", stream_name, rank)
-            return (1, rank) + tuple(0 for _ in active_criteria)
+            # bd-sw883: apply primary criteria within the black_screen bucket too.
+            return (1, rank) + tuple(compute_criteria_values(stat, stream_id))
 
         # Deprioritize low FPS streams (probe succeeded but FPS < 20)
         if deprioritize_failed_streams and deprioritize_low_fps and stat and getattr(stat, 'is_low_fps', False) is True:
             rank = failed_rank.get('low_fps', 2)
             logger.debug("[STREAM-PROBE-SORT]   %s: DEPRIORITIZED (low fps, rank=%s)", stream_name, rank)
-            return (1, rank) + tuple(0 for _ in active_criteria)
+            # bd-sw883: apply primary criteria within the low_fps bucket too.
+            return (1, rank) + tuple(compute_criteria_values(stat, stream_id))
 
         if not stat or stat.probe_status != 'success':
             logger.debug("[STREAM-PROBE-SORT]   %s: No successful probe data", stream_name)
