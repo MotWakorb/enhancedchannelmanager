@@ -616,7 +616,7 @@ export function StreamsPane({
         setTimeout(() => document.body.removeChild(dragEl), 0);
       }
     },
-    [selectedGroupNames, groupedStreams, onGroupExpand]
+    [selectedGroupNames, groupedStreams, onGroupExpand, streamGroupCounts]
   );
 
   // Bulk create handlers - apply settings defaults
@@ -795,7 +795,7 @@ export function StreamsPane({
     }
 
     showContextMenu(e.clientX, e.clientY, { streamIds });
-  }, [isEditMode, isSelected, clearSelection, toggleSelect, selectedIds]);
+  }, [isEditMode, isSelected, clearSelection, toggleSelect, selectedIds, showContextMenu]);
 
   // Handler for "Create channel(s) in existing group" from context menu
   const handleCreateInGroup = useCallback((groupId: number) => {
@@ -845,7 +845,7 @@ export function StreamsPane({
     const streamIds = group.streams.map(s => s.id);
 
     showContextMenu(e.clientX, e.clientY, { streamIds });
-  }, [isEditMode]);
+  }, [isEditMode, showContextMenu]);
 
   // Toggle group selection (select/deselect all streams in group)
   const toggleGroupSelection = useCallback((group: StreamGroup) => {
@@ -1317,6 +1317,8 @@ export function StreamsPane({
     isManualEntry,
     manualEntryChannelName,
     onCreateChannel,
+    channelDefaults?.customNetworkPrefixes,
+    channelDefaults?.customNetworkSuffixes,
   ]);
 
   // Check for conflicts and show dialog, or proceed directly if no conflicts

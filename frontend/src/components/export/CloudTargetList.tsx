@@ -38,7 +38,7 @@ export function CloudTargetList() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   useEffect(() => { loadTargets(); }, [loadTargets]);
 

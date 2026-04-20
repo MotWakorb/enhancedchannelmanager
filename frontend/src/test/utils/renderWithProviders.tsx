@@ -73,6 +73,7 @@ export function renderWithProviders(
  * Re-export everything from @testing-library/react
  * This allows test files to import everything from this module
  */
+// eslint-disable-next-line react-refresh/only-export-components -- test-only barrel re-export; HMR does not apply to test files
 export * from '@testing-library/react'
 
 /**

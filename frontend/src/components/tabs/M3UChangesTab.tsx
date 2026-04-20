@@ -133,7 +133,7 @@ export function M3UChangesTab() {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, accountFilter, changeTypeFilter, enabledFilter, hoursFilter, sortBy, sortOrder]);
+  }, [page, pageSize, accountFilter, changeTypeFilter, enabledFilter, hoursFilter, sortBy, sortOrder, notifications]);
 
   useEffect(() => {
     fetchChanges();

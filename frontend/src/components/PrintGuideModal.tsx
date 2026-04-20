@@ -51,22 +51,15 @@ interface PrintGuideModalProps {
   title?: string;
 }
 
-export const PrintGuideModal = memo(function PrintGuideModal({
-  isOpen,
+// Body runs only while open (outer wrapper unmounts on close) so per-open
+// state (groupSettings) is seeded via useState initializer from the sorted
+// groups — no effect/useMemo-as-effect needed.
+function PrintGuideModalInner({
   onClose,
   channelGroups,
   channels,
   title = 'TV Channel Guide',
-}: PrintGuideModalProps) {
-  // Initialize group settings - all selected, detailed mode by default
-  const [groupSettings, setGroupSettings] = useState<GroupPrintSettings[]>(() =>
-    channelGroups.map(g => ({
-      groupId: g.id,
-      selected: true,
-      mode: 'detailed',
-    }))
-  );
-
+}: Omit<PrintGuideModalProps, 'isOpen'>) {
   // Sort groups by first channel number in each group
   const sortedGroups = useMemo(() => {
     const groupFirstChannel = new Map<number, number>();
@@ -88,18 +81,16 @@ export const PrintGuideModal = memo(function PrintGuideModal({
       });
   }, [channelGroups, channels]);
 
-  // Reset settings when modal opens with new groups
-  useMemo(() => {
-    if (isOpen) {
-      setGroupSettings(
-        sortedGroups.map(g => ({
-          groupId: g.id,
-          selected: true,
-          mode: 'detailed',
-        }))
-      );
-    }
-  }, [isOpen, sortedGroups]);
+  // Initialize group settings - all selected, detailed mode by default. Since
+  // this component remounts on each open (via outer wrapper), we can seed
+  // directly from the first sorted list with a useState initializer.
+  const [groupSettings, setGroupSettings] = useState<GroupPrintSettings[]>(() =>
+    sortedGroups.map(g => ({
+      groupId: g.id,
+      selected: true,
+      mode: 'detailed',
+    }))
+  );
 
   // Get settings for a specific group
   const getGroupSettings = (groupId: number): GroupPrintSettings => {
@@ -188,7 +179,7 @@ export const PrintGuideModal = memo(function PrintGuideModal({
     onClose();
   }, [channels, sortedGroups, groupSettings, title, onClose]);
 
-  if (!isOpen) return null;
+  // isOpen gating handled by outer wrapper.
 
   return (
     <ModalOverlay onClose={onClose}>
@@ -274,6 +265,20 @@ export const PrintGuideModal = memo(function PrintGuideModal({
         </div>
       </div>
     </ModalOverlay>
+  );
+}
+
+export const PrintGuideModal = memo(function PrintGuideModal(
+  props: PrintGuideModalProps,
+) {
+  if (!props.isOpen) return null;
+  return (
+    <PrintGuideModalInner
+      onClose={props.onClose}
+      channelGroups={props.channelGroups}
+      channels={props.channels}
+      title={props.title}
+    />
   );
 });
 

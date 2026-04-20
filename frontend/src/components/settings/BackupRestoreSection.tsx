@@ -26,16 +26,6 @@ export function BackupRestoreSection({ isAdmin }: Props) {
   const [loadingSaved, setLoadingSaved] = useState(false);
   const [deletingFile, setDeletingFile] = useState<string | null>(null);
 
-  // Load export sections and saved backups on mount
-  useEffect(() => {
-    if (!isAdmin) return;
-    api.getExportSections().then((sections) => {
-      setExportSections(sections);
-      setSelectedExportSections(new Set(sections.map(s => s.key)));
-    }).catch(() => {});
-    loadSavedBackups();
-  }, [isAdmin]);
-
   const loadSavedBackups = useCallback(async () => {
     setLoadingSaved(true);
     try {
@@ -47,6 +37,16 @@ export function BackupRestoreSection({ isAdmin }: Props) {
       setLoadingSaved(false);
     }
   }, []);
+
+  // Load export sections and saved backups on mount
+  useEffect(() => {
+    if (!isAdmin) return;
+    api.getExportSections().then((sections) => {
+      setExportSections(sections);
+      setSelectedExportSections(new Set(sections.map(s => s.key)));
+    }).catch(() => {});
+    loadSavedBackups();
+  }, [isAdmin, loadSavedBackups]);
 
   if (!isAdmin) {
     return (

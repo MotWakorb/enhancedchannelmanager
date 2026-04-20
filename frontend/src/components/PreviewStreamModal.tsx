@@ -87,7 +87,11 @@ export const PreviewStreamModal = memo(function PreviewStreamModal({
     setPlayerError(error);
   }, []);
 
-  // Copy URL to clipboard (only for streams with direct URLs)
+  // Copy URL to clipboard (only for streams with direct URLs).
+  // useCallback deps use the whole displayInfo object (not its properties) so
+  // the React Compiler's inferred deps match — the compiler infers full-object
+  // deps from the code, but optional-chain property deps narrow that and
+  // break preserve-manual-memoization.
   const handleCopyUrl = useCallback(async () => {
     if (!displayInfo?.externalUrl) return;
 
@@ -106,7 +110,7 @@ export const PreviewStreamModal = memo(function PreviewStreamModal({
       setUrlCopied(true);
       setTimeout(() => setUrlCopied(false), 2000);
     }
-  }, [displayInfo?.externalUrl]);
+  }, [displayInfo]);
 
   // Open in VLC (only for streams with direct URLs)
   const handleOpenInVLC = useCallback(() => {
@@ -115,7 +119,7 @@ export const PreviewStreamModal = memo(function PreviewStreamModal({
     // Try VLC protocol handler
     const vlcUrl = `vlc://${encodeURIComponent(displayInfo.externalUrl)}`;
     window.location.href = vlcUrl;
-  }, [displayInfo?.externalUrl]);
+  }, [displayInfo]);
 
   // Download M3U file for external player
   const handleDownloadM3U = useCallback(() => {
@@ -131,7 +135,7 @@ export const PreviewStreamModal = memo(function PreviewStreamModal({
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-  }, [displayInfo?.name, displayInfo?.externalUrl]);
+  }, [displayInfo]);
 
   if (!isOpen || !previewTarget || !displayInfo) return null;
 

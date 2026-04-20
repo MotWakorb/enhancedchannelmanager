@@ -172,6 +172,18 @@ interface SortDropdownButtonProps {
   enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels', boolean>;
 }
 
+// Sort mode labels for journal/description. Module-scoped so it's stable
+// across renders and doesn't need to appear in useCallback dep arrays.
+const SORT_MODE_LABELS: Record<SortMode, string> = {
+  smart: 'Smart Sort',
+  resolution: 'resolution',
+  bitrate: 'bitrate',
+  framerate: 'framerate',
+  video_codec: 'video codec',
+  m3u_priority: 'M3U priority',
+  audio_channels: 'audio channels',
+};
+
 const SortDropdownButton = memo(function SortDropdownButton({
   onSortByMode,
   disabled = false,
@@ -1526,7 +1538,7 @@ export function ChannelsPane({
       editChannelModal.open();
       onExternalChannelEditHandled?.();
     }
-  }, [externalChannelToEdit, onExternalChannelEditHandled]);
+  }, [externalChannelToEdit, onExternalChannelEditHandled, editChannelModal]);
 
   // Create a Map for O(1) logo lookups instead of O(n) array.find()
   const logoMap = useMemo(() => {
@@ -2718,16 +2730,7 @@ export function ChannelsPane({
 
 
 
-  // Sort mode labels for journal/description
-  const SORT_MODE_LABELS: Record<SortMode, string> = {
-    smart: 'Smart Sort',
-    resolution: 'resolution',
-    bitrate: 'bitrate',
-    framerate: 'framerate',
-    video_codec: 'video codec',
-    m3u_priority: 'M3U priority',
-    audio_channels: 'audio channels',
-  };
+  // SORT_MODE_LABELS is at module scope above.
 
   // Sort streams by specified mode (single channel) — delegates to backend
   const handleSortStreamsByMode = useCallback(async (mode: SortMode) => {
@@ -3405,19 +3408,23 @@ export function ChannelsPane({
   // Build a set of group IDs that are related to auto_channel_sync:
   // 1. Groups that have auto_channel_sync: true directly
   // 2. Groups that are group_override targets of auto_channel_sync groups
-  const autoSyncRelatedGroups = new Set<number>();
-  if (providerSettingsMap) {
-    for (const setting of Object.values(providerSettingsMap)) {
-      if (setting.auto_channel_sync) {
-        // Add the source group itself
-        autoSyncRelatedGroups.add(setting.channel_group);
-        // Also add the group_override target if set
-        if (setting.custom_properties?.group_override) {
-          autoSyncRelatedGroups.add(setting.custom_properties.group_override);
+  // Memoized so downstream useMemo deps are stable across renders.
+  const autoSyncRelatedGroups = useMemo(() => {
+    const result = new Set<number>();
+    if (providerSettingsMap) {
+      for (const setting of Object.values(providerSettingsMap)) {
+        if (setting.auto_channel_sync) {
+          // Add the source group itself
+          result.add(setting.channel_group);
+          // Also add the group_override target if set
+          if (setting.custom_properties?.group_override) {
+            result.add(setting.custom_properties.group_override);
+          }
         }
       }
     }
-  }
+    return result;
+  }, [providerSettingsMap]);
 
   // Memoize expensive channel filtering and grouping operations
   const channelsByGroup = useMemo(() => {
@@ -3535,7 +3542,7 @@ export function ChannelsPane({
   }, [channelGroups]);
 
   // Helper function to determine if a group should be visible based on filter settings
-  const shouldShowGroup = (groupId: number): boolean => {
+  const shouldShowGroup = useCallback((groupId: number): boolean => {
     if (!channelListFilters) return true;
 
     const groupHasChannels = (channelsByGroup[groupId]?.length ?? 0) > 0;
@@ -3575,12 +3582,12 @@ export function ChannelsPane({
     }
 
     return true;
-  };
+  }, [channelListFilters, channelsByGroup, newlyCreatedGroupIds, autoSyncRelatedGroups, providerSettingsMap]);
 
   // Filter sorted channel groups based on filter settings
   const filteredChannelGroups = useMemo(() => {
     return sortedChannelGroups.filter((g) => shouldShowGroup(g.id));
-  }, [sortedChannelGroups, channelListFilters, channelsByGroup, newlyCreatedGroupIds, autoSyncRelatedGroups, providerSettingsMap]);
+  }, [sortedChannelGroups, shouldShowGroup]);
 
   const handleDragStart = (event: DragStartEvent) => {
     const activeId = event.active.id;

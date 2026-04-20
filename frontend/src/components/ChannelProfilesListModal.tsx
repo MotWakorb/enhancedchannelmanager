@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, memo } from 'react';
+import { useState, useEffect, useMemo, useCallback, memo } from 'react';
 import type { ChannelProfile, Channel, ChannelGroup } from '../types';
 import * as api from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
@@ -45,18 +45,7 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   const [channelChanges, setChannelChanges] = useState<Map<number, boolean>>(new Map());
   const [savingChannels, setSavingChannels] = useState(false);
 
-  // Fetch profiles when modal opens
-  useEffect(() => {
-    if (isOpen) {
-      setSearch('');
-      setNewProfileName('');
-      setViewMode('list');
-      setSelectedProfile(null);
-      loadProfiles();
-    }
-  }, [isOpen]);
-
-  const loadProfiles = async () => {
+  const loadProfiles = useCallback(async () => {
     setLoading(true);
     try {
       const data = await api.getChannelProfiles();
@@ -66,7 +55,18 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
     } finally {
       setLoading(false);
     }
-  };
+  }, [notifications]);
+
+  // Fetch profiles when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setSearch('');
+      setNewProfileName('');
+      setViewMode('list');
+      setSelectedProfile(null);
+      loadProfiles();
+    }
+  }, [isOpen, loadProfiles]);
 
   // Filter profiles by search
   const filteredProfiles = useMemo(() => {
@@ -227,10 +227,10 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
     });
   };
 
-  const getChannelEnabled = (channel: { id: number; enabled: boolean }): boolean => {
+  const getChannelEnabled = useCallback((channel: { id: number; enabled: boolean }): boolean => {
     const pendingChange = channelChanges.get(channel.id);
     return pendingChange !== undefined ? pendingChange : channel.enabled;
-  };
+  }, [channelChanges]);
 
   const handleEnableAllVisible = () => {
     setChannelChanges(prev => {
@@ -330,7 +330,7 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
       if (getChannelEnabled(ch)) count++;
     }
     return count;
-  }, [channelsWithState, channelChanges]);
+  }, [channelsWithState, getChannelEnabled]);
 
   if (!isOpen) return null;
 
