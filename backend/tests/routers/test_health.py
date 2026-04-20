@@ -48,6 +48,42 @@ class TestHealthCheck:
             assert data["git_commit"] == "abc123"
 
 
+class TestSchemaVersionEndpoint:
+    """Tests for GET /api/health/schema (bd-c5wf5)."""
+
+    @pytest.mark.asyncio
+    async def test_schema_endpoint_returns_200(self, async_client):
+        """The endpoint is reachable and returns 200."""
+        response = await async_client.get("/api/health/schema")
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_schema_endpoint_reports_head_revision(self, async_client):
+        """head_revision reflects the Alembic head declared in versions/."""
+        import database
+
+        response = await async_client.get("/api/health/schema")
+        data = response.json()
+        assert data["head_revision"] == database.get_alembic_head_revision()
+        assert isinstance(data["head_revision"], str) and data["head_revision"]
+
+    @pytest.mark.asyncio
+    async def test_schema_endpoint_reports_foreign_keys(self, async_client):
+        """foreign_keys_enabled must be True so FK constraints are enforced."""
+        response = await async_client.get("/api/health/schema")
+        data = response.json()
+        # test engine uses SQLite + database.py's connect listener → FK=ON
+        assert data["foreign_keys_enabled"] is True
+
+    @pytest.mark.asyncio
+    async def test_schema_endpoint_includes_journal_mode(self, async_client):
+        """journal_mode is surfaced so ops can verify WAL / delete state."""
+        response = await async_client.get("/api/health/schema")
+        data = response.json()
+        assert "journal_mode" in data
+        assert data["journal_mode"] in {"delete", "wal", "memory", "truncate", "persist", "off"}
+
+
 class TestCacheStats:
     """Tests for GET /api/cache/stats endpoint."""
 
