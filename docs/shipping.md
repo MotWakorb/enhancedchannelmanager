@@ -82,3 +82,16 @@ Create beads for anything that needs follow-up.
    ```
 5. Create GitHub release: `gh release create vX.Y.Z --target main --title "vX.Y.Z" --notes-file /tmp/release-notes.md`
 6. **Root checkout MUST stay on dev** — never leave it on main
+
+## Branch Protection on Main
+
+`main` is protected (configured via bead `enhancedchannelmanager-8w33i`). Enforced rules:
+
+- **Required status checks** (strict, branch must be up-to-date): `Backend Tests`, `Frontend Tests` — both jobs defined in `.github/workflows/test.yml`.
+- **Force-pushes blocked** and **deletions blocked**.
+- **Required conversation resolution** on PRs.
+- **Admins are NOT enforced** — the PO can push hotfixes directly if a check outage would otherwise block a release. Use sparingly.
+- **PR reviews are NOT required** — solo-maintainer workaround; add a review requirement when contributor count grows.
+- **Linear history not required** and **signed commits not required** — matches current merge-commit-tolerant workflow.
+
+To inspect or adjust: `gh api /repos/MotWakorb/enhancedchannelmanager/branches/main/protection`. Full config lives only in the GitHub API (no IaC yet).
