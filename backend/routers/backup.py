@@ -79,7 +79,10 @@ def _build_manifest(files: list[str]) -> dict:
 
 def _create_backup_zip() -> io.BytesIO:
     """Create a zip file containing all ECM config data."""
-    # Flush SQLite WAL to ensure journal.db is self-contained
+    # Flush SQLite WAL so journal.db is self-contained before we zip it.
+    # WAL mode is enabled by the engine-connect PRAGMA listener in
+    # database.py, so the checkpoint is meaningful: without it, recent
+    # writes would still live in journal.db-wal and be lost from the backup.
     try:
         engine = get_engine()
         with engine.connect() as conn:
