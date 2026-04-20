@@ -3,7 +3,8 @@ SQLite database setup for the Journal feature.
 Uses SQLAlchemy with async support via aiosqlite.
 """
 import logging
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.pool import StaticPool
 
@@ -20,6 +21,79 @@ Base = declarative_base()
 # Engine and session factory (initialized on startup)
 _engine = None
 _SessionLocal = None
+
+# Track whether we've logged PRAGMA state at least once so the startup log is
+# informative without spamming once-per-connection lines.
+_pragma_logged = False
+
+
+@event.listens_for(Engine, "connect")
+def _set_sqlite_pragmas(dbapi_connection, connection_record):
+    """Apply SQLite PRAGMAs on every new connection.
+
+    Set at connection time because SQLite PRAGMAs are per-connection, not
+    per-database. Without this, `journal_mode` defaults to rollback journal
+    (which serializes readers vs writers → `database is locked` errors under
+    concurrent probe/task/HTTP load) and `foreign_keys=OFF` (which silently
+    ignores FK constraints declared in models.py → orphan rows).
+
+    SQLite-only: guarded by dialect check so this is a no-op for non-SQLite
+    engines if the backend is ever swapped.
+
+    In-memory databases (`:memory:`) cannot use WAL mode, so we skip
+    journal_mode for them but still enforce foreign keys.
+    """
+    global _pragma_logged
+
+    # Identify SQLite connections. The sqlite3 DB-API module exposes
+    # `Connection` objects from the stdlib `sqlite3` package; non-SQLite
+    # drivers will not match, so we stay safe for future engine swaps.
+    try:
+        import sqlite3
+        if not isinstance(dbapi_connection, sqlite3.Connection):
+            return
+    except Exception:
+        return
+
+    cursor = dbapi_connection.cursor()
+    try:
+        # Detect in-memory DB — WAL mode requires a file on disk. Tests using
+        # `sqlite:///:memory:` expose the database via a connection with no
+        # backing file; `PRAGMA database_list` returns an empty `file` column
+        # for those.
+        is_memory = False
+        try:
+            cursor.execute("PRAGMA database_list")
+            rows = cursor.fetchall()
+            # rows like (seq, name, file). Main DB is first.
+            if rows and len(rows[0]) >= 3:
+                main_file = rows[0][2]
+                if not main_file:
+                    is_memory = True
+        except Exception:
+            # If we can't determine, fall through and attempt WAL — SQLite
+            # will return the actual mode we land in.
+            pass
+
+        resulting_mode = None
+        if not is_memory:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            row = cursor.fetchone()
+            if row is not None:
+                resulting_mode = row[0]
+
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA foreign_keys=ON")
+
+        if not _pragma_logged:
+            logger.info(
+                "[DATABASE] SQLite PRAGMAs applied: journal_mode=%s synchronous=NORMAL foreign_keys=ON (memory=%s)",
+                resulting_mode or "memory",
+                is_memory,
+            )
+            _pragma_logged = True
+    finally:
+        cursor.close()
 
 
 def get_database_url() -> str:
