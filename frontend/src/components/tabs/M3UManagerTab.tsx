@@ -420,6 +420,7 @@ export function M3UManagerTab({
       await loadData();
       onAccountsChange?.();  // Notify parent to reload providers
     } catch (err) {
+      logger.error('M3UManagerTab: failed to delete M3U account', err);
       notifications.error('Failed to delete M3U account', 'M3U Manager');
     }
   };
@@ -443,6 +444,7 @@ export function M3UManagerTab({
         a.id === account.id ? { ...a, status: 'fetching' } : a
       ));
     } catch (err) {
+      logger.error('M3UManagerTab: failed to refresh M3U account', err);
       notifications.error('Failed to refresh M3U account', 'M3U Manager');
     }
   };
@@ -452,6 +454,7 @@ export function M3UManagerTab({
       await api.patchM3UAccount(account.id, { is_active: !account.is_active });
       await loadData();
     } catch (err) {
+      logger.error('M3UManagerTab: failed to toggle M3U account active state', err);
       notifications.error('Failed to update M3U account', 'M3U Manager');
     }
   };
@@ -488,6 +491,7 @@ export function M3UManagerTab({
         a.is_active && a.name.toLowerCase() !== 'custom' ? { ...a, status: 'fetching' } : a
       ));
     } catch (err) {
+      logger.error('M3UManagerTab: failed to refresh all M3U accounts', err);
       notifications.error('Failed to refresh M3U accounts', 'M3U Manager');
     }
   };
@@ -576,6 +580,7 @@ export function M3UManagerTab({
       });
       setLinkedM3UAccounts(linkGroups);
     } catch (err) {
+      logger.error('M3UManagerTab: failed to save linked accounts', err);
       notifications.error('Failed to save linked accounts', 'M3U Manager');
     }
   };

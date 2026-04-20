@@ -46,7 +46,7 @@ function getActionCategory(action: ActionLogEntry): string | null {
     return 'removed';
   } else if (action.type === 'set_stream_priority') {
     return 'updated';
-  } else if ((action as any).action === 'excluded' || desc.includes('excluded:')) {
+  } else if ((action as ActionLogEntry & { action?: string }).action === 'excluded' || desc.includes('excluded:')) {
     return 'excluded';
   } else if (['assign_logo', 'assign_tvg_id', 'assign_epg', 'assign_profile', 'set_channel_number'].includes(action.type)) {
     return 'assigned';
