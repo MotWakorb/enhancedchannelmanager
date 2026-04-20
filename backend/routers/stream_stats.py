@@ -284,6 +284,11 @@ async def compute_sort(request: ComputeSortRequest):
     # Sort each channel
     results = []
     for ch in request.channels:
+        # M3U priority does not require probe stats; respect priorities even if stats are missing.
+        deprioritize_failed = settings.deprioritize_failed_streams
+        if request.mode == "m3u_priority":
+            deprioritize_failed = False
+
         sorted_ids = smart_sort_streams(
             stream_ids=ch.stream_ids,
             stats_map=stats_map,
@@ -291,7 +296,7 @@ async def compute_sort(request: ComputeSortRequest):
             stream_sort_priority=sort_priority,
             stream_sort_enabled=sort_enabled,
             m3u_account_priorities=settings.m3u_account_priorities,
-            deprioritize_failed_streams=settings.deprioritize_failed_streams,
+            deprioritize_failed_streams=deprioritize_failed,
             deprioritize_black_screen=getattr(settings, 'deprioritize_black_screen', True),
             deprioritize_low_fps=getattr(settings, 'deprioritize_low_fps', True),
             failed_stream_sort_order=getattr(settings, 'failed_stream_sort_order', None),
