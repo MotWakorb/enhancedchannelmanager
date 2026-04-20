@@ -109,6 +109,7 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
         notifications.error(result.message, 'Connection Failed');
       }
     } catch (err) {
+      logger.error('SettingsModal: connection test failed', err);
       setConnectionVerified(false);
     } finally {
       setTesting(false);

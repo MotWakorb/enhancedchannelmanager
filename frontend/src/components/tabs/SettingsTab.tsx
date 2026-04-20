@@ -629,7 +629,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           setProbeProgress(progress);
           setProbingAll(true);
         }
-      } catch (err) {
+      } catch {
         // Silently ignore errors - this is background polling
       }
     };
@@ -827,6 +827,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         notifications.error('Failed to reset statistics', 'Reset Statistics');
       }
     } catch (err) {
+      logger.error('SettingsTab: failed to reset statistics', err);
       notifications.error('Failed to reset statistics', 'Reset Statistics');
     } finally {
       setResettingStats(false);
@@ -1180,6 +1181,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         notifications.error(result.message || 'Failed to restart services', 'Restart Failed');
       }
     } catch (err) {
+      logger.error('SettingsTab: failed to restart services', err);
       notifications.error('Failed to restart services', 'Restart Failed');
     } finally {
       setRestarting(false);
@@ -2371,6 +2373,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         notifications.error(result.message, 'SMTP Test');
       }
     } catch (err) {
+      logger.error('SettingsTab: failed to test SMTP connection', err);
       notifications.error('Failed to test SMTP connection', 'SMTP Test');
     } finally {
       setSmtpTesting(false);
@@ -2429,6 +2432,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         notifications.error(result.message, 'Telegram Test');
       }
     } catch (err) {
+      logger.error('SettingsTab: failed to test Telegram bot', err);
       notifications.error('Failed to test Telegram bot', 'Telegram Test');
     } finally {
       setTelegramTesting(false);
