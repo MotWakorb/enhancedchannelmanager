@@ -273,13 +273,20 @@ jobs:
           # Broader state needed by individual specs (orphaned groups, M3U
           # accounts, etc.) is out of scope here and is tracked in bead
           # enhancedchannelmanager-2lw25.
-          curl -sSf -X POST http://localhost:6100/api/auth/setup \
+          # Use -w so we get the HTTP code even on failure; include response
+          # body in diagnostics so future regressions are easy to diagnose.
+          HTTP_CODE=$(curl -sS -o /tmp/setup-response.json -w '%{http_code}' \
+            -X POST http://localhost:6100/api/auth/setup \
             -H 'Content-Type: application/json' \
-            -d "{\"username\":\"${E2E_TEST_USERNAME}\",\"email\":\"e2e@test.local\",\"password\":\"${E2E_TEST_PASSWORD}\"}" \
-            -o /tmp/setup-response.json
-          echo "Setup response:"
+            -d "{\"username\":\"${E2E_TEST_USERNAME}\",\"email\":\"e2e@example.com\",\"password\":\"${E2E_TEST_PASSWORD}\"}")
+          echo "Setup HTTP code: ${HTTP_CODE}"
+          echo "Setup response body:"
           cat /tmp/setup-response.json
           echo
+          if [ "${HTTP_CODE}" != "201" ] && [ "${HTTP_CODE}" != "200" ]; then
+            echo "Setup call failed with HTTP ${HTTP_CODE}"
+            exit 1
+          fi
 
       - name: Install root dependencies (Playwright)
         run: npm ci
