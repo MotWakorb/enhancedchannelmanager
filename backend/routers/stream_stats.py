@@ -272,13 +272,23 @@ async def compute_sort(request: ComputeSortRequest):
             elapsed_ms = (time.time() - start_fetch) * 1000
             logger.debug("[STREAM-STATS-SORT] Fetched %s streams for M3U priority in %.1fms", len(streams_data), elapsed_ms)
             for s in streams_data:
-                stream_m3u_map[s["id"]] = extract_m3u_account_id(s.get("m3u_account"))
+                # Dispatcharr has historically returned either "id" or "stream_id" as the identifier.
+                # Be tolerant so M3U priority sorting doesn't silently no-op.
+                stream_id = s.get("id", s.get("stream_id"))
+                if stream_id is None:
+                    continue
+                stream_m3u_map[int(stream_id)] = extract_m3u_account_id(s.get("m3u_account"))
         except Exception as e:
             logger.warning("[STREAM-STATS-SORT] Failed to fetch M3U data: %s", e)
 
     # Sort each channel
     results = []
     for ch in request.channels:
+        # M3U priority does not require probe stats; respect priorities even if stats are missing.
+        deprioritize_failed = settings.deprioritize_failed_streams
+        if request.mode == "m3u_priority":
+            deprioritize_failed = False
+
         sorted_ids = smart_sort_streams(
             stream_ids=ch.stream_ids,
             stats_map=stats_map,
@@ -286,7 +296,7 @@ async def compute_sort(request: ComputeSortRequest):
             stream_sort_priority=sort_priority,
             stream_sort_enabled=sort_enabled,
             m3u_account_priorities=settings.m3u_account_priorities,
-            deprioritize_failed_streams=settings.deprioritize_failed_streams,
+            deprioritize_failed_streams=deprioritize_failed,
             deprioritize_black_screen=getattr(settings, 'deprioritize_black_screen', True),
             deprioritize_low_fps=getattr(settings, 'deprioritize_low_fps', True),
             failed_stream_sort_order=getattr(settings, 'failed_stream_sort_order', None),

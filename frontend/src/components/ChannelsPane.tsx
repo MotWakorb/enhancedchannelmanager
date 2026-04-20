@@ -2752,6 +2752,10 @@ export function ChannelsPane({
       const result = response.results[0];
       if (!result || !result.changed) {
         logger.info(`[SmartSort] No change needed - streams already in sorted order`);
+        notifications.info(
+          'No reorder needed: stream order already matches this sort (or all streams tie on the same metrics). Enable more criteria in Settings → Smart Sort, or probe streams for quality data.',
+          'Sort Complete'
+        );
         return;
       }
 
@@ -2835,7 +2839,10 @@ export function ChannelsPane({
       if (changesCount > 0) {
         notifications.success(`Sorted ${changesCount} of ${channelsToProcess.length} channel${channelsToProcess.length !== 1 ? 's' : ''} by ${SORT_MODE_LABELS[mode]}`, 'Sort Complete');
       } else {
-        notifications.info(`Streams already in ${SORT_MODE_LABELS[mode]} order`, 'Sort Complete');
+        notifications.info(
+          `No channels reordered: order already matches ${SORT_MODE_LABELS[mode]} (or all streams tie). Check Settings → Smart Sort, or probe streams.`,
+          'Sort Complete'
+        );
       }
       logger.info(`Bulk sort by ${SORT_MODE_LABELS[mode]}: ${changesCount} of ${channelsToProcess.length} channels reordered`);
     } catch (err) {

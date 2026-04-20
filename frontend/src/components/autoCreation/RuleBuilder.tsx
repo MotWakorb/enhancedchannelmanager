@@ -485,6 +485,11 @@ export function RuleBuilder({
                 </p>
               </div>
             )}
+            {streamSortField === 'provider_order' && (
+              <p className="form-hint">
+                Uses priority values from M3U Manager (Save Priorities). Choose Descending so the highest priority number is first; Ascending puts the lowest priority first.
+              </p>
+            )}
           </div>
 
           <div className="form-field">
