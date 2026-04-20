@@ -501,3 +501,161 @@ jobs:
             $(echo "${{ steps.meta.outputs.tags }}" | xargs -I {} echo --tag {}) \
             ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}@${{ needs.build-amd64.outputs.digest }} \
             ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}@${{ needs.build-arm64.outputs.digest }}
+
+  # ─── MCP Server Build Pipeline ───────────────────────────────────────
+
+  build-mcp-amd64:
+    name: Build MCP Image (AMD64)
+    runs-on: ubuntu-latest
+    needs: [security-scan-backend]
+    if: always() && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set lowercase image name
+        id: image
+        run: echo "name=${GITHUB_REPOSITORY,,}-mcp" >> $GITHUB_OUTPUT
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
+
+      - name: Build and push MCP (AMD64)
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ./mcp-server
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha,scope=mcp-amd64
+          cache-to: type=gha,mode=max,scope=mcp-amd64
+
+  build-mcp-arm64:
+    name: Build MCP Image (ARM64)
+    runs-on: ubuntu-24.04-arm
+    needs: [security-scan-backend]
+    if: always() && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set lowercase image name
+        id: image
+        run: echo "name=${GITHUB_REPOSITORY,,}-mcp" >> $GITHUB_OUTPUT
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
+
+      - name: Build and push MCP (ARM64)
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ./mcp-server
+          platforms: linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha,scope=mcp-arm64
+          cache-to: type=gha,mode=max,scope=mcp-arm64
+
+  merge-mcp-manifests:
+    name: Create MCP Multi-Arch Manifest
+    runs-on: ubuntu-latest
+    needs: [build-mcp-amd64, build-mcp-arm64]
+    if: >-
+      always() && github.event_name != 'pull_request'
+      && needs.build-mcp-amd64.result == 'success'
+      && needs.build-mcp-arm64.result == 'success'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout repository (for version extraction)
+        uses: actions/checkout@v6
+
+      - name: Set lowercase image name
+        id: image
+        run: echo "name=${GITHUB_REPOSITORY,,}-mcp" >> $GITHUB_OUTPUT
+
+      - name: Extract version from package.json
+        id: version
+        run: |
+          VERSION=$(jq -r '.version' frontend/package.json)
+          echo "full=${VERSION}" >> $GITHUB_OUTPUT
+          echo "minor=$(echo $VERSION | cut -d. -f1,2)" >> $GITHUB_OUTPUT
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=${{ steps.version.outputs.full }}-dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=${{ steps.version.outputs.full }},enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=${{ steps.version.outputs.minor }}-dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=${{ steps.version.outputs.minor }},enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Create manifest list and push
+        working-directory: /tmp
+        run: |
+          docker buildx imagetools create \
+            $(echo "${{ steps.meta.outputs.tags }}" | xargs -I {} echo --tag {}) \
+            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}@${{ needs.build-mcp-amd64.outputs.digest }} \
+            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}@${{ needs.build-mcp-arm64.outputs.digest }}

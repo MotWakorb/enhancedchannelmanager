@@ -815,9 +815,10 @@ class NormalizationEngine:
             logger.warning("[NORMALIZE] Unknown else action type: %s", action_type)
             return text
 
-    def normalize(self, name: str) -> NormalizationResult:
+    def normalize(self, name: str, group_ids: list[int] | None = None,
+                  preserve_superscripts: bool = False) -> NormalizationResult:
         """
-        Apply all enabled rules to normalize a stream name.
+        Apply enabled rules to normalize a stream name.
 
         Rules are applied in multiple passes until no more changes occur.
         This handles cases like "4K/UHD" (both quality tags) or "HD (NA)"
@@ -825,6 +826,11 @@ class NormalizationEngine:
 
         Args:
             name: The stream name to normalize
+            group_ids: Optional list of NormalizationRuleGroup IDs to apply.
+                       None = all enabled groups (default behavior).
+            preserve_superscripts: If True, skip Unicode superscript-to-ASCII
+                conversion.  Used when normalizing the *output* channel name
+                so that intentional superscripts (e.g. ESPN²) survive.
 
         Returns:
             NormalizationResult with original, normalized name, and applied rules
@@ -839,9 +845,19 @@ class NormalizationEngine:
         current = name.strip()
 
         # Convert Unicode superscripts to ASCII (e.g., ᴴᴰ -> HD, ᵁᴴᴰ -> UHD, ᴿᴬᵂ -> RAW)
-        current = convert_superscripts(current)
+        # Skipped when preserve_superscripts=True so intentional chars survive.
+        if not preserve_superscripts:
+            current = convert_superscripts(current)
 
         grouped_rules = self._load_rules()
+
+        # Filter to specific groups if requested (per-rule normalization)
+        if group_ids is not None:
+            all_count = len(grouped_rules)
+            allowed = set(group_ids)
+            grouped_rules = [(g, r) for g, r in grouped_rules if g.id in allowed]
+            logger.debug("[NORMALIZE] Filtered to %d/%d groups (ids=%s) for '%s'",
+                        len(grouped_rules), all_count, group_ids, name)
 
         # Multi-pass normalization: keep applying rules until no changes occur
         max_passes = 10  # Safety limit to prevent infinite loops
@@ -889,8 +905,8 @@ class NormalizationEngine:
                         result.transformations.append((rule.id, before, current))
 
                         logger.debug(
-                            "[NORMALIZE] Rule %s (%s): '%s' -> '%s'",
-                            rule.id, rule.name, before, current
+                            "[NORMALIZE] Rule %s (%s, group '%s'): '%s' -> '%s'",
+                            rule.id, rule.name, group.name, before, current
                         )
 
                     # Stop processing if rule says so

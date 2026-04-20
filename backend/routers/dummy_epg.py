@@ -140,6 +140,15 @@ class PreviewRequest(BaseModel):
     channel_logo_url_template: Optional[str] = None
     program_poster_url_template: Optional[str] = None
     pattern_variants: Optional[list[PatternVariantModel]] = None
+    # Lookup tables — inline tables defined on this source + IDs of global
+    # tables stored in the lookup_tables table. The preview endpoint merges
+    # both into a single lookups dict for the template engine.
+    inline_lookups: dict[str, dict[str, str]] = {}
+    global_lookup_ids: list[int] = []
+    # When true, response includes a per-template trace of placeholders,
+    # pipe transforms (input→output), conditional branches taken, and
+    # lookup resolutions — powers the preview UI's expandable trace view.
+    include_trace: bool = False
 
 
 class BatchPreviewRequest(BaseModel):
@@ -162,6 +171,8 @@ class BatchPreviewRequest(BaseModel):
     channel_logo_url_template: Optional[str] = None
     program_poster_url_template: Optional[str] = None
     pattern_variants: Optional[list[PatternVariantModel]] = None
+    inline_lookups: dict[str, dict[str, str]] = {}
+    global_lookup_ids: list[int] = []
 
 
 # =============================================================================
@@ -377,13 +388,19 @@ async def delete_profile(profile_id: int, db: Session = Depends(get_session)):
 
 
 @router.post("/preview")
-async def preview_epg(req: PreviewRequest):
-    """Test the EPG pipeline with sample data (no DB)."""
-    logger.debug("[DUMMY-EPG] POST /preview sample_name=%s", req.sample_name)
+async def preview_epg(req: PreviewRequest, db: Session = Depends(get_session)):
+    """Test the EPG pipeline with sample data. DB touched only to resolve
+    global_lookup_ids — skipped when the caller sends no IDs. When
+    include_trace=true the response carries a `traces` dict with per-field
+    step-by-step rendering (placeholders, pipes, conditionals, lookups)."""
+    logger.debug("[DUMMY-EPG] POST /preview sample_name=%s trace=%s", req.sample_name, req.include_trace)
     try:
         from dummy_epg_engine import preview_pipeline
         config = _build_preview_config(req)
-        result = preview_pipeline(config, req.sample_name)
+        lookups = _resolve_lookups(req.inline_lookups, req.global_lookup_ids, db)
+        result = preview_pipeline(
+            config, req.sample_name, lookups=lookups, include_trace=req.include_trace,
+        )
         return result
     except Exception as e:
         logger.warning("[DUMMY-EPG] Preview failed: %s", e)
@@ -391,13 +408,15 @@ async def preview_epg(req: PreviewRequest):
 
 
 @router.post("/preview/batch")
-async def preview_epg_batch(req: BatchPreviewRequest):
-    """Test the EPG pipeline with multiple sample names (no DB)."""
+async def preview_epg_batch(req: BatchPreviewRequest, db: Session = Depends(get_session)):
+    """Test the EPG pipeline with multiple sample names. Global lookups
+    are fetched once and reused across the batch."""
     logger.debug("[DUMMY-EPG] POST /preview/batch count=%s", len(req.sample_names))
     try:
         from dummy_epg_engine import preview_pipeline_batch
         config = _build_preview_config(req)
-        results = preview_pipeline_batch(config, req.sample_names[:100])  # Cap at 100
+        lookups = _resolve_lookups(req.inline_lookups, req.global_lookup_ids, db)
+        results = preview_pipeline_batch(config, req.sample_names[:100], lookups=lookups)  # Cap at 100
         return results
     except Exception as e:
         logger.warning("[DUMMY-EPG] Batch preview failed: %s", e)
@@ -428,6 +447,37 @@ def _build_preview_config(req) -> dict:
     if req.pattern_variants:
         config["pattern_variants"] = [v.model_dump() for v in req.pattern_variants]
     return config
+
+
+def _resolve_lookups(
+    inline_lookups: dict[str, dict[str, str]],
+    global_lookup_ids: list[int],
+    db,
+) -> dict[str, dict[str, str]]:
+    """Merge inline tables with globals fetched from the DB by ID.
+
+    Later definitions win: inline tables override a same-named global, so a
+    per-source tweak can temporarily shadow a shared table without editing it.
+    """
+    import json as _json
+    from models import LookupTable
+
+    merged: dict[str, dict[str, str]] = {}
+    if global_lookup_ids:
+        rows = db.query(LookupTable).filter(LookupTable.id.in_(global_lookup_ids)).all()
+        for row in rows:
+            try:
+                entries = _json.loads(row.entries or "{}")
+            except (ValueError, TypeError):
+                entries = {}
+            if isinstance(entries, dict):
+                merged[row.name] = {str(k): str(v) for k, v in entries.items()}
+
+    for name, entries in (inline_lookups or {}).items():
+        if isinstance(entries, dict):
+            merged[name] = {str(k): str(v) for k, v in entries.items()}
+
+    return merged
 
 
 def _resolve_group_assignments(channel_group_ids: list, channel_map: dict) -> list:

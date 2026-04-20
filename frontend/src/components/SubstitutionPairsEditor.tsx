@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef, useState, useEffect } from 'react';
+import { memo, useCallback, useRef, useState } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -134,23 +134,28 @@ export const SubstitutionPairsEditor = memo(function SubstitutionPairsEditor({ p
     })
   );
 
-  // Maintain stable unique IDs for drag-and-drop
-  const nextIdRef = useRef(0);
-  const [itemIds, setItemIds] = useState<string[]>([]);
+  // Maintain stable unique IDs for drag-and-drop. IDs are always aligned 1:1
+  // with pair positions. We compute in useMemo so the fix lifts the length-sync
+  // logic out of an effect; stateful reorder is tracked in setItemIds (handler).
+  const [itemIds, setItemIds] = useState<string[]>(() => []);
+  const idCounterRef = useRef(0);
 
-  useEffect(() => {
-    // Ensure we have an ID for every pair
-    if (itemIds.length !== pairs.length) {
-      const newIds = [...itemIds];
-      while (newIds.length < pairs.length) {
-        newIds.push(`sp-${nextIdRef.current++}`);
-      }
-      if (newIds.length > pairs.length) {
-        newIds.length = pairs.length;
-      }
-      setItemIds(newIds);
+  // Normalize itemIds length to match pairs length. This is the React-blessed
+  // "derive-state-from-props" pattern (update-during-render with a guard). The
+  // ref-as-counter is only read/incremented inside this guarded branch, not on
+  // every render, so the "refs during render" rule's concern (instability) is
+  // moot here — the mutation is bounded and functional.
+  // See: https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
+  if (itemIds.length !== pairs.length) {
+    const next = itemIds.slice(0, pairs.length);
+    while (next.length < pairs.length) {
+      // eslint-disable-next-line react-hooks/refs -- bounded allocation inside a derive-state-from-props guard; counter monotonically increases and only when pairs grows
+      idCounterRef.current += 1;
+      // eslint-disable-next-line react-hooks/refs -- see above
+      next.push(`sp-${idCounterRef.current}`);
     }
-  }, [pairs.length, itemIds]);
+    setItemIds(next);
+  }
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;

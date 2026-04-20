@@ -182,7 +182,7 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `POST /api/stream-stats/clear-all` | Clear all probe stats |
 | `GET /api/stream-stats/struck-out` | List struck-out streams (exceeding failure threshold) |
 | `POST /api/stream-stats/struck-out/remove` | Bulk remove struck-out streams from all channels |
-| `POST /api/stream-stats/compute-sort` | Compute sort scores for streams based on probe data |
+| `POST /api/stream-stats/compute-sort` | Compute sort scores for streams (resolution, bitrate, framerate, video codec, M3U priority, audio channels) |
 
 ## Enhanced Stats
 
@@ -198,7 +198,7 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `GET /api/stats/unique-viewers` | Get unique viewer summary for period |
 | `GET /api/stats/channel-bandwidth` | Get per-channel bandwidth stats |
 | `GET /api/stats/unique-viewers-by-channel` | Get unique viewers per channel |
-| `GET /api/stats/watch-history` | Get watch history log (paginated) |
+| `GET /api/stats/watch-history` | Get watch history log (paginated, filterable by channel/IP/days, includes user attribution) |
 
 ## Popularity
 
@@ -331,6 +331,7 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `GET /api/auto-creation/schema/conditions` | Get available condition types |
 | `GET /api/auto-creation/schema/actions` | Get available action types |
 | `GET /api/auto-creation/schema/template-variables` | Get available template variables |
+| `GET /api/auto-creation/debug-bundle` | Download diagnostic bundle (obfuscated channels, rules, streams, probe stats, settings, task schedules, logs) |
 
 ## FFMPEG Builder
 
@@ -405,6 +406,26 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `GET /api/dummy-epg/profiles/export/yaml` | Export profiles as YAML |
 | `POST /api/dummy-epg/profiles/import/yaml` | Import profiles from YAML |
 
+`POST /api/dummy-epg/preview` accepts the full profile config plus:
+
+- `inline_lookups: {<name>: {<key>: <value>, ...}, ...}` — per-source lookup tables referenced by `{key|lookup:<name>}`. Inline tables override globals of the same name.
+- `global_lookup_ids: [id, ...]` — IDs of saved tables from `/api/lookup-tables`.
+- `include_trace: bool` — when true, the response carries a `traces` dict keyed by template field (`title_template`, `description_template`, …). Trace entries describe literals, placeholders (with per-pipe input/output and lookup hit/miss), and conditionals (taken/skipped + branch kind).
+
+## Lookup Tables
+
+Named key → value tables used by the dummy EPG template engine's `{key|lookup:<name>}` pipe.
+
+| Endpoint | Description |
+|-|-|
+| `GET /api/lookup-tables` | List all tables (summary — entry counts, no entries) |
+| `POST /api/lookup-tables` | Create a table (`{name, description?, entries?}`) |
+| `GET /api/lookup-tables/{id}` | Get a single table with full `entries` dict |
+| `PATCH /api/lookup-tables/{id}` | Rename, edit description, and/or replace entries |
+| `DELETE /api/lookup-tables/{id}` | Delete a table (cascades to any source still referencing it by ID — the preview path skips missing IDs silently) |
+
+Names are unique. Each table is capped at 10 000 entries.
+
 ## Export
 
 | Endpoint | Description |
@@ -440,6 +461,11 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `GET /api/backup/create` | Download backup zip of all configuration |
 | `POST /api/backup/restore` | Restore from uploaded backup zip |
 | `POST /api/backup/restore-initial` | Restore from backup during initial setup (no auth) |
+| `GET /api/backup/export-sections` | List available YAML export sections |
+| `POST /api/backup/export` | Export selected sections as YAML |
+| `POST /api/backup/import` | Import from YAML backup |
+| `GET /api/backup/saved` | List saved YAML backup files |
+| `DELETE /api/backup/saved/{filename}` | Delete a saved YAML backup file |
 
 ## Authentication
 

@@ -48,7 +48,7 @@ class CreateAutoCreationRuleRequest(BaseModel):
     sort_regex: Optional[str] = None
     stream_sort_field: Optional[str] = None
     stream_sort_order: str = "asc"
-    normalize_names: bool = False
+    normalization_group_ids: list[int] = []
     skip_struck_streams: bool = False
     orphan_action: str = "delete"
 
@@ -71,7 +71,7 @@ class UpdateAutoCreationRuleRequest(BaseModel):
     sort_regex: Optional[str] = None
     stream_sort_field: Optional[str] = None
     stream_sort_order: Optional[str] = None
-    normalize_names: Optional[bool] = None
+    normalization_group_ids: Optional[list[int]] = None
     skip_struck_streams: Optional[bool] = None
     orphan_action: Optional[str] = None
 
@@ -87,6 +87,21 @@ class ImportYAMLRequest(BaseModel):
     """Request to import rules from YAML."""
     yaml_content: str
     overwrite: bool = False
+
+
+def _resolve_normalization_group_ids(rule_data: dict, session) -> str | None:
+    """Resolve normalization_group_ids from rule data, with backward compat for normalize_names."""
+    norm_ids = rule_data.get("normalization_group_ids")
+    if norm_ids is not None:
+        return json.dumps(norm_ids) if norm_ids else None
+    # Legacy: normalize_names=true -> all enabled groups
+    if rule_data.get("normalize_names"):
+        from models import NormalizationRuleGroup
+        groups = session.query(NormalizationRuleGroup.id).filter(
+            NormalizationRuleGroup.enabled == True
+        ).order_by(NormalizationRuleGroup.priority).all()
+        return json.dumps([g.id for g in groups]) if groups else None
+    return None
 
 
 # =============================================================================
@@ -185,7 +200,7 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
                 sort_regex=request.sort_regex,
                 stream_sort_field=request.stream_sort_field,
                 stream_sort_order=request.stream_sort_order,
-                normalize_names=request.normalize_names,
+                normalization_group_ids=json.dumps(request.normalization_group_ids) if request.normalization_group_ids else None,
                 skip_struck_streams=request.skip_struck_streams,
                 orphan_action=request.orphan_action
             )
@@ -257,8 +272,8 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
                 rule.stream_sort_field = request.stream_sort_field or None
             if request.stream_sort_order is not None:
                 rule.stream_sort_order = request.stream_sort_order
-            if request.normalize_names is not None:
-                rule.normalize_names = request.normalize_names
+            if request.normalization_group_ids is not None:
+                rule.set_normalization_group_ids(request.normalization_group_ids)
             if request.skip_struck_streams is not None:
                 rule.skip_struck_streams = request.skip_struck_streams
             if request.orphan_action is not None:
@@ -426,8 +441,11 @@ async def duplicate_auto_creation_rule(rule_id: int):
                 sort_order=rule.sort_order,
                 stream_sort_field=rule.stream_sort_field,
                 stream_sort_order=rule.stream_sort_order,
-                normalize_names=rule.normalize_names,
-                skip_struck_streams=rule.skip_struck_streams
+                normalization_group_ids=rule.normalization_group_ids,
+                skip_struck_streams=rule.skip_struck_streams,
+                probe_on_sort=rule.probe_on_sort,
+                sort_regex=rule.sort_regex,
+                orphan_action=rule.orphan_action
             )
             session.add(new_rule)
             session.commit()
@@ -679,7 +697,7 @@ async def export_auto_creation_rules_yaml():
                     "sort_regex": rule.sort_regex,
                     "stream_sort_field": rule.stream_sort_field,
                     "stream_sort_order": rule.stream_sort_order or "asc",
-                    "normalize_names": rule.normalize_names or False,
+                    "normalization_group_ids": rule.get_normalization_group_ids(),
                     "skip_struck_streams": rule.skip_struck_streams or False,
                     "probe_on_sort": rule.probe_on_sort or False,
                     "orphan_action": rule.orphan_action or "delete"
@@ -843,7 +861,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         existing.sort_regex = rule_data.get("sort_regex")
                         existing.stream_sort_field = rule_data.get("stream_sort_field")
                         existing.stream_sort_order = rule_data.get("stream_sort_order", "asc")
-                        existing.normalize_names = rule_data.get("normalize_names", False)
+                        existing.normalization_group_ids = _resolve_normalization_group_ids(rule_data, session)
                         existing.skip_struck_streams = rule_data.get("skip_struck_streams", False)
                         existing.probe_on_sort = rule_data.get("probe_on_sort", False)
                         existing.orphan_action = rule_data.get("orphan_action", "delete")
@@ -874,7 +892,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         sort_regex=rule_data.get("sort_regex"),
                         stream_sort_field=rule_data.get("stream_sort_field"),
                         stream_sort_order=rule_data.get("stream_sort_order", "asc"),
-                        normalize_names=rule_data.get("normalize_names", False),
+                        normalization_group_ids=_resolve_normalization_group_ids(rule_data, session),
                         skip_struck_streams=rule_data.get("skip_struck_streams", False),
                         probe_on_sort=rule_data.get("probe_on_sort", False),
                         orphan_action=rule_data.get("orphan_action", "delete")
@@ -1160,26 +1178,14 @@ async def generate_debug_bundle():
         groups = await client.get_channel_groups() or []
         group_lookup = {g.get("id"): g.get("name", "") for g in groups}
 
-        # -- 2. channels.json — minimal channel list ----------------------
-        channels_json_data = [
-            {
-                "id": ch.get("id"),
-                "name": ch.get("name", ""),
-                "channel_number": ch.get("channel_number"),
-                "channel_group_name": group_lookup.get(ch.get("channel_group_id"), ""),
-            }
-            for ch in all_channels
-        ]
-        channels_json_str = json.dumps(channels_json_data, indent=2)
-
-        # -- 3. channels.csv — full export with obfuscated URLs -----------
-        # Collect stream IDs
+        # -- 2. channels.json — channels with streams and stats -----------
+        # Collect all stream IDs across channels
         all_stream_ids = set()
         for ch in all_channels:
             all_stream_ids.update(ch.get("streams", []))
 
-        # Fetch stream URLs in batches
-        stream_url_lookup = {}
+        # Fetch stream details in batches (for names and M3U info)
+        stream_detail_lookup = {}  # stream_id -> {name, m3u_account_id, url}
         stream_ids_list = list(all_stream_ids)
         for i in range(0, len(stream_ids_list), 100):
             batch = stream_ids_list[i:i + 100]
@@ -1187,15 +1193,81 @@ async def generate_debug_bundle():
                 try:
                     streams = await client.get_streams_by_ids(batch)
                     for s in streams:
-                        url = s.get("url", "")
-                        stream_url_lookup[s.get("id")] = obfuscate_url(url) if url else ""
+                        m3u_acct = s.get("m3u_account")
+                        if isinstance(m3u_acct, dict):
+                            m3u_id = m3u_acct.get("id")
+                        else:
+                            m3u_id = m3u_acct
+                        stream_detail_lookup[s.get("id")] = {
+                            "name": s.get("name", ""),
+                            "m3u_account_id": m3u_id,
+                            "url": obfuscate_url(s.get("url", "")) if s.get("url") else "",
+                        }
                 except Exception as e:
                     logger.warning("[AUTO-CREATE] Debug bundle: failed to fetch stream batch: %s", e)
 
+        # Load stream stats from DB
+        from models import StreamStats
+        stats_session = get_session()
+        try:
+            stats_records = stats_session.query(StreamStats).filter(
+                StreamStats.stream_id.in_(stream_ids_list)
+            ).all() if stream_ids_list else []
+            stream_stats_lookup = {s.stream_id: s for s in stats_records}
+        finally:
+            stats_session.close()
+
+        # Build channels with embedded stream info, sorted by channel_number
+        channels_json_data = []
+        for ch in sorted(all_channels, key=lambda c: c.get("channel_number", 0) or 0):
+            stream_ids = ch.get("streams", [])
+            streams_data = []
+            for position, sid in enumerate(stream_ids, start=1):
+                detail = stream_detail_lookup.get(sid, {})
+                stat = stream_stats_lookup.get(sid)
+                stream_entry = {
+                    "id": sid,
+                    "position": position,
+                    "name": detail.get("name", ""),
+                    "m3u_account_id": detail.get("m3u_account_id"),
+                    "url": detail.get("url", ""),
+                }
+                if stat:
+                    stream_entry["stats"] = {
+                        "probe_status": stat.probe_status,
+                        "resolution": stat.resolution,
+                        "fps": stat.fps,
+                        "video_codec": stat.video_codec,
+                        "audio_codec": stat.audio_codec,
+                        "audio_channels": stat.audio_channels,
+                        "bitrate": stat.bitrate,
+                        "video_bitrate": stat.video_bitrate,
+                        "is_black_screen": stat.is_black_screen or False,
+                        "is_low_fps": stat.is_low_fps or False,
+                        "consecutive_failures": stat.consecutive_failures or 0,
+                        "last_probed": stat.last_probed.isoformat() + "Z" if stat.last_probed else None,
+                    }
+                streams_data.append(stream_entry)
+
+            channels_json_data.append({
+                "id": ch.get("id"),
+                "name": ch.get("name", ""),
+                "channel_number": ch.get("channel_number"),
+                "channel_group_name": group_lookup.get(ch.get("channel_group_id"), ""),
+                "stream_count": len(stream_ids),
+                "streams": streams_data,
+            })
+        channels_json_str = json.dumps(channels_json_data, indent=2)
+
+        # -- 3. channels.csv — full export with obfuscated URLs -----------
         csv_channels = []
         for ch in sorted(all_channels, key=lambda c: c.get("channel_number", 0) or 0):
             stream_ids = ch.get("streams", [])
-            stream_urls = [stream_url_lookup.get(sid, "") for sid in stream_ids if stream_url_lookup.get(sid)]
+            stream_urls = [
+                stream_detail_lookup.get(sid, {}).get("url", "")
+                for sid in stream_ids
+                if stream_detail_lookup.get(sid, {}).get("url")
+            ]
             csv_channels.append({
                 "channel_number": ch.get("channel_number"),
                 "name": ch.get("name", ""),
@@ -1246,7 +1318,7 @@ async def generate_debug_bundle():
                     "sort_regex": rule.sort_regex,
                     "stream_sort_field": rule.stream_sort_field,
                     "stream_sort_order": rule.stream_sort_order or "asc",
-                    "normalize_names": rule.normalize_names or False,
+                    "normalization_group_ids": rule.get_normalization_group_ids(),
                     "skip_struck_streams": rule.skip_struck_streams or False,
                     "probe_on_sort": rule.probe_on_sort or False,
                     "orphan_action": rule.orphan_action or "delete",
@@ -1262,27 +1334,88 @@ async def generate_debug_bundle():
         finally:
             session.close()
 
-        # -- 5. logs.txt — recent logs, obfuscated -----------------------
+        # -- 5. settings.json — user settings with secrets redacted -------
+        from config import get_settings as get_config_settings
+        settings_obj = get_config_settings()
+        settings_dict = settings_obj.model_dump()
+        # Redact sensitive fields
+        _REDACTED = "***REDACTED***"
+        for key in ("password", "smtp_password", "discord_webhook_url",
+                     "telegram_bot_token", "telegram_chat_id", "mcp_api_key"):
+            if settings_dict.get(key):
+                settings_dict[key] = _REDACTED
+        # Redact Dispatcharr URL credentials (keep host/port for debugging)
+        if settings_dict.get("url"):
+            from urllib.parse import urlparse, urlunparse
+            parsed = urlparse(settings_dict["url"])
+            if parsed.username or parsed.password:
+                clean = parsed._replace(netloc=f"{parsed.hostname}:{parsed.port}" if parsed.port else parsed.hostname)
+                settings_dict["url"] = urlunparse(clean)
+        if settings_dict.get("username"):
+            settings_dict["username"] = _REDACTED
+        settings_json_str = json.dumps(settings_dict, indent=2)
+
+        # -- 6. task_schedules.json — scheduled task configuration --------
+        from models import TaskSchedule
+        sched_session = get_session()
+        try:
+            schedules = sched_session.query(TaskSchedule).order_by(
+                TaskSchedule.task_id, TaskSchedule.id
+            ).all()
+            schedules_data = [s.to_dict() for s in schedules]
+        finally:
+            sched_session.close()
+        task_schedules_str = json.dumps(schedules_data, indent=2)
+
+        # -- 7. channel_groups_diagnostic.json — Channel Manager mismatch diagnosis
+        # Run BEFORE logs.txt is captured so [GROUPS-DIAG] lines land in the log dump too.
+        from routers.channel_groups import build_channel_groups_diagnostic
+        try:
+            cg_diagnostic = build_channel_groups_diagnostic(groups, all_channels)
+            cg_diagnostic_str = json.dumps(cg_diagnostic, indent=2, default=str)
+        except Exception as e:
+            logger.warning("[AUTO-CREATE] Debug bundle: channel groups diagnostic failed: %s", e)
+            cg_diagnostic_str = json.dumps({"error": str(e)})
+
+        # -- 8. logs.txt — recent logs, obfuscated -----------------------
         log_lines = get_recent_logs()
         obfuscated_lines = [obfuscate_text(line) for line in log_lines]
         logs_text = "\n".join(obfuscated_lines)
 
-        # -- 6. manifest.json --------------------------------------------
+        # -- 8. manifest.json --------------------------------------------
+        # Compute stream stats summary
+        total_streams = len(all_stream_ids)
+        probed_success = sum(1 for s in stream_stats_lookup.values() if s.probe_status == "success")
+        probed_failed = sum(1 for s in stream_stats_lookup.values() if s.probe_status in ("failed", "timeout"))
+        black_screen_count = sum(1 for s in stream_stats_lookup.values() if s.is_black_screen)
+        low_fps_count = sum(1 for s in stream_stats_lookup.values() if s.is_low_fps)
+
         manifest = {
             "ecm_version": APP_VERSION,
             "generated_at": datetime.utcnow().isoformat() + "Z",
             "channel_count": len(all_channels),
             "rule_count": rule_count,
             "group_count": len(groups),
+            "stream_count": total_streams,
+            "stream_stats": {
+                "probed_success": probed_success,
+                "probed_failed": probed_failed,
+                "unprobed": total_streams - probed_success - probed_failed,
+                "black_screen": black_screen_count,
+                "low_fps": low_fps_count,
+            },
         }
         manifest_str = json.dumps(manifest, indent=2)
 
-        # -- 7. Pack into tar.gz -----------------------------------------
+        # -- 9. Pack into tar.gz -----------------------------------------
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tf:
             _add_tar_entry(tf, "channels.json", channels_json_str)
             _add_tar_entry(tf, "channels.csv", csv_content)
             _add_tar_entry(tf, "rules.yaml", yaml_content)
+            _add_tar_entry(tf, "settings.json", settings_json_str)
+            _add_tar_entry(tf, "task_schedules.json", task_schedules_str)
+            _add_tar_entry(tf, "channel_groups_diagnostic.json", cg_diagnostic_str)
             _add_tar_entry(tf, "logs.txt", logs_text)
             _add_tar_entry(tf, "manifest.json", manifest_str)
         buf.seek(0)

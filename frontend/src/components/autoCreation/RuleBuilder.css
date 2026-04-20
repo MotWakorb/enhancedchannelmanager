@@ -426,6 +426,45 @@
   }
 }
 
+.checkbox-group.vertical {
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--input-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+}
+
+.norm-group-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.norm-group-actions .text-button {
+  background: none;
+  border: none;
+  color: var(--accent-primary, #3b82f6);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.norm-group-actions .text-button:hover {
+  color: var(--text-primary);
+}
+
+.norm-group-actions .text-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.norm-group-disabled {
+  opacity: 0.5;
+  font-style: italic;
+}
+
 .norm-hint {
   display: inline-flex;
   align-items: center;

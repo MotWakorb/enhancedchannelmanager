@@ -1,4 +1,4 @@
-import { memo, useRef, useEffect, useState, useCallback } from 'react';
+import { memo, useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import mpegts from 'mpegts.js';
 import type { VideoPlayerProps, VideoPlayerState, VideoPlayerError } from '../types';
 import './VideoPlayer.css';
@@ -28,8 +28,24 @@ export const VideoPlayer = memo(function VideoPlayer({
   const playerRef = useRef<mpegts.Player | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const [playerState, setPlayerState] = useState<VideoPlayerState>('idle');
-  const [error, setError] = useState<VideoPlayerError | null>(null);
+  // Check browser support once at mount (state with a lazy initializer so it's
+  // called exactly once even under StrictMode double-mount).
+  const [isMpegtsSupported] = useState<boolean>(() => mpegts.isSupported());
+  const unsupportedError = useMemo<VideoPlayerError | null>(
+    () => isMpegtsSupported ? null : {
+      code: 'UNSUPPORTED',
+      message: 'Your browser does not support MPEG-TS playback',
+      details: 'Media Source Extensions (MSE) is required for playback',
+    },
+    [isMpegtsSupported],
+  );
+  // Initialize player state lazily so unsupported-browser errors and the
+  // initial 'loading' state don't require setState calls inside useEffect.
+  const [playerState, setPlayerState] = useState<VideoPlayerState>(() => {
+    if (unsupportedError) return 'error';
+    return src ? 'loading' : 'idle';
+  });
+  const [error, setError] = useState<VideoPlayerError | null>(() => unsupportedError);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(muted);
   const [volume, setVolume] = useState(1);
@@ -48,21 +64,26 @@ export const VideoPlayer = memo(function VideoPlayer({
     onError?.(errorInfo);
   }, [onError, updateState]);
 
+  // Notify parent of the unsupported-browser error on mount (state is already
+  // seeded as 'error' via the useState initializer; we just fire the callback).
+  useEffect(() => {
+    if (unsupportedError) {
+      onError?.(unsupportedError);
+      onStateChange?.('error');
+    }
+    // Fire once on mount; unsupportedError is memoized to a stable reference.
+  }, [unsupportedError, onError, onStateChange]);
+
   // Initialize player
   useEffect(() => {
     if (!videoRef.current || !src) return;
 
-    // Check browser support
-    if (!mpegts.isSupported()) {
-      handleError({
-        code: 'UNSUPPORTED',
-        message: 'Your browser does not support MPEG-TS playback',
-        details: 'Media Source Extensions (MSE) is required for playback',
-      });
-      return;
-    }
-
-    updateState('loading');
+    // Check browser support. Bail out without touching state — unsupported
+    // is seeded as the initial playerState via useState initializer above.
+    if (!isMpegtsSupported) return;
+    // Initial 'loading' state is also seeded via useState; the onStateChange
+    // callback doesn't fire for initial state so notify it here.
+    onStateChange?.('loading');
 
     // Create player with buffered configuration for smooth playback
     const player = mpegts.createPlayer(
@@ -161,7 +182,7 @@ export const VideoPlayer = memo(function VideoPlayer({
         playerRef.current = null;
       }
     };
-  }, [src, autoPlay, handleError, updateState]);
+  }, [src, autoPlay, handleError, updateState, onStateChange, isMpegtsSupported]);
 
   // Video element event handlers
   useEffect(() => {

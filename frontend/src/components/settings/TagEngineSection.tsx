@@ -31,14 +31,7 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
   const [editingDescription, setEditingDescription] = useState(false);
   const [description, setDescription] = useState(group.description || '');
 
-  // Load tags when expanded
-  useEffect(() => {
-    if (isExpanded && tags.length === 0) {
-      loadTags();
-    }
-  }, [isExpanded]);
-
-  const loadTags = async () => {
+  const loadTags = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -50,7 +43,14 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
     } finally {
       setLoading(false);
     }
-  };
+  }, [group.id]);
+
+  // Load tags when expanded
+  useEffect(() => {
+    if (isExpanded && tags.length === 0) {
+      loadTags();
+    }
+  }, [isExpanded, tags.length, loadTags]);
 
   const handleAddTag = async () => {
     const tagValue = newTagInput.trim();
@@ -310,7 +310,7 @@ export function TagEngineSection() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   useEffect(() => {
     loadGroups();
@@ -364,7 +364,7 @@ export function TagEngineSection() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to export tags', 'Tags');
     }
-  }, []);
+  }, [notifications]);
 
   // Import tags from YAML
   const handleImportTags = useCallback(async () => {
@@ -386,7 +386,7 @@ export function TagEngineSection() {
     } finally {
       setImporting(false);
     }
-  }, [importYaml, importOverwrite, loadGroups]);
+  }, [importYaml, importOverwrite, loadGroups, notifications]);
 
   // Handle file selection for import
   const handleImportFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {

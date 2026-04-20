@@ -55,7 +55,7 @@ export function PublishHistoryPanel() {
     } finally {
       setLoading(false);
     }
-  }, [filterConfigId, filterStatus, page]);
+  }, [filterConfigId, filterStatus, page, notifications]);
 
   useEffect(() => { loadData(); }, [loadData]);
 

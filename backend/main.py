@@ -41,6 +41,9 @@ logging.basicConfig(
     level=getattr(logging, initial_log_level),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+# Keep noisy third-party loggers quiet regardless of app log level
+logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 # Sanitize all log arguments to prevent log injection (CWE-117)
 from log_utils import install_safe_logging, install_ring_buffer  # noqa: E402
 install_safe_logging()
@@ -79,6 +82,7 @@ tags_metadata = [
     {"name": "Admin", "description": "User management (admin only)"},
     {"name": "FFMPEG Profiles", "description": "Save and load FFMPEG Builder profiles"},
     {"name": "Backup", "description": "Backup and restore ECM configuration"},
+    {"name": "Lookup Tables", "description": "Named key→value tables used by the dummy EPG template engine"},
 ]
 
 app = FastAPI(
@@ -104,7 +108,7 @@ handle authentication automatically when accessed through the web UI.
 ## Rate Limiting
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
-    version="0.15.1",
+    version="0.16.0-0003",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -181,6 +185,8 @@ async def security_headers_middleware(request: Request, call_next):
 AUTH_EXEMPT_PATHS = {
     # Health check (Docker, load balancers)
     "/api/health",
+    # Rich readiness check (load balancers, orchestrators)
+    "/api/health/ready",
     # Auth flow (must be public by definition)
     "/api/auth/login",
     "/api/auth/refresh",
@@ -219,6 +225,10 @@ async def auth_middleware(request: Request, call_next):
             # Check if path is exempt
             if path not in AUTH_EXEMPT_PATHS:
                 token = get_token_from_request(request)
+                # Allow MCP API key as alternative to JWT
+                settings = get_settings()
+                if settings.mcp_api_key and token == settings.mcp_api_key:
+                    return await call_next(request)
                 if not token or not decode_token_safe(token):
                     return JSONResponse(
                         status_code=401,
@@ -269,7 +279,7 @@ async def request_timing_middleware(request: Request, call_next):
     method = request.method
 
     # Skip static files and health checks for timing logs
-    skip_timing = path.startswith("/assets") or path == "/api/health"
+    skip_timing = path.startswith("/assets") or path == "/api/health" or path == "/api/health/ready"
 
     # Process the request
     response = await call_next(request)
@@ -398,6 +408,7 @@ async def sanitized_http_exception_handler(request: Request, exc: HTTPException)
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.detail},
+        headers=exc.headers,
     )
 
 
@@ -562,12 +573,15 @@ async def startup_event():
                 probe_retry_count=settings.probe_retry_count,
                 probe_retry_delay=settings.probe_retry_delay,
                 deprioritize_failed_streams=settings.deprioritize_failed_streams,
+                deprioritize_black_screen=settings.deprioritize_black_screen,
+                deprioritize_low_fps=settings.deprioritize_low_fps,
                 black_screen_detection_enabled=settings.black_screen_detection_enabled,
                 black_screen_sample_duration=settings.black_screen_sample_duration,
                 stream_sort_priority=settings.stream_sort_priority,
                 stream_sort_enabled=settings.stream_sort_enabled,
                 stream_fetch_page_limit=settings.stream_fetch_page_limit,
                 m3u_account_priorities=settings.m3u_account_priorities,
+                failed_stream_sort_order=settings.failed_stream_sort_order,
             )
             prober.set_notification_callbacks(
                 create_callback=create_notification_internal,

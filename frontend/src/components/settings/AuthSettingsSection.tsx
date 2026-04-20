@@ -57,7 +57,7 @@ export function AuthSettingsSection({ isAdmin }: Props) {
     };
 
     loadSettings();
-  }, [isAdmin]);
+  }, [isAdmin, notifications]);
 
   const handleSave = useCallback(async () => {
     setSaving(true);

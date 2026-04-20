@@ -1058,6 +1058,8 @@ class UniqueClientConnection(Base):
     ip_address = Column(String(45), nullable=False)  # IPv4 or IPv6
     channel_id = Column(String(64), nullable=False)  # Dispatcharr channel UUID
     channel_name = Column(String(255), nullable=False)  # Cached for display
+    user_id = Column(Integer, nullable=True)  # Dispatcharr user ID (null if not available)
+    username = Column(String(255), nullable=True)  # Cached username from Dispatcharr
     date = Column(Date, nullable=False)  # Date of connection (for daily aggregation)
     connected_at = Column(DateTime, nullable=False)  # When connection started
     disconnected_at = Column(DateTime, nullable=True)  # When connection ended (null if still active)
@@ -1082,6 +1084,8 @@ class UniqueClientConnection(Base):
             "ip_address": self.ip_address,
             "channel_id": self.channel_id,
             "channel_name": self.channel_name,
+            "user_id": self.user_id,
+            "username": self.username,
             "date": self.date.isoformat() if self.date else None,
             "connected_at": self.connected_at.isoformat() + "Z" if self.connected_at else None,
             "disconnected_at": self.disconnected_at.isoformat() + "Z" if self.disconnected_at else None,
@@ -1430,8 +1434,8 @@ class AutoCreationRule(Base):
     stream_sort_field = Column(String(50), nullable=True)  # None = no stream reorder
     stream_sort_order = Column(String(4), default="asc")   # "asc" or "desc"
 
-    # Normalization - apply normalization engine rules to channel names
-    normalize_names = Column(Boolean, default=False, nullable=False)
+    # Normalization - JSON array of NormalizationRuleGroup IDs to apply, null/empty = disabled
+    normalization_group_ids = Column(Text, nullable=True)
 
     # Strike filtering - skip streams that have been struck out (consecutive_failures >= strike_threshold)
     skip_struck_streams = Column(Boolean, default=False, nullable=False)
@@ -1512,6 +1516,19 @@ class AutoCreationRule(Base):
         """Set managed_channel_ids from list of ints."""
         self.managed_channel_ids = json.dumps(sorted(set(ids))) if ids else None
 
+    def get_normalization_group_ids(self) -> list[int]:
+        """Parse normalization_group_ids JSON into list of ints."""
+        if not self.normalization_group_ids:
+            return []
+        try:
+            return json.loads(self.normalization_group_ids)
+        except (ValueError, TypeError):
+            return []
+
+    def set_normalization_group_ids(self, ids: list[int]) -> None:
+        """Set normalization_group_ids from list of ints."""
+        self.normalization_group_ids = json.dumps(sorted(set(ids))) if ids else None
+
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
         return {
@@ -1532,7 +1549,7 @@ class AutoCreationRule(Base):
             "sort_regex": self.sort_regex,
             "stream_sort_field": self.stream_sort_field,
             "stream_sort_order": self.stream_sort_order or "asc",
-            "normalize_names": self.normalize_names or False,
+            "normalization_group_ids": self.get_normalization_group_ids(),
             "skip_struck_streams": self.skip_struck_streams or False,
             "orphan_action": self.orphan_action or "delete",
             "last_run_at": self.last_run_at.isoformat() + "Z" if self.last_run_at else None,
@@ -2040,3 +2057,43 @@ class DummyEPGChannelAssignment(Base):
 
     def __repr__(self):
         return f"<DummyEPGChannelAssignment(id={self.id}, profile_id={self.profile_id}, channel_id={self.channel_id})>"
+
+
+class LookupTable(Base):
+    """
+    Named key→value lookup tables used by the dummy EPG template engine.
+
+    Referenced via the `|lookup:<name>` pipe transform. `entries` is a JSON
+    object (str → str); key miss falls back to the input value at render time.
+    """
+    __tablename__ = "lookup_tables"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False, unique=True)
+    description = Column(Text, nullable=True)
+    entries = Column(Text, nullable=False, default="{}")  # JSON-encoded dict[str, str]
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_lookup_table_name", name),
+    )
+
+    def to_dict(self) -> dict:
+        import json as _json
+        try:
+            entries_obj = _json.loads(self.entries) if self.entries else {}
+        except (ValueError, TypeError):
+            entries_obj = {}
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "entries": entries_obj,
+            "entry_count": len(entries_obj),
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<LookupTable(id={self.id}, name={self.name})>"
