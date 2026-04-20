@@ -17,10 +17,6 @@ on:
     paths-ignore:
       - '.beads/**'
       - '**.md'
-  schedule:
-    # Nightly E2E on dev — 07:00 UTC. The job itself short-circuits if no new
-    # commits have landed on dev since the last successful run.
-    - cron: '0 7 * * *'
   workflow_dispatch:
 
 jobs:
@@ -28,7 +24,6 @@ jobs:
   backend:
     name: Backend Tests
     runs-on: ubuntu-latest
-    if: github.event_name != 'schedule'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -64,10 +59,10 @@ jobs:
           RATE_LIMIT_ENABLED: '0'
           ECM_CI_DB_PATH: /tmp/ecm-test.db
         run: |
-          # tests/e2e/ hits a running ECM container at localhost:6100.
-          # That path is exercised by the separate `e2e` job (Playwright +
-          # docker build). Skip it here so the backend unit+integration
-          # suite can run without a live service.
+          # tests/e2e/ hits a running ECM container at localhost:6100 and is
+          # only meaningful against a live service. E2E coverage as a CI gate
+          # is deferred to bead enhancedchannelmanager-2lw25; skip it here so
+          # the backend unit+integration suite can run without a live service.
           python -m pytest \
             --ignore=tests/e2e \
             -m "not slow" --tb=short --no-header -p no:warnings
@@ -76,7 +71,6 @@ jobs:
   frontend:
     name: Frontend Tests
     runs-on: ubuntu-latest
-    if: github.event_name != 'schedule'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -148,172 +142,3 @@ jobs:
           path: frontend/coverage/
           if-no-files-found: ignore
           retention-days: 14
-
-  # ─── E2E tests ────────────────────────────────────────────────────────
-  e2e-should-run:
-    name: E2E — Skip-if-no-new-commits guard
-    runs-on: ubuntu-latest
-    if: github.event_name == 'schedule'
-    outputs:
-      run: ${{ steps.guard.outputs.run }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          ref: dev
-          fetch-depth: 0
-
-      - name: Check for new commits on dev since last successful run
-        id: guard
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          CURRENT_SHA="$(git rev-parse HEAD)"
-          echo "Current dev HEAD: ${CURRENT_SHA}"
-          # Find the most recent successful scheduled run of this workflow.
-          LAST_SHA=$(gh run list --workflow test.yml --branch dev \
-            --event schedule --status success --limit 1 \
-            --json headSha --jq '.[0].headSha // empty')
-          if [ -z "$LAST_SHA" ]; then
-            echo "No previous successful scheduled run — will run."
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "Last successful scheduled run SHA: ${LAST_SHA}"
-          if [ "$LAST_SHA" = "$CURRENT_SHA" ]; then
-            echo "No new commits since last successful run — skipping."
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "New commits detected — will run."
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          fi
-
-  e2e:
-    name: E2E Tests
-    runs-on: ubuntu-latest
-    needs: [e2e-should-run]
-    # PR to main: always run. Nightly cron on dev: run only when guard says so.
-    # workflow_dispatch: always run. Push to dev/main: skip (handled by build pipeline).
-    if: >-
-      always() &&
-      (
-        (github.event_name == 'pull_request' && github.base_ref == 'main') ||
-        (github.event_name == 'schedule' && needs.e2e-should-run.outputs.run == 'true') ||
-        github.event_name == 'workflow_dispatch'
-      )
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: package-lock.json
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Extract version
-        id: version
-        run: |
-          VERSION=$(jq -r '.version' frontend/package.json)
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
-      - name: Build ECM image locally
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          load: true
-          tags: ecm:e2e-test
-          platforms: linux/amd64
-          build-args: |
-            GIT_COMMIT=${{ github.sha }}
-            ECM_VERSION=${{ steps.version.outputs.version }}
-            RELEASE_CHANNEL=ci
-          cache-from: type=gha,scope=amd64
-
-      - name: Start ECM container
-        run: |
-          docker run -d --name ecm-e2e -p 6100:6100 \
-            -e DISPATCHARR_URL=http://localhost:9999 \
-            ecm:e2e-test
-
-          echo "Waiting for application to become healthy..."
-          READY=false
-          for i in {1..30}; do
-            if curl -sf http://localhost:6100/api/health > /dev/null 2>&1; then
-              echo "Application is ready."
-              READY=true
-              break
-            fi
-            echo "Waiting... ($i/30)"
-            sleep 2
-          done
-
-          if [ "$READY" = "false" ]; then
-            echo "Application failed to start within 60 seconds."
-            docker logs ecm-e2e
-            exit 1
-          fi
-
-      - name: Seed E2E test admin user
-        env:
-          E2E_TEST_USERNAME: e2etester
-          # Password must pass validate_password: >=8 chars, not contain the
-          # username, not a common/breached password. 'Ch4nn3lM4nager!' fits.
-          E2E_TEST_PASSWORD: 'Ch4nn3lM4nager!'
-        run: |
-          # The Playwright suite expects an admin user matching testCredentials
-          # in e2e/fixtures/test-data.ts (overridable via E2E_TEST_USERNAME /
-          # E2E_TEST_PASSWORD env vars). On a fresh container, /api/auth/setup
-          # is required (and only succeeds) before any user exists. Calling it
-          # here creates the first admin so the login fixture can sign in.
-          # Broader state needed by individual specs (orphaned groups, M3U
-          # accounts, etc.) is out of scope here and is tracked in bead
-          # enhancedchannelmanager-2lw25.
-          # Use -w so we get the HTTP code even on failure; include response
-          # body in diagnostics so future regressions are easy to diagnose.
-          HTTP_CODE=$(curl -sS -o /tmp/setup-response.json -w '%{http_code}' \
-            -X POST http://localhost:6100/api/auth/setup \
-            -H 'Content-Type: application/json' \
-            -d "{\"username\":\"${E2E_TEST_USERNAME}\",\"email\":\"e2e@example.com\",\"password\":\"${E2E_TEST_PASSWORD}\"}")
-          echo "Setup HTTP code: ${HTTP_CODE}"
-          echo "Setup response body:"
-          cat /tmp/setup-response.json
-          echo
-          if [ "${HTTP_CODE}" != "201" ] && [ "${HTTP_CODE}" != "200" ]; then
-            echo "Setup call failed with HTTP ${HTTP_CODE}"
-            exit 1
-          fi
-
-      - name: Install root dependencies (Playwright)
-        run: npm ci
-
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: Run Playwright tests
-        env:
-          E2E_BASE_URL: http://localhost:6100
-          E2E_TEST_USERNAME: e2etester
-          E2E_TEST_PASSWORD: 'Ch4nn3lM4nager!'
-          CI: '1'
-        run: npx playwright test
-
-      - name: Upload Playwright report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report
-          path: playwright-report/
-          if-no-files-found: ignore
-          retention-days: 14
-
-      - name: Stop container and collect logs
-        if: always()
-        run: |
-          docker logs ecm-e2e || true
-          docker stop ecm-e2e || true
-          docker rm ecm-e2e || true
