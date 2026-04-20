@@ -49,7 +49,7 @@ export const DummyEPGChannelPicker = memo(function DummyEPGChannelPicker({
     } finally {
       setLoading(false);
     }
-  }, [profileId]);
+  }, [profileId, notifications]);
 
   useEffect(() => {
     if (isOpen) {
@@ -90,7 +90,7 @@ export const DummyEPGChannelPicker = memo(function DummyEPGChannelPicker({
     } finally {
       setAdding(false);
     }
-  }, [profileId, loadData, onChanged]);
+  }, [profileId, loadData, onChanged, notifications]);
 
   const handleRemoveChannel = useCallback(async (channelId: number) => {
     try {
@@ -101,7 +101,7 @@ export const DummyEPGChannelPicker = memo(function DummyEPGChannelPicker({
       logger.error('DummyEPGChannelPicker: failed to remove channel', err);
       notifications.error('Failed to remove channel', 'Channel Picker');
     }
-  }, [profileId, onChanged]);
+  }, [profileId, onChanged, notifications]);
 
   const handleBulkFromGroup = useCallback(async (groupId: number) => {
     setAdding(true);
@@ -116,7 +116,7 @@ export const DummyEPGChannelPicker = memo(function DummyEPGChannelPicker({
     } finally {
       setAdding(false);
     }
-  }, [profileId, loadData, onChanged]);
+  }, [profileId, loadData, onChanged, notifications]);
 
   const [selectedAvailable, setSelectedAvailable] = useState<Set<number>>(new Set());
 

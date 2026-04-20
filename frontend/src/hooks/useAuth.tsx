@@ -154,6 +154,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
  * @returns Auth context state and methods
  * @throws Error if used outside AuthProvider
  */
+// eslint-disable-next-line react-refresh/only-export-components -- hook co-located with AuthProvider by convention; moving would cascade across many consumers
 export function useAuth(): AuthContextState {
   const context = useContext(AuthContext);
   if (context === undefined) {
@@ -175,6 +176,7 @@ export function useAuth(): AuthContextState {
  * - Auth is disabled OR
  * - Setup not complete
  */
+// eslint-disable-next-line react-refresh/only-export-components -- hook co-located with AuthProvider by convention
 export function useAuthRequired(): boolean {
   const { authStatus, isLoading } = useAuth();
 

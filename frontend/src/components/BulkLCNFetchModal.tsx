@@ -6,7 +6,7 @@
  */
 
 import { logger } from '../utils/logger';
-import { useState, useEffect, useMemo, useRef, memo } from 'react';
+import { useState, useEffect, useMemo, memo } from 'react';
 import type { Channel, EPGData } from '../types';
 import { getEPGLcnBatch, type LCNLookupItem } from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
@@ -38,13 +38,15 @@ interface ChannelLCNResult {
   alreadyHasLcn: boolean;
 }
 
-export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
-  isOpen,
+// Body runs only while open (outer wrapper unmounts on close) so all per-open
+// state resets naturally and the LCN fetch is a simple on-mount effect rather
+// than a setState-in-effect state-reset pattern driven by `isOpen`.
+function BulkLCNFetchModalInner({
   selectedChannels,
   epgData,
   onClose,
   onAssign,
-}: BulkLCNFetchModalProps) {
+}: Omit<BulkLCNFetchModalProps, 'isOpen'>) {
   const notifications = useNotifications();
   const [phase, setPhase] = useState<Phase>('fetching');
   const [results, setResults] = useState<ChannelLCNResult[]>([]);
@@ -58,34 +60,11 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
   const [notFoundExpanded, setNotFoundExpanded] = useState(true);
   const [alreadyHasExpanded, setAlreadyHasExpanded] = useState(false);
 
-  // Track if we've already fetched for this modal session
-  const hasFetchedRef = useRef(false);
-
-  // Fetch LCNs when modal opens
+  // Fetch LCNs on mount (outer gate guarantees one mount per open).
   useEffect(() => {
-    if (!isOpen) {
-      // Reset state when modal closes
-      setPhase('fetching');
-      setResults([]);
-      setSelectedForAssignment(new Set());
-      setFoundExpanded(true);
-      setNoTvgIdExpanded(true);
-      setNotFoundExpanded(true);
-      setAlreadyHasExpanded(false);
-      hasFetchedRef.current = false;
-      return;
-    }
+    let cancelled = false;
 
-    // Only fetch once per modal open
-    if (hasFetchedRef.current) {
-      return;
-    }
-    hasFetchedRef.current = true;
-
-    // Start fetching
     const fetchLCNs = async () => {
-      setPhase('fetching');
-
       // Build list of channels with TVG-IDs to look up
       const channelResults: ChannelLCNResult[] = [];
       const lookupItems: LCNLookupItem[] = [];
@@ -163,6 +142,8 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
         }
       }
 
+      if (cancelled) return;
+
       // Sort results by channel name
       channelResults.sort((a, b) => naturalCompare(a.channel.name, b.channel.name));
 
@@ -181,7 +162,9 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
     };
 
     fetchLCNs();
-  }, [isOpen, selectedChannels, epgData]);
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: fetch once on mount; outer wrapper remounts on reopen
+  }, []);
 
   // Categorize results
   const { found, notFound, noTvgId, alreadyHas } = useMemo(() => {
@@ -288,8 +271,6 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
     }
     onAssign(assignments);
   };
-
-  if (!isOpen) return null;
 
   return (
     <ModalOverlay onClose={onClose}>
@@ -501,6 +482,20 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
         </div>
       </div>
     </ModalOverlay>
+  );
+}
+
+export const BulkLCNFetchModal = memo(function BulkLCNFetchModal(
+  props: BulkLCNFetchModalProps,
+) {
+  if (!props.isOpen) return null;
+  return (
+    <BulkLCNFetchModalInner
+      selectedChannels={props.selectedChannels}
+      epgData={props.epgData}
+      onClose={props.onClose}
+      onAssign={props.onAssign}
+    />
   );
 });
 

@@ -90,9 +90,15 @@ export const PatternBuilder = memo(function PatternBuilder({
     }
   }, [examples, activeIndex, onBuilderExamplesChange]);
 
-  // Generate patterns whenever annotations change (visual mode)
+  // Generate patterns whenever annotations change (visual mode).
+  // Wrap in useMemo so downstream hook deps see a stable reference while
+  // annotations array identity is preserved (avoids re-running effects and
+  // memos on every parent render).
   const activeExample = examples[activeIndex] || null;
-  const annotations = activeExample?.annotations || [];
+  const annotations = useMemo(
+    () => activeExample?.annotations || [],
+    [activeExample],
+  );
 
   useEffect(() => {
     if (mode !== 'visual' || !activeExample) return;

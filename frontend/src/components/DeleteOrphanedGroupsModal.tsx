@@ -1,4 +1,4 @@
-import { useState, useEffect, memo } from 'react';
+import { useState, memo } from 'react';
 import './ModalBase.css';
 import './DeleteOrphanedGroupsModal.css';
 import { ModalOverlay } from './ModalOverlay';
@@ -16,22 +16,17 @@ interface DeleteOrphanedGroupsModalProps {
   groups: OrphanedGroup[];
 }
 
-export const DeleteOrphanedGroupsModal = memo(function DeleteOrphanedGroupsModal({
-  isOpen,
+// Render nothing when closed so reopening gives a fresh mount (state naturally resets).
+// This avoids needing an effect to seed selection from `groups` on open.
+function DeleteOrphanedGroupsModalInner({
   onClose,
   onConfirm,
   groups,
-}: DeleteOrphanedGroupsModalProps) {
-  const [selectedGroups, setSelectedGroups] = useState<Set<number>>(new Set());
-
-  // Select all groups by default when modal opens
-  useEffect(() => {
-    if (isOpen) {
-      setSelectedGroups(new Set(groups.map(g => g.id)));
-    }
-  }, [isOpen, groups]);
-
-  if (!isOpen) return null;
+}: Omit<DeleteOrphanedGroupsModalProps, 'isOpen'>) {
+  // Default = all selected. Only track user's explicit changes from that default.
+  const [selectedGroups, setSelectedGroups] = useState<Set<number>>(
+    () => new Set(groups.map(g => g.id))
+  );
 
   const handleToggle = (groupId: number) => {
     const newSelection = new Set(selectedGroups);
@@ -128,5 +123,21 @@ export const DeleteOrphanedGroupsModal = memo(function DeleteOrphanedGroupsModal
         </div>
       </div>
     </ModalOverlay>
+  );
+}
+
+export const DeleteOrphanedGroupsModal = memo(function DeleteOrphanedGroupsModal(
+  props: DeleteOrphanedGroupsModalProps,
+) {
+  if (!props.isOpen) return null;
+  // Conditional render + Inner component means each open is a fresh mount, so the
+  // "default = all selected" state is seeded by useState() rather than a setState
+  // effect fighting with user interaction.
+  return (
+    <DeleteOrphanedGroupsModalInner
+      onClose={props.onClose}
+      onConfirm={props.onConfirm}
+      groups={props.groups}
+    />
   );
 });

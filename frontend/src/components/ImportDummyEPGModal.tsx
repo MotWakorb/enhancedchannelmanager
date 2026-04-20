@@ -47,24 +47,33 @@ function mapSourceToProfile(source: EPGSource): Partial<DummyEPGProfile> {
   };
 }
 
-export const ImportDummyEPGModal = memo(function ImportDummyEPGModal({
-  isOpen,
+// Body runs only while open (outer wrapper unmounts on close) so per-open state
+// (selection, sources, loading) is seeded by useState initializers, not effects.
+function ImportDummyEPGModalInner({
   onClose,
   onImport,
-}: ImportDummyEPGModalProps) {
+}: Omit<ImportDummyEPGModalProps, 'isOpen'>) {
   const [sources, setSources] = useState<EPGSource[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
+  // Fetch once on mount. Triggering from prop change is unnecessary since the
+  // outer gate remounts this component on each open.
   useEffect(() => {
-    if (!isOpen) return;
-    setSelectedId(null);
-    setLoading(true);
+    let cancelled = false;
     api.getEPGSources()
-      .then(all => setSources(all.filter(s => s.source_type === 'dummy')))
-      .catch(() => setSources([]))
-      .finally(() => setLoading(false));
-  }, [isOpen]);
+      .then(all => {
+        if (cancelled) return;
+        setSources(all.filter(s => s.source_type === 'dummy'));
+      })
+      .catch(() => {
+        if (!cancelled) setSources([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   const handleImport = () => {
     const source = sources.find(s => s.id === selectedId);
@@ -72,8 +81,6 @@ export const ImportDummyEPGModal = memo(function ImportDummyEPGModal({
     onImport(mapSourceToProfile(source));
     onClose();
   };
-
-  if (!isOpen) return null;
 
   return (
     <ModalOverlay onClose={onClose}>
@@ -149,5 +156,17 @@ export const ImportDummyEPGModal = memo(function ImportDummyEPGModal({
         </div>
       </div>
     </ModalOverlay>
+  );
+}
+
+export const ImportDummyEPGModal = memo(function ImportDummyEPGModal(
+  props: ImportDummyEPGModalProps,
+) {
+  if (!props.isOpen) return null;
+  return (
+    <ImportDummyEPGModalInner
+      onClose={props.onClose}
+      onImport={props.onImport}
+    />
   );
 });

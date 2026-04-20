@@ -59,7 +59,7 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
     } finally {
       setLoading(false);
     }
-  }, [account.id]);
+  }, [account.id, notifications]);
 
   // Load filters when modal opens
   useEffect(() => {
