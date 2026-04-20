@@ -13,6 +13,7 @@ import {
   DragStartEvent,
   useDroppable,
 } from '@dnd-kit/core';
+import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core';
 import {
   arrayMove,
   SortableContext,
@@ -755,7 +756,11 @@ interface DroppableGroupHeaderProps {
   onSelectAll?: () => void;
   onStreamDropOnGroup?: (groupId: number | 'ungrouped', streamIds: number[]) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
-  dragHandleProps?: any;
+  // Drag handle props: `{ ...attributes, ...listeners }` from @dnd-kit/sortable's
+  // useSortable(). `attributes` is ARIA/a11y metadata (strings/booleans) and `listeners`
+  // is a map of DOM event handlers. dnd-kit's SyntheticListenerMap (Record<string, Function>)
+  // doesn't compose cleanly with DraggableAttributes, so we widen to the spread shape.
+  dragHandleProps?: DraggableAttributes | (DraggableAttributes & NonNullable<DraggableSyntheticListeners>);
   onProbeGroup?: () => void;
   isProbing?: boolean;
   onSortStreamsByQuality?: () => void;
@@ -3130,7 +3135,7 @@ export function ChannelsPane({
   const stripCountryPrefix = useCallback((channelName: string): string => {
     // Match country code (2-3 uppercase letters) followed by separator and the rest
     // Supports: "US | Name", "UK: Name", "CA - Name", "USA | Name", etc.
-    const match = channelName.match(/^[A-Z]{2,3}\s*[|:\-]\s*(.+)$/);
+    const match = channelName.match(/^[A-Z]{2,3}\s*[|:-]\s*(.+)$/);
     if (match) {
       return match[1].trim();
     }
@@ -4643,12 +4648,13 @@ export function ChannelsPane({
           handleCrossGroupMoveConfirm(false, crossGroupMoveData.suggestedChannelNumber, renumberSourceGroup);
         }
         break;
-      case 'custom':
+      case 'custom': {
         const customNum = parseInt(customStartingNumber, 10);
         if (!isNaN(customNum) && customNum >= 1) {
           handleCrossGroupMoveConfirm(false, customNum, renumberSourceGroup);
         }
         break;
+      }
     }
   };
 
@@ -4779,7 +4785,7 @@ export function ChannelsPane({
       const newNumber = startingNumber + index;
       if (channel.channel_number !== newNumber) {
         // Apply auto-rename if enabled in dialog
-        let updates: Partial<Channel> = { channel_number: newNumber };
+        const updates: Partial<Channel> = { channel_number: newNumber };
         if (sortRenumberUpdateNames && channel.channel_number !== null) {
           const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
           if (newName && newName !== channel.name) {
@@ -5004,7 +5010,7 @@ export function ChannelsPane({
       sortedConflicts.forEach((channel, index) => {
         // New number = endNum + 1 + (position from the end of conflicts)
         const newNumber = endNum + 1 + (sortedConflicts.length - 1 - index);
-        let updates: Partial<Channel> = { channel_number: newNumber };
+        const updates: Partial<Channel> = { channel_number: newNumber };
 
         // Apply auto-rename if enabled in the dialog
         if (massRenumberUpdateNames && channel.channel_number !== null) {
@@ -5025,7 +5031,7 @@ export function ChannelsPane({
     massRenumberChannels.forEach((channel, index) => {
       const newNumber = startNum + index;
       if (channel.channel_number !== newNumber) {
-        let updates: Partial<Channel> = { channel_number: newNumber };
+        const updates: Partial<Channel> = { channel_number: newNumber };
 
         // Apply auto-rename if enabled in the dialog
         if (massRenumberUpdateNames && channel.channel_number !== null) {

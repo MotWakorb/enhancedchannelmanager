@@ -4,6 +4,7 @@ import * as api from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
 import { CustomSelect } from './CustomSelect';
 import { useNotifications } from '../contexts/NotificationContext';
+import { logger } from '../utils/logger';
 import './ModalBase.css';
 import './DummyEPGChannelPicker.css';
 
@@ -43,6 +44,7 @@ export const DummyEPGChannelPicker = memo(function DummyEPGChannelPicker({
       setGroups(groupData);
       setAssignments(assignmentData);
     } catch (err) {
+      logger.error('DummyEPGChannelPicker: failed to load channel data', err);
       notifications.error('Failed to load channel data', 'Channel Picker');
     } finally {
       setLoading(false);
@@ -83,6 +85,7 @@ export const DummyEPGChannelPicker = memo(function DummyEPGChannelPicker({
       await loadData();
       onChanged();
     } catch (err) {
+      logger.error('DummyEPGChannelPicker: failed to assign channels', err);
       notifications.error('Failed to assign channels', 'Channel Picker');
     } finally {
       setAdding(false);
@@ -95,6 +98,7 @@ export const DummyEPGChannelPicker = memo(function DummyEPGChannelPicker({
       setAssignments(prev => prev.filter(a => a.channel_id !== channelId));
       onChanged();
     } catch (err) {
+      logger.error('DummyEPGChannelPicker: failed to remove channel', err);
       notifications.error('Failed to remove channel', 'Channel Picker');
     }
   }, [profileId, onChanged]);
@@ -107,6 +111,7 @@ export const DummyEPGChannelPicker = memo(function DummyEPGChannelPicker({
       await loadData();
       onChanged();
     } catch (err) {
+      logger.error('DummyEPGChannelPicker: failed to add channels from group', err);
       notifications.error('Failed to add channels from group', 'Channel Picker');
     } finally {
       setAdding(false);

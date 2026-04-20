@@ -7,6 +7,7 @@ import { ImportDummyEPGModal } from './ImportDummyEPGModal';
 import { ModalOverlay } from './ModalOverlay';
 import { useNotifications } from '../contexts/NotificationContext';
 import { useModal } from '../hooks/useModal';
+import { logger } from '../utils/logger';
 import './DummyEPGManagerSection.css';
 import './ModalBase.css';
 
@@ -69,6 +70,7 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
       const data = await api.getDummyEPGProfiles();
       setProfiles(data);
     } catch (err) {
+      logger.error('DummyEPGManagerSection: failed to load profiles', err);
       notifications.error('Failed to load Dummy EPG profiles', 'Dummy EPG');
     } finally {
       setLoading(false);
@@ -90,6 +92,7 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
       setEditingProfile(full);
       setProfileModalOpen(true);
     } catch (err) {
+      logger.error('DummyEPGManagerSection: failed to load profile details', err);
       notifications.error('Failed to load profile details', 'Dummy EPG');
     }
   };
@@ -109,6 +112,7 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
       setProfileToDelete(null);
       onSourcesChanged?.();
     } catch (err) {
+      logger.error('DummyEPGManagerSection: failed to delete profile', err);
       notifications.error('Failed to delete profile', 'Dummy EPG');
     } finally {
       setDeleting(false);
@@ -127,6 +131,7 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
         p.id === profile.id ? { ...p, enabled: !p.enabled } : p
       ));
     } catch (err) {
+      logger.error('DummyEPGManagerSection: failed to update profile', err);
       notifications.error('Failed to update profile', 'Dummy EPG');
     }
   };
@@ -138,6 +143,7 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
       notifications.success('XMLTV regenerated successfully', 'Dummy EPG');
       await loadProfiles();
     } catch (err) {
+      logger.error('DummyEPGManagerSection: failed to regenerate XMLTV', err);
       notifications.error('Failed to regenerate XMLTV', 'Dummy EPG');
     } finally {
       setRegenerating(false);
@@ -212,6 +218,7 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
       notifications.success(`"${profile.name}" added to Dispatcharr`, 'Dummy EPG');
       onSourcesChanged?.();
     } catch (err) {
+      logger.error('DummyEPGManagerSection: failed to add profile to Dispatcharr', err);
       notifications.error(`Failed to add "${profile.name}" to Dispatcharr`, 'Dummy EPG');
     } finally {
       setAddingToDispatcharr(null);

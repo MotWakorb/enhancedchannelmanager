@@ -481,6 +481,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
         );
         await loadSources();
       } catch (err) {
+        logger.error('EPGManagerTab: failed to update priorities', err);
         notifications.error('Failed to update priorities', 'EPG Manager');
         await loadSources();
       }
@@ -499,6 +500,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       setEditingSource(fullSource);
       setModalOpen(true);
     } catch (err) {
+      logger.error('EPGManagerTab: failed to load EPG source details', err);
       notifications.error('Failed to load EPG source details', 'EPG Manager');
     }
   };
@@ -513,6 +515,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       await loadSources();
       onSourcesChange?.();
     } catch (err) {
+      logger.error('EPGManagerTab: failed to delete EPG source', err);
       notifications.error('Failed to delete EPG source', 'EPG Manager');
     }
   };
@@ -537,6 +540,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       // Stop polling after 5 minutes max
       setTimeout(() => clearInterval(pollInterval), 300000);
     } catch (err) {
+      logger.error('EPGManagerTab: failed to refresh EPG source', err);
       notifications.error('Failed to refresh EPG source', 'EPG Manager');
     }
   };
@@ -546,6 +550,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       await api.updateEPGSource(source.id, { is_active: !source.is_active });
       await loadSources();
     } catch (err) {
+      logger.error('EPGManagerTab: failed to update EPG source active state', err);
       notifications.error('Failed to update EPG source', 'EPG Manager');
     }
   };
@@ -573,6 +578,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       setEditingDummySource(fullSource);
       setDummyModalOpen(true);
     } catch (err) {
+      logger.error('EPGManagerTab: failed to load dummy EPG source details', err);
       notifications.error('Failed to load EPG source details', 'EPG Manager');
     }
   };
@@ -587,6 +593,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       await loadSources();
       onSourcesChange?.();
     } catch (err) {
+      logger.error('EPGManagerTab: failed to delete dummy EPG source', err);
       notifications.error('Failed to delete dummy EPG source', 'EPG Manager');
     }
   };
@@ -596,6 +603,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       await api.updateEPGSource(source.id, { is_active: !source.is_active });
       await loadSources();
     } catch (err) {
+      logger.error('EPGManagerTab: failed to toggle dummy EPG source active state', err);
       notifications.error('Failed to update dummy EPG source', 'EPG Manager');
     }
   };
