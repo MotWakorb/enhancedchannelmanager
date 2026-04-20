@@ -1837,9 +1837,24 @@ class StreamProber:
                     streams_data = await self.client.get_streams_by_ids(stream_ids)
                     # Log raw stream data for debugging
                     for s in streams_data:
-                        logger.debug("[STREAM-PROBE-SORT] Channel %s: Stream %s ('%s') has raw m3u_account=%r", channel_id, s['id'], s.get('name', 'Unknown'), s.get('m3u_account'))
+                        stream_id = s.get("id", s.get("stream_id"))
+                        logger.debug(
+                            "[STREAM-PROBE-SORT] Channel %s: Stream %s ('%s') has raw m3u_account=%r",
+                            channel_id,
+                            stream_id,
+                            s.get("name", "Unknown"),
+                            s.get("m3u_account"),
+                        )
                     # Extract M3U account IDs (handles both direct ID and nested object formats)
-                    stream_m3u_map = {s["id"]: self._extract_m3u_account_id(s.get("m3u_account")) for s in streams_data}
+                    # Dispatcharr may return either "id" or "stream_id" depending on version/endpoint.
+                    stream_m3u_map = {}
+                    for s in streams_data:
+                        stream_id = s.get("id", s.get("stream_id"))
+                        if stream_id is None:
+                            continue
+                        stream_m3u_map[int(stream_id)] = self._extract_m3u_account_id(
+                            s.get("m3u_account")
+                        )
                     logger.debug("[STREAM-PROBE-SORT] Channel %s: Built M3U map for %s streams: %s", channel_id, len(stream_m3u_map), stream_m3u_map)
 
                     # Fetch stream stats for this channel's streams (uses get_session and StreamStats imported at top of file)

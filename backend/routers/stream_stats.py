@@ -272,7 +272,12 @@ async def compute_sort(request: ComputeSortRequest):
             elapsed_ms = (time.time() - start_fetch) * 1000
             logger.debug("[STREAM-STATS-SORT] Fetched %s streams for M3U priority in %.1fms", len(streams_data), elapsed_ms)
             for s in streams_data:
-                stream_m3u_map[s["id"]] = extract_m3u_account_id(s.get("m3u_account"))
+                # Dispatcharr has historically returned either "id" or "stream_id" as the identifier.
+                # Be tolerant so M3U priority sorting doesn't silently no-op.
+                stream_id = s.get("id", s.get("stream_id"))
+                if stream_id is None:
+                    continue
+                stream_m3u_map[int(stream_id)] = extract_m3u_account_id(s.get("m3u_account"))
         except Exception as e:
             logger.warning("[STREAM-STATS-SORT] Failed to fetch M3U data: %s", e)
 
