@@ -39,6 +39,7 @@ bd sync                       # Sync beads data only (NOT for code commits)
 | Architecture Diagram | `docs/architecture.md` |
 | Auth Middleware | `docs/auth_middleware.md` |
 | Backend Architecture | `docs/backend_architecture.md` |
+| Database Migrations | `docs/database_migrations.md` |
 | Pytest Conventions | `docs/pytest_conventions.md` |
 | Project Architecture | `docs/project_architecture.md` |
 | CSS Guidelines | `docs/css_guidelines.md` |

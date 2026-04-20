@@ -336,6 +336,8 @@ AUTH_EXEMPT_PATHS = {
     "/api/health",
     # Rich readiness check (load balancers, orchestrators)
     "/api/health/ready",
+    # Schema version — public so DBAS restore/sync can gate on revision
+    "/api/health/schema",
     # Auth flow (must be public by definition)
     "/api/auth/login",
     "/api/auth/refresh",
