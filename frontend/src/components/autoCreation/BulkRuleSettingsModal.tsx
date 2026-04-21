@@ -2,7 +2,7 @@
  * Bulk-edit shared rule settings for multiple auto-creation rules.
  * Only sections marked "Apply" send fields to the server.
  */
-import { useState, useEffect, useId, useMemo, useRef } from 'react';
+import { useState, useEffect, useId, useRef } from 'react';
 import type { AutoCreationRule, BulkUpdateRulesPatch } from '../../types/autoCreation';
 import { CustomSelect } from '../CustomSelect';
 import { getNormalizationRules } from '../../services/api';
@@ -58,9 +58,6 @@ export function BulkRuleSettingsModal({
   const rulesRef = useRef(rules);
   rulesRef.current = rules;
 
-  /** Stable key so we only re-seed when the modal opens or the selection set changes (not every parent render). */
-  const selectionKey = useMemo(() => selectedRuleIds.join(','), [selectedRuleIds]);
-
   useEffect(() => {
     getNormalizationRules().then(({ groups }) => {
       setAvailableNormGroups(groups.map(g => ({ id: g.id, name: g.name, enabled: g.enabled })));
@@ -92,7 +89,7 @@ export function BulkRuleSettingsModal({
     setApplyStreamSort(false);
     setApplyOrphan(false);
     setApplyMergePrune(false);
-  }, [isOpen, selectionKey]);
+  }, [isOpen, selectedRuleIds]);
 
   const handleSubmit = async () => {
     const patch: BulkUpdateRulesPatch = {};
