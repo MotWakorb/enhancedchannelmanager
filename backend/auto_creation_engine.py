@@ -2171,6 +2171,64 @@ def _smart_sort_streams(
         channel_name, active_criteria, deprioritize_failed, fail_order
     )
 
+    def compute_criteria_values(stats: dict | None, sid: int) -> list:
+        """Compute sort-key values for active_criteria in priority order.
+
+        Used for both successful streams (primary ordering) and deprioritized
+        streams (within-bucket tiebreaker — bd-bqpq0, mirrors bd-sw883 in
+        stream_prober.py). For a deprioritized stream where ``stats`` is None
+        (no probe row at all), only m3u_priority can be computed; all other
+        criteria are 0.
+        """
+        values = []
+        for criterion in active_criteria:
+            if criterion == "resolution":
+                resolution_value = 0
+                if stats and stats.get("resolution"):
+                    try:
+                        parts = stats["resolution"].split("x")
+                        if len(parts) == 2:
+                            resolution_value = int(parts[1])
+                    except (ValueError, IndexError) as e:
+                        logger.debug("[AUTO-CREATE-ENGINE] Suppressed resolution parse error: %s", e)
+                values.append(-resolution_value)
+
+            elif criterion == "bitrate":
+                bitrate_value = 0
+                if stats:
+                    bitrate_value = stats.get("video_bitrate") or stats.get("bitrate") or 0
+                values.append(-bitrate_value)
+
+            elif criterion == "framerate":
+                framerate_value = 0
+                fps = stats.get("fps") if stats else None
+                if fps:
+                    try:
+                        framerate_value = float(fps)
+                    except (ValueError, TypeError) as e:
+                        logger.debug("[AUTO-CREATE-ENGINE] Suppressed fps parse error: %s", e)
+                values.append(-framerate_value)
+
+            elif criterion == "m3u_priority":
+                # m3u_priority does NOT require a successful probe — it comes
+                # from the m3u account map, so it's always meaningful.
+                m3u_priority_value = 0
+                m3u_account_id = stream_m3u_map.get(sid)
+                if m3u_account_id is not None:
+                    m3u_priority_value = m3u_priorities.get(str(m3u_account_id), 0)
+                values.append(-m3u_priority_value)
+
+            elif criterion == "audio_channels":
+                audio_ch = (stats.get("audio_channels") if stats else 0) or 0
+                values.append(-audio_ch)
+
+            elif criterion == "video_codec":
+                from stream_prober import get_codec_rank
+                codec_value = get_codec_rank(stats.get("video_codec")) if stats else 0
+                values.append(-codec_value)
+
+        return values
+
     def get_sort_value(sid: int) -> tuple:
         stats = stats_cache.get(sid)
 
@@ -2178,65 +2236,26 @@ def _smart_sort_streams(
         if deprioritize_failed:
             if not stats or stats.get("probe_status") in ("failed", "timeout", "pending"):
                 rank = failed_rank.get('failed', 0)
-                return (1, rank) + tuple(0 for _ in active_criteria)
+                # bd-bqpq0: apply primary criteria within the failed bucket too.
+                return (1, rank) + tuple(compute_criteria_values(stats, sid))
 
         # Deprioritize black screen streams (probe succeeded but content is black)
         if deprioritize_failed and stats and stats.get("is_black_screen"):
             rank = failed_rank.get('black_screen', 1)
-            return (1, rank) + tuple(0 for _ in active_criteria)
+            # bd-bqpq0: apply primary criteria within the black_screen bucket too.
+            return (1, rank) + tuple(compute_criteria_values(stats, sid))
 
         # Deprioritize low FPS streams (probe succeeded but FPS below threshold)
         if deprioritize_failed and stats and stats.get("is_low_fps"):
             rank = failed_rank.get('low_fps', 2)
-            return (1, rank) + tuple(0 for _ in active_criteria)
+            # bd-bqpq0: apply primary criteria within the low_fps bucket too.
+            return (1, rank) + tuple(compute_criteria_values(stats, sid))
 
         if not stats or stats.get("probe_status") != "success":
             return (0, 0) + tuple(0 for _ in active_criteria)
 
         sort_values = [0, 0]  # 0 = successful stream, 0 = sub-rank (unused)
-
-        for criterion in active_criteria:
-            if criterion == "resolution":
-                resolution_value = 0
-                if stats.get("resolution"):
-                    try:
-                        parts = stats["resolution"].split("x")
-                        if len(parts) == 2:
-                            resolution_value = int(parts[1])
-                    except (ValueError, IndexError) as e:
-                        logger.debug("[AUTO-CREATE-ENGINE] Suppressed resolution parse error: %s", e)
-                sort_values.append(-resolution_value)
-
-            elif criterion == "bitrate":
-                bitrate_value = stats.get("video_bitrate") or stats.get("bitrate") or 0
-                sort_values.append(-bitrate_value)
-
-            elif criterion == "framerate":
-                framerate_value = 0
-                fps = stats.get("fps")
-                if fps:
-                    try:
-                        framerate_value = float(fps)
-                    except (ValueError, TypeError) as e:
-                        logger.debug("[AUTO-CREATE-ENGINE] Suppressed fps parse error: %s", e)
-                sort_values.append(-framerate_value)
-
-            elif criterion == "m3u_priority":
-                m3u_priority_value = 0
-                m3u_account_id = stream_m3u_map.get(sid)
-                if m3u_account_id is not None:
-                    m3u_priority_value = m3u_priorities.get(str(m3u_account_id), 0)
-                sort_values.append(-m3u_priority_value)
-
-            elif criterion == "audio_channels":
-                audio_ch = stats.get("audio_channels") or 0
-                sort_values.append(-audio_ch)
-
-            elif criterion == "video_codec":
-                from stream_prober import get_codec_rank
-                codec_value = get_codec_rank(stats.get("video_codec"))
-                sort_values.append(-codec_value)
-
+        sort_values.extend(compute_criteria_values(stats, sid))
         return tuple(sort_values)
 
     # Log each stream's sort values

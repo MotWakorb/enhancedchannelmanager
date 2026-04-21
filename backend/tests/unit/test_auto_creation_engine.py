@@ -13,6 +13,7 @@ from auto_creation_engine import (
     set_auto_creation_engine,
     init_auto_creation_engine,
     _sort_key,
+    _smart_sort_streams,
     _sort_streams_by_m3u_account_priority,
     _reorder_streams_for_rule,
 )
@@ -937,3 +938,197 @@ class TestSortKey:
         """channel_number sort returns infinity when stream_chno is None."""
         stream = StreamContext(stream_id=1, stream_name="ESPN", stream_chno=None)
         assert _sort_key(stream, "channel_number") == float('inf')
+
+
+def _mk_smart_sort_settings(
+    stream_sort_priority=None,
+    stream_sort_enabled=None,
+    m3u_account_priorities=None,
+    deprioritize_failed_streams=True,
+    failed_stream_sort_order=None,
+):
+    """Build a MagicMock-backed settings object for _smart_sort_streams.
+
+    Mirrors the DispatcharrSettings attribute surface that
+    ``auto_creation_engine._smart_sort_streams`` reads via ``getattr``.
+    """
+    settings = MagicMock()
+    settings.stream_sort_priority = stream_sort_priority or [
+        "resolution", "framerate", "m3u_priority", "bitrate", "audio_channels", "video_codec",
+    ]
+    settings.stream_sort_enabled = stream_sort_enabled or {
+        "resolution": True, "framerate": True, "m3u_priority": True,
+        "bitrate": True, "audio_channels": True, "video_codec": True,
+    }
+    settings.m3u_account_priorities = m3u_account_priorities or {}
+    settings.deprioritize_failed_streams = deprioritize_failed_streams
+    settings.failed_stream_sort_order = failed_stream_sort_order or [
+        "black_screen", "low_fps", "failed",
+    ]
+    return settings
+
+
+def _bs_stats_dict(stream_id, resolution, fps, stream_name=None):
+    """Build a stats-dict for a black-screen success-probed stream (rank=0 under
+    failed_stream_sort_order=['black_screen', 'low_fps', 'failed'])."""
+    return {
+        "stream_id": stream_id,
+        "stream_name": stream_name or f"Stream {stream_id}",
+        "resolution": resolution,
+        "fps": fps,
+        "video_codec": "h264",
+        "audio_codec": "aac",
+        "audio_channels": 2,
+        "bitrate": 5_000_000,
+        "video_bitrate": 5_000_000,
+        "probe_status": "success",
+        "is_black_screen": True,
+        "is_low_fps": False,
+    }
+
+
+def _failed_stats_dict(stream_id, resolution, fps, stream_name=None):
+    """Build a stats-dict for a status=failed stream (rank=2 under
+    failed_stream_sort_order=['black_screen', 'low_fps', 'failed'])."""
+    return {
+        "stream_id": stream_id,
+        "stream_name": stream_name or f"Stream {stream_id}",
+        "resolution": resolution,
+        "fps": fps,
+        "video_codec": "h264",
+        "audio_codec": "aac",
+        "audio_channels": 2,
+        "bitrate": 5_000_000,
+        "video_bitrate": 5_000_000,
+        "probe_status": "failed",
+        "is_black_screen": False,
+        "is_low_fps": False,
+    }
+
+
+class TestAutoCreateSmartSortWithinBucketPrimaryCriteria:
+    """Regression tests for bd-bqpq0 (same pattern as bd-sw883 / GitHub #73)
+    applied to ``auto_creation_engine._smart_sort_streams``.
+
+    Primary sort criteria (resolution, framerate, ...) must be applied WITHIN
+    each failed-rank bucket — not just at the bucket-boundary level. Previously
+    the composite sort key for deprioritized streams was
+    ``(1, rank) + (0,)*len(active_criteria)`` so every stream inside a bucket
+    collided on the key and Python's stable sort kept insertion order.
+    """
+
+    def test_black_screen_bucket_sorted_by_resolution_desc(self):
+        """Within the black_screen bucket, higher resolution sorts first."""
+        settings = _mk_smart_sort_settings()
+        stats_cache = {
+            1: _bs_stats_dict(1, resolution="1024x576", fps="25"),
+            2: _bs_stats_dict(2, resolution="1920x1080", fps="25"),
+            3: _bs_stats_dict(3, resolution="1024x576", fps="25"),
+        }
+        result = _smart_sort_streams(
+            [1, 2, 3],
+            stats_cache,
+            stream_m3u_map={},
+            channel_name="bqpq0-bs-bucket",
+            settings=settings,
+        )
+        assert result[0] == 2, (
+            f"Expected 1920x1080 stream (id=2) at #1 in black_screen bucket, "
+            f"got ordering {result}"
+        )
+
+    def test_failed_bucket_sorted_by_resolution_then_framerate(self):
+        """Within the status=failed bucket, resolution desc then framerate desc apply.
+
+        Reporter's exact scenario from issue #73: 1280x720@25 was landing ahead
+        of 1920x1080@50 inside the failed bucket because the within-bucket
+        tiebreaker was a tuple of zeros across all primary criteria.
+        """
+        settings = _mk_smart_sort_settings()
+        stats_cache = {
+            10: _failed_stats_dict(10, resolution="1280x720", fps="25"),
+            20: _failed_stats_dict(20, resolution="1920x1080", fps="50"),
+            30: _failed_stats_dict(30, resolution="1280x720", fps="25"),
+            40: _failed_stats_dict(40, resolution="1920x1080", fps="50"),
+        }
+        result = _smart_sort_streams(
+            [10, 20, 30, 40],
+            stats_cache,
+            stream_m3u_map={},
+            channel_name="bqpq0-failed-bucket",
+            settings=settings,
+        )
+        # Expected: 1920x1080@50 streams (20, 40) lead the bucket, then the
+        # 1280x720@25 streams (10, 30). Python's stable sort preserves
+        # insertion order within each equal-key group.
+        assert result[:2] == [20, 40], (
+            f"Expected 1920x1080@50 streams (20, 40) to lead the failed bucket, "
+            f"got {result}"
+        )
+        assert result[2:] == [10, 30], (
+            f"Expected 1280x720@25 streams (10, 30) at the tail of the failed bucket, "
+            f"got {result}"
+        )
+
+    def test_cross_bucket_ordering_preserved(self):
+        """Cross-bucket invariant must not regress: rank=0 (black_screen) still
+        precedes rank=2 (failed) even when primary criteria would invert it.
+        """
+        settings = _mk_smart_sort_settings()
+        stats_cache = {
+            # rank=0 (black_screen) but lower-resolution content
+            1: _bs_stats_dict(1, resolution="1024x576", fps="25"),
+            # rank=2 (failed) but higher-resolution content
+            2: _failed_stats_dict(2, resolution="1920x1080", fps="50"),
+        }
+        result = _smart_sort_streams(
+            [1, 2],
+            stats_cache,
+            stream_m3u_map={},
+            channel_name="bqpq0-cross-bucket",
+            settings=settings,
+        )
+        assert result == [1, 2], (
+            f"Cross-bucket invariant broken: expected rank=0 before rank=2, "
+            f"got {result}"
+        )
+
+    def test_ferteque_channel_scenario(self):
+        """Condensed reproduction of reporter's channel-591424 case.
+
+        3 black_screen streams (rank=0) and 3 failed streams (rank=2). Expected:
+        - Black_screen bucket leads.
+        - Within black_screen, the 1920x1080 stream leads (was landing #2 in prod).
+        - Within failed, the 1920x1080@50 stream leads (was landing #8 in prod).
+        """
+        settings = _mk_smart_sort_settings()
+        stats_cache = {
+            # Black-screen bucket — from reporter's log
+            101: _bs_stats_dict(101, resolution="1024x576", fps="25"),   # D.LaLiga2
+            102: _bs_stats_dict(102, resolution="1920x1080", fps="25"),  # UHD
+            103: _bs_stats_dict(103, resolution="1024x576", fps="25"),   # SD
+            # Failed bucket — condensed
+            201: _failed_stats_dict(201, resolution="1280x720", fps="25"),   # HD
+            202: _failed_stats_dict(202, resolution="1920x1080", fps="50"),  # HD 1080
+            203: _failed_stats_dict(203, resolution="1920x1080", fps="25"),  # S.LaLiga2
+        }
+        result = _smart_sort_streams(
+            [101, 102, 103, 201, 202, 203],
+            stats_cache,
+            stream_m3u_map={},
+            channel_name="bqpq0-ferteque",
+            settings=settings,
+        )
+        bs_bucket = result[:3]
+        failed_bucket = result[3:]
+        # Within black_screen bucket — 1920x1080 (id=102) leads
+        assert bs_bucket[0] == 102, (
+            f"Expected 1920x1080 black_screen stream (102) to lead bucket, "
+            f"got black_screen bucket order {bs_bucket}"
+        )
+        # Within failed bucket — 1920x1080@50 (id=202) leads,
+        # then 1920x1080@25 (id=203), then 1280x720@25 (id=201)
+        assert failed_bucket == [202, 203, 201], (
+            f"Expected failed bucket ordered by resolution desc then framerate desc "
+            f"— [202, 203, 201] — got {failed_bucket}"
+        )
