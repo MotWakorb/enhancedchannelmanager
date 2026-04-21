@@ -19,6 +19,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 - `docs/backend_architecture.md` expanded with an Observability section covering logging schema, metric naming conventions, cardinality rules, `bind_context` usage, and the process for adding new metrics (`bd-ak1db`, PR #80).
 
+### Fixed
+- Auto-creation rule duplicate preserves stream/channel sort, normalization groups, orphan cleanup, and option toggles — duplicates now match the original's configuration instead of silently dropping fields (PR #94, external contributor stevencoutts, bd-x3lto).
+
 ## [0.16.0] — Yanked 2026-04-20
 
 **This release was rolled back** before any external consumer pulled the tag. The GitHub Release, git tag, and GHCR image for `0.16.0` were deleted; `:latest` was retagged back to the `v0.15.2` multi-arch index. Rollback executed per `bd-vgm4l`; see `docs/runbooks/v0.16.0-rollback.md` for the procedure. The PO chose rollback over a forward hotfix because open P0/P1 bugs needed to clear before a release could ship. Work originally tagged `0.16.0` will re-ship in a later version once blockers are cleared.
