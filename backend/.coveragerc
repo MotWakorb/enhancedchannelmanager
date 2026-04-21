@@ -1,0 +1,40 @@
+# Coverage.py config for the backend pytest suite.
+#
+# Paired with backend/pytest.ini addopts (--cov=. --cov-fail-under=56).
+# See docs/testing.md § "Coverage ratchet cadence" for the methodology and
+# the ratchet policy. Baseline: 58% line coverage on dev tip, measured
+# 2026-04-20, during bead enhancedchannelmanager-nmlxi.
+
+[run]
+source = .
+branch = False
+# Exclude code we deliberately do not measure:
+#   - tests/*          — the suite itself
+#   - alembic/*        — DB migration files (mechanical, reviewed separately)
+#   - conftest.py      — pytest fixtures, not production code
+#   - reset_password.py, test_dispatcharr_api.py — one-off operator scripts
+#   - obfuscate.py     — build-time code obfuscation tool, not runtime
+#   - __pycache__/*    — bytecode caches
+omit =
+    tests/*
+    alembic/*
+    conftest.py
+    reset_password.py
+    test_dispatcharr_api.py
+    obfuscate.py
+    __pycache__/*
+    */__pycache__/*
+
+[report]
+# Show missing line numbers in term output so contributors can see gaps.
+show_missing = True
+# Skip files that are 100% covered to keep the report short.
+skip_covered = False
+# Exclude well-known lines from coverage consideration (the default set +
+# our project conventions).
+exclude_lines =
+    pragma: no cover
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    @abstractmethod
