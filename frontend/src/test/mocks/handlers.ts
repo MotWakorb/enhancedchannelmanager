@@ -143,6 +143,15 @@ export function createMockAutoCreationRule(overrides: Partial<MockAutoCreationRu
     target_group_id: overrides.target_group_id ?? null,
     run_on_refresh: overrides.run_on_refresh ?? false,
     stop_on_first_match: overrides.stop_on_first_match ?? false,
+    sort_field: overrides.sort_field ?? null,
+    sort_order: overrides.sort_order ?? 'asc',
+    probe_on_sort: overrides.probe_on_sort ?? false,
+    sort_regex: overrides.sort_regex ?? null,
+    stream_sort_field: overrides.stream_sort_field ?? null,
+    stream_sort_order: overrides.stream_sort_order ?? 'asc',
+    normalization_group_ids: overrides.normalization_group_ids ?? [],
+    skip_struck_streams: overrides.skip_struck_streams ?? false,
+    orphan_action: overrides.orphan_action ?? 'none',
     last_run_at: overrides.last_run_at ?? null,
     match_count: overrides.match_count ?? 0,
     created_at: overrides.created_at ?? new Date().toISOString(),
@@ -293,6 +302,15 @@ interface MockAutoCreationRule {
   target_group_id: number | null
   run_on_refresh: boolean
   stop_on_first_match: boolean
+  sort_field?: string | null
+  sort_order?: 'asc' | 'desc'
+  probe_on_sort?: boolean
+  sort_regex?: string | null
+  stream_sort_field?: string | null
+  stream_sort_order?: 'asc' | 'desc'
+  normalization_group_ids?: number[]
+  skip_struck_streams?: boolean
+  orphan_action?: 'delete' | 'move_uncategorized' | 'delete_and_cleanup_groups' | 'none'
   last_run_at: string | null
   match_count: number
   created_at: string
