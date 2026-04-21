@@ -34,5 +34,11 @@ backend/static/
 dist/
 build/
 
+# Test coverage artifacts (enforced in CI, see docs/testing.md)
+frontend/coverage/
+backend/.coverage
+backend/coverage.xml
+backend/htmlcov/
+
 # User guide screenshots (may contain PII)
 docs/images/

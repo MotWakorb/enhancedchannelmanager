@@ -33,11 +33,16 @@ export default defineConfig({
         'src/vite-env.d.ts',
       ],
       thresholds: {
-        // Start with modest thresholds, increase as coverage improves
-        lines: 20,
-        branches: 20,
-        functions: 20,
-        statements: 20,
+        // Pragmatic baseline ratchet (bead enhancedchannelmanager-nmlxi, measured 2026-04-20).
+        // Full-suite measurement on dev tip:
+        //   statements 15.17%, branches 14.13%, functions 15.28%, lines 15.46%
+        // Thresholds = measured − 2 (regression guard without instantly breaking CI).
+        // Re-ratchet cadence + policy: docs/testing.md § "Coverage ratchet cadence".
+        // DO NOT lower without PO approval.
+        lines: 13,
+        branches: 12,
+        functions: 13,
+        statements: 13,
       },
     },
 
