@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Security
 - `backend/routers/backup.py` — canonicalize-and-verify (`resolve()` + `relative_to()`) applied to `download_saved_backup` and `delete_saved_backup` as defense-in-depth alongside the existing `_BACKUP_FILENAME_RE` guard. Closes CodeQL py/path-injection alerts 1416-1419 (CWE-22/23/36/73/99). Pattern mirrors the zip-restore remediation in the same file. New tests cover traversal, absolute paths, symlink-escape, and null bytes (PR #98, bd-0a1pr).
+- `backend/cloud_storage/onedrive_adapter.py` — Pydantic + adapter-level validators on `tenant_id` (GUID or verified domain) and `drive_id` (base64url-style) prevent SSRF via Microsoft Graph URL interpolation. Closes CodeQL CRITICAL py/partial-ssrf alerts 1361, 1362 (CWE-918). New tests at `backend/tests/test_cloud_storage.py` cover validator unit coverage + HTTP 422 at the cloud-target API (PR #101, bd-zbt74).
 
 ## [0.16.0] — Yanked 2026-04-20
 
