@@ -175,6 +175,10 @@ class ActionExecutor:
         self._channel_m3u_counts: dict[tuple[int, int], int] = {}
         self._seeded_channels: set[int] = set()
 
+        # merge_streams reconciliation: for actions with remove_non_matching=True,
+        # we accumulate the desired stream IDs per channel and prune later.
+        self._merge_prune_desired_by_channel: dict[int, set[int]] = {}
+
         # Pre-populate base-name mapping for existing channels with "NUMBER | " prefixes
         _num_prefix = re.compile(r'^\d+\s*\|\s*')
         for c in self.existing_channels:
@@ -953,6 +957,7 @@ class ActionExecutor:
         find_channel_by = params.get("find_channel_by")
         max_streams = params.get("max_streams_per_channel", 0)  # 0 = unlimited
         find_channel_value = params.get("find_channel_value")
+        remove_non_matching = params.get("remove_non_matching", False) is True
         logger.debug(
             "[AUTO-CREATE-EXEC] target=%s find_by=%s "
             "find_value=%s stream=%r",
@@ -1045,6 +1050,10 @@ class ActionExecutor:
                     logger.debug("[AUTO-CREATE-EXEC] Call sign fallback failed: %s", e)
 
             if channel:
+                if remove_non_matching:
+                    self._merge_prune_desired_by_channel.setdefault(channel["id"], set()).add(
+                        stream_ctx.stream_id
+                    )
                 # Enforce per-provider stream limit if configured
                 if max_streams > 0 and stream_ctx.m3u_account_id is not None:
                     await self._ensure_channel_m3u_counts(channel["id"])
@@ -2004,6 +2013,88 @@ class ActionExecutor:
                 description=f"Failed to set stream priority in channel '{channel_name}'",
                 error=str(e)
             )
+
+    async def prune_merge_streams(self, results: dict, dry_run: bool) -> None:
+        """Apply merge_streams pruning for actions that enabled remove_non_matching.
+
+        For each channel that had merge_streams executed with remove_non_matching=True,
+        remove any streams from that channel that were not part of the desired set.
+        """
+        if not self._merge_prune_desired_by_channel:
+            return
+
+        for channel_id, desired in self._merge_prune_desired_by_channel.items():
+            channel = self._channel_by_id.get(channel_id)
+            if not channel:
+                try:
+                    channel = await self.client.get_channel(channel_id)
+                except Exception as e:
+                    logger.warning(
+                        "[AUTO-CREATE-EXEC] Failed to fetch channel %s for merge prune: %s",
+                        channel_id, e,
+                    )
+                    continue
+
+            channel_name = channel.get("name", f"ID:{channel_id}")
+            current_streams = [s["id"] if isinstance(s, dict) else s for s in channel.get("streams", [])]
+
+            # Preserve current order, prune out non-desired, then append any desired
+            # streams that were not present (should be rare if merge succeeded).
+            pruned = [sid for sid in current_streams if sid in desired]
+            for sid in desired:
+                if sid not in pruned:
+                    pruned.append(sid)
+
+            if pruned == current_streams:
+                continue
+
+            removed_count = max(0, len(current_streams) - len(pruned))
+            if dry_run:
+                results["dry_run_results"].append({
+                    "stream_id": None,
+                    "stream_name": f"[AUTO-CREATE-EXEC] {channel_name}",
+                    "rule_id": None,
+                    "rule_name": None,
+                    "action": f"Would remove {removed_count} non-matching stream(s) from '{channel_name}'",
+                    "would_create": False,
+                    "would_modify": True
+                })
+                continue
+
+            try:
+                await self.client.update_channel(channel_id, {"streams": pruned})
+                channel["streams"] = pruned
+                results["execution_log"].append({
+                    "stream_id": None,
+                    "stream_name": f"[AUTO-CREATE-EXEC] {channel_name}",
+                    "m3u_account_id": None,
+                    "rules_evaluated": [],
+                    "actions_executed": [{
+                        "type": "merge_streams_prune",
+                        "description": f"Removed {removed_count} non-matching stream(s) from '{channel_name}'",
+                        "success": True,
+                        "entity_id": channel_id,
+                        "error": None
+                    }]
+                })
+            except Exception as e:
+                logger.error(
+                    "[AUTO-CREATE-EXEC] Failed to prune merged streams in '%s': %s",
+                    channel_name, e,
+                )
+                results["execution_log"].append({
+                    "stream_id": None,
+                    "stream_name": f"[AUTO-CREATE-EXEC] {channel_name}",
+                    "m3u_account_id": None,
+                    "rules_evaluated": [],
+                    "actions_executed": [{
+                        "type": "merge_streams_prune",
+                        "description": f"Failed to remove non-matching streams from '{channel_name}': {e}",
+                        "success": False,
+                        "entity_id": channel_id,
+                        "error": str(e)
+                    }]
+                })
 
     # =========================================================================
     # Reconciliation / Cleanup Methods

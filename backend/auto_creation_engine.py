@@ -1218,6 +1218,11 @@ class AutoCreationEngine:
                     })
 
         # =====================================================================
+        # Pass 2.75: Merge reconciliation — prune non-matching streams (optional)
+        # =====================================================================
+        await executor.prune_merge_streams(results, dry_run)
+
+        # =====================================================================
         # Pass 3: Re-sort existing channels for rules with sort_field
         # =====================================================================
         logger.debug("[AUTO-CREATE-ENGINE] Starting channel renumbering pass")
