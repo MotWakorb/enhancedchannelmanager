@@ -177,6 +177,12 @@ export function AutoCreationTab() {
   // Check if any enabled rules exist
   const hasEnabledRules = useMemo(() => getEnabledRules().length > 0, [getEnabledRules]);
 
+  /** Stable identity for bulk modal props — `Array.from(selectedRuleIds)` in JSX is a new array every render. */
+  const bulkModalSelectedRuleIds = useMemo(
+    () => Array.from(selectedRuleIds).sort((a, b) => a - b),
+    [selectedRuleIds],
+  );
+
   // Handlers
   const handleCreateRule = useCallback(() => {
     setEditingRule(null);
@@ -936,7 +942,7 @@ export function AutoCreationTab() {
       <BulkRuleSettingsModal
         isOpen={showBulkRuleModal}
         onClose={() => setShowBulkRuleModal(false)}
-        selectedRuleIds={Array.from(selectedRuleIds)}
+        selectedRuleIds={bulkModalSelectedRuleIds}
         rules={rules}
         onApply={handleBulkRuleSettingsApply}
       />
