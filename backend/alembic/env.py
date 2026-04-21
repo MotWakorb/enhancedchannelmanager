@@ -10,6 +10,7 @@ the SQLite batch-mode rule for column alters.
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from logging.config import fileConfig
@@ -54,7 +55,24 @@ elif not config.get_main_option("sqlalchemy.url"):
     config.set_main_option("sqlalchemy.url", database.get_database_url())
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Skip re-loading logging config when the app has already installed its
+    # own. ``fileConfig`` (even with ``disable_existing_loggers=False``)
+    # resets the root logger level to whatever is declared in
+    # ``alembic.ini`` (WARNING), which silences every log line below
+    # WARNING emitted during and after the migration — including the
+    # request-end INFO log line produced by the observability middleware
+    # on ``ecm.access``. The symptom surfaces in tests as missing
+    # ``trace_id`` entries in captured JSON output (see
+    # ``tests/routers/test_observability_middleware.py::TestTraceIdMiddleware``),
+    # but the same override would dampen production logs whenever
+    # ``database.init_db()`` runs ``command.upgrade(...)`` at startup.
+    #
+    # Heuristic: if the root logger already has handlers attached, assume
+    # the embedding application has configured logging and we should not
+    # clobber it. Standalone ``alembic`` CLI invocations start with no root
+    # handlers, so they still pick up the ini file's formatting.
+    if not logging.getLogger().handlers:
+        fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 
 def run_migrations_offline() -> None:
