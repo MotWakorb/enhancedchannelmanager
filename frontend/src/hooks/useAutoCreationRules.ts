@@ -176,7 +176,7 @@ export function useAutoCreationRules(
     const duplicateData: CreateRuleData = {
       name: `${originalRule.name} (Copy)`,
       description: originalRule.description,
-      enabled: false, // Disabled by default
+      enabled: originalRule.enabled,
       priority: maxPriority + 1,
       conditions: originalRule.conditions,
       actions: originalRule.actions,
@@ -184,6 +184,15 @@ export function useAutoCreationRules(
       target_group_id: originalRule.target_group_id,
       run_on_refresh: originalRule.run_on_refresh,
       stop_on_first_match: originalRule.stop_on_first_match,
+      sort_field: originalRule.sort_field ?? null,
+      sort_order: originalRule.sort_order,
+      probe_on_sort: originalRule.probe_on_sort,
+      sort_regex: originalRule.sort_regex ?? null,
+      stream_sort_field: originalRule.stream_sort_field ?? null,
+      stream_sort_order: originalRule.stream_sort_order,
+      normalization_group_ids: originalRule.normalization_group_ids,
+      skip_struck_streams: originalRule.skip_struck_streams,
+      orphan_action: originalRule.orphan_action,
     };
 
     const newRule = await createRule(duplicateData);
