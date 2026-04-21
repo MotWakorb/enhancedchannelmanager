@@ -402,6 +402,13 @@ class Action:
                 elif self.params["find_channel_by"] not in ("name_exact", "name_regex", "tvg_id"):
                     errors.append("merge_streams.find_channel_by must be 'name_exact', 'name_regex', or 'tvg_id'")
 
+            # Optional prune toggle
+            remove_non_matching = self.params.get("remove_non_matching", False)
+            if remove_non_matching is not None and not isinstance(remove_non_matching, bool):
+                errors.append("merge_streams.remove_non_matching must be a boolean")
+            if "remove_non_matching" not in self.params:
+                self.params["remove_non_matching"] = False
+
         # Validate assign_logo
         elif action_type == ActionType.ASSIGN_LOGO:
             value = self.params.get("value")
