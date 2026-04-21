@@ -787,6 +787,37 @@ class TestActionExecutorMergeStreams:
 
         # update_channel should be called for merge and then for prune
         assert self.client.update_channel.call_count >= 2
+        # Last call is the prune, and it should remove 999 while keeping merged stream 201.
+        _channel_id, payload = self.client.update_channel.call_args_list[-1].args
+        assert _channel_id == 1
+        assert payload["streams"] == [101, 201]
+        assert 999 not in payload["streams"]
+
+    def test_merge_remove_non_matching_dry_run_logs_only(self):
+        """Dry-run prune should not call update_channel and should emit dry_run_results."""
+        # Channel has one existing stream plus an extra stale stream
+        self.channels[0]["streams"] = [101, 999]
+        self.executor._channel_by_id[1]["streams"] = [101, 999]
+
+        action = {
+            "type": "merge_streams",
+            "target": "existing_channel",
+            "find_channel_by": "tvg_id",
+            "remove_non_matching": True,
+        }
+
+        exec_ctx = ExecutionContext(dry_run=True)
+        _ = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        results = {"dry_run_results": [], "execution_log": []}
+        asyncio.get_event_loop().run_until_complete(
+            self.executor.prune_merge_streams(results, dry_run=True)
+        )
+
+        self.client.update_channel.assert_not_called()
+        assert any("Would remove" in r.get("action", "") for r in results["dry_run_results"])
 
 
 class TestActionExecutorPropertyActions:

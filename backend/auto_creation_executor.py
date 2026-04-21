@@ -177,7 +177,8 @@ class ActionExecutor:
 
         # merge_streams reconciliation: for actions with remove_non_matching=True,
         # we accumulate the desired stream IDs per channel and prune later.
-        self._merge_prune_desired_by_channel: dict[int, set[int]] = {}
+        self._merge_streams_added_by_channel: dict[int, set[int]] = {}
+        self._merge_prune_enabled_channels: set[int] = set()
 
         # Pre-populate base-name mapping for existing channels with "NUMBER | " prefixes
         _num_prefix = re.compile(r'^\d+\s*\|\s*')
@@ -1050,10 +1051,12 @@ class ActionExecutor:
                     logger.debug("[AUTO-CREATE-EXEC] Call sign fallback failed: %s", e)
 
             if channel:
+                # Track merged stream IDs per channel for optional prune step.
+                # If prune is enabled for a channel by ANY merge action during this run,
+                # the prune step will keep only streams merged into that channel this run.
+                self._merge_streams_added_by_channel.setdefault(channel["id"], set()).add(stream_ctx.stream_id)
                 if remove_non_matching:
-                    self._merge_prune_desired_by_channel.setdefault(channel["id"], set()).add(
-                        stream_ctx.stream_id
-                    )
+                    self._merge_prune_enabled_channels.add(channel["id"])
                 # Enforce per-provider stream limit if configured
                 if max_streams > 0 and stream_ctx.m3u_account_id is not None:
                     await self._ensure_channel_m3u_counts(channel["id"])
@@ -2017,13 +2020,15 @@ class ActionExecutor:
     async def prune_merge_streams(self, results: dict, dry_run: bool) -> None:
         """Apply merge_streams pruning for actions that enabled remove_non_matching.
 
-        For each channel that had merge_streams executed with remove_non_matching=True,
-        remove any streams from that channel that were not part of the desired set.
+        For each channel where any merge_streams action enabled remove_non_matching=True,
+        remove any streams from that channel that were not merged into the channel
+        during this rule run.
         """
-        if not self._merge_prune_desired_by_channel:
+        if not self._merge_prune_enabled_channels:
             return
 
-        for channel_id, desired in self._merge_prune_desired_by_channel.items():
+        for channel_id in self._merge_prune_enabled_channels:
+            desired = self._merge_streams_added_by_channel.get(channel_id, set())
             channel = self._channel_by_id.get(channel_id)
             if not channel:
                 try:
@@ -2038,12 +2043,15 @@ class ActionExecutor:
             channel_name = channel.get("name", f"ID:{channel_id}")
             current_streams = [s["id"] if isinstance(s, dict) else s for s in channel.get("streams", [])]
 
-            # Preserve current order, prune out non-desired, then append any desired
-            # streams that were not present (should be rare if merge succeeded).
+            # Preserve current order, prune out non-desired.
             pruned = [sid for sid in current_streams if sid in desired]
-            for sid in desired:
-                if sid not in pruned:
-                    pruned.append(sid)
+            missing = desired - set(current_streams)
+            if missing:
+                logger.warning(
+                    "[AUTO-CREATE-EXEC] Channel '%s' merge prune: %s desired stream id(s) "
+                    "not present in channel streams (will not be appended): %s",
+                    channel_name, len(missing), sorted(list(missing))[:20],
+                )
 
             if pruned == current_streams:
                 continue

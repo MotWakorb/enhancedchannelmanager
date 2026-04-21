@@ -875,7 +875,7 @@ export function ActionEditor({
                 Remove streams that no longer match
               </label>
               <span className="field-hint">
-                When enabled, this rule keeps the target channel in sync: streams that don&apos;t match this rule anymore will be removed from that channel.
+                When enabled, the target channel is kept in sync: after this run, it will keep only the streams that were merged into that channel during this run (removing stale streams that no longer match).
               </span>
             </div>
           </>
