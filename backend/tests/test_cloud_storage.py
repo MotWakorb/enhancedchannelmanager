@@ -356,3 +356,167 @@ class TestCredentialMasking:
         masked = _mask_credentials(creds)
         assert masked["port"] == 443
         assert masked["enabled"] is True
+
+
+# =============================================================================
+# OneDrive tenant_id / drive_id shape validation (SSRF defense)
+# CodeQL alerts 1361, 1362 / bead enhancedchannelmanager-zbt74
+# =============================================================================
+
+
+class TestOneDriveTenantIdValidator:
+    """_validate_tenant_id and adapter __init__ should reject SSRF-prone shapes."""
+
+    def _make(self, tenant_id):
+        return get_adapter("onedrive", {
+            "client_id": "cid", "client_secret": "csec", "tenant_id": tenant_id,
+        })
+
+    def test_accepts_valid_guid_tenant_id(self):
+        # Well-known Azure AD "common" GUID-form tenant
+        adapter = self._make("72f988bf-86f1-41af-91ab-2d7cd011db47")
+        assert adapter.tenant_id == "72f988bf-86f1-41af-91ab-2d7cd011db47"
+
+    def test_accepts_valid_domain_tenant_id(self):
+        adapter = self._make("contoso.onmicrosoft.com")
+        assert adapter.tenant_id == "contoso.onmicrosoft.com"
+
+    def test_accepts_single_label_tenant_id(self):
+        # Azure permits single-label aliases like "common" / "organizations"
+        adapter = self._make("common")
+        assert adapter.tenant_id == "common"
+
+    @pytest.mark.parametrize("bad", [
+        "",
+        "../evil",
+        "evil.com/..",
+        "foo.evil.com/",
+        "..%2Fattacker",
+        "tenant\x00id",
+        "tenant id with space",
+        "tenant/id",
+        "tenant?x=1",
+        "tenant#frag",
+        "http://evil.com",
+        "https://evil.com/",
+        ".leading-dot.com",
+        "trailing-dot.com.",
+        "double..dot.com",
+        "label-.invalid.com",
+        "-leading-hyphen.com",
+        "a" * 254,
+    ])
+    def test_rejects_invalid_tenant_id_shape(self, bad):
+        with pytest.raises(ValueError):
+            self._make(bad)
+
+    def test_rejects_non_string_tenant_id(self):
+        with pytest.raises(ValueError):
+            get_adapter("onedrive", {
+                "client_id": "c", "client_secret": "s", "tenant_id": None,
+            })
+
+
+class TestOneDriveDriveIdValidator:
+    """_validate_drive_id and adapter __init__ should reject SSRF-prone shapes."""
+
+    def _make(self, drive_id):
+        return get_adapter("onedrive", {
+            "client_id": "cid",
+            "client_secret": "csec",
+            "tenant_id": "contoso.onmicrosoft.com",
+            "drive_id": drive_id,
+        })
+
+    def test_accepts_valid_base64url_drive_id(self):
+        adapter = self._make("b!abcDEF123-_xyz")
+        assert adapter.drive_id == "b!abcDEF123-_xyz"
+
+    def test_empty_drive_id_allowed(self):
+        adapter = self._make("")
+        assert adapter.drive_id == ""
+
+    def test_missing_drive_id_allowed(self):
+        # Omitting the field entirely should also be fine (default drive).
+        adapter = get_adapter("onedrive", {
+            "client_id": "cid", "client_secret": "csec",
+            "tenant_id": "contoso.onmicrosoft.com",
+        })
+        assert adapter.drive_id == ""
+
+    @pytest.mark.parametrize("bad", [
+        "../",
+        "../../etc/passwd",
+        "foo/bar",
+        "foo\\bar",
+        "https://evil.com/",
+        "drive id with space",
+        "drive\x00id",
+        "drive\n",
+        "driveé",  # unicode
+        "a" * 129,       # overlong
+        "drive?x=1",
+        "drive#frag",
+        "drive%2F",      # percent-encoded slash
+    ])
+    def test_rejects_invalid_drive_id_shape(self, bad):
+        with pytest.raises(ValueError):
+            self._make(bad)
+
+
+class TestOneDriveCloudTargetApiValidation:
+    """API boundary rejects SSRF-prone tenant_id/drive_id with HTTP 422."""
+
+    @pytest.mark.asyncio
+    async def test_create_rejects_bad_tenant_id(self, async_client):
+        response = await async_client.post("/api/export/cloud-targets", json={
+            "name": "BadTenant",
+            "provider_type": "onedrive",
+            "credentials": {
+                "client_id": "c", "client_secret": "s",
+                "tenant_id": "../evil",
+            },
+        })
+        assert response.status_code == 422
+        body = response.text
+        assert "tenant_id" in body
+
+    @pytest.mark.asyncio
+    async def test_create_rejects_bad_drive_id(self, async_client):
+        response = await async_client.post("/api/export/cloud-targets", json={
+            "name": "BadDrive",
+            "provider_type": "onedrive",
+            "credentials": {
+                "client_id": "c", "client_secret": "s",
+                "tenant_id": "contoso.onmicrosoft.com",
+                "drive_id": "../../etc/passwd",
+            },
+        })
+        assert response.status_code == 422
+        assert "drive_id" in response.text
+
+    @pytest.mark.asyncio
+    @patch("routers.export.journal")
+    async def test_create_accepts_valid_onedrive_credentials(self, mock_journal, async_client):
+        with patch("routers.export.encrypt_credentials", return_value="enc"):
+            response = await async_client.post("/api/export/cloud-targets", json={
+                "name": "GoodOneDrive",
+                "provider_type": "onedrive",
+                "credentials": {
+                    "client_id": "c", "client_secret": "s",
+                    "tenant_id": "contoso.onmicrosoft.com",
+                    "drive_id": "b!abcDEF123-_xyz",
+                },
+            })
+        assert response.status_code == 201
+
+    @pytest.mark.asyncio
+    async def test_test_inline_rejects_bad_tenant_id(self, async_client):
+        response = await async_client.post("/api/export/cloud-targets/test", json={
+            "provider_type": "onedrive",
+            "credentials": {
+                "client_id": "c", "client_secret": "s",
+                "tenant_id": "https://evil.com/",
+            },
+        })
+        assert response.status_code == 422
