@@ -774,6 +774,20 @@ class TestActionExecutorMergeStreams:
         }
 
         exec_ctx = ExecutionContext()
+        # Simulate that the existing in-channel stream also matched this run
+        # (merge_streams would be executed and skipped because it's already present,
+        # but it must still count as "desired" so it isn't pruned).
+        existing_ctx = StreamContext(
+            stream_id=101,
+            stream_name="ESPN",
+            m3u_account_id=1,
+            m3u_account_name="Provider A",
+            tvg_id="ESPN.US",
+        )
+        _ = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, existing_ctx, exec_ctx)
+        )
+
         # Merge a new matching stream into ESPN
         _ = asyncio.get_event_loop().run_until_complete(
             self.executor.execute(action, self.stream_ctx, exec_ctx)
