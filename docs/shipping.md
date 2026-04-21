@@ -38,9 +38,11 @@ cd frontend && npm run build
 bd close <id>
 ```
 
-### 5. Update README.md if Needed
+### 5. Update README.md and CHANGELOG.md if Needed
 
 If the change adds, removes, or modifies a feature, update the documentation.
+
+Every user-facing change must also be recorded in [`CHANGELOG.md`](../CHANGELOG.md) under the `[Unreleased]` section, in the appropriate Keep-a-Changelog category (Added / Changed / Deprecated / Removed / Fixed / Security). When cutting a release, rename the `[Unreleased]` heading to the new version with the release date and start a fresh empty `[Unreleased]` section above it.
 
 ### 6. Commit and Push
 
