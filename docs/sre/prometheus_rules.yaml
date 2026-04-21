@@ -1,0 +1,257 @@
+# ECM Prometheus alert rules — initial SLO scaffold.
+#
+# Companion to docs/sre/slos.md (bd-dl1bd).
+# Consumed by a Prometheus instance that scrapes ECM's /metrics endpoint.
+# This file is "rules-as-code" only — no Prometheus/Alertmanager deployment
+# is shipped with ECM yet. A future bead will wire scrape + routing.
+#
+# Conventions:
+#   - severity: "page"     — wake someone up
+#   - severity: "ticket"   — open a ticket, investigate next business hour
+#   - severity: "warning"  — dashboard-visible, informational only
+#   - Every alert carries a `runbook_url` annotation pointing at
+#     docs/runbooks/<name>.md (relative path — scrapers rewrite to absolute
+#     URLs at their discretion).
+#   - Window choices (short / long) are intentionally simple for scaffold.
+#     A follow-up bead introduces multi-window multi-burn-rate (MWMBR)
+#     alerts with recording rules once we have a Prometheus target to
+#     provision them against.
+#
+# Load into Prometheus by pointing `rule_files:` at this path. Validate
+# syntax with `promtool check rules docs/sre/prometheus_rules.yaml`.
+
+groups:
+  # =====================================================================
+  # SLO-1: Readiness Availability
+  # =====================================================================
+  - name: ecm_readiness_availability
+    interval: 30s
+    rules:
+      - alert: ECMReadinessDown
+        expr: ecm_health_ready_ok == 0
+        for: 2m
+        labels:
+          severity: page
+          slo: readiness_availability
+          service: ecm
+        annotations:
+          summary: "ECM readiness probe failing ({{ $value }}) for 2m+"
+          description: |
+            ecm_health_ready_ok has been 0 for at least 2 minutes. One or
+            more readiness sub-checks (database, dispatcharr, ffprobe) is
+            failing. Burns the availability error budget directly.
+          runbook_url: docs/runbooks/readiness_availability.md
+
+      - alert: ECMReadinessFlapping
+        # Flapping = multiple 0->1 transitions in a short window. We detect
+        # via changes() on the gauge — >2 transitions in 10m is suspicious.
+        expr: changes(ecm_health_ready_ok[10m]) > 4
+        for: 5m
+        labels:
+          severity: ticket
+          slo: readiness_availability
+          service: ecm
+        annotations:
+          summary: "ECM readiness probe flapping (>4 transitions in 10m)"
+          description: |
+            ecm_health_ready_ok is oscillating between 0 and 1. Usually
+            indicates an intermittent dependency (Dispatcharr flaky,
+            database momentarily locked) or a race in a sub-check.
+          runbook_url: docs/runbooks/readiness_availability.md
+
+      - alert: ECMReadiness30dBudgetBurn
+        # 30-day SLO = 99.0% means avg_over_time must exceed 0.99.
+        # We alert when the 6-hour average drops below 0.95 — a sustained
+        # 5% unavailability burns budget fast enough to warrant action
+        # even before the 30d window reflects it.
+        expr: avg_over_time(ecm_health_ready_ok[6h]) < 0.95
+        for: 15m
+        labels:
+          severity: ticket
+          slo: readiness_availability
+          service: ecm
+        annotations:
+          summary: "ECM readiness 6h availability {{ $value | humanizePercentage }} — burning 30d budget"
+          description: |
+            Sustained unavailability over the last 6 hours is consuming
+            the 30-day error budget (1% of 30d = ~7h12m). Investigate
+            root cause before the budget exhausts.
+          runbook_url: docs/runbooks/readiness_availability.md
+
+  # =====================================================================
+  # SLO-2: HTTP Request Latency
+  # =====================================================================
+  - name: ecm_http_latency
+    interval: 30s
+    rules:
+      - alert: ECMHTTPLatencyHighP95
+        # p95 > 500ms for 10 consecutive minutes.
+        # Excludes /metrics (self-skipped by middleware) and health probes.
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(ecm_http_request_duration_seconds_bucket{path!~"/metrics|/api/health/.*"}[5m])
+            )
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: ticket
+          slo: http_latency
+          service: ecm
+        annotations:
+          summary: "ECM HTTP p95 latency {{ $value | humanizeDuration }} > 500ms for 10m+"
+          description: |
+            95th percentile request latency has exceeded 500ms for at
+            least 10 minutes. Possible causes: SQLite contention under
+            bulk operations, slow Dispatcharr upstream, N+1 query pattern
+            in a frontend view.
+          runbook_url: docs/runbooks/http_latency.md
+
+      - alert: ECMHTTPLatencyCriticalP95
+        # p95 > 2s sustained — page. Something is very wrong.
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(ecm_http_request_duration_seconds_bucket{path!~"/metrics|/api/health/.*"}[5m])
+            )
+          ) > 2.0
+        for: 5m
+        labels:
+          severity: page
+          slo: http_latency
+          service: ecm
+        annotations:
+          summary: "ECM HTTP p95 latency {{ $value | humanizeDuration }} > 2s — critical"
+          description: |
+            95th percentile request latency has exceeded 2 seconds for
+            at least 5 minutes. Users are noticing. Check readiness,
+            database health, and Dispatcharr connectivity immediately.
+          runbook_url: docs/runbooks/http_latency.md
+
+  # =====================================================================
+  # SLO-3: HTTP Error Rate
+  # =====================================================================
+  - name: ecm_http_error_rate
+    interval: 30s
+    rules:
+      - alert: ECMHTTPError5xxElevated
+        # 5xx rate > 1% over 5m — ticket severity.
+        # Suppress when total rate is tiny to avoid div-by-zero alerting
+        # during idle periods (>= 0.1 rps threshold).
+        expr: |
+          (
+            sum(rate(ecm_http_requests_total{status=~"5..",path!="/metrics"}[5m]))
+            /
+            sum(rate(ecm_http_requests_total{path!="/metrics"}[5m]))
+          ) > 0.01
+          and
+          sum(rate(ecm_http_requests_total{path!="/metrics"}[5m])) > 0.1
+        for: 10m
+        labels:
+          severity: ticket
+          slo: http_error_rate
+          service: ecm
+        annotations:
+          summary: "ECM 5xx error rate {{ $value | humanizePercentage }} > 1% for 10m+"
+          description: |
+            HTTP 5xx response rate has exceeded 1% of total requests for
+            at least 10 minutes. Check logs for repeated stack traces
+            (grep `"level":"ERROR"` in the structured log stream), and
+            correlate by `path` label to identify the failing endpoint.
+          runbook_url: docs/runbooks/http_error_rate.md
+
+      - alert: ECMHTTPError5xxCritical
+        # 5xx rate > 10% over 5m — page. Outage-scale.
+        expr: |
+          (
+            sum(rate(ecm_http_requests_total{status=~"5..",path!="/metrics"}[5m]))
+            /
+            sum(rate(ecm_http_requests_total{path!="/metrics"}[5m]))
+          ) > 0.1
+          and
+          sum(rate(ecm_http_requests_total{path!="/metrics"}[5m])) > 0.1
+        for: 3m
+        labels:
+          severity: page
+          slo: http_error_rate
+          service: ecm
+        annotations:
+          summary: "ECM 5xx error rate {{ $value | humanizePercentage }} > 10% — critical"
+          description: |
+            HTTP 5xx response rate has exceeded 10% for at least 3
+            minutes. Treat as an incident. Begin runbook, page on-call,
+            capture trace_ids from ERROR logs for postmortem.
+          runbook_url: docs/runbooks/http_error_rate.md
+
+  # =====================================================================
+  # SLO-4: Readiness Sub-check Latency (informational / warning only)
+  # =====================================================================
+  - name: ecm_readiness_subcheck_latency
+    interval: 1m
+    rules:
+      - alert: ECMReadinessDatabaseCheckSlow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(ecm_health_ready_check_duration_seconds_bucket{check="database"}[5m])
+            )
+          ) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          slo: readiness_subcheck_latency
+          service: ecm
+          check: database
+        annotations:
+          summary: "ECM database readiness check p95 {{ $value | humanizeDuration }} > 50ms"
+          description: |
+            Database readiness sub-check is slow. Leading indicator for
+            SLO-2 latency breach. Likely SQLite file lock contention or
+            a probe that has drifted from a cheap PRAGMA read.
+          runbook_url: docs/runbooks/readiness_subcheck_latency.md
+
+      - alert: ECMReadinessDispatcharrCheckSlow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(ecm_health_ready_check_duration_seconds_bucket{check="dispatcharr"}[5m])
+            )
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          slo: readiness_subcheck_latency
+          service: ecm
+          check: dispatcharr
+        annotations:
+          summary: "ECM dispatcharr readiness check p95 {{ $value | humanizeDuration }} > 500ms"
+          description: |
+            Dispatcharr readiness sub-check is slow. Upstream dependency
+            latency — propagates directly to user-facing endpoints that
+            proxy Dispatcharr.
+          runbook_url: docs/runbooks/readiness_subcheck_latency.md
+
+      - alert: ECMReadinessFfprobeCheckSlow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(ecm_health_ready_check_duration_seconds_bucket{check="ffprobe"}[5m])
+            )
+          ) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          slo: readiness_subcheck_latency
+          service: ecm
+          check: ffprobe
+        annotations:
+          summary: "ECM ffprobe readiness check p95 {{ $value | humanizeDuration }} > 100ms"
+          description: |
+            ffprobe readiness sub-check is slow. Typically indicates
+            disk I/O issues on the host or ffprobe binary degradation.
+          runbook_url: docs/runbooks/readiness_subcheck_latency.md

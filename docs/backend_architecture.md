@@ -98,11 +98,14 @@ finally:
 
 Metric emission is wrapped in try/except so a misbehaving collector can never fail a request. This is the invariant: observability is a side effect, not a dependency.
 
+### SLOs and alert rules
+
+See [`docs/sre/slos.md`](./sre/slos.md) (bd-dl1bd) for the initial SLOs built on top of this substrate — readiness availability, HTTP p95 latency, HTTP 5xx error rate, and informational readiness sub-check latency. Corresponding Prometheus alert rules live in [`docs/sre/prometheus_rules.yaml`](./sre/prometheus_rules.yaml); runbooks referenced by each alert are under [`docs/runbooks/`](./runbooks/). Targets are intentionally conservative until 30+ days of production metrics exist — they will be recalibrated after that baseline, tracked as a follow-up bead.
+
 ### Out of scope for this substrate
 
 Explicit non-goals, handed off to future beads:
 
-- **SLOs** — need a baseline of real traffic before committing to numbers.
-- **Alertmanager / Prometheus / Grafana deployment** — this substrate only exposes the endpoint; no scrape target is deployed with ECM.
+- **Alertmanager / Prometheus / Grafana deployment** — this substrate only exposes the endpoint and ships rules-as-code (see SLO section above); no scrape target is deployed with ECM.
 - **Distributed tracing (OpenTelemetry / Jaeger / Tempo)** — the `trace_id` is a correlation id, not a W3C TraceContext id. A future bead will adopt OTel if and when we have a downstream tracer to emit to.
 - **Log aggregation (Loki / ELK)** — JSON on stdout is the substrate; a pipeline is its own bead.
