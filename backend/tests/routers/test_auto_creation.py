@@ -1,7 +1,7 @@
 """
 Unit tests for auto-creation endpoints.
 
-Tests: 19 endpoints covering rule CRUD, reorder, toggle, duplicate,
+Tests: rule CRUD, bulk-update, reorder, toggle, duplicate,
        pipeline execution, execution history, rollback, YAML import/export,
        validation, and schema endpoints.
 Mocks: auto_creation_engine, auto_creation_schema, get_client(), get_session().
@@ -166,6 +166,74 @@ class TestUpdateAutoCreationRule:
             )
 
         assert response.status_code == 404
+
+
+class TestBulkUpdateAutoCreationRules:
+    """Tests for POST /api/auto-creation/rules/bulk-update."""
+
+    @pytest.mark.asyncio
+    async def test_updates_multiple_rules(self, async_client, test_session):
+        """Applies the same scalar updates to several rules."""
+        r1 = _create_rule(test_session, name="BulkA", run_on_refresh=False, orphan_action="delete")
+        r2 = _create_rule(test_session, name="BulkB", run_on_refresh=False)
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
+                "rule_ids": [r1.id, r2.id],
+                "run_on_refresh": True,
+                "orphan_action": "none",
+            })
+        assert response.status_code == 200
+        data = response.json()
+        assert data["updated_count"] == 2
+        assert len(data["rules"]) == 2
+        test_session.expire_all()
+        assert test_session.query(AutoCreationRule).get(r1.id).run_on_refresh is True
+        assert test_session.query(AutoCreationRule).get(r1.id).orphan_action == "none"
+        assert test_session.query(AutoCreationRule).get(r2.id).run_on_refresh is True
+
+    @pytest.mark.asyncio
+    async def test_rejects_empty_rule_ids(self, async_client):
+        """rule_ids must be non-empty."""
+        response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
+            "rule_ids": [],
+            "enabled": False,
+        })
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_rejects_no_fields(self, async_client):
+        """At least one update field is required."""
+        response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
+            "rule_ids": [1],
+        })
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_sets_merge_streams_remove_non_matching(self, async_client, test_session):
+        """Updates remove_non_matching on all merge_streams actions."""
+        merge_action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "match_by": "tvg_id",
+            "remove_non_matching": False,
+        }
+        r = _create_rule(
+            test_session,
+            name="MergeRule",
+            actions=json.dumps([merge_action]),
+        )
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
+                "rule_ids": [r.id],
+                "merge_streams_remove_non_matching": True,
+            })
+        assert response.status_code == 200
+        test_session.expire_all()
+        rule = test_session.query(AutoCreationRule).get(r.id)
+        acts = json.loads(rule.actions)
+        assert acts[0]["remove_non_matching"] is True
 
 
 class TestDeleteAutoCreationRule:
