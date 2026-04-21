@@ -712,6 +712,150 @@ class TestSavedBackups:
         assert response.status_code == 400
 
 
+class TestSavedBackupsPathInjection:
+    """Path-injection regression tests for download/delete saved backup endpoints.
+
+    Remediates CodeQL HIGH alerts 1416-1419 (py/path-injection, CWE-22/23/36/73/99).
+    Backstops the canonicalize-and-verify containment check in
+    routers.backup.download_saved_backup / delete_saved_backup.
+    """
+
+    # Traversal payloads that must be rejected at the 400 boundary before any
+    # filesystem call reaches Path.exists / Path.read_text / Path.unlink.
+    # Each is URL-encoded where needed to survive the FastAPI path parameter.
+    TRAVERSAL_PAYLOADS = [
+        # URL-encoded '../' traversal
+        "..%2Fecm-backup-2026-01-01_000000.yaml",
+        "..%2F..%2Fetc%2Fpasswd",
+        # URL-encoded absolute paths
+        "%2Fetc%2Fpasswd",
+        "%2Ftmp%2Fecm-backup-2026-01-01_000000.yaml",
+        # Null-byte splice (URL-encoded) — legacy-Python filename smuggling
+        "ecm-backup-2026-01-01_000000.yaml%00.evil",
+        # Backslash (Windows-style traversal)
+        "..%5Cecm-backup-2026-01-01_000000.yaml",
+    ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("payload", TRAVERSAL_PAYLOADS)
+    async def test_download_rejects_traversal_payloads(self, async_client, tmp_path, payload):
+        """download_saved_backup must reject traversal / absolute / null-byte payloads with 400."""
+        backups_dir = tmp_path / "backups"
+        backups_dir.mkdir()
+        with patch("routers.backup.BACKUPS_DIR", backups_dir):
+            response = await async_client.get(f"/api/backup/saved/{payload}")
+        # Any non-2xx rejection is acceptable; the critical guarantee is that
+        # we never reach Path.read_text on an attacker-controlled path.
+        assert response.status_code in (400, 404, 422), (
+            f"payload {payload!r} was not rejected: status={response.status_code}"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("payload", TRAVERSAL_PAYLOADS)
+    async def test_delete_rejects_traversal_payloads(self, async_client, tmp_path, payload):
+        """delete_saved_backup must reject traversal / absolute / null-byte payloads with 400."""
+        backups_dir = tmp_path / "backups"
+        backups_dir.mkdir()
+        with patch("routers.backup.BACKUPS_DIR", backups_dir):
+            response = await async_client.delete(f"/api/backup/saved/{payload}")
+        assert response.status_code in (400, 404, 422), (
+            f"payload {payload!r} was not rejected: status={response.status_code}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_download_rejects_symlink_escape(self, async_client, tmp_path):
+        """A symlink inside BACKUPS_DIR pointing outside must not leak contents.
+
+        Creates a symlink whose *name* passes the regex but whose resolved
+        target is outside BACKUPS_DIR. After canonicalization, .relative_to()
+        must raise and produce a 400.
+        """
+        import os
+
+        backups_dir = tmp_path / "backups"
+        backups_dir.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        secret = outside / "secret.yaml"
+        secret.write_text("top-secret-contents")
+
+        # Symlink name satisfies _BACKUP_FILENAME_RE but points outside the dir.
+        link_name = "ecm-backup-2099-12-31_235959.yaml"
+        link_path = backups_dir / link_name
+        try:
+            os.symlink(secret, link_path)
+        except (OSError, NotImplementedError):
+            pytest.skip("Symlinks not supported in this environment")
+
+        with patch("routers.backup.BACKUPS_DIR", backups_dir):
+            response = await async_client.get(f"/api/backup/saved/{link_name}")
+
+        # The canonicalized path resolves outside BACKUPS_DIR, so the
+        # containment check must reject with 400. If the check regressed, the
+        # response body would contain "top-secret-contents".
+        assert response.status_code == 400
+        assert "top-secret-contents" not in response.text
+
+    @pytest.mark.asyncio
+    async def test_delete_rejects_symlink_escape(self, async_client, tmp_path):
+        """A symlink inside BACKUPS_DIR pointing outside must not be deleted via resolve()."""
+        import os
+
+        backups_dir = tmp_path / "backups"
+        backups_dir.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        secret = outside / "secret.yaml"
+        secret.write_text("do-not-delete-me")
+
+        link_name = "ecm-backup-2099-12-31_235959.yaml"
+        link_path = backups_dir / link_name
+        try:
+            os.symlink(secret, link_path)
+        except (OSError, NotImplementedError):
+            pytest.skip("Symlinks not supported in this environment")
+
+        with patch("routers.backup.BACKUPS_DIR", backups_dir):
+            response = await async_client.delete(f"/api/backup/saved/{link_name}")
+
+        assert response.status_code == 400
+        # The real file outside BACKUPS_DIR must still exist — the symlink
+        # resolution must not have caused us to unlink the target.
+        assert secret.exists()
+        assert secret.read_text() == "do-not-delete-me"
+
+    @pytest.mark.asyncio
+    async def test_download_valid_filename_still_works(self, async_client, tmp_path):
+        """Regression: the containment check must not break legitimate downloads."""
+        backups_dir = tmp_path / "backups"
+        backups_dir.mkdir()
+        (backups_dir / "ecm-backup-2026-01-15_123456.yaml").write_text("legitimate")
+
+        with patch("routers.backup.BACKUPS_DIR", backups_dir):
+            response = await async_client.get(
+                "/api/backup/saved/ecm-backup-2026-01-15_123456.yaml"
+            )
+
+        assert response.status_code == 200
+        assert response.text == "legitimate"
+
+    @pytest.mark.asyncio
+    async def test_delete_valid_filename_still_works(self, async_client, tmp_path):
+        """Regression: the containment check must not break legitimate deletes."""
+        backups_dir = tmp_path / "backups"
+        backups_dir.mkdir()
+        target = backups_dir / "ecm-backup-2026-01-15_123456.yaml"
+        target.write_text("legitimate")
+
+        with patch("routers.backup.BACKUPS_DIR", backups_dir):
+            response = await async_client.delete(
+                "/api/backup/saved/ecm-backup-2026-01-15_123456.yaml"
+            )
+
+        assert response.status_code == 200
+        assert not target.exists()
+
+
 def _make_yaml_export(**overrides):
     """Create a YAML export string for testing.
 
