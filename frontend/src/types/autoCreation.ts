@@ -118,6 +118,8 @@ export interface Action {
   find_channel_by?: 'name_exact' | 'name_regex' | 'tvg_id';
   find_channel_value?: string;
   max_streams_per_channel?: number;
+  /** When true, remove streams from the target channel that no longer match this rule run. */
+  remove_non_matching?: boolean;
   message?: string;
   // Name transform (for create_channel and create_group)
   name_transform_pattern?: string;

@@ -760,6 +760,34 @@ class TestActionExecutorMergeStreams:
         assert result.skipped is True
         self.client.update_channel.assert_not_called()
 
+    def test_merge_remove_non_matching_prunes_channel(self):
+        """When remove_non_matching is enabled, prune removes streams not merged this run."""
+        # Channel has one existing stream plus an extra stale stream
+        self.channels[0]["streams"] = [101, 999]
+        self.executor._channel_by_id[1]["streams"] = [101, 999]
+
+        action = {
+            "type": "merge_streams",
+            "target": "existing_channel",
+            "find_channel_by": "tvg_id",
+            "remove_non_matching": True,
+        }
+
+        exec_ctx = ExecutionContext()
+        # Merge a new matching stream into ESPN
+        _ = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        # Apply prune pass
+        results = {"dry_run_results": [], "execution_log": []}
+        asyncio.get_event_loop().run_until_complete(
+            self.executor.prune_merge_streams(results, dry_run=False)
+        )
+
+        # update_channel should be called for merge and then for prune
+        assert self.client.update_channel.call_count >= 2
+
 
 class TestActionExecutorPropertyActions:
     """Tests for property assignment actions."""

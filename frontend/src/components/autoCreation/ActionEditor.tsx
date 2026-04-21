@@ -862,6 +862,22 @@ export function ActionEditor({
                 Max streams per provider per channel. Use with quality sorting + probe for best results.
               </span>
             </div>
+
+            <div className="action-field">
+              <label className="transform-toggle">
+                <input
+                  type="checkbox"
+                  checked={!!action.remove_non_matching}
+                  onChange={e => onChange({ ...action, remove_non_matching: e.target.checked })}
+                  disabled={readonly}
+                  aria-label="Remove non-matching streams on merge"
+                />
+                Remove streams that no longer match
+              </label>
+              <span className="field-hint">
+                When enabled, this rule keeps the target channel in sync: streams that don&apos;t match this rule anymore will be removed from that channel.
+              </span>
+            </div>
           </>
         )}
 
