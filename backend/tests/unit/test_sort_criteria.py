@@ -929,3 +929,116 @@ class TestWithinBucketPrimaryCriteria:
             f"Expected failed bucket ordered by resolution desc then framerate desc "
             f"— [202, 203, 201] — got {failed_bucket}"
         )
+
+    # -- Full 13-stream ferteque regression (bd-sw883 re-open 2026-04-21) --
+
+    def test_ferteque_full_13_stream_regression(self):
+        """Exact 13-stream reproduction of reporter's channel-591424 log.
+
+        bd-sw883 was re-opened on 2026-04-21 when ferteque reported the
+        GH-73 defect still repros after the original 2026-04-20 fix merged.
+        This test mirrors the reporter's log entry ID-for-ID so regressions
+        against the exact published log are caught here.
+
+        Bucket expectations with full primary criteria enabled
+        (resolution, framerate, m3u_priority, bitrate, audio_channels, video_codec):
+
+        - rank=0 black_screen bucket (5 success probes flagged black):
+          * 958629 (1920x1080 @ 50) — highest res + highest fps
+          * 958471 (1920x1080 @ 50) — same res/fps; later insertion → tail via stable sort
+          * 959174 (1920x1080 @ 25) — same res, lower fps
+          * 962110 (1024x576 @ 25)  — lower res; earlier insertion
+          * 959167 (1024x576 @ 25)  — lower res; later insertion
+        - rank=2 failed bucket (8 failed probes):
+          * 1465608 (1920x1080 @ 50) — lowest id among 1080@50 failed
+          * 1465609 (1920x1080 @ 50)
+          * 1151440 (1920x1080 @ 50)
+          * 1151441 (1920x1080 @ 50)
+          * 962109  (1920x1080 @ 25)
+          * 962111  (1920x1080 @ 25)
+          * 1465610 (1280x720 @ 25)
+          * 1151442 (1280x720 @ 25)
+
+        Within equal primary keys, the deterministic tiebreaker is stream_id
+        ascending (see get_sort_value trailing ``(stream_id,)`` appendix).
+        """
+        stats_map = {
+            # black_screen (success probes flagged black) — rank 0
+            962110: self._bs_stats(962110, resolution="1024x576", fps="25"),    # D.LaLiga2
+            959174: self._bs_stats(959174, resolution="1920x1080", fps="25"),   # MOVISTAR UHD
+            959167: self._bs_stats(959167, resolution="1024x576", fps="25"),    # MOVISTAR SD
+            958629: self._bs_stats(958629, resolution="1920x1080", fps="50"),   # M.LALIGA 2 RAW
+            958471: self._bs_stats(958471, resolution="1920x1080", fps="50"),   # VO MOVISTAR LALIGA 2 RAW
+            # status=failed — rank 2
+            962109: self._failed_stats(962109, resolution="1920x1080", fps="25"),  # K.LaLiga2
+            1465610: self._failed_stats(1465610, resolution="1280x720", fps="25"), # HD
+            1465608: self._failed_stats(1465608, resolution="1920x1080", fps="50"),# HD 1080
+            1465609: self._failed_stats(1465609, resolution="1920x1080", fps="50"),# HD 1080 B
+            1151442: self._failed_stats(1151442, resolution="1280x720", fps="25"), # HD (dup)
+            1151440: self._failed_stats(1151440, resolution="1920x1080", fps="50"),# HD 1080 (dup)
+            1151441: self._failed_stats(1151441, resolution="1920x1080", fps="50"),# HD 1080 B (dup)
+            962111: self._failed_stats(962111, resolution="1920x1080", fps="25"),  # S.LaLiga2 HD
+        }
+        # Original insertion order from reporter's log
+        ids_in = [
+            962110, 959174, 959167, 962109, 958629, 958471, 1465610,
+            1465608, 1465609, 1151442, 1151440, 1151441, 962111,
+        ]
+        result = smart_sort_streams(
+            ids_in,
+            stats_map,
+            stream_sort_priority=["resolution", "framerate", "m3u_priority", "bitrate", "audio_channels", "video_codec"],
+            stream_sort_enabled={
+                "resolution": True, "framerate": True, "m3u_priority": True,
+                "bitrate": True, "audio_channels": True, "video_codec": True,
+            },
+            deprioritize_failed_streams=True,
+            deprioritize_black_screen=True,
+            failed_stream_sort_order=["black_screen", "low_fps", "failed"],
+            channel_name="channel-591424",
+        )
+        bs_bucket = result[:5]
+        failed_bucket = result[5:]
+        # Black-screen bucket: 1920x1080@50 streams lead (id asc: 958471 < 958629)
+        assert bs_bucket == [958471, 958629, 959174, 959167, 962110], (
+            f"black_screen bucket mismatch: got {bs_bucket}"
+        )
+        # Failed bucket: 1920x1080@50 > 1920x1080@25 > 1280x720@25, id asc within ties
+        assert failed_bucket == [
+            1151440, 1151441, 1465608, 1465609,  # 1920x1080 @ 50 (id asc)
+            962109, 962111,                      # 1920x1080 @ 25 (id asc)
+            1151442, 1465610,                    # 1280x720 @ 25 (id asc)
+        ], f"failed bucket mismatch: got {failed_bucket}"
+
+    def test_all_black_screen_bucket_pure_primary_criteria(self):
+        """All streams in a single bucket: within-bucket order is pure primary-criteria.
+
+        Investigation guard for bd-sw883 re-open: reporter's briefing called out
+        the corner where every stream lands in rank=0 (success probes + black
+        screen). Prior to the fix this degenerate case exposed the bug most
+        cleanly because there's no cross-bucket structure to hide behind.
+        """
+        stats_map = {
+            1: self._bs_stats(1, resolution="1024x576", fps="25"),
+            2: self._bs_stats(2, resolution="1920x1080", fps="25"),
+            3: self._bs_stats(3, resolution="1024x576", fps="25"),
+            4: self._bs_stats(4, resolution="1920x1080", fps="50"),
+            5: self._bs_stats(5, resolution="1920x1080", fps="50"),
+            6: self._bs_stats(6, resolution="1280x720", fps="25"),
+        }
+        result = smart_sort_streams(
+            [1, 2, 3, 4, 5, 6],
+            stats_map,
+            stream_sort_priority=["resolution", "framerate", "m3u_priority", "bitrate", "audio_channels", "video_codec"],
+            stream_sort_enabled={
+                "resolution": True, "framerate": True, "m3u_priority": True,
+                "bitrate": True, "audio_channels": True, "video_codec": True,
+            },
+            deprioritize_failed_streams=True,
+            deprioritize_black_screen=True,
+            failed_stream_sort_order=["black_screen", "low_fps", "failed"],
+        )
+        # Expected: 1920x1080@50 (4, 5 by id) > 1920x1080@25 (2) > 1280x720@25 (6) > 1024x576@25 (1, 3 by id)
+        assert result == [4, 5, 2, 6, 1, 3], (
+            f"All-black-screen bucket ordering failed: got {result}"
+        )
