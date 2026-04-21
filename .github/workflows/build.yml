@@ -11,6 +11,7 @@ on:
   pull_request:
     branches:
       - main
+      - dev
     paths-ignore:
       - '.beads/**'
       - '**.md'
@@ -95,6 +96,46 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
+
+      # ADR-005 Phase 3b: delta-zero enforcement.
+      # Fails the job on any PR that has open HIGH/CRITICAL CodeQL alerts.
+      # PR-only — push events are post-merge scans of already-reviewed code
+      # and gating them would block everyone on transient alerts.
+      # Code Scanning "merge protection rules" aren't available for our custom
+      # CodeQL setup, so we enforce delta-zero in the workflow itself and
+      # make this job a required status check.
+      - name: Enforce CodeQL delta-zero (fail on open HIGH/CRITICAL)
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          REF="${{ github.event.pull_request.merge_commit_sha || github.sha }}"
+          echo "Checking CodeQL alerts on ref=$REF"
+
+          # gh api --paginate streams pages as concatenated JSON arrays; jq -s
+          # flattens them into a single array before filtering.
+          ALERTS=$(gh api --paginate \
+            "/repos/${{ github.repository }}/code-scanning/alerts?state=open&ref=$REF&per_page=100" \
+            | jq -s 'add // [] | [.[] | select(.rule.security_severity_level=="high" or .rule.security_severity_level=="critical") | {number, rule: .rule.id, path: .most_recent_instance.location.path, severity: .rule.security_severity_level}]')
+
+          COUNT=$(echo "$ALERTS" | jq 'length')
+          echo "Open HIGH/CRITICAL alerts on ref=$REF: $COUNT"
+
+          if [ "$COUNT" -gt 0 ]; then
+            echo "::error::$COUNT open HIGH/CRITICAL CodeQL alerts on this PR:"
+            echo "$ALERTS" | jq -r '.[] | "- alert #\(.number) [\(.severity)] \(.rule) at \(.path)"'
+            echo ""
+            echo "Per ADR-005 Phase 1 dismissal policy, these must be either:"
+            echo "  (a) remediated (the fix closes the finding)"
+            echo "  (b) dismissed as false-positive with sanitizer evidence + test reference"
+            echo "  (c) dismissed as test-only with test path reference"
+            echo "See docs/adr/ADR-005-code-security-gating-strategy.md for full policy."
+            exit 1
+          fi
+
+          echo "Delta-zero check passed: 0 open HIGH/CRITICAL alerts on ref=$REF"
 
   # IaC Security Scanning
   iac-security-scan:
