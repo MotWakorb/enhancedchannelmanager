@@ -18,6 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 - `docs/backend_architecture.md` expanded with an Observability section covering logging schema, metric naming conventions, cardinality rules, `bind_context` usage, and the process for adding new metrics (`bd-ak1db`, PR #80).
+- `docs/shipping.md` — replaced the "Release Workflow (Merging to Main)" section with the ADR-004-authoritative Cut Mechanics (steps 0–10), a verbatim Pre-Cut Gate Checklist (G1a–G7) for pasting into release-cut PR descriptions, and a new Hotfix Path subsection covering the one carve-out from the "no non-release PRs to `main`" rule. The "When User Says 'Ship the Fix'" dev-cycle section is unchanged (`bd-tvlxz`).
+- `docs/runbooks/v0.16.0-rollback.md` — reordered the two force-push paths: Option 2 (temporary `allow_force_pushes` flip) is now primary per ADR-005 (admin-bypass disabled on `main`), with Option 1 (admin bypass) retained as a fallback only for the transitional window. Added a mandatory post-action verification step (`gh api ... | jq '.allow_force_pushes.enabled'` must return `false`) and a design note considering a short-TTL wrapper that auto-reverts via `trap` regardless of outcome (`bd-tvlxz`).
 
 ### Fixed
 - Auto-creation rule duplicate preserves stream/channel sort, normalization groups, orphan cleanup, and option toggles — duplicates now match the original's configuration instead of silently dropping fields (PR #94, external contributor stevencoutts, bd-x3lto).
