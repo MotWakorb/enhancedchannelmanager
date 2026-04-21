@@ -42,6 +42,7 @@ bd sync                       # Sync beads data only (NOT for code commits)
 | Database Migrations | `docs/database_migrations.md` |
 | Pytest Conventions | `docs/pytest_conventions.md` |
 | Project Architecture | `docs/project_architecture.md` |
+| Runbooks | `docs/runbooks/` |
 | CSS Guidelines | `docs/css_guidelines.md` |
 | Beads (Issue Tracking) | `~/.claude/projects/<project-slug>/memory/beads.md` |
 | Dispatcharr API | `docs/dispatcharr_api.md` |
