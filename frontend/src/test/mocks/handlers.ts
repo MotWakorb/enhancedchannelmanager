@@ -151,7 +151,7 @@ export function createMockAutoCreationRule(overrides: Partial<MockAutoCreationRu
     stream_sort_order: overrides.stream_sort_order ?? 'asc',
     normalization_group_ids: overrides.normalization_group_ids ?? [],
     skip_struck_streams: overrides.skip_struck_streams ?? false,
-    orphan_action: overrides.orphan_action ?? 'none',
+    orphan_action: overrides.orphan_action ?? 'delete',
     last_run_at: overrides.last_run_at ?? null,
     match_count: overrides.match_count ?? 0,
     created_at: overrides.created_at ?? new Date().toISOString(),
