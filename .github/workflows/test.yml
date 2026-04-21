@@ -38,7 +38,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio httpx
+          # Belt-and-suspenders: these are in requirements.txt already, but
+          # pin them here so the CI command is self-documenting.
+          pip install pytest pytest-asyncio pytest-cov httpx
 
       - name: Prepare CI SQLite database
         working-directory: backend
@@ -61,9 +63,26 @@ jobs:
           # only meaningful against a live service. E2E coverage as a CI gate
           # is deferred to bead enhancedchannelmanager-2lw25; skip it here so
           # the backend unit+integration suite can run without a live service.
+          #
+          # Coverage threshold is configured in backend/pytest.ini addopts
+          # (--cov=. --cov-fail-under=56) with paths filtered by .coveragerc.
+          # Pytest exits non-zero if coverage drops below the threshold, so
+          # this step enforces the ratchet automatically.
+          # See docs/testing.md § "Coverage ratchet cadence".
           python -m pytest \
             --ignore=tests/e2e \
             -m "not slow" --tb=short --no-header -p no:warnings
+
+      - name: Upload backend coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: |
+            backend/.coverage
+            backend/coverage.xml
+          if-no-files-found: ignore
+          retention-days: 14
 
   # ─── Frontend lint / typecheck / unit tests ───────────────────────────
   frontend:
@@ -99,15 +118,15 @@ jobs:
         working-directory: frontend
         run: npm run typecheck
 
-      - name: Unit tests
+      - name: Unit tests with coverage (blocking)
         working-directory: frontend
-        run: npm test
-
-      - name: Coverage report (informational only)
-        working-directory: frontend
-        continue-on-error: true
         run: |
-          echo "Coverage report — NON-BLOCKING. Threshold enforcement tracked in bead enhancedchannelmanager-nmlxi."
+          # Coverage thresholds are configured in frontend/vitest.config.ts
+          # (lines 13 / branches 12 / functions 13 / statements 13 —
+          # measured 2026-04-20 − 2 point regression buffer).
+          # Vitest exits non-zero if coverage drops below any threshold, so
+          # this step enforces the ratchet automatically.
+          # See docs/testing.md § "Coverage ratchet cadence".
           npm run test:coverage
 
       - name: Upload coverage artifact
