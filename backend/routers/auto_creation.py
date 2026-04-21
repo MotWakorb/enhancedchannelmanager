@@ -76,6 +76,13 @@ class UpdateAutoCreationRuleRequest(BaseModel):
     orphan_action: Optional[str] = None
 
 
+class BulkUpdateAutoCreationRulesRequest(UpdateAutoCreationRuleRequest):
+    """Bulk-update multiple rules. Only include fields to change (omit others)."""
+
+    rule_ids: List[int]
+    merge_streams_remove_non_matching: Optional[bool] = None
+
+
 class RunPipelineRequest(BaseModel):
     """Request to run the auto-creation pipeline."""
     dry_run: bool = False
@@ -87,6 +94,58 @@ class ImportYAMLRequest(BaseModel):
     """Request to import rules from YAML."""
     yaml_content: str
     overwrite: bool = False
+
+
+def _apply_merge_streams_remove_non_matching(actions: list, value: bool) -> list:
+    """Set remove_non_matching on every merge_streams action (stored as flat keys on the action dict)."""
+    out = []
+    for a in actions:
+        if not isinstance(a, dict):
+            out.append(a)
+            continue
+        if a.get("type") != "merge_streams":
+            out.append(a)
+            continue
+        out.append({**a, "remove_non_matching": bool(value)})
+    return out
+
+
+def _apply_rule_scalar_updates(rule, request: UpdateAutoCreationRuleRequest) -> None:
+    """Apply scalar columns from an update request (excluding conditions/actions body)."""
+    if request.name is not None:
+        rule.name = request.name
+    if request.description is not None:
+        rule.description = request.description
+    if request.enabled is not None:
+        rule.enabled = request.enabled
+    if request.priority is not None:
+        rule.priority = request.priority
+    if request.m3u_account_id is not None:
+        rule.m3u_account_id = request.m3u_account_id
+    if request.target_group_id is not None:
+        rule.target_group_id = request.target_group_id
+    if request.run_on_refresh is not None:
+        rule.run_on_refresh = request.run_on_refresh
+    if request.stop_on_first_match is not None:
+        rule.stop_on_first_match = request.stop_on_first_match
+    if request.sort_field is not None:
+        rule.sort_field = request.sort_field or None
+    if request.sort_order is not None:
+        rule.sort_order = request.sort_order
+    if request.probe_on_sort is not None:
+        rule.probe_on_sort = request.probe_on_sort
+    if request.sort_regex is not None:
+        rule.sort_regex = request.sort_regex or None
+    if request.stream_sort_field is not None:
+        rule.stream_sort_field = request.stream_sort_field or None
+    if request.stream_sort_order is not None:
+        rule.stream_sort_order = request.stream_sort_order
+    if request.normalization_group_ids is not None:
+        rule.set_normalization_group_ids(request.normalization_group_ids)
+    if request.skip_struck_streams is not None:
+        rule.skip_struck_streams = request.skip_struck_streams
+    if request.orphan_action is not None:
+        rule.orphan_action = request.orphan_action
 
 
 def _resolve_normalization_group_ids(rule_data: dict, session) -> str | None:
@@ -243,41 +302,7 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
             if not rule:
                 raise HTTPException(status_code=404, detail="Rule not found")
 
-            # Update fields if provided
-            if request.name is not None:
-                rule.name = request.name
-            if request.description is not None:
-                rule.description = request.description
-            if request.enabled is not None:
-                rule.enabled = request.enabled
-            if request.priority is not None:
-                rule.priority = request.priority
-            if request.m3u_account_id is not None:
-                rule.m3u_account_id = request.m3u_account_id
-            if request.target_group_id is not None:
-                rule.target_group_id = request.target_group_id
-            if request.run_on_refresh is not None:
-                rule.run_on_refresh = request.run_on_refresh
-            if request.stop_on_first_match is not None:
-                rule.stop_on_first_match = request.stop_on_first_match
-            if request.sort_field is not None:
-                rule.sort_field = request.sort_field or None
-            if request.sort_order is not None:
-                rule.sort_order = request.sort_order
-            if request.probe_on_sort is not None:
-                rule.probe_on_sort = request.probe_on_sort
-            if request.sort_regex is not None:
-                rule.sort_regex = request.sort_regex or None
-            if request.stream_sort_field is not None:
-                rule.stream_sort_field = request.stream_sort_field or None
-            if request.stream_sort_order is not None:
-                rule.stream_sort_order = request.stream_sort_order
-            if request.normalization_group_ids is not None:
-                rule.set_normalization_group_ids(request.normalization_group_ids)
-            if request.skip_struck_streams is not None:
-                rule.skip_struck_streams = request.skip_struck_streams
-            if request.orphan_action is not None:
-                rule.orphan_action = request.orphan_action
+            _apply_rule_scalar_updates(rule, request)
 
             # Validate and update conditions/actions if provided
             conditions = request.conditions if request.conditions is not None else rule.get_conditions()
@@ -320,6 +345,80 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to update auto-creation rule %s: %s", rule_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/rules/bulk-update")
+async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRequest):
+    """Apply the same field changes to many rules. Omitted fields are left unchanged."""
+    from models import AutoCreationRule
+    from auto_creation_schema import validate_rule
+
+    payload = request.model_dump(exclude_unset=True)
+    rule_ids = payload.pop("rule_ids", None) or []
+    merge_streams_remove_non_matching = payload.pop("merge_streams_remove_non_matching", None)
+
+    if not rule_ids:
+        raise HTTPException(status_code=400, detail="rule_ids is required")
+    if len(rule_ids) != len(set(rule_ids)):
+        raise HTTPException(status_code=400, detail="duplicate rule_ids")
+    if not payload and merge_streams_remove_non_matching is None:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    scalar_update = UpdateAutoCreationRuleRequest(**payload) if payload else UpdateAutoCreationRuleRequest()
+
+    session = get_session()
+    try:
+        updated: list = []
+        for rid in rule_ids:
+            rule = session.query(AutoCreationRule).filter(AutoCreationRule.id == rid).first()
+            if not rule:
+                raise HTTPException(status_code=404, detail=f"Rule not found: {rid}")
+
+            if payload:
+                _apply_rule_scalar_updates(rule, scalar_update)
+
+            if merge_streams_remove_non_matching is not None:
+                actions = rule.get_actions()
+                new_actions = _apply_merge_streams_remove_non_matching(
+                    actions, merge_streams_remove_non_matching
+                )
+                rule.actions = json.dumps(new_actions)
+
+            conditions = rule.get_conditions()
+            actions = rule.get_actions()
+            validation = validate_rule(conditions, actions)
+            if not validation["valid"]:
+                raise HTTPException(status_code=400, detail={
+                    "message": f"Invalid rule configuration for rule id={rid}",
+                    "errors": validation["errors"],
+                })
+            updated.append(rule)
+
+        session.commit()
+        for rule in updated:
+            session.refresh(rule)
+
+        names = ", ".join(r.name for r in updated[:5])
+        if len(updated) > 5:
+            names += ", …"
+        journal.log_entry(
+            category="auto_creation",
+            action_type="update",
+            entity_id=0,
+            entity_name="bulk",
+            description=f"Bulk-updated {len(updated)} auto-creation rule(s): {names}",
+        )
+
+        return {"rules": [r.to_dict() for r in updated], "updated_count": len(updated)}
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.exception("[AUTO-CREATE] Bulk update failed: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        session.close()
 
 
 @router.delete("/rules/{rule_id}")

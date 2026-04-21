@@ -7,6 +7,8 @@ import type {
   AutoCreationRule,
   CreateRuleData,
   UpdateRuleData,
+  BulkUpdateRulesPatch,
+  BulkUpdateRulesResponse,
   RulesListResponse,
   ExecutionsListResponse,
   AutoCreationExecution,
@@ -86,6 +88,19 @@ export async function deleteAutoCreationRule(id: number): Promise<void> {
 export async function toggleAutoCreationRule(id: number): Promise<AutoCreationRule> {
   return fetchJson<AutoCreationRule>(`${API_BASE}/auto-creation/rules/${id}/toggle`, {
     method: 'POST',
+  });
+}
+
+/**
+ * Apply the same settings changes to multiple rules. Only include fields to change.
+ */
+export async function bulkUpdateAutoCreationRules(
+  ruleIds: number[],
+  patch: BulkUpdateRulesPatch
+): Promise<BulkUpdateRulesResponse> {
+  return fetchJson<BulkUpdateRulesResponse>(`${API_BASE}/auto-creation/rules/bulk-update`, {
+    method: 'POST',
+    body: JSON.stringify({ rule_ids: ruleIds, ...patch }),
   });
 }
 
