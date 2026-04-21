@@ -440,3 +440,88 @@ class TestValidation:
             "selection_mode": "groups",
         })
         assert response.status_code == 400
+
+
+# =============================================================================
+# Print-Guide XSS Regression (bd-i3npz / CodeQL 1360)
+# =============================================================================
+#
+# CodeQL alert 1360 flags request.title reaching Response(content=html) in
+# backend/routers/export.py:1243 as a reflected-XSS sink. The sanitizer
+# `_escape_html` IS in fact applied at :1235 before the title is inlined into
+# the HTML document. These tests prove the sanitizer fires and exist so the
+# CodeQL alert can be formally dismissed per ADR-005 Phase 1 policy
+# (sanitizer-based FP dismissals must reference a test that proves the escape).
+# =============================================================================
+
+
+class TestPrintGuideXSS:
+    """Regression tests ensuring print-guide HTML output escapes user input."""
+
+    @pytest.mark.asyncio
+    @patch("routers.export.get_client")
+    async def test_print_guide_escapes_xss_in_title(self, mock_get_client, async_client):
+        """Script tag in title must be HTML-entity encoded in the response body."""
+        mock_client = MagicMock()
+        mock_client.get_channel_groups = AsyncMock(return_value=[])
+        mock_client.get_channels = AsyncMock(return_value={"results": []})
+        mock_get_client.return_value = mock_client
+
+        payload = {
+            "title": "<script>alert(1)</script>",
+            "groups": [],
+        }
+        response = await async_client.post("/api/export/print-guide", json=payload)
+
+        assert response.status_code == 200
+        body = response.text
+        # Raw script tag must NOT appear anywhere in the rendered HTML
+        assert "<script>alert(1)</script>" not in body
+        # Entity-encoded form MUST appear (single-escape, HTML entity form)
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body
+
+    @pytest.mark.asyncio
+    @patch("routers.export.get_client")
+    async def test_print_guide_escapes_double_quote_in_title(self, mock_get_client, async_client):
+        """Double-quote in title must be entity-encoded to prevent attribute-context escape."""
+        mock_client = MagicMock()
+        mock_client.get_channel_groups = AsyncMock(return_value=[])
+        mock_client.get_channels = AsyncMock(return_value={"results": []})
+        mock_get_client.return_value = mock_client
+
+        payload = {
+            "title": 'abc" def',
+            "groups": [],
+        }
+        response = await async_client.post("/api/export/print-guide", json=payload)
+
+        assert response.status_code == 200
+        body = response.text
+        # The raw `"` from the user input must not survive as an unescaped character
+        # adjacent to its preceding token (which would allow attribute breakout).
+        assert 'abc" def' not in body
+        # The escaped entity form must be present in the body.
+        assert "abc&quot; def" in body
+
+    @pytest.mark.asyncio
+    @patch("routers.export.get_client")
+    async def test_print_guide_escapes_ampersand_in_title(self, mock_get_client, async_client):
+        """Ampersand in title must be encoded first to avoid double-escape drift."""
+        mock_client = MagicMock()
+        mock_client.get_channel_groups = AsyncMock(return_value=[])
+        mock_client.get_channels = AsyncMock(return_value={"results": []})
+        mock_get_client.return_value = mock_client
+
+        payload = {
+            "title": "A & B <tag>",
+            "groups": [],
+        }
+        response = await async_client.post("/api/export/print-guide", json=payload)
+
+        assert response.status_code == 200
+        body = response.text
+        # The ampersand is escaped first, then < and > are escaped — result is
+        # single-pass encoded: "A &amp; B &lt;tag&gt;".
+        assert "A &amp; B &lt;tag&gt;" in body
+        # Raw `<tag>` substring must not appear.
+        assert "A & B <tag>" not in body
