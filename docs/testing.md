@@ -106,6 +106,91 @@ npm run test:e2e:debug     # Debug mode with breakpoints
 npm run test:e2e:report    # View test report
 ```
 
+## Coverage ratchet cadence
+
+Coverage is enforced in CI as a **one-way ratchet**: the current floor is the
+baseline measured 2026-04-20 during bead `enhancedchannelmanager-nmlxi`, minus
+a small regression buffer. Crossing below those numbers fails the CI job.
+
+### Current thresholds
+
+| Suite | Metric | Measured 2026-04-20 | Threshold | Buffer | Where enforced |
+|-|-|-|-|-|-|
+| Backend (pytest + coverage.py) | lines | 58% | 56% | 2 pts | `backend/pytest.ini` (`--cov-fail-under=56`), paths in `backend/.coveragerc` |
+| Frontend (vitest + v8) | statements | 15.17% | 13% | 2 pts | `frontend/vitest.config.ts` `thresholds.statements` |
+| Frontend (vitest + v8) | branches | 14.13% | 12% | 2 pts | `frontend/vitest.config.ts` `thresholds.branches` |
+| Frontend (vitest + v8) | functions | 15.28% | 13% | 2 pts | `frontend/vitest.config.ts` `thresholds.functions` |
+| Frontend (vitest + v8) | lines | 15.46% | 13% | 2 pts | `frontend/vitest.config.ts` `thresholds.lines` |
+
+Backend measurement: `docker exec ecm-ecm-1 sh -c 'cd /app && python -m pytest
+--ignore=tests/e2e -m "not slow" --cov-config=/tmp/.coveragerc --cov=.
+--cov-report=term'` with the three known-drift deselects from the flake
+section above. 2427 tests, 3 deselected.
+
+Frontend measurement: `cd frontend && npm run test:coverage`. 1118 tests across
+44 files.
+
+### Rationale for buffer choice
+
+The ideal methodology (from bead `enhancedchannelmanager-nmlxi`) is to wait
+~1 week after the CI test-gate landed (`enhancedchannelmanager-t8xw3`) so we
+can observe real per-PR coverage numbers rather than the full-suite snapshot.
+We didn't have that window — t8xw3 closed the day this bead landed. The PO
+approved a single full-suite snapshot with a 2-point buffer as a pragmatic
+baseline. Expect slightly churny CI on PRs that touch low-coverage modules
+until the first re-ratchet.
+
+### Re-ratchet policy
+
+- **Cadence**: review the thresholds **2-4 weeks after this bead lands**,
+  once real PR coverage data exists. Thereafter, review quarterly (aligned
+  with the flake sweep).
+- **Raise criterion**: if every PR merged in the review window held coverage
+  comfortably (≥ threshold + 3 points) on every metric, raise that metric's
+  threshold by **~5 points**. Never raise by more than 5 points in one
+  review — gives authors time to respond before the ratchet tightens further.
+- **Lower prohibition**: thresholds are **one-way**. Lowering requires
+  explicit PO approval and a one-line rationale in the commit message. Do
+  not lower "because my PR didn't quite make it" — add tests instead.
+- **Per-metric independence**: frontend has four metrics (lines, branches,
+  functions, statements). They ratchet independently. A PR that lifts
+  function coverage to 20% should raise the function threshold to 15% —
+  it does not have to wait for statements to also move.
+- **Scope creep guard**: this bead's predecessor (`t8xw3`) explicitly
+  excludes retroactively force-testing low-coverage modules. The ratchet
+  exists to prevent regression, not to force a coverage sprint.
+
+### Next-iteration upgrade: diff-coverage
+
+The bead scope flagged **diff-coverage** (coverage of CHANGED lines only)
+as a likely better gate for a 61K-line codebase — whole-codebase coverage
+is noisy for small PRs. This is out of scope for the current ratchet bead
+and should be filed as a follow-up. Candidate tools:
+
+- Python: `diff-cover` (PyPI) integrates cleanly with coverage.xml.
+- JavaScript/TypeScript: `diff-cover` also consumes v8/lcov output.
+
+When we file the follow-up, the gate becomes "changed lines must hit X%
+coverage" with X set conservatively (≥ 80% seems reasonable given the base
+rates above) and the whole-codebase thresholds stay as a floor.
+
+### Running coverage locally
+
+```bash
+# Backend — inside the container (matches the CI invocation).
+docker exec ecm-ecm-1 sh -c 'cd /app && python -m pytest \
+  --ignore=tests/e2e -m "not slow" --no-header -p no:warnings'
+# Coverage is auto-enabled via pytest.ini addopts. To disable for a quick
+# single-file run: add --no-cov.
+
+# Frontend — from the host.
+cd frontend && npm run test:coverage
+```
+
+If a local run drops below threshold, fix the root cause (add a test, remove
+dead code, or adjust .coveragerc omit if the file is genuinely non-runtime).
+Do **not** lower the threshold in the config.
+
 ## When to Run Tests
 
 - **Backend tests**: MANDATORY for any backend code changes
