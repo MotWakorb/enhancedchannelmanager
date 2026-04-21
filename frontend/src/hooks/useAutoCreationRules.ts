@@ -176,7 +176,7 @@ export function useAutoCreationRules(
     const duplicateData: CreateRuleData = {
       name: `${originalRule.name} (Copy)`,
       description: originalRule.description,
-      enabled: originalRule.enabled,
+      enabled: false, // Disabled by default (safety: avoid duplicate processing)
       priority: maxPriority + 1,
       conditions: originalRule.conditions,
       actions: originalRule.actions,

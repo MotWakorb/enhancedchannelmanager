@@ -464,7 +464,7 @@ describe('useAutoCreationRules', () => {
       expect(duplicate!.name).toContain('Original Rule');
       expect(duplicate!.name).toContain('Copy');
       expect(duplicate!.id).not.toBe(original.id);
-      expect(duplicate!.enabled).toBe(true);
+      expect(duplicate!.enabled).toBe(false);
       expect(duplicate!.run_on_refresh).toBe(true);
       expect(duplicate!.stop_on_first_match).toBe(true);
       expect(duplicate!.sort_field).toBe('quality');
@@ -476,6 +476,36 @@ describe('useAutoCreationRules', () => {
       expect(duplicate!.skip_struck_streams).toBe(true);
       expect(duplicate!.orphan_action).toBe('delete');
       expect(result.current.rules).toHaveLength(2);
+    });
+
+    it('round-trips nullable/empty sort config fields', async () => {
+      const original = createMockAutoCreationRule({
+        name: 'Nullable Fields Rule',
+        enabled: true,
+        sort_field: null,
+        sort_regex: null,
+        stream_sort_field: null,
+        normalization_group_ids: [],
+      });
+      mockDataStore.autoCreationRules.push(original);
+
+      const { result } = renderHook(() => useAutoCreationRules());
+
+      await act(async () => {
+        await result.current.fetchRules();
+      });
+
+      let duplicate: AutoCreationRule | undefined;
+      await act(async () => {
+        duplicate = await result.current.duplicateRule(original.id);
+      });
+
+      expect(duplicate).toBeDefined();
+      expect(duplicate!.enabled).toBe(false);
+      expect(duplicate!.sort_field).toBeNull();
+      expect(duplicate!.sort_regex).toBeNull();
+      expect(duplicate!.stream_sort_field).toBeNull();
+      expect(duplicate!.normalization_group_ids).toEqual([]);
     });
 
     it('throws when duplicating non-existent rule', async () => {
