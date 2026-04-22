@@ -44,6 +44,20 @@ The user may provide:
 - **`merge_streams` with `target: auto`** — looks for existing channels by normalized name; if no match, skips the stream entirely.
 - **Sort order affects which stream becomes primary** in a channel.
 
+### Unicode-Suffix Normalization Surprises
+
+If a pattern appears to match when you read it but the engine says otherwise (or vice versa) for inputs containing Unicode suffixes — `ᴴᴰ`, `ᴿᴬᵂ`, `²`, `³`, zero-width joiners, NFD-decomposed accents — the cause is almost always a Unicode-normal-form mismatch between the pattern and the input.
+
+Under the unified NormalizationPolicy (bd-eio04.1), every input is NFC-canonicalized, Cf-stripped (ZWSP/ZWNJ/ZWJ/BOM), and superscript-converted (letters + numerics) **before** any rule pattern runs. A pattern typed against the pre-policy raw bytes (e.g. containing a ZWSP you can't see, or an NFD-decomposed `é`) will not match the post-policy input — and looks identical in the UI.
+
+When diagnosing this class:
+
+- Paste the raw input into Settings → Normalization → Test Rules and read the trace drawer. Test Rules applies the policy and shows you the bytes your pattern actually runs against.
+- Ensure both your pattern and your sample input are in the same normal form (NFC, no stray Cf code points). Re-type the pattern inside the rule editor rather than pasting from a source with unknown provenance.
+- For `²` / `³` / `ᴴᴰ` / `ᴿᴬᵂ`: these now strip on every code path. If a rule expected to see them in the input, the rule is running too late in the pipeline (after the policy has already converted them) — condition against the ASCII equivalent.
+
+Full reference: [`docs/normalization.md`](../normalization.md). Operator triage for duplicate channels caused by Unicode-suffix divergence: [`docs/runbooks/duplicate-channels-unicode-suffix.md`](../runbooks/duplicate-channels-unicode-suffix.md).
+
 ### Execution Log Analysis (when log is provided)
 
 The execution log uses the `[AUTO-CREATE-EXEC]` prefix. Key patterns to look for:
