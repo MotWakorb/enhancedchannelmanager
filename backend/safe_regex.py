@@ -197,28 +197,39 @@ def search(
 
     On timeout or oversize pattern, returns ``None`` and logs WARN. See
     the module docstring for the best-effort caveat on timeout.
+
+    When *pattern* is a pre-compiled Pattern, the bound-method path is
+    used (``pattern.search(text, ...)``) rather than the module-level
+    dispatcher. Module-level dispatch re-hashes the compiled pattern on
+    every call in the underlying ``regex`` library and runs measurably
+    slower — a concern on hot paths such as N log N sort comparisons
+    (bd-eio04.15).
     """
-    if isinstance(pattern, str) and len(pattern) > max_pattern_len:
-        _log_oversize(pattern, len(text), max_pattern_len)
-        return None
+    timeout_s = _timeout_seconds(timeout_ms)
+    if isinstance(pattern, str):
+        if len(pattern) > max_pattern_len:
+            _log_oversize(pattern, len(text), max_pattern_len)
+            return None
+        try:
+            return _regex.search(pattern, text, flags=flags, timeout=timeout_s)
+        except TimeoutError:
+            _log_timeout(pattern, len(text), timeout_ms)
+            return None
+        except _regex.error as exc:
+            logger.warning(
+                "[SAFE_REGEX] compile error at search "
+                "pattern_sha256=%s pattern_excerpt=%r error=%s caller=%s",
+                _pattern_sha256(pattern),
+                _pattern_excerpt(pattern),
+                exc,
+                _caller_name(skip_frames=2),
+            )
+            return None
+    # Pre-compiled pattern: go direct to the bound method for speed.
     try:
-        return _regex.search(
-            pattern, text, flags=flags, timeout=_timeout_seconds(timeout_ms)
-        )
+        return pattern.search(text, timeout=timeout_s)
     except TimeoutError:
-        pattern_str = pattern if isinstance(pattern, str) else pattern.pattern
-        _log_timeout(pattern_str, len(text), timeout_ms)
-        return None
-    except _regex.error as exc:
-        pattern_str = pattern if isinstance(pattern, str) else pattern.pattern
-        logger.warning(
-            "[SAFE_REGEX] compile error at search "
-            "pattern_sha256=%s pattern_excerpt=%r error=%s caller=%s",
-            _pattern_sha256(pattern_str),
-            _pattern_excerpt(pattern_str),
-            exc,
-            _caller_name(skip_frames=2),
-        )
+        _log_timeout(pattern.pattern, len(text), timeout_ms)
         return None
 
 
