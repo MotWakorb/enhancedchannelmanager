@@ -22,8 +22,8 @@ The AST walk operates on the compiled parse tree, not on the pattern string
 via regex-matching, so the linter is itself ReDoS-safe by construction.
 
 Error messages are actionable (length/limit surfaced, rewrite hint included)
-and point to ``/docs/patterns`` (placeholder — bd-eio04.8 writes the style
-guide Regex section this URL will link to).
+and link to ``docs/style_guide.md#regex`` for project-wide guidance on the
+regex convention and when ``safe_regex`` applies.
 """
 from __future__ import annotations
 
@@ -81,10 +81,11 @@ _REPEAT_OPS = {MAX_REPEAT, MIN_REPEAT}
 
 MAX_PATTERN_LEN: int = safe_regex.DEFAULT_MAX_PATTERN_LEN  # 500
 
-# Placeholder — bd-eio04.8 will write the style guide section this link
-# points to. Keeping the TODO in-code so the test suite's grep for
-# "/docs/patterns" is load-bearing until that bead lands.
-DOCS_URL: str = "/docs/patterns"  # TODO(bd-eio04.8): point to anchored section
+# Anchored link to the Regex section of the engineering style guide. The
+# style guide covers the full convention (when to use safe_regex, the
+# exception list, the enforcement chain); error messages surfaced from this
+# linter point the user here so "422 rejected" is immediately actionable.
+DOCS_URL: str = "docs/style_guide.md#regex"
 
 ViolationCode = Literal[
     "REGEX_TOO_LONG",

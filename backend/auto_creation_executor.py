@@ -1549,12 +1549,14 @@ class ActionExecutor:
         n = re.sub(r'^[A-Z]{2}\s*[:|]\s*', '', n)
         # Strip league prefix: "NFL: Arizona Cardinals"
         n = ActionExecutor._LEAGUE_PREFIXES_RE.sub('', n)
-        # Strip quality suffixes
+        # Strip quality suffixes — {suffix} iterates the hardcoded
+        # ActionExecutor._QUALITY_SUFFIXES tuple, not user input.
         for suffix in ActionExecutor._QUALITY_SUFFIXES:
-            n = re.sub(rf'[\s\-_|:]*{suffix}\s*$', '', n, flags=re.IGNORECASE)
-        # Strip timezone suffixes
+            n = re.sub(rf'[\s\-_|:]*{suffix}\s*$', '', n, flags=re.IGNORECASE)  # nosemgrep: no-bare-re-on-dynamic-pattern
+        # Strip timezone suffixes — {suffix} iterates the hardcoded
+        # ActionExecutor._TIMEZONE_SUFFIXES tuple.
         for suffix in ActionExecutor._TIMEZONE_SUFFIXES:
-            n = re.sub(rf'[\s\-_|:]*{suffix}\s*$', '', n, flags=re.IGNORECASE)
+            n = re.sub(rf'[\s\-_|:]*{suffix}\s*$', '', n, flags=re.IGNORECASE)  # nosemgrep: no-bare-re-on-dynamic-pattern
         # Convert semantic characters
         n = n.replace('+', 'plus').replace('&', 'and')
         # Lowercase alphanumeric only
