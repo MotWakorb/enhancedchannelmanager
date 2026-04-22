@@ -74,6 +74,8 @@ httpx==0.28.1
     # via
     #   -r requirements.in
     #   respx
+hypothesis==6.152.1
+    # via -r requirements.in
 idna==3.11
     # via
     #   anyio
@@ -163,6 +165,8 @@ six==1.17.0
     #   python-dateutil
 slowapi==0.1.9
     # via -r requirements.in
+sortedcontainers==2.4.0
+    # via hypothesis
 sqlalchemy==2.0.49
     # via
     #   -r requirements.in

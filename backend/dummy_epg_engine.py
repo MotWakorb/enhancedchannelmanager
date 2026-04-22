@@ -12,11 +12,17 @@ from datetime import datetime, timedelta
 
 import pytz
 
+import safe_regex
+
 logger = logging.getLogger(__name__)
 
 
 def _js_to_python_named_groups(pattern: str) -> str:
-    """Convert JavaScript-style named groups (?<name>...) to Python (?P<name>...)."""
+    """Convert JavaScript-style named groups (?<name>...) to Python (?P<name>...).
+
+    The regex used here is a module-level, developer-authored pattern (not user
+    input), so stdlib ``re`` is correct — no ReDoS surface.
+    """
     if not pattern:
         return pattern
     return re.sub(r"\(\?<(?!\=|\!)", "(?P<", pattern)
@@ -69,14 +75,12 @@ def apply_substitutions(name: str, pairs: list[dict]) -> tuple[str, list[dict]]:
         before = current
 
         if is_regex:
-            try:
-                current = re.sub(find, replace, current)
-            except re.error as e:
-                logger.warning(
-                    "[DUMMY-EPG] Invalid regex in substitution find=%s: %s",
-                    find, e,
-                )
-                continue
+            # Fallback contract (bd-eio04.16): safe_regex.sub returns *text*
+            # unchanged on timeout / oversize pattern / invalid pattern and
+            # emits a [SAFE_REGEX] WARN. When the returned string matches
+            # ``before``, the rule is effectively a no-op and no step is
+            # recorded — equivalent to skipping a bad rule without crashing.
+            current = safe_regex.sub(find, replace, current)
         else:
             current = current.replace(find, replace)
 
@@ -118,32 +122,33 @@ def extract_groups(
     time_pattern = _js_to_python_named_groups(time_pattern)
     date_pattern = _js_to_python_named_groups(date_pattern)
 
-    try:
-        title_match = re.search(title_pattern, name)
-    except re.error as e:
-        logger.warning("[DUMMY-EPG] Invalid title_pattern regex: %s", e)
-        return None
-
+    # Fallback contract (bd-eio04.16): safe_regex.search returns None on
+    # timeout / oversize / invalid pattern (logging [SAFE_REGEX] WARN). For
+    # title_pattern this is treated as "no match" — the same outcome as a
+    # non-matching good pattern — so the caller renders fallback templates
+    # rather than crashing.
+    title_match = safe_regex.search(title_pattern, name)
     if not title_match:
         return None
 
     groups = dict(title_match.groupdict())
 
     if time_pattern:
-        try:
-            time_match = re.search(time_pattern, name)
-            if time_match:
-                groups.update(time_match.groupdict())
-        except re.error as e:
-            logger.warning("[DUMMY-EPG] Invalid time_pattern regex: %s", e)
+        # Fallback contract (bd-eio04.16): safe_regex.search returns None on
+        # timeout / oversize / invalid pattern. Missing time groups is already
+        # a supported state (compute_event_times falls back to "now"), so we
+        # simply skip updating the groups dict.
+        time_match = safe_regex.search(time_pattern, name)
+        if time_match:
+            groups.update(time_match.groupdict())
 
     if date_pattern:
-        try:
-            date_match = re.search(date_pattern, name)
-            if date_match:
-                groups.update(date_match.groupdict())
-        except re.error as e:
-            logger.warning("[DUMMY-EPG] Invalid date_pattern regex: %s", e)
+        # Fallback contract (bd-eio04.16): safe_regex.search returns None on
+        # timeout / oversize / invalid pattern. Missing date groups falls
+        # through to the "no date captured" branch in compute_event_times.
+        date_match = safe_regex.search(date_pattern, name)
+        if date_match:
+            groups.update(date_match.groupdict())
 
     return groups
 
