@@ -19,7 +19,9 @@ TOKEN_URL = "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
 # Azure AD tenant IDs are either GUIDs (common.onmicrosoft.com case not permitted
 # for app-only flows) or verified domain names such as `contoso.onmicrosoft.com`.
 # Anchored start/end to prevent URL injection (e.g. `evil.com/`, `../`, null bytes).
-_TENANT_ID_RE = re.compile(
+# Module-level constant assembled from raw-string literal fragments; no runtime
+# interpolation — safe by construction.
+_TENANT_ID_RE = re.compile(  # nosemgrep: no-bare-re-on-dynamic-pattern
     r"\A(?:"
     # GUID form
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"

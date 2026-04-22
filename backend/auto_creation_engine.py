@@ -15,6 +15,8 @@ import re
 from collections import defaultdict
 from datetime import datetime
 from typing import Optional
+
+import safe_regex
 from config import get_settings
 from database import get_session
 from models import (
@@ -693,14 +695,37 @@ class AutoCreationEngine:
                     continue
 
                 # Get current stream IDs in the channel
+                stream_items = channel.get("streams", []) or []
                 current_streams = [
                     s["id"] if isinstance(s, dict) else s
-                    for s in channel.get("streams", [])
+                    for s in stream_items
                 ]
                 if len(current_streams) < 2:
                     continue
 
                 channel_name = channel.get("name", f"Channel #{channel_id}")
+
+                # Some sort modes (e.g. stream_name) only need names, not probe stats.
+                # When a stream has no stats row yet, _stream_name_for_sort falls back
+                # to "Stream <id>", which can make sorting appear to do nothing.
+                # If the channel payload includes stream dicts with names, seed those
+                # into the per-call stats cache so name-based sorts can still reorder.
+                stats_cache = self._stream_stats_cache
+                if any(isinstance(s, dict) and s.get("name") for s in stream_items):
+                    stats_cache = dict(self._stream_stats_cache)
+                    for s in stream_items:
+                        if not isinstance(s, dict):
+                            continue
+                        sid = s.get("id")
+                        sname = s.get("name")
+                        if not sid or not sname:
+                            continue
+                        existing = stats_cache.get(sid)
+                        if isinstance(existing, dict):
+                            if not existing.get("stream_name"):
+                                stats_cache[sid] = {**existing, "stream_name": sname}
+                        else:
+                            stats_cache[sid] = {"stream_name": sname}
 
                 # Respect rule.stream_sort_field (Provider Order, Quality, etc.).
                 # Previously this always used global smart-sort settings, so "Provider Order (M3U)"
@@ -708,7 +733,7 @@ class AutoCreationEngine:
                 sorted_streams = _reorder_streams_for_rule(
                     current_streams,
                     rule,
-                    self._stream_stats_cache,
+                    stats_cache,
                     stream_m3u_map,
                     channel_name,
                     settings,
@@ -716,7 +741,26 @@ class AutoCreationEngine:
 
                 # Skip if order didn't change
                 if sorted_streams == current_streams:
-                    logger.info("[AUTO-CREATE-ENGINE] Channel '%s': order unchanged, skipping", channel_name)
+                    mode_label = _stream_sort_rule_label(rule.stream_sort_field)
+                    logger.info(
+                        "[AUTO-CREATE-ENGINE] Channel '%s': already sorted by %s, skipping",
+                        channel_name,
+                        mode_label,
+                    )
+                    # Still record that we evaluated sorting for UI visibility.
+                    results["execution_log"].append({
+                        "stream_id": None,
+                        "stream_name": f"[AUTO-CREATE-ENGINE] {channel_name}",
+                        "m3u_account_id": None,
+                        "rules_evaluated": [],
+                        "actions_executed": [{
+                            "type": "reorder_streams",
+                            "description": f"Stream order already sorted in '{channel_name}' by {mode_label} (no changes)",
+                            "success": True,
+                            "entity_id": channel_id,
+                            "error": None
+                        }]
+                    })
                     continue
 
                 if dry_run:
@@ -1091,16 +1135,40 @@ class AutoCreationEngine:
                     len(entries), rule.name,
                     rule.sort_field, rule.sort_order or 'asc'
                 )
+                # bd-eio04.15: precompile sort_regex ONCE per rule, outside
+                # the sort comparator. Python's Timsort invokes the key
+                # function O(n) times (not N log N — keys are memoized), so
+                # the per-call cost is O(n) safe_regex.search invocations.
+                # Pre-compiling avoids paying the compile overhead on every
+                # call and keeps the hot path close to stdlib re speed.
+                # Oversize / invalid patterns raise here; we fall back to a
+                # None sort_regex so _sort_key returns the unmatched
+                # sentinel for every stream (stable arbitrary order).
+                precompiled_sort_regex = None
+                raw_sort_regex = getattr(rule, 'sort_regex', None)
+                if raw_sort_regex and rule.sort_field == "stream_name_regex":
+                    try:
+                        precompiled_sort_regex = safe_regex.compile(raw_sort_regex)
+                    except safe_regex.SafeRegexError as e:
+                        logger.warning(
+                            "[AUTO-CREATE-ENGINE] Rule '%s' sort_regex "
+                            "failed to compile (%s); falling back to "
+                            "unsorted order for stream_name_regex",
+                            rule.name, e,
+                        )
                 entries.sort(
-                    key=lambda e: _sort_key(e[0], rule.sort_field, getattr(rule, 'sort_regex', None)),
+                    key=lambda e: _sort_key(e[0], rule.sort_field, precompiled_sort_regex),
                     reverse=(rule.sort_order == "desc")
                 )
             sorted_entries.extend(entries)
 
         logger.debug("[AUTO-CREATE-ENGINE] Total sorted entries: %s", len(sorted_entries))
 
-        # Track channel IDs per rule in sorted order (for Pass 3 renumber + Pass 3.5 stream reorder)
-        rule_channel_order = defaultdict(list)  # rule_id -> [channel_id, ...] in sorted order
+        # Track channel IDs per rule in sorted order for:
+        # - Pass 3 renumber: ONLY channels the rule owns (created this run OR pre-run managed)
+        # - Pass 3.5 stream reorder: channels the rule owns OR channels it actually modified this run
+        rule_channel_order = defaultdict(list)  # rule_id -> [channel_id, ...] in sorted order (renumber gating)
+        rule_channel_order_streams = defaultdict(list)  # rule_id -> [channel_id, ...] in sorted order (reorder gating)
 
         # Snapshot each rule's pre-run managed channel set. Used to gate the
         # rule_channel_order append so Pass 3's renumber only touches channels
@@ -1220,7 +1288,7 @@ class AutoCreationEngine:
             results["modified_entities"].extend(exec_ctx.modified_entities)
             results["probe_stream_ids"].update(exec_ctx.probe_stream_ids)
 
-            # Track channel ID for Pass 3 renumber + Pass 3.5 stream reorder.
+            # Track channel ID for Pass 3 renumber.
             # Only include channels this rule actually OWNS — either just
             # created this run, or already in the rule's pre-run managed set.
             # This prevents Pass 3 from renumbering foreign-group channels
@@ -1241,6 +1309,21 @@ class AutoCreationEngine:
                         "channel (not created this run, not pre-run managed)",
                         winning_rule.name, cid
                     )
+
+                # Track channel ID for Pass 3.5 stream reorder.
+                # For stream sorting we also want to include channels that the rule actually
+                # modified (e.g. merge added/removed streams) during this run; otherwise
+                # stream_sort can silently never run when Channels Created=0.
+                modified_this_run = any(
+                    (a.get("entity_id") == cid and a.get("type") in ("merge_stream", "merge_streams_prune"))
+                    for a in actions_log
+                )
+                if owned_by_this_rule or modified_this_run:
+                    # Avoid duplicates when multiple matched streams touch the same channel.
+                    # Preserve first-seen order (mirrors later dict.fromkeys de-dupe, but keeps
+                    # the intermediate structure stable for tests and debug logging).
+                    if cid not in rule_channel_order_streams[winning_rule.id]:
+                        rule_channel_order_streams[winning_rule.id].append(cid)
 
             if stop_processing:
                 break
@@ -1350,7 +1433,7 @@ class AutoCreationEngine:
         # =====================================================================
         logger.debug("[AUTO-CREATE-ENGINE] Starting stream reorder within channels")
         await self._reorder_channel_streams(
-            rules, rule_channel_order, results, dry_run,
+            rules, rule_channel_order_streams, results, dry_run,
             settings=settings, stream_m3u_map=stream_m3u_map
         )
 
@@ -2392,16 +2475,45 @@ def _resolution_height_from_stats(stats: dict | None) -> int:
 def _sort_streams_by_resolution_height(
     stream_ids: list[int],
     stats_cache: dict,
+    settings,
     order: str,
     channel_name: str,
 ) -> list[int]:
-    """Sort by probed resolution height; missing stats count as 0."""
+    """Sort by probed resolution height; missing stats count as 0.
+
+    When Settings enable deprioritization, push failed/black-screen/low-FPS
+    streams to the bottom (same categories as smart sort).
+    """
+
+    deprioritize_failed = getattr(settings, "deprioritize_failed_streams", True) if settings is not None else True
+    fail_order = getattr(settings, "failed_stream_sort_order", None) if settings is not None else None
+    if not fail_order:
+        fail_order = ["failed", "black_screen", "low_fps"]
+    failed_rank = {name: idx for idx, name in enumerate(fail_order)}
 
     def sort_key(sid: int):
-        h = _resolution_height_from_stats(stats_cache.get(sid))
-        if order == "desc":
-            return (-h, sid)
-        return (h, sid)
+        stats = stats_cache.get(sid)
+        h = _resolution_height_from_stats(stats)
+
+        # rank: 0 = good stream, 1 = deprioritized bucket (ordered by fail_order)
+        if deprioritize_failed:
+            status = (stats or {}).get("probe_status") if isinstance(stats, dict) else None
+            if status in ("failed", "timeout"):
+                bucket = "failed"
+                rank = failed_rank.get(bucket, len(failed_rank))
+                # Within deprioritized bucket: still order by resolution (desc/asc)
+                return (1, rank, -h if order == "desc" else h, sid)
+            if isinstance(stats, dict) and stats.get("is_black_screen"):
+                bucket = "black_screen"
+                rank = failed_rank.get(bucket, len(failed_rank))
+                return (1, rank, -h if order == "desc" else h, sid)
+            if isinstance(stats, dict) and stats.get("is_low_fps"):
+                bucket = "low_fps"
+                rank = failed_rank.get(bucket, len(failed_rank))
+                return (1, rank, -h if order == "desc" else h, sid)
+
+        # Good stream bucket.
+        return (0, 0, -h if order == "desc" else h, sid)
 
     sorted_ids = sorted(stream_ids, key=sort_key)
     logger.info(
@@ -2470,7 +2582,7 @@ def _reorder_streams_for_rule(
 
     if field == "quality":
         return _sort_streams_by_resolution_height(
-            stream_ids, stats_cache, order, channel_name
+            stream_ids, stats_cache, settings, order, channel_name
         )
 
     if field == "stream_name":
@@ -2501,8 +2613,16 @@ def _natural_sort_key(s: str) -> list:
     return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', s)]
 
 
-def _sort_key(stream: StreamContext, sort_field: str, sort_regex: str | None = None):
-    """Get sort key for a stream based on the sort field."""
+def _sort_key(stream: StreamContext, sort_field: str, sort_regex=None):
+    """Get sort key for a stream based on the sort field.
+
+    ``sort_regex`` may be a raw string (legacy path — compiled on every
+    call, do not use in hot loops) or a pre-compiled pattern object from
+    :func:`safe_regex.compile`. Callers that sort N streams should
+    precompile once and pass the compiled object to amortize compilation
+    cost across the N log N comparisons (see bd-eio04.15 — hot-path
+    mitigation in the sort closure at ``_run_rules``).
+    """
     if sort_field == "stream_name":
         return stream.stream_name.lower()
     elif sort_field == "stream_name_natural":
@@ -2517,11 +2637,15 @@ def _sort_key(stream: StreamContext, sort_field: str, sort_regex: str | None = N
         return stream.stream_chno if stream.stream_chno is not None else float('inf')
     elif sort_field == "stream_name_regex":
         if sort_regex:
-            try:
-                m = re.search(sort_regex, stream.stream_name)
-            except re.error:
-                return (-1, 0, "")
-            if m and m.groups():
+            # bd-eio04.15: route through safe_regex. A pre-compiled pattern
+            # (preferred) bypasses repeated compilation; a raw string falls
+            # back to safe_regex.search's internal one-shot compile. On
+            # timeout or no-match the result is None, which collapses to
+            # the (-1, 0, "") sentinel — unmatched streams sort to the
+            # front in ascending order, which matches the pre-migration
+            # behavior when the stdlib re.search returned None.
+            m = safe_regex.search(sort_regex, stream.stream_name)
+            if m is not None and m.groups():
                 captured = m.group(1)
                 try:
                     return (0, float(captured), captured)
@@ -2569,7 +2693,9 @@ def _get_rule_starting_number(rule) -> Optional[int]:
 # Pattern: stream name contains EAST or WEST near the end, possibly followed by
 # quality indicators (HD, FHD, UHD, SD, 4K, HEVC, H.264/5) or parenthesized/bracketed
 # tags like (CX), [HD], etc.
-_TZ_SUFFIX_RE = re.compile(
+# Module-level constant assembled from raw-string literal fragments (multi-line
+# string concatenation); no runtime interpolation — safe by construction.
+_TZ_SUFFIX_RE = re.compile(  # nosemgrep: no-bare-re-on-dynamic-pattern
     r'[\s\-_.\(|\[](EAST|WEST)[\s\)\]]*'
     r'(?:\s*(?:F?HD|UHD|SD|4K|HEVC|H\.?26[45]|\([^)]*\)|\[[^\]]*\]))*'
     r'\s*$',

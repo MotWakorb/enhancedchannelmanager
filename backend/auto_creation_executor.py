@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 import re
 
+import safe_regex
 from auto_creation_schema import Action, ActionType, TemplateVariables
 from auto_creation_evaluator import StreamContext
 
@@ -420,14 +421,22 @@ class ActionExecutor:
         pattern = params.get("name_transform_pattern")
         if pattern:
             replacement = params.get("name_transform_replacement", "")
-            # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
+            # Convert JS-style backreferences ($1, $2) to Python (\1, \2).
+            # Pattern here is a hardcoded literal, so we leave this on stdlib re.
             py_replacement = re.sub(r'\$(\d+)', r'\\\1', replacement)
             try:
                 original = name
-                name = re.sub(pattern, py_replacement, name)
+                # bd-eio04.15: user-supplied pattern routed through safe_regex.
+                # On timeout safe_regex.sub returns 'name' unchanged — that
+                # matches the pre-migration fallback contract (no-op on
+                # regex error) and keeps the channel-name pipeline moving.
+                name = safe_regex.sub(pattern, py_replacement, name)
                 if name != original:
                     logger.debug("[AUTO-CREATE-EXEC] '%s' -> '%s' (pattern=/%s/ replacement='%s')", original, name, pattern, replacement)
             except re.error as e:
+                # safe_regex swallows regex.error internally and returns the
+                # input text unchanged; this arm is defensive for any
+                # lingering stdlib re escapes.
                 logger.warning("[AUTO-CREATE-EXEC] Name transform regex error: %s", e)
         return name.strip()
 
@@ -627,6 +636,18 @@ class ActionExecutor:
         group_name = self._get_group_name(group_id)
         group_label = f"'{group_name}'" if group_name else str(group_id)
 
+        # Observability (bd-eio04.9): record whether normalization was
+        # applied to this creation. Three buckets:
+        #   - "true"    — normalization ran AND changed the name
+        #   - "false"   — normalization ran but produced no change
+        #   - "skipped" — no normalization groups configured for the rule
+        # Only the non-dry-run path emits the metric (dry-run previews
+        # do not create channels in the real sense).
+        if normalization_group_ids and self._normalization_engine:
+            normalized_label = "true" if pre_norm_name != channel_name else "false"
+        else:
+            normalized_label = "skipped"
+
         # Create new channel
         if exec_ctx.dry_run:
             # Track simulated channel so subsequent streams in this run
@@ -673,6 +694,18 @@ class ActionExecutor:
                 channel_data["tvg_id"] = stream_ctx.tvg_id
 
             new_channel = await self.client.create_channel(channel_data)
+
+            # Observability (bd-eio04.9) — one counter increment per real
+            # channel creation. Wrapped in try/except so a missing
+            # metric registry (e.g. CI-without-prometheus) never blocks
+            # a creation that otherwise succeeded.
+            try:
+                from observability import get_metric
+                get_metric("auto_creation_channels_created_total").labels(
+                    normalized=normalized_label
+                ).inc()
+            except Exception:  # pragma: no cover
+                logger.debug("[AUTO-CREATE-EXEC] metric increment failed", exc_info=True)
 
             # Track the new channel
             self._created_channels[channel_name.lower()] = new_channel
@@ -1516,12 +1549,14 @@ class ActionExecutor:
         n = re.sub(r'^[A-Z]{2}\s*[:|]\s*', '', n)
         # Strip league prefix: "NFL: Arizona Cardinals"
         n = ActionExecutor._LEAGUE_PREFIXES_RE.sub('', n)
-        # Strip quality suffixes
+        # Strip quality suffixes — {suffix} iterates the hardcoded
+        # ActionExecutor._QUALITY_SUFFIXES tuple, not user input.
         for suffix in ActionExecutor._QUALITY_SUFFIXES:
-            n = re.sub(rf'[\s\-_|:]*{suffix}\s*$', '', n, flags=re.IGNORECASE)
-        # Strip timezone suffixes
+            n = re.sub(rf'[\s\-_|:]*{suffix}\s*$', '', n, flags=re.IGNORECASE)  # nosemgrep: no-bare-re-on-dynamic-pattern
+        # Strip timezone suffixes — {suffix} iterates the hardcoded
+        # ActionExecutor._TIMEZONE_SUFFIXES tuple.
         for suffix in ActionExecutor._TIMEZONE_SUFFIXES:
-            n = re.sub(rf'[\s\-_|:]*{suffix}\s*$', '', n, flags=re.IGNORECASE)
+            n = re.sub(rf'[\s\-_|:]*{suffix}\s*$', '', n, flags=re.IGNORECASE)  # nosemgrep: no-bare-re-on-dynamic-pattern
         # Convert semantic characters
         n = n.replace('+', 'plus').replace('&', 'and')
         # Lowercase alphanumeric only
@@ -1838,20 +1873,29 @@ class ActionExecutor:
         try:
             if mode == "regex_extract":
                 pattern = params.get("pattern", "")
-                match = re.search(pattern, str(source_value))
-                if match and match.groups():
-                    result_value = match.group(1)
-                elif match:
-                    result_value = match.group(0)
-                else:
+                # bd-eio04.15: user pattern routed through safe_regex. On
+                # timeout safe_regex.search returns None; the existing None
+                # arm sets result_value="" — that preserves the historical
+                # "pattern did not match" contract for this action.
+                match = safe_regex.search(pattern, str(source_value))
+                if match is None:
                     result_value = ""
+                elif match.groups():
+                    result_value = match.group(1)
+                else:
+                    result_value = match.group(0)
 
             elif mode == "regex_replace":
                 pattern = params.get("pattern", "")
                 replacement = params.get("replacement", "")
-                # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
+                # Convert JS-style backreferences ($1, $2) to Python (\1, \2).
+                # Hardcoded literal pattern — stays on stdlib re.
                 py_replacement = re.sub(r'\$(\d+)', r'\\\1', replacement)
-                result_value = re.sub(pattern, py_replacement, str(source_value))
+                # bd-eio04.15: user pattern through safe_regex.sub. Timeout
+                # => source_value returned unchanged (the variable ends up
+                # set to the original value), which is the least-surprising
+                # fallback for a failed replace.
+                result_value = safe_regex.sub(pattern, py_replacement, str(source_value))
 
             elif mode == "literal":
                 template = params.get("template", "")
@@ -2420,13 +2464,22 @@ class ActionExecutor:
     def _find_channel_by_regex(self, pattern: str) -> Optional[dict]:
         """Find first channel matching regex pattern."""
         try:
-            regex = re.compile(pattern, re.IGNORECASE)
+            # bd-eio04.15: safe_regex.compile rejects oversize patterns up
+            # front and wraps compile errors in SafeRegexError. The compiled
+            # pattern is reused for each channel lookup — safe_regex.search
+            # enforces a per-call ReDoS budget, so a pathological pattern
+            # fails a single channel comparison (returns None) rather than
+            # hanging the whole search. End state: "no channel matched",
+            # which is the existing fallback contract of this method.
+            compiled = safe_regex.compile(pattern, flags=re.IGNORECASE)
             for channel in self.existing_channels:
-                if regex.search(channel.get("name", "")):
+                if safe_regex.search(compiled, channel.get("name", "")) is not None:
                     return channel
             for channel in self._created_channels.values():
-                if regex.search(channel.get("name", "")):
+                if safe_regex.search(compiled, channel.get("name", "")) is not None:
                     return channel
+        except safe_regex.SafeRegexError:
+            logger.debug("[AUTO-CREATE-EXEC] Invalid regex in channel name pattern")
         except re.error:
             logger.debug("[AUTO-CREATE-EXEC] Invalid regex in channel name pattern")
         return None

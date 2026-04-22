@@ -176,8 +176,9 @@ def strip_quality_suffixes(name: str) -> str:
     (1080p, 720p, 476p, etc.).
     """
     result = normalize_unicode_to_ascii(name)
+    # `suffix` iterates the hardcoded QUALITY_SUFFIXES tuple.
     for suffix in QUALITY_SUFFIXES:
-        pattern = re.compile(rf"[\s\-_|:]*{suffix}\s*$", re.IGNORECASE)
+        pattern = re.compile(rf"[\s\-_|:]*{suffix}\s*$", re.IGNORECASE)  # nosemgrep: no-bare-re-on-dynamic-pattern
         result = pattern.sub("", result)
     result = _ARBITRARY_RESOLUTION_RE.sub("", result)
     return result.strip()
@@ -262,20 +263,23 @@ def strip_network_suffix(name: str, custom_suffixes: Optional[list[str]] = None)
     all_suffixes = NETWORK_SUFFIXES + (custom_suffixes or [])
     sorted_suffixes = sorted(all_suffixes, key=len, reverse=True)
 
+    # `suffix` iterates NETWORK_SUFFIXES + caller-supplied custom_suffixes;
+    # each is passed through re.escape() before interpolation, so {escaped}
+    # is a literal substring with no regex metacharacters.
     for suffix in sorted_suffixes:
         escaped = re.escape(suffix)
         # Pattern 1: Suffix in parentheses
-        paren = re.compile(rf"\s*\(\s*{escaped}\s*\)\s*$", re.IGNORECASE)
+        paren = re.compile(rf"\s*\(\s*{escaped}\s*\)\s*$", re.IGNORECASE)  # nosemgrep: no-bare-re-on-dynamic-pattern
         if paren.search(result):
             result = paren.sub("", result).strip()
             continue
         # Pattern 2: Suffix in brackets
-        bracket = re.compile(rf"\s*\[\s*{escaped}\s*\]\s*$", re.IGNORECASE)
+        bracket = re.compile(rf"\s*\[\s*{escaped}\s*\]\s*$", re.IGNORECASE)  # nosemgrep: no-bare-re-on-dynamic-pattern
         if bracket.search(result):
             result = bracket.sub("", result).strip()
             continue
         # Pattern 3: Bare suffix with separator
-        bare_sep = re.compile(
+        bare_sep = re.compile(  # nosemgrep: no-bare-re-on-dynamic-pattern
             rf"^(.{{3,}})[\s\-|:]+{escaped}\s*$", re.IGNORECASE
         )
         m = bare_sep.match(result)
@@ -283,7 +287,7 @@ def strip_network_suffix(name: str, custom_suffixes: Optional[list[str]] = None)
             result = m.group(1).strip().rstrip("-|: ")
             continue
         # Pattern 4: Bare suffix with just space
-        bare_space = re.compile(rf"^(.{{3,}})\s+{escaped}\s*$", re.IGNORECASE)
+        bare_space = re.compile(rf"^(.{{3,}})\s+{escaped}\s*$", re.IGNORECASE)  # nosemgrep: no-bare-re-on-dynamic-pattern
         m = bare_space.match(result)
         if m:
             result = m.group(1).strip().rstrip("-|: ")
