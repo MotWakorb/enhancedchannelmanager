@@ -52,6 +52,10 @@ bd sync                       # Sync beads data only (NOT for code commits)
 | Shipping Workflow | `docs/shipping.md` |
 | Dummy EPG Template Engine | `docs/template_engine.md` |
 | DBAS Import Threat Model | `docs/security/threat_model_dbas_import.md` |
+| Normalization (user + dev guide) | `docs/normalization.md` |
+| Versioning Scheme | `docs/versioning.md` |
+| API Reference | `docs/api.md` |
+| SLOs | `docs/sre/slos.md` |
 
 ## Development Workflow
 
