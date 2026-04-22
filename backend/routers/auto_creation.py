@@ -14,7 +14,7 @@ from typing import List, Optional
 import journal
 from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from database import get_session
@@ -81,7 +81,7 @@ class UpdateAutoCreationRuleRequest(BaseModel):
 class BulkUpdateAutoCreationRulesRequest(UpdateAutoCreationRuleRequest):
     """Bulk-update multiple rules. Only include fields to change (omit others)."""
 
-    rule_ids: List[int]
+    rule_ids: List[int] = Field(..., min_length=1, max_length=500)
     merge_streams_remove_non_matching: Optional[bool] = None
 
 

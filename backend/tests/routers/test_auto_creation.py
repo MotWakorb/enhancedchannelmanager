@@ -199,7 +199,8 @@ class TestBulkUpdateAutoCreationRules:
             "rule_ids": [],
             "enabled": False,
         })
-        assert response.status_code == 400
+        # Pydantic request validation rejects empty lists.
+        assert response.status_code == 422
 
     @pytest.mark.asyncio
     async def test_rejects_no_fields(self, async_client):
