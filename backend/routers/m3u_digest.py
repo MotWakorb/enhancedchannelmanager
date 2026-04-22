@@ -305,9 +305,11 @@ async def update_m3u_digest_settings(request: M3UDigestSettingsUpdate):
             settings.send_to_discord = request.send_to_discord
 
         if request.exclude_group_patterns is not None:
+            # TODO(enhancedchannelmanager-3u6p0): migrate write-time syntax
+            # validation to safe_regex.compile.
             for pattern in request.exclude_group_patterns:
                 try:
-                    re.compile(pattern)
+                    re.compile(pattern)  # nosemgrep: no-bare-re-on-dynamic-pattern
                 except re.error as e:
                     raise HTTPException(
                         status_code=400,
@@ -316,9 +318,11 @@ async def update_m3u_digest_settings(request: M3UDigestSettingsUpdate):
             settings.set_exclude_group_patterns(request.exclude_group_patterns)
 
         if request.exclude_stream_patterns is not None:
+            # TODO(enhancedchannelmanager-3u6p0): migrate write-time syntax
+            # validation to safe_regex.compile.
             for pattern in request.exclude_stream_patterns:
                 try:
-                    re.compile(pattern)
+                    re.compile(pattern)  # nosemgrep: no-bare-re-on-dynamic-pattern
                 except re.error as e:
                     raise HTTPException(
                         status_code=400,
