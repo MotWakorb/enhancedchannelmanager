@@ -627,6 +627,269 @@ class TestAutoCreationEngineProcessStreams:
         assert result["streams_matched"] == 1
 
 
+class TestPass3RenumberGating:
+    """
+    Pass 3 (channel renumber) gating — bd-yj5yi / GH-104 regression.
+
+    PR #107 added a normalized-name fallback in _find_channel_by_name that
+    lets auto-creation find MORE pre-existing channels for incoming streams.
+    When if_exists=skip|merge matches a channel in a foreign group, the old
+    code unconditionally added that channel to rule_channel_order, and Pass 3
+    (for any rule with sort_field) then called assign_channel_numbers() on
+    the expanded list — renumbering channels the rule never owned.
+
+    These tests exercise the gating logic on the Pass 3 append:
+    - owned channels (just created OR pre-run managed) are renumbered
+    - foreign/unmanaged channels matched via fallback are NOT renumbered.
+    """
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        from auto_creation_executor import ActionResult, ExecutionContext
+
+        self.ActionResult = ActionResult
+        self.ExecutionContext = ExecutionContext
+
+        self.client = MagicMock()
+        self.client.assign_channel_numbers = AsyncMock()
+        self.client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
+        self.engine = AutoCreationEngine(self.client)
+        self.engine._existing_channels = []
+        self.engine._existing_groups = []
+
+    def _make_rule(self, rule_id, name, sort_field=None, starting_channel_number=None,
+                   managed_channel_ids=None):
+        """Build a mock rule with reasonable defaults."""
+        rule = MagicMock()
+        rule.id = rule_id
+        rule.name = name
+        rule.priority = 0
+        rule.m3u_account_id = None
+        rule.target_group_id = None
+        rule.enabled = True
+        rule.stop_on_first_match = True
+        rule.skip_struck_streams = False
+        rule.sort_field = sort_field
+        rule.sort_order = "asc"
+        rule.sort_regex = None
+        rule.starting_channel_number = starting_channel_number
+        rule.orphan_action = "none"
+        rule.managed_channel_ids = None if managed_channel_ids is None else "[]"
+        rule.get_managed_channel_ids.return_value = managed_channel_ids or []
+        rule.get_conditions.return_value = [{"type": "always"}]
+        # action carries the numbering spec (range start is the renumber anchor)
+        _action = {"type": "create_channel", "params": {}}
+        if starting_channel_number is not None:
+            _action["channel_number"] = starting_channel_number
+        rule.get_actions.return_value = [_action]
+        rule.get_normalization_group_ids.return_value = []
+        rule.match_scope_target_group = False
+        return rule
+
+    def _make_execute_fn(self, channel_id, *, created):
+        """
+        Build an executor.execute replacement that simulates either
+        a successful channel create OR a fallback-match (skip/merge) into
+        a pre-existing foreign channel.
+        """
+        async def _fake_execute(action, stream_ctx, exec_ctx,
+                                rule_target_group_id=None,
+                                normalization_group_ids=None,
+                                match_scope_target_group=False):
+            exec_ctx.current_channel_id = channel_id
+            if created:
+                exec_ctx.created_channel_ids.add(channel_id)
+                exec_ctx.channels_created += 1
+            return self.ActionResult(
+                success=True,
+                action_type="create_channel",
+                description=f"{'Created' if created else 'Matched-existing'} channel id={channel_id}",
+                entity_type="channel",
+                entity_id=channel_id,
+                entity_name=f"ch-{channel_id}",
+                created=created,
+            )
+        return _fake_execute
+
+    @patch("auto_creation_engine.get_session")
+    def test_does_not_renumber_foreign_channel_matched_via_fallback(self, mock_get_session):
+        """
+        Rule B (sort_field=name) with no pre-run managed channels. Stream matches
+        into a pre-existing foreign channel (e.g., owned by Rule A). current_channel_id
+        is set but created=False. Pass 3 must NOT call assign_channel_numbers on
+        the foreign channel.
+        """
+        mock_session = MagicMock()
+        mock_get_session.return_value = mock_session
+
+        streams = [
+            StreamContext(stream_id=101, stream_name="ESPN", m3u_account_id=1, m3u_account_name="P"),
+            StreamContext(stream_id=102, stream_name="ESPN 2", m3u_account_id=1, m3u_account_name="P"),
+        ]
+        rule_b = self._make_rule(
+            rule_id=2, name="Rule B",
+            sort_field="name", starting_channel_number=4000,
+            managed_channel_ids=[],  # rule owns nothing yet
+        )
+
+        # Both streams fall into fallback-match on foreign channels 501 & 502
+        # (created by some other rule's earlier run). Simulate by returning
+        # created=False and setting current_channel_id without adding to created set.
+        execute_fns = iter([
+            self._make_execute_fn(501, created=False),
+            self._make_execute_fn(502, created=False),
+        ])
+
+        async def dispatch_execute(*args, **kwargs):
+            fn = next(execute_fns)
+            return await fn(*args, **kwargs)
+
+        mock_execution = MagicMock()
+        mock_execution.id = 1
+
+        with patch("auto_creation_engine.ActionExecutor") as mock_exec_cls:
+            mock_executor = MagicMock()
+            mock_executor.execute = AsyncMock(side_effect=dispatch_execute)
+            mock_executor.verify_epg_assignments = AsyncMock(return_value=(0, 0, 0))
+            mock_executor.prune_merge_streams = AsyncMock()
+            mock_executor.reorder_streams_on_channels = AsyncMock(return_value=0)
+            mock_executor._channel_by_id = {}
+            mock_executor._created_channels = {}
+            mock_exec_cls.return_value = mock_executor
+
+            # Stub engine internals that touch DB/external calls
+            self.engine._refresh_dummy_epg_and_retry = AsyncMock()
+            self.engine._reconcile_orphans = AsyncMock()
+            self.engine._update_rule_stats = AsyncMock()
+
+            asyncio.get_event_loop().run_until_complete(
+                self.engine._process_streams(streams, [rule_b], mock_execution, dry_run=False)
+            )
+
+        # Foreign channels 501/502 must NOT be renumbered by Rule B.
+        # If assign_channel_numbers was called at all, the regression is present.
+        assert self.client.assign_channel_numbers.await_count == 0, (
+            "Rule B renumbered a foreign channel it did not own "
+            f"(call args: {self.client.assign_channel_numbers.await_args_list})"
+        )
+
+    @patch("auto_creation_engine._auto_rename_after_renumber", new_callable=AsyncMock)
+    @patch("auto_creation_engine.get_session")
+    def test_renumbers_own_created_channels(self, mock_get_session, mock_rename):
+        """
+        Rule creates 2 new channels with sort_field=name set. Pass 3 should
+        renumber those 2 channels starting at the rule's starting_channel_number.
+        """
+        mock_session = MagicMock()
+        mock_get_session.return_value = mock_session
+
+        streams = [
+            StreamContext(stream_id=101, stream_name="ESPN A", m3u_account_id=1, m3u_account_name="P"),
+            StreamContext(stream_id=102, stream_name="ESPN B", m3u_account_id=1, m3u_account_name="P"),
+        ]
+        rule_a = self._make_rule(
+            rule_id=1, name="Rule A",
+            sort_field="name", starting_channel_number=100,
+            managed_channel_ids=[],
+        )
+
+        execute_fns = iter([
+            self._make_execute_fn(201, created=True),
+            self._make_execute_fn(202, created=True),
+        ])
+
+        async def dispatch_execute(*args, **kwargs):
+            fn = next(execute_fns)
+            return await fn(*args, **kwargs)
+
+        mock_execution = MagicMock()
+        mock_execution.id = 1
+
+        with patch("auto_creation_engine.ActionExecutor") as mock_exec_cls:
+            mock_executor = MagicMock()
+            mock_executor.execute = AsyncMock(side_effect=dispatch_execute)
+            mock_executor.verify_epg_assignments = AsyncMock(return_value=(0, 0, 0))
+            mock_executor.prune_merge_streams = AsyncMock()
+            mock_executor.reorder_streams_on_channels = AsyncMock(return_value=0)
+            mock_executor._channel_by_id = {}
+            mock_executor._created_channels = {}
+            mock_exec_cls.return_value = mock_executor
+
+            # Stub engine internals that touch DB/external calls
+            self.engine._refresh_dummy_epg_and_retry = AsyncMock()
+            self.engine._reconcile_orphans = AsyncMock()
+            self.engine._update_rule_stats = AsyncMock()
+
+            asyncio.get_event_loop().run_until_complete(
+                self.engine._process_streams(streams, [rule_a], mock_execution, dry_run=False)
+            )
+
+        # Rule A's own created channels (201, 202) get renumbered at 100.
+        self.client.assign_channel_numbers.assert_awaited()
+        call_args = self.client.assign_channel_numbers.await_args_list[0]
+        assert call_args.args[0] == [201, 202]
+        assert call_args.args[1] == 100
+
+    @patch("auto_creation_engine._auto_rename_after_renumber", new_callable=AsyncMock)
+    @patch("auto_creation_engine.get_session")
+    def test_renumbers_previously_managed_channels(self, mock_get_session, mock_rename):
+        """
+        Re-run scenario: rule already owns channels 301/302 (in its
+        managed_channel_ids). On re-run, those channels are matched via
+        fallback (created=False) but ARE in the pre-run managed set — so
+        they SHOULD be renumbered.
+        """
+        mock_session = MagicMock()
+        mock_get_session.return_value = mock_session
+
+        streams = [
+            StreamContext(stream_id=101, stream_name="ESPN", m3u_account_id=1, m3u_account_name="P"),
+            StreamContext(stream_id=102, stream_name="ESPN 2", m3u_account_id=1, m3u_account_name="P"),
+        ]
+        rule_c = self._make_rule(
+            rule_id=3, name="Rule C",
+            sort_field="name", starting_channel_number=4000,
+            managed_channel_ids=[301, 302],  # rule already owns these
+        )
+
+        execute_fns = iter([
+            self._make_execute_fn(301, created=False),
+            self._make_execute_fn(302, created=False),
+        ])
+
+        async def dispatch_execute(*args, **kwargs):
+            fn = next(execute_fns)
+            return await fn(*args, **kwargs)
+
+        mock_execution = MagicMock()
+        mock_execution.id = 1
+
+        with patch("auto_creation_engine.ActionExecutor") as mock_exec_cls:
+            mock_executor = MagicMock()
+            mock_executor.execute = AsyncMock(side_effect=dispatch_execute)
+            mock_executor.verify_epg_assignments = AsyncMock(return_value=(0, 0, 0))
+            mock_executor.prune_merge_streams = AsyncMock()
+            mock_executor.reorder_streams_on_channels = AsyncMock(return_value=0)
+            mock_executor._channel_by_id = {}
+            mock_executor._created_channels = {}
+            mock_exec_cls.return_value = mock_executor
+
+            # Stub engine internals that touch DB/external calls
+            self.engine._refresh_dummy_epg_and_retry = AsyncMock()
+            self.engine._reconcile_orphans = AsyncMock()
+            self.engine._update_rule_stats = AsyncMock()
+
+            asyncio.get_event_loop().run_until_complete(
+                self.engine._process_streams(streams, [rule_c], mock_execution, dry_run=False)
+            )
+
+        # Rule C's previously-managed channels get renumbered (valid re-run behavior).
+        self.client.assign_channel_numbers.assert_awaited()
+        call_args = self.client.assign_channel_numbers.await_args_list[0]
+        assert call_args.args[0] == [301, 302]
+        assert call_args.args[1] == 4000
+
+
 class TestAutoCreationEngineExecutionTracking:
     """Tests for execution tracking methods."""
 

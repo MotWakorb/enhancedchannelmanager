@@ -62,6 +62,12 @@ class ExecutionContext:
     current_channel_id: Optional[int] = None  # Channel created/selected for this stream
     current_group_id: Optional[int] = None  # Group created/selected
 
+    # Channel IDs actually CREATED during this stream's action execution
+    # (not merged-into or matched via fallback). Used by Pass 3 renumber
+    # gating to avoid renumbering foreign channels the rule doesn't own.
+    # See bd-yj5yi (GH-104) — PR #107 regression fix.
+    created_channel_ids: set = field(default_factory=set)
+
     # Custom variables set by set_variable actions
     custom_variables: dict = field(default_factory=dict)
 
@@ -635,6 +641,7 @@ class ActionExecutor:
                 self._base_name_to_channel[base_name.lower()] = simulated
             self._used_channel_numbers.add(channel_number)
             exec_ctx.current_channel_id = dry_id
+            exec_ctx.created_channel_ids.add(dry_id)
             return ActionResult(
                 success=True,
                 action_type=action.type,
@@ -673,6 +680,7 @@ class ActionExecutor:
             self._used_channel_numbers.add(channel_number)
             self._channel_assigned_numbers[new_channel["id"]] = channel_number
             exec_ctx.current_channel_id = new_channel["id"]
+            exec_ctx.created_channel_ids.add(new_channel["id"])
 
             # Assign default channel profiles if configured
             profile_desc = await self._assign_default_profiles(new_channel["id"])
