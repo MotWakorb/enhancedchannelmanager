@@ -714,6 +714,25 @@ async def startup_event():
     except Exception as e:
         logger.warning("[MAIN] Could not check auto-creation rule priorities: %s", e)
 
+    # Scan existing rule rows for pathological regex patterns (bd-eio04.7).
+    # Read-only diagnostic pass — findings are written to rule_lint_findings
+    # so the UI can surface pre-lint rows that would now fail the write-time
+    # linter. Does NOT disable or modify any rule.
+    try:
+        from tasks.rule_lint_scan import run_scan
+        sess = get_session()
+        try:
+            summary = run_scan(sess)
+            if summary.get("total_findings", 0) > 0:
+                logger.info(
+                    "[MAIN] Rule lint scan surfaced %d finding(s) across existing rules",
+                    summary["total_findings"],
+                )
+        finally:
+            sess.close()
+    except Exception as e:
+        logger.warning("[MAIN] Rule lint scan failed (non-fatal): %s", e)
+
     logger.info("[MAIN] CONFIG_DIR: %s", CONFIG_DIR)
     logger.info("[MAIN] CONFIG_FILE: %s", CONFIG_FILE)
     logger.info("[MAIN] CONFIG_DIR exists: %s", CONFIG_DIR.exists())

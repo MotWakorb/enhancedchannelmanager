@@ -2105,3 +2105,76 @@ class LookupTable(Base):
 
     def __repr__(self):
         return f"<LookupTable(id={self.id}, name={self.name})>"
+
+
+class RuleLintFinding(Base):
+    """
+    Persistent lint finding for a stored rule pattern (bd-eio04.7).
+
+    Written by :mod:`regex_lint`'s migration-scan step for pre-lint rows
+    that would now fail the write-time lint. Kept separate from the rule
+    tables so the hot-path rows aren't widened with optional
+    audit-style metadata (DB-engineer grooming decision).
+
+    The table is purely diagnostic: findings do NOT disable or modify the
+    underlying rule. UI surfaces the findings via GET endpoints on each
+    router so an operator can decide whether to edit or keep the rule.
+
+    Scan semantics:
+    - Idempotent. Before each scan the existing findings for that
+      ``(rule_type, rule_id)`` pair are cleared; re-running the scan on
+      the same corpus produces the same flagged set.
+    - Best-effort. If a rule's JSON payload fails to deserialize the scan
+      logs and skips that row — a separate concern from the pattern
+      being pathological.
+    """
+
+    __tablename__ = "rule_lint_findings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # Logical rule type — one of "normalization", "auto_creation",
+    # "dummy_epg". Not a real FK because the three rule tables can't share
+    # one; the scan keeps the string coordinate and the rule_id together.
+    rule_type = Column(String(30), nullable=False)
+    rule_id = Column(Integer, nullable=False)
+    # Human-readable path (e.g., "condition_value", "actions[1].pattern").
+    field = Column(String(120), nullable=False)
+    # REGEX_TOO_LONG / REGEX_COMPILE_ERROR / REGEX_NESTED_QUANTIFIER —
+    # kept as a String column rather than an Enum so a newer scan can
+    # surface codes this column wasn't built knowing about.
+    code = Column(String(40), nullable=False)
+    message = Column(Text, nullable=False)
+    # JSON-encoded per-code context (pattern_len, compile_error, reason).
+    detail = Column(Text, nullable=True)
+    detected_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_rule_lint_finding_rule", rule_type, rule_id),
+        Index("idx_rule_lint_finding_code", code),
+    )
+
+    def to_dict(self) -> dict:
+        import json as _json
+
+        try:
+            detail_obj = _json.loads(self.detail) if self.detail else {}
+        except (ValueError, TypeError):
+            detail_obj = {}
+        return {
+            "id": self.id,
+            "rule_type": self.rule_type,
+            "rule_id": self.rule_id,
+            "field": self.field,
+            "code": self.code,
+            "message": self.message,
+            "detail": detail_obj,
+            "detected_at": (
+                self.detected_at.isoformat() + "Z" if self.detected_at else None
+            ),
+        }
+
+    def __repr__(self):
+        return (
+            f"<RuleLintFinding(id={self.id}, rule_type={self.rule_type}, "
+            f"rule_id={self.rule_id}, code={self.code})>"
+        )

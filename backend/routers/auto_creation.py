@@ -20,6 +20,12 @@ from starlette.responses import StreamingResponse
 from concurrency import run_cpu_bound
 from database import get_session
 from dispatcharr_client import get_client
+from regex_lint import (
+    lint_actions_json,
+    lint_conditions_json,
+    lint_pattern,
+    violations_to_http_detail,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +226,38 @@ async def get_auto_creation_rule(rule_id: int):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+def _lint_auto_creation_rule_request(
+    conditions: Optional[list], actions: Optional[list], sort_regex: Optional[str]
+) -> None:
+    """Raise HTTP 422 if any pattern field fails the regex linter (bd-eio04.7).
+
+    Auto-creation rules have regex-bearing fields scattered across:
+      - ``sort_regex`` (top-level rule column)
+      - Condition ``value`` for regex-flavored condition types
+        (``stream_name_matches``, ``stream_group_matches``,
+        ``tvg_id_matches``, ``channel_exists_matching``)
+      - Action ``pattern`` for ``set_variable`` in ``regex_extract`` /
+        ``regex_replace`` modes
+      - Action ``name_transform_pattern`` on ``create_channel`` /
+        ``create_group``
+    """
+    violations = []
+    violations.extend(lint_pattern(sort_regex, field="sort_regex"))
+    if conditions:
+        violations.extend(lint_conditions_json(conditions, prefix="conditions"))
+    if actions:
+        violations.extend(lint_actions_json(actions, prefix="actions"))
+    if violations:
+        logger.warning(
+            "[AUTO-CREATE] Rejected rule — %d lint violation(s): %s",
+            len(violations),
+            [(v.field, v.code) for v in violations],
+        )
+        raise HTTPException(
+            status_code=422, detail=violations_to_http_detail(violations)
+        )
+
+
 @router.post("/rules")
 async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
     """Create a new auto-creation rule."""
@@ -231,6 +269,11 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
         logger.debug("[AUTO-CREATE] Creating rule '%s' with %s actions", request.name, len(request.actions))
         for j, action in enumerate(request.actions):
             logger.debug("[AUTO-CREATE]   Action %s: %s", j, action)
+        # Lint regex patterns (bd-eio04.7) BEFORE schema validation so users
+        # see the specific pattern error rather than a generic schema message.
+        _lint_auto_creation_rule_request(
+            request.conditions, request.actions, request.sort_regex
+        )
         validation = validate_rule(request.conditions, request.actions)
         if not validation["valid"]:
             raise HTTPException(status_code=400, detail={
@@ -317,6 +360,16 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
             logger.debug("[AUTO-CREATE] Updating rule id=%s '%s' with %s actions", rule_id, rule.name, len(actions))
             for j, action in enumerate(actions):
                 logger.debug("[AUTO-CREATE]   Action %s: %s", j, action)
+
+            # Lint regex patterns (bd-eio04.7). Only fields actually
+            # supplied on the PUT are linted — an operator renaming a rule
+            # shouldn't hit a 422 for a pattern they didn't edit. Pre-lint
+            # rows are surfaced separately by the startup scan.
+            _lint_auto_creation_rule_request(
+                request.conditions if request.conditions is not None else None,
+                request.actions if request.actions is not None else None,
+                request.sort_regex if request.sort_regex is not None else None,
+            )
 
             validation = validate_rule(conditions, actions)
             if not validation["valid"]:
@@ -1542,3 +1595,33 @@ async def generate_debug_bundle():
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to generate debug bundle: %s", e)
         raise HTTPException(status_code=500, detail="Failed to generate debug bundle")
+
+
+# =============================================================================
+# Lint findings (bd-eio04.7) — read-only view of the startup migration scan.
+# =============================================================================
+
+
+@router.get("/lint-findings")
+async def get_auto_creation_lint_findings():
+    """Return the cached lint findings for auto-creation rules.
+
+    See ``routers/normalization.py::get_normalization_lint_findings`` for
+    semantics. Findings are scoped to ``rule_type='auto_creation'``.
+    """
+    logger.debug("[AUTO-CREATE] GET /lint-findings")
+    try:
+        from models import RuleLintFinding
+        from tasks.rule_lint_scan import RULE_TYPE_AUTO_CREATION
+
+        session = get_session()
+        try:
+            findings = session.query(RuleLintFinding).filter(
+                RuleLintFinding.rule_type == RULE_TYPE_AUTO_CREATION
+            ).order_by(RuleLintFinding.rule_id, RuleLintFinding.id).all()
+            return {"findings": [f.to_dict() for f in findings]}
+        finally:
+            session.close()
+    except Exception as e:
+        logger.exception("[AUTO-CREATE] Failed to get lint findings: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")

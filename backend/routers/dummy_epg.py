@@ -13,6 +13,11 @@ from cache import get_cache
 from concurrency import run_cpu_bound
 from database import get_session
 from dispatcharr_client import get_client
+from regex_lint import (
+    lint_pattern,
+    lint_substitution_pairs,
+    violations_to_http_detail,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -201,12 +206,61 @@ async def list_profiles(db: Session = Depends(get_session)):
         db.close()
 
 
+def _lint_dummy_epg_profile_request(req) -> None:
+    """Raise HTTP 422 if any pattern field on the profile request fails
+    the regex linter (bd-eio04.7).
+
+    Lints:
+      - ``title_pattern``, ``time_pattern``, ``date_pattern`` (top-level)
+      - ``find`` on substitution pairs flagged ``is_regex=True``
+      - Pattern fields inside each ``pattern_variants`` entry
+    """
+    violations = []
+    for name in ("title_pattern", "time_pattern", "date_pattern"):
+        violations.extend(lint_pattern(getattr(req, name, None), field=name))
+
+    sub_pairs = getattr(req, "substitution_pairs", None)
+    if sub_pairs:
+        # Pydantic models need to be serialized so the helper sees dicts.
+        pairs_as_dicts = [
+            p.model_dump() if hasattr(p, "model_dump") else p for p in sub_pairs
+        ]
+        violations.extend(
+            lint_substitution_pairs(pairs_as_dicts, prefix="substitution_pairs")
+        )
+
+    variants = getattr(req, "pattern_variants", None)
+    if variants:
+        for idx, variant in enumerate(variants):
+            v = variant.model_dump() if hasattr(variant, "model_dump") else variant
+            if not isinstance(v, dict):
+                continue
+            for name in ("title_pattern", "time_pattern", "date_pattern"):
+                violations.extend(
+                    lint_pattern(
+                        v.get(name), field=f"pattern_variants[{idx}].{name}"
+                    )
+                )
+
+    if violations:
+        logger.warning(
+            "[DUMMY-EPG] Rejected profile — %d lint violation(s): %s",
+            len(violations),
+            [(v.field, v.code) for v in violations],
+        )
+        raise HTTPException(
+            status_code=422, detail=violations_to_http_detail(violations)
+        )
+
+
 @router.post("/profiles")
 async def create_profile(req: ProfileCreateRequest, db: Session = Depends(get_session)):
     """Create a new Dummy EPG profile."""
     logger.debug("[DUMMY-EPG] POST /profiles name=%s", req.name)
     try:
         from models import DummyEPGProfile
+        # Lint regex patterns before any DB work (bd-eio04.7).
+        _lint_dummy_epg_profile_request(req)
         # Check for duplicate name
         existing = db.query(DummyEPGProfile).filter(
             DummyEPGProfile.name == req.name
@@ -295,6 +349,10 @@ async def update_profile(profile_id: int, req: ProfileUpdateRequest, db: Session
     logger.debug("[DUMMY-EPG] PATCH /profiles/%s", profile_id)
     try:
         from models import DummyEPGProfile
+        # Lint regex patterns on the update (bd-eio04.7). Only fields
+        # actually present in the PATCH are linted — an operator renaming
+        # a profile shouldn't hit a 422 for a pattern they didn't edit.
+        _lint_dummy_epg_profile_request(req)
         profile = db.query(DummyEPGProfile).filter(
             DummyEPGProfile.id == profile_id
         ).first()
@@ -865,3 +923,29 @@ def _apply_profile_fields(profile, data: dict):
         profile.set_pattern_variants(data["pattern_variants"])
     if "channel_group_ids" in data and data["channel_group_ids"] is not None:
         profile.set_channel_group_ids(data["channel_group_ids"])
+
+
+# =============================================================================
+# Lint findings (bd-eio04.7) — read-only view of the startup migration scan.
+# =============================================================================
+
+
+@router.get("/lint-findings")
+async def get_dummy_epg_lint_findings(db: Session = Depends(get_session)):
+    """Return the cached lint findings for dummy-EPG profiles.
+
+    See ``routers/normalization.py::get_normalization_lint_findings`` for
+    semantics. Findings are scoped to ``rule_type='dummy_epg'``.
+    """
+    logger.debug("[DUMMY-EPG] GET /lint-findings")
+    try:
+        from models import RuleLintFinding
+        from tasks.rule_lint_scan import RULE_TYPE_DUMMY_EPG
+
+        findings = db.query(RuleLintFinding).filter(
+            RuleLintFinding.rule_type == RULE_TYPE_DUMMY_EPG
+        ).order_by(RuleLintFinding.rule_id, RuleLintFinding.id).all()
+        return {"findings": [f.to_dict() for f in findings]}
+    except Exception as e:
+        logger.warning("[DUMMY-EPG] Failed to get lint findings: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
