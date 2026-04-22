@@ -1129,9 +1129,11 @@ export function AutoCreationTab() {
                     <div className="log-entries">
                       {filteredLog.map((entry: ExecutionLogEntry) => {
                         const isExpanded = expandedLogEntries.has(entry.stream_id);
-                        const winnerRule = entry.rules_evaluated.find(r => r.was_winner);
-                        const actionCount = entry.actions_executed.length;
-                        const hasErrors = entry.actions_executed.some(a => !a.success);
+                        const rulesEvaluated = entry.rules_evaluated ?? [];
+                        const actionsExecuted = entry.actions_executed ?? [];
+                        const winnerRule = rulesEvaluated.find(r => r.was_winner);
+                        const actionCount = actionsExecuted.length;
+                        const hasErrors = actionsExecuted.some(a => !a.success);
 
                         return (
                           <div key={entry.stream_id} className={`log-entry ${isExpanded ? 'expanded' : ''}`}>
@@ -1159,7 +1161,9 @@ export function AutoCreationTab() {
                             {isExpanded && (
                               <div className="log-entry-body">
                                 {/* Condition evaluations */}
-                                {entry.rules_evaluated.filter(r => r.matched || r.conditions.length > 0).map((rule, ri) => (
+                                {rulesEvaluated
+                                  .filter(r => r.matched || r.conditions.length > 0)
+                                  .map((rule, ri) => (
                                   <div key={ri} className="log-rule-section">
                                     <div className="log-rule-title">
                                       <span className={`material-icons ${rule.matched ? 'condition-pass' : 'condition-fail'}`}>
