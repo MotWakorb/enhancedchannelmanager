@@ -8,17 +8,28 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 
 import { NormalizationEngineSection } from './NormalizationEngineSection';
 
-// Mock the notification context
+// Mock the notification context.
+// IMPORTANT: `useNotifications` must return a STABLE reference across
+// renders. The real hook returns a `useMemo`'d value; if the mock returns
+// a fresh object each call, any `useCallback` that depends on it (e.g.
+// `loadData` in this component) gets invalidated, re-firing its effect
+// on every render and causing an infinite loop — which is what stuck
+// these tests in a permanent "loading" state before the fix.
 const mockSuccess = vi.fn();
 const mockError = vi.fn();
 const mockWarning = vi.fn();
+const mockInfo = vi.fn();
+const stableNotifications = {
+  success: mockSuccess,
+  error: mockError,
+  warning: mockWarning,
+  info: mockInfo,
+  notify: vi.fn(),
+  dismiss: vi.fn(),
+  dismissAll: vi.fn(),
+};
 vi.mock('../../contexts/NotificationContext', () => ({
-  useNotifications: () => ({
-    success: mockSuccess,
-    error: mockError,
-    warning: mockWarning,
-    info: vi.fn(),
-  }),
+  useNotifications: () => stableNotifications,
 }));
 
 // Minimal mocks for the API surface this component talks to. We only care
@@ -70,13 +81,17 @@ function baseDiff(overrides: Partial<Record<string, unknown>> = {}) {
 
 describe('NormalizationEngineSection — apply to existing channels (GH-104)', () => {
   beforeEach(() => {
-    mockPreview.mockReset();
-    mockExecute.mockReset();
-    mockGetRules.mockReset();
-    mockGetTags.mockReset();
-    mockSuccess.mockReset();
-    mockError.mockReset();
-    mockWarning.mockReset();
+    // Use `mockClear` (not `mockReset`) — each test re-seeds
+    // `mockPreview` / `mockExecute` with its own `mockResolvedValue`,
+    // and the mount-time seeds below keep `mockGetRules` / `mockGetTags`
+    // resolving cleanly.
+    mockPreview.mockClear();
+    mockExecute.mockClear();
+    mockGetRules.mockClear();
+    mockGetTags.mockClear();
+    mockSuccess.mockClear();
+    mockError.mockClear();
+    mockWarning.mockClear();
     // Seed the mount-time API calls so the loading state always resolves.
     mockGetRules.mockResolvedValue({ groups: [] });
     mockGetTags.mockResolvedValue({ groups: [] });
