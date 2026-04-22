@@ -716,7 +716,26 @@ class AutoCreationEngine:
 
                 # Skip if order didn't change
                 if sorted_streams == current_streams:
-                    logger.info("[AUTO-CREATE-ENGINE] Channel '%s': order unchanged, skipping", channel_name)
+                    mode_label = _stream_sort_rule_label(rule.stream_sort_field)
+                    logger.info(
+                        "[AUTO-CREATE-ENGINE] Channel '%s': already sorted by %s, skipping",
+                        channel_name,
+                        mode_label,
+                    )
+                    # Still record that we evaluated sorting for UI visibility.
+                    results["execution_log"].append({
+                        "stream_id": None,
+                        "stream_name": f"[AUTO-CREATE-ENGINE] {channel_name}",
+                        "m3u_account_id": None,
+                        "rules_evaluated": [],
+                        "actions_executed": [{
+                            "type": "reorder_streams",
+                            "description": f"Stream order already sorted in '{channel_name}' by {mode_label} (no changes)",
+                            "success": True,
+                            "entity_id": channel_id,
+                            "error": None
+                        }]
+                    })
                     continue
 
                 if dry_run:

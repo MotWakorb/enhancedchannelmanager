@@ -890,6 +890,49 @@ class TestPass3RenumberGating:
         assert call_args.args[1] == 4000
 
 
+class TestAutoCreationEngineStreamReorderLogging:
+    """Tests for Pass 3.5 stream reorder logging."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.update_channel = AsyncMock()
+        self.engine = AutoCreationEngine(self.client)
+
+    @patch("auto_creation_engine._reorder_streams_for_rule")
+    def test_reorder_logs_when_order_unchanged(self, mock_reorder):
+        """If a channel is already sorted, still record a log entry for UI visibility."""
+        rule = MagicMock()
+        rule.id = 1
+        rule.name = "Rule 1"
+        rule.stream_sort_field = "smart_sort"
+        rule.stream_sort_order = "asc"
+
+        channel_id = 123
+        current = [10, 20]
+        self.engine._existing_channels = [{"id": channel_id, "name": "Ch 123", "streams": current}]
+
+        mock_reorder.return_value = current  # unchanged
+
+        results = {"execution_log": [], "dry_run_results": []}
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._reorder_channel_streams(
+                rules=[rule],
+                rule_channel_order={1: [channel_id]},
+                results=results,
+                dry_run=False,
+                settings=MagicMock(),
+                stream_m3u_map={},
+            )
+        )
+
+        self.client.update_channel.assert_not_called()
+        assert len(results["execution_log"]) == 1
+        action = results["execution_log"][0]["actions_executed"][0]
+        assert action["type"] == "reorder_streams"
+        assert action["success"] is True
+        assert "already sorted" in action["description"]
+
+
 class TestAutoCreationEngineExecutionTracking:
     """Tests for execution tracking methods."""
 
