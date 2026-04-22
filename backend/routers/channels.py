@@ -15,6 +15,7 @@ from typing import Optional, Literal, Union
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Response
 from pydantic import BaseModel
 
+from concurrency import run_cpu_bound
 from config import get_settings
 from csv_handler import parse_csv, generate_csv, generate_template, CSVParseError
 from database import get_session
@@ -284,7 +285,8 @@ async def create_channel(request: CreateChannelRequest):
                 from normalization_engine import get_normalization_engine
                 with get_session() as db:
                     engine = get_normalization_engine(db)
-                    norm_result = engine.normalize(request.name)
+                    # Offload normalization off event loop (bd-w3z4h)
+                    norm_result = await run_cpu_bound(engine.normalize, request.name)
                     channel_name = norm_result.normalized
                     if channel_name != request.name:
                         logger.debug("[CHANNELS] Normalized channel name: '%s' -> '%s'", request.name, channel_name)
@@ -1360,7 +1362,8 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                             from normalization_engine import get_normalization_engine
                             with get_session() as db:
                                 engine = get_normalization_engine(db)
-                                norm_result = engine.normalize(op.name)
+                                # Offload normalization off event loop (bd-w3z4h)
+                                norm_result = await run_cpu_bound(engine.normalize, op.name)
                                 channel_name = norm_result.normalized
                                 if channel_name != op.name:
                                     logger.debug("[CHANNELS-BULK] Normalized channel name: '%s' -> '%s'", op.name, channel_name)

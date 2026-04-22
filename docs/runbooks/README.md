@@ -15,6 +15,7 @@ Operational playbooks for on-call and incident response. Read during incidents, 
 | Runbook | Scope | Last Exercised |
 |-|-|-|
 | [v0.16.0 Hard Rollback](./v0.16.0-rollback.md) | Post-release rollback of a tagged version across git, GitHub Release, and GHCR | 2026-04-20 (real incident) |
+| [NormalizationPolicy Unified Mode](./normalization-unified-policy.md) | `ECM_NORMALIZATION_UNIFIED_POLICY` — rollback switch for the bd-eio04.1 unified Unicode preprocessor (GH #104) | Not exercised |
 
 ## Adding a runbook
 
