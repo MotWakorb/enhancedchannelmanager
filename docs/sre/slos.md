@@ -128,6 +128,62 @@ A follow-up bead should split this SLO by `path` label once we've observed which
 
 ---
 
+## SLO-5: Normalization Correctness
+
+**SLI:** Fraction of nightly canary runs where the Test Rules preview path (`engine.test_rule` / `engine.test_rules_batch`) and the auto-creation executor path (`engine.normalize`) produce byte-identical output — **including identical `matched_rule_ids`** — across the full shared Unicode fixture bank (`backend/tests/fixtures/unicode_fixtures.py`). A single fixture diverging in a single run counts as a full-run failure for the purpose of this SLI.
+
+**Prometheus expression (SLI numerator over denominator):**
+```promql
+1
+-
+(
+  rate(ecm_normalization_canary_divergence_total[7d])
+  /
+  # Denominator: canary runs per 7 days. The workflow runs once per day at
+  # 07:00 UTC, so the steady-state denominator is 7. Exposed as a recording
+  # rule (`ecm:normalization_canary_runs_per_7d`) once alert-manager is wired.
+  7
+)
+```
+
+For SLO evaluation without the recording rule (interim), compute the
+numerator directly — the `ecm_normalization_canary_divergence_total`
+counter increments by 1 per divergent canary run, never per-fixture, so
+`increase(ecm_normalization_canary_divergence_total[7d])` is the
+human-readable number of SLO-5 breaches in the last 7 days.
+
+**SLO target:** **100.0% parity** over a rolling 7-day window — any single divergent canary run is an SLO breach. (Unlike latency/availability SLOs where "99.9%" accepts a statistical tail, correctness is an invariant — the two paths share one NormalizationPolicy by construction; divergence is a structural bug, not a probabilistic event.)
+
+**Error budget:** **Zero.** There is no tolerable rate of Test-Rules vs. Auto-Create divergence. The error budget policy below is punitive because a single divergence reproduces the exact failure mode behind GH #104.
+
+**Why this target:** The entire point of bd-eio04 (epic: "Normalization parity") was to eliminate the divergence class that made Settings → Normalization Test and the auto-creation executor produce different outputs. A non-zero SLI means the unification regressed. 99.9% is not an acceptable answer — it means one bad deploy per thousand canary cycles silently slips through. Correctness is binary.
+
+**Why this uses SLO-5 (not SLO-4):** SLO-4 is already claimed by Readiness Sub-check Latency above — renaming bd-eio04.9 to the next free slot was called out in the grooming comment on the bead.
+
+**What breaks this SLO:**
+
+- A commit to `backend/normalization_engine.py` that changes the Test Rules or Auto-Create preprocessing path without updating the other.
+- An operator disabling the unified policy flag on one path (`ECM_NORMALIZATION_UNIFIED_POLICY`) without disabling it on the other — policy version is logged into the decision record for exactly this correlation.
+- A new rule type or action that the two code paths interpret differently.
+- Adding a fixture to `unicode_fixtures.py` whose `expected_normalized` value one path produces but the other does not.
+
+**Runbook:** [`docs/runbooks/normalization-canary-divergence.md`](../runbooks/normalization-canary-divergence.md)
+
+**Error-budget policy (SLO-5-specific override):**
+
+| Budget state | Trigger | Response |
+|-|-|-|
+| **Healthy** | Zero divergences in window | Normal work. |
+| **Breached** | One or more divergences | File a P2 ticket, open the runbook, **block the next release cut until resolved**. A blameless postmortem is recommended but not mandatory at first occurrence; the second occurrence within 30 days upgrades to mandatory postmortem. |
+
+The "block release cut" rule overrides the normal 25%/50%/75%/100% budget bands above — correctness cannot be deferred by budget math. The standard policy resumes once the breach is closed out (root cause identified, regression test added, canary green for one consecutive run).
+
+**Supplementary diagnostic signal (not the SLI):**
+
+A bug-report ratio — `1 - (bug_reports_containing_normaliz_30d) / (auto_creations_30d)` — is tracked on the normalization dashboard for trend analysis. This is **not** part of the SLI because bug reports lag the incident by days and are subject to reporter self-selection; it's useful as a leading indicator of user-perceived correctness but cannot be the thing we page on.
+
+---
+
 ## SLO-4: Readiness Sub-check Latency (informational)
 
 **SLI:** 95th percentile duration of readiness sub-checks, per `check` label (`database`, `dispatcharr`, `ffprobe`).
@@ -192,4 +248,5 @@ For the scaffold we ship simpler single-window thresholds for SLO-2/3 (p95 laten
 
 ## Changelog
 
+- **2026-04-22 (bd-eio04.9):** Added **SLO-5: Normalization Correctness** — canary-based parity SLI with zero-tolerance target. Supported by new metrics in `observability.py` (`ecm_normalization_canary_divergence_total`, plus rule-match / no-change / duration / per-creation-normalized counters), a structured decision log (see `NORMALIZATION_DECISION_LOGGER`), and a nightly CI canary (`.github/workflows/normalization-canary.yml`). Runbook at `docs/runbooks/normalization-canary-divergence.md`.
 - **2026-04-20 (bd-dl1bd):** Initial scaffold. Four SLOs defined, targets conservative, error-budget policy drafted, alert rules shipped in sibling YAML. **Not yet calibrated against real traffic** — targets must be revisited once 30 days of production metrics exist.
