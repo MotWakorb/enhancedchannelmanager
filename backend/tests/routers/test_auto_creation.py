@@ -203,12 +203,43 @@ class TestBulkUpdateAutoCreationRules:
         assert response.status_code == 422
 
     @pytest.mark.asyncio
+    async def test_rejects_more_than_500_rule_ids(self, async_client):
+        """rule_ids is capped to prevent pathological requests."""
+        response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
+            "rule_ids": list(range(1, 502)),  # 501 ids
+            "enabled": False,
+        })
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
     async def test_rejects_no_fields(self, async_client):
         """At least one update field is required."""
         response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
             "rule_ids": [1],
         })
         assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_rolls_back_when_any_rule_id_missing(self, async_client, test_session):
+        """If one rule id is missing, nothing is committed."""
+        r1 = _create_rule(test_session, name="BulkRB1", enabled=True)
+        r2 = _create_rule(test_session, name="BulkRB2", enabled=True)
+        r3 = _create_rule(test_session, name="BulkRB3", enabled=True)
+
+        missing_id = 999999
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
+                "rule_ids": [r1.id, r2.id, missing_id, r3.id],
+                "enabled": False,
+            })
+
+        assert response.status_code == 404
+
+        test_session.expire_all()
+        assert test_session.query(AutoCreationRule).get(r1.id).enabled is True
+        assert test_session.query(AutoCreationRule).get(r2.id).enabled is True
+        assert test_session.query(AutoCreationRule).get(r3.id).enabled is True
 
     @pytest.mark.asyncio
     async def test_sets_merge_streams_remove_non_matching(self, async_client, test_session):
