@@ -1809,3 +1809,149 @@ class TestVerifyEpgAssignments:
             executor.verify_epg_assignments()
         )
         assert (ok, patched, failed) == (0, 0, 1)
+
+
+class TestMatchScopeTargetGroup:
+    """Regression tests for GH-92 / bd-r9mtd: ``match_scope_target_group``.
+
+    When two rules with different target groups produce the same channel name
+    (e.g., both produce "ESPN"), the default (group-agnostic) lookup merges the
+    second stream into the first rule's channel. With
+    ``match_scope_target_group=True``, the lookup is scoped to the rule's
+    target group, so each rule creates a separate channel in its own group.
+    """
+
+    def setup_method(self):
+        """Set up executor with two groups and an existing ESPN channel in group 1."""
+        self.client = MagicMock()
+        # Return a distinguishable new channel each time create_channel is called.
+        self._next_id = 500
+        async def _create_channel(data):
+            self._next_id += 1
+            return {
+                "id": self._next_id,
+                "name": data["name"],
+                "channel_number": data.get("channel_number"),
+                "channel_group_id": data.get("channel_group_id"),
+                "streams": data.get("streams", []),
+            }
+        self.client.create_channel = AsyncMock(side_effect=_create_channel)
+        self.client.update_channel = AsyncMock()
+
+        # Group 1 = SPORTS with an existing "ESPN" channel (simulates rule A
+        # having already created one). Group 2 = ESPN-GROUP, empty.
+        self.channels = [
+            {"id": 1, "name": "ESPN", "channel_number": 100,
+             "channel_group_id": 1, "streams": [101]},
+        ]
+        self.groups = [
+            {"id": 1, "name": "SPORTS"},
+            {"id": 2, "name": "ESPN-GROUP"},
+        ]
+        self.executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            existing_groups=self.groups,
+        )
+
+        self.stream_ctx = StreamContext(
+            stream_id=202,
+            stream_name="ESPN",
+            m3u_account_id=1,
+            m3u_account_name="Provider A",
+            group_name="ESPN-GROUP",
+            tvg_id="ESPN.US",
+        )
+
+    def test_find_channel_by_name_honors_scope_group_id(self):
+        """Scope filter excludes channels in other groups."""
+        in_scope = self.executor._find_channel_by_name("ESPN", scope_group_id=1)
+        assert in_scope is not None and in_scope["id"] == 1
+
+        out_of_scope = self.executor._find_channel_by_name("ESPN", scope_group_id=2)
+        assert out_of_scope is None
+
+        # None (default) preserves backwards-compat global lookup
+        any_group = self.executor._find_channel_by_name("ESPN")
+        assert any_group is not None and any_group["id"] == 1
+
+    def test_default_merges_across_groups(self):
+        """Without the flag, a rule targeting group 2 merges into group 1's ESPN (GH-92 bug).
+
+        This documents the pre-fix behavior — proves the flag is needed.
+        """
+        action = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+            "if_exists": "merge",
+        }
+        exec_ctx = ExecutionContext()
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(
+                action, self.stream_ctx, exec_ctx,
+                rule_target_group_id=2,
+                match_scope_target_group=False,
+            )
+        )
+        # With flag OFF, the second rule merges into the group 1 ESPN —
+        # update_channel is called, create_channel is NOT.
+        assert result.success is True
+        self.client.create_channel.assert_not_called()
+        self.client.update_channel.assert_called()
+
+    def test_scope_creates_separate_channel_in_target_group(self):
+        """With the flag ON, rule B creates a new ESPN in group 2 instead of merging.
+
+        This is the GH-92 regression scenario: two rules, same channel name,
+        different target groups — each should produce its own channel.
+        """
+        action = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+            "if_exists": "merge",
+        }
+        exec_ctx = ExecutionContext()
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(
+                action, self.stream_ctx, exec_ctx,
+                rule_target_group_id=2,
+                match_scope_target_group=True,
+            )
+        )
+        assert result.success is True
+        assert result.created is True
+        # A brand-new channel was created in group 2 — NOT a merge into group 1.
+        self.client.create_channel.assert_called_once()
+        call_args = self.client.create_channel.call_args[0][0]
+        assert call_args["name"] == "ESPN"
+        assert call_args["channel_group_id"] == 2
+        # And the existing group-1 channel was left alone
+        self.client.update_channel.assert_not_called()
+
+    def test_scope_matches_when_same_target_group(self):
+        """Flag ON, same target group as existing channel → still merges.
+
+        The flag only prevents cross-group merges; within the same group, an
+        existing channel with the same name is still the "already exists" case
+        and the rule's ``if_exists`` setting applies.
+        """
+        action = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+            "if_exists": "skip",
+        }
+        exec_ctx = ExecutionContext()
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(
+                action, self.stream_ctx, exec_ctx,
+                rule_target_group_id=1,  # same group as existing ESPN
+                match_scope_target_group=True,
+            )
+        )
+        assert result.success is True
+        assert result.skipped is True
+        assert result.entity_id == 1
+        self.client.create_channel.assert_not_called()
