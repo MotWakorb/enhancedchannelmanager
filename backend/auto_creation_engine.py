@@ -1102,6 +1102,18 @@ class AutoCreationEngine:
         # Track channel IDs per rule in sorted order (for Pass 3 renumber + Pass 3.5 stream reorder)
         rule_channel_order = defaultdict(list)  # rule_id -> [channel_id, ...] in sorted order
 
+        # Snapshot each rule's pre-run managed channel set. Used to gate the
+        # rule_channel_order append so Pass 3's renumber only touches channels
+        # this rule actually owns: either created this run OR already managed
+        # by this rule prior to the run. A channel matched into via the
+        # normalized-name fallback (PR #107) that belongs to a DIFFERENT rule
+        # must NOT be added, or Pass 3 will renumber foreign groups.
+        # See bd-yj5yi / GH-104 regression.
+        pre_run_managed_ids: dict[int, set[int]] = {
+            rule.id: set(rule.get_managed_channel_ids() or [])
+            for rule in rules
+        }
+
         # =====================================================================
         # Pass 2: Execute actions on sorted matches
         # =====================================================================
@@ -1208,9 +1220,27 @@ class AutoCreationEngine:
             results["modified_entities"].extend(exec_ctx.modified_entities)
             results["probe_stream_ids"].update(exec_ctx.probe_stream_ids)
 
-            # Track channel ID for Pass 3 renumber + Pass 3.5 stream reorder
+            # Track channel ID for Pass 3 renumber + Pass 3.5 stream reorder.
+            # Only include channels this rule actually OWNS — either just
+            # created this run, or already in the rule's pre-run managed set.
+            # This prevents Pass 3 from renumbering foreign-group channels
+            # that were matched via the normalized-name fallback introduced
+            # in PR #107 (bd-yj5yi / GH-104).
             if exec_ctx.current_channel_id:
-                rule_channel_order[winning_rule.id].append(exec_ctx.current_channel_id)
+                cid = exec_ctx.current_channel_id
+                owned_by_this_rule = (
+                    cid in exec_ctx.created_channel_ids
+                    or cid in pre_run_managed_ids.get(winning_rule.id, set())
+                )
+                if owned_by_this_rule:
+                    rule_channel_order[winning_rule.id].append(cid)
+                else:
+                    logger.debug(
+                        "[AUTO-CREATE-ENGINE] Rule '%s': skipping Pass 3 append for "
+                        "channel_id=%s — matched via fallback into foreign/unmanaged "
+                        "channel (not created this run, not pre-run managed)",
+                        winning_rule.name, cid
+                    )
 
             if stop_processing:
                 break
