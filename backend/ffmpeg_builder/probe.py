@@ -14,7 +14,10 @@ FFMPEG_BIN = "ffmpeg"
 DEFAULT_TIMEOUT = 30
 
 # Restrict ffprobe to safe network protocols only — blocks file://, data://, concat:, etc.
-FFPROBE_PROTOCOL_WHITELIST = "http,https,tcp,udp,rtp,rtmp,pipe"
+# tls and crypto are required internal protocols: HTTPS chains to tls for the TLS
+# handshake, HLS AES-128 encrypted segments chain to crypto. Without tls ffprobe
+# fails on every HTTPS URL with "Protocol 'tls' not on whitelist" (GH-106).
+FFPROBE_PROTOCOL_WHITELIST = "http,https,tls,crypto,tcp,udp,rtp,rtmp,pipe"
 
 
 @dataclass
