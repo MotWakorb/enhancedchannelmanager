@@ -108,23 +108,74 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
 
-          REF="${{ github.event.pull_request.merge_commit_sha || github.sha }}"
-          echo "Checking CodeQL alerts on ref=$REF"
+          # Code Scanning alerts API requires the PR merge ref form for
+          # PR-scoped queries — raw SHA or refs/heads/<branch> returns 0
+          # even when alerts exist. See:
+          # https://docs.github.com/en/rest/code-scanning/code-scanning#list-code-scanning-alerts-for-a-repository
+          REF="refs/pull/${PR_NUMBER}/merge"
+          echo "Checking CodeQL alerts on ref=$REF (PR #${PR_NUMBER})"
 
-          # gh api --paginate streams pages as concatenated JSON arrays; jq -s
-          # flattens them into a single array before filtering.
-          ALERTS=$(gh api --paginate \
-            "/repos/${{ github.repository }}/code-scanning/alerts?state=open&ref=$REF&per_page=100" \
-            | jq -s 'add // [] | [.[] | select(.rule.security_severity_level=="high" or .rule.security_severity_level=="critical") | {number, rule: .rule.id, path: .most_recent_instance.location.path, severity: .rule.security_severity_level}]')
+          # Alerts are eventually-consistent relative to the SARIF upload
+          # performed by codeql-action/analyze — the analyze step returns
+          # before the alerts API has indexed the results. Poll with
+          # exponential backoff until we either see alerts or confirm the
+          # matrix languages have completed analysis on this ref.
+          #
+          # Strategy:
+          #  - Up to 6 attempts with 10/20/30/45/60/60s waits (~4min total)
+          #  - On each attempt, fetch all open alerts for the ref and check
+          #    if any are HIGH/CRITICAL
+          #  - If ANY alerts are present for the ref (any severity), treat
+          #    that as evidence the index has caught up — proceed with the
+          #    filter decision
+          #  - If zero alerts after all attempts, accept the delta-zero
+          #    conclusion (the alternative — failing on absence of data —
+          #    would make the gate flap on first-scan repos)
+          ATTEMPTS=6
+          WAITS=(10 20 30 45 60 60)
+          TOTAL_ALERTS=0
+          ALERTS='[]'
+          for i in $(seq 0 $((ATTEMPTS - 1))); do
+            ATTEMPT_NUM=$((i + 1))
+            echo "Attempt ${ATTEMPT_NUM}/${ATTEMPTS}: querying alerts on ref=$REF"
 
-          COUNT=$(echo "$ALERTS" | jq 'length')
-          echo "Open HIGH/CRITICAL alerts on ref=$REF: $COUNT"
+            # gh api --paginate streams pages as concatenated JSON arrays;
+            # jq -s flattens them into a single array before filtering.
+            RAW=$(gh api --paginate \
+              "/repos/${{ github.repository }}/code-scanning/alerts?state=open&ref=${REF}&per_page=100" \
+              | jq -s 'add // []')
 
-          if [ "$COUNT" -gt 0 ]; then
-            echo "::error::$COUNT open HIGH/CRITICAL CodeQL alerts on this PR:"
+            TOTAL_ALERTS=$(echo "$RAW" | jq 'length')
+            ALERTS=$(echo "$RAW" | jq '[.[] | select(.rule.security_severity_level=="high" or .rule.security_severity_level=="critical") | {number, rule: .rule.id, path: .most_recent_instance.location.path, severity: .rule.security_severity_level}]')
+            HIGH_COUNT=$(echo "$ALERTS" | jq 'length')
+
+            echo "  -> total open alerts on ref: ${TOTAL_ALERTS}; HIGH/CRITICAL: ${HIGH_COUNT}"
+
+            # If we have any alerts (any severity) for this ref, the index
+            # is live — decision can be made. If HIGH_COUNT > 0, fail.
+            # If TOTAL_ALERTS > 0 but HIGH_COUNT == 0, we're clean and can
+            # exit the loop early.
+            if [ "${TOTAL_ALERTS}" -gt 0 ]; then
+              echo "  -> index has data for this ref; decision can be made"
+              break
+            fi
+
+            if [ "${ATTEMPT_NUM}" -lt "${ATTEMPTS}" ]; then
+              WAIT=${WAITS[$i]}
+              echo "  -> no alerts visible yet; sleeping ${WAIT}s before retry"
+              sleep "${WAIT}"
+            fi
+          done
+
+          HIGH_COUNT=$(echo "$ALERTS" | jq 'length')
+          echo "Final: ${TOTAL_ALERTS} open alerts on ref=$REF; ${HIGH_COUNT} HIGH/CRITICAL"
+
+          if [ "${HIGH_COUNT}" -gt 0 ]; then
+            echo "::error::${HIGH_COUNT} open HIGH/CRITICAL CodeQL alerts on this PR:"
             echo "$ALERTS" | jq -r '.[] | "- alert #\(.number) [\(.severity)] \(.rule) at \(.path)"'
             echo ""
             echo "Per ADR-005 Phase 1 dismissal policy, these must be either:"
