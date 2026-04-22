@@ -10,11 +10,13 @@ import time
 from typing import List, Literal, Optional
 
 import yaml
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
 import journal
+from auth.routes import limiter
+from concurrency import run_cpu_bound
 from config import get_settings
 from database import get_session
 from dispatcharr_client import get_client
@@ -519,7 +521,9 @@ async def test_normalization_rule(request: TestRuleRequest):
         session = get_session()
         try:
             engine = get_normalization_engine(session)
-            result = engine.test_rule(
+            # Offload CPU-bound regex/rule eval to thread pool (bd-w3z4h)
+            result = await run_cpu_bound(
+                engine.test_rule,
                 text=request.text,
                 condition_type=request.condition_type,
                 condition_value=request.condition_value or "",
@@ -531,7 +535,7 @@ async def test_normalization_rule(request: TestRuleRequest):
                 tag_group_id=request.tag_group_id,
                 tag_match_position=request.tag_match_position or "contains",
                 else_action_type=request.else_action_type,
-                else_action_value=request.else_action_value
+                else_action_value=request.else_action_value,
             )
             return result
         finally:
@@ -542,15 +546,17 @@ async def test_normalization_rule(request: TestRuleRequest):
 
 
 @router.post("/test-batch")
-async def test_normalization_batch(request: TestRulesBatchRequest):
+@limiter.limit("30/minute")
+async def test_normalization_batch(request: Request, body: TestRulesBatchRequest):
     """Test all enabled rules against multiple sample texts."""
-    logger.debug("[NORMALIZE] POST /test-batch - count=%s", len(request.texts))
+    logger.debug("[NORMALIZE] POST /test-batch - count=%s", len(body.texts))
     try:
         from normalization_engine import get_normalization_engine
         session = get_session()
         try:
             engine = get_normalization_engine(session)
-            results = engine.test_rules_batch(request.texts)
+            # Offload batch evaluation off event loop (bd-w3z4h)
+            results = await run_cpu_bound(engine.test_rules_batch, body.texts)
             return {
                 "results": [
                     {
@@ -581,7 +587,8 @@ async def normalize_text(request: TestRulesBatchRequest):
         session = get_session()
         try:
             engine = get_normalization_engine(session)
-            results = engine.test_rules_batch(request.texts)
+            # Offload batch evaluation off event loop (bd-w3z4h)
+            results = await run_cpu_bound(engine.test_rules_batch, request.texts)
             return {
                 "results": [
                     {"original": r.original, "normalized": r.normalized}
@@ -648,14 +655,23 @@ async def get_normalization_rule_stats(limit: int = 500):
                 NormalizationRule.priority
             ).all()
 
-            rule_stats = []
-            for rule in rules:
-                match_count = 0
-                for name in stream_names:
-                    match = engine._match_condition(name, rule)
-                    if match.matched:
-                        match_count += 1
+            # Offload the R×S regex loop to the thread pool (bd-w3z4h).
+            # 500 streams × 100 rules = 50k regex evals — blocks the event loop
+            # for several seconds if run inline.
+            def _count_matches():
+                counts = []
+                for rule in rules:
+                    count = 0
+                    for name in stream_names:
+                        m = engine._match_condition(name, rule)
+                        if m.matched:
+                            count += 1
+                    counts.append(count)
+                return counts
 
+            match_counts = await run_cpu_bound(_count_matches)
+            rule_stats = []
+            for rule, match_count in zip(rules, match_counts):
                 rule_stats.append({
                     "rule_id": rule.id,
                     "rule_name": rule.name,
