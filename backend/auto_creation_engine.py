@@ -15,6 +15,8 @@ import re
 from collections import defaultdict
 from datetime import datetime
 from typing import Optional
+
+import safe_regex
 from config import get_settings
 from database import get_session
 from models import (
@@ -1091,8 +1093,29 @@ class AutoCreationEngine:
                     len(entries), rule.name,
                     rule.sort_field, rule.sort_order or 'asc'
                 )
+                # bd-eio04.15: precompile sort_regex ONCE per rule, outside
+                # the sort comparator. Python's Timsort invokes the key
+                # function O(n) times (not N log N — keys are memoized), so
+                # the per-call cost is O(n) safe_regex.search invocations.
+                # Pre-compiling avoids paying the compile overhead on every
+                # call and keeps the hot path close to stdlib re speed.
+                # Oversize / invalid patterns raise here; we fall back to a
+                # None sort_regex so _sort_key returns the unmatched
+                # sentinel for every stream (stable arbitrary order).
+                precompiled_sort_regex = None
+                raw_sort_regex = getattr(rule, 'sort_regex', None)
+                if raw_sort_regex and rule.sort_field == "stream_name_regex":
+                    try:
+                        precompiled_sort_regex = safe_regex.compile(raw_sort_regex)
+                    except safe_regex.SafeRegexError as e:
+                        logger.warning(
+                            "[AUTO-CREATE-ENGINE] Rule '%s' sort_regex "
+                            "failed to compile (%s); falling back to "
+                            "unsorted order for stream_name_regex",
+                            rule.name, e,
+                        )
                 entries.sort(
-                    key=lambda e: _sort_key(e[0], rule.sort_field, getattr(rule, 'sort_regex', None)),
+                    key=lambda e: _sort_key(e[0], rule.sort_field, precompiled_sort_regex),
                     reverse=(rule.sort_order == "desc")
                 )
             sorted_entries.extend(entries)
@@ -2501,8 +2524,16 @@ def _natural_sort_key(s: str) -> list:
     return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', s)]
 
 
-def _sort_key(stream: StreamContext, sort_field: str, sort_regex: str | None = None):
-    """Get sort key for a stream based on the sort field."""
+def _sort_key(stream: StreamContext, sort_field: str, sort_regex=None):
+    """Get sort key for a stream based on the sort field.
+
+    ``sort_regex`` may be a raw string (legacy path — compiled on every
+    call, do not use in hot loops) or a pre-compiled pattern object from
+    :func:`safe_regex.compile`. Callers that sort N streams should
+    precompile once and pass the compiled object to amortize compilation
+    cost across the N log N comparisons (see bd-eio04.15 — hot-path
+    mitigation in the sort closure at ``_run_rules``).
+    """
     if sort_field == "stream_name":
         return stream.stream_name.lower()
     elif sort_field == "stream_name_natural":
@@ -2517,11 +2548,15 @@ def _sort_key(stream: StreamContext, sort_field: str, sort_regex: str | None = N
         return stream.stream_chno if stream.stream_chno is not None else float('inf')
     elif sort_field == "stream_name_regex":
         if sort_regex:
-            try:
-                m = re.search(sort_regex, stream.stream_name)
-            except re.error:
-                return (-1, 0, "")
-            if m and m.groups():
+            # bd-eio04.15: route through safe_regex. A pre-compiled pattern
+            # (preferred) bypasses repeated compilation; a raw string falls
+            # back to safe_regex.search's internal one-shot compile. On
+            # timeout or no-match the result is None, which collapses to
+            # the (-1, 0, "") sentinel — unmatched streams sort to the
+            # front in ascending order, which matches the pre-migration
+            # behavior when the stdlib re.search returned None.
+            m = safe_regex.search(sort_regex, stream.stream_name)
+            if m is not None and m.groups():
                 captured = m.group(1)
                 try:
                     return (0, float(captured), captured)

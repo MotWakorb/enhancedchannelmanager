@@ -10,6 +10,7 @@ from typing import Optional, List, Dict
 
 from sqlalchemy.orm import Session
 
+import safe_regex
 from database import get_session
 from models import M3UChangeLog, M3UDigestSettings
 from task_scheduler import TaskScheduler, TaskResult, ScheduleConfig, ScheduleType
@@ -186,34 +187,49 @@ class M3UDigestTask(TaskScheduler):
             stream_patterns_raw = settings.get_exclude_stream_patterns()
 
             if group_patterns_raw or stream_patterns_raw:
-                # Compile patterns once
+                # Compile user-supplied patterns via safe_regex so oversized
+                # patterns are rejected up-front (raises PatternTooLongError)
+                # and syntactically invalid ones are logged and skipped
+                # (SafeRegexError). Matching goes through safe_regex.search
+                # below so every call has a per-invocation ReDoS timeout —
+                # on timeout or other failure, search returns None and the
+                # row is treated as NOT matched (i.e. not excluded), which
+                # is the safe default for an exclude filter.
                 group_regexes = []
                 for p in group_patterns_raw:
                     try:
-                        group_regexes.append(re.compile(p, re.IGNORECASE))
-                    except re.error as e:
+                        group_regexes.append(safe_regex.compile(p, flags=re.IGNORECASE))
+                    except safe_regex.SafeRegexError as e:
                         logger.debug("[M3U-DIGEST] Suppressed invalid group regex pattern: %s", e)
 
                 stream_regexes = []
                 for p in stream_patterns_raw:
                     try:
-                        stream_regexes.append(re.compile(p, re.IGNORECASE))
-                    except re.error as e:
+                        stream_regexes.append(safe_regex.compile(p, flags=re.IGNORECASE))
+                    except safe_regex.SafeRegexError as e:
                         logger.debug("[M3U-DIGEST] Suppressed invalid stream regex pattern: %s", e)
 
                 filtered_changes = []
                 for change in changes:
                     # Check group exclude: if group_name matches any pattern, drop it
                     if group_regexes and change.group_name:
-                        if any(rx.search(change.group_name) for rx in group_regexes):
+                        if any(
+                            safe_regex.search(rx, change.group_name) is not None
+                            for rx in group_regexes
+                        ):
                             continue
 
                     # Check stream exclude: filter individual stream names
                     if stream_regexes and change.change_type in ("streams_added", "streams_removed"):
                         original_names = change.get_stream_names()
                         if original_names:
-                            kept = [n for n in original_names
-                                    if not any(rx.search(n) for rx in stream_regexes)]
+                            kept = [
+                                n for n in original_names
+                                if not any(
+                                    safe_regex.search(rx, n) is not None
+                                    for rx in stream_regexes
+                                )
+                            ]
                             if not kept:
                                 continue  # All streams excluded, drop entire entry
                             if len(kept) < len(original_names):

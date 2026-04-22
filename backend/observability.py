@@ -34,11 +34,15 @@ The :func:`install_observability` function is the single entry point —
 from __future__ import annotations
 
 import contextvars
+import hashlib
+import itertools
 import json
 import logging
+import os
+import threading
 import time
 import uuid
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Iterable, Optional
 
 try:  # pragma: no cover — defensive for environments without prometheus-client
     from prometheus_client import (
@@ -244,6 +248,13 @@ _HEALTH_CHECK_BUCKETS = (
     0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 3.0,
 )
 
+# Normalization runs at microsecond-to-millisecond scale — well below the
+# floor of the HTTP buckets. A dedicated histogram shape captures the sub-ms
+# distribution that dominates this work's latency profile.
+_NORMALIZATION_LATENCY_BUCKETS = (
+    0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5,
+)
+
 
 def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
     """Instantiate the ECM metric set against ``registry``."""
@@ -274,6 +285,64 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             "Duration of each readiness sub-check (database, dispatcharr, ffprobe).",
             ["check"],
             buckets=_HEALTH_CHECK_BUCKETS,
+            registry=registry,
+        ),
+        # ----------------------------------------------------------------
+        # Normalization observability (bd-eio04.9).
+        #
+        # ``rule_matches_total`` labels by ``rule_category`` — a bounded
+        # enum drawn from the NormalizationRule action_type namespace
+        # (``remove``, ``replace``, ``regex_replace``, ``strip_prefix``,
+        # ``strip_suffix``, ``normalize_prefix``, ``capitalize``,
+        # ``tag_group``, ``legacy_tag``, ``other``). Per-rule-id breakdown
+        # is NOT a metric label (cardinality bomb — there is no upper
+        # bound on user-created rules) — it goes in the sampled INFO log
+        # instead, per PO decision 6 (hybrid metric + log).
+        #
+        # ``auto_creation_channels_created_total`` labels by
+        # ``normalized`` ∈ {true, false, skipped} (three fixed values).
+        # "skipped" is emitted when no normalization groups were
+        # configured for the rule — important signal that distinguishes
+        # "ran and did nothing" from "never ran at all".
+        #
+        # ``canary_divergence_total`` has no labels. This is the SLI
+        # numerator for SLO-5 (Normalization Correctness) — any non-zero
+        # rate over the measurement window is an SLO breach.
+        # ----------------------------------------------------------------
+        "normalization_rule_matches_total": Counter(
+            "ecm_normalization_rule_matches_total",
+            "Count of normalization rule matches by rule category. "
+            "rule_category is a bounded enum mapped from NormalizationRule.action_type; "
+            "per-rule-id detail lives in the sampled INFO log.",
+            ["rule_category"],
+            registry=registry,
+        ),
+        "normalization_no_change_total": Counter(
+            "ecm_normalization_no_change_total",
+            "Count of normalize() invocations where the output matched the "
+            "input verbatim (ran but produced no change).",
+            registry=registry,
+        ),
+        "auto_creation_channels_created_total": Counter(
+            "ecm_auto_creation_channels_created_total",
+            "Count of auto-created channels, labeled by whether normalization "
+            "was applied. 'true' = ran and changed name. 'false' = ran and "
+            "produced no change. 'skipped' = no normalization groups configured.",
+            ["normalized"],
+            registry=registry,
+        ),
+        "normalization_duration_seconds": Histogram(
+            "ecm_normalization_duration_seconds",
+            "Duration of a single normalize() call, in seconds. Buckets cover "
+            "the sub-millisecond regime typical for this work.",
+            buckets=_NORMALIZATION_LATENCY_BUCKETS,
+            registry=registry,
+        ),
+        "normalization_canary_divergence_total": Counter(
+            "ecm_normalization_canary_divergence_total",
+            "Count of nightly canary divergences between Test Rules (test_rule / "
+            "test_rules_batch) and auto-creation executor output. "
+            "SLI numerator for SLO-5 — any non-zero rate over the window is a breach.",
             registry=registry,
         ),
     }
@@ -312,6 +381,310 @@ def reset_for_tests() -> None:
     global REGISTRY, _METRICS
     REGISTRY = None
     _METRICS = {}
+    reset_normalization_sampler_for_tests()
+
+
+# =========================================================================
+# Normalization decision log (bd-eio04.9)
+# =========================================================================
+# Structured INFO log for every (sampled) normalization decision. The
+# decision log supplements the metrics in `_build_metrics` — metrics
+# answer "how often" and "how fast", the log answers "which input, which
+# rules, what did it produce?". The two together give on-call a
+# 2-minute path from "SLO-5 burning" → "exactly which fixture diverged".
+#
+# Volume control:
+#   * Baseline stride sampler — default every 10th call (10%).
+#   * Always-sample when the decision is "we changed something": applied
+#     is True AND matched_rule_ids is non-empty. Bug-hunting only cares
+#     about decisions that acted; "ran and did nothing" traffic is what
+#     the stride sampler keeps bounded.
+#   * PO decision (grooming 2026-04-22): deterministic every-N stride,
+#     not random sampling, so the same traffic produces the same log
+#     content across replays (helps canary failure forensics).
+#
+# Truncation + hashing:
+#   * `input` and `output` fields are truncated to 256 chars (they can
+#     be arbitrarily long user content). Truncation marker: trailing
+#     "...[truncated]" sentinel.
+#   * `input_sha256` is ALWAYS included — the full hash of the raw input
+#     — so on-call can correlate across log lines when the truncation
+#     strips the distinguishing tail.
+
+NORMALIZATION_DECISION_LOGGER = "ecm.normalization.decision"
+_DECISION_FIELD_MAX_CHARS = 256
+_DECISION_TRUNCATION_SENTINEL = "...[truncated]"
+
+# Default stride: emit one INFO log per N calls. 10 = 10% baseline. This
+# default tracks the SRE dashboard budget noted in the bead — at peak
+# auto-creation traffic, a 10% baseline combined with "always on
+# applied=true" caps log volume at roughly one line per rule match plus
+# a sample of the no-op traffic.
+_DEFAULT_SAMPLE_STRIDE = 10
+
+# Bounded enum of rule categories used as the `rule_category` metric
+# label. Keys are NormalizationRule.action_type values seen in the
+# codebase (see backend/normalization_engine.py::_apply_action). Anything
+# outside this enum is mapped to "other" by `_normalize_rule_category`
+# so the label cardinality is bounded regardless of future rule types.
+_KNOWN_RULE_CATEGORIES = frozenset({
+    "remove",
+    "replace",
+    "regex_replace",
+    "strip_prefix",
+    "strip_suffix",
+    "normalize_prefix",
+    "capitalize",
+    "tag_group",
+    "legacy_tag",
+})
+
+
+def _normalize_rule_category(raw: Optional[str]) -> str:
+    """Map a raw rule action_type onto the bounded metric-label enum.
+
+    Unknown / empty values collapse to ``"other"`` so the Prometheus
+    label stays bounded regardless of what the caller passes.
+    """
+    if not raw:
+        return "other"
+    normalized = str(raw).strip().lower()
+    if normalized in _KNOWN_RULE_CATEGORIES:
+        return normalized
+    return "other"
+
+
+class _DeterministicSampler:
+    """Every-N stride sampler for structured decision logs.
+
+    Sampling rule (bd-eio04.9):
+        * If ``always_keep`` is True (caller knows this decision
+          actually changed the string) — always emit.
+        * Otherwise emit one out of every ``stride`` calls. Stride is
+          applied deterministically against a monotonically-increasing
+          counter, so replaying the same traffic twice produces the
+          same sampled subset.
+
+    Thread-safe: ``threading.Lock`` guards the counter because the
+    auto-creation executor runs on multiple workers. Locking a single
+    integer increment is ~200ns — negligible next to the normalization
+    work itself.
+    """
+
+    def __init__(self, stride: int = _DEFAULT_SAMPLE_STRIDE) -> None:
+        self._stride = max(1, int(stride))
+        self._counter = 0
+        self._lock = threading.Lock()
+
+    @property
+    def stride(self) -> int:
+        return self._stride
+
+    def set_stride(self, stride: int) -> None:
+        """Update the stride. Resets the counter to 0 so the next call is kept."""
+        with self._lock:
+            self._stride = max(1, int(stride))
+            self._counter = 0
+
+    def should_sample(self, always_keep: bool = False) -> bool:
+        """Return True when this call should be emitted as INFO."""
+        if always_keep:
+            # Advance the counter anyway so "always-keep" traffic does
+            # not desynchronize the stride sampler for the baseline
+            # path. Otherwise a burst of applied decisions would make
+            # the next no-op decision look like a "fresh" cycle start.
+            with self._lock:
+                self._counter += 1
+            return True
+        with self._lock:
+            self._counter += 1
+            # Emit when counter hits 1, stride+1, 2*stride+1, … so the
+            # very first call is always logged (helps smoke-testing
+            # that the hook is wired up).
+            return (self._counter - 1) % self._stride == 0
+
+
+def _read_stride_from_env() -> int:
+    """Read the sampler stride from ECM_NORMALIZATION_LOG_STRIDE.
+
+    Invalid / non-integer values fall back to the default stride. Zero
+    or negative values are clamped to 1 (emit every call) — useful for
+    debugging, never the default.
+    """
+    raw = os.environ.get("ECM_NORMALIZATION_LOG_STRIDE")
+    if not raw:
+        return _DEFAULT_SAMPLE_STRIDE
+    try:
+        value = int(raw.strip())
+    except (TypeError, ValueError):
+        return _DEFAULT_SAMPLE_STRIDE
+    return max(1, value)
+
+
+_normalization_sampler = _DeterministicSampler(stride=_read_stride_from_env())
+
+
+def get_normalization_sampler() -> _DeterministicSampler:
+    """Return the process-wide normalization decision log sampler."""
+    return _normalization_sampler
+
+
+def reset_normalization_sampler_for_tests(stride: Optional[int] = None) -> None:
+    """Reset the sampler to a clean state. ONLY for tests."""
+    global _normalization_sampler
+    _normalization_sampler = _DeterministicSampler(
+        stride=stride if stride is not None else _read_stride_from_env()
+    )
+
+
+def _truncate_for_log(value: str, max_chars: int = _DECISION_FIELD_MAX_CHARS) -> str:
+    """Truncate ``value`` to ``max_chars`` with a visible sentinel.
+
+    Returns the original string when ``len(value) <= max_chars``. Otherwise
+    trims to ``max_chars`` and appends ``...[truncated]`` so operators
+    reading the log know the value was clipped.
+    """
+    if value is None:
+        return ""
+    s = str(value)
+    if len(s) <= max_chars:
+        return s
+    return s[:max_chars] + _DECISION_TRUNCATION_SENTINEL
+
+
+def sha256_of(value: str) -> str:
+    """Return the hex SHA-256 of ``value`` encoded as UTF-8.
+
+    Exposed as a helper so the canary harness (see
+    ``scripts/normalization_canary.py``) can compute the same hash the
+    decision log records without duplicating the logic.
+    """
+    if value is None:
+        value = ""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def record_normalization_decision(
+    *,
+    input_text: str,
+    output_text: str,
+    matched_rule_ids: Iterable[Any],
+    applied: bool,
+    policy_version: str,
+    duration_seconds: Optional[float] = None,
+    rule_category: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+    logger_name: str = NORMALIZATION_DECISION_LOGGER,
+) -> bool:
+    """Emit a sampled INFO-level decision log line.
+
+    Always updates the metrics (no-change counter, duration histogram)
+    regardless of whether the log line is emitted — metrics are cheap,
+    the sampler only decides whether to write the log. This is the
+    entry point used by ``normalization_engine.NormalizationEngine``
+    and by the canary harness so the two paths feed the same
+    observability sinks with byte-identical structure.
+
+    Parameters
+    ----------
+    input_text:
+        The raw input to normalize. Truncated to 256 chars in the log;
+        hashed fully into ``input_sha256``.
+    output_text:
+        The normalized output. Truncated to 256 chars.
+    matched_rule_ids:
+        Iterable of rule identifiers that matched. Coerced to a list of
+        ints or strings — whatever the caller already has.
+    applied:
+        True when the output changed relative to the input OR a rule
+        matched. The sampler always keeps decisions where
+        ``applied and matched_rule_ids`` — those are the bug-hunting
+        signal. No-op traffic is throttled to the stride.
+    policy_version:
+        Identifier of the NormalizationPolicy build — e.g.
+        ``"unified-v1"`` vs. ``"legacy"``. Flows into the log so SRE
+        can correlate divergence with the policy flag.
+    duration_seconds:
+        Wall time of the normalize() call. When provided, observed
+        into the duration histogram. Ignored when ``None`` (the caller
+        didn't measure).
+    rule_category:
+        Optional coarse rule category for the metric label. Passed
+        through ``_normalize_rule_category`` so unknown values map to
+        ``"other"``.
+    extra:
+        Optional dict of additional structured fields for the log
+        payload (e.g. ``{"source": "auto_create", "channel_id": 42}``).
+
+    Returns
+    -------
+    bool
+        True when the log line was actually emitted (i.e. the sampler
+        kept this call). Callers generally don't need the return value;
+        it's exposed for testing.
+    """
+    # Metrics are updated unconditionally — they're cheap and the
+    # sampler only applies to logs.
+    try:
+        if duration_seconds is not None:
+            get_metric("normalization_duration_seconds").observe(
+                max(0.0, float(duration_seconds))
+            )
+        if not applied and not list(matched_rule_ids):
+            # "Ran but did nothing" — counted separately so dashboards
+            # can show the ratio of no-op normalize() calls.
+            get_metric("normalization_no_change_total").inc()
+        if rule_category:
+            get_metric("normalization_rule_matches_total").labels(
+                rule_category=_normalize_rule_category(rule_category)
+            ).inc()
+    except Exception:  # pragma: no cover — metrics must never break the pipeline
+        # Observability must never take down the code path it's
+        # instrumenting. Log at DEBUG so the failure is visible in
+        # dev but never fatal.
+        logging.getLogger(__name__).debug(
+            "[NORMALIZE] metric update failed for decision log", exc_info=True
+        )
+
+    rule_ids_list = list(matched_rule_ids or [])
+    always_keep = bool(applied and rule_ids_list)
+    sampler = get_normalization_sampler()
+    if not sampler.should_sample(always_keep=always_keep):
+        return False
+
+    payload: Dict[str, Any] = {
+        "input": _truncate_for_log(input_text),
+        "output": _truncate_for_log(output_text),
+        "matched_rule_ids": rule_ids_list,
+        "applied": bool(applied),
+        "policy_version": policy_version,
+        "input_sha256": sha256_of(input_text),
+    }
+    if rule_category:
+        payload["rule_category"] = _normalize_rule_category(rule_category)
+    if duration_seconds is not None:
+        # Round to microseconds so the log stays compact; the histogram
+        # keeps the raw distribution.
+        payload["duration_seconds"] = round(float(duration_seconds), 6)
+    if extra:
+        for key, value in extra.items():
+            # Don't let callers clobber reserved field names.
+            if key not in payload:
+                payload[key] = value
+
+    # Use lazy %-formatting per the backend logging convention. Passing
+    # the structured dict through `extra` surfaces it as individual
+    # attributes on the LogRecord — the JsonFormatter flattens those
+    # into the top-level JSON body automatically.
+    logger = logging.getLogger(logger_name)
+    logger.info(
+        "[NORMALIZE] decision applied=%s rules=%s sha=%s",
+        payload["applied"],
+        rule_ids_list,
+        payload["input_sha256"][:12],
+        extra=payload,
+    )
+    return True
 
 
 # =========================================================================
