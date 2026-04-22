@@ -778,6 +778,49 @@ export interface NormalizationBatchResponse {
   results: NormalizationResult[];
 }
 
+// Single row of the apply-to-channels preview diff (GH-104)
+export interface ApplyToChannelsDiffRow {
+  channel_id: number;
+  current_name: string;
+  proposed_name: string;
+  normalized_core: string;
+  channel_number_prefix: string;
+  group_id: number | null;
+  group_name: string | null;
+  collision: boolean;
+  collision_target_id: number | null;
+  collision_target_name: string | null;
+  collision_target_group_id: number | null;
+  collision_target_group_name: string | null;
+  suggested_action: 'rename' | 'merge' | 'skip';
+}
+
+// Response from dry-run apply-to-channels
+export interface ApplyToChannelsDryRunResponse {
+  dry_run: true;
+  diffs: ApplyToChannelsDiffRow[];
+  channels_with_changes: number;
+}
+
+// Per-row override sent when executing apply-to-channels
+export type ApplyToChannelsAction = 'rename' | 'merge' | 'skip';
+
+export interface ApplyToChannelsActionOverride {
+  channel_id: number;
+  action: ApplyToChannelsAction;
+  merge_target_id?: number;
+}
+
+// Response from executing apply-to-channels
+export interface ApplyToChannelsExecuteResponse {
+  dry_run: false;
+  status: string;
+  renamed: Array<{ channel_id: number; old_name: string; new_name: string }>;
+  merged: Array<{ channel_id: number; target_id: number; streams_added: number }>;
+  skipped: Array<{ channel_id: number; reason: string }>;
+  errors: Array<{ channel_id: number; error: string }>;
+}
+
 // Migration status response
 export interface NormalizationMigrationStatus {
   builtin_groups: number;

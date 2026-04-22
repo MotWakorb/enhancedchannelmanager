@@ -35,6 +35,9 @@ import type {
   TestRuleResult,
   TagGroup,
   TagMatchPosition,
+  ApplyToChannelsDiffRow,
+  ApplyToChannelsAction,
+  ApplyToChannelsActionOverride,
 } from '../../types';
 import { ModalOverlay } from '../ModalOverlay';
 import './NormalizationEngineSection.css';
@@ -304,6 +307,13 @@ export function NormalizationEngineSection() {
   const [importOverwrite, setImportOverwrite] = useState(false);
   const [importing, setImporting] = useState(false);
   const importFileRef = useRef<HTMLInputElement>(null);
+
+  // Apply-to-channels state (GH-104)
+  const [showApplyModal, setShowApplyModal] = useState(false);
+  const [applyLoading, setApplyLoading] = useState(false);
+  const [applyExecuting, setApplyExecuting] = useState(false);
+  const [applyDiffs, setApplyDiffs] = useState<ApplyToChannelsDiffRow[]>([]);
+  const [applyActions, setApplyActions] = useState<Record<number, ApplyToChannelsAction>>({});
 
   // Drag-and-drop sensors for rule reordering
   const sensors = useSensors(
@@ -778,6 +788,98 @@ export function NormalizationEngineSection() {
     e.target.value = '';
   }, []);
 
+  // ------------------------------------------------------------------
+  // Apply-to-channels handlers (GH-104)
+  // ------------------------------------------------------------------
+
+  // Open the modal and load the preview diff
+  const openApplyModal = useCallback(async () => {
+    setShowApplyModal(true);
+    setApplyLoading(true);
+    setApplyDiffs([]);
+    setApplyActions({});
+    try {
+      const result = await api.previewApplyNormalizationToChannels();
+      setApplyDiffs(result.diffs);
+      // Seed per-row actions with the server's suggestion, but default
+      // collisions to 'skip' so nothing destructive happens by accident.
+      const seeded: Record<number, ApplyToChannelsAction> = {};
+      result.diffs.forEach((row) => {
+        seeded[row.channel_id] = row.collision ? 'skip' : 'rename';
+      });
+      setApplyActions(seeded);
+    } catch (err) {
+      notifications.error(
+        err instanceof Error ? err.message : 'Failed to load preview',
+        'Normalization'
+      );
+      setShowApplyModal(false);
+    } finally {
+      setApplyLoading(false);
+    }
+  }, [notifications]);
+
+  // Update the action for a single row
+  const setApplyAction = useCallback(
+    (channelId: number, action: ApplyToChannelsAction) => {
+      setApplyActions((prev) => ({ ...prev, [channelId]: action }));
+    },
+    []
+  );
+
+  // Bulk-set all non-colliding rows to 'rename'
+  const handleAcceptAllNonColliding = useCallback(() => {
+    setApplyActions((prev) => {
+      const next = { ...prev };
+      applyDiffs.forEach((row) => {
+        if (!row.collision) {
+          next[row.channel_id] = 'rename';
+        }
+      });
+      return next;
+    });
+  }, [applyDiffs]);
+
+  // Execute the selected actions
+  const handleExecuteApply = useCallback(async () => {
+    const overrides: ApplyToChannelsActionOverride[] = applyDiffs.map((row) => {
+      const action = applyActions[row.channel_id] || 'skip';
+      const entry: ApplyToChannelsActionOverride = {
+        channel_id: row.channel_id,
+        action,
+      };
+      if (action === 'merge' && row.collision_target_id != null) {
+        entry.merge_target_id = row.collision_target_id;
+      }
+      return entry;
+    });
+
+    setApplyExecuting(true);
+    try {
+      const result = await api.executeApplyNormalizationToChannels(overrides);
+      const summary =
+        `Renamed ${result.renamed.length}, ` +
+        `merged ${result.merged.length}, ` +
+        `skipped ${result.skipped.length}` +
+        (result.errors.length > 0 ? `, errors ${result.errors.length}` : '');
+      if (result.errors.length > 0) {
+        notifications.warning(summary, 'Normalization');
+      } else {
+        notifications.success(summary, 'Normalization');
+      }
+      setShowApplyModal(false);
+      setApplyDiffs([]);
+      setApplyActions({});
+    } catch (err) {
+      notifications.error(
+        err instanceof Error ? err.message : 'Failed to apply normalization',
+        'Normalization'
+      );
+    } finally {
+      setApplyExecuting(false);
+    }
+  }, [applyActions, applyDiffs, notifications]);
+
   // Stats
   const stats = useMemo(() => {
     let totalRules = 0;
@@ -839,6 +941,16 @@ export function NormalizationEngineSection() {
           >
             <span className="material-icons">upload</span>
             Import
+          </button>
+          <button
+            className="norm-engine-btn"
+            onClick={openApplyModal}
+            type="button"
+            title="Apply enabled rules to existing channels (preview first)"
+            data-testid="apply-to-channels-btn"
+          >
+            <span className="material-icons">published_with_changes</span>
+            Apply to existing channels
           </button>
           <button
             className="norm-engine-btn norm-engine-btn-primary"
@@ -1564,6 +1676,154 @@ export function NormalizationEngineSection() {
                 type="button"
               >
                 {importing ? 'Importing...' : 'Import'}
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
+
+      {/* Apply-to-channels Modal (GH-104) */}
+      {showApplyModal && (
+        <ModalOverlay onClose={() => (applyExecuting ? null : setShowApplyModal(false))}>
+          <div
+            className="modal-container modal-lg norm-engine-apply-modal"
+            data-testid="apply-to-channels-modal"
+          >
+            <div className="modal-header">
+              <h2 className="modal-title">Apply Normalization to Existing Channels</h2>
+              <button
+                className="modal-close-btn"
+                onClick={() => setShowApplyModal(false)}
+                type="button"
+                disabled={applyExecuting}
+              >
+                <span className="material-icons">close</span>
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <p className="modal-help-text">
+                Preview the effect of the enabled normalization rules on every existing
+                channel. Pick an action per row — rename, merge into an existing channel,
+                or skip — then execute. All changes are written to the journal.
+              </p>
+
+              {applyLoading && (
+                <div
+                  className="norm-engine-apply-loading"
+                  data-testid="apply-to-channels-loading"
+                >
+                  Loading preview...
+                </div>
+              )}
+
+              {!applyLoading && applyDiffs.length === 0 && (
+                <div
+                  className="norm-engine-apply-empty"
+                  data-testid="apply-to-channels-empty"
+                >
+                  No channels would change. Either normalization rules are disabled
+                  or every channel name is already normalized.
+                </div>
+              )}
+
+              {!applyLoading && applyDiffs.length > 0 && (
+                <>
+                  <div className="norm-engine-apply-toolbar">
+                    <button
+                      className="norm-engine-btn"
+                      type="button"
+                      onClick={handleAcceptAllNonColliding}
+                      data-testid="apply-to-channels-bulk-accept"
+                    >
+                      Accept all non-colliding
+                    </button>
+                    <span className="norm-engine-apply-count">
+                      {applyDiffs.length} channel{applyDiffs.length === 1 ? '' : 's'} with changes
+                    </span>
+                  </div>
+
+                  <div
+                    className="norm-engine-apply-table-wrap"
+                    data-testid="apply-to-channels-diffs"
+                  >
+                    <table className="norm-engine-apply-table">
+                      <thead>
+                        <tr>
+                          <th>Current name</th>
+                          <th>Proposed name</th>
+                          <th>Collision?</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {applyDiffs.map((row) => (
+                          <tr
+                            key={row.channel_id}
+                            className={row.collision ? 'apply-row-collision' : ''}
+                            data-testid={`apply-row-${row.channel_id}`}
+                          >
+                            <td>{row.current_name}</td>
+                            <td>{row.proposed_name}</td>
+                            <td>
+                              {row.collision ? (
+                                <span
+                                  className="norm-engine-apply-collision"
+                                  title={`Matches existing channel '${row.collision_target_name ?? ''}'`}
+                                >
+                                  <span className="material-icons">warning</span>
+                                  {row.collision_target_name ?? 'collision'}
+                                </span>
+                              ) : (
+                                <span className="norm-engine-apply-ok">—</span>
+                              )}
+                            </td>
+                            <td>
+                              <select
+                                value={applyActions[row.channel_id] ?? 'skip'}
+                                onChange={(e) =>
+                                  setApplyAction(
+                                    row.channel_id,
+                                    e.target.value as ApplyToChannelsAction
+                                  )
+                                }
+                                data-testid={`apply-action-${row.channel_id}`}
+                              >
+                                <option value="skip">Skip</option>
+                                <option value="rename" disabled={row.collision}>
+                                  Rename
+                                </option>
+                                <option value="merge" disabled={!row.collision}>
+                                  Merge into existing
+                                </option>
+                              </select>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="modal-footer">
+              <button
+                className="modal-btn"
+                onClick={() => setShowApplyModal(false)}
+                type="button"
+                disabled={applyExecuting}
+              >
+                Cancel
+              </button>
+              <button
+                className="modal-btn modal-btn-primary"
+                onClick={handleExecuteApply}
+                disabled={applyExecuting || applyLoading || applyDiffs.length === 0}
+                type="button"
+                data-testid="apply-to-channels-execute"
+              >
+                {applyExecuting ? 'Applying...' : 'Execute'}
               </button>
             </div>
           </div>
