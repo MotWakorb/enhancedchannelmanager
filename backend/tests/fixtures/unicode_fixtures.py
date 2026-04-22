@@ -15,8 +15,8 @@ numeric_sup  | Unicode numeric superscripts (e.g. `²`, `⁶⁰`). Converted to
 mixed        | Strings containing both letter and numeric superscripts, or
              | letter superscripts combined with other edge cases.
 nfc_nfd      | Canonical-composition pairs. Fixtures use NFD-decomposed input
-             | that should collapse to NFC after normalization. Currently
-             | xfailed pending bd-eio04.4 NFC wiring.
+             | that collapses to NFC after normalization. Wired up via
+             | NormalizationPolicy in bd-eio04.1 (bundles bd-eio04.4).
 zero_width   | Invisible format characters: ZWJ (U+200D), ZWSP (U+200B),
              | ZWNJ (U+200C), BOM (U+FEFF). Must be stripped.
 combining    | Standalone combining diacritics without base characters, or
@@ -127,10 +127,11 @@ NUMERIC_SUPERSCRIPT_FIXTURES: list[NormalizationFixture] = [
         origin="bd-yui1k",
         category="numeric_sup",
         notes=(
-            "Post-bd-yui1k semantics: numeric superscripts convert to ASCII "
-            "digits on the default normalization path (letters strip, "
-            "numerics convert). The preserve_superscripts=True flag is the "
-            "only way to keep the ² glyph."
+            "Post-bd-eio04.1 semantics: numeric superscripts convert to "
+            "ASCII digits on EVERY normalization path (letters and "
+            "numerics alike). The preserve_superscripts kwarg was "
+            "dropped in bd-eio04.1 because divergence between Test "
+            "Rules and Auto-Create was the bug class behind GH #104."
         ),
     ),
     NormalizationFixture(
@@ -181,8 +182,8 @@ MIXED_FIXTURES: list[NormalizationFixture] = [
 
 # -----------------------------------------------------------------------------
 # NFC vs NFD — canonical composition.
-# Currently xfailed downstream pending bd-eio04.4 NFC wiring. Do not skip
-# here — the fixture stays in the bank so .4 can flip the xfail off.
+# Wired up via NormalizationPolicy in bd-eio04.1 (which bundled bd-eio04.4).
+# Downstream tests can treat these as regular fixtures; no xfail required.
 # -----------------------------------------------------------------------------
 
 # NFD form: 'e' + combining acute accent (U+0301). Visually "é" but two codepoints.
@@ -198,10 +199,10 @@ NFC_NFD_FIXTURES: list[NormalizationFixture] = [
         origin="synthetic",
         category="nfc_nfd",
         notes=(
-            "NFD-decomposed 'Café Sports' (e + U+0301) should canonicalize "
-            "to NFC pre-composed form. Blocks on bd-eio04.4 — downstream "
-            "tests must mark pytest.mark.xfail(reason='pending bd-eio04.4 "
-            "NFC') until NFC canonicalization is wired into normalize()."
+            "NFD-decomposed 'Café Sports' (e + U+0301) canonicalizes to "
+            "NFC pre-composed form. Wired up by bd-eio04.1's "
+            "NormalizationPolicy (which bundles bd-eio04.4). If this "
+            "fixture regresses, the policy broke NFC handling."
         ),
     ),
 ]

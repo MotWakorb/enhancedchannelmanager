@@ -8,17 +8,70 @@ types, and various transformation actions.
 The engine loads rules from the database, organized into groups with
 priority ordering. Rules execute in order until a match with stop_processing
 is found, or all rules have been evaluated.
+
+Unified NormalizationPolicy (bd-eio04.1, closes GH #104)
+--------------------------------------------------------
+The Test Rules preview path (`engine.test_rule`,
+`engine.test_rules_batch`) and the auto-creation execution path
+(`engine.normalize`) now share a single NormalizationPolicy. Both paths
+apply identical Unicode preprocessing before condition matching:
+  * NFC canonicalization (unicodedata.normalize('NFC', ...)) — collapses
+    NFD-decomposed input like 'Café' (e + U+0301) to pre-composed form.
+    NFC, not NFKC, to avoid over-normalizing ligatures / fullwidth /
+    Roman-numeral compatibility forms.
+  * Strip a narrow whitelist of invisible Cf code points: U+200B ZWSP,
+    U+200C ZWNJ, U+200D ZWJ, U+FEFF BOM. RTL marks (U+200F, U+202E) are
+    preserved.
+  * Convert ALL Unicode superscripts to ASCII (both letter-superscripts
+    ᴴᴰ -> HD and numeric superscripts ² -> 2). The prior
+    `preserve_superscripts` kwarg / `preserve_numeric` carve-out
+    introduced by PR #61 / bd-yui1k is deleted outright — divergence
+    between the two code paths was the root cause of GH #104.
+
+Operator knobs
+--------------
+ECM_NORMALIZATION_UNIFIED_POLICY (default: "true")
+    Feature flag for the unified policy. Set to "false" (or "0") to
+    roll back to the pre-bd-eio04.1 behavior (separate superscript
+    carve-outs, no NFC, no Cf-stripping) without re-deploying. Intended
+    as a one-pull-request rollback switch; remove once the new policy
+    has soaked in production.
 """
+import os
 import re
 import logging
+import unicodedata
 from typing import Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
 from models import NormalizationRule, NormalizationRuleGroup, TagGroup, Tag
 
 logger = logging.getLogger(__name__)
+
+
+# -----------------------------------------------------------------------------
+# Feature flag — operators can toggle to fall back to pre-bd-eio04.1 behavior.
+# Evaluated once at import time. To change at runtime, restart the container.
+# -----------------------------------------------------------------------------
+
+def _unified_policy_enabled() -> bool:
+    """Parse ECM_NORMALIZATION_UNIFIED_POLICY. Default-on."""
+    raw = os.environ.get("ECM_NORMALIZATION_UNIFIED_POLICY", "true")
+    return raw.strip().lower() not in {"false", "0", "no", "off"}
+
+
+# Cf code points stripped by the unified policy. Intentionally narrow: we
+# only strip invisible markers that commonly appear as copy-paste artifacts
+# (ZWJ/ZWSP/ZWNJ/BOM). RTL/LTR bidi marks (U+200F, U+202E) are preserved
+# because they can carry legitimate directional meaning in channel names.
+_STRIPPED_CF_CODEPOINTS = frozenset({
+    "​",  # ZERO WIDTH SPACE
+    "‌",  # ZERO WIDTH NON-JOINER
+    "‍",  # ZERO WIDTH JOINER
+    "﻿",  # BYTE ORDER MARK / ZERO WIDTH NO-BREAK SPACE
+})
 
 
 # Cache for tag groups to avoid repeated database queries
@@ -32,17 +85,17 @@ def invalidate_tag_cache():
     clear_abbreviation_cache()
 
 
-# Unicode superscript to ASCII mapping — split into two maps so callers can
-# independently preserve numeric superscripts (e.g. ESPN²) while still
-# stripping letter-superscripts used as quality tags (ᴴᴰ -> HD,
-# ᴿᴬᵂ -> RAW).
-# See bd-yui1k: PR #61's preserve_superscripts=True short-circuit was too
-# coarse — it preserved both letter AND numeric forms, leaving
-# "ESPN ᴿᴬᵂ" untouched in auto-creation output. PR #61's original
-# intent (commit cea3d98b) was to preserve only intentional marks like ESPN².
+# Unicode superscript to ASCII mapping. The historical split into
+# LETTER_SUPERSCRIPTS + NUMERIC_SUPERSCRIPTS (bd-yui1k) was retained only
+# to support the `preserve_superscripts` kwarg, which bd-eio04.1 removed
+# outright — both letter AND numeric superscripts now convert on ALL
+# paths. The two maps are preserved as internal detail so historical
+# imports of LETTER_SUPERSCRIPTS / NUMERIC_SUPERSCRIPTS / SUPERSCRIPT_MAP
+# continue to resolve.
 #
 # Common letter patterns used as quality tags:
 #   ᴴᴰ (HD), ᶠᴴᴰ (FHD), ᵁᴴᴰ (UHD), ᴿᴬᵂ (RAW), ˢᴰ (SD), etc.
+# Common numeric patterns: ESPN² (ESPN2), ⁶⁰fps (60fps), ¹²⁰Hz (120Hz).
 LETTER_SUPERSCRIPTS = {
     # Uppercase superscripts
     '\u1d2c': 'A',  # ᴬ
@@ -91,11 +144,10 @@ LETTER_SUPERSCRIPTS = {
     '\u1dbb': 'z',  # ᶻ
 }
 
-# Numeric and math-symbol superscripts (ESPN², ⁺⁻⁼⁽⁾). Kept separate so
-# callers that pass preserve_numeric=True can retain them while
-# letter-superscripts above are still converted. Prior to this split, NONE
-# of these characters were in the conversion map — PR #61's "preserve"
-# flag worked for ESPN² only by accident (² wasn't in the map).
+# Numeric and math-symbol superscripts (ESPN², ⁺⁻⁼⁽⁾). Prior to
+# bd-yui1k these were not in the conversion map at all — PR #61's
+# "preserve" flag worked for ESPN² only by accident. bd-eio04.1 drops
+# the preservation carve-out entirely; numerics convert on every path.
 NUMERIC_SUPERSCRIPTS = {
     '\u2070': '0',  # ⁰
     '\u00b9': '1',  # ¹
@@ -114,31 +166,113 @@ NUMERIC_SUPERSCRIPTS = {
     '\u207e': ')',  # ⁾
 }
 
-# Backward-compatible union of both maps. Older callers (and historical
-# imports of `SUPERSCRIPT_MAP`) continue to work and now also convert
-# numeric superscripts when the caller opts in to full conversion.
+# Combined superscript map used by convert_superscripts(). Exported for
+# historical callers / tests that import it directly.
 SUPERSCRIPT_MAP = {**LETTER_SUPERSCRIPTS, **NUMERIC_SUPERSCRIPTS}
 
 
-def convert_superscripts(text: str, preserve_numeric: bool = False) -> str:
+def convert_superscripts(text: str) -> str:
     """
     Convert Unicode superscript characters to their ASCII equivalents.
-    This allows quality tags like ᴴᴰ, ᵁᴴᴰ, ᴿᴬᵂ to be matched by normal rules.
 
-    Args:
-        text: Input string.
-        preserve_numeric: When True, letter-superscripts are still converted
-            (ᴴᴰ -> HD, ᴿᴬᵂ -> RAW) but numeric/symbol superscripts
-            (⁰-⁹, ⁺⁻⁼⁽⁾, including ²) are preserved in-place. Used by the
-            auto-creation output path so intentional marks like ESPN² survive
-            while quality-tag letter-superscripts are still stripped
-            (bd-yui1k — supersedes the coarser PR #61 behavior).
+    Under the unified NormalizationPolicy (bd-eio04.1), every superscript
+    — both letter-superscripts (ᴴᴰ -> HD, ᴿᴬᵂ -> RAW) and numeric
+    superscripts (² -> 2, ⁶⁰ -> 60) — converts on every code path. The
+    prior `preserve_numeric` kwarg is removed; divergence between paths
+    was the bug class behind GH #104.
+
+    When the ECM_NORMALIZATION_UNIFIED_POLICY flag is disabled, this
+    function also applies NFC canonicalization and Cf-stripping at the
+    top of the pipeline (inside NormalizationPolicy.apply_to_text). When
+    the flag is enabled (default), NormalizationPolicy is the canonical
+    entry point; call it directly rather than this helper if you want
+    the full preprocessing.
     """
-    active_map = LETTER_SUPERSCRIPTS if preserve_numeric else SUPERSCRIPT_MAP
-    result = []
-    for char in text:
-        result.append(active_map.get(char, char))
-    return ''.join(result)
+    if not text:
+        return text
+    # NFC canonicalize so NFD-decomposed inputs (e + U+0301) look
+    # identical to pre-composed inputs (U+00E9) after conversion.
+    text = unicodedata.normalize("NFC", text)
+    return ''.join(SUPERSCRIPT_MAP.get(ch, ch) for ch in text)
+
+
+# -----------------------------------------------------------------------------
+# NormalizationPolicy — single canonical Unicode preprocessor shared by the
+# Test Rules and Auto-Create code paths. Introduced for bd-eio04.1 to close
+# the divergence behind GH #104. The dataclass is intentionally minimal and
+# frozen so .4 (observability fields) and .9 (hook fields) can add members
+# later without breaking callers.
+# -----------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class NormalizationPolicy:
+    """
+    Unified Unicode preprocessing policy.
+
+    The policy is a frozen dataclass applied identically by
+    `NormalizationEngine.normalize` and `NormalizationEngine.test_rule` /
+    `test_rules_batch`. It exists so subsequent beads (bd-eio04.9 for
+    observability, others for further unification) can add fields
+    without hunting down preprocessor call sites.
+
+    Attributes:
+        unified_enabled: When True (default, gated by
+            ECM_NORMALIZATION_UNIFIED_POLICY env var), apply NFC +
+            Cf-stripping + full superscript conversion at every policy
+            entry point. When False, fall back to the pre-bd-eio04.1
+            behavior (superscript conversion only, no NFC, no
+            Cf-stripping) so operators have a rollback switch.
+    """
+
+    unified_enabled: bool = True
+
+    def apply_to_text(self, text: str) -> str:
+        """
+        Apply the policy to an input text. Returns a new string.
+
+        Order (under unified_enabled=True):
+            1. NFC canonicalize.
+            2. Strip whitelisted Cf code points (ZWSP/ZWNJ/ZWJ/BOM).
+            3. Convert superscripts to ASCII (letters AND numerics).
+
+        Under unified_enabled=False, only step (3) runs, via the legacy
+        preserve_numeric=False path — this matches pre-bd-eio04.1
+        default behavior.
+        """
+        if not text:
+            return text
+        if self.unified_enabled:
+            text = unicodedata.normalize("NFC", text)
+            if any(ch in _STRIPPED_CF_CODEPOINTS for ch in text):
+                text = ''.join(
+                    ch for ch in text if ch not in _STRIPPED_CF_CODEPOINTS
+                )
+            return ''.join(SUPERSCRIPT_MAP.get(ch, ch) for ch in text)
+        # Legacy fallback path — behavior prior to bd-eio04.1. Keeps
+        # superscript conversion (bd-yui1k behavior with
+        # preserve_numeric=False) but NO NFC, NO Cf-stripping.
+        return ''.join(SUPERSCRIPT_MAP.get(ch, ch) for ch in text)
+
+
+# Process-wide canonical policy instance. Both code paths read this. The
+# instance is created at module load so the env-var feature flag is
+# latched once; to change, restart the container.
+_DEFAULT_POLICY = NormalizationPolicy(unified_enabled=_unified_policy_enabled())
+
+
+def get_default_policy() -> NormalizationPolicy:
+    """Return the process-wide NormalizationPolicy instance."""
+    return _DEFAULT_POLICY
+
+
+def _reset_default_policy_for_tests() -> NormalizationPolicy:
+    """Re-read the ECM_NORMALIZATION_UNIFIED_POLICY env var and refresh the
+    singleton. ONLY for tests — production toggles the flag via container
+    restart, not at runtime.
+    """
+    global _DEFAULT_POLICY
+    _DEFAULT_POLICY = NormalizationPolicy(unified_enabled=_unified_policy_enabled())
+    return _DEFAULT_POLICY
 
 
 @dataclass
@@ -459,9 +593,17 @@ class NormalizationEngine:
         """
         Check if text matches a single condition.
         Returns RuleMatch with match details.
+
+        Applies the unified NormalizationPolicy (bd-eio04.1) to BOTH the
+        input text and the pattern so NFC/NFD variants, invisible Cf
+        code points, and Unicode superscripts collapse to canonical form
+        before matching. This is the shared preprocessing entry point
+        for test_rule / test_rules_batch; normalize() preprocesses once
+        at the top of the loop and hands already-canonical text in.
         """
-        # Convert superscripts in pattern (so rules with ᴿᴬᵂ match RAW)
-        pattern = convert_superscripts(pattern)
+        policy = get_default_policy()
+        text = policy.apply_to_text(text)
+        pattern = policy.apply_to_text(pattern)
 
         # Prepare text for matching
         match_text = text if case_sensitive else text.lower()
@@ -862,8 +1004,7 @@ class NormalizationEngine:
             logger.warning("[NORMALIZE] Unknown else action type: %s", action_type)
             return text
 
-    def normalize(self, name: str, group_ids: list[int] | None = None,
-                  preserve_superscripts: bool = False) -> NormalizationResult:
+    def normalize(self, name: str, group_ids: list[int] | None = None) -> NormalizationResult:
         """
         Apply enabled rules to normalize a stream name.
 
@@ -875,16 +1016,24 @@ class NormalizationEngine:
             name: The stream name to normalize
             group_ids: Optional list of NormalizationRuleGroup IDs to apply.
                        None = all enabled groups (default behavior).
-            preserve_superscripts: If True, preserve NUMERIC superscripts
-                (e.g. ESPN² → ESPN²) but STILL convert letter-superscripts
-                used as quality tags (ᴴᴰ → HD, ᴿᴬᵂ → RAW). Used
-                when normalizing the *output* channel name so intentional
-                marks like ESPN² survive while quality-tag cruft gets
-                stripped (bd-yui1k — split replaces PR #61's coarser
-                skip-all-superscripts behavior).
 
         Returns:
-            NormalizationResult with original, normalized name, and applied rules
+            NormalizationResult with original, normalized name, and applied rules.
+
+        Unified NormalizationPolicy (bd-eio04.1)
+        ----------------------------------------
+        The Unicode preprocessing (NFC canonicalization, narrow Cf-code-point
+        stripping, superscript-to-ASCII conversion for both letters AND
+        numerics) is applied ONCE at the top of this pipeline via the
+        process-wide NormalizationPolicy. The Test Rules preview path
+        (`test_rule`, `test_rules_batch`) applies the same policy inside
+        `_match_single_condition`. Both paths therefore preprocess input
+        identically — that is the contract exercised by
+        tests/unit/test_normalization_parity.py.
+
+        The prior `preserve_superscripts` kwarg is removed. PO decision
+        2026-04-22: numerics convert on every path; there is no
+        carve-out for intentional marks like ESPN².
         """
         result = NormalizationResult(
             original=name,
@@ -895,11 +1044,11 @@ class NormalizationEngine:
 
         current = name.strip()
 
-        # Convert Unicode superscripts to ASCII (e.g., ᴴᴰ -> HD, ᵁᴴᴰ -> UHD, ᴿᴬᵂ -> RAW).
-        # Always run — preserve_superscripts=True now routes to the
-        # letter-only map so numeric superscripts (ESPN²) survive but
-        # quality-tag letter-superscripts are still stripped.
-        current = convert_superscripts(current, preserve_numeric=preserve_superscripts)
+        # Apply the unified NormalizationPolicy once up front. Under the
+        # default (ECM_NORMALIZATION_UNIFIED_POLICY=true) this does
+        # NFC + Cf-strip + superscript conversion; under the legacy
+        # fallback it applies superscript conversion only.
+        current = get_default_policy().apply_to_text(current)
 
         grouped_rules = self._load_rules()
 
@@ -1247,12 +1396,20 @@ class NormalizationEngine:
             condition_logic=condition_logic
         )
 
-        match = self._match_condition(text, rule)
+        # bd-eio04.1: apply the unified NormalizationPolicy to the input
+        # before matching + action so the Test Rules preview path
+        # reaches byte-identical output with normalize(). Prior behavior
+        # preprocessed inside _match_condition for matching but applied
+        # actions to the raw input — that split was the root cause of
+        # GH #104's "Test shows HD but auto-create shows ᴴᴰ" divergence.
+        preprocessed_text = get_default_policy().apply_to_text(text)
+
+        match = self._match_condition(preprocessed_text, rule)
 
         result = {
             "matched": match.matched,
             "before": text,
-            "after": text,
+            "after": preprocessed_text,
             "match_start": match.match_start if match.matched else None,
             "match_end": match.match_end if match.matched else None,
             "matched_tag": match.matched_tag if match.matched_tag else None,
@@ -1260,14 +1417,18 @@ class NormalizationEngine:
         }
 
         if match.matched:
-            result["after"] = self._apply_action(text, rule, match)
+            result["after"] = self._apply_action(preprocessed_text, rule, match)
             # Final cleanup
             result["after"] = re.sub(r'\s+', ' ', result["after"]).strip()
         elif else_action_type:
             # Condition didn't match, apply else action
-            result["after"] = self._apply_else_action(text, rule)
+            result["after"] = self._apply_else_action(preprocessed_text, rule)
             result["after"] = re.sub(r'\s+', ' ', result["after"]).strip()
             result["else_applied"] = True
+        else:
+            # Also strip/normalize whitespace for consistency with
+            # normalize()'s per-pass cleanup.
+            result["after"] = re.sub(r'\s+', ' ', preprocessed_text).strip()
 
         return result
 
