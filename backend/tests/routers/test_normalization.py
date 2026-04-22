@@ -575,8 +575,11 @@ class TestApplyToChannels:
         assert len(data["renamed"]) == 1
         assert data["renamed"][0]["new_name"] == "RTL"
         client.update_channel.assert_awaited_once_with(1, {"name": "RTL"})
-        mock_journal.log_entry.assert_called_once()
-        assert mock_journal.log_entry.call_args.kwargs["action_type"] == "rename"
+        # Two journal entries: one per rename, one bulk-apply audit summary
+        # (bd-eio04.12).
+        assert mock_journal.log_entry.call_count == 2
+        action_types = {c.kwargs["action_type"] for c in mock_journal.log_entry.call_args_list}
+        assert action_types == {"rename", "bulk_apply_normalization"}
 
     @pytest.mark.asyncio
     async def test_execute_merge_collision(self, async_client):
@@ -611,8 +614,11 @@ class TestApplyToChannels:
         # Target gets new stream list (original 20 + 10 + 11)
         client.update_channel.assert_awaited_once_with(2, {"streams": [20, 10, 11]})
         client.delete_channel.assert_awaited_once_with(1)
-        mock_journal.log_entry.assert_called_once()
-        assert mock_journal.log_entry.call_args.kwargs["action_type"] == "merge"
+        # Two journal entries: one per merge, one bulk-apply audit summary
+        # (bd-eio04.12).
+        assert mock_journal.log_entry.call_count == 2
+        action_types = {c.kwargs["action_type"] for c in mock_journal.log_entry.call_args_list}
+        assert action_types == {"merge", "bulk_apply_normalization"}
 
     @pytest.mark.asyncio
     async def test_execute_skip_collision(self, async_client):
@@ -639,7 +645,13 @@ class TestApplyToChannels:
         assert data["merged"] == []
         client.update_channel.assert_not_called()
         client.delete_channel.assert_not_called()
-        mock_journal.log_entry.assert_not_called()
+        # Bulk-apply audit entry is always written, even when nothing changed
+        # (bd-eio04.12). No per-channel entries because nothing was mutated.
+        assert mock_journal.log_entry.call_count == 1
+        assert (
+            mock_journal.log_entry.call_args.kwargs["action_type"]
+            == "bulk_apply_normalization"
+        )
 
     @pytest.mark.asyncio
     async def test_execute_rename_collision_refused(self, async_client):
@@ -683,6 +695,184 @@ class TestApplyToChannels:
         assert data["diffs"][0]["current_name"] == "107 | RTL ᴿᴬᵂ"
         assert data["diffs"][0]["proposed_name"] == "107 | RTL"
         assert data["diffs"][0]["channel_number_prefix"] == "107 | "
+
+
+class TestApplyToChannelsRuleTrace:
+    """Preview rows include the per-rule trace so the UI can render a
+    'Rules fired' drawer (bd-eio04.12)."""
+
+    @pytest.mark.asyncio
+    async def test_dry_run_emits_transformations_field(self, async_client):
+        """Every diff row exposes a transformations list sourced from
+        NormalizationResult.transformations. Shape matches /test-batch."""
+        channels = [{"id": 1, "name": "RTL ᴿᴬᵂ"}]
+
+        # Build an engine mock whose `normalize()` returns a namespace with
+        # the transformations shape the serializer expects.
+        class _Result:
+            normalized = "RTL"
+            transformations = [(101, "RTL ᴿᴬᵂ", "RTL")]
+
+        engine = MagicMock()
+        engine.normalize.return_value = _Result()
+
+        client = AsyncMock()
+        client.get_channels.return_value = {"results": channels, "next": None}
+        client.get_channel_groups.return_value = []
+
+        with patch("routers.normalization.get_client", return_value=client), \
+             patch("normalization_engine.get_normalization_engine", return_value=engine):
+            response = await async_client.post(
+                "/api/normalization/apply-to-channels?dry_run=true"
+            )
+
+        assert response.status_code == 200
+        row = response.json()["diffs"][0]
+        assert "transformations" in row
+        assert row["transformations"] == [
+            {"rule_id": 101, "before": "RTL ᴿᴬᵂ", "after": "RTL"}
+        ]
+
+
+class TestApplyToChannelsAdminGate:
+    """Bulk apply-to-channels is admin-gated when auth is enabled
+    (bd-ei4m9, absorbed by bd-eio04.12). Non-admin callers must see
+    HTTP 403, not silently execute destructive renames."""
+
+    @pytest.mark.asyncio
+    async def test_non_admin_is_forbidden_when_auth_enabled(self, async_client):
+        """When auth.require_auth and setup_complete are both true, a
+        non-admin caller receives 403 from the dependency."""
+        from fastapi import HTTPException, status
+        from main import app
+        from auth import RequireAdminIfEnabled as _prebuilt
+
+        async def _reject() -> None:
+            # FastAPI introspects the callable's signature for DI; keep it
+            # parameterless so the framework doesn't try to pull query args.
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin access required",
+            )
+
+        # Override the prebuilt RequireAdminIfEnabled dependency so the
+        # route sees a 403 regardless of actual auth state.
+        app.dependency_overrides[_prebuilt.dependency] = _reject
+        try:
+            response = await async_client.post(
+                "/api/normalization/apply-to-channels?dry_run=true"
+            )
+        finally:
+            app.dependency_overrides.pop(_prebuilt.dependency, None)
+
+        assert response.status_code == 403
+        assert "admin" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_anonymous_allowed_when_auth_disabled(self, async_client):
+        """When auth is disabled (setup_complete=False or require_auth=False),
+        the dependency returns None and the endpoint is reachable. The
+        default `async_client` fixture runs with auth disabled, so we just
+        verify the happy path still works after the admin gate was added."""
+        channels = [{"id": 1, "name": "RTL ᴿᴬᵂ"}]
+        client = AsyncMock()
+        client.get_channels.return_value = {"results": channels, "next": None}
+        client.get_channel_groups.return_value = []
+
+        engine = MagicMock()
+        engine.normalize.return_value = MagicMock(normalized="RTL", transformations=[])
+
+        with patch("routers.normalization.get_client", return_value=client), \
+             patch("normalization_engine.get_normalization_engine", return_value=engine):
+            response = await async_client.post(
+                "/api/normalization/apply-to-channels?dry_run=true"
+            )
+
+        assert response.status_code == 200
+
+
+class TestApplyToChannelsIdempotencyLock:
+    """Execute mode holds a module-level lock so only one bulk rename/merge
+    can run at a time. A concurrent caller must see HTTP 409, not race
+    into the critical section (bd-eio04.12)."""
+
+    @pytest.mark.asyncio
+    async def test_returns_409_when_another_bulk_in_flight(self, async_client):
+        """Manually hold the lock and verify the endpoint returns 409."""
+        from routers import normalization as normalization_router
+
+        channels = [{"id": 1, "name": "RTL ᴿᴬᵂ"}]
+        client = AsyncMock()
+        client.get_channels.return_value = {"results": channels, "next": None}
+        client.get_channel_groups.return_value = []
+
+        engine = MagicMock()
+        engine.normalize.return_value = MagicMock(normalized="RTL", transformations=[])
+
+        # Pre-acquire the execute lock to simulate a bulk apply already in
+        # progress. We release it in the finally below so the fixture's
+        # test isolation stays clean for other tests.
+        await normalization_router._APPLY_TO_CHANNELS_EXECUTE_LOCK.acquire()
+        try:
+            with patch("routers.normalization.get_client", return_value=client), \
+                 patch("normalization_engine.get_normalization_engine", return_value=engine):
+                response = await async_client.post(
+                    "/api/normalization/apply-to-channels?dry_run=false",
+                    json={"actions": [{"channel_id": 1, "action": "rename"}]},
+                )
+        finally:
+            normalization_router._APPLY_TO_CHANNELS_EXECUTE_LOCK.release()
+
+        assert response.status_code == 409
+        assert "in progress" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_dry_run_is_not_blocked_by_lock(self, async_client):
+        """The lock only gates execute mode; dry-run reads stay concurrent."""
+        from routers import normalization as normalization_router
+
+        channels = [{"id": 1, "name": "RTL ᴿᴬᵂ"}]
+        client = AsyncMock()
+        client.get_channels.return_value = {"results": channels, "next": None}
+        client.get_channel_groups.return_value = []
+
+        engine = MagicMock()
+        engine.normalize.return_value = MagicMock(normalized="RTL", transformations=[])
+
+        await normalization_router._APPLY_TO_CHANNELS_EXECUTE_LOCK.acquire()
+        try:
+            with patch("routers.normalization.get_client", return_value=client), \
+                 patch("normalization_engine.get_normalization_engine", return_value=engine):
+                response = await async_client.post(
+                    "/api/normalization/apply-to-channels?dry_run=true"
+                )
+        finally:
+            normalization_router._APPLY_TO_CHANNELS_EXECUTE_LOCK.release()
+
+        assert response.status_code == 200
+
+
+class TestApplyToChannelsRateLimit:
+    """The endpoint carries a @limiter.limit decorator so a runaway client
+    can't hammer destructive bulk renames. Rate limiting is disabled in
+    the test conftest (RATE_LIMIT_ENABLED=0) so we just verify the
+    decorator is wired — the actual throttling is validated by slowapi."""
+
+    def test_rate_limit_decorator_applied(self):
+        """The endpoint function is registered with the slowapi limiter."""
+        from routers import normalization as normalization_router
+
+        limiter = normalization_router.limiter
+        # slowapi keys _route_limits by fully-qualified function name
+        # (e.g. 'routers.normalization.apply_normalization_to_channels').
+        key = "routers.normalization.apply_normalization_to_channels"
+        assert key in limiter._route_limits, (
+            "apply-to-channels endpoint must be registered with the limiter"
+        )
+        limits = limiter._route_limits[key]
+        assert limits, "at least one Limit entry expected"
+        rendered = " ".join(str(lim.limit) for lim in limits)
+        assert "5" in rendered and "minute" in rendered
 
 
 class TestFindChannelByNameNormalizationFallback:
