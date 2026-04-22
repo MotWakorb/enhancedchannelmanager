@@ -1960,18 +1960,22 @@ class TestMatchScopeTargetGroup:
 
 class TestCreateChannelSuperscriptStripping:
     """
-    bd-yui1k: auto-creation _execute_create_channel with a real
-    normalization engine must strip letter-superscripts (ᴿᴬᵂ -> RAW)
-    from the created channel name even when preserve_superscripts=True.
-    Numeric superscripts (²) must still survive.
+    bd-eio04.1: auto-creation _execute_create_channel with a real
+    normalization engine must strip BOTH letter-superscripts
+    (ᴿᴬᵂ -> RAW, ᴴᴰ -> HD) AND numeric-superscripts (ESPN² -> ESPN2)
+    from the created channel name. The preserve_superscripts carve-out
+    from PR #61 / bd-yui1k has been dropped — the Test Rules preview
+    path and the auto-creation path now share a single
+    NormalizationPolicy (GH #104).
 
     End-to-end coverage: uses the real NormalizationEngine against an
-    in-memory test session so the full normalize() -> convert_superscripts()
-    -> create_channel path is exercised, not mocked.
+    in-memory test session so the full normalize() ->
+    NormalizationPolicy.apply_to_text() -> create_channel path is
+    exercised, not mocked.
     """
 
     def test_raw_letter_superscripts_stripped_in_created_channel_name(self, test_session):
-        """Stream 'Foo ᴿᴬᵂ' creates channel 'Foo' (ᴿᴬᵂ stripped)."""
+        """Stream 'Foo ᴿᴬᵂ' creates channel 'Foo RAW' (ᴿᴬᵂ converted)."""
         from auto_creation_executor import ActionExecutor, ExecutionContext
         from normalization_engine import NormalizationEngine
         from tests.fixtures.factories import create_normalization_rule_group
@@ -2027,8 +2031,18 @@ class TestCreateChannelSuperscriptStripping:
         assert "ᵂ" not in posted["name"]  # ᵂ
         assert posted["name"] == "Foo RAW"
 
-    def test_numeric_superscripts_preserved_in_created_channel_name(self, test_session):
-        """Stream 'ESPN²' creates channel 'ESPN²' (² preserved)."""
+    def test_numeric_superscripts_converted_in_created_channel_name(self, test_session):
+        """Stream 'ESPN²' creates channel 'ESPN2' (² converted, bd-eio04.1).
+
+        Post bd-eio04.1 / GH #104: the preserve_superscripts carve-out
+        was dropped. Numeric superscripts (² ³ ⁰-⁹ ⁺⁻⁼⁽⁾) convert to
+        ASCII on ALL normalization code paths — including the
+        auto-creation executor path that previously preserved them.
+
+        Supersedes the old (now-deleted) test
+        `test_numeric_superscripts_preserved_in_created_channel_name`
+        which locked in the broken behavior from PR #61.
+        """
         from auto_creation_executor import ActionExecutor, ExecutionContext
         from normalization_engine import NormalizationEngine
         from tests.fixtures.factories import create_normalization_rule_group
@@ -2039,7 +2053,7 @@ class TestCreateChannelSuperscriptStripping:
         engine = NormalizationEngine(test_session)
 
         client = MagicMock()
-        client.create_channel = AsyncMock(return_value={"id": 78, "name": "ESPN²"})
+        client.create_channel = AsyncMock(return_value={"id": 78, "name": "ESPN2"})
 
         executor = ActionExecutor(
             client,
@@ -2050,7 +2064,7 @@ class TestCreateChannelSuperscriptStripping:
 
         stream_ctx = StreamContext(
             stream_id=102,
-            stream_name="ESPN²",
+            stream_name="ESPN²",  # ESPN²
             m3u_account_id=1,
             m3u_account_name="Provider",
             group_name="Sports",
@@ -2074,4 +2088,5 @@ class TestCreateChannelSuperscriptStripping:
         assert result.success is True
         client.create_channel.assert_called_once()
         posted = client.create_channel.call_args[0][0]
-        assert posted["name"] == "ESPN²"
+        assert "²" not in posted["name"]  # ² stripped/converted
+        assert posted["name"] == "ESPN2"

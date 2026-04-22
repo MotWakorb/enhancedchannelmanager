@@ -328,6 +328,57 @@ async def metrics_endpoint():
 
 
 # ============================================================================
+# Request Timeout Middleware (bd-w3z4h)
+# ============================================================================
+# Wraps every request in asyncio.wait_for(..., timeout=ECM_REQUEST_TIMEOUT_SECONDS).
+# If a handler exceeds the timeout, returns 504 Gateway Timeout and cancels the
+# handler coroutine. This is a secondary line of defense behind the thread-pool
+# offload + uvicorn --limit-concurrency: a runaway handler cannot hold a worker
+# slot indefinitely.
+#
+# Exempt paths (streaming / long-poll): /api/health is fast so included;
+# endpoints that stream responses or generate large XMLTV exports may need
+# explicit exemption if they legitimately exceed the budget.
+_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("ECM_REQUEST_TIMEOUT_SECONDS", "30"))
+# Paths that legitimately stream or take longer than the default budget.
+# XMLTV generation for large catalogs can take 10-30s; keep them above the budget
+# by exempting here until we move XMLTV to a background cache refresh.
+_TIMEOUT_EXEMPT_PREFIXES = (
+    "/api/stream-preview/",   # streaming endpoints
+    "/api/ffmpeg/",            # long-running ffmpeg jobs
+    "/api/tasks/",             # task triggering / status
+    "/api/backup/",            # backup/restore can be large
+)
+
+
+@app.middleware("http")
+async def request_timeout_middleware(request: Request, call_next):
+    """Enforce a per-request timeout; return 504 on exceed."""
+    path = request.url.path
+    # Skip timeout for streaming / long-running endpoints + non-api requests
+    if not path.startswith("/api/") or any(
+        path.startswith(p) for p in _TIMEOUT_EXEMPT_PREFIXES
+    ):
+        return await call_next(request)
+    try:
+        return await asyncio.wait_for(
+            call_next(request), timeout=_REQUEST_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[TIMEOUT] %s %s exceeded %.1fs budget — returning 504",
+            request.method, path, _REQUEST_TIMEOUT_SECONDS,
+        )
+        return JSONResponse(
+            status_code=504,
+            content={
+                "detail": "Gateway Timeout",
+                "timeout_seconds": _REQUEST_TIMEOUT_SECONDS,
+            },
+        )
+
+
+# ============================================================================
 # Global Auth Middleware — secure-by-default for all /api/* endpoints
 # ============================================================================
 # Paths that are intentionally public (no auth required even when auth is enabled)
@@ -931,6 +982,14 @@ async def shutdown_event():
     prober = get_prober()
     if prober:
         await prober.stop()
+
+    # Shut down the CPU-bound thread pool (bd-w3z4h)
+    try:
+        from concurrency import shutdown_cpu_pool
+        shutdown_cpu_pool(wait=False)
+        logger.info("[MAIN] CPU-bound thread pool shut down")
+    except Exception as e:
+        logger.warning("[MAIN] Error shutting down CPU pool: %s", e)
 
 
 # Serve static files in production
