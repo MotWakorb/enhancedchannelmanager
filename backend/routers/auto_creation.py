@@ -17,6 +17,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
+from concurrency import run_cpu_bound
 from database import get_session
 from dispatcharr_client import get_client
 
@@ -965,7 +966,8 @@ async def validate_auto_creation_rule(
     logger.debug("[AUTO-CREATE] POST /validate")
     try:
         from auto_creation_schema import validate_rule
-        result = validate_rule(conditions, actions)
+        # Offload regex compile/validation off event loop (bd-w3z4h)
+        result = await run_cpu_bound(validate_rule, conditions, actions)
         return result
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to validate auto-creation rule: %s", e)
