@@ -43,6 +43,7 @@ import { useNotifications } from '../contexts/NotificationContext';
 import { useDropdown } from '../hooks/useDropdown';
 import { useContextMenu } from '../hooks/useContextMenu';
 import { useModal } from '../hooks/useModal';
+import { useNormalizePreview } from '../hooks/useNormalizePreview';
 import { ChannelListItem } from './ChannelListItem';
 import { StreamListItem } from './StreamListItem';
 import { PreviewStreamModal } from './PreviewStreamModal';
@@ -1404,6 +1405,12 @@ export function ChannelsPane({
   // Normalize names modal state
   const normalizeModal = useModal();
   const findDuplicatesModal = useModal();
+
+  // bd-eio04.13 — per-row would-normalize indicator deep-link target.
+  // When set, the NormalizeNamesModal opens filtered to this single
+  // channel instead of the current selection. Cleared when the modal
+  // closes.
+  const [normalizePreviewChannelId, setNormalizePreviewChannelId] = useState<number | null>(null);
 
   // CSV import modal state
   const csvImportModal = useModal();
@@ -3519,6 +3526,19 @@ export function ChannelsPane({
     return grouped;
   }, [localChannels, searchTerm, channelListFilters, autoSyncRelatedGroups, streamStatsMap]);
 
+  // bd-eio04.13 — flatten the visible channels into a stable (id, name)
+  // list so useNormalizePreview can batch-fetch would_normalize state
+  // for currently-rendered rows. Reorders alone don't change the
+  // signature (the hook keys on id+name), so this won't refetch when
+  // the user drags a channel within a group.
+  const visibleChannelsForPreview = useMemo(
+    () => Object.values(channelsByGroup)
+      .flat()
+      .map(ch => ({ id: ch.id, name: ch.name })),
+    [channelsByGroup],
+  );
+  const { previews: normalizePreviews } = useNormalizePreview(visibleChannelsForPreview);
+
   // Sort channel groups by their lowest channel number (only groups with channels)
   const sortedChannelGroups = useMemo(() => {
     return [...channelGroups]
@@ -5324,6 +5344,14 @@ export function ChannelsPane({
                         return stats && stats.probe_status === 'success' && stats.is_low_fps;
                       })}
                       onPreviewChannel={() => handlePreviewChannel(channel)}
+                      proposedNormalizedName={(() => {
+                        const preview = normalizePreviews.get(channel.id);
+                        return preview?.would_change ? preview.proposed_name : undefined;
+                      })()}
+                      onShowNormalizePreview={() => {
+                        setNormalizePreviewChannelId(channel.id);
+                        normalizeModal.open();
+                      }}
                     />
                     {selectedChannelId === channel.id && (
                       <div
@@ -5983,11 +6011,25 @@ export function ChannelsPane({
       />
 
       {/* Normalize Names Modal */}
-      {normalizeModal.isOpen && selectedChannelIds.size > 0 && (
+      {normalizeModal.isOpen && (normalizePreviewChannelId !== null || selectedChannelIds.size > 0) && (
         <NormalizeNamesModal
-          channels={channels.filter(c => selectedChannelIds.has(c.id))}
-          onConfirm={handleNormalizeNames}
-          onCancel={() => normalizeModal.close()}
+          channels={
+            // bd-eio04.13 — deep-link focus takes priority: if a row's
+            // would-normalize indicator was clicked, scope the modal to
+            // just that channel. Otherwise fall back to the current
+            // selection (original bulk-normalize flow).
+            normalizePreviewChannelId !== null
+              ? channels.filter(c => c.id === normalizePreviewChannelId)
+              : channels.filter(c => selectedChannelIds.has(c.id))
+          }
+          onConfirm={(updates) => {
+            handleNormalizeNames(updates);
+            setNormalizePreviewChannelId(null);
+          }}
+          onCancel={() => {
+            normalizeModal.close();
+            setNormalizePreviewChannelId(null);
+          }}
         />
       )}
 
