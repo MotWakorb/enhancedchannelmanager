@@ -5,7 +5,11 @@ Tests the _match_tag_group method and tag-based rule processing.
 """
 import pytest
 
-from normalization_engine import NormalizationEngine, _tag_group_cache
+from normalization_engine import (
+    NormalizationEngine, _tag_group_cache,
+    convert_superscripts,
+    LETTER_SUPERSCRIPTS, NUMERIC_SUPERSCRIPTS, SUPERSCRIPT_MAP,
+)
 
 
 class TestTagGroupMatching:
@@ -561,11 +565,43 @@ class TestPreserveSuperscripts:
         result = engine.normalize("ESPN\u00B2", preserve_superscripts=True)  # ESPN²
         assert result.normalized == "ESPN\u00B2"
 
-    def test_preserve_superscripts_keeps_superscript_letters(self, engine):
-        """Superscript letters like ᴴᴰ also survive when flag is set."""
-        result = engine.normalize("ESPN \u1D34\u1D30", preserve_superscripts=True)
-        assert "\u1D34" in result.normalized
-        assert "\u1D30" in result.normalized
+    def test_preserve_superscripts_still_strips_letter_superscripts(self, engine):
+        """
+        Letter-superscripts (e.g. ᴴᴰ, ᴿᴬᵂ) are quality-tag cruft, not
+        intentional marks — they are ALWAYS converted, even when
+        preserve_superscripts=True. Only numeric/symbol superscripts are
+        preserved under the flag (bd-yui1k — supersedes the coarser
+        PR #61 behavior which preserved everything).
+        """
+        result = engine.normalize("ESPN \u1D34\u1D30", preserve_superscripts=True)  # ESPN ᴴᴰ
+        assert "\u1D34" not in result.normalized  # ᴴ converted to H
+        assert "\u1D30" not in result.normalized  # ᴰ converted to D
+        assert result.normalized == "ESPN HD"
+
+    def test_preserve_superscripts_strips_raw_letter_superscripts(self, engine):
+        """\u1D3F\u1D2C\u1D42 is the GH-104 reporter's scenario — must strip to RAW."""
+        result = engine.normalize(
+            "ESPN \u1D3F\u1D2C\u1D42", preserve_superscripts=True
+        )
+        assert result.normalized == "ESPN RAW"
+
+    def test_preserve_superscripts_keeps_numeric_while_stripping_letters(self, engine):
+        """Mixed input: letter-superscripts go, numeric superscripts stay."""
+        # "ESPN \u1D3F\u1D2C\u1D42 \u00B2" — letters convert, ² survives
+        result = engine.normalize(
+            "ESPN \u1D3F\u1D2C\u1D42 \u00B2",
+            preserve_superscripts=True,
+        )
+        assert result.normalized == "ESPN RAW \u00B2"
+
+    def test_full_conversion_when_flag_false(self, engine):
+        """Default behavior (preserve_superscripts=False) still converts BOTH letter and numeric."""
+        result = engine.normalize(
+            "ESPN \u1D3F\u1D2C\u1D42 \u00B2",
+            preserve_superscripts=False,
+        )
+        # Both converted: ᴿᴬᵂ -> RAW, ² -> 2
+        assert result.normalized == "ESPN RAW 2"
 
     def test_normalization_rules_still_apply_with_preserve(self, engine, test_session):
         """Tag-stripping rules still fire even when superscripts are preserved."""
@@ -599,3 +635,67 @@ class TestPreserveSuperscripts:
         # HD stripped by the rule, but ² survives
         assert "HD" not in result.normalized
         assert "\u00B2" in result.normalized
+
+
+
+class TestConvertSuperscripts:
+    """
+    Direct tests for the convert_superscripts() helper (bd-yui1k).
+
+    Exercises the two-map split that replaces PR #61's coarser
+    preserve_superscripts=True skip-all behavior. Letter-superscripts
+    used as quality tags (\u1D34\u1D30 = HD, \u1D3F\u1D2C\u1D42 = RAW)
+    are always converted; numeric/symbol superscripts
+    (\u2070-\u2079 \u207A-\u207E plus \u00B2 \u00B3) are preserved
+    only when preserve_numeric=True.
+    """
+
+    def test_letter_superscripts_converted_by_default(self):
+        """Default (preserve_numeric=False) converts letter-superscripts."""
+        assert convert_superscripts("ESPN \u1D3F\u1D2C\u1D42") == "ESPN RAW"
+        assert convert_superscripts("ESPN \u1D34\u1D30") == "ESPN HD"
+
+    def test_numeric_superscripts_converted_by_default(self):
+        """Default (preserve_numeric=False) converts numeric superscripts too."""
+        assert convert_superscripts("ESPN\u00B2") == "ESPN2"
+        assert convert_superscripts("CNN\u00B3") == "CNN3"
+        assert convert_superscripts("X\u207A\u207B\u2074") == "X+-4"
+
+    def test_preserve_numeric_keeps_numerics(self):
+        """preserve_numeric=True keeps \u00B2 \u00B3 \u2070-\u2079 etc."""
+        assert convert_superscripts("ESPN\u00B2", preserve_numeric=True) == "ESPN\u00B2"
+        assert convert_superscripts("CNN\u00B3", preserve_numeric=True) == "CNN\u00B3"
+
+    def test_preserve_numeric_still_strips_letters(self):
+        """Critical bug fix: preserve_numeric=True must still convert letter-superscripts."""
+        assert convert_superscripts("ESPN \u1D3F\u1D2C\u1D42", preserve_numeric=True) == "ESPN RAW"
+        assert convert_superscripts("ESPN \u1D34\u1D30", preserve_numeric=True) == "ESPN HD"
+
+    def test_mixed_letter_and_numeric(self):
+        """Mixed input: letters convert, numerics preserved only when flag set."""
+        assert convert_superscripts(
+            "ESPN \u1D3F\u1D2C\u1D42 \u00B2",
+            preserve_numeric=True,
+        ) == "ESPN RAW \u00B2"
+        assert convert_superscripts(
+            "ESPN \u1D3F\u1D2C\u1D42 \u00B2",
+            preserve_numeric=False,
+        ) == "ESPN RAW 2"
+
+    def test_empty_string(self):
+        """Empty input returns empty output in both modes."""
+        assert convert_superscripts("") == ""
+        assert convert_superscripts("", preserve_numeric=True) == ""
+
+    def test_no_superscripts_passthrough(self):
+        """Plain ASCII passes through unchanged in both modes."""
+        assert convert_superscripts("ESPN") == "ESPN"
+        assert convert_superscripts("ESPN", preserve_numeric=True) == "ESPN"
+
+    def test_letter_and_numeric_maps_disjoint(self):
+        """No character appears in both maps — invariant for the split."""
+        assert not (LETTER_SUPERSCRIPTS.keys() & NUMERIC_SUPERSCRIPTS.keys())
+
+    def test_union_map_matches_components(self):
+        """SUPERSCRIPT_MAP is the union of the two component maps."""
+        assert SUPERSCRIPT_MAP == {**LETTER_SUPERSCRIPTS, **NUMERIC_SUPERSCRIPTS}
