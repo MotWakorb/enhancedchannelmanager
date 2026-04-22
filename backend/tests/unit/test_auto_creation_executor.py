@@ -1955,3 +1955,123 @@ class TestMatchScopeTargetGroup:
         assert result.skipped is True
         assert result.entity_id == 1
         self.client.create_channel.assert_not_called()
+
+
+
+class TestCreateChannelSuperscriptStripping:
+    """
+    bd-yui1k: auto-creation _execute_create_channel with a real
+    normalization engine must strip letter-superscripts (ᴿᴬᵂ -> RAW)
+    from the created channel name even when preserve_superscripts=True.
+    Numeric superscripts (²) must still survive.
+
+    End-to-end coverage: uses the real NormalizationEngine against an
+    in-memory test session so the full normalize() -> convert_superscripts()
+    -> create_channel path is exercised, not mocked.
+    """
+
+    def test_raw_letter_superscripts_stripped_in_created_channel_name(self, test_session):
+        """Stream 'Foo ᴿᴬᵂ' creates channel 'Foo' (ᴿᴬᵂ stripped)."""
+        from auto_creation_executor import ActionExecutor, ExecutionContext
+        from normalization_engine import NormalizationEngine
+        from tests.fixtures.factories import create_normalization_rule_group
+
+        # Real engine, real session; the rule group just needs to exist so
+        # the group_ids filter finds it — the superscript conversion itself
+        # happens before DB rules apply.
+        group = create_normalization_rule_group(
+            test_session, name="noop", enabled=True,
+        )
+        engine = NormalizationEngine(test_session)
+
+        client = MagicMock()
+        client.create_channel = AsyncMock(return_value={"id": 77, "name": "Foo"})
+
+        executor = ActionExecutor(
+            client,
+            existing_channels=[],
+            existing_groups=[],
+            normalization_engine=engine,
+        )
+
+        stream_ctx = StreamContext(
+            stream_id=101,
+            stream_name="Foo ᴿᴬᵂ",  # Foo ᴿᴬᵂ
+            m3u_account_id=1,
+            m3u_account_name="Provider",
+            group_name="Test",
+            tvg_id=None,
+            resolution_height=None,
+            logo_url=None,
+        )
+
+        action = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+        }
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(
+                action, stream_ctx, ExecutionContext(),
+                normalization_group_ids=[group.id],
+            )
+        )
+
+        assert result.success is True
+        assert result.created is True
+        # The POSTed channel name must NOT contain the letter-superscripts
+        client.create_channel.assert_called_once()
+        posted = client.create_channel.call_args[0][0]
+        assert "ᴿ" not in posted["name"]  # ᴿ
+        assert "ᴬ" not in posted["name"]  # ᴬ
+        assert "ᵂ" not in posted["name"]  # ᵂ
+        assert posted["name"] == "Foo RAW"
+
+    def test_numeric_superscripts_preserved_in_created_channel_name(self, test_session):
+        """Stream 'ESPN²' creates channel 'ESPN²' (² preserved)."""
+        from auto_creation_executor import ActionExecutor, ExecutionContext
+        from normalization_engine import NormalizationEngine
+        from tests.fixtures.factories import create_normalization_rule_group
+
+        group = create_normalization_rule_group(
+            test_session, name="noop2", enabled=True,
+        )
+        engine = NormalizationEngine(test_session)
+
+        client = MagicMock()
+        client.create_channel = AsyncMock(return_value={"id": 78, "name": "ESPN²"})
+
+        executor = ActionExecutor(
+            client,
+            existing_channels=[],
+            existing_groups=[],
+            normalization_engine=engine,
+        )
+
+        stream_ctx = StreamContext(
+            stream_id=102,
+            stream_name="ESPN²",
+            m3u_account_id=1,
+            m3u_account_name="Provider",
+            group_name="Sports",
+            tvg_id=None,
+            resolution_height=None,
+            logo_url=None,
+        )
+
+        action = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+        }
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(
+                action, stream_ctx, ExecutionContext(),
+                normalization_group_ids=[group.id],
+            )
+        )
+
+        assert result.success is True
+        client.create_channel.assert_called_once()
+        posted = client.create_channel.call_args[0][0]
+        assert posted["name"] == "ESPN²"
