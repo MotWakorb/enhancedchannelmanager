@@ -53,6 +53,7 @@ export function BulkRuleSettingsModal({
 
   const [applyMergePrune, setApplyMergePrune] = useState(false);
   const [mergeRemoveNonMatching, setMergeRemoveNonMatching] = useState(false);
+  const [probeOnSortError, setProbeOnSortError] = useState<string | null>(null);
 
   /** When the modal is open, parent `rules` can get a new array reference every fetch; don't retrigger seed from `rules`. */
   const rulesRef = useRef(rules);
@@ -93,6 +94,7 @@ export function BulkRuleSettingsModal({
 
   const handleSubmit = async () => {
     const patch: BulkUpdateRulesPatch = {};
+    setProbeOnSortError(null);
 
     if (applyOptions) {
       patch.enabled = enabled;
@@ -103,20 +105,27 @@ export function BulkRuleSettingsModal({
     if (applyNorm) {
       patch.normalization_group_ids = [...normGroupIds];
     }
+
+    const applyingChannelQualityProbe = applyChannelSort && sortField === 'quality';
+    const applyingStreamQualityProbe = applyStreamSort && streamSortField === 'quality';
+    const shouldSendProbeOnSort = applyingChannelQualityProbe || applyingStreamQualityProbe;
+    if (shouldSendProbeOnSort) {
+      const desired = applyingChannelQualityProbe ? probeOnSort : streamProbeOnSort;
+      if (applyingChannelQualityProbe && applyingStreamQualityProbe && probeOnSort !== streamProbeOnSort) {
+        setProbeOnSortError('Channel sort and stream sort are both applying Quality probing, but have different values. Make them match (or un-apply one section) and try again.');
+        return;
+      }
+      patch.probe_on_sort = desired;
+    }
+
     if (applyChannelSort) {
       patch.sort_field = sortField || null;
       patch.sort_order = sortOrder;
       patch.sort_regex = sortRegex || null;
-      if (sortField === 'quality') {
-        patch.probe_on_sort = probeOnSort;
-      }
     }
     if (applyStreamSort) {
       patch.stream_sort_field = streamSortField || null;
       patch.stream_sort_order = streamSortOrder;
-      if (streamSortField === 'quality') {
-        patch.probe_on_sort = streamProbeOnSort;
-      }
     }
     if (applyOrphan) {
       patch.orphan_action = orphanAction;
@@ -275,7 +284,15 @@ export function BulkRuleSettingsModal({
             )}
             {applyChannelSort && sortField === 'quality' && (
               <label className="checkbox-option">
-                <input type="checkbox" checked={probeOnSort} onChange={e => setProbeOnSort(e.target.checked)} />
+                <input
+                  type="checkbox"
+                  checked={probeOnSort}
+                  onChange={e => {
+                    const next = e.target.checked;
+                    setProbeOnSort(next);
+                    if (applyStreamSort && streamSortField === 'quality') setStreamProbeOnSort(next);
+                  }}
+                />
                 <span>Probe unprobed streams before sorting</span>
               </label>
             )}
@@ -321,7 +338,11 @@ export function BulkRuleSettingsModal({
                     <input
                       type="checkbox"
                       checked={streamProbeOnSort}
-                      onChange={e => setStreamProbeOnSort(e.target.checked)}
+                      onChange={e => {
+                        const next = e.target.checked;
+                        setStreamProbeOnSort(next);
+                        if (applyChannelSort && sortField === 'quality') setProbeOnSort(next);
+                      }}
                     />
                     <span>Probe unprobed streams before sorting</span>
                   </label>
@@ -329,6 +350,12 @@ export function BulkRuleSettingsModal({
               </>
             )}
           </section>
+
+          {probeOnSortError && (
+            <p className="form-hint" style={{ color: 'var(--danger)', marginTop: '8px' }}>
+              {probeOnSortError}
+            </p>
+          )}
 
           <section className="bulk-section">
             <label className="bulk-apply-row">
