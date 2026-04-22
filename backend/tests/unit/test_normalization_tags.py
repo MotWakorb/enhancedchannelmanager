@@ -10,6 +10,7 @@ from normalization_engine import (
     convert_superscripts,
     LETTER_SUPERSCRIPTS, NUMERIC_SUPERSCRIPTS, SUPERSCRIPT_MAP,
 )
+from tests.fixtures.unicode_fixtures import NUMERIC_SUPERSCRIPT_FIXTURES
 
 
 class TestTagGroupMatching:
@@ -413,6 +414,40 @@ class TestSuperscriptConversion:
 
         # Tag should be converted to HD
         assert any(tag_value == "HD" for tag_value, _ in tags)
+
+    def test_shared_fixture_bank_wires_up_correctly(self):
+        """Demonstrates importing from the shared Unicode fixture bank (bd-eio04.3).
+
+        Picks the `case_bd_yui1k_numeric_strip` fixture and asserts the bank
+        exposes it with the expected shape. This is the wiring demo — full
+        migration of handwritten Unicode strings to the shared bank happens
+        in follow-up PRs (bd-eio04.1 and later sweeps).
+        """
+        fixture = next(
+            f for f in NUMERIC_SUPERSCRIPT_FIXTURES
+            if f.name == "case_bd_yui1k_numeric_strip"
+        )
+        assert fixture.input == "ESPN ²"
+        assert fixture.expected_normalized == "ESPN 2"
+        assert fixture.origin == "bd-yui1k"
+        assert fixture.category == "numeric_sup"
+
+    @pytest.mark.xfail(
+        reason="pending bd-yui1k numeric-superscript conversion landing on this branch",
+        strict=False,
+    )
+    def test_numeric_superscript_strip_from_shared_bank(self):
+        """Exercises the `case_bd_yui1k_numeric_strip` fixture end-to-end.
+
+        Marked xfail because this worktree may predate bd-yui1k's numeric
+        superscript support. When bd-yui1k is merged everywhere, flip this
+        to a regular test (or delete the xfail marker).
+        """
+        fixture = next(
+            f for f in NUMERIC_SUPERSCRIPT_FIXTURES
+            if f.name == "case_bd_yui1k_numeric_strip"
+        )
+        assert convert_superscripts(fixture.input) == fixture.expected_normalized
 
 
 class TestCapitalizeAction:
