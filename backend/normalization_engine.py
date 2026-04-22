@@ -1409,7 +1409,7 @@ class NormalizationEngine:
         # channel number — this prevents matching random words in names
         # like "(MC Radio) New Wave" or "DOCUBOX: MILITARY AND WAR"
         has_network = any(
-            re.search(r'\b' + net + r'\b', upper)
+            safe_regex.search(r'\b' + net + r'\b', upper)
             for net in NormalizationEngine._BROADCAST_NETWORKS
         )
         has_channel_num = bool(re.search(r'\b\d{1,2}\b', upper))
