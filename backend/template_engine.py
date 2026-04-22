@@ -21,6 +21,8 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
+import safe_regex
+
 
 class TemplateSyntaxError(ValueError):
     """Raised when a template is malformed or references an unknown transform/table."""
@@ -95,9 +97,11 @@ class TemplateEngine:
     """
 
     # Public caps — exposed so tests and callers can reason about them.
+    # The regex-length cap is inherited from ``safe_regex.DEFAULT_MAX_PATTERN_LEN``
+    # (500 chars). Conditional regex patterns are routed through ``safe_regex``
+    # which handles both the length cap and the ReDoS timeout.
     MAX_TEMPLATE_LEN = 4096
     MAX_INPUT_LEN = 1024
-    MAX_REGEX_LEN = 500
 
     # Pattern for a single {placeholder} — body has no unescaped '{' or '}'.
     _PLACEHOLDER_RE = re.compile(r"\{([^{}]+)\}")
@@ -266,13 +270,22 @@ class TemplateEngine:
         if "~" in condition:
             name, pattern = condition.split("~", 1)
             value = groups.get(name, "")
-            if len(pattern) > self.MAX_REGEX_LEN:
-                return False, {"kind": "regex", "value": value, "error": "pattern too long"}
+            # Fallback contract (bd-eio04.16): route user-supplied regex through
+            # safe_regex. ``compile`` raises ``PatternTooLongError`` for oversize
+            # patterns and ``SafeRegexError`` for malformed patterns — both are
+            # caught below and collapse the conditional to false rather than
+            # crashing the render. ``search`` on the compiled pattern returns
+            # None on ReDoS timeout (logged by safe_regex), again collapsing to
+            # false. A single bad user config therefore skips a {if:...~...}
+            # block rather than bringing down XMLTV generation.
             try:
-                matched = re.search(pattern, value) is not None
-                return matched, {"kind": "regex", "value": value}
-            except re.error as err:
+                compiled = safe_regex.compile(pattern)
+            except safe_regex.PatternTooLongError:
+                return False, {"kind": "regex", "value": value, "error": "pattern too long"}
+            except safe_regex.SafeRegexError as err:
                 return False, {"kind": "regex", "value": value, "error": str(err)}
+            matched = safe_regex.search(compiled, value) is not None
+            return matched, {"kind": "regex", "value": value}
 
         # {if:group} — truthy if non-empty.
         value = groups.get(condition, "")
