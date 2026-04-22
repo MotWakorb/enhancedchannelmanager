@@ -2693,7 +2693,9 @@ def _get_rule_starting_number(rule) -> Optional[int]:
 # Pattern: stream name contains EAST or WEST near the end, possibly followed by
 # quality indicators (HD, FHD, UHD, SD, 4K, HEVC, H.264/5) or parenthesized/bracketed
 # tags like (CX), [HD], etc.
-_TZ_SUFFIX_RE = re.compile(
+# Module-level constant assembled from raw-string literal fragments (multi-line
+# string concatenation); no runtime interpolation — safe by construction.
+_TZ_SUFFIX_RE = re.compile(  # nosemgrep: no-bare-re-on-dynamic-pattern
     r'[\s\-_.\(|\[](EAST|WEST)[\s\)\]]*'
     r'(?:\s*(?:F?HD|UHD|SD|4K|HEVC|H\.?26[45]|\([^)]*\)|\[[^\]]*\]))*'
     r'\s*$',

@@ -783,9 +783,11 @@ async def test_discord_webhook(request: DiscordTestRequest):
         return {"success": False, "message": "Webhook URL is required"}
 
     # Validate URL format - accept discord.com, discordapp.com, and variants (canary, ptb)
+    # TODO(enhancedchannelmanager-4mab3): promote to module-level _DISCORD_WEBHOOK_RE
+    # constant to match the ECM style guide convention.
     import re
     discord_pattern = r'^https://(discord\.com|discordapp\.com|canary\.discord\.com|ptb\.discord\.com)/api/webhooks/'
-    if not re.match(discord_pattern, webhook_url):
+    if not re.match(discord_pattern, webhook_url):  # nosemgrep: no-bare-re-on-dynamic-pattern
         return {"success": False, "message": "Invalid Discord webhook URL format"}
 
     try:
