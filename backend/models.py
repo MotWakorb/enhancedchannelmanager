@@ -1452,6 +1452,13 @@ class AutoCreationRule(Base):
     # Orphan cleanup behavior: "delete", "move_uncategorized", "delete_and_cleanup_groups", or "none"
     orphan_action = Column(String(30), default="delete", nullable=False)
 
+    # Duplicate-check scope: when True, existing-channel name lookups during
+    # create_channel are restricted to the rule's target group, so two rules
+    # targeting different groups can create separate channels with the same
+    # name instead of merging into an existing channel in another group
+    # (GH-92, bd-r9mtd). Default False preserves the existing global lookup.
+    match_scope_target_group = Column(Boolean, default=False, nullable=False)
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -1552,6 +1559,7 @@ class AutoCreationRule(Base):
             "normalization_group_ids": self.get_normalization_group_ids(),
             "skip_struck_streams": self.skip_struck_streams or False,
             "orphan_action": self.orphan_action or "delete",
+            "match_scope_target_group": self.match_scope_target_group or False,
             "last_run_at": self.last_run_at.isoformat() + "Z" if self.last_run_at else None,
             "last_run_stats": self.get_last_run_stats(),
             "match_count": self.match_count or 0,
