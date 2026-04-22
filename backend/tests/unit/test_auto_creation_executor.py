@@ -550,9 +550,10 @@ class TestCreateChannelNormalizationLookup:
         """Fake normalization engine that maps names via ``mapping``."""
         engine = MagicMock()
 
-        def _normalize(name):
+        def _normalize(name, *args, **kwargs):
             result = MagicMock()
             result.normalized = mapping.get(name, name)
+            result.transformations = []
             return result
 
         engine.normalize.side_effect = _normalize
@@ -607,9 +608,9 @@ class TestCreateChannelNormalizationLookup:
 
     def test_number_prefix_rename_path_still_fires(self):
         """The existing rename path at executor.py:517-539 still triggers
-        when normalize_names=True and the channel has a number prefix whose
-        core differs from the normalized incoming name ('107 | RTL ᴿᴬᵂ'
-        stays number-prefixed as '107 | RTL')."""
+        when ``normalization_group_ids`` is non-empty and the channel has a
+        number prefix whose core differs from the normalized incoming name
+        ('107 | RTL ᴿᴬᵂ' stays number-prefixed as '107 | RTL')."""
         from auto_creation_executor import ActionExecutor
 
         client = MagicMock()
@@ -642,7 +643,7 @@ class TestCreateChannelNormalizationLookup:
 
         result = asyncio.get_event_loop().run_until_complete(
             executor.execute(action, stream_ctx, ExecutionContext(),
-                             normalize_names=True)
+                             normalization_group_ids=[1])
         )
 
         assert result.success is True

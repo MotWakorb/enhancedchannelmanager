@@ -7,7 +7,7 @@ import json
 import logging
 import re
 import time
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import yaml
 from fastapi import APIRouter, HTTPException
@@ -119,9 +119,15 @@ class ReorderGroupsRequest(BaseModel):
 
 
 class ApplyChannelAction(BaseModel):
-    """Per-channel action override for apply-to-channels execute mode."""
+    """Per-channel action override for apply-to-channels execute mode.
+
+    ``action`` is constrained to a Literal so invalid inputs are rejected by
+    FastAPI/Pydantic at the request boundary with HTTP 422 — the endpoint
+    itself only surfaces semantic/runtime errors (e.g., "target channel not
+    found", "rename would collide") in the ``errors[]`` list of its response.
+    """
     channel_id: int
-    action: str  # "rename" | "merge" | "skip"
+    action: Literal["rename", "merge", "skip"]
     merge_target_id: Optional[int] = None
 
 

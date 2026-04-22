@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `GET /api/health/schema` public endpoint returning `current_revision`, `head_revision`, `up_to_date`, `foreign_keys_enabled`, and `journal_mode` — required by DBAS restore/sync to gate backup imports on schema version (`bd-c5wf5`, PR #81).
 - `docs/database_migrations.md` authoring conventions (`bd-c5wf5`, PR #81).
 - `docs/runbooks/` scaffold with template and v0.16.0 hard-rollback exemplar (`bd-bwly4`).
+- New Settings → Normalization Rules → "Apply to existing channels" button with dry-run diff preview + per-row rename/merge/skip actions. Exposes POST /api/normalization/apply-to-channels endpoint (PR #107, bd-u9odj, GH-104).
 
 ### Changed
 - `docs/backend_architecture.md` expanded with an Observability section covering logging schema, metric naming conventions, cardinality rules, `bind_context` usage, and the process for adding new metrics (`bd-ak1db`, PR #80).
@@ -23,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 - Auto-creation rule duplicate preserves stream/channel sort, normalization groups, orphan cleanup, and option toggles — duplicates now match the original's configuration instead of silently dropping fields (PR #94, external contributor stevencoutts, bd-x3lto).
+- Auto-creation no longer creates duplicate channels when an existing channel's name differs only by a normalization-matched suffix (e.g., "RTL ᴿᴬᵂ" and incoming "RTL"). Root causes: normalization engine wasn't initialized unless at least one rule opted in via normalize_names=True, and the channel-lookup map only indexed stored-name → normalized. Fix: always initialize engine when any NormalizationRuleGroup is enabled; add symmetric normalized-search + core-name fallbacks in _find_channel_by_name (PR #107, bd-u9odj, GH-104).
 
 ### Security
 - `backend/routers/backup.py` — canonicalize-and-verify (`resolve()` + `relative_to()`) applied to `download_saved_backup` and `delete_saved_backup` as defense-in-depth alongside the existing `_BACKUP_FILENAME_RE` guard. Closes CodeQL py/path-injection alerts 1416-1419 (CWE-22/23/36/73/99). Pattern mirrors the zip-restore remediation in the same file. New tests cover traversal, absolute paths, symlink-escape, and null bytes (PR #98, bd-0a1pr).
