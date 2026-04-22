@@ -793,6 +793,9 @@ export interface ApplyToChannelsDiffRow {
   collision_target_group_id: number | null;
   collision_target_group_name: string | null;
   suggested_action: 'rename' | 'merge' | 'skip';
+  // bd-eio04.12: per-rule trace so the UI can render a "Rules fired"
+  // drawer that matches the Test Rules preview shape.
+  transformations?: NormalizationTransformation[];
 }
 
 // Response from dry-run apply-to-channels
@@ -819,6 +822,9 @@ export interface ApplyToChannelsExecuteResponse {
   merged: Array<{ channel_id: number; target_id: number; streams_added: number }>;
   skipped: Array<{ channel_id: number; reason: string }>;
   errors: Array<{ channel_id: number; error: string }>;
+  // bd-eio04.12: correlates the audit-log entry with the rule-set that
+  // was active when the bulk apply ran.
+  rule_set_hash?: string;
 }
 
 // Migration status response

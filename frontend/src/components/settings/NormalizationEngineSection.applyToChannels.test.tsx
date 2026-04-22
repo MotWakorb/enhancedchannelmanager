@@ -225,6 +225,7 @@ describe('NormalizationEngineSection — apply to existing channels (GH-104)', (
       merged: [],
       skipped: [],
       errors: [],
+      rule_set_hash: 'abc123def456',
     });
 
     render(<NormalizationEngineSection />);
@@ -238,8 +239,16 @@ describe('NormalizationEngineSection — apply to existing channels (GH-104)', (
     });
 
     await screen.findByTestId('apply-row-1');
+    // bd-eio04.12: Execute now opens a confirmation modal first.
     await act(async () => {
       fireEvent.click(screen.getByTestId('apply-to-channels-execute'));
+    });
+    const confirm = await screen.findByTestId('apply-to-channels-confirm');
+    expect(confirm).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(
+        screen.getByTestId('apply-to-channels-confirm-execute')
+      );
     });
 
     await waitFor(() => {
@@ -249,5 +258,195 @@ describe('NormalizationEngineSection — apply to existing channels (GH-104)', (
     expect(sent).toEqual([
       expect.objectContaining({ channel_id: 1, action: 'rename' }),
     ]);
+  });
+
+  // ------------------------------------------------------------------
+  // bd-eio04.12 — new UX gaps (rule-trace drawer, conflict-group
+  // winner pick, confirm modal, post-execute summary).
+  // ------------------------------------------------------------------
+
+  it('expands the per-row rule-trace drawer when the toggle is clicked', async () => {
+    mockPreview.mockResolvedValue({
+      dry_run: true,
+      channels_with_changes: 1,
+      diffs: [
+        baseDiff({
+          channel_id: 1,
+          current_name: 'RTL RAW',
+          proposed_name: 'RTL',
+          transformations: [
+            { rule_id: 101, before: 'RTL RAW', after: 'RTL' },
+            { rule_id: 102, before: 'RTL  ', after: 'RTL' },
+          ],
+        }),
+      ],
+    });
+
+    render(<NormalizationEngineSection />);
+    const openBtn = await screen.findByTestId(
+      'apply-to-channels-btn',
+      undefined,
+      { timeout: 3000 }
+    );
+    await act(async () => {
+      fireEvent.click(openBtn);
+    });
+
+    // Default is collapsed — no drawer row on mount.
+    const toggle = await screen.findByTestId('apply-trace-toggle-1');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByTestId('apply-trace-drawer-1')).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    const drawer = await screen.findByTestId('apply-trace-drawer-1');
+    expect(drawer).toBeInTheDocument();
+    expect(within(drawer).getByText(/Rule 101/)).toBeInTheDocument();
+    expect(within(drawer).getByText(/Rule 102/)).toBeInTheDocument();
+    // aria-controls wires the toggle to the drawer by id
+    expect(toggle.getAttribute('aria-controls')).toBe('apply-trace-1');
+    expect(drawer.getAttribute('id')).toBe('apply-trace-1');
+  });
+
+  it('groups source-collision rows and requires a winner before Execute enables', async () => {
+    // Two channels that both normalize to the same proposed name.
+    // This is a "type-(ii) source collision" — two in-scope rows, no
+    // pre-existing channel at the target.
+    mockPreview.mockResolvedValue({
+      dry_run: true,
+      channels_with_changes: 2,
+      diffs: [
+        baseDiff({
+          channel_id: 1,
+          current_name: 'RTL RAW',
+          proposed_name: 'RTL',
+          collision: false,
+        }),
+        baseDiff({
+          channel_id: 2,
+          current_name: 'RTL ᴿᴬᵂ',
+          proposed_name: 'RTL',
+          collision: false,
+        }),
+      ],
+    });
+
+    render(<NormalizationEngineSection />);
+    const openBtn = await screen.findByTestId(
+      'apply-to-channels-btn',
+      undefined,
+      { timeout: 3000 }
+    );
+    await act(async () => {
+      fireEvent.click(openBtn);
+    });
+
+    // Both rows render the conflict-group badge
+    expect(
+      await screen.findByTestId('apply-conflict-badge-1')
+    ).toHaveTextContent(/Conflict Group \d+/);
+    expect(
+      screen.getByTestId('apply-conflict-badge-2')
+    ).toHaveTextContent(/Conflict Group \d+/);
+
+    // Hint banner signals "needs a winner"
+    expect(
+      screen.getByTestId('apply-to-channels-conflict-hint')
+    ).toBeInTheDocument();
+
+    // Execute is disabled until a winner is picked
+    const executeBtn = screen.getByTestId('apply-to-channels-execute');
+    expect((executeBtn as HTMLButtonElement).disabled).toBe(true);
+
+    // Pick channel 1 as the winner
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('apply-winner-radio-1'));
+    });
+
+    // Winner's action flips to 'rename', loser flips to 'skip'
+    expect(
+      (screen.getByTestId('apply-action-1') as HTMLSelectElement).value
+    ).toBe('rename');
+    expect(
+      (screen.getByTestId('apply-action-2') as HTMLSelectElement).value
+    ).toBe('skip');
+
+    // Execute is now enabled
+    expect((executeBtn as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('requires confirmation before executing and surfaces a post-execute summary', async () => {
+    mockPreview.mockResolvedValue({
+      dry_run: true,
+      channels_with_changes: 1,
+      diffs: [baseDiff({ channel_id: 1 })],
+    });
+    mockExecute.mockResolvedValue({
+      dry_run: false,
+      status: 'completed',
+      renamed: [{ channel_id: 1, old_name: 'RTL RAW', new_name: 'RTL' }],
+      merged: [],
+      skipped: [],
+      errors: [],
+      rule_set_hash: 'abc123def456',
+    });
+
+    render(<NormalizationEngineSection />);
+    const openBtn = await screen.findByTestId(
+      'apply-to-channels-btn',
+      undefined,
+      { timeout: 3000 }
+    );
+    await act(async () => {
+      fireEvent.click(openBtn);
+    });
+    await screen.findByTestId('apply-row-1');
+
+    // Execute opens the confirmation modal — does NOT fire the POST
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('apply-to-channels-execute'));
+    });
+    expect(mockExecute).not.toHaveBeenCalled();
+    const confirm = await screen.findByTestId('apply-to-channels-confirm');
+    expect(confirm).toBeInTheDocument();
+    expect(
+      screen.getByTestId('apply-to-channels-confirm-count')
+    ).toHaveTextContent(/1 channel/);
+
+    // Cancel closes the confirm modal without firing the POST
+    await act(async () => {
+      fireEvent.click(
+        screen.getByTestId('apply-to-channels-confirm-cancel')
+      );
+    });
+    expect(mockExecute).not.toHaveBeenCalled();
+
+    // Re-open and confirm — POST fires, summary appears
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('apply-to-channels-execute'));
+    });
+    await act(async () => {
+      fireEvent.click(
+        screen.getByTestId('apply-to-channels-confirm-execute')
+      );
+    });
+
+    await waitFor(() => {
+      expect(mockExecute).toHaveBeenCalledTimes(1);
+    });
+
+    const summary = await screen.findByTestId(
+      'apply-to-channels-summary'
+    );
+    expect(within(summary).getByText(/1 renamed/)).toBeInTheDocument();
+    expect(within(summary).getByText(/0 merged/)).toBeInTheDocument();
+    expect(within(summary).getByText(/0 failed/)).toBeInTheDocument();
+    expect(within(summary).getByText(/abc123def456/)).toBeInTheDocument();
+    expect(
+      within(summary).getByTestId('apply-to-channels-summary-journal-link')
+    ).toHaveAttribute('href', '#journal');
   });
 });
