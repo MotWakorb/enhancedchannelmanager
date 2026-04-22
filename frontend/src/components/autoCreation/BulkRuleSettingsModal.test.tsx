@@ -43,11 +43,11 @@ function mkRule(overrides: Partial<AutoCreationRule>): AutoCreationRule {
   return {
     id: overrides.id ?? 1,
     name: overrides.name ?? 'Rule',
-    description: null,
+    description: undefined,
     enabled: overrides.enabled ?? true,
     priority: 0,
-    m3u_account_id: null,
-    target_group_id: null,
+    m3u_account_id: undefined,
+    target_group_id: undefined,
     conditions: [],
     actions: [],
     run_on_refresh: false,
@@ -62,7 +62,9 @@ function mkRule(overrides: Partial<AutoCreationRule>): AutoCreationRule {
     skip_struck_streams: false,
     orphan_action: 'delete',
     match_scope_target_group: false,
-    managed_channel_ids: [],
+    match_count: 0,
+    created_at: '2026-04-22T00:00:00Z',
+    updated_at: '2026-04-22T00:00:00Z',
     ...overrides,
   };
 }
