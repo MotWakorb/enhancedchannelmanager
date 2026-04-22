@@ -31,10 +31,10 @@ These three paths **must produce the same output for the same input**. That is t
 1. Open **Settings → Normalization Rules**.
 2. Pick a rule group (or create one — groups are ordering buckets; rules within a group run in priority order, groups run in group-priority order).
 3. Click **Add rule**. Choose a condition and an action.
-4. Paste a sample raw name into the **Test Rules** panel on the right and click **Test**.
+4. Expand the **Test Rules** panel above the rule groups, paste a sample raw name (one per line), and click **Run Test**.
 5. Review the output. If it matches your intent, **Save**. If not, iterate on the rule before saving — you don't pay for retries on the preview path.
 
-![placeholder — Settings → Normalization Rules panel with Test Rules preview on the right](path/to/screenshots/normalization-test-rules.png)
+![Settings → Channel Normalization showing the Normalization Rules Engine header, the Test Rules panel expanded with sample inputs, and the Results list showing Original → Normalized with a rule-trace line under each entry](images/normalization/normalization-test-rules.png)
 
 ### Testing a rule before you commit
 
@@ -147,7 +147,7 @@ Do **not** use it to force a one-off rename of a single channel. Edit the channe
 1. Settings → Normalization Rules → **Apply to existing channels**.
 2. The modal opens in **dry-run** mode by default. ECM computes the diff and shows one row per channel with a proposed new name.
 
-   ![placeholder — Apply to Channels modal with rule-trace drawer expanded](path/to/screenshots/apply-to-channels-dry-run.png)
+   ![Apply Normalization to Existing Channels modal with the rule-trace drawer expanded on the first row, showing current_name, proposed name, rules-fired count, and a trace panel explaining the diff cause (in this case Unicode normalization only)](images/normalization/apply-to-channels-dry-run.png)
 
 3. For each row you see:
    - `current_name` — what's stored today.
