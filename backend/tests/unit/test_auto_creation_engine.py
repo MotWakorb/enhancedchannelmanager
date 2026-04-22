@@ -15,6 +15,7 @@ from auto_creation_engine import (
     _sort_key,
     _smart_sort_streams,
     _sort_streams_by_m3u_account_priority,
+    _sort_streams_by_resolution_height,
     _reorder_streams_for_rule,
 )
 from auto_creation_evaluator import StreamContext
@@ -1331,6 +1332,24 @@ class TestStreamReorderByRule:
             [100, 101], rule, {}, stream_m3u_map, "Ch", settings
         )
         assert out == [101, 100]
+
+
+class TestQualitySortDeprioritization:
+    """Quality (resolution) sort should respect deprioritization settings."""
+
+    def test_quality_sort_pushes_black_screen_below_good_streams(self):
+        settings = MagicMock()
+        settings.deprioritize_failed_streams = True
+        settings.failed_stream_sort_order = ["black_screen", "low_fps", "failed"]
+
+        # Stream 1: 1080p but black screen
+        # Stream 2: 720p good
+        stats_cache = {
+            1: {"resolution": "1920x1080", "probe_status": "success", "is_black_screen": True, "is_low_fps": False},
+            2: {"resolution": "1280x720", "probe_status": "success", "is_black_screen": False, "is_low_fps": False},
+        }
+        out = _sort_streams_by_resolution_height([1, 2], stats_cache, settings, "desc", "Ch")
+        assert out == [2, 1]
 
 
 class TestSortKey:

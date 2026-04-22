@@ -2448,16 +2448,45 @@ def _resolution_height_from_stats(stats: dict | None) -> int:
 def _sort_streams_by_resolution_height(
     stream_ids: list[int],
     stats_cache: dict,
+    settings,
     order: str,
     channel_name: str,
 ) -> list[int]:
-    """Sort by probed resolution height; missing stats count as 0."""
+    """Sort by probed resolution height; missing stats count as 0.
+
+    When Settings enable deprioritization, push failed/black-screen/low-FPS
+    streams to the bottom (same categories as smart sort).
+    """
+
+    deprioritize_failed = getattr(settings, "deprioritize_failed_streams", True) if settings is not None else True
+    fail_order = getattr(settings, "failed_stream_sort_order", None) if settings is not None else None
+    if not fail_order:
+        fail_order = ["failed", "black_screen", "low_fps"]
+    failed_rank = {name: idx for idx, name in enumerate(fail_order)}
 
     def sort_key(sid: int):
-        h = _resolution_height_from_stats(stats_cache.get(sid))
-        if order == "desc":
-            return (-h, sid)
-        return (h, sid)
+        stats = stats_cache.get(sid)
+        h = _resolution_height_from_stats(stats)
+
+        # rank: 0 = good stream, 1 = deprioritized bucket (ordered by fail_order)
+        if deprioritize_failed:
+            status = (stats or {}).get("probe_status") if isinstance(stats, dict) else None
+            if status in ("failed", "timeout"):
+                bucket = "failed"
+                rank = failed_rank.get(bucket, len(failed_rank))
+                # Within deprioritized bucket: still order by resolution (desc/asc)
+                return (1, rank, -h if order == "desc" else h, sid)
+            if isinstance(stats, dict) and stats.get("is_black_screen"):
+                bucket = "black_screen"
+                rank = failed_rank.get(bucket, len(failed_rank))
+                return (1, rank, -h if order == "desc" else h, sid)
+            if isinstance(stats, dict) and stats.get("is_low_fps"):
+                bucket = "low_fps"
+                rank = failed_rank.get(bucket, len(failed_rank))
+                return (1, rank, -h if order == "desc" else h, sid)
+
+        # Good stream bucket.
+        return (0, 0, -h if order == "desc" else h, sid)
 
     sorted_ids = sorted(stream_ids, key=sort_key)
     logger.info(
@@ -2526,7 +2555,7 @@ def _reorder_streams_for_rule(
 
     if field == "quality":
         return _sort_streams_by_resolution_height(
-            stream_ids, stats_cache, order, channel_name
+            stream_ids, stats_cache, settings, order, channel_name
         )
 
     if field == "stream_name":
