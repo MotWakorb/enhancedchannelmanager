@@ -826,7 +826,12 @@ class AutoCreationEngine:
         )
 
         # Create normalization engine if any rule uses normalization_group_ids
-        # or if any condition needs it (normalized_name_in_group)
+        # or if any condition needs it (normalized_name_in_group).
+        # Also create it if any NormalizationRuleGroup is enabled in the DB so
+        # the executor's normalized-name/core-name indices are available for
+        # _find_channel_by_name lookups — this prevents auto-creation from
+        # creating duplicate channels when an existing channel's name would
+        # collapse to the same normalized form (GH-104 / bd-u9odj).
         norm_engine = None
         needs_norm = any(r.get_normalization_group_ids() for r in rules)
         if not needs_norm:
@@ -840,6 +845,24 @@ class AutoCreationEngine:
                         break
                 if needs_norm:
                     break
+        if not needs_norm:
+            # Fall back to DB: any enabled group means lookups should consult
+            # the normalized indices even if no rule explicitly opts in.
+            try:
+                from models import NormalizationRuleGroup
+                session = get_session()
+                try:
+                    has_enabled_group = session.query(
+                        NormalizationRuleGroup
+                    ).filter(
+                        NormalizationRuleGroup.enabled == True  # noqa: E712 — SQLA needs ==
+                    ).first() is not None
+                finally:
+                    session.close()
+                if has_enabled_group:
+                    needs_norm = True
+            except Exception as e:
+                logger.warning("[AUTO-CREATE-ENGINE] Failed to probe enabled normalization groups: %s", e)
         if needs_norm:
             try:
                 from normalization_engine import get_normalization_engine

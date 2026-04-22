@@ -2303,6 +2303,12 @@ class ActionExecutor:
         finds a channel created as "4000 | USA Network", and the normalized-name
         mapping so that merge_streams can find channels the same way
         normalized_name_in_group does.
+
+        When a normalization engine is available and no exact match is found,
+        the lookup also normalizes the search name itself and re-queries the
+        channel/core-name indices. This prevents auto-creation from creating
+        duplicate channels when an existing channel was created before
+        normalization rules existed (GH-104 / bd-u9odj).
         """
         name_lower = name.lower()
         # Check newly created channels first (by exact name)
@@ -2322,6 +2328,45 @@ class ActionExecutor:
             result = self._normalized_name_to_channel[name_lower]
             logger.debug("[AUTO-CREATE-EXEC] '%s' found via normalized-name mapping (id=%s, name='%s')", name, result.get('id'), result.get('name'))
             return result
+        # Normalized-name fallback: when the search name isn't an exact match
+        # to any stored channel, normalize it through the engine and retry. This
+        # catches the case where an existing channel's stored name already
+        # equals the normalized form (e.g., stored "RTL", searching for
+        # "RTL ᴿᴬᵂ") — symmetric to the normalized-name map above which
+        # handles the opposite direction.
+        if self._normalization_engine is not None:
+            try:
+                norm = self._normalization_engine.normalize(name)
+                norm_lower = (norm.normalized or "").strip().lower()
+            except Exception as e:
+                logger.warning("[AUTO-CREATE-EXEC] Normalization of lookup name '%s' failed: %s", name, e)
+                norm_lower = ""
+            if norm_lower and norm_lower != name_lower:
+                result = (
+                    self._channel_by_name.get(norm_lower)
+                    or self._base_name_to_channel.get(norm_lower)
+                    or self._normalized_name_to_channel.get(norm_lower)
+                    or self._core_name_to_channel.get(norm_lower)
+                )
+                if result:
+                    logger.debug("[AUTO-CREATE-EXEC] '%s' found via normalized-search fallback ('%s' -> '%s', id=%s)",
+                                 name, name, norm_lower, result.get('id'))
+                    return result
+            # Core-name fallback: strip tag/country prefixes/suffixes and look
+            # up by core key. Only used when normalized fallback above didn't
+            # produce a hit, so we don't double-count.
+            try:
+                core = self._normalization_engine.extract_core_name(name)
+                core_lower = (core or "").strip().lower()
+            except Exception as e:
+                logger.warning("[AUTO-CREATE-EXEC] Core-name extraction for lookup '%s' failed: %s", name, e)
+                core_lower = ""
+            if core_lower and core_lower != name_lower:
+                result = self._core_name_to_channel.get(core_lower)
+                if result:
+                    logger.debug("[AUTO-CREATE-EXEC] '%s' found via core-name fallback (core='%s', id=%s)",
+                                 name, core_lower, result.get('id'))
+                    return result
         return None
 
     def _find_channel_by_regex(self, pattern: str) -> Optional[dict]:

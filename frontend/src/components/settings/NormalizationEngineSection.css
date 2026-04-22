@@ -1023,3 +1023,86 @@
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-primary);
 }
+
+/* ---------------------------------------------------------------------- */
+/* Apply-to-channels modal (GH-104)                                       */
+/* ---------------------------------------------------------------------- */
+
+.norm-engine-apply-modal {
+  max-width: 900px;
+}
+
+.norm-engine-apply-loading,
+.norm-engine-apply-empty {
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.norm-engine-apply-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  gap: 1rem;
+}
+
+.norm-engine-apply-count {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.norm-engine-apply-table-wrap {
+  max-height: 60vh;
+  overflow-y: auto;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+}
+
+.norm-engine-apply-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.norm-engine-apply-table th,
+.norm-engine-apply-table td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.norm-engine-apply-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-secondary);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.norm-engine-apply-table tr.apply-row-collision {
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.norm-engine-apply-collision {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--warning);
+}
+
+.norm-engine-apply-collision .material-icons {
+  font-size: 1rem;
+}
+
+.norm-engine-apply-ok {
+  color: var(--text-tertiary);
+}
+
+.norm-engine-apply-table select {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  padding: 0.25rem 0.5rem;
+}
