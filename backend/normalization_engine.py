@@ -664,9 +664,11 @@ class NormalizationEngine:
             return RuleMatch(matched=False)
 
         elif condition_type == "regex":
+            # TODO(enhancedchannelmanager-eio04.14): migrate user-supplied
+            # normalization rule pattern to safe_regex.search.
             try:
                 flags = 0 if case_sensitive else re.IGNORECASE
-                match = re.search(pattern, text, flags)
+                match = re.search(pattern, text, flags)  # nosemgrep: no-bare-re-on-dynamic-pattern
                 if match:
                     return RuleMatch(
                         matched=True,
@@ -752,9 +754,11 @@ class NormalizationEngine:
                 sep = r'[\s:\-|/]+'
                 tag_pat = re.escape(match_tag)
                 flags = 0 if case_sensitive else re.IGNORECASE
+                # TODO(enhancedchannelmanager-eio04.14): migrate user-supplied
+                # tag-group regex in this block to safe_regex.search / safe_regex.match.
                 # Try to match with separators on both sides first
                 pattern = r'(' + sep + r')' + tag_pat + r'(?=' + sep + r'|$)'
-                m = re.search(pattern, text, flags)
+                m = re.search(pattern, text, flags)  # nosemgrep: no-bare-re-on-dynamic-pattern
                 if m:
                     # Consume the leading separator group + tag, leave trailing for next segment
                     return RuleMatch(
@@ -765,7 +769,7 @@ class NormalizationEngine:
                     )
                 # Try at start of string: tag followed by separator
                 pattern = tag_pat + r'(' + sep + r')'
-                m = re.match(pattern, text, flags)
+                m = re.match(pattern, text, flags)  # nosemgrep: no-bare-re-on-dynamic-pattern
                 if m:
                     return RuleMatch(
                         matched=True,
@@ -877,11 +881,13 @@ class NormalizationEngine:
             if rule.condition_type != "regex":
                 logger.warning("[NORMALIZE] regex_replace requires regex condition in rule %s", rule.id)
                 return text
+            # TODO(enhancedchannelmanager-eio04.14): migrate user-supplied
+            # regex_replace to safe_regex.sub.
             try:
                 flags = 0 if case_sensitive else re.IGNORECASE
                 # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
                 py_replacement = re.sub(r'\$(\d+)', r'\\\1', action_value)
-                return re.sub(pattern, py_replacement, text, flags=flags)
+                return re.sub(pattern, py_replacement, text, flags=flags)  # nosemgrep: no-bare-re-on-dynamic-pattern
             except re.error as e:
                 logger.warning("[NORMALIZE] Regex replace error in rule %s: %s", rule.id, e)
                 return text
@@ -972,12 +978,14 @@ class NormalizationEngine:
 
         elif action_type == "regex_replace":
             # For else, apply the regex pattern to the whole text
+            # TODO(enhancedchannelmanager-eio04.14): migrate user-supplied
+            # else-branch regex_replace to safe_regex.sub.
             if rule.condition_value:
                 try:
                     flags = 0 if rule.case_sensitive else re.IGNORECASE
                     # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
                     py_replacement = re.sub(r'\$(\d+)', r'\\\1', action_value)
-                    return re.sub(rule.condition_value, py_replacement, text, flags=flags)
+                    return re.sub(rule.condition_value, py_replacement, text, flags=flags)  # nosemgrep: no-bare-re-on-dynamic-pattern
                 except re.error as e:
                     logger.warning("[NORMALIZE] Regex replace error in else action of rule %s: %s", rule.id, e)
             return text
@@ -1389,8 +1397,10 @@ class NormalizationEngine:
         # Bare form: only attempt if name contains a broadcast network or
         # channel number — this prevents matching random words in names
         # like "(MC Radio) New Wave" or "DOCUBOX: MILITARY AND WAR"
+        # `net` iterates the hardcoded NormalizationEngine._BROADCAST_NETWORKS
+        # frozenset, not user input — concatenation is safe.
         has_network = any(
-            re.search(r'\b' + net + r'\b', upper)
+            re.search(r'\b' + net + r'\b', upper)  # nosemgrep: no-bare-re-on-dynamic-pattern
             for net in NormalizationEngine._BROADCAST_NETWORKS
         )
         has_channel_num = bool(re.search(r'\b\d{1,2}\b', upper))
