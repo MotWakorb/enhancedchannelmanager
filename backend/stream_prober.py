@@ -32,7 +32,13 @@ BITRATE_SAMPLE_DURATION = 8  # seconds to sample stream for bitrate measurement
 # rows, which an attacker who can write a stream URL could otherwise weaponise for
 # local-file exfiltration or DoS on the ECM host. Matches the whitelist used in
 # backend/ffmpeg_builder/probe.py and backend/routers/stream_preview.py.
-FFPROBE_PROTOCOL_WHITELIST = "http,https,tcp,udp,rtp,rtmp,pipe"
+#
+# tls and crypto are required internal protocols: HTTPS chains to tls for the TLS
+# handshake, and HLS AES-128-encrypted segments chain to crypto. Without them,
+# ffprobe fails on every HTTPS stream with "Protocol 'tls' not on whitelist"
+# (GH-106). Neither is a URL scheme an attacker can specify directly — they are
+# internal demuxers activated by https:// / hls variants.
+FFPROBE_PROTOCOL_WHITELIST = "http,https,tls,crypto,tcp,udp,rtp,rtmp,pipe"
 
 # Per-account ramp-up configuration
 RAMP_INITIAL_LIMIT = 1         # Start each account at 1 concurrent probe
