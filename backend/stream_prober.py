@@ -15,6 +15,7 @@ import os
 import re
 
 import journal
+import safe_regex
 
 import httpx
 
@@ -1762,16 +1763,18 @@ class StreamProber:
         if not search_pattern:
             return original_url
 
-        try:
-            rewritten = re.sub(search_pattern, replace_pattern, original_url)
-            if rewritten != original_url:
-                logger.debug("[STREAM-PROBE] Profile %s: rewrote URL "
-                           "(pattern: %s -> %s)",
-                           profile['id'], search_pattern, replace_pattern)
-            return rewritten
-        except re.error as e:
-            logger.warning("[STREAM-PROBE] Invalid regex in profile %s: %s", profile['id'], e)
-            return original_url
+        # User-supplied regex — run through safe_regex to cap ReDoS exposure.
+        # safe_regex.sub returns the original text unchanged on timeout,
+        # oversize pattern, or compile error, and emits a [SAFE_REGEX] WARN
+        # log with a pattern sha256 + excerpt. That sentinel is the correct
+        # fallback here: an unrewritten URL probes directly against the
+        # source, which is safer than blocking the probe entirely.
+        rewritten = safe_regex.sub(search_pattern, replace_pattern, original_url)
+        if rewritten != original_url:
+            logger.debug("[STREAM-PROBE] Profile %s: rewrote URL "
+                       "(pattern: %s -> %s)",
+                       profile['id'], search_pattern, replace_pattern)
+        return rewritten
 
     async def _auto_reorder_channels(self, channel_groups_override: list[str] = None, stream_to_channels: dict = None) -> list[dict]:
         """
