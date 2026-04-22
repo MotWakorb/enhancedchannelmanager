@@ -1,11 +1,12 @@
 """
 Unit tests for normalization endpoints.
 
-Tests: 18 endpoints for normalization rule groups, rules, testing, and migration.
+Tests: 18 endpoints for normalization rule groups, rules, testing, migration,
+and apply-to-channels (GH-104).
 Uses async_client fixture which patches database session.
 """
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from models import NormalizationRuleGroup, NormalizationRule
 
@@ -472,3 +473,273 @@ class TestRunMigration:
         assert response.status_code == 200
         data = response.json()
         assert data["created_groups"] == 3
+
+
+class TestApplyToChannels:
+    """Tests for POST /api/normalization/apply-to-channels (GH-104).
+
+    The endpoint walks every existing channel, runs each name through the
+    shared NormalizationEngine, and returns a per-channel diff. In execute
+    mode the caller provides a per-row action (rename | merge | skip) and
+    the endpoint mutates channels + writes journal entries.
+    """
+
+    def _mock_client(self, channels, groups=None):
+        """Build an AsyncMock Dispatcharr client returning the given channels."""
+        client = AsyncMock()
+        client.get_channels.return_value = {"results": channels, "next": None}
+        client.get_channel_groups.return_value = groups or []
+        return client
+
+    def _mock_engine(self, mapping):
+        """Return a MagicMock normalization engine that looks up name -> normalized."""
+        engine = MagicMock()
+
+        def _normalize(name):
+            result = MagicMock()
+            result.normalized = mapping.get(name, name)
+            return result
+
+        engine.normalize.side_effect = _normalize
+        return engine
+
+    @pytest.mark.asyncio
+    async def test_dry_run_returns_diff(self, async_client):
+        """Dry-run returns per-channel diffs for channels that would change."""
+        channels = [
+            {"id": 1, "name": "RTL ᴿᴬᵂ", "channel_group_id": 5},
+            {"id": 2, "name": "CNN", "channel_group_id": 5},  # unchanged
+        ]
+        client = self._mock_client(channels, groups=[{"id": 5, "name": "DE"}])
+        engine = self._mock_engine({"RTL ᴿᴬᵂ": "RTL", "CNN": "CNN"})
+
+        with patch("routers.normalization.get_client", return_value=client), \
+             patch("normalization_engine.get_normalization_engine", return_value=engine):
+            response = await async_client.post("/api/normalization/apply-to-channels?dry_run=true")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["dry_run"] is True
+        # Only the channel with an actual change should appear in diffs
+        assert data["channels_with_changes"] == 1
+        assert len(data["diffs"]) == 1
+        row = data["diffs"][0]
+        assert row["channel_id"] == 1
+        assert row["current_name"] == "RTL ᴿᴬᵂ"
+        assert row["proposed_name"] == "RTL"
+        assert row["collision"] is False
+        assert row["suggested_action"] == "rename"
+        # No mutations in dry-run mode
+        client.update_channel.assert_not_called()
+        client.delete_channel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dry_run_flags_collision(self, async_client):
+        """Dry-run marks rows whose proposed name already belongs to another channel."""
+        channels = [
+            {"id": 1, "name": "RTL ᴿᴬᵂ", "channel_group_id": 5},
+            {"id": 2, "name": "RTL", "channel_group_id": 5},  # pre-existing target
+        ]
+        client = self._mock_client(channels)
+        engine = self._mock_engine({"RTL ᴿᴬᵂ": "RTL", "RTL": "RTL"})
+
+        with patch("routers.normalization.get_client", return_value=client), \
+             patch("normalization_engine.get_normalization_engine", return_value=engine):
+            response = await async_client.post("/api/normalization/apply-to-channels?dry_run=true")
+
+        assert response.status_code == 200
+        data = response.json()
+        row = next(d for d in data["diffs"] if d["channel_id"] == 1)
+        assert row["collision"] is True
+        assert row["collision_target_id"] == 2
+        assert row["suggested_action"] == "merge"
+
+    @pytest.mark.asyncio
+    async def test_execute_rename_non_collision(self, async_client):
+        """Execute mode with action=rename updates the channel name and journals."""
+        channels = [{"id": 1, "name": "RTL ᴿᴬᵂ", "channel_group_id": 5}]
+        client = self._mock_client(channels)
+        engine = self._mock_engine({"RTL ᴿᴬᵂ": "RTL"})
+
+        with patch("routers.normalization.get_client", return_value=client), \
+             patch("normalization_engine.get_normalization_engine", return_value=engine), \
+             patch("routers.normalization.journal") as mock_journal:
+            response = await async_client.post(
+                "/api/normalization/apply-to-channels?dry_run=false",
+                json={"actions": [{"channel_id": 1, "action": "rename"}]},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["dry_run"] is False
+        assert len(data["renamed"]) == 1
+        assert data["renamed"][0]["new_name"] == "RTL"
+        client.update_channel.assert_awaited_once_with(1, {"name": "RTL"})
+        mock_journal.log_entry.assert_called_once()
+        assert mock_journal.log_entry.call_args.kwargs["action_type"] == "rename"
+
+    @pytest.mark.asyncio
+    async def test_execute_merge_collision(self, async_client):
+        """Execute mode with action=merge moves streams and deletes source."""
+        channels = [
+            {"id": 1, "name": "RTL ᴿᴬᵂ", "channel_group_id": 5, "streams": [10, 11]},
+            {"id": 2, "name": "RTL", "channel_group_id": 5, "streams": [20]},
+        ]
+        client = self._mock_client(channels)
+        # The merge path fetches each channel again for authoritative stream lists
+        client.get_channel.side_effect = [
+            {"id": 1, "name": "RTL ᴿᴬᵂ", "streams": [10, 11]},  # source
+            {"id": 2, "name": "RTL", "streams": [20]},           # target
+        ]
+        engine = self._mock_engine({"RTL ᴿᴬᵂ": "RTL", "RTL": "RTL"})
+
+        with patch("routers.normalization.get_client", return_value=client), \
+             patch("normalization_engine.get_normalization_engine", return_value=engine), \
+             patch("routers.normalization.journal") as mock_journal:
+            response = await async_client.post(
+                "/api/normalization/apply-to-channels?dry_run=false",
+                json={"actions": [{"channel_id": 1, "action": "merge", "merge_target_id": 2}]},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["merged"]) == 1
+        merge_rec = data["merged"][0]
+        assert merge_rec["channel_id"] == 1
+        assert merge_rec["target_id"] == 2
+        assert merge_rec["streams_added"] == 2
+        # Target gets new stream list (original 20 + 10 + 11)
+        client.update_channel.assert_awaited_once_with(2, {"streams": [20, 10, 11]})
+        client.delete_channel.assert_awaited_once_with(1)
+        mock_journal.log_entry.assert_called_once()
+        assert mock_journal.log_entry.call_args.kwargs["action_type"] == "merge"
+
+    @pytest.mark.asyncio
+    async def test_execute_skip_collision(self, async_client):
+        """Execute mode with action=skip leaves the channel alone."""
+        channels = [
+            {"id": 1, "name": "RTL ᴿᴬᵂ", "channel_group_id": 5},
+            {"id": 2, "name": "RTL", "channel_group_id": 5},
+        ]
+        client = self._mock_client(channels)
+        engine = self._mock_engine({"RTL ᴿᴬᵂ": "RTL", "RTL": "RTL"})
+
+        with patch("routers.normalization.get_client", return_value=client), \
+             patch("normalization_engine.get_normalization_engine", return_value=engine), \
+             patch("routers.normalization.journal") as mock_journal:
+            response = await async_client.post(
+                "/api/normalization/apply-to-channels?dry_run=false",
+                json={"actions": [{"channel_id": 1, "action": "skip"}]},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["skipped"]) == 1
+        assert data["renamed"] == []
+        assert data["merged"] == []
+        client.update_channel.assert_not_called()
+        client.delete_channel.assert_not_called()
+        mock_journal.log_entry.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_execute_rename_collision_refused(self, async_client):
+        """Rename into a collision is rejected with an error, not silently overwritten."""
+        channels = [
+            {"id": 1, "name": "RTL ᴿᴬᵂ", "channel_group_id": 5},
+            {"id": 2, "name": "RTL", "channel_group_id": 5},
+        ]
+        client = self._mock_client(channels)
+        engine = self._mock_engine({"RTL ᴿᴬᵂ": "RTL", "RTL": "RTL"})
+
+        with patch("routers.normalization.get_client", return_value=client), \
+             patch("normalization_engine.get_normalization_engine", return_value=engine), \
+             patch("routers.normalization.journal"):
+            response = await async_client.post(
+                "/api/normalization/apply-to-channels?dry_run=false",
+                json={"actions": [{"channel_id": 1, "action": "rename"}]},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["errors"]) == 1
+        assert "collide" in data["errors"][0]["error"].lower()
+        client.update_channel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_preserves_number_prefix(self, async_client):
+        """Channel-number prefix like '107 | ' is preserved across the rename."""
+        channels = [{"id": 1, "name": "107 | RTL ᴿᴬᵂ", "channel_group_id": 5}]
+        client = self._mock_client(channels)
+        # Engine only sees the core name after prefix stripping
+        engine = self._mock_engine({"RTL ᴿᴬᵂ": "RTL"})
+
+        with patch("routers.normalization.get_client", return_value=client), \
+             patch("normalization_engine.get_normalization_engine", return_value=engine):
+            response = await async_client.post("/api/normalization/apply-to-channels?dry_run=true")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["diffs"]) == 1
+        assert data["diffs"][0]["current_name"] == "107 | RTL ᴿᴬᵂ"
+        assert data["diffs"][0]["proposed_name"] == "107 | RTL"
+        assert data["diffs"][0]["channel_number_prefix"] == "107 | "
+
+
+class TestFindChannelByNameNormalizationFallback:
+    """Regression tests for the _find_channel_by_name lookup fix (GH-104 Part 2).
+
+    When no exact match exists but the normalization engine would collapse
+    the search name into a stored channel name, the lookup must find it so
+    auto-creation doesn't build a brand-new duplicate.
+    """
+
+    def _build_executor(self, channels, normalizer):
+        """Create an ActionExecutor wired to a fake normalization engine."""
+        from auto_creation_executor import ActionExecutor
+
+        client = MagicMock()
+        engine = MagicMock()
+
+        def _normalize(name):
+            result = MagicMock()
+            result.normalized = normalizer(name)
+            return result
+
+        engine.normalize.side_effect = _normalize
+        engine.extract_core_name.side_effect = lambda n: normalizer(n)
+        engine.extract_call_sign.return_value = None
+        return ActionExecutor(client, existing_channels=channels, normalization_engine=engine)
+
+    def test_lookup_finds_normalized_existing_channel(self):
+        """Searching for 'RTL ᴿᴬᵂ' finds stored 'RTL' via normalized-search fallback."""
+        # Simulate the bug scenario: a channel already exists with the
+        # already-normalized name ("RTL"), and a new stream arrives with the
+        # un-normalized form ("RTL ᴿᴬᵂ") that should be attached to it rather
+        # than creating a duplicate.
+        channels = [{"id": 42, "name": "RTL"}]
+        executor = self._build_executor(
+            channels,
+            normalizer=lambda n: "RTL" if "RTL" in n else n,
+        )
+        found = executor._find_channel_by_name("RTL ᴿᴬᵂ")
+        assert found is not None
+        assert found["id"] == 42
+
+    def test_lookup_misses_when_no_normalization_overlap(self):
+        """Fallback returns None when the normalized form still doesn't match."""
+        channels = [{"id": 42, "name": "Fox News"}]
+        executor = self._build_executor(
+            channels,
+            normalizer=lambda n: n,  # identity normalizer
+        )
+        assert executor._find_channel_by_name("ESPN") is None
+
+    def test_exact_match_still_wins(self):
+        """Exact match is preferred over the normalization fallback path."""
+        channels = [{"id": 1, "name": "ESPN"}, {"id": 2, "name": "ESPN2"}]
+        executor = self._build_executor(
+            channels,
+            normalizer=lambda n: "ESPN" if "ESPN" in n else n,
+        )
+        found = executor._find_channel_by_name("ESPN2")
+        assert found["id"] == 2  # not 1 — exact match wins

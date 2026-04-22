@@ -2173,6 +2173,30 @@ export async function importNormalizationRulesYaml(yamlContent: string, overwrit
   });
 }
 
+/**
+ * Preview applying enabled normalization rules to every existing channel.
+ * Returns a per-channel diff without mutating anything (GH-104).
+ */
+export async function previewApplyNormalizationToChannels(): Promise<import('../types').ApplyToChannelsDryRunResponse> {
+  return fetchJson(`${API_BASE}/normalization/apply-to-channels?dry_run=true`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+/**
+ * Execute the apply-to-channels flow with per-row actions.
+ * Each action entry selects rename / merge / skip for one channel.
+ */
+export async function executeApplyNormalizationToChannels(
+  actions: import('../types').ApplyToChannelsActionOverride[],
+): Promise<import('../types').ApplyToChannelsExecuteResponse> {
+  return fetchJson(`${API_BASE}/normalization/apply-to-channels?dry_run=false`, {
+    method: 'POST',
+    body: JSON.stringify({ actions }),
+  });
+}
+
 // =============================================================================
 // Tag Engine API
 // =============================================================================
