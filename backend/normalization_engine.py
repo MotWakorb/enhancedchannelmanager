@@ -40,6 +40,7 @@ ECM_NORMALIZATION_UNIFIED_POLICY (default: "true")
 import os
 import re
 import logging
+import time
 import unicodedata
 from typing import Optional
 from dataclasses import dataclass, field
@@ -49,6 +50,18 @@ from sqlalchemy.orm import Session
 from models import NormalizationRule, NormalizationRuleGroup, TagGroup, Tag
 
 logger = logging.getLogger(__name__)
+
+
+# Policy version string emitted into the structured decision log (bd-eio04.9).
+# Bumped when the unified-policy flag flips so on-call can correlate
+# divergence reports with the policy the run was using.
+POLICY_VERSION_UNIFIED = "unified-v1"
+POLICY_VERSION_LEGACY = "legacy"
+
+
+def _current_policy_version(policy_obj: "NormalizationPolicy") -> str:
+    """Return the canonical policy-version tag for the decision log."""
+    return POLICY_VERSION_UNIFIED if policy_obj.unified_enabled else POLICY_VERSION_LEGACY
 
 
 # -----------------------------------------------------------------------------
@@ -1035,6 +1048,13 @@ class NormalizationEngine:
         2026-04-22: numerics convert on every path; there is no
         carve-out for intentional marks like ESPN².
         """
+        # Observability hook (bd-eio04.9) — stamp the start time here so
+        # the decision log captures the full normalize() path including
+        # policy preprocessing + rule loading. The call to
+        # `record_normalization_decision` at the end is deliberately in
+        # a try/finally so the hook never alters the return value when
+        # an exception inside the engine would otherwise surface.
+        _norm_started_at = time.perf_counter()
         result = NormalizationResult(
             original=name,
             normalized=name,
@@ -1081,6 +1101,52 @@ class NormalizationEngine:
             logger.debug("[NORMALIZE] Normalization pass %s: '%s' -> '%s'", pass_num + 1, before_pass, current)
 
         result.normalized = current
+
+        # Observability hook (bd-eio04.9): record a structured decision
+        # for the metrics + sampled INFO log. Import is local so the
+        # module stays importable in environments where observability
+        # is not installed (tests that stub out logging, etc.). The
+        # hook is idempotent and exception-safe — a failure here must
+        # never change the normalize() return value.
+        try:
+            from observability import record_normalization_decision
+
+            elapsed = time.perf_counter() - _norm_started_at
+            policy = get_default_policy()
+            # Best-effort "coarse rule category" for the metric label:
+            # report the action_type of the first transformation when
+            # present, else None so the hook skips the rule_matches
+            # counter. Per-rule-id detail lives in the INFO log.
+            first_action: Optional[str] = None
+            if result.transformations:
+                first_rule_id = result.transformations[0][0]
+                # The rule_id may be the sentinel "legacy_tag" for
+                # settings-based tags; pass through.
+                if first_rule_id == "legacy_tag":
+                    first_action = "legacy_tag"
+                else:
+                    # Resolve rule_id -> action_type from the cached rules.
+                    for _, rules in grouped_rules:
+                        for rule in rules:
+                            if rule.id == first_rule_id:
+                                first_action = rule.action_type
+                                break
+                        if first_action is not None:
+                            break
+
+            record_normalization_decision(
+                input_text=name,
+                output_text=current,
+                matched_rule_ids=list(result.rules_applied),
+                applied=bool(result.rules_applied) or (name != current),
+                policy_version=_current_policy_version(policy),
+                duration_seconds=elapsed,
+                rule_category=first_action,
+                extra={"source": "normalize"},
+            )
+        except Exception:  # pragma: no cover — observability must not break the caller
+            logger.debug("[NORMALIZE] decision-log hook failed", exc_info=True)
+
         return result
 
     def _apply_rules_single_pass(
@@ -1429,6 +1495,32 @@ class NormalizationEngine:
             # Also strip/normalize whitespace for consistency with
             # normalize()'s per-pass cleanup.
             result["after"] = re.sub(r'\s+', ' ', preprocessed_text).strip()
+
+        # Observability hook (bd-eio04.9): emit a decision log for the
+        # Test Rules preview path too, tagged source=test_rule so
+        # SRE can compare the two paths in kibana/loki and catch a
+        # divergence without waiting for the nightly canary.
+        try:
+            from observability import record_normalization_decision
+
+            policy = get_default_policy()
+            applied = bool(match.matched) or result.get("else_applied", False)
+            matched_ids: list = []
+            # test_rule uses a synthetic rule with id=0; surface that
+            # so the log shows the preview path ran a concrete rule.
+            if applied:
+                matched_ids = [0]
+            record_normalization_decision(
+                input_text=text,
+                output_text=result["after"],
+                matched_rule_ids=matched_ids,
+                applied=applied,
+                policy_version=_current_policy_version(policy),
+                rule_category=action_type,
+                extra={"source": "test_rule"},
+            )
+        except Exception:  # pragma: no cover — observability must not break the caller
+            logger.debug("[NORMALIZE] decision-log hook failed in test_rule", exc_info=True)
 
         return result
 
