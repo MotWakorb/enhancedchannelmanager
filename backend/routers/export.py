@@ -1144,8 +1144,10 @@ def _clean_channel_name(name: str, channel_number) -> str:
         try:
             num_val = float(channel_number)
             num_str = str(int(num_val)) if num_val == int(num_val) else str(num_val)
+            # escaped_num is re.escape() of a numeric string — can't contain
+            # regex metacharacters by construction; pattern is fixed-length.
             escaped_num = re.escape(num_str)
-            cleaned = re.sub(rf"^{escaped_num}\s*[-|:]?\s*", "", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(rf"^{escaped_num}\s*[-|:]?\s*", "", cleaned, flags=re.IGNORECASE)  # nosemgrep: no-bare-re-on-dynamic-pattern
         except (ValueError, TypeError):
             pass
     return cleaned.strip() or name
