@@ -3,6 +3,7 @@ OneDrive/SharePoint cloud storage adapter via Microsoft Graph API.
 Uses client credentials (app-only) OAuth2 flow.
 """
 import logging
+import re
 import time
 from pathlib import Path
 
@@ -15,6 +16,66 @@ logger = logging.getLogger(__name__)
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 TOKEN_URL = "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
 
+# Azure AD tenant IDs are either GUIDs (common.onmicrosoft.com case not permitted
+# for app-only flows) or verified domain names such as `contoso.onmicrosoft.com`.
+# Anchored start/end to prevent URL injection (e.g. `evil.com/`, `../`, null bytes).
+_TENANT_ID_RE = re.compile(
+    r"\A(?:"
+    # GUID form
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"|"
+    # DNS domain form (labels separated by dots; each label 1-63 chars, LDH)
+    r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"
+    r"(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*"
+    r")\Z"
+)
+
+# Microsoft Graph drive IDs are base64url-ish identifiers. Accept only
+# characters that appear in real drive IDs; reject path separators, URL
+# schemes, percent-encoding, whitespace, and unicode.
+_DRIVE_ID_RE = re.compile(r"\A[A-Za-z0-9!_\-]{1,128}\Z")
+
+
+def _validate_tenant_id(value: str) -> str:
+    """Validate an Azure AD tenant identifier.
+
+    Accepts GUID form (`00000000-0000-0000-0000-000000000000`) or a DNS
+    domain (`contoso.onmicrosoft.com`). Raises ``ValueError`` otherwise.
+
+    This guards against SSRF via URL injection into the Microsoft
+    Graph OAuth token endpoint (see CodeQL alert 1361).
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError("tenant_id must be a non-empty string")
+    if len(value) > 253:
+        raise ValueError("tenant_id is too long")
+    if not _TENANT_ID_RE.match(value):
+        raise ValueError(
+            "tenant_id must be an Azure AD GUID or verified domain name"
+        )
+    return value
+
+
+def _validate_drive_id(value: str) -> str:
+    """Validate a Microsoft Graph drive identifier.
+
+    Accepts base64url-style identifiers (alnum, ``!``, ``_``, ``-``).
+    Raises ``ValueError`` otherwise.
+
+    This guards against SSRF via URL injection into the Microsoft
+    Graph drives endpoint (see CodeQL alert 1362). Empty is allowed
+    because it selects the app's default drive.
+    """
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str):
+        raise ValueError("drive_id must be a string")
+    if not _DRIVE_ID_RE.match(value):
+        raise ValueError(
+            "drive_id must be a base64url-style Microsoft Graph identifier"
+        )
+    return value
+
 
 class OneDriveAdapter(CloudStorageAdapter):
     """Adapter for OneDrive/SharePoint via Microsoft Graph API.
@@ -22,18 +83,25 @@ class OneDriveAdapter(CloudStorageAdapter):
     Required credentials:
         client_id: Azure AD app client ID
         client_secret: Azure AD app client secret
-        tenant_id: Azure AD tenant ID
+        tenant_id: Azure AD tenant ID (GUID or verified domain)
 
     Optional credentials:
-        drive_id: Specific drive ID (defaults to app's drive)
+        drive_id: Specific drive ID (base64url-style; defaults to app's drive)
         upload_folder_path: Folder path within the drive (default: "/")
+
+    Raises:
+        ValueError: if ``tenant_id`` or ``drive_id`` fail shape validation.
+            This is defense-in-depth; the Pydantic request models at the
+            API boundary reject bad values with HTTP 422 first.
     """
 
     def __init__(self, credentials: dict):
         self.client_id = credentials["client_id"]
         self.client_secret = credentials["client_secret"]
-        self.tenant_id = credentials["tenant_id"]
-        self.drive_id = credentials.get("drive_id") or ""
+        # Validate tenant_id and drive_id before they ever reach URL
+        # construction. See CodeQL alerts 1361 / 1362.
+        self.tenant_id = _validate_tenant_id(credentials["tenant_id"])
+        self.drive_id = _validate_drive_id(credentials.get("drive_id") or "")
         self.folder_path = (credentials.get("upload_folder_path") or "/").strip("/")
         self._token: str | None = None
 

@@ -62,6 +62,12 @@ class ExecutionContext:
     current_channel_id: Optional[int] = None  # Channel created/selected for this stream
     current_group_id: Optional[int] = None  # Group created/selected
 
+    # Channel IDs actually CREATED during this stream's action execution
+    # (not merged-into or matched via fallback). Used by Pass 3 renumber
+    # gating to avoid renumbering foreign channels the rule doesn't own.
+    # See bd-yj5yi (GH-104) — PR #107 regression fix.
+    created_channel_ids: set = field(default_factory=set)
+
     # Custom variables set by set_variable actions
     custom_variables: dict = field(default_factory=dict)
 
@@ -247,7 +253,8 @@ class ActionExecutor:
 
     async def execute(self, action: Action | dict, stream_ctx: StreamContext,
                       exec_ctx: ExecutionContext, rule_target_group_id: int = None,
-                      normalization_group_ids: list[int] = None) -> ActionResult:
+                      normalization_group_ids: list[int] = None,
+                      match_scope_target_group: bool = False) -> ActionResult:
         """
         Execute a single action.
 
@@ -257,6 +264,12 @@ class ActionExecutor:
             exec_ctx: Execution context for tracking results
             rule_target_group_id: Default target group from rule
             normalization_group_ids: List of normalization rule group IDs to apply (empty/None = disabled)
+            match_scope_target_group: When True, restrict existing-channel name
+                lookups in create_channel to channels in the action's effective
+                target group. This allows two rules targeting different groups
+                to create separate channels with the same name instead of
+                merging into the first group's channel (GH-92, bd-r9mtd).
+                Default False preserves pre-GH-92 global-lookup behavior.
 
         Returns:
             ActionResult with execution details
@@ -289,7 +302,8 @@ class ActionExecutor:
         if action_type == ActionType.CREATE_CHANNEL:
             result = await self._execute_create_channel(
                 action, stream_ctx, exec_ctx, template_ctx, rule_target_group_id,
-                normalization_group_ids=normalization_group_ids
+                normalization_group_ids=normalization_group_ids,
+                match_scope_target_group=match_scope_target_group
             )
         elif action_type == ActionType.CREATE_GROUP:
             result = await self._execute_create_group(action, stream_ctx, exec_ctx, template_ctx)
@@ -466,7 +480,8 @@ class ActionExecutor:
     async def _execute_create_channel(self, action: Action, stream_ctx: StreamContext,
                                        exec_ctx: ExecutionContext, template_ctx: dict,
                                        rule_target_group_id: int = None,
-                                       normalization_group_ids: list[int] = None) -> ActionResult:
+                                       normalization_group_ids: list[int] = None,
+                                       match_scope_target_group: bool = False) -> ActionResult:
         """Execute create_channel action."""
         params = action.params
         name_template = params.get("name_template", "{stream_name}")
@@ -510,9 +525,17 @@ class ActionExecutor:
             exec_ctx.current_group_id, rule_target_group_id
         )
 
-        # Check if channel already exists (check with original name before number prefix)
-        existing = self._find_channel_by_name(channel_name)
-        logger.debug("[AUTO-CREATE-EXEC] Lookup '%s': %s", channel_name, 'found id=' + str(existing['id']) if existing else 'not found')
+        # Check if channel already exists (check with original name before number prefix).
+        # When match_scope_target_group is True, restrict the lookup to channels in the
+        # effective target group (GH-92, bd-r9mtd) so that two rules targeting different
+        # groups can create separate channels with the same name.
+        scope_group_id = group_id if match_scope_target_group else None
+        existing = self._find_channel_by_name(channel_name, scope_group_id=scope_group_id)
+        logger.debug(
+            "[AUTO-CREATE-EXEC] Lookup '%s' (scope_group_id=%s): %s",
+            channel_name, scope_group_id,
+            'found id=' + str(existing['id']) if existing else 'not found'
+        )
 
         if existing:
             existing_group_name = self._get_group_name(existing.get("channel_group_id"))
@@ -618,6 +641,7 @@ class ActionExecutor:
                 self._base_name_to_channel[base_name.lower()] = simulated
             self._used_channel_numbers.add(channel_number)
             exec_ctx.current_channel_id = dry_id
+            exec_ctx.created_channel_ids.add(dry_id)
             return ActionResult(
                 success=True,
                 action_type=action.type,
@@ -656,6 +680,7 @@ class ActionExecutor:
             self._used_channel_numbers.add(channel_number)
             self._channel_assigned_numbers[new_channel["id"]] = channel_number
             exec_ctx.current_channel_id = new_channel["id"]
+            exec_ctx.created_channel_ids.add(new_channel["id"])
 
             # Assign default channel profiles if configured
             profile_desc = await self._assign_default_profiles(new_channel["id"])
@@ -2296,32 +2321,97 @@ class ActionExecutor:
             return desc
         return ""
 
-    def _find_channel_by_name(self, name: str) -> Optional[dict]:
+    def _find_channel_by_name(self, name: str, scope_group_id: Optional[int] = None) -> Optional[dict]:
         """Find channel by exact name (case-insensitive).
 
         Also checks the base-name mapping so that a lookup for "USA Network"
         finds a channel created as "4000 | USA Network", and the normalized-name
         mapping so that merge_streams can find channels the same way
         normalized_name_in_group does.
+
+        When a normalization engine is available and no exact match is found,
+        the lookup also normalizes the search name itself and re-queries the
+        channel/core-name indices. This prevents auto-creation from creating
+        duplicate channels when an existing channel was created before
+        normalization rules existed (GH-104 / bd-u9odj).
+
+        When ``scope_group_id`` is not None (enabled by the rule's
+        ``match_scope_target_group`` flag — GH-92 / bd-r9mtd), any candidate
+        channel is filtered to require ``channel_group_id == scope_group_id``.
+        A match in a different group is treated as "not found" so the caller
+        will create a new channel in the desired group instead of merging
+        across groups. Passing ``None`` (default) preserves the prior
+        group-agnostic behavior.
         """
+        def _in_scope(c: Optional[dict]) -> bool:
+            if c is None:
+                return False
+            if scope_group_id is None:
+                return True
+            return c.get("channel_group_id") == scope_group_id
+
         name_lower = name.lower()
         # Check newly created channels first (by exact name)
         if name_lower in self._created_channels:
-            logger.debug("[AUTO-CREATE-EXEC] '%s' found in created channels", name)
-            return self._created_channels[name_lower]
+            cand = self._created_channels[name_lower]
+            if _in_scope(cand):
+                logger.debug("[AUTO-CREATE-EXEC] '%s' found in created channels", name)
+                return cand
         # Check base-name mapping (base name -> number-prefixed channel)
         if name_lower in self._base_name_to_channel:
-            logger.debug("[AUTO-CREATE-EXEC] '%s' found via base-name mapping", name)
-            return self._base_name_to_channel[name_lower]
+            cand = self._base_name_to_channel[name_lower]
+            if _in_scope(cand):
+                logger.debug("[AUTO-CREATE-EXEC] '%s' found via base-name mapping", name)
+                return cand
         result = self._channel_by_name.get(name_lower)
-        if result:
+        if _in_scope(result):
             logger.debug("[AUTO-CREATE-EXEC] '%s' found in existing channels (id=%s)", name, result.get('id'))
             return result
         # Check normalized-name mapping (normalization-engine-processed channel names)
         if name_lower in self._normalized_name_to_channel:
-            result = self._normalized_name_to_channel[name_lower]
-            logger.debug("[AUTO-CREATE-EXEC] '%s' found via normalized-name mapping (id=%s, name='%s')", name, result.get('id'), result.get('name'))
-            return result
+            cand = self._normalized_name_to_channel[name_lower]
+            if _in_scope(cand):
+                logger.debug("[AUTO-CREATE-EXEC] '%s' found via normalized-name mapping (id=%s, name='%s')", name, cand.get('id'), cand.get('name'))
+                return cand
+        # Normalized-name fallback: when the search name isn't an exact match
+        # to any stored channel, normalize it through the engine and retry. This
+        # catches the case where an existing channel's stored name already
+        # equals the normalized form (e.g., stored "RTL", searching for
+        # "RTL ᴿᴬᵂ") — symmetric to the normalized-name map above which
+        # handles the opposite direction.
+        if self._normalization_engine is not None:
+            try:
+                norm = self._normalization_engine.normalize(name)
+                norm_lower = (norm.normalized or "").strip().lower()
+            except Exception as e:
+                logger.warning("[AUTO-CREATE-EXEC] Normalization of lookup name '%s' failed: %s", name, e)
+                norm_lower = ""
+            if norm_lower and norm_lower != name_lower:
+                cand = (
+                    self._channel_by_name.get(norm_lower)
+                    or self._base_name_to_channel.get(norm_lower)
+                    or self._normalized_name_to_channel.get(norm_lower)
+                    or self._core_name_to_channel.get(norm_lower)
+                )
+                if _in_scope(cand):
+                    logger.debug("[AUTO-CREATE-EXEC] '%s' found via normalized-search fallback ('%s' -> '%s', id=%s)",
+                                 name, name, norm_lower, cand.get('id'))
+                    return cand
+            # Core-name fallback: strip tag/country prefixes/suffixes and look
+            # up by core key. Only used when normalized fallback above didn't
+            # produce a hit, so we don't double-count.
+            try:
+                core = self._normalization_engine.extract_core_name(name)
+                core_lower = (core or "").strip().lower()
+            except Exception as e:
+                logger.warning("[AUTO-CREATE-EXEC] Core-name extraction for lookup '%s' failed: %s", name, e)
+                core_lower = ""
+            if core_lower and core_lower != name_lower:
+                cand = self._core_name_to_channel.get(core_lower)
+                if _in_scope(cand):
+                    logger.debug("[AUTO-CREATE-EXEC] '%s' found via core-name fallback (core='%s', id=%s)",
+                                 name, core_lower, cand.get('id'))
+                    return cand
         return None
 
     def _find_channel_by_regex(self, pattern: str) -> Optional[dict]:

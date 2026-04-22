@@ -1159,9 +1159,20 @@ async def list_saved_backups(_admin=RequireAdminIfEnabled):
 @router.get("/saved/{filename}")
 async def download_saved_backup(filename: str, _admin=RequireAdminIfEnabled):
     """Download a saved YAML backup file."""
+    # Layer 1 (defense in depth): strict regex allowlist on filename shape.
     if not _BACKUP_FILENAME_RE.match(filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
-    path = BACKUPS_DIR / filename
+    # Layer 2: canonicalize and verify containment under BACKUPS_DIR.
+    # This closes CodeQL py/path-injection (CWE-22/23/36/73/99) by making
+    # containment explicit — the regex guard alone is not followed by
+    # CodeQL's dataflow tracker. Mirrors zip-restore hardening at lines
+    # 164-167 (commit a591105c).
+    try:
+        safe_root = BACKUPS_DIR.resolve()
+        path = (BACKUPS_DIR / filename).resolve()
+        path.relative_to(safe_root)
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="Invalid filename")
     if not path.exists():
         raise HTTPException(status_code=404, detail="Backup not found")
     content = path.read_text()
@@ -1175,9 +1186,18 @@ async def download_saved_backup(filename: str, _admin=RequireAdminIfEnabled):
 @router.delete("/saved/{filename}", status_code=200)
 async def delete_saved_backup(filename: str, _admin=RequireAdminIfEnabled):
     """Delete a saved YAML backup file."""
+    # Layer 1 (defense in depth): strict regex allowlist on filename shape.
     if not _BACKUP_FILENAME_RE.match(filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
-    path = BACKUPS_DIR / filename
+    # Layer 2: canonicalize and verify containment under BACKUPS_DIR.
+    # See download_saved_backup above for the rationale — this closes
+    # CodeQL py/path-injection findings that the regex alone cannot.
+    try:
+        safe_root = BACKUPS_DIR.resolve()
+        path = (BACKUPS_DIR / filename).resolve()
+        path.relative_to(safe_root)
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="Invalid filename")
     if not path.exists():
         raise HTTPException(status_code=404, detail="Backup not found")
     path.unlink()

@@ -44,6 +44,7 @@ export function RuleBuilder({
   const [normalizationGroupIds, setNormalizationGroupIds] = useState<number[]>(rule?.normalization_group_ids ?? []);
   const [skipStruckStreams, setSkipStruckStreams] = useState(rule?.skip_struck_streams ?? false);
   const [orphanAction, setOrphanAction] = useState(rule?.orphan_action || 'delete');
+  const [matchScopeTargetGroup, setMatchScopeTargetGroup] = useState(rule?.match_scope_target_group ?? false);
   const [conditions, setConditions] = useState<Condition[]>(rule?.conditions || []);
   const [actions, setActions] = useState<Action[]>(rule?.actions || []);
 
@@ -172,6 +173,7 @@ export function RuleBuilder({
         normalization_group_ids: normalizationGroupIds,
         skip_struck_streams: skipStruckStreams,
         orphan_action: orphanAction,
+        match_scope_target_group: matchScopeTargetGroup,
       });
     } finally {
       setSaving(false);
@@ -319,6 +321,19 @@ export function RuleBuilder({
                   aria-label="Skip struck-out streams"
                 />
                 <span>Skip struck-out streams</span>
+              </label>
+              <label
+                className="checkbox-item"
+                title="When enabled, the duplicate-name check for create_channel is restricted to this rule's target group. Two rules targeting different groups can then create separate channels with the same name instead of merging into an existing channel in another group (GH-92)."
+              >
+                <input
+                  type="checkbox"
+                  checked={matchScopeTargetGroup}
+                  onChange={e => setMatchScopeTargetGroup(e.target.checked)}
+                  disabled={isLoading}
+                  aria-label="Scope duplicate-name check to target group"
+                />
+                <span>Scope duplicate-name check to target group</span>
               </label>
             </div>
           </div>

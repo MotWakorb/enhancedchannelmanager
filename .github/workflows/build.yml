@@ -11,6 +11,7 @@ on:
   pull_request:
     branches:
       - main
+      - dev
     paths-ignore:
       - '.beads/**'
       - '**.md'
@@ -95,6 +96,159 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
+
+      # ADR-005 Phase 3b: delta-zero enforcement.
+      # Fails the job on any PR that has open HIGH/CRITICAL CodeQL alerts.
+      # PR-only — push events are post-merge scans of already-reviewed code
+      # and gating them would block everyone on transient alerts.
+      # Code Scanning "merge protection rules" aren't available for our custom
+      # CodeQL setup, so we enforce delta-zero in the workflow itself and
+      # make this job a required status check.
+      - name: Enforce CodeQL delta-zero (fail on open HIGH/CRITICAL)
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          LANGUAGE: ${{ matrix.language }}
+        run: |
+          set -euo pipefail
+
+          # Code Scanning alerts API requires the PR merge ref form for
+          # PR-scoped queries — raw SHA or refs/heads/<branch> returns 0
+          # even when alerts exist. See:
+          # https://docs.github.com/en/rest/code-scanning/code-scanning#list-code-scanning-alerts-for-a-repository
+          REF="refs/pull/${PR_NUMBER}/merge"
+          echo "Checking CodeQL alerts on ref=$REF (PR #${PR_NUMBER}, language=${LANGUAGE})"
+
+          # Two sources of eventual-consistency between codeql-action/analyze
+          # and the alerts view:
+          #  (1) On a NEW PR, after the first scan: alerts-API lags the
+          #      analyses endpoint. Poll for them to appear.
+          #  (2) On a SUBSEQUENT push that FIXES alerts: alerts-API keeps
+          #      returning stale alerts from the prior scan. These stale
+          #      alerts carry a `most_recent_instance.commit_sha` that
+          #      points to the PREVIOUS merge commit, not the current one.
+          #
+          # Solution: pin on the latest analysis commit_sha from the
+          # analyses endpoint (which updates instantly on SARIF upload),
+          # then filter alerts to only those whose
+          # `most_recent_instance.commit_sha` matches that pin. Stale
+          # alerts from prior scans are ignored; new alerts are trusted
+          # only once the analysis pin is current.
+          #
+          # Poll schedule: up to 6 attempts at 10/20/30/45/60/60s waits
+          # (~4min total). Break early as soon as analyses on the CURRENT
+          # merge commit exist for our language (proof the API has caught
+          # up) AND we can filter alerts to that commit.
+          ATTEMPTS=6
+          WAITS=(10 20 30 45 60 60)
+          CURRENT_SHA=""
+          PINNED_ALERTS='[]'
+
+          CURRENT_RESULTS_COUNT=""
+          for i in $(seq 0 $((ATTEMPTS - 1))); do
+            ATTEMPT_NUM=$((i + 1))
+            echo "Attempt ${ATTEMPT_NUM}/${ATTEMPTS}: checking analyses for ref=$REF, language=${LANGUAGE}"
+
+            # Fetch the latest analysis for THIS language on this PR ref.
+            # The analyses endpoint reflects SARIF uploads immediately —
+            # unlike the alerts endpoint, which takes additional time to
+            # update its ref-scoped view. Pinning to this commit_sha lets
+            # us ignore stale alerts from prior scans.
+            LATEST=$(gh api \
+              "/repos/${{ github.repository }}/code-scanning/analyses?ref=${REF}&per_page=20" \
+              | jq --arg lang "/language:${LANGUAGE}" \
+                  '[.[] | select(.category==$lang)] | sort_by(.created_at) | reverse | .[0] // null')
+
+            if [ "${LATEST}" != "null" ] && [ -n "${LATEST}" ]; then
+              CURRENT_SHA=$(echo "${LATEST}" | jq -r '.commit_sha')
+              CREATED_AT=$(echo "${LATEST}" | jq -r '.created_at')
+              CURRENT_RESULTS_COUNT=$(echo "${LATEST}" | jq -r '.results_count')
+              echo "  -> latest analysis for ${LANGUAGE}: commit=${CURRENT_SHA:0:10} created=${CREATED_AT} results=${CURRENT_RESULTS_COUNT}"
+              echo "  -> analysis pin acquired; proceeding to alert check"
+              break
+            fi
+
+            echo "  -> no analyses found yet for ${LANGUAGE}"
+
+            if [ "${ATTEMPT_NUM}" -lt "${ATTEMPTS}" ]; then
+              WAIT=${WAITS[$i]}
+              echo "  -> sleeping ${WAIT}s before retry"
+              sleep "${WAIT}"
+            fi
+          done
+
+          if [ -z "${CURRENT_SHA}" ]; then
+            echo "::error::Could not acquire a CodeQL analysis pin for language=${LANGUAGE} on ref=${REF} after ~4min. SARIF upload did not register. Failing closed."
+            exit 1
+          fi
+
+          # Fast-path: if the analysis itself reports zero findings for
+          # this commit, the scan was clean — no need to poll the alerts
+          # endpoint (which could still be showing stale alerts from
+          # prior scans).
+          if [ "${CURRENT_RESULTS_COUNT}" = "0" ]; then
+            echo "Delta-zero check passed: analysis on ${CURRENT_SHA:0:10} (${LANGUAGE}) reports 0 findings"
+            exit 0
+          fi
+
+          # The analysis reported >0 findings. Now we need to check
+          # severity. Poll the alerts endpoint filtered to alerts whose
+          # most_recent_instance.commit_sha matches our pinned SHA.
+          # Stale alerts (from prior scans on different commits) are
+          # excluded automatically. On a fresh scan, alerts may lag the
+          # analyses endpoint by ~30-60s before appearing.
+          ALERT_ATTEMPTS=4
+          ALERT_WAITS=(10 20 30 45)
+          PINNED_ALERTS='[]'
+          for j in $(seq 0 $((ALERT_ATTEMPTS - 1))); do
+            A_NUM=$((j + 1))
+            echo "Alert poll ${A_NUM}/${ALERT_ATTEMPTS}: querying alerts on ref=${REF} pinned to ${CURRENT_SHA:0:10}"
+            RAW=$(gh api --paginate \
+              "/repos/${{ github.repository }}/code-scanning/alerts?state=open&ref=${REF}&per_page=100" \
+              | jq -s 'add // []')
+
+            TOTAL_RAW=$(echo "$RAW" | jq 'length')
+            PINNED_ALERTS=$(echo "$RAW" | jq --arg sha "${CURRENT_SHA}" \
+              '[.[] | select(.most_recent_instance.commit_sha == $sha)]')
+            PINNED_COUNT=$(echo "$PINNED_ALERTS" | jq 'length')
+
+            echo "  -> alerts on ref: ${TOTAL_RAW} raw, ${PINNED_COUNT} pinned to current SHA"
+
+            # We expect at least some pinned alerts because the analysis
+            # said results_count > 0. Break as soon as they appear.
+            if [ "${PINNED_COUNT}" -gt 0 ]; then
+              echo "  -> pinned alerts visible; decision can be made"
+              break
+            fi
+
+            if [ "${A_NUM}" -lt "${ALERT_ATTEMPTS}" ]; then
+              WAIT=${ALERT_WAITS[$j]}
+              echo "  -> zero pinned alerts despite analysis reporting ${CURRENT_RESULTS_COUNT}; sleeping ${WAIT}s"
+              sleep "${WAIT}"
+            fi
+          done
+
+          # Apply the HIGH/CRITICAL filter to pinned alerts only.
+          HIGH_ALERTS=$(echo "$PINNED_ALERTS" | jq \
+            '[.[] | select(.rule.security_severity_level=="high" or .rule.security_severity_level=="critical") | {number, rule: .rule.id, path: .most_recent_instance.location.path, severity: .rule.security_severity_level}]')
+          HIGH_COUNT=$(echo "$HIGH_ALERTS" | jq 'length')
+
+          echo "Final (language=${LANGUAGE}, pinned to commit ${CURRENT_SHA:0:10}): ${HIGH_COUNT} open HIGH/CRITICAL alerts"
+
+          if [ "${HIGH_COUNT}" -gt 0 ]; then
+            echo "::error::${HIGH_COUNT} open HIGH/CRITICAL CodeQL alerts on this PR:"
+            echo "$HIGH_ALERTS" | jq -r '.[] | "- alert #\(.number) [\(.severity)] \(.rule) at \(.path)"'
+            echo ""
+            echo "Per ADR-005 Phase 1 dismissal policy, these must be either:"
+            echo "  (a) remediated (the fix closes the finding)"
+            echo "  (b) dismissed as false-positive with sanitizer evidence + test reference"
+            echo "  (c) dismissed as test-only with test path reference"
+            echo "See docs/adr/ADR-005-code-security-gating-strategy.md for full policy."
+            exit 1
+          fi
+
+          echo "Delta-zero check passed: 0 open HIGH/CRITICAL alerts on ref=$REF (language=${LANGUAGE})"
 
   # IaC Security Scanning
   iac-security-scan:

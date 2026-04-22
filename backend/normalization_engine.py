@@ -32,9 +32,18 @@ def invalidate_tag_cache():
     clear_abbreviation_cache()
 
 
-# Unicode superscript to ASCII mapping for quality tags
-# Common patterns: ᴴᴰ (HD), ᶠᴴᴰ (FHD), ᵁᴴᴰ (UHD), ᴿᴬᵂ (RAW), ˢᴰ (SD), etc.
-SUPERSCRIPT_MAP = {
+# Unicode superscript to ASCII mapping — split into two maps so callers can
+# independently preserve numeric superscripts (e.g. ESPN²) while still
+# stripping letter-superscripts used as quality tags (ᴴᴰ -> HD,
+# ᴿᴬᵂ -> RAW).
+# See bd-yui1k: PR #61's preserve_superscripts=True short-circuit was too
+# coarse — it preserved both letter AND numeric forms, leaving
+# "ESPN ᴿᴬᵂ" untouched in auto-creation output. PR #61's original
+# intent (commit cea3d98b) was to preserve only intentional marks like ESPN².
+#
+# Common letter patterns used as quality tags:
+#   ᴴᴰ (HD), ᶠᴴᴰ (FHD), ᵁᴴᴰ (UHD), ᴿᴬᵂ (RAW), ˢᴰ (SD), etc.
+LETTER_SUPERSCRIPTS = {
     # Uppercase superscripts
     '\u1d2c': 'A',  # ᴬ
     '\u1d2e': 'B',  # ᴮ
@@ -82,15 +91,53 @@ SUPERSCRIPT_MAP = {
     '\u1dbb': 'z',  # ᶻ
 }
 
+# Numeric and math-symbol superscripts (ESPN², ⁺⁻⁼⁽⁾). Kept separate so
+# callers that pass preserve_numeric=True can retain them while
+# letter-superscripts above are still converted. Prior to this split, NONE
+# of these characters were in the conversion map — PR #61's "preserve"
+# flag worked for ESPN² only by accident (² wasn't in the map).
+NUMERIC_SUPERSCRIPTS = {
+    '\u2070': '0',  # ⁰
+    '\u00b9': '1',  # ¹
+    '\u00b2': '2',  # ²
+    '\u00b3': '3',  # ³
+    '\u2074': '4',  # ⁴
+    '\u2075': '5',  # ⁵
+    '\u2076': '6',  # ⁶
+    '\u2077': '7',  # ⁷
+    '\u2078': '8',  # ⁸
+    '\u2079': '9',  # ⁹
+    '\u207a': '+',  # ⁺
+    '\u207b': '-',  # ⁻
+    '\u207c': '=',  # ⁼
+    '\u207d': '(',  # ⁽
+    '\u207e': ')',  # ⁾
+}
 
-def convert_superscripts(text: str) -> str:
+# Backward-compatible union of both maps. Older callers (and historical
+# imports of `SUPERSCRIPT_MAP`) continue to work and now also convert
+# numeric superscripts when the caller opts in to full conversion.
+SUPERSCRIPT_MAP = {**LETTER_SUPERSCRIPTS, **NUMERIC_SUPERSCRIPTS}
+
+
+def convert_superscripts(text: str, preserve_numeric: bool = False) -> str:
     """
     Convert Unicode superscript characters to their ASCII equivalents.
     This allows quality tags like ᴴᴰ, ᵁᴴᴰ, ᴿᴬᵂ to be matched by normal rules.
+
+    Args:
+        text: Input string.
+        preserve_numeric: When True, letter-superscripts are still converted
+            (ᴴᴰ -> HD, ᴿᴬᵂ -> RAW) but numeric/symbol superscripts
+            (⁰-⁹, ⁺⁻⁼⁽⁾, including ²) are preserved in-place. Used by the
+            auto-creation output path so intentional marks like ESPN² survive
+            while quality-tag letter-superscripts are still stripped
+            (bd-yui1k — supersedes the coarser PR #61 behavior).
     """
+    active_map = LETTER_SUPERSCRIPTS if preserve_numeric else SUPERSCRIPT_MAP
     result = []
     for char in text:
-        result.append(SUPERSCRIPT_MAP.get(char, char))
+        result.append(active_map.get(char, char))
     return ''.join(result)
 
 
@@ -828,9 +875,13 @@ class NormalizationEngine:
             name: The stream name to normalize
             group_ids: Optional list of NormalizationRuleGroup IDs to apply.
                        None = all enabled groups (default behavior).
-            preserve_superscripts: If True, skip Unicode superscript-to-ASCII
-                conversion.  Used when normalizing the *output* channel name
-                so that intentional superscripts (e.g. ESPN²) survive.
+            preserve_superscripts: If True, preserve NUMERIC superscripts
+                (e.g. ESPN² → ESPN²) but STILL convert letter-superscripts
+                used as quality tags (ᴴᴰ → HD, ᴿᴬᵂ → RAW). Used
+                when normalizing the *output* channel name so intentional
+                marks like ESPN² survive while quality-tag cruft gets
+                stripped (bd-yui1k — split replaces PR #61's coarser
+                skip-all-superscripts behavior).
 
         Returns:
             NormalizationResult with original, normalized name, and applied rules
@@ -844,10 +895,11 @@ class NormalizationEngine:
 
         current = name.strip()
 
-        # Convert Unicode superscripts to ASCII (e.g., ᴴᴰ -> HD, ᵁᴴᴰ -> UHD, ᴿᴬᵂ -> RAW)
-        # Skipped when preserve_superscripts=True so intentional chars survive.
-        if not preserve_superscripts:
-            current = convert_superscripts(current)
+        # Convert Unicode superscripts to ASCII (e.g., ᴴᴰ -> HD, ᵁᴴᴰ -> UHD, ᴿᴬᵂ -> RAW).
+        # Always run — preserve_superscripts=True now routes to the
+        # letter-only map so numeric superscripts (ESPN²) survive but
+        # quality-tag letter-superscripts are still stripped.
+        current = convert_superscripts(current, preserve_numeric=preserve_superscripts)
 
         grouped_rules = self._load_rules()
 
