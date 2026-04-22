@@ -15,6 +15,7 @@ from auto_creation_engine import (
     _sort_key,
     _smart_sort_streams,
     _sort_streams_by_m3u_account_priority,
+    _sort_streams_by_resolution_height,
     _reorder_streams_for_rule,
 )
 from auto_creation_evaluator import StreamContext
@@ -773,6 +774,72 @@ class TestPass3RenumberGating:
             f"(call args: {self.client.assign_channel_numbers.await_args_list})"
         )
 
+    @patch("auto_creation_engine.get_session")
+    def test_stream_reorder_runs_on_modified_existing_channel(self, mock_get_session):
+        """
+        Pass 3.5 gating: when a rule merges streams into an existing channel
+        (created=0), stream sorting should still run for that channel.
+        """
+        mock_session = MagicMock()
+        mock_get_session.return_value = mock_session
+
+        streams = [
+            StreamContext(stream_id=201, stream_name="A", m3u_account_id=1, m3u_account_name="P"),
+            StreamContext(stream_id=202, stream_name="B", m3u_account_id=1, m3u_account_name="P"),
+        ]
+
+        rule = self._make_rule(
+            rule_id=2, name="Rule",
+            sort_field=None, starting_channel_number=None,
+            managed_channel_ids=[],  # not pre-run managed
+        )
+        rule.stream_sort_field = "quality"
+        rule.stream_sort_order = "desc"
+
+        # Simulate merge into existing channel 501 (not created).
+        async def _fake_execute(action, stream_ctx, exec_ctx,
+                                rule_target_group_id=None,
+                                normalization_group_ids=None,
+                                match_scope_target_group=False):
+            exec_ctx.current_channel_id = 501
+            return self.ActionResult(
+                success=True,
+                action_type="merge_stream",
+                description="Added stream",
+                entity_type="channel",
+                entity_id=501,
+                entity_name="ch-501",
+                modified=True,
+                created=False,
+            )
+
+        mock_execution = MagicMock()
+        mock_execution.id = 1
+
+        with patch("auto_creation_engine.ActionExecutor") as mock_exec_cls, \
+             patch.object(self.engine, "_reorder_channel_streams", new_callable=AsyncMock) as mock_reorder:
+            mock_executor = MagicMock()
+            mock_executor.execute = AsyncMock(side_effect=_fake_execute)
+            mock_executor.verify_epg_assignments = AsyncMock(return_value=(0, 0, 0))
+            mock_executor.prune_merge_streams = AsyncMock()
+            mock_executor._channel_by_id = {}
+            mock_executor._created_channels = {}
+            mock_exec_cls.return_value = mock_executor
+
+            # Stub engine internals that touch DB/external calls
+            self.engine._refresh_dummy_epg_and_retry = AsyncMock()
+            self.engine._reconcile_orphans = AsyncMock()
+            self.engine._update_rule_stats = AsyncMock()
+
+            asyncio.get_event_loop().run_until_complete(
+                self.engine._process_streams(streams, [rule], mock_execution, dry_run=False)
+            )
+
+        # Pass 3.5 should have been invoked with a channel list containing 501.
+        assert mock_reorder.await_count == 1
+        passed_rule_channel_order = mock_reorder.await_args.args[1]
+        assert passed_rule_channel_order.get(rule.id) == [501]
+
     @patch("auto_creation_engine._auto_rename_after_renumber", new_callable=AsyncMock)
     @patch("auto_creation_engine.get_session")
     def test_renumbers_own_created_channels(self, mock_get_session, mock_rename):
@@ -888,6 +955,89 @@ class TestPass3RenumberGating:
         call_args = self.client.assign_channel_numbers.await_args_list[0]
         assert call_args.args[0] == [301, 302]
         assert call_args.args[1] == 4000
+
+
+class TestAutoCreationEngineStreamReorderLogging:
+    """Tests for Pass 3.5 stream reorder logging."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.update_channel = AsyncMock()
+        self.engine = AutoCreationEngine(self.client)
+
+    @patch("auto_creation_engine._reorder_streams_for_rule")
+    def test_reorder_logs_when_order_unchanged(self, mock_reorder):
+        """If a channel is already sorted, still record a log entry for UI visibility."""
+        rule = MagicMock()
+        rule.id = 1
+        rule.name = "Rule 1"
+        rule.stream_sort_field = "smart_sort"
+        rule.stream_sort_order = "asc"
+
+        channel_id = 123
+        current = [10, 20]
+        self.engine._existing_channels = [{"id": channel_id, "name": "Ch 123", "streams": current}]
+
+        mock_reorder.return_value = current  # unchanged
+
+        results = {"execution_log": [], "dry_run_results": []}
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._reorder_channel_streams(
+                rules=[rule],
+                rule_channel_order={1: [channel_id]},
+                results=results,
+                dry_run=False,
+                settings=MagicMock(),
+                stream_m3u_map={},
+            )
+        )
+
+        self.client.update_channel.assert_not_called()
+        assert len(results["execution_log"]) == 1
+        action = results["execution_log"][0]["actions_executed"][0]
+        assert action["type"] == "reorder_streams"
+        assert action["success"] is True
+        assert "already sorted" in action["description"]
+
+
+class TestAutoCreationEngineStreamReorderUsesChannelNames:
+    """Regression: name-based stream sorting should work without probe stats rows."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.update_channel = AsyncMock()
+        self.engine = AutoCreationEngine(self.client)
+        self.engine._stream_stats_cache = {}  # no probe stats
+
+    def test_stream_name_sort_uses_channel_stream_names(self):
+        rule = MagicMock()
+        rule.id = 1
+        rule.name = "Rule 1"
+        rule.stream_sort_field = "stream_name"
+        rule.stream_sort_order = "asc"
+
+        channel_id = 10
+        # Unsorted by name: Bravo, Alpha
+        self.engine._existing_channels = [{
+            "id": channel_id,
+            "name": "Test Channel",
+            "streams": [{"id": 2, "name": "Bravo"}, {"id": 1, "name": "Alpha"}],
+        }]
+
+        results = {"execution_log": [], "dry_run_results": []}
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._reorder_channel_streams(
+                rules=[rule],
+                rule_channel_order={1: [channel_id]},
+                results=results,
+                dry_run=False,
+                settings=MagicMock(),
+                stream_m3u_map={},
+            )
+        )
+
+        # Should reorder to Alpha, Bravo (ids 1,2) and persist via API.
+        self.client.update_channel.assert_awaited_once_with(channel_id, {"streams": [1, 2]})
 
 
 class TestAutoCreationEngineExecutionTracking:
@@ -1182,6 +1332,24 @@ class TestStreamReorderByRule:
             [100, 101], rule, {}, stream_m3u_map, "Ch", settings
         )
         assert out == [101, 100]
+
+
+class TestQualitySortDeprioritization:
+    """Quality (resolution) sort should respect deprioritization settings."""
+
+    def test_quality_sort_pushes_black_screen_below_good_streams(self):
+        settings = MagicMock()
+        settings.deprioritize_failed_streams = True
+        settings.failed_stream_sort_order = ["black_screen", "low_fps", "failed"]
+
+        # Stream 1: 1080p but black screen
+        # Stream 2: 720p good
+        stats_cache = {
+            1: {"resolution": "1920x1080", "probe_status": "success", "is_black_screen": True, "is_low_fps": False},
+            2: {"resolution": "1280x720", "probe_status": "success", "is_black_screen": False, "is_low_fps": False},
+        }
+        out = _sort_streams_by_resolution_height([1, 2], stats_cache, settings, "desc", "Ch")
+        assert out == [2, 1]
 
 
 class TestSortKey:
