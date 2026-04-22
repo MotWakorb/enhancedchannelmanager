@@ -12,6 +12,7 @@ Syntax covered:
 """
 import pytest
 
+import safe_regex
 from template_engine import (
     TemplateEngine,
     TemplateSyntaxError,
@@ -210,9 +211,12 @@ class TestGuards:
         assert len(out) <= TemplateEngine.MAX_INPUT_LEN
 
     def test_regex_length_capped_in_conditional(self):
-        # A regex longer than the cap disables the conditional (evaluates false)
-        # rather than raising, so a single bad user config doesn't crash pipeline.
-        huge_regex = "(" + "a?" * (TemplateEngine.MAX_REGEX_LEN // 2 + 10) + ")" + "a" * 20
+        # A regex longer than the safe_regex cap disables the conditional
+        # (evaluates false) rather than raising, so a single bad user config
+        # doesn't crash pipeline. The cap now lives in safe_regex —
+        # template_engine no longer has its own MAX_REGEX_LEN.
+        cap = safe_regex.DEFAULT_MAX_PATTERN_LEN
+        huge_regex = "(" + "a?" * (cap // 2 + 10) + ")" + "a" * 20
         tpl = "{if:x~" + huge_regex + "}match{/if}"
         assert render(tpl, {"x": "a" * 20}) == ""
 
@@ -312,3 +316,53 @@ class TestTemplateEngineClass:
         engine = TemplateEngine(lookups={"tbl": {"a": "from-instance"}})
         out = engine.render("{k|lookup:tbl}", {"k": "a"}, lookups={"tbl": {"a": "from-call"}})
         assert out == "from-call"
+
+
+# ----------------------------------------------------------------------------
+# bd-eio04.16 — ReDoS resilience in {if:x~regex} conditionals.
+#
+# The migrated call site routes user-supplied regex through
+# safe_regex.compile + safe_regex.search. Adversarial patterns must not hang
+# XMLTV rendering; the conditional collapses to false.
+# ----------------------------------------------------------------------------
+
+import time
+
+
+class TestRegexConditionalRedosResilience:
+    _ADVERSARIAL_PATTERN = r"(a+)+b"
+    _GENUINE_REDOS_PATTERN = r"(a|aa)+b"
+    _ADVERSARIAL_TEXT = "a" * 30 + "!"
+    _WALL_CLOCK_BUDGET_MS = 500
+
+    def test_adversarial_pattern_condition_is_false_within_budget(self):
+        """{if:name~(a+)+b} against a long input collapses to false without
+        stalling the render."""
+        tpl = "before-{if:name~" + self._ADVERSARIAL_PATTERN + "}MATCH{/if}-after"
+        start = time.monotonic()
+        out = render(tpl, {"name": self._ADVERSARIAL_TEXT})
+        elapsed_ms = (time.monotonic() - start) * 1000
+        assert out == "before--after"
+        assert elapsed_ms < self._WALL_CLOCK_BUDGET_MS, f"elapsed {elapsed_ms:.1f}ms"
+
+    def test_genuine_redos_pattern_condition_is_false_within_budget(self):
+        """Genuine catastrophic-backtracking pattern exercises the safe_regex
+        timeout path; conditional still evaluates to false."""
+        tpl = "ok-{if:name~" + self._GENUINE_REDOS_PATTERN + "}HIT{/if}-done"
+        start = time.monotonic()
+        out = render(tpl, {"name": self._ADVERSARIAL_TEXT})
+        elapsed_ms = (time.monotonic() - start) * 1000
+        assert out == "ok--done"
+        assert elapsed_ms < self._WALL_CLOCK_BUDGET_MS, f"elapsed {elapsed_ms:.1f}ms"
+
+    def test_trace_mode_reports_regex_kind_on_adversarial_pattern(self):
+        """When tracing is on, the adversarial-pattern conditional still
+        reports kind_detail='regex' and taken=False — the UI can show the
+        regex was not usable."""
+        engine = TemplateEngine()
+        tpl = "{if:name~" + self._GENUINE_REDOS_PATTERN + "}HIT{/if}"
+        _, trace = engine.render_with_trace(tpl, {"name": self._ADVERSARIAL_TEXT})
+        conds = [t for t in trace if t["kind"] == "conditional"]
+        assert len(conds) == 1
+        assert conds[0]["kind_detail"] == "regex"
+        assert conds[0]["taken"] is False
