@@ -210,6 +210,11 @@ export interface AutoCreationRule {
   normalization_group_ids?: number[];
   skip_struck_streams?: boolean;
   orphan_action?: 'delete' | 'move_uncategorized' | 'delete_and_cleanup_groups' | 'none';
+  // When true, the executor's existing-channel name lookup during
+  // create_channel is scoped to the rule's target group so two rules
+  // targeting different groups can create separate channels with the
+  // same name instead of merging into a foreign group (GH-92).
+  match_scope_target_group?: boolean;
   last_run_at?: string;
   match_count: number;
   created_at: string;
@@ -239,6 +244,7 @@ export interface CreateRuleData {
   normalization_group_ids?: number[];
   skip_struck_streams?: boolean;
   orphan_action?: string;
+  match_scope_target_group?: boolean;
 }
 
 /**
