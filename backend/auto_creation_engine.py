@@ -1296,7 +1296,11 @@ class AutoCreationEngine:
                     for a in actions_log
                 )
                 if owned_by_this_rule or modified_this_run:
-                    rule_channel_order_streams[winning_rule.id].append(cid)
+                    # Avoid duplicates when multiple matched streams touch the same channel.
+                    # Preserve first-seen order (mirrors later dict.fromkeys de-dupe, but keeps
+                    # the intermediate structure stable for tests and debug logging).
+                    if cid not in rule_channel_order_streams[winning_rule.id]:
+                        rule_channel_order_streams[winning_rule.id].append(cid)
 
             if stop_processing:
                 break
