@@ -826,7 +826,12 @@ class AutoCreationEngine:
         )
 
         # Create normalization engine if any rule uses normalization_group_ids
-        # or if any condition needs it (normalized_name_in_group)
+        # or if any condition needs it (normalized_name_in_group).
+        # Also create it if any NormalizationRuleGroup is enabled in the DB so
+        # the executor's normalized-name/core-name indices are available for
+        # _find_channel_by_name lookups — this prevents auto-creation from
+        # creating duplicate channels when an existing channel's name would
+        # collapse to the same normalized form (GH-104 / bd-u9odj).
         norm_engine = None
         needs_norm = any(r.get_normalization_group_ids() for r in rules)
         if not needs_norm:
@@ -840,6 +845,24 @@ class AutoCreationEngine:
                         break
                 if needs_norm:
                     break
+        if not needs_norm:
+            # Fall back to DB: any enabled group means lookups should consult
+            # the normalized indices even if no rule explicitly opts in.
+            try:
+                from models import NormalizationRuleGroup
+                session = get_session()
+                try:
+                    has_enabled_group = session.query(
+                        NormalizationRuleGroup
+                    ).filter(
+                        NormalizationRuleGroup.enabled == True  # noqa: E712 — SQLA needs ==
+                    ).first() is not None
+                finally:
+                    session.close()
+                if has_enabled_group:
+                    needs_norm = True
+            except Exception as e:
+                logger.warning("[AUTO-CREATE-ENGINE] Failed to probe enabled normalization groups: %s", e)
         if needs_norm:
             try:
                 from normalization_engine import get_normalization_engine
@@ -1079,6 +1102,18 @@ class AutoCreationEngine:
         # Track channel IDs per rule in sorted order (for Pass 3 renumber + Pass 3.5 stream reorder)
         rule_channel_order = defaultdict(list)  # rule_id -> [channel_id, ...] in sorted order
 
+        # Snapshot each rule's pre-run managed channel set. Used to gate the
+        # rule_channel_order append so Pass 3's renumber only touches channels
+        # this rule actually owns: either created this run OR already managed
+        # by this rule prior to the run. A channel matched into via the
+        # normalized-name fallback (PR #107) that belongs to a DIFFERENT rule
+        # must NOT be added, or Pass 3 will renumber foreign groups.
+        # See bd-yj5yi / GH-104 regression.
+        pre_run_managed_ids: dict[int, set[int]] = {
+            rule.id: set(rule.get_managed_channel_ids() or [])
+            for rule in rules
+        }
+
         # =====================================================================
         # Pass 2: Execute actions on sorted matches
         # =====================================================================
@@ -1134,7 +1169,8 @@ class AutoCreationEngine:
 
                 action_result = await executor.execute(
                     action, stream, exec_ctx, winning_rule.target_group_id,
-                    normalization_group_ids=winning_rule.get_normalization_group_ids()
+                    normalization_group_ids=winning_rule.get_normalization_group_ids(),
+                    match_scope_target_group=bool(getattr(winning_rule, 'match_scope_target_group', False))
                 )
 
                 action_entry = {
@@ -1184,9 +1220,27 @@ class AutoCreationEngine:
             results["modified_entities"].extend(exec_ctx.modified_entities)
             results["probe_stream_ids"].update(exec_ctx.probe_stream_ids)
 
-            # Track channel ID for Pass 3 renumber + Pass 3.5 stream reorder
+            # Track channel ID for Pass 3 renumber + Pass 3.5 stream reorder.
+            # Only include channels this rule actually OWNS — either just
+            # created this run, or already in the rule's pre-run managed set.
+            # This prevents Pass 3 from renumbering foreign-group channels
+            # that were matched via the normalized-name fallback introduced
+            # in PR #107 (bd-yj5yi / GH-104).
             if exec_ctx.current_channel_id:
-                rule_channel_order[winning_rule.id].append(exec_ctx.current_channel_id)
+                cid = exec_ctx.current_channel_id
+                owned_by_this_rule = (
+                    cid in exec_ctx.created_channel_ids
+                    or cid in pre_run_managed_ids.get(winning_rule.id, set())
+                )
+                if owned_by_this_rule:
+                    rule_channel_order[winning_rule.id].append(cid)
+                else:
+                    logger.debug(
+                        "[AUTO-CREATE-ENGINE] Rule '%s': skipping Pass 3 append for "
+                        "channel_id=%s — matched via fallback into foreign/unmanaged "
+                        "channel (not created this run, not pre-run managed)",
+                        winning_rule.name, cid
+                    )
 
             if stop_processing:
                 break

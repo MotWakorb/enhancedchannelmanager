@@ -51,6 +51,7 @@ class CreateAutoCreationRuleRequest(BaseModel):
     normalization_group_ids: list[int] = []
     skip_struck_streams: bool = False
     orphan_action: str = "delete"
+    match_scope_target_group: bool = False
 
 
 class UpdateAutoCreationRuleRequest(BaseModel):
@@ -74,6 +75,7 @@ class UpdateAutoCreationRuleRequest(BaseModel):
     normalization_group_ids: Optional[list[int]] = None
     skip_struck_streams: Optional[bool] = None
     orphan_action: Optional[str] = None
+    match_scope_target_group: Optional[bool] = None
 
 
 class BulkUpdateAutoCreationRulesRequest(UpdateAutoCreationRuleRequest):
@@ -146,6 +148,8 @@ def _apply_rule_scalar_updates(rule, request: UpdateAutoCreationRuleRequest) -> 
         rule.skip_struck_streams = request.skip_struck_streams
     if request.orphan_action is not None:
         rule.orphan_action = request.orphan_action
+    if getattr(request, "match_scope_target_group", None) is not None:
+        rule.match_scope_target_group = request.match_scope_target_group
 
 
 def _resolve_normalization_group_ids(rule_data: dict, session) -> str | None:
@@ -261,7 +265,8 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
                 stream_sort_order=request.stream_sort_order,
                 normalization_group_ids=json.dumps(request.normalization_group_ids) if request.normalization_group_ids else None,
                 skip_struck_streams=request.skip_struck_streams,
-                orphan_action=request.orphan_action
+                orphan_action=request.orphan_action,
+                match_scope_target_group=request.match_scope_target_group
             )
             session.add(rule)
             session.commit()
@@ -544,7 +549,8 @@ async def duplicate_auto_creation_rule(rule_id: int):
                 skip_struck_streams=rule.skip_struck_streams,
                 probe_on_sort=rule.probe_on_sort,
                 sort_regex=rule.sort_regex,
-                orphan_action=rule.orphan_action
+                orphan_action=rule.orphan_action,
+                match_scope_target_group=rule.match_scope_target_group
             )
             session.add(new_rule)
             session.commit()
@@ -799,7 +805,8 @@ async def export_auto_creation_rules_yaml():
                     "normalization_group_ids": rule.get_normalization_group_ids(),
                     "skip_struck_streams": rule.skip_struck_streams or False,
                     "probe_on_sort": rule.probe_on_sort or False,
-                    "orphan_action": rule.orphan_action or "delete"
+                    "orphan_action": rule.orphan_action or "delete",
+                    "match_scope_target_group": rule.match_scope_target_group or False
                 }
 
                 # Add group_name to actions that have group_id
@@ -964,6 +971,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         existing.skip_struck_streams = rule_data.get("skip_struck_streams", False)
                         existing.probe_on_sort = rule_data.get("probe_on_sort", False)
                         existing.orphan_action = rule_data.get("orphan_action", "delete")
+                        existing.match_scope_target_group = rule_data.get("match_scope_target_group", False)
                         logger.debug("[AUTO-CREATE-YAML] Rule '%s': updated existing (id=%s), stored actions=%s", rule_name, existing.id, existing.actions)
                         imported.append({"name": existing.name, "action": "updated"})
                     else:
@@ -994,7 +1002,8 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         normalization_group_ids=_resolve_normalization_group_ids(rule_data, session),
                         skip_struck_streams=rule_data.get("skip_struck_streams", False),
                         probe_on_sort=rule_data.get("probe_on_sort", False),
-                        orphan_action=rule_data.get("orphan_action", "delete")
+                        orphan_action=rule_data.get("orphan_action", "delete"),
+                        match_scope_target_group=rule_data.get("match_scope_target_group", False)
                     )
                     session.add(rule)
                     logger.debug("[AUTO-CREATE-YAML] Rule '%s': created new, stored actions=%s", rule_name, rule.actions)

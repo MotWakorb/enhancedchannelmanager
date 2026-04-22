@@ -540,6 +540,124 @@ class TestActionExecutorCreateChannel:
         assert call_args["name"] == "ESPN News (1080p)"
 
 
+class TestCreateChannelNormalizationLookup:
+    """Regression tests for GH-104 Part 2: the create_channel action must not
+    create a duplicate channel when an existing channel's name would collapse
+    to the same normalized form as the stream being processed.
+    """
+
+    def _make_engine(self, mapping):
+        """Fake normalization engine that maps names via ``mapping``."""
+        engine = MagicMock()
+
+        def _normalize(name, *args, **kwargs):
+            result = MagicMock()
+            result.normalized = mapping.get(name, name)
+            result.transformations = []
+            return result
+
+        engine.normalize.side_effect = _normalize
+        engine.extract_core_name.side_effect = lambda n: mapping.get(n, n)
+        engine.extract_call_sign.return_value = None
+        return engine
+
+    def test_attaches_to_normalized_existing_instead_of_creating_duplicate(self):
+        """Stream 'RTL ᴿᴬᵂ' attaches to existing 'RTL' via normalized lookup."""
+        from auto_creation_executor import ActionExecutor
+
+        client = MagicMock()
+        client.update_channel = AsyncMock()
+        client.create_channel = AsyncMock()
+
+        # Existing channel already stored under the normalized name.
+        existing = [{"id": 42, "name": "RTL", "streams": [], "channel_group_id": 5}]
+        engine = self._make_engine({"RTL ᴿᴬᵂ": "RTL", "RTL": "RTL"})
+        executor = ActionExecutor(client, existing_channels=existing,
+                                  normalization_engine=engine)
+
+        stream_ctx = StreamContext(
+            stream_id=77,
+            stream_name="RTL ᴿᴬᵂ",
+            m3u_account_id=1,
+            m3u_account_name="Provider",
+            group_name="DE",
+            tvg_id=None,
+            resolution_height=None,
+            logo_url=None,
+        )
+
+        action = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+            "if_exists": "merge",
+            # normalize_names=False on this rule on purpose — the fix should
+            # still prevent the duplicate via the lookup fallback.
+        }
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext())
+        )
+
+        assert result.success is True
+        # Must NOT create a brand-new duplicate channel.
+        client.create_channel.assert_not_called()
+        # Must attach the stream to the existing channel instead.
+        client.update_channel.assert_called()
+        updated_id = client.update_channel.call_args[0][0]
+        assert updated_id == 42
+
+    def test_number_prefix_rename_path_still_fires(self):
+        """The existing rename path at executor.py:517-539 still triggers
+        when ``normalization_group_ids`` is non-empty and the channel has a
+        number prefix whose core differs from the normalized incoming name
+        ('107 | RTL ᴿᴬᵂ' stays number-prefixed as '107 | RTL')."""
+        from auto_creation_executor import ActionExecutor
+
+        client = MagicMock()
+        client.update_channel = AsyncMock(return_value={})
+        client.create_channel = AsyncMock()
+
+        existing = [{"id": 7, "name": "107 | RTL ᴿᴬᵂ", "channel_number": 107,
+                     "streams": [], "channel_group_id": 5}]
+        engine = self._make_engine({"RTL ᴿᴬᵂ": "RTL", "RTL": "RTL",
+                                     "107 | RTL ᴿᴬᵂ": "107 | RTL"})
+        executor = ActionExecutor(client, existing_channels=existing,
+                                  normalization_engine=engine)
+
+        stream_ctx = StreamContext(
+            stream_id=77,
+            stream_name="RTL ᴿᴬᵂ",
+            m3u_account_id=1,
+            m3u_account_name="Provider",
+            group_name="DE",
+            tvg_id=None,
+            resolution_height=None,
+            logo_url=None,
+        )
+
+        action = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+            "if_exists": "merge",
+        }
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext(),
+                             normalization_group_ids=[1])
+        )
+
+        assert result.success is True
+        client.create_channel.assert_not_called()
+        # update_channel is called at least for the rename; may also be called
+        # to attach the stream. Verify the rename call happened.
+        rename_calls = [
+            c for c in client.update_channel.call_args_list
+            if c[0][0] == 7 and "name" in c[0][1]
+        ]
+        assert len(rename_calls) >= 1
+        assert rename_calls[0][0][1]["name"] == "107 | RTL"
+
+
 class TestActionExecutorCreateGroup:
     """Tests for create_group action."""
 
@@ -1691,3 +1809,269 @@ class TestVerifyEpgAssignments:
             executor.verify_epg_assignments()
         )
         assert (ok, patched, failed) == (0, 0, 1)
+
+
+class TestMatchScopeTargetGroup:
+    """Regression tests for GH-92 / bd-r9mtd: ``match_scope_target_group``.
+
+    When two rules with different target groups produce the same channel name
+    (e.g., both produce "ESPN"), the default (group-agnostic) lookup merges the
+    second stream into the first rule's channel. With
+    ``match_scope_target_group=True``, the lookup is scoped to the rule's
+    target group, so each rule creates a separate channel in its own group.
+    """
+
+    def setup_method(self):
+        """Set up executor with two groups and an existing ESPN channel in group 1."""
+        self.client = MagicMock()
+        # Return a distinguishable new channel each time create_channel is called.
+        self._next_id = 500
+        async def _create_channel(data):
+            self._next_id += 1
+            return {
+                "id": self._next_id,
+                "name": data["name"],
+                "channel_number": data.get("channel_number"),
+                "channel_group_id": data.get("channel_group_id"),
+                "streams": data.get("streams", []),
+            }
+        self.client.create_channel = AsyncMock(side_effect=_create_channel)
+        self.client.update_channel = AsyncMock()
+
+        # Group 1 = SPORTS with an existing "ESPN" channel (simulates rule A
+        # having already created one). Group 2 = ESPN-GROUP, empty.
+        self.channels = [
+            {"id": 1, "name": "ESPN", "channel_number": 100,
+             "channel_group_id": 1, "streams": [101]},
+        ]
+        self.groups = [
+            {"id": 1, "name": "SPORTS"},
+            {"id": 2, "name": "ESPN-GROUP"},
+        ]
+        self.executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            existing_groups=self.groups,
+        )
+
+        self.stream_ctx = StreamContext(
+            stream_id=202,
+            stream_name="ESPN",
+            m3u_account_id=1,
+            m3u_account_name="Provider A",
+            group_name="ESPN-GROUP",
+            tvg_id="ESPN.US",
+        )
+
+    def test_find_channel_by_name_honors_scope_group_id(self):
+        """Scope filter excludes channels in other groups."""
+        in_scope = self.executor._find_channel_by_name("ESPN", scope_group_id=1)
+        assert in_scope is not None and in_scope["id"] == 1
+
+        out_of_scope = self.executor._find_channel_by_name("ESPN", scope_group_id=2)
+        assert out_of_scope is None
+
+        # None (default) preserves backwards-compat global lookup
+        any_group = self.executor._find_channel_by_name("ESPN")
+        assert any_group is not None and any_group["id"] == 1
+
+    def test_default_merges_across_groups(self):
+        """Without the flag, a rule targeting group 2 merges into group 1's ESPN (GH-92 bug).
+
+        This documents the pre-fix behavior — proves the flag is needed.
+        """
+        action = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+            "if_exists": "merge",
+        }
+        exec_ctx = ExecutionContext()
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(
+                action, self.stream_ctx, exec_ctx,
+                rule_target_group_id=2,
+                match_scope_target_group=False,
+            )
+        )
+        # With flag OFF, the second rule merges into the group 1 ESPN —
+        # update_channel is called, create_channel is NOT.
+        assert result.success is True
+        self.client.create_channel.assert_not_called()
+        self.client.update_channel.assert_called()
+
+    def test_scope_creates_separate_channel_in_target_group(self):
+        """With the flag ON, rule B creates a new ESPN in group 2 instead of merging.
+
+        This is the GH-92 regression scenario: two rules, same channel name,
+        different target groups — each should produce its own channel.
+        """
+        action = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+            "if_exists": "merge",
+        }
+        exec_ctx = ExecutionContext()
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(
+                action, self.stream_ctx, exec_ctx,
+                rule_target_group_id=2,
+                match_scope_target_group=True,
+            )
+        )
+        assert result.success is True
+        assert result.created is True
+        # A brand-new channel was created in group 2 — NOT a merge into group 1.
+        self.client.create_channel.assert_called_once()
+        call_args = self.client.create_channel.call_args[0][0]
+        assert call_args["name"] == "ESPN"
+        assert call_args["channel_group_id"] == 2
+        # And the existing group-1 channel was left alone
+        self.client.update_channel.assert_not_called()
+
+    def test_scope_matches_when_same_target_group(self):
+        """Flag ON, same target group as existing channel → still merges.
+
+        The flag only prevents cross-group merges; within the same group, an
+        existing channel with the same name is still the "already exists" case
+        and the rule's ``if_exists`` setting applies.
+        """
+        action = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+            "if_exists": "skip",
+        }
+        exec_ctx = ExecutionContext()
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(
+                action, self.stream_ctx, exec_ctx,
+                rule_target_group_id=1,  # same group as existing ESPN
+                match_scope_target_group=True,
+            )
+        )
+        assert result.success is True
+        assert result.skipped is True
+        assert result.entity_id == 1
+        self.client.create_channel.assert_not_called()
+
+
+
+class TestCreateChannelSuperscriptStripping:
+    """
+    bd-yui1k: auto-creation _execute_create_channel with a real
+    normalization engine must strip letter-superscripts (ᴿᴬᵂ -> RAW)
+    from the created channel name even when preserve_superscripts=True.
+    Numeric superscripts (²) must still survive.
+
+    End-to-end coverage: uses the real NormalizationEngine against an
+    in-memory test session so the full normalize() -> convert_superscripts()
+    -> create_channel path is exercised, not mocked.
+    """
+
+    def test_raw_letter_superscripts_stripped_in_created_channel_name(self, test_session):
+        """Stream 'Foo ᴿᴬᵂ' creates channel 'Foo' (ᴿᴬᵂ stripped)."""
+        from auto_creation_executor import ActionExecutor, ExecutionContext
+        from normalization_engine import NormalizationEngine
+        from tests.fixtures.factories import create_normalization_rule_group
+
+        # Real engine, real session; the rule group just needs to exist so
+        # the group_ids filter finds it — the superscript conversion itself
+        # happens before DB rules apply.
+        group = create_normalization_rule_group(
+            test_session, name="noop", enabled=True,
+        )
+        engine = NormalizationEngine(test_session)
+
+        client = MagicMock()
+        client.create_channel = AsyncMock(return_value={"id": 77, "name": "Foo"})
+
+        executor = ActionExecutor(
+            client,
+            existing_channels=[],
+            existing_groups=[],
+            normalization_engine=engine,
+        )
+
+        stream_ctx = StreamContext(
+            stream_id=101,
+            stream_name="Foo ᴿᴬᵂ",  # Foo ᴿᴬᵂ
+            m3u_account_id=1,
+            m3u_account_name="Provider",
+            group_name="Test",
+            tvg_id=None,
+            resolution_height=None,
+            logo_url=None,
+        )
+
+        action = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+        }
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(
+                action, stream_ctx, ExecutionContext(),
+                normalization_group_ids=[group.id],
+            )
+        )
+
+        assert result.success is True
+        assert result.created is True
+        # The POSTed channel name must NOT contain the letter-superscripts
+        client.create_channel.assert_called_once()
+        posted = client.create_channel.call_args[0][0]
+        assert "ᴿ" not in posted["name"]  # ᴿ
+        assert "ᴬ" not in posted["name"]  # ᴬ
+        assert "ᵂ" not in posted["name"]  # ᵂ
+        assert posted["name"] == "Foo RAW"
+
+    def test_numeric_superscripts_preserved_in_created_channel_name(self, test_session):
+        """Stream 'ESPN²' creates channel 'ESPN²' (² preserved)."""
+        from auto_creation_executor import ActionExecutor, ExecutionContext
+        from normalization_engine import NormalizationEngine
+        from tests.fixtures.factories import create_normalization_rule_group
+
+        group = create_normalization_rule_group(
+            test_session, name="noop2", enabled=True,
+        )
+        engine = NormalizationEngine(test_session)
+
+        client = MagicMock()
+        client.create_channel = AsyncMock(return_value={"id": 78, "name": "ESPN²"})
+
+        executor = ActionExecutor(
+            client,
+            existing_channels=[],
+            existing_groups=[],
+            normalization_engine=engine,
+        )
+
+        stream_ctx = StreamContext(
+            stream_id=102,
+            stream_name="ESPN²",
+            m3u_account_id=1,
+            m3u_account_name="Provider",
+            group_name="Sports",
+            tvg_id=None,
+            resolution_height=None,
+            logo_url=None,
+        )
+
+        action = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+        }
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(
+                action, stream_ctx, ExecutionContext(),
+                normalization_group_ids=[group.id],
+            )
+        )
+
+        assert result.success is True
+        client.create_channel.assert_called_once()
+        posted = client.create_channel.call_args[0][0]
+        assert posted["name"] == "ESPN²"
