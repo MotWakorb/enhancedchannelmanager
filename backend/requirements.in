@@ -23,6 +23,9 @@ aiofiles>=23.0.0
 croniter>=2.0.0
 aiohttp>=3.9.0
 
+# ReDoS-guarded regex wrapper (backend/safe_regex.py, bd-eio04.5)
+regex>=2024.5.15
+
 # Observability — Prometheus metrics exposition
 prometheus-client>=0.20.0
 
