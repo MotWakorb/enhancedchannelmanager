@@ -10,6 +10,8 @@ import logging
 from typing import Optional
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+
+import safe_regex
 from auto_creation_schema import Condition, ConditionType
 
 
@@ -264,7 +266,13 @@ class ConditionEvaluator:
                 return f"({'|'.join(dates)})"
             except ValueError:
                 return match.group(0)
-        return re.sub(pattern, replace_match, text)
+        # bd-eio04.15: route through safe_regex for ReDoS protection. The
+        # pattern here is a module-literal; the wrapped call still provides
+        # defense-in-depth because 'text' is user-supplied (rule condition
+        # strings). On timeout, safe_regex.sub returns 'text' unchanged,
+        # which means placeholders simply aren't expanded — an acceptable
+        # degradation that preserves the caller's downstream flow.
+        return safe_regex.sub(pattern, replace_match, text)
 
     def evaluate(self, condition: Condition | dict, context: StreamContext) -> EvaluationResult:
         """
@@ -498,12 +506,22 @@ class ConditionEvaluator:
 
         try:
             flags = 0 if case_sensitive else re.IGNORECASE
-            matched = bool(re.search(pattern, value, flags))
+            # bd-eio04.15: route user-supplied pattern through safe_regex.
+            # On timeout safe_regex.search returns None, which collapses to
+            # matched=False — the same fallback this method already uses
+            # for 'pattern does not match'. The caller records a negative
+            # evaluation; the run continues.
+            match_obj = safe_regex.search(pattern, value, flags=flags)
+            matched = match_obj is not None
             return EvaluationResult(
                 matched, cond_type,
                 f"'{value}' {'matches' if matched else 'does not match'} /{pattern}/"
             )
         except re.error as e:
+            # Retained for parity with the pre-migration fall-through in case
+            # a future callsite passes a pre-compiled stdlib pattern. The
+            # safe_regex wrapper handles syntax errors internally and returns
+            # None rather than raising.
             logger.error("[AUTO-CREATE-EVAL] Invalid regex pattern '%s': %s", pattern, e)
             return EvaluationResult(False, cond_type, f"Invalid regex: {e}")
 
@@ -636,10 +654,16 @@ class ConditionEvaluator:
 
         try:
             flags = 0 if case_sensitive else re.IGNORECASE
-            regex = re.compile(pattern, flags)
+            # bd-eio04.15: compile via safe_regex (bounds pattern length and
+            # catches syntactically invalid patterns as SafeRegexError). Then
+            # run safe_regex.search per channel — each call gets its own
+            # ReDoS budget. On any call timing out, safe_regex.search returns
+            # None for that channel; we continue to the next one rather than
+            # bail the whole rule, which matches the "no match" outcome.
+            compiled = safe_regex.compile(pattern, flags=flags)
 
             for channel in self.existing_channels:
-                if regex.search(channel.get("name", "")):
+                if safe_regex.search(compiled, channel.get("name", "")) is not None:
                     return EvaluationResult(
                         True, cond_type,
                         f"Channel '{channel['name']}' matches /{pattern}/"
@@ -649,7 +673,12 @@ class ConditionEvaluator:
                 False, cond_type,
                 f"No channel matches /{pattern}/"
             )
+        except safe_regex.SafeRegexError as e:
+            return EvaluationResult(False, cond_type, f"Invalid regex: {e}")
         except re.error as e:
+            # Defensive retention — safe_regex.compile already normalizes
+            # compile errors into SafeRegexError, but keep this arm for any
+            # stdlib-re escapes in legacy code paths.
             return EvaluationResult(False, cond_type, f"Invalid regex: {e}")
 
     def _evaluate_channel_in_group(self, group_id: int, channel_id: int | None,
