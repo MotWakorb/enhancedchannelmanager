@@ -228,11 +228,23 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `POST /api/normalization/test` | Test a rule against sample text |
 | `POST /api/normalization/test-batch` | Test all enabled rules against multiple texts |
 | `POST /api/normalization/normalize` | Normalize text using all enabled rules |
+| `POST /api/normalization/apply-to-channels` | Apply enabled rules to existing channels — admin-gated, rate-limited 5/minute, `dry_run=true` by default (see note below) |
 | `GET /api/normalization/rule-stats` | Get stream match statistics per rule |
+| `GET /api/normalization/lint-findings` | Read-only view of saved normalization rules that fail the current write-time linter (bd-eio04.7) |
 | `GET /api/normalization/export` | Export normalization rules |
 | `POST /api/normalization/import` | Import normalization rules |
 | `GET /api/normalization/migration/status` | Get migration status |
 | `POST /api/normalization/migration/run` | Run demo rules migration |
+
+`POST /api/normalization/apply-to-channels` computes a diff of "what would change if we applied the current rule set to every existing channel" and, in execute mode, renames or merges per-row according to the caller-supplied `actions[]` array. Guarantees:
+
+- **Admin-gated** — protected by `RequireAdminIfEnabled`; non-admin callers see HTTP 403 when auth is enabled.
+- **Rate-limited** — 5 requests/minute per remote address (slowapi) to prevent runaway bulk-apply loops.
+- **Dry-run by default** — `dry_run=true` returns `{dry_run, diffs, channels_with_changes}` without mutating. `dry_run=false` requires an explicit `actions[]` body; unspecified channels default to `skip`.
+- **Single-flight execute** — only one concurrent execute run is allowed; a second caller sees HTTP 409.
+- **Journaled** — every rename and merge writes a journal entry with the `rule_set_hash` captured at execute time for audit and undo.
+
+See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#re-normalize-existing-channels) for the operator workflow.
 
 ## Tags
 
@@ -331,6 +343,7 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `GET /api/auto-creation/schema/conditions` | Get available condition types |
 | `GET /api/auto-creation/schema/actions` | Get available action types |
 | `GET /api/auto-creation/schema/template-variables` | Get available template variables |
+| `GET /api/auto-creation/lint-findings` | Read-only view of saved auto-creation rules that fail the current write-time linter (bd-eio04.7) |
 | `GET /api/auto-creation/debug-bundle` | Download diagnostic bundle (obfuscated channels, rules, streams, probe stats, settings, task schedules, logs) |
 
 ## FFMPEG Builder
@@ -405,6 +418,7 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `GET /api/dummy-epg/xmltv/{id}` | Get XMLTV output for a profile |
 | `GET /api/dummy-epg/profiles/export/yaml` | Export profiles as YAML |
 | `POST /api/dummy-epg/profiles/import/yaml` | Import profiles from YAML |
+| `GET /api/dummy-epg/lint-findings` | Read-only view of saved dummy-EPG templates that fail the current write-time linter (bd-eio04.7) |
 
 `POST /api/dummy-epg/preview` accepts the full profile config plus:
 
