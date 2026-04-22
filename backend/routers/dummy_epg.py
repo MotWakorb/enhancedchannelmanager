@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from cache import get_cache
+from concurrency import run_cpu_bound
 from database import get_session
 from dispatcharr_client import get_client
 
@@ -398,8 +399,11 @@ async def preview_epg(req: PreviewRequest, db: Session = Depends(get_session)):
         from dummy_epg_engine import preview_pipeline
         config = _build_preview_config(req)
         lookups = _resolve_lookups(req.inline_lookups, req.global_lookup_ids, db)
-        result = preview_pipeline(
-            config, req.sample_name, lookups=lookups, include_trace=req.include_trace,
+        # Offload template/regex rendering off event loop (bd-w3z4h)
+        result = await run_cpu_bound(
+            preview_pipeline,
+            config, req.sample_name,
+            lookups=lookups, include_trace=req.include_trace,
         )
         return result
     except Exception as e:
@@ -416,7 +420,10 @@ async def preview_epg_batch(req: BatchPreviewRequest, db: Session = Depends(get_
         from dummy_epg_engine import preview_pipeline_batch
         config = _build_preview_config(req)
         lookups = _resolve_lookups(req.inline_lookups, req.global_lookup_ids, db)
-        results = preview_pipeline_batch(config, req.sample_names[:100], lookups=lookups)  # Cap at 100
+        # Offload batch template/regex rendering off event loop (bd-w3z4h)
+        results = await run_cpu_bound(
+            preview_pipeline_batch, config, req.sample_names[:100], lookups=lookups,  # Cap at 100
+        )
         return results
     except Exception as e:
         logger.warning("[DUMMY-EPG] Batch preview failed: %s", e)
@@ -562,7 +569,8 @@ async def get_xmltv_all(db: Session = Depends(get_session)):
             p_dict["channel_map"] = channel_map
             profile_data.append(p_dict)
 
-        xml_string = generate_xmltv(profile_data, channel_map)
+        # Offload XML generation off event loop (bd-w3z4h)
+        xml_string = await run_cpu_bound(generate_xmltv, profile_data, channel_map)
         cache.set("dummy_epg_xmltv_all", xml_string)
 
         logger.info("[DUMMY-EPG] Generated XMLTV for %s enabled profiles", len(profiles))
@@ -604,7 +612,8 @@ async def get_xmltv_profile(profile_id: int, db: Session = Depends(get_session))
         p_dict["channel_map"] = channel_map
         profile_data = [p_dict]
 
-        xml_string = generate_xmltv(profile_data, channel_map)
+        # Offload XML generation off event loop (bd-w3z4h)
+        xml_string = await run_cpu_bound(generate_xmltv, profile_data, channel_map)
         cache.set(cache_key, xml_string)
 
         logger.info("[DUMMY-EPG] Generated XMLTV for profile %s", profile_id)
@@ -645,17 +654,18 @@ async def force_regenerate(db: Session = Depends(get_session)):
             p_dict["channel_map"] = channel_map
             profile_data.append(p_dict)
 
-        xml_string = generate_xmltv(profile_data, channel_map)
+        # Offload XML generation off event loop (bd-w3z4h)
+        xml_string = await run_cpu_bound(generate_xmltv, profile_data, channel_map)
         cache.set("dummy_epg_xmltv_all", xml_string)
 
-        # Also cache per-profile
+        # Also cache per-profile (each offloaded)
         for profile in profiles:
             p_dict = profile.to_dict()
             p_dict["channel_assignments"] = _resolve_group_assignments(
                 p_dict.get("channel_group_ids", []), channel_map
             )
             p_dict["channel_map"] = channel_map
-            per_xml = generate_xmltv([p_dict], channel_map)
+            per_xml = await run_cpu_bound(generate_xmltv, [p_dict], channel_map)
             cache.set(f"dummy_epg_xmltv_{profile.id}", per_xml)
 
         logger.info("[DUMMY-EPG] Force-regenerated XMLTV for %s enabled profiles", len(profiles))
