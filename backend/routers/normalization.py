@@ -20,6 +20,11 @@ from concurrency import run_cpu_bound
 from config import get_settings
 from database import get_session
 from dispatcharr_client import get_client
+from regex_lint import (
+    lint_conditions_json,
+    lint_pattern,
+    violations_to_http_detail,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -351,12 +356,42 @@ async def get_normalization_rule(rule_id: int):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+def _lint_normalization_rule_request(request) -> None:
+    """Raise HTTP 422 if the rule's pattern fields fail the regex linter.
+
+    Lints (bd-eio04.7):
+      - ``condition_value`` when ``condition_type == "regex"``
+      - Any pattern inside the compound ``conditions[]`` JSON (regex types)
+
+    Replacement strings on ``action_value`` / ``else_action_value`` are
+    templates, not regexes, so they are not linted here.
+    """
+    violations = []
+    if getattr(request, "condition_type", None) == "regex":
+        violations.extend(
+            lint_pattern(getattr(request, "condition_value", None), field="condition_value")
+        )
+    conditions = getattr(request, "conditions", None)
+    if conditions:
+        violations.extend(lint_conditions_json(conditions, prefix="conditions"))
+    if violations:
+        logger.warning(
+            "[NORMALIZE] Rejected rule — %d lint violation(s): %s",
+            len(violations),
+            [(v.field, v.code) for v in violations],
+        )
+        raise HTTPException(
+            status_code=422, detail=violations_to_http_detail(violations)
+        )
+
+
 @router.post("/rules")
 async def create_normalization_rule(request: CreateRuleRequest):
     """Create a new normalization rule."""
     logger.debug("[NORMALIZE] POST /rules - name=%s group_id=%s", request.name, request.group_id)
     try:
         from models import NormalizationRule, NormalizationRuleGroup
+        _lint_normalization_rule_request(request)
         session = get_session()
         try:
             # Verify group exists
@@ -409,6 +444,10 @@ async def update_normalization_rule(rule_id: int, request: UpdateRuleRequest):
     logger.debug("[NORMALIZE] PATCH /rules/%s", rule_id)
     try:
         from models import NormalizationRule
+        # Lint any pattern-bearing fields on the update request. The helper
+        # only lints what's actually supplied — PATCH semantics are
+        # preserved (unset fields pass through unchanged).
+        _lint_normalization_rule_request(request)
         session = get_session()
         try:
             rule = session.query(NormalizationRule).filter(
@@ -1246,3 +1285,36 @@ async def apply_normalization_to_channels(
         "skipped": skipped,
         "errors": errors,
     }
+
+
+# =============================================================================
+# Lint findings (bd-eio04.7) — read-only view of the startup migration scan.
+# =============================================================================
+
+
+@router.get("/lint-findings")
+async def get_normalization_lint_findings():
+    """Return the cached lint findings for normalization rules.
+
+    Findings are produced by the one-time startup scan (bd-eio04.7 migration
+    pass) and also refreshed implicitly by write-time validation (write-time
+    rejections never reach here because they fail with 422). UI surfaces
+    these so pre-lint rows that would now fail can be fixed by the operator.
+    The scan does not modify or disable any rule — this is a pure view.
+    """
+    logger.debug("[NORMALIZE] GET /lint-findings")
+    try:
+        from models import RuleLintFinding
+        from tasks.rule_lint_scan import RULE_TYPE_NORMALIZATION
+
+        session = get_session()
+        try:
+            findings = session.query(RuleLintFinding).filter(
+                RuleLintFinding.rule_type == RULE_TYPE_NORMALIZATION
+            ).order_by(RuleLintFinding.rule_id, RuleLintFinding.id).all()
+            return {"findings": [f.to_dict() for f in findings]}
+        finally:
+            session.close()
+    except Exception as e:
+        logger.exception("[NORMALIZE] Failed to get lint findings: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
