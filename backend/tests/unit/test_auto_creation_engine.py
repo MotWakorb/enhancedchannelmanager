@@ -773,6 +773,72 @@ class TestPass3RenumberGating:
             f"(call args: {self.client.assign_channel_numbers.await_args_list})"
         )
 
+    @patch("auto_creation_engine.get_session")
+    def test_stream_reorder_runs_on_modified_existing_channel(self, mock_get_session):
+        """
+        Pass 3.5 gating: when a rule merges streams into an existing channel
+        (created=0), stream sorting should still run for that channel.
+        """
+        mock_session = MagicMock()
+        mock_get_session.return_value = mock_session
+
+        streams = [
+            StreamContext(stream_id=201, stream_name="A", m3u_account_id=1, m3u_account_name="P"),
+            StreamContext(stream_id=202, stream_name="B", m3u_account_id=1, m3u_account_name="P"),
+        ]
+
+        rule = self._make_rule(
+            rule_id=2, name="Rule",
+            sort_field=None, starting_channel_number=None,
+            managed_channel_ids=[],  # not pre-run managed
+        )
+        rule.stream_sort_field = "quality"
+        rule.stream_sort_order = "desc"
+
+        # Simulate merge into existing channel 501 (not created).
+        async def _fake_execute(action, stream_ctx, exec_ctx,
+                                rule_target_group_id=None,
+                                normalization_group_ids=None,
+                                match_scope_target_group=False):
+            exec_ctx.current_channel_id = 501
+            return self.ActionResult(
+                success=True,
+                action_type="merge_stream",
+                description="Added stream",
+                entity_type="channel",
+                entity_id=501,
+                entity_name="ch-501",
+                modified=True,
+                created=False,
+            )
+
+        mock_execution = MagicMock()
+        mock_execution.id = 1
+
+        with patch("auto_creation_engine.ActionExecutor") as mock_exec_cls, \
+             patch.object(self.engine, "_reorder_channel_streams", new_callable=AsyncMock) as mock_reorder:
+            mock_executor = MagicMock()
+            mock_executor.execute = AsyncMock(side_effect=_fake_execute)
+            mock_executor.verify_epg_assignments = AsyncMock(return_value=(0, 0, 0))
+            mock_executor.prune_merge_streams = AsyncMock()
+            mock_executor._channel_by_id = {}
+            mock_executor._created_channels = {}
+            mock_exec_cls.return_value = mock_executor
+
+            # Stub engine internals that touch DB/external calls
+            self.engine._refresh_dummy_epg_and_retry = AsyncMock()
+            self.engine._reconcile_orphans = AsyncMock()
+            self.engine._update_rule_stats = AsyncMock()
+
+            asyncio.get_event_loop().run_until_complete(
+                self.engine._process_streams(streams, [rule], mock_execution, dry_run=False)
+            )
+
+        # Pass 3.5 should have been invoked with a channel list containing 501.
+        assert mock_reorder.await_count == 1
+        passed_rule_channel_order = mock_reorder.await_args.args[1]
+        assert passed_rule_channel_order.get(rule.id) == [501]
+
     @patch("auto_creation_engine._auto_rename_after_renumber", new_callable=AsyncMock)
     @patch("auto_creation_engine.get_session")
     def test_renumbers_own_created_channels(self, mock_get_session, mock_rename):

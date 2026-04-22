@@ -1141,8 +1141,11 @@ class AutoCreationEngine:
 
         logger.debug("[AUTO-CREATE-ENGINE] Total sorted entries: %s", len(sorted_entries))
 
-        # Track channel IDs per rule in sorted order (for Pass 3 renumber + Pass 3.5 stream reorder)
-        rule_channel_order = defaultdict(list)  # rule_id -> [channel_id, ...] in sorted order
+        # Track channel IDs per rule in sorted order for:
+        # - Pass 3 renumber: ONLY channels the rule owns (created this run OR pre-run managed)
+        # - Pass 3.5 stream reorder: channels the rule owns OR channels it actually modified this run
+        rule_channel_order = defaultdict(list)  # rule_id -> [channel_id, ...] in sorted order (renumber gating)
+        rule_channel_order_streams = defaultdict(list)  # rule_id -> [channel_id, ...] in sorted order (reorder gating)
 
         # Snapshot each rule's pre-run managed channel set. Used to gate the
         # rule_channel_order append so Pass 3's renumber only touches channels
@@ -1262,7 +1265,7 @@ class AutoCreationEngine:
             results["modified_entities"].extend(exec_ctx.modified_entities)
             results["probe_stream_ids"].update(exec_ctx.probe_stream_ids)
 
-            # Track channel ID for Pass 3 renumber + Pass 3.5 stream reorder.
+            # Track channel ID for Pass 3 renumber.
             # Only include channels this rule actually OWNS — either just
             # created this run, or already in the rule's pre-run managed set.
             # This prevents Pass 3 from renumbering foreign-group channels
@@ -1283,6 +1286,17 @@ class AutoCreationEngine:
                         "channel (not created this run, not pre-run managed)",
                         winning_rule.name, cid
                     )
+
+                # Track channel ID for Pass 3.5 stream reorder.
+                # For stream sorting we also want to include channels that the rule actually
+                # modified (e.g. merge added/removed streams) during this run; otherwise
+                # stream_sort can silently never run when Channels Created=0.
+                modified_this_run = any(
+                    (a.get("entity_id") == cid and a.get("type") in ("merge_stream", "merge_streams_prune"))
+                    for a in actions_log
+                )
+                if owned_by_this_rule or modified_this_run:
+                    rule_channel_order_streams[winning_rule.id].append(cid)
 
             if stop_processing:
                 break
@@ -1392,7 +1406,7 @@ class AutoCreationEngine:
         # =====================================================================
         logger.debug("[AUTO-CREATE-ENGINE] Starting stream reorder within channels")
         await self._reorder_channel_streams(
-            rules, rule_channel_order, results, dry_run,
+            rules, rule_channel_order_streams, results, dry_run,
             settings=settings, stream_m3u_map=stream_m3u_map
         )
 
