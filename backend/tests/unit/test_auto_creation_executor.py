@@ -540,6 +540,123 @@ class TestActionExecutorCreateChannel:
         assert call_args["name"] == "ESPN News (1080p)"
 
 
+class TestCreateChannelNormalizationLookup:
+    """Regression tests for GH-104 Part 2: the create_channel action must not
+    create a duplicate channel when an existing channel's name would collapse
+    to the same normalized form as the stream being processed.
+    """
+
+    def _make_engine(self, mapping):
+        """Fake normalization engine that maps names via ``mapping``."""
+        engine = MagicMock()
+
+        def _normalize(name):
+            result = MagicMock()
+            result.normalized = mapping.get(name, name)
+            return result
+
+        engine.normalize.side_effect = _normalize
+        engine.extract_core_name.side_effect = lambda n: mapping.get(n, n)
+        engine.extract_call_sign.return_value = None
+        return engine
+
+    def test_attaches_to_normalized_existing_instead_of_creating_duplicate(self):
+        """Stream 'RTL ᴿᴬᵂ' attaches to existing 'RTL' via normalized lookup."""
+        from auto_creation_executor import ActionExecutor
+
+        client = MagicMock()
+        client.update_channel = AsyncMock()
+        client.create_channel = AsyncMock()
+
+        # Existing channel already stored under the normalized name.
+        existing = [{"id": 42, "name": "RTL", "streams": [], "channel_group_id": 5}]
+        engine = self._make_engine({"RTL ᴿᴬᵂ": "RTL", "RTL": "RTL"})
+        executor = ActionExecutor(client, existing_channels=existing,
+                                  normalization_engine=engine)
+
+        stream_ctx = StreamContext(
+            stream_id=77,
+            stream_name="RTL ᴿᴬᵂ",
+            m3u_account_id=1,
+            m3u_account_name="Provider",
+            group_name="DE",
+            tvg_id=None,
+            resolution_height=None,
+            logo_url=None,
+        )
+
+        action = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+            "if_exists": "merge",
+            # normalize_names=False on this rule on purpose — the fix should
+            # still prevent the duplicate via the lookup fallback.
+        }
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext())
+        )
+
+        assert result.success is True
+        # Must NOT create a brand-new duplicate channel.
+        client.create_channel.assert_not_called()
+        # Must attach the stream to the existing channel instead.
+        client.update_channel.assert_called()
+        updated_id = client.update_channel.call_args[0][0]
+        assert updated_id == 42
+
+    def test_number_prefix_rename_path_still_fires(self):
+        """The existing rename path at executor.py:517-539 still triggers
+        when normalize_names=True and the channel has a number prefix whose
+        core differs from the normalized incoming name ('107 | RTL ᴿᴬᵂ'
+        stays number-prefixed as '107 | RTL')."""
+        from auto_creation_executor import ActionExecutor
+
+        client = MagicMock()
+        client.update_channel = AsyncMock(return_value={})
+        client.create_channel = AsyncMock()
+
+        existing = [{"id": 7, "name": "107 | RTL ᴿᴬᵂ", "channel_number": 107,
+                     "streams": [], "channel_group_id": 5}]
+        engine = self._make_engine({"RTL ᴿᴬᵂ": "RTL", "RTL": "RTL",
+                                     "107 | RTL ᴿᴬᵂ": "107 | RTL"})
+        executor = ActionExecutor(client, existing_channels=existing,
+                                  normalization_engine=engine)
+
+        stream_ctx = StreamContext(
+            stream_id=77,
+            stream_name="RTL ᴿᴬᵂ",
+            m3u_account_id=1,
+            m3u_account_name="Provider",
+            group_name="DE",
+            tvg_id=None,
+            resolution_height=None,
+            logo_url=None,
+        )
+
+        action = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+            "if_exists": "merge",
+        }
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream_ctx, ExecutionContext(),
+                             normalize_names=True)
+        )
+
+        assert result.success is True
+        client.create_channel.assert_not_called()
+        # update_channel is called at least for the rename; may also be called
+        # to attach the stream. Verify the rename call happened.
+        rename_calls = [
+            c for c in client.update_channel.call_args_list
+            if c[0][0] == 7 and "name" in c[0][1]
+        ]
+        assert len(rename_calls) >= 1
+        assert rename_calls[0][0][1]["name"] == "107 | RTL"
+
+
 class TestActionExecutorCreateGroup:
     """Tests for create_group action."""
 
