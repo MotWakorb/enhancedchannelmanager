@@ -40,15 +40,29 @@ ECM_NORMALIZATION_UNIFIED_POLICY (default: "true")
 import os
 import re
 import logging
+import time
 import unicodedata
 from typing import Optional
 from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
+import safe_regex  # bd-eio04.14: ReDoS-guarded wrapper for user-supplied regex
 from models import NormalizationRule, NormalizationRuleGroup, TagGroup, Tag
 
 logger = logging.getLogger(__name__)
+
+
+# Policy version string emitted into the structured decision log (bd-eio04.9).
+# Bumped when the unified-policy flag flips so on-call can correlate
+# divergence reports with the policy the run was using.
+POLICY_VERSION_UNIFIED = "unified-v1"
+POLICY_VERSION_LEGACY = "legacy"
+
+
+def _current_policy_version(policy_obj: "NormalizationPolicy") -> str:
+    """Return the canonical policy-version tag for the decision log."""
+    return POLICY_VERSION_UNIFIED if policy_obj.unified_enabled else POLICY_VERSION_LEGACY
 
 
 # -----------------------------------------------------------------------------
@@ -651,18 +665,22 @@ class NormalizationEngine:
             return RuleMatch(matched=False)
 
         elif condition_type == "regex":
-            try:
-                flags = 0 if case_sensitive else re.IGNORECASE
-                match = re.search(pattern, text, flags)
-                if match:
-                    return RuleMatch(
-                        matched=True,
-                        match_start=match.start(),
-                        match_end=match.end(),
-                        groups=match.groups()
-                    )
-            except re.error as e:
-                logger.warning("[NORMALIZE] Invalid regex pattern: %s", e)
+            # bd-eio04.14: migrated to safe_regex. User-supplied pattern;
+            # on timeout / oversize / compile-error safe_regex.search
+            # returns None and logs a [SAFE_REGEX] WARN (with pattern
+            # sha256 + excerpt). Falling through to RuleMatch(matched=False)
+            # preserves the pre-migration no-match arm, which is the
+            # contract bd-eio04.1's NormalizationPolicy relies on when a
+            # regex condition fails to evaluate.
+            flags = 0 if case_sensitive else re.IGNORECASE
+            match = safe_regex.search(pattern, text, flags=flags)
+            if match:
+                return RuleMatch(
+                    matched=True,
+                    match_start=match.start(),
+                    match_end=match.end(),
+                    groups=match.groups()
+                )
             return RuleMatch(matched=False)
 
         else:
@@ -739,9 +757,17 @@ class NormalizationEngine:
                 sep = r'[\s:\-|/]+'
                 tag_pat = re.escape(match_tag)
                 flags = 0 if case_sensitive else re.IGNORECASE
+                # bd-eio04.14: tag-group contains patterns are built from
+                # user tag values via re.escape (length-bounded in practice
+                # but still user-controlled). Route through safe_regex so
+                # a pathological tag value cannot trigger ReDoS inside the
+                # normalization loop. Fallback contract for both calls: on
+                # timeout safe_regex returns None -> fall through to the
+                # non-match return at the bottom of the loop, tag group
+                # simply "didn't apply" for this entry.
                 # Try to match with separators on both sides first
                 pattern = r'(' + sep + r')' + tag_pat + r'(?=' + sep + r'|$)'
-                m = re.search(pattern, text, flags)
+                m = safe_regex.search(pattern, text, flags=flags)
                 if m:
                     # Consume the leading separator group + tag, leave trailing for next segment
                     return RuleMatch(
@@ -752,7 +778,7 @@ class NormalizationEngine:
                     )
                 # Try at start of string: tag followed by separator
                 pattern = tag_pat + r'(' + sep + r')'
-                m = re.match(pattern, text, flags)
+                m = safe_regex.match(pattern, text, flags=flags)
                 if m:
                     return RuleMatch(
                         matched=True,
@@ -864,14 +890,17 @@ class NormalizationEngine:
             if rule.condition_type != "regex":
                 logger.warning("[NORMALIZE] regex_replace requires regex condition in rule %s", rule.id)
                 return text
-            try:
-                flags = 0 if case_sensitive else re.IGNORECASE
-                # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
-                py_replacement = re.sub(r'\$(\d+)', r'\\\1', action_value)
-                return re.sub(pattern, py_replacement, text, flags=flags)
-            except re.error as e:
-                logger.warning("[NORMALIZE] Regex replace error in rule %s: %s", rule.id, e)
-                return text
+            # bd-eio04.14: migrated user-regex call to safe_regex.sub.
+            # The inner re.sub on action_value (backreference rewrite) stays
+            # on stdlib re — that pattern is a hardcoded module literal,
+            # not user-supplied. Fallback contract: safe_regex.sub returns
+            # text unchanged on timeout / oversize / compile error. The
+            # safe_regex module emits its own [SAFE_REGEX] WARN log, so no
+            # additional log here.
+            flags = 0 if case_sensitive else re.IGNORECASE
+            # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
+            py_replacement = re.sub(r'\$(\d+)', r'\\\1', action_value)
+            return safe_regex.sub(pattern, py_replacement, text, flags=flags)
 
         elif action_type == "strip_prefix":
             # Remove pattern from start, including any following separator
@@ -960,13 +989,16 @@ class NormalizationEngine:
         elif action_type == "regex_replace":
             # For else, apply the regex pattern to the whole text
             if rule.condition_value:
-                try:
-                    flags = 0 if rule.case_sensitive else re.IGNORECASE
-                    # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
-                    py_replacement = re.sub(r'\$(\d+)', r'\\\1', action_value)
-                    return re.sub(rule.condition_value, py_replacement, text, flags=flags)
-                except re.error as e:
-                    logger.warning("[NORMALIZE] Regex replace error in else action of rule %s: %s", rule.id, e)
+                # bd-eio04.14: migrated user-regex call to safe_regex.sub.
+                # Backreference-rewrite sub on action_value stays on stdlib
+                # re (hardcoded literal pattern). Fallback contract: on
+                # timeout / oversize / compile-error safe_regex.sub
+                # returns text unchanged — matches pre-migration behavior
+                # where re.error was caught and text was returned.
+                flags = 0 if rule.case_sensitive else re.IGNORECASE
+                # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
+                py_replacement = re.sub(r'\$(\d+)', r'\\\1', action_value)
+                return safe_regex.sub(rule.condition_value, py_replacement, text, flags=flags)
             return text
 
         elif action_type == "strip_prefix":
@@ -1035,6 +1067,13 @@ class NormalizationEngine:
         2026-04-22: numerics convert on every path; there is no
         carve-out for intentional marks like ESPN².
         """
+        # Observability hook (bd-eio04.9) — stamp the start time here so
+        # the decision log captures the full normalize() path including
+        # policy preprocessing + rule loading. The call to
+        # `record_normalization_decision` at the end is deliberately in
+        # a try/finally so the hook never alters the return value when
+        # an exception inside the engine would otherwise surface.
+        _norm_started_at = time.perf_counter()
         result = NormalizationResult(
             original=name,
             normalized=name,
@@ -1081,6 +1120,52 @@ class NormalizationEngine:
             logger.debug("[NORMALIZE] Normalization pass %s: '%s' -> '%s'", pass_num + 1, before_pass, current)
 
         result.normalized = current
+
+        # Observability hook (bd-eio04.9): record a structured decision
+        # for the metrics + sampled INFO log. Import is local so the
+        # module stays importable in environments where observability
+        # is not installed (tests that stub out logging, etc.). The
+        # hook is idempotent and exception-safe — a failure here must
+        # never change the normalize() return value.
+        try:
+            from observability import record_normalization_decision
+
+            elapsed = time.perf_counter() - _norm_started_at
+            policy = get_default_policy()
+            # Best-effort "coarse rule category" for the metric label:
+            # report the action_type of the first transformation when
+            # present, else None so the hook skips the rule_matches
+            # counter. Per-rule-id detail lives in the INFO log.
+            first_action: Optional[str] = None
+            if result.transformations:
+                first_rule_id = result.transformations[0][0]
+                # The rule_id may be the sentinel "legacy_tag" for
+                # settings-based tags; pass through.
+                if first_rule_id == "legacy_tag":
+                    first_action = "legacy_tag"
+                else:
+                    # Resolve rule_id -> action_type from the cached rules.
+                    for _, rules in grouped_rules:
+                        for rule in rules:
+                            if rule.id == first_rule_id:
+                                first_action = rule.action_type
+                                break
+                        if first_action is not None:
+                            break
+
+            record_normalization_decision(
+                input_text=name,
+                output_text=current,
+                matched_rule_ids=list(result.rules_applied),
+                applied=bool(result.rules_applied) or (name != current),
+                policy_version=_current_policy_version(policy),
+                duration_seconds=elapsed,
+                rule_category=first_action,
+                extra={"source": "normalize"},
+            )
+        except Exception:  # pragma: no cover — observability must not break the caller
+            logger.debug("[NORMALIZE] decision-log hook failed", exc_info=True)
+
         return result
 
     def _apply_rules_single_pass(
@@ -1324,7 +1409,7 @@ class NormalizationEngine:
         # channel number — this prevents matching random words in names
         # like "(MC Radio) New Wave" or "DOCUBOX: MILITARY AND WAR"
         has_network = any(
-            re.search(r'\b' + net + r'\b', upper)
+            safe_regex.search(r'\b' + net + r'\b', upper)
             for net in NormalizationEngine._BROADCAST_NETWORKS
         )
         has_channel_num = bool(re.search(r'\b\d{1,2}\b', upper))
@@ -1429,6 +1514,32 @@ class NormalizationEngine:
             # Also strip/normalize whitespace for consistency with
             # normalize()'s per-pass cleanup.
             result["after"] = re.sub(r'\s+', ' ', preprocessed_text).strip()
+
+        # Observability hook (bd-eio04.9): emit a decision log for the
+        # Test Rules preview path too, tagged source=test_rule so
+        # SRE can compare the two paths in kibana/loki and catch a
+        # divergence without waiting for the nightly canary.
+        try:
+            from observability import record_normalization_decision
+
+            policy = get_default_policy()
+            applied = bool(match.matched) or result.get("else_applied", False)
+            matched_ids: list = []
+            # test_rule uses a synthetic rule with id=0; surface that
+            # so the log shows the preview path ran a concrete rule.
+            if applied:
+                matched_ids = [0]
+            record_normalization_decision(
+                input_text=text,
+                output_text=result["after"],
+                matched_rule_ids=matched_ids,
+                applied=applied,
+                policy_version=_current_policy_version(policy),
+                rule_category=action_type,
+                extra={"source": "test_rule"},
+            )
+        except Exception:  # pragma: no cover — observability must not break the caller
+            logger.debug("[NORMALIZE] decision-log hook failed in test_rule", exc_info=True)
 
         return result
 

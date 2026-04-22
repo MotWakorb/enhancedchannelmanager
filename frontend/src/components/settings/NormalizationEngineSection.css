@@ -1106,3 +1106,206 @@
   border-radius: var(--radius-md);
   padding: 0.25rem 0.5rem;
 }
+
+/* ----------------------------------------------------------------------
+ * bd-eio04.12: rule-trace drawer, conflict groups, confirm + summary UI
+ * for the apply-to-channels modal.
+ * -------------------------------------------------------------------- */
+
+.norm-engine-apply-trace-toggle {
+  background: transparent;
+  border: 0;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0.1rem;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.norm-engine-apply-trace-toggle:hover,
+.norm-engine-apply-trace-toggle:focus-visible {
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  outline: none;
+}
+
+.norm-engine-apply-trace-toggle .material-icons {
+  font-size: 1.1rem;
+}
+
+.norm-engine-apply-trace-row td {
+  background: var(--bg-secondary);
+  padding: 0;
+}
+
+.norm-engine-apply-trace {
+  padding: 0.75rem 1rem;
+  border-left: 3px solid var(--accent-50);
+}
+
+.norm-engine-apply-trace-heading {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.norm-engine-apply-trace-empty {
+  color: var(--text-secondary);
+  font-style: italic;
+  font-size: 0.85rem;
+}
+
+.norm-engine-apply-trace-list {
+  margin: 0;
+  padding-left: 1rem;
+  list-style: none;
+}
+
+.norm-engine-apply-trace-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.norm-engine-apply-trace-item .material-icons {
+  font-size: 1rem;
+  color: var(--accent-50);
+}
+
+.norm-engine-apply-trace-item .trace-rule-id {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.norm-engine-apply-trace-item code {
+  background: var(--bg-primary);
+  padding: 0.05rem 0.3rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+}
+
+.norm-engine-apply-rule-count {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.norm-engine-apply-conflict-badge {
+  display: inline-block;
+  background: var(--warning);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-sm);
+  margin-right: 0.35rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.norm-engine-apply-conflict-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--warning);
+  font-size: 0.85rem;
+  margin-left: 0.75rem;
+}
+
+.norm-engine-apply-conflict-hint .material-icons {
+  font-size: 1rem;
+}
+
+.norm-engine-apply-table tr.apply-row-source-conflict {
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.norm-engine-apply-table tr.apply-row-winner {
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.norm-engine-apply-winner-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+/* Confirm modal */
+.norm-engine-apply-confirm .modal-body p {
+  margin: 0.5rem 0;
+  color: var(--text-primary);
+}
+
+.norm-engine-apply-confirm-warning {
+  color: var(--warning);
+  font-size: 0.9rem;
+}
+
+.norm-engine-apply-confirm-count {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-top: 0.75rem;
+}
+
+/* Post-execute summary */
+.norm-engine-apply-summary {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.norm-engine-apply-summary-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  color: var(--success);
+  margin-bottom: 0.5rem;
+}
+
+.norm-engine-apply-summary-counts {
+  display: flex;
+  gap: 1.25rem;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.norm-engine-apply-summary-errors {
+  color: var(--error);
+  font-weight: 600;
+}
+
+.norm-engine-apply-summary-hash {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.norm-engine-apply-summary-hash code {
+  background: var(--bg-primary);
+  padding: 0.05rem 0.3rem;
+  border-radius: var(--radius-sm);
+}
+
+.norm-engine-apply-summary-link {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.norm-engine-apply-summary-link a {
+  color: var(--accent-50);
+  text-decoration: underline;
+}

@@ -768,3 +768,153 @@ def test_generate_xmltv_empty_profiles():
     assert root.tag == "tv"
     assert len(root.findall("channel")) == 0
     assert len(root.findall("programme")) == 0
+
+
+# ---------------------------------------------------------------------------
+# bd-eio04.16 — ReDoS resilience for user-supplied regex in the EPG pipeline.
+#
+# These tests verify each safe_regex-migrated call site behaves gracefully
+# when given an adversarial pattern + long input. The wall-clock budget is
+# 500ms per call (5x the 100ms safe_regex default timeout) — CI-safe jitter
+# cap. The adversarial fixtures match the shared bank used in test_safe_regex.
+# ---------------------------------------------------------------------------
+
+import time
+
+# (a+)+b short-circuits in the 'regex' library for most inputs; (a|aa)+b is
+# a genuine catastrophic-backtracking fixture that exercises the timeout path.
+_ADVERSARIAL_PATTERN = r"(a+)+b"
+_ADVERSARIAL_TEXT = "a" * 30 + "!"
+_GENUINE_REDOS_PATTERN = r"(a|aa)+b"
+_WALL_CLOCK_BUDGET_MS = 500
+
+
+def test_apply_substitutions_adversarial_regex_returns_unchanged_within_budget():
+    """apply_substitutions with a ReDoS-prone pattern falls back to text
+    unchanged and records no step, well within the wall-clock budget.
+    Migrated call site: dummy_epg_engine.apply_substitutions."""
+    pairs = [{"find": _ADVERSARIAL_PATTERN, "replace": "BOOM", "is_regex": True, "enabled": True}]
+    start = time.monotonic()
+    result, steps = apply_substitutions(_ADVERSARIAL_TEXT, pairs)
+    elapsed_ms = (time.monotonic() - start) * 1000
+    # No substitution applied — text unchanged. Adversarial pattern may
+    # short-circuit to "no match" or hit the safe_regex timeout; either way
+    # the sentinel is the original text.
+    assert result == _ADVERSARIAL_TEXT
+    assert steps == []
+    assert elapsed_ms < _WALL_CLOCK_BUDGET_MS, f"elapsed {elapsed_ms:.1f}ms"
+
+
+def test_apply_substitutions_genuine_redos_pattern_returns_unchanged_within_budget():
+    """Genuine catastrophic-backtracking pattern (not short-circuitable)
+    exercises the safe_regex timeout path. Returns original text unchanged."""
+    pairs = [{"find": _GENUINE_REDOS_PATTERN, "replace": "X", "is_regex": True, "enabled": True}]
+    start = time.monotonic()
+    result, steps = apply_substitutions(_ADVERSARIAL_TEXT, pairs)
+    elapsed_ms = (time.monotonic() - start) * 1000
+    assert result == _ADVERSARIAL_TEXT
+    assert steps == []
+    assert elapsed_ms < _WALL_CLOCK_BUDGET_MS, f"elapsed {elapsed_ms:.1f}ms"
+
+
+def test_extract_groups_title_pattern_adversarial_returns_none_within_budget():
+    """extract_groups with a ReDoS-prone title_pattern returns None (no
+    match) within budget. Migrated call site: extract_groups title_match."""
+    start = time.monotonic()
+    groups = extract_groups(_ADVERSARIAL_TEXT, _GENUINE_REDOS_PATTERN)
+    elapsed_ms = (time.monotonic() - start) * 1000
+    assert groups is None
+    assert elapsed_ms < _WALL_CLOCK_BUDGET_MS, f"elapsed {elapsed_ms:.1f}ms"
+
+
+def test_extract_groups_time_pattern_adversarial_keeps_title_within_budget():
+    """Adversarial time_pattern does not prevent title groups from
+    returning — time groups simply omitted. Migrated call site: extract_groups
+    time_match."""
+    # Title pattern matches cheaply; time pattern is the ReDoS fixture.
+    # Long name plus tail that triggers catastrophic backtracking.
+    name = "Title " + _ADVERSARIAL_TEXT
+    start = time.monotonic()
+    groups = extract_groups(
+        name,
+        r"(?P<title>Title)",
+        time_pattern=_GENUINE_REDOS_PATTERN,
+    )
+    elapsed_ms = (time.monotonic() - start) * 1000
+    assert groups is not None
+    assert groups["title"] == "Title"
+    assert "hour" not in groups
+    assert elapsed_ms < _WALL_CLOCK_BUDGET_MS, f"elapsed {elapsed_ms:.1f}ms"
+
+
+def test_extract_groups_date_pattern_adversarial_keeps_title_within_budget():
+    """Adversarial date_pattern does not prevent title groups from
+    returning. Migrated call site: extract_groups date_match."""
+    name = "Title " + _ADVERSARIAL_TEXT
+    start = time.monotonic()
+    groups = extract_groups(
+        name,
+        r"(?P<title>Title)",
+        date_pattern=_GENUINE_REDOS_PATTERN,
+    )
+    elapsed_ms = (time.monotonic() - start) * 1000
+    assert groups is not None
+    assert groups["title"] == "Title"
+    assert "month" not in groups
+    assert elapsed_ms < _WALL_CLOCK_BUDGET_MS, f"elapsed {elapsed_ms:.1f}ms"
+
+
+# ---------------------------------------------------------------------------
+# Property-based equivalence: for benign (pattern, text) pairs, safe_regex
+# migrated sites produce the same result as the prior stdlib-re behavior.
+# ---------------------------------------------------------------------------
+
+try:
+    from hypothesis import given, settings, strategies as st
+    _HAS_HYPOTHESIS = True
+except ImportError:  # pragma: no cover
+    _HAS_HYPOTHESIS = False
+
+
+if _HAS_HYPOTHESIS:
+    import re as _re_stdlib
+
+    # Benign patterns: simple literal + alternation that neither stdlib re
+    # nor the regex library will treat pathologically. Keep the alphabet
+    # tiny so patterns and texts exercise the same characters reliably.
+    _BENIGN_PATTERNS = st.sampled_from([
+        r"foo", r"\d+", r"[a-z]+", r"ab?c", r"^hello", r"world$",
+        r"(?P<w>\w+)", r"a(b|c)d", r"x{1,3}y",
+    ])
+    _BENIGN_TEXTS = st.text(alphabet="abcdefghijxyz 0123456789", min_size=0, max_size=64)
+
+    @given(pattern=_BENIGN_PATTERNS, text=_BENIGN_TEXTS)
+    @settings(max_examples=50, deadline=1000)
+    def test_apply_substitutions_benign_equivalence(pattern, text):
+        """For benign patterns, apply_substitutions produces the same string
+        as the prior stdlib re.sub behavior."""
+        try:
+            expected = _re_stdlib.sub(pattern, "REPL", text)
+        except _re_stdlib.error:
+            # Skip patterns stdlib rejects — migration behavior on invalid
+            # patterns (no-op) is covered by the explicit tests above.
+            return
+        pairs = [{"find": pattern, "replace": "REPL", "is_regex": True, "enabled": True}]
+        actual, _steps = apply_substitutions(text, pairs)
+        assert actual == expected
+
+    @given(pattern=_BENIGN_PATTERNS, text=_BENIGN_TEXTS)
+    @settings(max_examples=50, deadline=1000)
+    def test_extract_groups_title_benign_equivalence(pattern, text):
+        """For benign title patterns, extract_groups behaves the same way
+        as stdlib re.search: match -> dict, no match -> None."""
+        try:
+            expected_match = _re_stdlib.search(pattern, text)
+        except _re_stdlib.error:
+            return
+        groups = extract_groups(text, pattern)
+        if expected_match is None:
+            assert groups is None
+        else:
+            assert groups is not None
+            assert groups == dict(expected_match.groupdict())
