@@ -497,9 +497,12 @@ class ActionExecutor:
         if normalization_group_ids and self._normalization_engine:
             logger.debug("[AUTO-CREATE-EXEC] Applying normalization groups %s to '%s'", normalization_group_ids, channel_name)
             try:
+                # bd-eio04.1: preserve_superscripts kwarg removed. The
+                # auto-creation path now shares NormalizationPolicy with
+                # Test Rules — both strip letter-superscripts AND convert
+                # numeric superscripts (ESPN² -> ESPN2). Closes GH #104.
                 norm_result = self._normalization_engine.normalize(
-                    channel_name, group_ids=normalization_group_ids,
-                    preserve_superscripts=True)
+                    channel_name, group_ids=normalization_group_ids)
                 if norm_result.normalized != channel_name:
                     logger.debug("[AUTO-CREATE-EXEC] Normalized channel name: '%s' -> '%s'", channel_name, norm_result.normalized)
                     for rule_id, before, after in norm_result.transformations:
