@@ -627,6 +627,18 @@ class ActionExecutor:
         group_name = self._get_group_name(group_id)
         group_label = f"'{group_name}'" if group_name else str(group_id)
 
+        # Observability (bd-eio04.9): record whether normalization was
+        # applied to this creation. Three buckets:
+        #   - "true"    — normalization ran AND changed the name
+        #   - "false"   — normalization ran but produced no change
+        #   - "skipped" — no normalization groups configured for the rule
+        # Only the non-dry-run path emits the metric (dry-run previews
+        # do not create channels in the real sense).
+        if normalization_group_ids and self._normalization_engine:
+            normalized_label = "true" if pre_norm_name != channel_name else "false"
+        else:
+            normalized_label = "skipped"
+
         # Create new channel
         if exec_ctx.dry_run:
             # Track simulated channel so subsequent streams in this run
@@ -673,6 +685,18 @@ class ActionExecutor:
                 channel_data["tvg_id"] = stream_ctx.tvg_id
 
             new_channel = await self.client.create_channel(channel_data)
+
+            # Observability (bd-eio04.9) — one counter increment per real
+            # channel creation. Wrapped in try/except so a missing
+            # metric registry (e.g. CI-without-prometheus) never blocks
+            # a creation that otherwise succeeded.
+            try:
+                from observability import get_metric
+                get_metric("auto_creation_channels_created_total").labels(
+                    normalized=normalized_label
+                ).inc()
+            except Exception:  # pragma: no cover
+                logger.debug("[AUTO-CREATE-EXEC] metric increment failed", exc_info=True)
 
             # Track the new channel
             self._created_channels[channel_name.lower()] = new_channel
