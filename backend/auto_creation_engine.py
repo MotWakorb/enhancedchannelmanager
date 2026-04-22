@@ -693,14 +693,37 @@ class AutoCreationEngine:
                     continue
 
                 # Get current stream IDs in the channel
+                stream_items = channel.get("streams", []) or []
                 current_streams = [
                     s["id"] if isinstance(s, dict) else s
-                    for s in channel.get("streams", [])
+                    for s in stream_items
                 ]
                 if len(current_streams) < 2:
                     continue
 
                 channel_name = channel.get("name", f"Channel #{channel_id}")
+
+                # Some sort modes (e.g. stream_name) only need names, not probe stats.
+                # When a stream has no stats row yet, _stream_name_for_sort falls back
+                # to "Stream <id>", which can make sorting appear to do nothing.
+                # If the channel payload includes stream dicts with names, seed those
+                # into the per-call stats cache so name-based sorts can still reorder.
+                stats_cache = self._stream_stats_cache
+                if any(isinstance(s, dict) and s.get("name") for s in stream_items):
+                    stats_cache = dict(self._stream_stats_cache)
+                    for s in stream_items:
+                        if not isinstance(s, dict):
+                            continue
+                        sid = s.get("id")
+                        sname = s.get("name")
+                        if not sid or not sname:
+                            continue
+                        existing = stats_cache.get(sid)
+                        if isinstance(existing, dict):
+                            if not existing.get("stream_name"):
+                                stats_cache[sid] = {**existing, "stream_name": sname}
+                        else:
+                            stats_cache[sid] = {"stream_name": sname}
 
                 # Respect rule.stream_sort_field (Provider Order, Quality, etc.).
                 # Previously this always used global smart-sort settings, so "Provider Order (M3U)"
@@ -708,7 +731,7 @@ class AutoCreationEngine:
                 sorted_streams = _reorder_streams_for_rule(
                     current_streams,
                     rule,
-                    self._stream_stats_cache,
+                    stats_cache,
                     stream_m3u_map,
                     channel_name,
                     settings,

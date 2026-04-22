@@ -933,6 +933,46 @@ class TestAutoCreationEngineStreamReorderLogging:
         assert "already sorted" in action["description"]
 
 
+class TestAutoCreationEngineStreamReorderUsesChannelNames:
+    """Regression: name-based stream sorting should work without probe stats rows."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.update_channel = AsyncMock()
+        self.engine = AutoCreationEngine(self.client)
+        self.engine._stream_stats_cache = {}  # no probe stats
+
+    def test_stream_name_sort_uses_channel_stream_names(self):
+        rule = MagicMock()
+        rule.id = 1
+        rule.name = "Rule 1"
+        rule.stream_sort_field = "stream_name"
+        rule.stream_sort_order = "asc"
+
+        channel_id = 10
+        # Unsorted by name: Bravo, Alpha
+        self.engine._existing_channels = [{
+            "id": channel_id,
+            "name": "Test Channel",
+            "streams": [{"id": 2, "name": "Bravo"}, {"id": 1, "name": "Alpha"}],
+        }]
+
+        results = {"execution_log": [], "dry_run_results": []}
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._reorder_channel_streams(
+                rules=[rule],
+                rule_channel_order={1: [channel_id]},
+                results=results,
+                dry_run=False,
+                settings=MagicMock(),
+                stream_m3u_map={},
+            )
+        )
+
+        # Should reorder to Alpha, Bravo (ids 1,2) and persist via API.
+        self.client.update_channel.assert_awaited_once_with(channel_id, {"streams": [1, 2]})
+
+
 class TestAutoCreationEngineExecutionTracking:
     """Tests for execution tracking methods."""
 
