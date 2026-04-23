@@ -348,7 +348,12 @@ _TIMEOUT_EXEMPT_PREFIXES = (
     "/api/ffmpeg/",            # long-running ffmpeg jobs
     "/api/tasks/",             # task triggering / status
     "/api/backup/",            # backup/restore can be large
-    "/api/auto-creation/",     # pipeline runs can exceed 30s on large catalogs
+    # Note: /api/auto-creation/ was previously exempt as a hotfix (bd-zv6pi)
+    # for synchronous /run handlers that could exceed the 30s budget. As of
+    # bd-enfsy those handlers are now 202+poll background tasks (the
+    # supervisor lives in routers/auto_creation.py), so the prefix is back
+    # under the timeout — every CRUD and the now-fast enqueue must respect
+    # the budget.
 )
 
 
