@@ -312,54 +312,41 @@ describe('Auto-Creation API Service', () => {
   // ===========================================================================
 
   describe('runAutoCreationPipeline', () => {
-    it('runs pipeline in execute mode', async () => {
-      // API uses { dryRun: boolean } which maps to { dry_run: boolean } in the request body
+    // bd-enfsy: POST returns 202 + { execution_id, status: 'running' } now —
+    // pipeline runs in a supervised background task and the caller polls
+    // GET /executions/{id} until status is terminal.
+    it('enqueues pipeline in execute mode and returns execution_id', async () => {
       const result = await runAutoCreationPipeline({ dryRun: false });
 
-      expect(result.success).toBe(true);
       expect(result.execution_id).toBeDefined();
-      expect(result.mode).toBe('execute');
-      expect(result.streams_evaluated).toBeGreaterThanOrEqual(0);
+      expect(result.status).toBe('running');
     });
 
-    it('runs pipeline in dry-run mode', async () => {
+    it('enqueues pipeline in dry-run mode', async () => {
       const result = await runAutoCreationPipeline({ dryRun: true });
 
-      expect(result.success).toBe(true);
-      expect(result.mode).toBe('dry_run');
-      expect(result.dry_run_results).toBeDefined();
+      expect(result.execution_id).toBeDefined();
+      expect(result.status).toBe('running');
     });
 
-    it('can run specific rules', async () => {
+    it('can enqueue specific rules', async () => {
       let capturedBody: { rule_ids?: number[] } = {};
       server.use(
         http.post('/api/auto-creation/run', async ({ request }) => {
           capturedBody = await request.json() as { rule_ids?: number[] };
-          return HttpResponse.json({
-            success: true,
-            execution_id: 1,
-            mode: 'execute',
-            duration_seconds: 1.0,
-            streams_evaluated: 10,
-            streams_matched: 5,
-            channels_created: 2,
-            channels_updated: 1,
-            groups_created: 0,
-            streams_merged: 2,
-            streams_skipped: 0,
-            created_entities: [],
-            modified_entities: [],
-          });
+          return HttpResponse.json(
+            { execution_id: 1, status: 'running', message: 'started' },
+            { status: 202 }
+          );
         })
       );
 
-      // API uses ruleIds which maps to rule_ids in the request body
       await runAutoCreationPipeline({ ruleIds: [1, 2, 3] });
 
       expect(capturedBody.rule_ids).toEqual([1, 2, 3]);
     });
 
-    it('handles pipeline errors', async () => {
+    it('handles pipeline enqueue errors', async () => {
       server.use(
         http.post('/api/auto-creation/run', () => {
           return HttpResponse.json(

@@ -199,3 +199,41 @@ class TestRequestTimeoutMiddleware:
                 r for r in app.routes
                 if getattr(r, "path", None) != "/api/_test_stall_for_timeout"
             ]
+
+    def test_auto_creation_no_longer_exempt(self):
+        """bd-enfsy: now that /run uses background-task pattern, /api/auto-creation/
+        must NOT be in the exempt prefix list — defense-in-depth restored."""
+        import main as main_module
+
+        assert "/api/auto-creation/" not in main_module._TIMEOUT_EXEMPT_PREFIXES, (
+            "bd-enfsy: /api/auto-creation/ should be removed from "
+            "_TIMEOUT_EXEMPT_PREFIXES once /run is converted to 202 + poll. "
+            "If you re-added it, you've broken the operational defense-in-depth."
+        )
+
+    @pytest.mark.asyncio
+    async def test_auto_creation_crud_subject_to_timeout(self, async_client, test_session, monkeypatch):
+        """bd-enfsy: A pathologically slow auto-creation CRUD handler must now
+        be cut off by the timeout middleware (was previously bypassed)."""
+        import main as main_module
+
+        monkeypatch.setattr(main_module, "_REQUEST_TIMEOUT_SECONDS", 0.2)
+
+        from main import app
+
+        @app.get("/api/auto-creation/_test_stall_enfsy", include_in_schema=False)
+        async def _stall_route():
+            await asyncio.sleep(1.0)
+            return {"unreachable": True}
+
+        try:
+            response = await async_client.get("/api/auto-creation/_test_stall_enfsy")
+            assert response.status_code == 504, (
+                "Auto-creation endpoint should now be subject to the request "
+                "timeout middleware (bd-enfsy removed the exempt prefix)."
+            )
+        finally:
+            app.routes[:] = [
+                r for r in app.routes
+                if getattr(r, "path", None) != "/api/auto-creation/_test_stall_enfsy"
+            ]
