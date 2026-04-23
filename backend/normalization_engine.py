@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
+import safe_regex  # bd-eio04.14: ReDoS-guarded wrapper for user-supplied regex
 from models import NormalizationRule, NormalizationRuleGroup, TagGroup, Tag
 
 logger = logging.getLogger(__name__)
@@ -664,18 +665,22 @@ class NormalizationEngine:
             return RuleMatch(matched=False)
 
         elif condition_type == "regex":
-            try:
-                flags = 0 if case_sensitive else re.IGNORECASE
-                match = re.search(pattern, text, flags)
-                if match:
-                    return RuleMatch(
-                        matched=True,
-                        match_start=match.start(),
-                        match_end=match.end(),
-                        groups=match.groups()
-                    )
-            except re.error as e:
-                logger.warning("[NORMALIZE] Invalid regex pattern: %s", e)
+            # bd-eio04.14: migrated to safe_regex. User-supplied pattern;
+            # on timeout / oversize / compile-error safe_regex.search
+            # returns None and logs a [SAFE_REGEX] WARN (with pattern
+            # sha256 + excerpt). Falling through to RuleMatch(matched=False)
+            # preserves the pre-migration no-match arm, which is the
+            # contract bd-eio04.1's NormalizationPolicy relies on when a
+            # regex condition fails to evaluate.
+            flags = 0 if case_sensitive else re.IGNORECASE
+            match = safe_regex.search(pattern, text, flags=flags)
+            if match:
+                return RuleMatch(
+                    matched=True,
+                    match_start=match.start(),
+                    match_end=match.end(),
+                    groups=match.groups()
+                )
             return RuleMatch(matched=False)
 
         else:
@@ -752,9 +757,17 @@ class NormalizationEngine:
                 sep = r'[\s:\-|/]+'
                 tag_pat = re.escape(match_tag)
                 flags = 0 if case_sensitive else re.IGNORECASE
+                # bd-eio04.14: tag-group contains patterns are built from
+                # user tag values via re.escape (length-bounded in practice
+                # but still user-controlled). Route through safe_regex so
+                # a pathological tag value cannot trigger ReDoS inside the
+                # normalization loop. Fallback contract for both calls: on
+                # timeout safe_regex returns None -> fall through to the
+                # non-match return at the bottom of the loop, tag group
+                # simply "didn't apply" for this entry.
                 # Try to match with separators on both sides first
                 pattern = r'(' + sep + r')' + tag_pat + r'(?=' + sep + r'|$)'
-                m = re.search(pattern, text, flags)
+                m = safe_regex.search(pattern, text, flags=flags)
                 if m:
                     # Consume the leading separator group + tag, leave trailing for next segment
                     return RuleMatch(
@@ -765,7 +778,7 @@ class NormalizationEngine:
                     )
                 # Try at start of string: tag followed by separator
                 pattern = tag_pat + r'(' + sep + r')'
-                m = re.match(pattern, text, flags)
+                m = safe_regex.match(pattern, text, flags=flags)
                 if m:
                     return RuleMatch(
                         matched=True,
@@ -877,14 +890,17 @@ class NormalizationEngine:
             if rule.condition_type != "regex":
                 logger.warning("[NORMALIZE] regex_replace requires regex condition in rule %s", rule.id)
                 return text
-            try:
-                flags = 0 if case_sensitive else re.IGNORECASE
-                # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
-                py_replacement = re.sub(r'\$(\d+)', r'\\\1', action_value)
-                return re.sub(pattern, py_replacement, text, flags=flags)
-            except re.error as e:
-                logger.warning("[NORMALIZE] Regex replace error in rule %s: %s", rule.id, e)
-                return text
+            # bd-eio04.14: migrated user-regex call to safe_regex.sub.
+            # The inner re.sub on action_value (backreference rewrite) stays
+            # on stdlib re — that pattern is a hardcoded module literal,
+            # not user-supplied. Fallback contract: safe_regex.sub returns
+            # text unchanged on timeout / oversize / compile error. The
+            # safe_regex module emits its own [SAFE_REGEX] WARN log, so no
+            # additional log here.
+            flags = 0 if case_sensitive else re.IGNORECASE
+            # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
+            py_replacement = re.sub(r'\$(\d+)', r'\\\1', action_value)
+            return safe_regex.sub(pattern, py_replacement, text, flags=flags)
 
         elif action_type == "strip_prefix":
             # Remove pattern from start, including any following separator
@@ -973,13 +989,16 @@ class NormalizationEngine:
         elif action_type == "regex_replace":
             # For else, apply the regex pattern to the whole text
             if rule.condition_value:
-                try:
-                    flags = 0 if rule.case_sensitive else re.IGNORECASE
-                    # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
-                    py_replacement = re.sub(r'\$(\d+)', r'\\\1', action_value)
-                    return re.sub(rule.condition_value, py_replacement, text, flags=flags)
-                except re.error as e:
-                    logger.warning("[NORMALIZE] Regex replace error in else action of rule %s: %s", rule.id, e)
+                # bd-eio04.14: migrated user-regex call to safe_regex.sub.
+                # Backreference-rewrite sub on action_value stays on stdlib
+                # re (hardcoded literal pattern). Fallback contract: on
+                # timeout / oversize / compile-error safe_regex.sub
+                # returns text unchanged — matches pre-migration behavior
+                # where re.error was caught and text was returned.
+                flags = 0 if rule.case_sensitive else re.IGNORECASE
+                # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
+                py_replacement = re.sub(r'\$(\d+)', r'\\\1', action_value)
+                return safe_regex.sub(rule.condition_value, py_replacement, text, flags=flags)
             return text
 
         elif action_type == "strip_prefix":
@@ -1390,7 +1409,7 @@ class NormalizationEngine:
         # channel number — this prevents matching random words in names
         # like "(MC Radio) New Wave" or "DOCUBOX: MILITARY AND WAR"
         has_network = any(
-            re.search(r'\b' + net + r'\b', upper)
+            safe_regex.search(r'\b' + net + r'\b', upper)
             for net in NormalizationEngine._BROADCAST_NETWORKS
         )
         has_channel_num = bool(re.search(r'\b\d{1,2}\b', upper))
