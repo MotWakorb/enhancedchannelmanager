@@ -264,6 +264,32 @@ class TestBulkUpdateAutoCreationRules:
         assert test_session.query(AutoCreationRule).get(r3.id).enabled is True
 
     @pytest.mark.asyncio
+    async def test_reports_all_missing_ids(self, async_client, test_session):
+        """bd-bh1hh: When multiple rule_ids are missing, the 404 body mentions
+        every missing id (not just the first one encountered). This is a visible
+        API change from the original loop-and-fail-fast behavior.
+        """
+        r1 = _create_rule(test_session, name="BulkMiss1", enabled=True)
+        r2 = _create_rule(test_session, name="BulkMiss2", enabled=True)
+
+        missing_a = 99999
+        missing_b = 99998
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={
+                    "rule_ids": [r1.id, missing_a, r2.id, missing_b],
+                    "enabled": False,
+                },
+            )
+
+        assert response.status_code == 404
+        detail = str(response.json()["detail"])
+        assert str(missing_a) in detail
+        assert str(missing_b) in detail
+
+    @pytest.mark.asyncio
     async def test_sets_merge_streams_remove_non_matching(self, async_client, test_session):
         """Updates remove_non_matching on all merge_streams actions."""
         merge_action = {

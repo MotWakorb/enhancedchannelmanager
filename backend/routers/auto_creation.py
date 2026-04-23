@@ -438,11 +438,23 @@ async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRe
 
     session = get_session()
     try:
+        # Single SELECT ... WHERE id IN (...) instead of N per-id queries
+        # (bd-bh1hh: avoid N+1 — at max_length=500 this collapses 500 round
+        # trips into 1).
+        rules_by_id = {
+            r.id: r for r in session.query(AutoCreationRule)
+            .filter(AutoCreationRule.id.in_(rule_ids)).all()
+        }
+        missing = [rid for rid in rule_ids if rid not in rules_by_id]
+        if missing:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Rules not found: {missing}",
+            )
+
         updated: list = []
         for rid in rule_ids:
-            rule = session.query(AutoCreationRule).filter(AutoCreationRule.id == rid).first()
-            if not rule:
-                raise HTTPException(status_code=404, detail=f"Rule not found: {rid}")
+            rule = rules_by_id[rid]
 
             if payload:
                 _apply_rule_scalar_updates(rule, scalar_update)
@@ -466,8 +478,12 @@ async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRe
             updated.append(rule)
 
         session.commit()
-        for rule in updated:
-            session.refresh(rule)
+        # No per-rule session.refresh() — attached instances already reflect
+        # the committed values. AutoCreationRule has no server_default or DB
+        # triggers on the columns written here; updated_at uses a Python-side
+        # onupdate callable which SQLAlchemy applies during flush, so it is
+        # populated on the in-memory instance before to_dict() reads it.
+        # (bd-bh1hh: drops another N SELECTs per bulk request.)
 
         names = ", ".join(r.name for r in updated[:5])
         if len(updated) > 5:
