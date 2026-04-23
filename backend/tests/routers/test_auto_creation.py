@@ -212,6 +212,28 @@ class TestBulkUpdateAutoCreationRules:
         assert response.status_code == 422
 
     @pytest.mark.asyncio
+    async def test_accepts_exactly_500_rule_ids(self, async_client, test_session):
+        rules = [_create_rule(test_session, name=f"Bulk500-{i}", enabled=True) for i in range(500)]
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
+                "rule_ids": [r.id for r in rules],
+                "enabled": False,
+            })
+        assert response.status_code == 200
+        assert response.json()["updated_count"] == 500
+
+    @pytest.mark.asyncio
+    async def test_rejects_duplicate_rule_ids(self, async_client, test_session):
+        r = _create_rule(test_session, name="DupRule", enabled=True)
+        response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
+            "rule_ids": [r.id, r.id],
+            "enabled": False,
+        })
+        assert response.status_code == 400
+        assert "duplicate" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
     async def test_rejects_no_fields(self, async_client):
         """At least one update field is required."""
         response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
@@ -230,7 +252,7 @@ class TestBulkUpdateAutoCreationRules:
         with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
              patch("routers.auto_creation.journal"):
             response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
-                "rule_ids": [r1.id, r2.id, missing_id, r3.id],
+                "rule_ids": [r1.id, r2.id, r3.id, missing_id],
                 "enabled": False,
             })
 
