@@ -848,3 +848,137 @@ class TestActionTypes:
         assert ActionType.SET_VARIABLE.value == "set_variable"
         assert ActionType.SKIP.value == "skip"
         assert ActionType.STOP_PROCESSING.value == "stop_processing"
+
+
+class TestSafeRegexMigrationWriteTimeValidation:
+    """
+    bd-ltjyx — write-time regex validation for user-supplied patterns must
+    route through ``safe_regex.compile`` instead of bare ``re.compile``.
+
+    This locks two behaviors that bare ``re.compile`` did NOT enforce:
+
+    1. Patterns longer than ``safe_regex.DEFAULT_MAX_PATTERN_LEN`` (500
+       chars) must be rejected at validation time. Bare ``re.compile``
+       would happily compile a 50,000-char pattern; ``safe_regex.compile``
+       caps it.
+    2. The error surfaced for syntactically invalid patterns must remain
+       backward-compatible — existing UI and API contracts assert the
+       string ``"Invalid regex"`` (or ``"Invalid name_transform_pattern"``)
+       appears in the validation error. ``safe_regex.SafeRegexError`` is
+       wrapped, not re-raised, so the user-facing message stays stable.
+    """
+
+    # safe_regex.DEFAULT_MAX_PATTERN_LEN is 500 — anything past that must
+    # be rejected at write time.
+    OVERSIZE_PATTERN = "a" * 600
+
+    # ----- Site 1: Condition regex types (auto_creation_schema.py:167) -----
+
+    def test_oversize_pattern_rejected_for_stream_name_matches(self):
+        """Oversize pattern must be rejected at validation time."""
+        cond = Condition(type="stream_name_matches", value=self.OVERSIZE_PATTERN)
+        errors = cond.validate()
+        assert len(errors) > 0
+        assert "Invalid regex" in errors[0]
+
+    def test_oversize_pattern_rejected_for_channel_exists_matching(self):
+        cond = Condition(type="channel_exists_matching", value=self.OVERSIZE_PATTERN)
+        errors = cond.validate()
+        assert len(errors) > 0
+        assert "Invalid regex" in errors[0]
+
+    def test_oversize_pattern_rejected_for_stream_group_matches(self):
+        cond = Condition(type="stream_group_matches", value=self.OVERSIZE_PATTERN)
+        errors = cond.validate()
+        assert len(errors) > 0
+        assert "Invalid regex" in errors[0]
+
+    def test_oversize_pattern_rejected_for_tvg_id_matches(self):
+        cond = Condition(type="tvg_id_matches", value=self.OVERSIZE_PATTERN)
+        errors = cond.validate()
+        assert len(errors) > 0
+        assert "Invalid regex" in errors[0]
+
+    # ----- Site 2: set_variable pattern (auto_creation_schema.py:492) -----
+
+    def test_oversize_pattern_rejected_for_set_variable_regex_extract(self):
+        action = Action(
+            type="set_variable",
+            params={
+                "variable_name": "v",
+                "variable_mode": "regex_extract",
+                "source_field": "stream_name",
+                "pattern": self.OVERSIZE_PATTERN,
+            },
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "Invalid regex" in errors[0]
+
+    def test_oversize_pattern_rejected_for_set_variable_regex_replace(self):
+        action = Action(
+            type="set_variable",
+            params={
+                "variable_name": "v",
+                "variable_mode": "regex_replace",
+                "source_field": "stream_name",
+                "pattern": self.OVERSIZE_PATTERN,
+                "replacement": "",
+            },
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "Invalid regex" in errors[0]
+
+    # ----- Site 3: name_transform_pattern (auto_creation_schema.py:520) -----
+
+    def test_oversize_pattern_rejected_for_name_transform(self):
+        action = Action(
+            type="create_channel",
+            params={
+                "name_template": "test",
+                "name_transform_pattern": self.OVERSIZE_PATTERN,
+            },
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+        # Existing contract: error message names the field.
+        assert "name_transform_pattern" in errors[0]
+
+    # ----- Boundary check: pattern at exactly the cap is still accepted ---
+
+    def test_pattern_at_max_length_is_accepted_for_condition(self):
+        """Patterns exactly at the 500-char cap are still valid (boundary)."""
+        # Use a literal string (no metacharacters) so the only thing under
+        # test is the length cap, not regex syntax.
+        at_cap = "a" * 500
+        cond = Condition(type="stream_name_matches", value=at_cap)
+        errors = cond.validate()
+        assert errors == []
+
+    def test_pattern_at_max_length_is_accepted_for_set_variable(self):
+        at_cap = "a" * 500
+        action = Action(
+            type="set_variable",
+            params={
+                "variable_name": "v",
+                "variable_mode": "regex_extract",
+                "source_field": "stream_name",
+                "pattern": at_cap,
+            },
+        )
+        errors = action.validate()
+        assert errors == []
+
+    def test_pattern_at_max_length_is_accepted_for_name_transform(self):
+        at_cap = "a" * 500
+        action = Action(
+            type="create_channel",
+            params={
+                "name_template": "test",
+                "name_transform_pattern": at_cap,
+                "name_transform_replacement": "",
+            },
+        )
+        errors = action.validate()
+        assert errors == []
