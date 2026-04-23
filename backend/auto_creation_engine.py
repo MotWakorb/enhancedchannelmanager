@@ -80,7 +80,8 @@ class AutoCreationEngine:
         dry_run: bool = False,
         triggered_by: str = "manual",
         m3u_account_ids: list[int] = None,
-        rule_ids: list[int] = None
+        rule_ids: list[int] = None,
+        execution_id: int | None = None,
     ) -> dict:
         """
         Run the full auto-creation pipeline.
@@ -90,12 +91,19 @@ class AutoCreationEngine:
             triggered_by: How the pipeline was triggered (manual, scheduled, m3u_refresh)
             m3u_account_ids: Optional list of M3U account IDs to process (None = all)
             rule_ids: Optional list of rule IDs to run (None = all enabled)
+            execution_id: Optional pre-created execution record id. When the
+                router enqueues a background task (bd-enfsy 202+poll pattern)
+                it creates an AutoCreationExecution(status="running") up front
+                so it can return the id to the caller immediately. Passing the
+                id here lets the engine reuse that record instead of creating a
+                second one — the row stays in "running" while work proceeds and
+                is finalized to "completed" / "failed" by this method.
 
         Returns:
             Dict with execution summary and results
         """
         started_at = datetime.utcnow()
-        logger.info("[AUTO-CREATE-ENGINE] Starting auto-creation pipeline (dry_run=%s, triggered_by=%s)", dry_run, triggered_by)
+        logger.info("[AUTO-CREATE-ENGINE] Starting auto-creation pipeline (dry_run=%s, triggered_by=%s, execution_id=%s)", dry_run, triggered_by, execution_id)
 
         # Load existing channels and groups
         await self._load_existing_data()
@@ -104,6 +112,11 @@ class AutoCreationEngine:
         rules = await self._load_rules(rule_ids)
         if not rules:
             logger.info("[AUTO-CREATE-ENGINE] No enabled rules found")
+            # If a pre-created execution exists, mark it completed so it does
+            # not stay in "running" forever (otherwise the frontend poll would
+            # spin indefinitely on a no-op run).
+            if execution_id is not None:
+                await self._finalize_no_op_execution(execution_id)
             return {
                 "success": True,
                 "message": "No enabled rules to process",
@@ -134,11 +147,29 @@ class AutoCreationEngine:
         # Apply global exclusion filters
         streams, exclusion_log = await self._apply_global_filters(streams)
 
-        # Create execution record
-        execution = await self._create_execution(
-            mode="dry_run" if dry_run else "execute",
-            triggered_by=triggered_by
-        )
+        # Reuse pre-created execution record (bd-enfsy 202+poll path) when
+        # the router has supplied an id; otherwise create one ourselves
+        # (synchronous /tasks/scheduled path remains unchanged).
+        if execution_id is not None:
+            execution = await self._load_execution(execution_id)
+            if execution is None:
+                # The pre-created row was deleted between enqueue and run —
+                # fall back to creating a fresh one so the run still records
+                # something sensible.
+                logger.warning(
+                    "[AUTO-CREATE-ENGINE] execution_id=%s not found at run time; "
+                    "creating a new execution record",
+                    execution_id,
+                )
+                execution = await self._create_execution(
+                    mode="dry_run" if dry_run else "execute",
+                    triggered_by=triggered_by,
+                )
+        else:
+            execution = await self._create_execution(
+                mode="dry_run" if dry_run else "execute",
+                triggered_by=triggered_by
+            )
 
         # Process streams through rules
         results = await self._process_streams(streams, rules, execution, dry_run)
@@ -199,7 +230,8 @@ class AutoCreationEngine:
         self,
         rule_id: int,
         dry_run: bool = False,
-        triggered_by: str = "manual"
+        triggered_by: str = "manual",
+        execution_id: int | None = None,
     ) -> dict:
         """
         Run a specific rule.
@@ -208,6 +240,9 @@ class AutoCreationEngine:
             rule_id: ID of the rule to run
             dry_run: If True, only simulate changes
             triggered_by: How the rule was triggered
+            execution_id: Optional pre-created execution record id, threaded
+                through to ``run_pipeline`` (see its docstring for the
+                bd-enfsy 202+poll background-task pattern).
 
         Returns:
             Dict with execution summary
@@ -215,7 +250,8 @@ class AutoCreationEngine:
         return await self.run_pipeline(
             dry_run=dry_run,
             triggered_by=triggered_by,
-            rule_ids=[rule_id]
+            rule_ids=[rule_id],
+            execution_id=execution_id,
         )
 
     async def rollback_execution(self, execution_id: int, rolled_back_by: str = "manual") -> dict:
@@ -2171,6 +2207,41 @@ class AutoCreationEngine:
             session.commit()
             session.refresh(execution)
             return execution
+        finally:
+            session.close()
+
+    async def _load_execution(self, execution_id: int) -> AutoCreationExecution | None:
+        """Load an existing execution record by id (bd-enfsy: reuses the row
+        the router pre-created when enqueuing background work)."""
+        session = get_session()
+        try:
+            execution = session.query(AutoCreationExecution).filter(
+                AutoCreationExecution.id == execution_id
+            ).first()
+            if execution is not None:
+                # Detach so it can be mutated outside this session and saved
+                # via _save_execution(merge) like a freshly-created one.
+                session.expunge(execution)
+            return execution
+        finally:
+            session.close()
+
+    async def _finalize_no_op_execution(self, execution_id: int) -> None:
+        """Mark a pre-created execution as completed when there's no work to do
+        (e.g. no enabled rules). Without this the row would remain in
+        ``status="running"`` forever and the frontend poller would spin."""
+        session = get_session()
+        try:
+            execution = session.query(AutoCreationExecution).filter(
+                AutoCreationExecution.id == execution_id
+            ).first()
+            if execution is None:
+                return
+            now = datetime.utcnow()
+            execution.completed_at = now
+            execution.duration_seconds = (now - execution.started_at).total_seconds() if execution.started_at else 0.0
+            execution.status = "completed"
+            session.commit()
         finally:
             session.close()
 
