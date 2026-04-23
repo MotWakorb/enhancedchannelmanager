@@ -27,8 +27,14 @@ class CleanupTask(TaskScheduler):
     Configuration options (stored in task config JSON):
     - probe_history_days: Keep probe history for this many days (default: 30)
     - task_history_days: Keep task execution history for this many days (default: 30)
-    - journal_days: Keep journal entries for this many days (default: 30)
+    - journal_days: Keep journal entries for this many days (default: 90)
     - vacuum_db: Run VACUUM after cleanup (default: True)
+
+    Retention rationale (bd-dmu8w): the journal default is 90 days because
+    bulk auto-creation now produces per-entity rows (bd-91mcq), amplifying
+    journal growth N-fold per run. 90 days is the documented hot-retention
+    window and matches ``journal.purge_old_entries``' own default. Operators
+    who need a longer audit trail should override this via the task config.
     """
 
     task_id = "cleanup"
@@ -47,7 +53,9 @@ class CleanupTask(TaskScheduler):
         # Task-specific config - retention periods in days
         self.probe_history_days: int = 30
         self.task_history_days: int = 30
-        self.journal_days: int = 30
+        # bd-dmu8w: 90 days hot retention for journal entries.
+        # See class docstring for rationale.
+        self.journal_days: int = 90
         self.vacuum_db: bool = True
 
     def get_config(self) -> dict:

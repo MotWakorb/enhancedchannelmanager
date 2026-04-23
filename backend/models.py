@@ -30,11 +30,26 @@ class JournalEntry(Base):
     user_initiated = Column(Boolean, default=True, nullable=False)  # Manual vs automatic
     batch_id = Column(String(50), nullable=True)  # Groups related changes
 
-    # Indexes for common queries
+    # Indexes for common queries.
+    #
+    # bd-dmu8w added the next two on top of the bd-91mcq per-entity audit work:
+    #
+    # * ``idx_journal_batch_id`` — single-column on ``batch_id``. Forensic
+    #   "show me everything in batch X" queries (auto-creation bulk runs)
+    #   used to full-scan; bulk operations now amplify row growth N-fold,
+    #   making the scan cost grow with table size.
+    # * ``idx_journal_entity`` — composite ``(category, entity_id, timestamp DESC)``
+    #   for the "history for this entity" access pattern (e.g.
+    #   ``WHERE category='channel' AND entity_id=42 ORDER BY timestamp DESC``).
+    #   Leading columns are the equality filters; the trailing
+    #   ``timestamp DESC`` lets SQLite serve newest-first ranges from the
+    #   index without an additional sort.
     __table_args__ = (
         Index("idx_journal_timestamp", timestamp.desc()),
         Index("idx_journal_category", category),
         Index("idx_journal_action_type", action_type),
+        Index("idx_journal_batch_id", batch_id),
+        Index("idx_journal_entity", category, entity_id, timestamp.desc()),
     )
 
     def to_dict(self) -> dict:
