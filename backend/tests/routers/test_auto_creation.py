@@ -289,6 +289,79 @@ class TestBulkUpdateAutoCreationRules:
         acts = json.loads(rule.actions)
         assert acts[0]["remove_non_matching"] is True
 
+    @pytest.mark.asyncio
+    async def test_scalars_only_update_skips_validate_on_drifted_rule(
+        self, async_client, test_session
+    ):
+        """bd-z7xqy: Scalar-only bulk edits must succeed even when the stored
+        rule's conditions/actions fail validate_rule (schema drift / legacy data).
+
+        Uses the real validate_rule — no mock — to prove the handler no longer
+        gates scalar-only updates on post-update schema validation.
+        """
+        rule = _create_rule(
+            test_session,
+            name="DriftedScalar",
+            enabled=False,
+            conditions=json.dumps([]),  # validate_rule rejects empty conditions
+        )
+
+        with patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={"rule_ids": [rule.id], "enabled": True},
+            )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["updated_count"] == 1
+
+        test_session.expire_all()
+        refreshed = test_session.query(AutoCreationRule).get(rule.id)
+        assert refreshed.enabled is True
+
+    @pytest.mark.asyncio
+    async def test_merge_streams_payload_still_validates_drifted_rule(
+        self, async_client, test_session
+    ):
+        """bd-z7xqy: When the bulk payload touches rule logic
+        (merge_streams_remove_non_matching), validate_rule must still gate
+        the change and the transaction must roll back on failure.
+        """
+        merge_action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "match_by": "tvg_id",
+            "remove_non_matching": False,
+        }
+        original_actions = json.dumps([merge_action])
+        rule = _create_rule(
+            test_session,
+            name="DriftedMerge",
+            conditions=json.dumps([]),  # drift: empty conditions fail validate_rule
+            actions=original_actions,
+        )
+
+        with patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={
+                    "rule_ids": [rule.id],
+                    "merge_streams_remove_non_matching": True,
+                },
+            )
+
+        assert response.status_code == 400, response.text
+        detail = response.json()["detail"]
+        # detail is a dict with {"message": "...", "errors": [...]}
+        message = detail["message"] if isinstance(detail, dict) else str(detail)
+        assert "Invalid rule configuration" in message
+
+        # Rollback: actions JSON must be unchanged.
+        test_session.expire_all()
+        refreshed = test_session.query(AutoCreationRule).get(rule.id)
+        assert json.loads(refreshed.actions) == [merge_action]
+
 
 class TestDeleteAutoCreationRule:
     """Tests for DELETE /api/auto-creation/rules/{rule_id}."""
