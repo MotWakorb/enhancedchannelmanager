@@ -398,6 +398,73 @@ class TestUpdateDigestSettings:
         assert "regex" in response.json()["detail"].lower()
 
     @pytest.mark.asyncio
+    async def test_rejects_invalid_stream_regex(self, async_client, test_session):
+        """Returns 400 for invalid stream-pattern regex (bd-3u6p0)."""
+        _create_digest_settings(test_session)
+
+        with patch("routers.m3u_digest.journal"):
+            response = await async_client.put("/api/m3u/digest/settings", json={
+                "exclude_stream_patterns": ["(unclosed"],
+            })
+
+        assert response.status_code == 400
+        assert "regex" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_rejects_oversize_group_pattern(self, async_client, test_session):
+        """Returns 400 when an exclude_group_patterns entry exceeds the
+        safe_regex pattern-length cap (501+ chars).
+
+        bd-3u6p0: write-time validation must route through safe_regex.compile,
+        which enforces DEFAULT_MAX_PATTERN_LEN=500 to prevent
+        paste-a-novel-into-the-rules-field bypass of the per-call timeout.
+        Stdlib re.compile would happily accept this.
+        """
+        _create_digest_settings(test_session)
+
+        oversize = "a" * 501
+
+        with patch("routers.m3u_digest.journal"):
+            response = await async_client.put("/api/m3u/digest/settings", json={
+                "exclude_group_patterns": [oversize],
+            })
+
+        assert response.status_code == 400
+        assert "regex" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_rejects_oversize_stream_pattern(self, async_client, test_session):
+        """Returns 400 when an exclude_stream_patterns entry exceeds the
+        safe_regex pattern-length cap (bd-3u6p0)."""
+        _create_digest_settings(test_session)
+
+        oversize = "a" * 501
+
+        with patch("routers.m3u_digest.journal"):
+            response = await async_client.put("/api/m3u/digest/settings", json={
+                "exclude_stream_patterns": [oversize],
+            })
+
+        assert response.status_code == 400
+        assert "regex" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_accepts_valid_exclude_patterns(self, async_client, test_session):
+        """Accepts valid exclude patterns under the safe_regex length cap."""
+        _create_digest_settings(test_session)
+
+        with patch("routers.m3u_digest.journal"):
+            response = await async_client.put("/api/m3u/digest/settings", json={
+                "exclude_group_patterns": [r"ESPN\+"],
+                "exclude_stream_patterns": [r"^PPV\b"],
+            })
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["exclude_group_patterns"] == [r"ESPN\+"]
+        assert data["exclude_stream_patterns"] == [r"^PPV\b"]
+
+    @pytest.mark.asyncio
     async def test_accepts_valid_emails(self, async_client, test_session):
         """Accepts valid email recipients."""
         _create_digest_settings(test_session)
@@ -458,3 +525,41 @@ class TestSendTestDigest:
             response = await async_client.post("/api/m3u/digest/test")
 
         assert response.status_code == 500
+
+
+class TestRouterUsesSafeRegex:
+    """
+    Migration regression tests (bd-3u6p0).
+
+    Lock in the safe_regex.compile migration of the write-time exclude-pattern
+    validation in routers/m3u_digest.py. If someone reverts the migration,
+    these tests fail loudly.
+    """
+
+    def test_router_module_imports_safe_regex(self):
+        """The router must import safe_regex at module scope."""
+        import routers.m3u_digest as router_module
+        assert hasattr(router_module, "safe_regex"), (
+            "routers.m3u_digest must import safe_regex (bd-3u6p0)"
+        )
+
+    def test_update_settings_source_uses_safe_regex_compile(self):
+        """
+        Source-level check that the digest-settings PUT handler routes
+        write-time pattern validation through safe_regex.compile rather than
+        bare re.compile. Catches a revert without spinning up the full
+        async client.
+        """
+        import inspect
+        import routers.m3u_digest as router_module
+
+        src = inspect.getsource(router_module)
+        assert "safe_regex.compile" in src, (
+            "routers/m3u_digest.py no longer calls safe_regex.compile — "
+            "the bd-3u6p0 migration has been reverted"
+        )
+        # The two write-time sites must NOT carry nosemgrep annotations.
+        assert "nosemgrep: no-bare-re-on-dynamic-pattern" not in src, (
+            "routers/m3u_digest.py still carries a no-bare-re-on-dynamic-pattern "
+            "nosemgrep annotation — bd-3u6p0 should have removed both"
+        )
