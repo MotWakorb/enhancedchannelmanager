@@ -9,7 +9,7 @@ Mocks: auto_creation_engine, auto_creation_schema, get_client(), get_session().
 import json
 import pytest
 from datetime import datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from models import AutoCreationRule, AutoCreationExecution
 
@@ -440,6 +440,112 @@ class TestBulkUpdateAutoCreationRules:
         refreshed = test_session.query(AutoCreationRule).get(r.id)
         assert refreshed.enabled is True
         assert refreshed.priority == 5
+
+    @pytest.mark.asyncio
+    async def test_emits_per_entity_journal_entries_with_shared_batch_id(
+        self, async_client, test_session
+    ):
+        """bd-91mcq: Bulk-update must emit one journal entry per mutated rule,
+        each with entity_id=rule.id, and all sharing the same batch_id.
+
+        Matches the pattern in backend/routers/channels.py:800 (bulk channel
+        renumber) — per-entity forensics over a single summary entry.
+        """
+        r1 = _create_rule(test_session, name="JournalA", enabled=False)
+        r2 = _create_rule(test_session, name="JournalB", enabled=False)
+        r3 = _create_rule(test_session, name="JournalC", enabled=False)
+
+        mock_journal = MagicMock()
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal", mock_journal):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={"rule_ids": [r1.id, r2.id, r3.id], "enabled": True},
+            )
+
+        assert response.status_code == 200, response.text
+
+        # One log_entry call per rule mutated.
+        assert mock_journal.log_entry.call_count == 3
+
+        # Collect entity_ids and batch_ids from each call.
+        call_entity_ids = []
+        call_batch_ids = []
+        for call in mock_journal.log_entry.call_args_list:
+            kwargs = call.kwargs
+            call_entity_ids.append(kwargs["entity_id"])
+            call_batch_ids.append(kwargs["batch_id"])
+
+        # Each entity_id matches one of the seeded rules, all distinct.
+        assert sorted(call_entity_ids) == sorted([r1.id, r2.id, r3.id])
+
+        # All three calls share the same batch_id (grouping).
+        assert len(set(call_batch_ids)) == 1
+        assert call_batch_ids[0] is not None and call_batch_ids[0] != ""
+
+    @pytest.mark.asyncio
+    async def test_journal_description_reflects_scalar_diff(
+        self, async_client, test_session
+    ):
+        """bd-91mcq: Journal description must show the before→after diff of
+        changed scalar fields (e.g. 'enabled: False → True, priority: 3 → 5').
+        """
+        rule = _create_rule(
+            test_session, name="DiffRule", enabled=False, priority=3
+        )
+
+        mock_journal = MagicMock()
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal", mock_journal):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={"rule_ids": [rule.id], "enabled": True, "priority": 5},
+            )
+
+        assert response.status_code == 200, response.text
+        assert mock_journal.log_entry.call_count == 1
+
+        call = mock_journal.log_entry.call_args
+        description = call.kwargs["description"]
+        # Description must reflect both transitions.
+        assert "enabled" in description
+        assert "priority" in description
+        assert "False" in description and "True" in description
+        assert "3" in description and "5" in description
+
+        # before/after also capture the diff, mirroring channels.py pattern.
+        before = call.kwargs.get("before_value") or {}
+        after = call.kwargs.get("after_value") or {}
+        assert before.get("enabled") is False
+        assert after.get("enabled") is True
+        assert before.get("priority") == 3
+        assert after.get("priority") == 5
+
+    @pytest.mark.asyncio
+    async def test_no_journal_entries_when_rollback(
+        self, async_client, test_session
+    ):
+        """bd-91mcq: On rollback path (missing rule id triggers 404), no
+        journal entries must be emitted.
+        """
+        r1 = _create_rule(test_session, name="NoJournalRB1", enabled=True)
+        r2 = _create_rule(test_session, name="NoJournalRB2", enabled=True)
+        missing_id = 999999
+
+        mock_journal = MagicMock()
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal", mock_journal):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={
+                    "rule_ids": [r1.id, r2.id, missing_id],
+                    "enabled": False,
+                },
+            )
+
+        assert response.status_code == 404
+        # Zero log_entry calls on the rollback path.
+        assert mock_journal.log_entry.call_count == 0
 
 
 class TestDeleteAutoCreationRule:
