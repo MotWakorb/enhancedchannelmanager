@@ -75,6 +75,13 @@ export function ECMIntegration({
 
   const selectedProfile = profiles.find(p => p.id === selectedProfileId) ?? profiles[0] ?? null;
 
+  // Sync selectedProfileId when profiles change (React-blessed "adjust state on
+  // prop change" pattern — update-during-render with a guard, not an effect).
+  // See https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
+  if (profiles.length > 0 && !profiles.find(p => p.id === selectedProfileId)) {
+    setSelectedProfileId(profiles[0].id);
+  }
+
   // Fetch configs for name resolution
   useEffect(() => {
     fetch('/api/ffmpeg/configs')
@@ -84,13 +91,6 @@ export function ECMIntegration({
       })
       .catch(() => {});
   }, []);
-
-  // Sync selectedProfileId when profiles change
-  useEffect(() => {
-    if (profiles.length > 0 && !profiles.find(p => p.id === selectedProfileId)) {
-      setSelectedProfileId(profiles[0].id);
-    }
-  }, [profiles, selectedProfileId]);
 
   const getConfigName = useCallback((configId: number) => {
     return configs.find(c => c.id === configId)?.name || `Config #${configId}`;

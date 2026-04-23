@@ -30,6 +30,8 @@ describe('WatchHistoryPanel', () => {
       channel_id: 'ch-1',
       channel_name: 'ESPN',
       ip_address: '192.168.1.100',
+      user_id: 1,
+      username: 'admin',
       connected_at: new Date(Date.now() - 3600000).toISOString(), // 1 hour ago
       disconnected_at: new Date(Date.now() - 1800000).toISOString(), // 30 min ago
       watch_seconds: 1800,
@@ -40,6 +42,8 @@ describe('WatchHistoryPanel', () => {
       channel_id: 'ch-2',
       channel_name: 'CNN',
       ip_address: '192.168.1.101',
+      user_id: null,
+      username: null,
       connected_at: new Date(Date.now() - 7200000).toISOString(), // 2 hours ago
       disconnected_at: new Date(Date.now() - 5400000).toISOString(), // 1.5 hours ago
       watch_seconds: 1800,
@@ -50,6 +54,8 @@ describe('WatchHistoryPanel', () => {
       channel_id: 'ch-3',
       channel_name: 'HBO',
       ip_address: '192.168.1.102',
+      user_id: 2,
+      username: 'viewer1',
       connected_at: new Date(Date.now() - 600000).toISOString(), // 10 min ago
       disconnected_at: null, // Still watching
       watch_seconds: 600,

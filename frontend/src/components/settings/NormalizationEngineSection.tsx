@@ -4,7 +4,7 @@
  * Advanced normalization rules management UI for the Settings tab.
  * Allows viewing, creating, editing, and testing normalization rules.
  */
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -35,6 +35,9 @@ import type {
   TestRuleResult,
   TagGroup,
   TagMatchPosition,
+  ApplyToChannelsDiffRow,
+  ApplyToChannelsAction,
+  ApplyToChannelsActionOverride,
 } from '../../types';
 import { ModalOverlay } from '../ModalOverlay';
 import './NormalizationEngineSection.css';
@@ -305,6 +308,29 @@ export function NormalizationEngineSection() {
   const [importing, setImporting] = useState(false);
   const importFileRef = useRef<HTMLInputElement>(null);
 
+  // Apply-to-channels state (GH-104, bd-eio04.12)
+  const [showApplyModal, setShowApplyModal] = useState(false);
+  const [applyLoading, setApplyLoading] = useState(false);
+  const [applyExecuting, setApplyExecuting] = useState(false);
+  const [applyDiffs, setApplyDiffs] = useState<ApplyToChannelsDiffRow[]>([]);
+  const [applyActions, setApplyActions] = useState<Record<number, ApplyToChannelsAction>>({});
+  // bd-eio04.12: rows whose rule-trace drawer is currently expanded
+  const [applyExpandedRows, setApplyExpandedRows] = useState<Set<number>>(new Set());
+  // bd-eio04.12: per conflict group (keyed by lowercased proposed_name),
+  // which channel_id the user picked as the winner. The winner defaults
+  // to unset so Execute stays disabled until the user chooses explicitly.
+  const [conflictGroupWinners, setConflictGroupWinners] = useState<Record<string, number>>({});
+  // bd-eio04.12: confirm-modal + post-execute summary
+  const [showApplyConfirm, setShowApplyConfirm] = useState(false);
+  const [applyResultSummary, setApplyResultSummary] =
+    useState<{
+      renamed: number;
+      merged: number;
+      skipped: number;
+      errors: number;
+      ruleSetHash?: string;
+    } | null>(null);
+
   // Drag-and-drop sensors for rule reordering
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -332,7 +358,7 @@ export function NormalizationEngineSection() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   useEffect(() => {
     loadData();
@@ -383,7 +409,7 @@ export function NormalizationEngineSection() {
       notifications.error(err instanceof Error ? err.message : 'Failed to reorder rules', 'Normalization');
       await loadData();
     }
-  }, [loadData]);
+  }, [loadData, notifications]);
 
   // Handle group drag end for reordering
   const handleGroupDragEnd = useCallback(async (event: DragEndEvent) => {
@@ -413,7 +439,7 @@ export function NormalizationEngineSection() {
       notifications.error(err instanceof Error ? err.message : 'Failed to reorder groups', 'Normalization');
       await loadData();
     }
-  }, [groups, loadData]);
+  }, [groups, loadData, notifications]);
 
   // Toggle group enabled state
   const toggleGroupEnabled = useCallback(async (group: NormalizationRuleGroup) => {
@@ -431,7 +457,7 @@ export function NormalizationEngineSection() {
       );
       notifications.error(err instanceof Error ? err.message : 'Failed to update group', 'Normalization');
     }
-  }, []);
+  }, [notifications]);
 
   // Toggle rule enabled state
   const toggleRuleEnabled = useCallback(async (rule: NormalizationRule) => {
@@ -459,7 +485,7 @@ export function NormalizationEngineSection() {
       );
       notifications.error(err instanceof Error ? err.message : 'Failed to update rule', 'Normalization');
     }
-  }, []);
+  }, [notifications]);
 
   // Delete rule
   const deleteRule = useCallback(async (rule: NormalizationRule) => {
@@ -473,7 +499,7 @@ export function NormalizationEngineSection() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to delete rule', 'Normalization');
     }
-  }, [loadData, selectedRule]);
+  }, [loadData, selectedRule, notifications]);
 
   // Delete group
   const deleteGroup = useCallback(async (group: NormalizationRuleGroup) => {
@@ -484,7 +510,7 @@ export function NormalizationEngineSection() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to delete group', 'Normalization');
     }
-  }, [loadData]);
+  }, [loadData, notifications]);
 
   // Open rule editor for new rule
   const openNewRuleEditor = useCallback((groupId: number) => {
@@ -607,7 +633,7 @@ export function NormalizationEngineSection() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to save rule', 'Normalization');
     }
-  }, [ruleEditor, closeRuleEditor, loadData]);
+  }, [ruleEditor, closeRuleEditor, loadData, notifications]);
 
   // Open group editor for new group
   const openNewGroupEditor = useCallback(() => {
@@ -655,7 +681,7 @@ export function NormalizationEngineSection() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to save group', 'Normalization');
     }
-  }, [groupEditor, groups, closeGroupEditor, loadData]);
+  }, [groupEditor, groups, closeGroupEditor, loadData, notifications]);
 
   // Test normalization
   const runTest = useCallback(async () => {
@@ -672,7 +698,7 @@ export function NormalizationEngineSection() {
     } finally {
       setTesting(false);
     }
-  }, [testInput]);
+  }, [testInput, notifications]);
 
   // Live preview for rule editor
   const updatePreview = useCallback(async () => {
@@ -742,7 +768,7 @@ export function NormalizationEngineSection() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to export rules', 'Normalization');
     }
-  }, []);
+  }, [notifications]);
 
   // Import rules from YAML
   const handleImportRules = useCallback(async () => {
@@ -764,7 +790,7 @@ export function NormalizationEngineSection() {
     } finally {
       setImporting(false);
     }
-  }, [importYaml, importOverwrite, loadData]);
+  }, [importYaml, importOverwrite, loadData, notifications]);
 
   // Handle file selection for import
   const handleImportFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -777,6 +803,216 @@ export function NormalizationEngineSection() {
     reader.readAsText(file);
     e.target.value = '';
   }, []);
+
+  // ------------------------------------------------------------------
+  // Apply-to-channels handlers (GH-104)
+  // ------------------------------------------------------------------
+
+  // Open the modal and load the preview diff
+  const openApplyModal = useCallback(async () => {
+    setShowApplyModal(true);
+    setApplyLoading(true);
+    setApplyDiffs([]);
+    setApplyActions({});
+    try {
+      const result = await api.previewApplyNormalizationToChannels();
+      setApplyDiffs(result.diffs);
+      // Seed per-row actions with the server's suggestion, but default
+      // collisions to 'skip' so nothing destructive happens by accident.
+      const seeded: Record<number, ApplyToChannelsAction> = {};
+      result.diffs.forEach((row) => {
+        seeded[row.channel_id] = row.collision ? 'skip' : 'rename';
+      });
+      setApplyActions(seeded);
+    } catch (err) {
+      notifications.error(
+        err instanceof Error ? err.message : 'Failed to load preview',
+        'Normalization'
+      );
+      setShowApplyModal(false);
+    } finally {
+      setApplyLoading(false);
+    }
+  }, [notifications]);
+
+  // Update the action for a single row
+  const setApplyAction = useCallback(
+    (channelId: number, action: ApplyToChannelsAction) => {
+      setApplyActions((prev) => ({ ...prev, [channelId]: action }));
+    },
+    []
+  );
+
+  // Bulk-set all non-colliding rows to 'rename'
+  const handleAcceptAllNonColliding = useCallback(() => {
+    setApplyActions((prev) => {
+      const next = { ...prev };
+      applyDiffs.forEach((row) => {
+        if (!row.collision) {
+          next[row.channel_id] = 'rename';
+        }
+      });
+      return next;
+    });
+  }, [applyDiffs]);
+
+  // Toggle the rule-trace drawer for a row (bd-eio04.12).
+  const toggleApplyRowExpanded = useCallback((channelId: number) => {
+    setApplyExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(channelId)) {
+        next.delete(channelId);
+      } else {
+        next.add(channelId);
+      }
+      return next;
+    });
+  }, []);
+
+  // Group rows that would rename to the same target name. Two flavors:
+  //   (i)  "collision" rows target a pre-existing channel outside this
+  //        preview set — each is its own 1-row group with an "existing
+  //        channel" winner pre-selected (merge into existing).
+  //   (ii) "source collision" groups are two or more rows in this preview
+  //        set whose proposed_name lands on the same target — the user
+  //        must pick exactly one winner before Execute enables.
+  // bd-eio04.12.
+  const conflictGroups = useMemo(() => {
+    const byTarget = new Map<string, ApplyToChannelsDiffRow[]>();
+    applyDiffs.forEach((row) => {
+      const key = (row.proposed_name || '').toLowerCase();
+      if (!key) return;
+      const bucket = byTarget.get(key) || [];
+      bucket.push(row);
+      byTarget.set(key, bucket);
+    });
+    const groups: Array<{
+      key: string;
+      rows: ApplyToChannelsDiffRow[];
+      kind: 'source' | 'existing' | 'none';
+    }> = [];
+    byTarget.forEach((rows, key) => {
+      if (rows.length > 1) {
+        groups.push({ key, rows, kind: 'source' });
+      } else if (rows[0].collision) {
+        groups.push({ key, rows, kind: 'existing' });
+      } else {
+        groups.push({ key, rows, kind: 'none' });
+      }
+    });
+    return groups;
+  }, [applyDiffs]);
+
+  // Map channel_id -> conflict group index (1-based for display badges).
+  const conflictGroupIndexByChannelId = useMemo(() => {
+    const map = new Map<number, number>();
+    let badge = 0;
+    conflictGroups.forEach((grp) => {
+      if (grp.kind === 'source' || grp.kind === 'existing') {
+        badge += 1;
+        grp.rows.forEach((row) => map.set(row.channel_id, badge));
+      }
+    });
+    return map;
+  }, [conflictGroups]);
+
+  // Source-collision groups that still need a winner before Execute enables.
+  const unresolvedSourceGroupKeys = useMemo(() => {
+    return conflictGroups
+      .filter((g) => g.kind === 'source' && conflictGroupWinners[g.key] == null)
+      .map((g) => g.key);
+  }, [conflictGroups, conflictGroupWinners]);
+
+  const canExecute = useMemo(() => {
+    if (applyDiffs.length === 0) return false;
+    if (unresolvedSourceGroupKeys.length > 0) return false;
+    return true;
+  }, [applyDiffs, unresolvedSourceGroupKeys]);
+
+  // Pick the winner inside a source-collision group. Non-winners flip to
+  // 'skip' automatically so the user can't double-rename onto the same
+  // target.
+  const pickConflictWinner = useCallback(
+    (groupKey: string, winnerChannelId: number) => {
+      setConflictGroupWinners((prev) => ({ ...prev, [groupKey]: winnerChannelId }));
+      setApplyActions((prev) => {
+        const next = { ...prev };
+        conflictGroups
+          .find((g) => g.key === groupKey)
+          ?.rows.forEach((row) => {
+            if (row.channel_id === winnerChannelId) {
+              next[row.channel_id] = row.collision ? 'merge' : 'rename';
+            } else {
+              next[row.channel_id] = 'skip';
+            }
+          });
+        return next;
+      });
+    },
+    [conflictGroups]
+  );
+
+  // Execute the selected actions — now gated by a confirmation modal.
+  const handleExecuteApply = useCallback(async () => {
+    const overrides: ApplyToChannelsActionOverride[] = applyDiffs.map((row) => {
+      const action = applyActions[row.channel_id] || 'skip';
+      const entry: ApplyToChannelsActionOverride = {
+        channel_id: row.channel_id,
+        action,
+      };
+      if (action === 'merge' && row.collision_target_id != null) {
+        entry.merge_target_id = row.collision_target_id;
+      }
+      return entry;
+    });
+
+    setApplyExecuting(true);
+    try {
+      const result = await api.executeApplyNormalizationToChannels(overrides);
+      const summary =
+        `Renamed ${result.renamed.length}, ` +
+        `merged ${result.merged.length}, ` +
+        `skipped ${result.skipped.length}` +
+        (result.errors.length > 0 ? `, errors ${result.errors.length}` : '');
+      if (result.errors.length > 0) {
+        notifications.warning(summary, 'Normalization');
+      } else {
+        notifications.success(summary, 'Normalization');
+      }
+      // Surface the post-execute summary inline so the user sees counts +
+      // journal-log link without dismissing the modal (bd-eio04.12).
+      setApplyResultSummary({
+        renamed: result.renamed.length,
+        merged: result.merged.length,
+        skipped: result.skipped.length,
+        errors: result.errors.length,
+        ruleSetHash: result.rule_set_hash,
+      });
+      setShowApplyConfirm(false);
+      setApplyDiffs([]);
+      setApplyActions({});
+      setApplyExpandedRows(new Set());
+      setConflictGroupWinners({});
+    } catch (err) {
+      notifications.error(
+        err instanceof Error ? err.message : 'Failed to apply normalization',
+        'Normalization'
+      );
+    } finally {
+      setApplyExecuting(false);
+    }
+  }, [applyActions, applyDiffs, notifications]);
+
+  const closeApplyModal = useCallback(() => {
+    if (applyExecuting) return;
+    setShowApplyModal(false);
+    setApplyDiffs([]);
+    setApplyActions({});
+    setApplyExpandedRows(new Set());
+    setConflictGroupWinners({});
+    setApplyResultSummary(null);
+    setShowApplyConfirm(false);
+  }, [applyExecuting]);
 
   // Stats
   const stats = useMemo(() => {
@@ -839,6 +1075,16 @@ export function NormalizationEngineSection() {
           >
             <span className="material-icons">upload</span>
             Import
+          </button>
+          <button
+            className="norm-engine-btn"
+            onClick={openApplyModal}
+            type="button"
+            title="Apply enabled rules to existing channels (preview first)"
+            data-testid="apply-to-channels-btn"
+          >
+            <span className="material-icons">published_with_changes</span>
+            Apply to existing channels
           </button>
           <button
             className="norm-engine-btn norm-engine-btn-primary"
@@ -1564,6 +1810,434 @@ export function NormalizationEngineSection() {
                 type="button"
               >
                 {importing ? 'Importing...' : 'Import'}
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
+
+      {/* Apply-to-channels Modal (GH-104, bd-eio04.12) */}
+      {showApplyModal && (
+        <ModalOverlay onClose={closeApplyModal}>
+          <div
+            className="modal-container modal-lg norm-engine-apply-modal"
+            data-testid="apply-to-channels-modal"
+          >
+            <div className="modal-header">
+              <h2 className="modal-title">Apply Normalization to Existing Channels</h2>
+              <button
+                className="modal-close-btn"
+                onClick={closeApplyModal}
+                type="button"
+                disabled={applyExecuting}
+              >
+                <span className="material-icons">close</span>
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <p className="modal-help-text">
+                Preview the effect of the enabled normalization rules on every existing
+                channel. Pick an action per row — rename, merge into an existing channel,
+                or skip — then execute. All changes are written to the journal.
+              </p>
+
+              {applyLoading && (
+                <div
+                  className="norm-engine-apply-loading"
+                  data-testid="apply-to-channels-loading"
+                >
+                  Loading preview...
+                </div>
+              )}
+
+              {!applyLoading && applyResultSummary && (
+                <div
+                  className="norm-engine-apply-summary"
+                  data-testid="apply-to-channels-summary"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <div className="norm-engine-apply-summary-heading">
+                    <span className="material-icons">check_circle</span>
+                    Apply complete
+                  </div>
+                  <div className="norm-engine-apply-summary-counts">
+                    <span>{applyResultSummary.renamed} renamed</span>
+                    <span>{applyResultSummary.merged} merged</span>
+                    <span>{applyResultSummary.skipped} skipped</span>
+                    <span
+                      className={
+                        applyResultSummary.errors > 0
+                          ? 'norm-engine-apply-summary-errors'
+                          : ''
+                      }
+                    >
+                      {applyResultSummary.errors} failed
+                    </span>
+                  </div>
+                  {applyResultSummary.ruleSetHash && (
+                    <div className="norm-engine-apply-summary-hash">
+                      Rule-set hash: <code>{applyResultSummary.ruleSetHash}</code>
+                    </div>
+                  )}
+                  <p className="norm-engine-apply-summary-link">
+                    Review each change in the{' '}
+                    <a href="#journal" data-testid="apply-to-channels-summary-journal-link">
+                      Activity Log (Journal tab)
+                    </a>
+                    .
+                  </p>
+                </div>
+              )}
+
+              {!applyLoading && !applyResultSummary && applyDiffs.length === 0 && (
+                <div
+                  className="norm-engine-apply-empty"
+                  data-testid="apply-to-channels-empty"
+                >
+                  No channels would change. Either normalization rules are disabled
+                  or every channel name is already normalized.
+                </div>
+              )}
+
+              {!applyLoading && !applyResultSummary && applyDiffs.length > 0 && (
+                <>
+                  <div className="norm-engine-apply-toolbar">
+                    <button
+                      className="norm-engine-btn"
+                      type="button"
+                      onClick={handleAcceptAllNonColliding}
+                      data-testid="apply-to-channels-bulk-accept"
+                    >
+                      Accept all non-colliding
+                    </button>
+                    <span className="norm-engine-apply-count">
+                      {applyDiffs.length} channel{applyDiffs.length === 1 ? '' : 's'} with changes
+                    </span>
+                    {unresolvedSourceGroupKeys.length > 0 && (
+                      <span
+                        className="norm-engine-apply-conflict-hint"
+                        data-testid="apply-to-channels-conflict-hint"
+                      >
+                        <span className="material-icons">warning</span>
+                        {unresolvedSourceGroupKeys.length} conflict group
+                        {unresolvedSourceGroupKeys.length === 1 ? '' : 's'} need
+                        {unresolvedSourceGroupKeys.length === 1 ? 's' : ''} a winner
+                      </span>
+                    )}
+                  </div>
+
+                  <div
+                    className="norm-engine-apply-table-wrap"
+                    data-testid="apply-to-channels-diffs"
+                  >
+                    <table className="norm-engine-apply-table">
+                      <thead>
+                        <tr>
+                          <th aria-label="Expand rule trace" />
+                          <th>Current name</th>
+                          <th>Proposed name</th>
+                          <th>Conflict</th>
+                          <th>Rules fired</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {applyDiffs.map((row) => {
+                          const expanded = applyExpandedRows.has(row.channel_id);
+                          const groupKey = (row.proposed_name || '').toLowerCase();
+                          const sourceGroup = conflictGroups.find(
+                            (g) => g.key === groupKey && g.kind === 'source'
+                          );
+                          const badge = conflictGroupIndexByChannelId.get(row.channel_id);
+                          const isWinner =
+                            sourceGroup &&
+                            conflictGroupWinners[groupKey] === row.channel_id;
+                          const isInSourceGroup = !!sourceGroup;
+                          const needsWinnerPick =
+                            isInSourceGroup &&
+                            conflictGroupWinners[groupKey] == null;
+                          const rowClasses = [
+                            row.collision ? 'apply-row-collision' : '',
+                            isInSourceGroup ? 'apply-row-source-conflict' : '',
+                            isWinner ? 'apply-row-winner' : '',
+                          ]
+                            .filter(Boolean)
+                            .join(' ');
+                          const traceRowId = `apply-trace-${row.channel_id}`;
+                          return (
+                            <Fragment key={row.channel_id}>
+                              <tr
+                                className={rowClasses}
+                                data-testid={`apply-row-${row.channel_id}`}
+                              >
+                                <td>
+                                  <button
+                                    type="button"
+                                    className="norm-engine-apply-trace-toggle"
+                                    onClick={() => toggleApplyRowExpanded(row.channel_id)}
+                                    aria-expanded={expanded}
+                                    aria-controls={traceRowId}
+                                    aria-label={
+                                      expanded
+                                        ? 'Collapse rule trace'
+                                        : 'Expand rule trace'
+                                    }
+                                    data-testid={`apply-trace-toggle-${row.channel_id}`}
+                                  >
+                                    <span className="material-icons">
+                                      {expanded ? 'expand_more' : 'chevron_right'}
+                                    </span>
+                                  </button>
+                                </td>
+                                <td>{row.current_name}</td>
+                                <td>{row.proposed_name}</td>
+                                <td>
+                                  {badge && (
+                                    <span
+                                      className="norm-engine-apply-conflict-badge"
+                                      data-testid={`apply-conflict-badge-${row.channel_id}`}
+                                    >
+                                      Conflict Group {badge}
+                                    </span>
+                                  )}
+                                  {row.collision ? (
+                                    <span
+                                      className="norm-engine-apply-collision"
+                                      title={`Matches existing channel '${
+                                        row.collision_target_name ?? ''
+                                      }'`}
+                                    >
+                                      <span className="material-icons">warning</span>
+                                      {row.collision_target_name ?? 'collision'}
+                                    </span>
+                                  ) : !badge ? (
+                                    <span className="norm-engine-apply-ok">—</span>
+                                  ) : null}
+                                  {isInSourceGroup && (
+                                    <label className="norm-engine-apply-winner-radio">
+                                      <input
+                                        type="radio"
+                                        name={`conflict-winner-${groupKey}`}
+                                        checked={!!isWinner}
+                                        onChange={() =>
+                                          pickConflictWinner(groupKey, row.channel_id)
+                                        }
+                                        data-testid={`apply-winner-radio-${row.channel_id}`}
+                                      />
+                                      <span>Winner</span>
+                                    </label>
+                                  )}
+                                </td>
+                                <td>
+                                  <span
+                                    className="norm-engine-apply-rule-count"
+                                    data-testid={`apply-rule-count-${row.channel_id}`}
+                                  >
+                                    {(row.transformations?.length ?? 0)}{' '}
+                                    rule
+                                    {(row.transformations?.length ?? 0) === 1 ? '' : 's'}
+                                  </span>
+                                </td>
+                                <td>
+                                  <select
+                                    value={applyActions[row.channel_id] ?? 'skip'}
+                                    disabled={needsWinnerPick && !isWinner}
+                                    onChange={(e) =>
+                                      setApplyAction(
+                                        row.channel_id,
+                                        e.target.value as ApplyToChannelsAction
+                                      )
+                                    }
+                                    data-testid={`apply-action-${row.channel_id}`}
+                                  >
+                                    <option value="skip">Skip</option>
+                                    <option
+                                      value="rename"
+                                      disabled={
+                                        row.collision ||
+                                        (needsWinnerPick && !isWinner)
+                                      }
+                                    >
+                                      Rename
+                                    </option>
+                                    <option
+                                      value="merge"
+                                      disabled={
+                                        !row.collision &&
+                                        !(isInSourceGroup && isWinner)
+                                      }
+                                    >
+                                      {row.collision
+                                        ? 'Merge into existing'
+                                        : 'Merge'}
+                                    </option>
+                                  </select>
+                                </td>
+                              </tr>
+                              {expanded && (
+                                <tr
+                                  id={traceRowId}
+                                  className="norm-engine-apply-trace-row"
+                                  data-testid={`apply-trace-drawer-${row.channel_id}`}
+                                >
+                                  <td colSpan={6}>
+                                    <div className="norm-engine-apply-trace">
+                                      <div className="norm-engine-apply-trace-heading">
+                                        Rules fired for &quot;{row.current_name}&quot;
+                                      </div>
+                                      {(row.transformations?.length ?? 0) === 0 ? (
+                                        <div className="norm-engine-apply-trace-empty">
+                                          No rule trace recorded. The diff may be
+                                          due to Unicode normalization only.
+                                        </div>
+                                      ) : (
+                                        <ol className="norm-engine-apply-trace-list">
+                                          {row.transformations?.map((t, i) => (
+                                            <li
+                                              key={`${row.channel_id}-${i}`}
+                                              className="norm-engine-apply-trace-item"
+                                            >
+                                              <span className="material-icons">
+                                                chevron_right
+                                              </span>
+                                              <span className="trace-rule-id">
+                                                Rule {t.rule_id}
+                                              </span>
+                                              :{' '}
+                                              <code className="trace-before">
+                                                {t.before}
+                                              </code>{' '}
+                                              →{' '}
+                                              <code className="trace-after">
+                                                {t.after}
+                                              </code>
+                                            </li>
+                                          ))}
+                                        </ol>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              )}
+                            </Fragment>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="modal-footer">
+              <button
+                className="modal-btn"
+                onClick={closeApplyModal}
+                type="button"
+                disabled={applyExecuting}
+              >
+                {applyResultSummary ? 'Close' : 'Cancel'}
+              </button>
+              {!applyResultSummary && (
+                <button
+                  className="modal-btn modal-btn-primary"
+                  onClick={() => setShowApplyConfirm(true)}
+                  disabled={applyExecuting || applyLoading || !canExecute}
+                  type="button"
+                  data-testid="apply-to-channels-execute"
+                >
+                  {applyExecuting ? 'Applying...' : 'Execute'}
+                </button>
+              )}
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
+
+      {/* Apply-to-channels confirm modal (bd-eio04.12).
+          Wraps the destructive Execute action with an explicit count +
+          "cannot be undone" copy. Escape closes unless the execute is
+          actually in flight (loading lock). */}
+      {showApplyConfirm && (
+        <ModalOverlay
+          onClose={() => (applyExecuting ? null : setShowApplyConfirm(false))}
+        >
+          <div
+            className="modal-container modal-sm norm-engine-apply-confirm"
+            data-testid="apply-to-channels-confirm"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="apply-confirm-title"
+          >
+            <div className="modal-header">
+              <h2 className="modal-title" id="apply-confirm-title">
+                Confirm bulk rename
+              </h2>
+              <button
+                className="modal-close-btn"
+                onClick={() => setShowApplyConfirm(false)}
+                type="button"
+                disabled={applyExecuting}
+              >
+                <span className="material-icons">close</span>
+              </button>
+            </div>
+            <div className="modal-body">
+              {(() => {
+                const counts = {
+                  rename: 0,
+                  merge: 0,
+                  skip: 0,
+                };
+                applyDiffs.forEach((row) => {
+                  const action = applyActions[row.channel_id] || 'skip';
+                  counts[action] += 1;
+                });
+                const mutating = counts.rename + counts.merge;
+                return (
+                  <>
+                    <p>
+                      About to rename <strong>{counts.rename}</strong> channel
+                      {counts.rename === 1 ? '' : 's'} and merge{' '}
+                      <strong>{counts.merge}</strong> channel
+                      {counts.merge === 1 ? '' : 's'} into existing targets.{' '}
+                      <strong>{counts.skip}</strong> will be skipped.
+                    </p>
+                    <p className="norm-engine-apply-confirm-warning">
+                      This cannot be undone from this screen. See the
+                      Activity Log (Journal tab) to review each change.
+                    </p>
+                    <p
+                      className="norm-engine-apply-confirm-count"
+                      data-testid="apply-to-channels-confirm-count"
+                    >
+                      {mutating} channel{mutating === 1 ? '' : 's'} will be
+                      modified.
+                    </p>
+                  </>
+                );
+              })()}
+            </div>
+            <div className="modal-footer">
+              <button
+                className="modal-btn"
+                type="button"
+                onClick={() => setShowApplyConfirm(false)}
+                disabled={applyExecuting}
+                data-testid="apply-to-channels-confirm-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                className="modal-btn modal-btn-primary"
+                type="button"
+                onClick={handleExecuteApply}
+                disabled={applyExecuting}
+                data-testid="apply-to-channels-confirm-execute"
+              >
+                {applyExecuting ? 'Applying...' : 'Yes, apply'}
               </button>
             </div>
           </div>

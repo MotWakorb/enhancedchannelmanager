@@ -116,6 +116,17 @@ def _generate_secret_key() -> str:
     return secrets.token_urlsafe(32)
 
 
+def _sanitize_auth_data(data: dict) -> dict:
+    """Replace null values with field defaults to prevent Pydantic validation failures."""
+    defaults = AuthSettings()
+    for field_name, field_info in AuthSettings.model_fields.items():
+        if field_name in data and data[field_name] is None:
+            default_val = getattr(defaults, field_name)
+            logger.warning("[AUTH-SETTINGS] Field '%s' is null, using default", field_name)
+            data[field_name] = default_val
+    return data
+
+
 def load_auth_settings() -> AuthSettings:
     """Load auth settings from file or return defaults."""
     global _cached_auth_settings
@@ -124,10 +135,12 @@ def load_auth_settings() -> AuthSettings:
         return _cached_auth_settings
 
     logger.info("[AUTH-SETTINGS] Loading auth settings from %s", AUTH_CONFIG_FILE)
+    file_exists = AUTH_CONFIG_FILE.exists()
 
-    if AUTH_CONFIG_FILE.exists():
+    if file_exists:
         try:
             data = json.loads(AUTH_CONFIG_FILE.read_text())
+            data = _sanitize_auth_data(data)
             _cached_auth_settings = AuthSettings(**data)
 
             # Ensure we have a secret key
@@ -137,13 +150,22 @@ def load_auth_settings() -> AuthSettings:
 
             logger.info("[AUTH-SETTINGS] Loaded auth settings, setup_complete: %s", _cached_auth_settings.setup_complete)
             return _cached_auth_settings
+        except json.JSONDecodeError as e:
+            logger.error("[AUTH-SETTINGS] Auth settings file is not valid JSON: %s", e)
         except Exception as e:
             logger.error("[AUTH-SETTINGS] Failed to load auth settings: %s", e)
 
+    if file_exists:
+        # File exists but failed to parse — use in-memory defaults only.
+        # Do NOT overwrite the file; the user's real settings may be recoverable.
+        logger.warning("[AUTH-SETTINGS] Using in-memory defaults (existing file could not be parsed)")
+        _cached_auth_settings = AuthSettings()
+        _cached_auth_settings.jwt.secret_key = _generate_secret_key()
+        return _cached_auth_settings
+
+    # No file at all — first-run: generate and persist a secret key
     logger.info("[AUTH-SETTINGS] Using default auth settings (no config file found)")
     _cached_auth_settings = AuthSettings()
-
-    # Generate and persist a secret key for new installations
     _cached_auth_settings.jwt.secret_key = _generate_secret_key()
     save_auth_settings(_cached_auth_settings)
 

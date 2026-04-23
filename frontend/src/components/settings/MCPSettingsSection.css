@@ -1,0 +1,217 @@
+.mcp-settings-section {
+  max-width: 800px;
+}
+
+/* Server status */
+.mcp-status-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mcp-status-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  flex: 1;
+}
+
+.mcp-status-badge .material-icons {
+  font-size: 1.1rem;
+}
+
+.mcp-status-online {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--success);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.mcp-status-offline {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--error);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.mcp-status-checking {
+  background: rgba(168, 168, 184, 0.1);
+  color: var(--text-secondary);
+  border: 1px solid rgba(168, 168, 184, 0.2);
+}
+
+.mcp-status-row .btn-sm {
+  padding: 0.35rem;
+  min-width: unset;
+}
+
+.mcp-status-row .btn-sm .material-icons {
+  font-size: 1.1rem;
+}
+
+/* Key status badges */
+.mcp-key-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.mcp-key-active {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--success);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.mcp-key-inactive {
+  background: rgba(168, 168, 184, 0.1);
+  color: var(--text-secondary);
+  border: 1px solid rgba(168, 168, 184, 0.2);
+}
+
+.mcp-key-badge .material-icons {
+  font-size: 1.1rem;
+}
+
+/* Key display (code + copy button) */
+.mcp-key-display {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.mcp-key-display code {
+  flex: 1;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.mcp-copy-btn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+}
+
+.mcp-copy-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.mcp-copy-btn .material-icons {
+  font-size: 1rem;
+}
+
+/* Action buttons */
+.mcp-key-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.mcp-key-actions .btn {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.mcp-key-actions .btn .material-icons {
+  font-size: 1rem;
+}
+
+.mcp-key-actions .btn-danger {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--error);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.mcp-key-actions .btn-danger:hover {
+  background: rgba(239, 68, 68, 0.25);
+}
+
+/* Config block */
+.mcp-config-block {
+  position: relative;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+  padding: 0.75rem;
+}
+
+.mcp-config-block pre {
+  margin: 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.mcp-config-block .mcp-copy-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+}
+
+/* Tools grid */
+.mcp-tools-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.75rem;
+}
+
+.mcp-tool-card {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+  padding: 0.75rem;
+}
+
+.mcp-tool-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.mcp-tool-card-header .material-icons {
+  font-size: 1rem;
+  color: var(--accent, #646cff);
+}
+
+.mcp-tool-card-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.mcp-tool-card-count {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 0.1rem 0.4rem;
+  border-radius: 10px;
+}
+
+.mcp-tool-card p {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.3;
+}

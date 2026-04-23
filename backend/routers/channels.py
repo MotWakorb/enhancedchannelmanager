@@ -15,10 +15,12 @@ from typing import Optional, Literal, Union
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Response
 from pydantic import BaseModel
 
+from concurrency import run_cpu_bound
 from config import get_settings
 from csv_handler import parse_csv, generate_csv, generate_template, CSVParseError
 from database import get_session
 from dispatcharr_client import get_client
+from normalization_engine import get_normalization_engine
 import journal
 
 logger = logging.getLogger(__name__)
@@ -74,6 +76,48 @@ class MergeChannelsRequest(BaseModel):
 
 class ClearAutoCreatedRequest(BaseModel):
     group_ids: list[int]
+
+
+class BulkMergeItem(BaseModel):
+    """A single merge operation: keep target, absorb sources."""
+    target_channel_id: int
+    source_channel_ids: list[int]
+
+
+class BulkMergeRequest(BaseModel):
+    merges: list[BulkMergeItem]
+
+
+class NormalizePreviewBatchItem(BaseModel):
+    """Single row in a batch normalize-preview request.
+
+    The frontend already knows the current channel name from the list
+    response — passing it here avoids an extra Dispatcharr roundtrip per
+    row. bd-eio04.13.
+    """
+    channel_id: int
+    name: str
+
+
+class NormalizePreviewBatchRequest(BaseModel):
+    """bd-eio04.13 — batch preview of would_normalize for currently-visible channel rows.
+
+    Accepts either:
+      - `channels`: list of {channel_id, name} pairs (preferred — no
+        Dispatcharr roundtrip, O(rules × M) instead of O(rules × M) +
+        M HTTP calls).
+      - `channel_ids`: list of ids (fallback — the backend fetches each
+        name from Dispatcharr). Retained for deep-link scenarios where
+        the caller only has IDs.
+    Exactly one of the two must be populated.
+    """
+    channels: Optional[list[NormalizePreviewBatchItem]] = None
+    channel_ids: Optional[list[int]] = None
+
+
+# Upper bound on a single batch to keep per-request cost O(rules × 100).
+# Frontend pages above this if more rows are visible. See bd-eio04.13.
+NORMALIZE_PREVIEW_BATCH_MAX = 100
 
 
 # Bulk commit operation types
@@ -274,7 +318,8 @@ async def create_channel(request: CreateChannelRequest):
                 from normalization_engine import get_normalization_engine
                 with get_session() as db:
                     engine = get_normalization_engine(db)
-                    norm_result = engine.normalize(request.name)
+                    # Offload normalization off event loop (bd-w3z4h)
+                    norm_result = await run_cpu_bound(engine.normalize, request.name)
                     channel_name = norm_result.normalized
                     if channel_name != request.name:
                         logger.debug("[CHANNELS] Normalized channel name: '%s' -> '%s'", request.name, channel_name)
@@ -1126,7 +1171,7 @@ async def bulk_commit_operations(request: BulkCommitRequest):
 
         # Validate each operation
         for idx, op in enumerate(request.operations):
-            if op.type in ("updateChannel", "deleteChannel"):
+            if op.type == "updateChannel":
                 if op.channelId >= 0 and op.channelId not in existing_channels:
                     ch_name = f"Channel {op.channelId}"
                     result["validationIssues"].append({
@@ -1138,6 +1183,10 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                         "channelName": ch_name,
                     })
                     result["validationPassed"] = False
+            elif op.type == "deleteChannel":
+                if op.channelId >= 0 and op.channelId not in existing_channels:
+                    # Deleting a channel that doesn't exist is a no-op, not an error
+                    logger.debug("[CHANNELS-BULK] deleteChannel: channel %s already gone, skipping", op.channelId)
 
             elif op.type == "addStreamToChannel":
                 if op.channelId >= 0 and op.channelId not in existing_channels:
@@ -1346,7 +1395,8 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                             from normalization_engine import get_normalization_engine
                             with get_session() as db:
                                 engine = get_normalization_engine(db)
-                                norm_result = engine.normalize(op.name)
+                                # Offload normalization off event loop (bd-w3z4h)
+                                norm_result = await run_cpu_bound(engine.normalize, op.name)
                                 channel_name = norm_result.normalized
                                 if channel_name != op.name:
                                     logger.debug("[CHANNELS-BULK] Normalized channel name: '%s' -> '%s'", op.name, channel_name)
@@ -1400,9 +1450,15 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                 elif op.type == "deleteChannel":
                     channel_id = resolve_id(op.channelId)
                     logger.debug("[CHANNELS-BULK] [%s/%s] deleteChannel: channel_id=%s", idx+1, len(request.operations), channel_id)
-                    await client.delete_channel(channel_id)
+                    try:
+                        await client.delete_channel(channel_id)
+                        logger.debug("[CHANNELS-BULK] Deleted channel %s", channel_id)
+                    except Exception as del_err:
+                        if "404" in str(del_err) or "not found" in str(del_err).lower():
+                            logger.debug("[CHANNELS-BULK] Channel %s already deleted, skipping", channel_id)
+                        else:
+                            raise
                     result["operationsApplied"] += 1
-                    logger.debug("[CHANNELS-BULK] Deleted channel %s", channel_id)
 
                 elif op.type == "createGroup":
                     logger.debug("[CHANNELS-BULK] [%s/%s] createGroup: name='%s'", idx+1, len(request.operations), op.name)
@@ -1516,6 +1572,111 @@ async def bulk_commit_operations(request: BulkCommitRequest):
             "error": str(e)
         })
         return result
+
+
+@router.post("/normalize-preview-batch")
+async def normalize_preview_batch(request: NormalizePreviewBatchRequest):
+    """bd-eio04.13 — batch would-normalize preview for channel list rows.
+
+    Per-row result:
+
+        {
+          "channel_id": int,
+          "current_name": str,
+          "proposed_name": str,
+          "would_change": bool,
+          "transformations": [{rule_id, before, after}, ...],
+        }
+
+    Prefers the `channels` payload ({channel_id, name}) when provided —
+    no Dispatcharr roundtrip, O(rules × M) total cost. Falls back to
+    `channel_ids` for callers that only have IDs (e.g. deep-link flows);
+    in that case the backend fetches each name from Dispatcharr and
+    silently skips rows it can't resolve.
+
+    Batch size is capped at NORMALIZE_PREVIEW_BATCH_MAX (100) rows. The
+    frontend is responsible for paging above that window.
+    """
+    if request.channels is not None and request.channel_ids is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide exactly one of 'channels' or 'channel_ids', not both.",
+        )
+
+    rows = request.channels or []
+    ids_only: list[int] = list(request.channel_ids or [])
+    total = len(rows) + len(ids_only)
+
+    if total > NORMALIZE_PREVIEW_BATCH_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Too many rows ({total}); maximum "
+                f"{NORMALIZE_PREVIEW_BATCH_MAX} per batch."
+            ),
+        )
+
+    if total == 0:
+        return {"results": []}
+
+    logger.debug(
+        "[CHANNELS] POST /normalize-preview-batch - rows=%s ids_only=%s",
+        len(rows), len(ids_only),
+    )
+
+    session = get_session()
+    try:
+        engine = get_normalization_engine(session)
+        results: list[dict] = []
+        start = time.time()
+
+        # Fast path: names already supplied by caller.
+        for row in rows:
+            current_name = row.name or ""
+            preview = engine.normalize(current_name)
+            proposed = preview.normalized
+            results.append({
+                "channel_id": row.channel_id,
+                "current_name": current_name,
+                "proposed_name": proposed,
+                "would_change": proposed != current_name,
+                "transformations": [
+                    {"rule_id": t[0], "before": t[1], "after": t[2]}
+                    for t in (preview.transformations or [])
+                ],
+            })
+
+        # Fallback path: fetch names for bare IDs via Dispatcharr.
+        if ids_only:
+            client = get_client()
+            for cid in ids_only:
+                try:
+                    channel = await client.get_channel(cid)
+                except Exception as exc:
+                    logger.debug("[CHANNELS] normalize-preview: skipped id=%s: %s", cid, exc)
+                    continue
+                current_name = (channel or {}).get("name") or ""
+                preview = engine.normalize(current_name)
+                proposed = preview.normalized
+                results.append({
+                    "channel_id": cid,
+                    "current_name": current_name,
+                    "proposed_name": proposed,
+                    "would_change": proposed != current_name,
+                    "transformations": [
+                        {"rule_id": t[0], "before": t[1], "after": t[2]}
+                        for t in (preview.transformations or [])
+                    ],
+                })
+
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug(
+            "[CHANNELS] normalize-preview-batch: resolved %d/%d in %.1fms",
+            len(results), total, elapsed_ms,
+        )
+        return {"results": results}
+    finally:
+        session.close()
 
 
 @router.post("/clear-auto-created")
@@ -1634,6 +1795,49 @@ async def get_channel(channel_id: int):
         return result
     except Exception as e:
         logger.exception("[CHANNELS] Failed to fetch channel id=%s", channel_id)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/{channel_id}/normalize-preview")
+async def normalize_preview_single(channel_id: int):
+    """bd-eio04.13 — would-normalize preview for a single channel.
+
+    Returns `{channel_id, current_name, proposed_name, would_change,
+    transformations}` by fetching the channel from Dispatcharr and running
+    the active NormalizationEngine against its current name.
+    """
+    logger.debug("[CHANNELS] GET /channels/%s/normalize-preview", channel_id)
+    client = get_client()
+    try:
+        start = time.time()
+        channel = await client.get_channel(channel_id)
+        current_name = (channel or {}).get("name") or ""
+
+        session = get_session()
+        try:
+            engine = get_normalization_engine(session)
+            preview = engine.normalize(current_name)
+        finally:
+            session.close()
+
+        proposed = preview.normalized
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug(
+            "[CHANNELS] normalize-preview id=%s '%s' -> '%s' in %.1fms",
+            channel_id, current_name, proposed, elapsed_ms,
+        )
+        return {
+            "channel_id": channel_id,
+            "current_name": current_name,
+            "proposed_name": proposed,
+            "would_change": proposed != current_name,
+            "transformations": [
+                {"rule_id": t[0], "before": t[1], "after": t[2]}
+                for t in (preview.transformations or [])
+            ],
+        }
+    except Exception as e:
+        logger.exception("[CHANNELS] Failed normalize-preview for id=%s: %s", channel_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -1968,3 +2172,181 @@ async def reorder_channel_streams(channel_id: int, request: ReorderStreamsReques
     except Exception as e:
         logger.exception("[CHANNELS] Failed to reorder streams for channel %s: %s", channel_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# =============================================================================
+# Find & Merge Duplicate Channels
+# =============================================================================
+
+
+@router.post("/find-duplicates")
+async def find_duplicate_channels():
+    """Scan all channels and find duplicates by normalized name.
+
+    Applies the user's normalization rules to every channel name,
+    then groups channels that resolve to the same normalized name.
+    Returns only groups with 2+ channels.
+    """
+    logger.debug("[CHANNELS] POST /channels/find-duplicates")
+    from normalization_engine import get_normalization_engine
+
+    client = get_client()
+    session = get_session()
+
+    try:
+        engine = get_normalization_engine(session)
+
+        # Fetch all channels (paginated)
+        all_channels = []
+        page = 1
+        while True:
+            result = await client.get_channels(page=page, page_size=500)
+            batch = result.get("results", [])
+            if not batch:
+                break
+            all_channels.extend(batch)
+            if not result.get("next"):
+                break
+            page += 1
+
+        logger.info("[CHANNELS] find-duplicates: scanning %d channels", len(all_channels))
+
+        # Group by normalized name
+        groups: dict[str, list[dict]] = {}
+        for ch in all_channels:
+            name = ch.get("name", "")
+            norm_result = engine.normalize(name)
+            normalized = norm_result.normalized.strip()
+            if not normalized:
+                continue
+
+            key = normalized.lower()
+            if key not in groups:
+                groups[key] = []
+            groups[key].append({
+                "id": ch.get("id"),
+                "name": name,
+                "normalized_name": normalized,
+                "channel_number": ch.get("channel_number"),
+                "stream_count": len(ch.get("streams", [])),
+                "channel_group_id": ch.get("channel_group_id"),
+                "channel_group_name": ch.get("channel_group_name", ""),
+            })
+
+        # Filter to groups with duplicates
+        duplicates = [
+            {
+                "normalized_name": channels[0]["normalized_name"],
+                "channels": sorted(channels, key=lambda c: -(c["stream_count"] or 0)),
+            }
+            for channels in groups.values()
+            if len(channels) >= 2
+        ]
+
+        # Sort by number of duplicates (worst first)
+        duplicates.sort(key=lambda g: -len(g["channels"]))
+
+        total_dup_channels = sum(len(g["channels"]) for g in duplicates)
+        logger.info("[CHANNELS] find-duplicates: found %d duplicate groups (%d channels)",
+                    len(duplicates), total_dup_channels)
+
+        return {
+            "groups": duplicates,
+            "total_groups": len(duplicates),
+            "total_duplicate_channels": total_dup_channels,
+        }
+
+    except Exception as e:
+        logger.exception("[CHANNELS] find-duplicates failed: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        session.close()
+
+
+@router.post("/bulk-merge")
+async def bulk_merge_channels(request: BulkMergeRequest):
+    """Merge multiple groups of duplicate channels.
+
+    For each merge item, keeps the target channel and moves all streams
+    from source channels into it, then deletes the sources.
+    """
+    logger.debug("[CHANNELS] POST /channels/bulk-merge - %d merge groups", len(request.merges))
+
+    client = get_client()
+    results = []
+    merged_count = 0
+    failed_count = 0
+
+    for item in request.merges:
+        try:
+            target = await client.get_channel(item.target_channel_id)
+            target_name = target.get("name", f"Channel {item.target_channel_id}")
+
+            # Collect all streams from target + sources (deduplicated, target first)
+            all_streams: list[int] = []
+            seen: set[int] = set()
+            for sid in target.get("streams", []):
+                if sid not in seen:
+                    all_streams.append(sid)
+                    seen.add(sid)
+
+            source_names = []
+            for src_id in item.source_channel_ids:
+                try:
+                    src = await client.get_channel(src_id)
+                    source_names.append(src.get("name", f"Channel {src_id}"))
+                    for sid in src.get("streams", []):
+                        if sid not in seen:
+                            all_streams.append(sid)
+                            seen.add(sid)
+                except Exception as e:
+                    logger.warning("[CHANNELS] bulk-merge: failed to fetch source %s: %s", src_id, e)
+
+            # Update target with combined streams
+            if all_streams:
+                await client.update_channel(item.target_channel_id, {"streams": all_streams})
+
+            # Delete source channels
+            deleted = []
+            for src_id in item.source_channel_ids:
+                try:
+                    await client.delete_channel(src_id)
+                    deleted.append(src_id)
+                except Exception as e:
+                    logger.warning("[CHANNELS] bulk-merge: failed to delete source %s: %s", src_id, e)
+
+            journal.log_entry(
+                category="channel",
+                action_type="bulk_merge",
+                entity_id=item.target_channel_id,
+                entity_name=target_name,
+                description=f"Merged {len(item.source_channel_ids)} channels into '{target_name}'",
+                before_value={"source_names": source_names},
+                after_value={"stream_count": len(all_streams), "deleted_ids": deleted},
+            )
+
+            merged_count += 1
+            results.append({
+                "target_channel_id": item.target_channel_id,
+                "target_name": target_name,
+                "sources_deleted": len(deleted),
+                "total_streams": len(all_streams),
+                "success": True,
+            })
+
+        except Exception as e:
+            failed_count += 1
+            logger.warning("[CHANNELS] bulk-merge: group failed (target=%s): %s",
+                          item.target_channel_id, e)
+            results.append({
+                "target_channel_id": item.target_channel_id,
+                "success": False,
+                "error": str(e),
+            })
+
+    logger.info("[CHANNELS] bulk-merge complete: %d merged, %d failed", merged_count, failed_count)
+    return {
+        "merged": merged_count,
+        "failed": failed_count,
+        "results": results,
+    }

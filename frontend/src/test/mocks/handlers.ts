@@ -143,6 +143,15 @@ export function createMockAutoCreationRule(overrides: Partial<MockAutoCreationRu
     target_group_id: overrides.target_group_id ?? null,
     run_on_refresh: overrides.run_on_refresh ?? false,
     stop_on_first_match: overrides.stop_on_first_match ?? false,
+    sort_field: overrides.sort_field ?? null,
+    sort_order: overrides.sort_order ?? 'asc',
+    probe_on_sort: overrides.probe_on_sort ?? false,
+    sort_regex: overrides.sort_regex ?? null,
+    stream_sort_field: overrides.stream_sort_field ?? null,
+    stream_sort_order: overrides.stream_sort_order ?? 'asc',
+    normalization_group_ids: overrides.normalization_group_ids ?? [],
+    skip_struck_streams: overrides.skip_struck_streams ?? false,
+    orphan_action: overrides.orphan_action ?? 'delete',
     last_run_at: overrides.last_run_at ?? null,
     match_count: overrides.match_count ?? 0,
     created_at: overrides.created_at ?? new Date().toISOString(),
@@ -293,6 +302,15 @@ interface MockAutoCreationRule {
   target_group_id: number | null
   run_on_refresh: boolean
   stop_on_first_match: boolean
+  sort_field?: string | null
+  sort_order?: 'asc' | 'desc'
+  probe_on_sort?: boolean
+  sort_regex?: string | null
+  stream_sort_field?: string | null
+  stream_sort_order?: 'asc' | 'desc'
+  normalization_group_ids?: number[]
+  skip_struck_streams?: boolean
+  orphan_action?: 'delete' | 'move_uncategorized' | 'delete_and_cleanup_groups' | 'none'
   last_run_at: string | null
   match_count: number
   created_at: string
@@ -393,6 +411,8 @@ export const mockDataStore: MockDataStore = {
     stream_sort_enabled: { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false },
     m3u_account_priorities: {},
     deprioritize_failed_streams: true,
+    deprioritize_black_screen: true,
+    deprioritize_low_fps: true,
     hide_auto_sync_groups: false,
     frontend_log_level: 'INFO',
   },
@@ -994,6 +1014,10 @@ export const handlers = [
   }),
 
   http.post(`${API_BASE}/auto-creation/run`, async ({ request }) => {
+    // bd-enfsy: 202 + poll background-task pattern. We mirror the backend by
+    // creating an execution with status='completed' immediately (so the
+    // poller's first GET sees a terminal status — the fastest possible
+    // poll path) and returning 202 + execution_id.
     const data = await request.json() as { dry_run?: boolean; rule_ids?: number[] }
     const dryRun = data.dry_run ?? false
     const execution = createMockAutoCreationExecution({
@@ -1004,25 +1028,41 @@ export const handlers = [
       streams_matched: 5,
       streams_evaluated: 100,
     })
-    if (!dryRun) {
-      mockDataStore.autoCreationExecutions.unshift(execution)
-    }
-    return HttpResponse.json({
-      success: true,
-      execution_id: execution.id,
-      mode: execution.mode,
-      duration_seconds: execution.duration_seconds,
-      streams_evaluated: execution.streams_evaluated,
-      streams_matched: execution.streams_matched,
-      channels_created: execution.channels_created,
-      channels_updated: execution.channels_updated,
-      groups_created: execution.groups_created,
-      streams_merged: execution.streams_merged,
-      streams_skipped: execution.streams_skipped,
-      created_entities: execution.created_entities,
-      modified_entities: execution.modified_entities,
-      dry_run_results: dryRun ? [] : undefined,
+    // Always store so the GET /executions/{id} poll target can find it.
+    mockDataStore.autoCreationExecutions.unshift(execution)
+    return HttpResponse.json(
+      {
+        execution_id: execution.id,
+        status: 'running',
+        message: 'Pipeline started; poll /api/auto-creation/executions/{id} for status',
+      },
+      { status: 202 }
+    )
+  }),
+
+  http.post(`${API_BASE}/auto-creation/rules/:ruleId/run`, async ({ params, request }) => {
+    // bd-enfsy: 202 + poll for the per-rule run too.
+    const ruleId = parseInt(params.ruleId as string)
+    const url = new URL(request.url)
+    const dryRun = url.searchParams.get('dry_run') === 'true'
+    const execution = createMockAutoCreationExecution({
+      mode: dryRun ? 'dry_run' : 'execute',
+      triggered_by: 'manual',
+      status: 'completed',
+      channels_created: dryRun ? 0 : 1,
+      streams_matched: 1,
+      streams_evaluated: 5,
     })
+    mockDataStore.autoCreationExecutions.unshift(execution)
+    return HttpResponse.json(
+      {
+        execution_id: execution.id,
+        status: 'running',
+        rule_id: ruleId,
+        message: 'Rule run started; poll /api/auto-creation/executions/{id} for status',
+      },
+      { status: 202 }
+    )
   }),
 
   http.post(`${API_BASE}/auto-creation/executions/:id/rollback`, ({ params }) => {
@@ -1080,5 +1120,180 @@ export const handlers = [
       imported: [{ name: 'Imported Rule', action: 'created' }],
       errors: [],
     })
+  }),
+
+  // ── Backup & Restore ──
+
+  http.get(`${API_BASE}/backup/create`, () => {
+    return new HttpResponse(new Blob(['mock-zip'], { type: 'application/zip' }), {
+      headers: {
+        'Content-Disposition': 'attachment; filename="ecm-backup-2026-01-01.zip"',
+        'Content-Type': 'application/zip',
+      },
+    })
+  }),
+
+  http.get(`${API_BASE}/backup/export`, () => {
+    return new HttpResponse('ecm_export:\n  version: 0.16.0\nsettings: {}\n', {
+      headers: {
+        'Content-Disposition': 'attachment; filename="ecm-export-2026-01-01.yaml"',
+        'Content-Type': 'text/yaml',
+      },
+    })
+  }),
+
+  http.post(`${API_BASE}/backup/validate`, () => {
+    return HttpResponse.json({
+      valid: true,
+      version: '0.16.0',
+      exported_at: '2026-01-01T00:00:00+00:00',
+      sections: [
+        { key: 'settings', label: 'Settings', item_count: 10, available: true },
+        { key: 'scheduled_tasks', label: 'Scheduled Tasks', item_count: 3, available: true },
+        { key: 'tag_groups', label: 'Tag Groups', item_count: 2, available: true },
+        { key: 'ffmpeg_profiles', label: 'FFmpeg Profiles', item_count: 0, available: false },
+      ],
+    })
+  }),
+
+  http.post(`${API_BASE}/backup/restore`, () => {
+    return HttpResponse.json({
+      status: 'ok',
+      backup_version: '0.16.0',
+      backup_date: '2026-01-01T00:00:00+00:00',
+      restored_files: ['settings.json', 'journal.db'],
+    })
+  }),
+
+  http.post(`${API_BASE}/backup/restore-yaml`, () => {
+    return HttpResponse.json({
+      success: true,
+      sections_restored: ['settings', 'scheduled_tasks', 'tag_groups'],
+      sections_failed: [],
+      warnings: [],
+      errors: [],
+    })
+  }),
+
+  http.post(`${API_BASE}/backup/restore-initial`, () => {
+    return HttpResponse.json({
+      status: 'ok',
+      backup_version: '0.16.0',
+      backup_date: '2026-01-01T00:00:00+00:00',
+      restored_files: ['settings.json', 'journal.db'],
+    })
+  }),
+
+  // ==========================================================================
+  // Lookup Tables — /api/lookup-tables
+  // ==========================================================================
+
+  http.get(`${API_BASE}/lookup-tables`, () => {
+    return HttpResponse.json([
+      {
+        id: 1,
+        name: 'callsigns',
+        description: 'Channel call signs',
+        entry_count: 2,
+        created_at: '2026-04-19T00:00:00Z',
+        updated_at: '2026-04-19T00:00:00Z',
+      },
+    ])
+  }),
+
+  http.post(`${API_BASE}/lookup-tables`, async ({ request }) => {
+    const body = (await request.json()) as {
+      name: string
+      description?: string | null
+      entries?: Record<string, string>
+    }
+    return HttpResponse.json(
+      {
+        id: nextId(),
+        name: body.name,
+        description: body.description ?? null,
+        entries: body.entries ?? {},
+        entry_count: Object.keys(body.entries ?? {}).length,
+        created_at: '2026-04-19T00:00:00Z',
+        updated_at: '2026-04-19T00:00:00Z',
+      },
+      { status: 201 },
+    )
+  }),
+
+  http.get(`${API_BASE}/lookup-tables/:id`, ({ params }) => {
+    return HttpResponse.json({
+      id: Number(params.id),
+      name: 'callsigns',
+      description: 'Channel call signs',
+      entries: { ESPN: 'espn.com', CNN: 'cnn.com' },
+      entry_count: 2,
+      created_at: '2026-04-19T00:00:00Z',
+      updated_at: '2026-04-19T00:00:00Z',
+    })
+  }),
+
+  http.patch(`${API_BASE}/lookup-tables/:id`, async ({ params, request }) => {
+    const body = (await request.json()) as {
+      name?: string
+      description?: string | null
+      entries?: Record<string, string>
+    }
+    return HttpResponse.json({
+      id: Number(params.id),
+      name: body.name ?? 'callsigns',
+      description: body.description ?? null,
+      entries: body.entries ?? { ESPN: 'espn.com' },
+      entry_count: Object.keys(body.entries ?? { ESPN: 'espn.com' }).length,
+      created_at: '2026-04-19T00:00:00Z',
+      updated_at: '2026-04-19T00:00:01Z',
+    })
+  }),
+
+  http.delete(`${API_BASE}/lookup-tables/:id`, () => {
+    return new HttpResponse(null, { status: 204 })
+  }),
+
+  // ==========================================================================
+  // Dummy EPG — /api/dummy-epg/preview (subset used by the modal)
+  // ==========================================================================
+
+  http.post(`${API_BASE}/dummy-epg/preview`, async ({ request }) => {
+    const body = (await request.json()) as {
+      sample_name: string
+      title_template?: string
+      description_template?: string
+      include_trace?: boolean
+    }
+    const rendered = {
+      title: body.title_template ?? body.sample_name,
+      description: body.description_template ?? '',
+      upcoming_title: '',
+      upcoming_description: '',
+      ended_title: '',
+      ended_description: '',
+      fallback_title: '',
+      fallback_description: '',
+      channel_logo_url: '',
+      program_poster_url: '',
+    }
+    const response: Record<string, unknown> = {
+      original_name: body.sample_name,
+      substituted_name: body.sample_name,
+      substitution_steps: [],
+      matched: true,
+      matched_variant: null,
+      groups: { name: body.sample_name },
+      time_variables: null,
+      rendered,
+    }
+    if (body.include_trace) {
+      response.traces = {
+        title_template: body.title_template
+          ? [{ kind: 'literal', text: rendered.title }]
+          : [],
+      }
+    }
+    return HttpResponse.json(response)
   }),
 ]

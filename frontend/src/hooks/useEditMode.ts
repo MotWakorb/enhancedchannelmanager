@@ -969,7 +969,7 @@ export function useEditMode({
         }],
       };
     }
-  }, [state.isActive, state.stagedOperations, state.workingCopy, buildBulkOperations]);
+  }, [state.isActive, state.stagedOperations, buildBulkOperations]);
 
   // Commit all staged operations to server
   const commit = useCallback(async (
@@ -1300,7 +1300,6 @@ export function useEditMode({
   }, [
     state.isActive,
     state.stagedOperations,
-    state.workingCopy,
     channels,
     onChannelsChange,
     onCommitComplete,
@@ -1330,6 +1329,11 @@ export function useEditMode({
         ],
       }));
     }
+    // state.workingCopy is read inside the effect; we use a functional setState
+    // (setState(prev => ...)) so it reads the latest, but exhaustive-deps still
+    // flags the outer read. Adding state.workingCopy would cause a render loop
+    // (the effect's setState updates state.workingCopy which retriggers it).
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment: workingCopy read uses functional updater to avoid a render loop
   }, [state.isActive, channels]);
 
   // Determine which channels to display

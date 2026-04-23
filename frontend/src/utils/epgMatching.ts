@@ -302,7 +302,7 @@ interface EPGLookup {
  * Build lookup maps from EPG data for fast matching.
  * This is O(n) where n = EPG entries, done once per batch.
  */
-function buildEPGLookup(epgData: EPGData[]): EPGLookup {
+export function buildEPGLookup(epgData: EPGData[]): EPGLookup {
   const byNormalizedTvgId = new Map<string, EPGData[]>();
   const byNormalizedName = new Map<string, EPGData[]>();
   const byCallSign = new Map<string, EPGData[]>();
@@ -404,7 +404,7 @@ const MIN_PREFIX_LENGTH = 4;
  * Find EPG matches for a channel using pre-built lookup maps.
  * Uses exact matching first, then falls back to prefix/fuzzy matching.
  */
-function findEPGMatchesWithLookup(
+export function findEPGMatchesWithLookup(
   channel: Channel,
   channelStreams: Stream[],
   lookup: EPGLookup
@@ -816,7 +816,7 @@ function findEPGMatchesWithLookup(
 /**
  * Progress callback for batch matching
  */
-interface BatchMatchProgress {
+export interface BatchMatchProgress {
   current: number;
   total: number;
   channelName: string;

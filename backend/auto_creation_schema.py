@@ -160,8 +160,11 @@ class Condition:
                 ConditionType.TVG_ID_MATCHES,
                 ConditionType.CHANNEL_EXISTS_MATCHING,
             ):
+                # TODO(enhancedchannelmanager-ltjyx): migrate write-time syntax validation
+                # to safe_regex.compile so length cap + compile-error surface match
+                # regex_lint.py (bd-eio04.7).
                 try:
-                    re.compile(self.value)
+                    re.compile(self.value)  # nosemgrep: no-bare-re-on-dynamic-pattern
                 except re.error as e:
                     errors.append(f"Invalid regex pattern for {self.type}: {e}")
 
@@ -402,6 +405,13 @@ class Action:
                 elif self.params["find_channel_by"] not in ("name_exact", "name_regex", "tvg_id"):
                     errors.append("merge_streams.find_channel_by must be 'name_exact', 'name_regex', or 'tvg_id'")
 
+            # Optional prune toggle
+            remove_non_matching = self.params.get("remove_non_matching", False)
+            if remove_non_matching is not None and not isinstance(remove_non_matching, bool):
+                errors.append("merge_streams.remove_non_matching must be a boolean")
+            if "remove_non_matching" not in self.params:
+                self.params["remove_non_matching"] = False
+
         # Validate assign_logo
         elif action_type == ActionType.ASSIGN_LOGO:
             value = self.params.get("value")
@@ -477,8 +487,9 @@ class Action:
                     if not pattern or not isinstance(pattern, str):
                         errors.append(f"set_variable with mode '{mode}' requires a 'pattern'")
                     else:
+                        # TODO(enhancedchannelmanager-ltjyx): migrate to safe_regex.compile.
                         try:
-                            re.compile(pattern)
+                            re.compile(pattern)  # nosemgrep: no-bare-re-on-dynamic-pattern
                         except re.error as e:
                             errors.append(f"Invalid regex pattern for set_variable: {e}")
                     if mode == "regex_replace":
@@ -504,8 +515,9 @@ class Action:
             if not isinstance(pattern, str):
                 errors.append("name_transform_pattern must be a string")
             else:
+                # TODO(enhancedchannelmanager-ltjyx): migrate to safe_regex.compile.
                 try:
-                    re.compile(pattern)
+                    re.compile(pattern)  # nosemgrep: no-bare-re-on-dynamic-pattern
                 except re.error as e:
                     errors.append(f"Invalid name_transform_pattern: {e}")
             # replacement is optional (defaults to empty string), but must be string if present

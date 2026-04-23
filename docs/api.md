@@ -182,7 +182,7 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `POST /api/stream-stats/clear-all` | Clear all probe stats |
 | `GET /api/stream-stats/struck-out` | List struck-out streams (exceeding failure threshold) |
 | `POST /api/stream-stats/struck-out/remove` | Bulk remove struck-out streams from all channels |
-| `POST /api/stream-stats/compute-sort` | Compute sort scores for streams based on probe data |
+| `POST /api/stream-stats/compute-sort` | Compute sort scores for streams (resolution, bitrate, framerate, video codec, M3U priority, audio channels) |
 
 ## Enhanced Stats
 
@@ -198,7 +198,7 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `GET /api/stats/unique-viewers` | Get unique viewer summary for period |
 | `GET /api/stats/channel-bandwidth` | Get per-channel bandwidth stats |
 | `GET /api/stats/unique-viewers-by-channel` | Get unique viewers per channel |
-| `GET /api/stats/watch-history` | Get watch history log (paginated) |
+| `GET /api/stats/watch-history` | Get watch history log (paginated, filterable by channel/IP/days, includes user attribution) |
 
 ## Popularity
 
@@ -228,11 +228,23 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `POST /api/normalization/test` | Test a rule against sample text |
 | `POST /api/normalization/test-batch` | Test all enabled rules against multiple texts |
 | `POST /api/normalization/normalize` | Normalize text using all enabled rules |
+| `POST /api/normalization/apply-to-channels` | Apply enabled rules to existing channels — admin-gated, rate-limited 5/minute, `dry_run=true` by default (see note below) |
 | `GET /api/normalization/rule-stats` | Get stream match statistics per rule |
+| `GET /api/normalization/lint-findings` | Read-only view of saved normalization rules that fail the current write-time linter (bd-eio04.7) |
 | `GET /api/normalization/export` | Export normalization rules |
 | `POST /api/normalization/import` | Import normalization rules |
 | `GET /api/normalization/migration/status` | Get migration status |
 | `POST /api/normalization/migration/run` | Run demo rules migration |
+
+`POST /api/normalization/apply-to-channels` computes a diff of "what would change if we applied the current rule set to every existing channel" and, in execute mode, renames or merges per-row according to the caller-supplied `actions[]` array. Guarantees:
+
+- **Admin-gated** — protected by `RequireAdminIfEnabled`; non-admin callers see HTTP 403 when auth is enabled.
+- **Rate-limited** — 5 requests/minute per remote address (slowapi) to prevent runaway bulk-apply loops.
+- **Dry-run by default** — `dry_run=true` returns `{dry_run, diffs, channels_with_changes}` without mutating. `dry_run=false` requires an explicit `actions[]` body; unspecified channels default to `skip`.
+- **Single-flight execute** — only one concurrent execute run is allowed; a second caller sees HTTP 409.
+- **Journaled** — every rename and merge writes a journal entry with the `rule_set_hash` captured at execute time for audit and undo.
+
+See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#re-normalize-existing-channels) for the operator workflow.
 
 ## Tags
 
@@ -317,6 +329,7 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `POST /api/auto-creation/rules` | Create rule |
 | `PUT /api/auto-creation/rules/{id}` | Update rule |
 | `DELETE /api/auto-creation/rules/{id}` | Delete rule |
+| `POST /api/auto-creation/rules/bulk-update` | Apply the same field changes to multiple rules (omitted fields unchanged) |
 | `POST /api/auto-creation/rules/reorder` | Reorder rules by priority |
 | `POST /api/auto-creation/rules/{id}/toggle` | Toggle rule enabled state |
 | `POST /api/auto-creation/rules/{id}/duplicate` | Duplicate a rule |
@@ -331,6 +344,8 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `GET /api/auto-creation/schema/conditions` | Get available condition types |
 | `GET /api/auto-creation/schema/actions` | Get available action types |
 | `GET /api/auto-creation/schema/template-variables` | Get available template variables |
+| `GET /api/auto-creation/lint-findings` | Read-only view of saved auto-creation rules that fail the current write-time linter (bd-eio04.7) |
+| `GET /api/auto-creation/debug-bundle` | Download diagnostic bundle (obfuscated channels, rules, streams, probe stats, settings, task schedules, logs) |
 
 ## FFMPEG Builder
 
@@ -404,6 +419,27 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `GET /api/dummy-epg/xmltv/{id}` | Get XMLTV output for a profile |
 | `GET /api/dummy-epg/profiles/export/yaml` | Export profiles as YAML |
 | `POST /api/dummy-epg/profiles/import/yaml` | Import profiles from YAML |
+| `GET /api/dummy-epg/lint-findings` | Read-only view of saved dummy-EPG templates that fail the current write-time linter (bd-eio04.7) |
+
+`POST /api/dummy-epg/preview` accepts the full profile config plus:
+
+- `inline_lookups: {<name>: {<key>: <value>, ...}, ...}` — per-source lookup tables referenced by `{key|lookup:<name>}`. Inline tables override globals of the same name.
+- `global_lookup_ids: [id, ...]` — IDs of saved tables from `/api/lookup-tables`.
+- `include_trace: bool` — when true, the response carries a `traces` dict keyed by template field (`title_template`, `description_template`, …). Trace entries describe literals, placeholders (with per-pipe input/output and lookup hit/miss), and conditionals (taken/skipped + branch kind).
+
+## Lookup Tables
+
+Named key → value tables used by the dummy EPG template engine's `{key|lookup:<name>}` pipe.
+
+| Endpoint | Description |
+|-|-|
+| `GET /api/lookup-tables` | List all tables (summary — entry counts, no entries) |
+| `POST /api/lookup-tables` | Create a table (`{name, description?, entries?}`) |
+| `GET /api/lookup-tables/{id}` | Get a single table with full `entries` dict |
+| `PATCH /api/lookup-tables/{id}` | Rename, edit description, and/or replace entries |
+| `DELETE /api/lookup-tables/{id}` | Delete a table (cascades to any source still referencing it by ID — the preview path skips missing IDs silently) |
+
+Names are unique. Each table is capped at 10 000 entries.
 
 ## Export
 
@@ -440,6 +476,11 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `GET /api/backup/create` | Download backup zip of all configuration |
 | `POST /api/backup/restore` | Restore from uploaded backup zip |
 | `POST /api/backup/restore-initial` | Restore from backup during initial setup (no auth) |
+| `GET /api/backup/export-sections` | List available YAML export sections |
+| `POST /api/backup/export` | Export selected sections as YAML |
+| `POST /api/backup/import` | Import from YAML backup |
+| `GET /api/backup/saved` | List saved YAML backup files |
+| `DELETE /api/backup/saved/{filename}` | Delete a saved YAML backup file |
 
 ## Authentication
 

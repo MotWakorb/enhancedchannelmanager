@@ -190,7 +190,8 @@ export function InputSourceConfig({ value, onChange }: InputSourceConfigProps) {
 
   const handleHWAccelChange = (api: string) => {
     if (api === 'none') {
-      const { hwaccel, ...rest } = input;
+      // Strip hwaccel from input by destructuring it out; the binding is intentionally unused.
+      const { hwaccel: _hwaccel, ...rest } = input;
       emit(rest as InputSource);
     } else {
       const hwaccel: HWAccelConfig = { api: api as HWAccelAPI };
