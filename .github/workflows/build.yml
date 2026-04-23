@@ -380,7 +380,7 @@ jobs:
       contents: read
       packages: write
     outputs:
-      digest: ${{ steps.build.outputs.digest }}
+      digest: ${{ steps.digest.outputs.digest }}
 
     steps:
       - name: Checkout repository
@@ -418,8 +418,61 @@ jobs:
             echo "channel=latest" >> $GITHUB_OUTPUT
           fi
 
+      # Build + push with 2 retries on transient GHCR 50x during layer blob push.
+      # See bd-42aai: GHCR returned 502/504 with
+      # "error writing layer blob: failed to parse error response 50x" in a
+      # 30min window across 4 jobs, each needing manual rerun. Retries are
+      # scoped to this step only; build cache is reused across attempts.
       - name: Build and push (AMD64)
         id: build
+        uses: docker/build-push-action@v7
+        continue-on-error: true
+        with:
+          context: .
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            ECM_VERSION=${{ steps.version.outputs.version }}
+            RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,mode=max,scope=amd64
+
+      - name: Wait before retry 1 (AMD64)
+        if: steps.build.outcome == 'failure'
+        run: |
+          echo "::warning::Build/push attempt 1 failed (likely transient GHCR 50x). Sleeping 30s before retry."
+          sleep 30
+
+      - name: Build and push (AMD64) — retry 1
+        id: build_retry1
+        if: steps.build.outcome == 'failure'
+        uses: docker/build-push-action@v7
+        continue-on-error: true
+        with:
+          context: .
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            ECM_VERSION=${{ steps.version.outputs.version }}
+            RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,mode=max,scope=amd64
+
+      - name: Wait before retry 2 (AMD64)
+        if: steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'
+        run: |
+          echo "::warning::Build/push attempt 2 failed. Sleeping 60s before final retry."
+          sleep 60
+
+      - name: Build and push (AMD64) — retry 2
+        id: build_retry2
+        if: steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -433,6 +486,19 @@ jobs:
           outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=amd64
           cache-to: type=gha,mode=max,scope=amd64
+
+      - name: Capture digest (AMD64)
+        id: digest
+        run: |
+          # Pick the digest from whichever attempt actually succeeded.
+          DIGEST="${{ steps.build.outputs.digest }}"
+          if [ -z "$DIGEST" ]; then DIGEST="${{ steps.build_retry1.outputs.digest }}"; fi
+          if [ -z "$DIGEST" ]; then DIGEST="${{ steps.build_retry2.outputs.digest }}"; fi
+          if [ -z "$DIGEST" ]; then
+            echo "::error::No digest produced by any build attempt"
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
 
   # Container vulnerability scanning with Trivy (loads image from build-amd64 cache)
   trivy-scan:
@@ -488,7 +554,7 @@ jobs:
       contents: read
       packages: write
     outputs:
-      digest: ${{ steps.build.outputs.digest }}
+      digest: ${{ steps.digest.outputs.digest }}
 
     steps:
       - name: Checkout repository
@@ -526,8 +592,58 @@ jobs:
             echo "channel=latest" >> $GITHUB_OUTPUT
           fi
 
+      # Build + push with 2 retries on transient GHCR 50x during layer blob push.
+      # See bd-42aai for the incident that motivated this.
       - name: Build and push (ARM64)
         id: build
+        uses: docker/build-push-action@v7
+        continue-on-error: true
+        with:
+          context: .
+          platforms: linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            ECM_VERSION=${{ steps.version.outputs.version }}
+            RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha,scope=arm64
+          cache-to: type=gha,mode=max,scope=arm64
+
+      - name: Wait before retry 1 (ARM64)
+        if: steps.build.outcome == 'failure'
+        run: |
+          echo "::warning::Build/push attempt 1 failed (likely transient GHCR 50x). Sleeping 30s before retry."
+          sleep 30
+
+      - name: Build and push (ARM64) — retry 1
+        id: build_retry1
+        if: steps.build.outcome == 'failure'
+        uses: docker/build-push-action@v7
+        continue-on-error: true
+        with:
+          context: .
+          platforms: linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            ECM_VERSION=${{ steps.version.outputs.version }}
+            RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha,scope=arm64
+          cache-to: type=gha,mode=max,scope=arm64
+
+      - name: Wait before retry 2 (ARM64)
+        if: steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'
+        run: |
+          echo "::warning::Build/push attempt 2 failed. Sleeping 60s before final retry."
+          sleep 60
+
+      - name: Build and push (ARM64) — retry 2
+        id: build_retry2
+        if: steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -541,6 +657,18 @@ jobs:
           outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=arm64
           cache-to: type=gha,mode=max,scope=arm64
+
+      - name: Capture digest (ARM64)
+        id: digest
+        run: |
+          DIGEST="${{ steps.build.outputs.digest }}"
+          if [ -z "$DIGEST" ]; then DIGEST="${{ steps.build_retry1.outputs.digest }}"; fi
+          if [ -z "$DIGEST" ]; then DIGEST="${{ steps.build_retry2.outputs.digest }}"; fi
+          if [ -z "$DIGEST" ]; then
+            echo "::error::No digest produced by any build attempt"
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
 
   # Container vulnerability scanning with Trivy — ARM64 (loads image from build-arm64 cache)
   trivy-scan-arm64:
@@ -667,7 +795,7 @@ jobs:
       contents: read
       packages: write
     outputs:
-      digest: ${{ steps.build.outputs.digest }}
+      digest: ${{ steps.digest.outputs.digest }}
 
     steps:
       - name: Checkout repository
@@ -694,8 +822,50 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
 
+      # Build + push with 2 retries on transient GHCR 50x during layer blob push.
+      # See bd-42aai for the incident that motivated this.
       - name: Build and push MCP (AMD64)
         id: build
+        uses: docker/build-push-action@v7
+        continue-on-error: true
+        with:
+          context: ./mcp-server
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha,scope=mcp-amd64
+          cache-to: type=gha,mode=max,scope=mcp-amd64
+
+      - name: Wait before MCP retry 1 (AMD64)
+        if: steps.build.outcome == 'failure'
+        run: |
+          echo "::warning::MCP build/push attempt 1 failed (likely transient GHCR 50x). Sleeping 30s before retry."
+          sleep 30
+
+      - name: Build and push MCP (AMD64) — retry 1
+        id: build_retry1
+        if: steps.build.outcome == 'failure'
+        uses: docker/build-push-action@v7
+        continue-on-error: true
+        with:
+          context: ./mcp-server
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha,scope=mcp-amd64
+          cache-to: type=gha,mode=max,scope=mcp-amd64
+
+      - name: Wait before MCP retry 2 (AMD64)
+        if: steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'
+        run: |
+          echo "::warning::MCP build/push attempt 2 failed. Sleeping 60s before final retry."
+          sleep 60
+
+      - name: Build and push MCP (AMD64) — retry 2
+        id: build_retry2
+        if: steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'
         uses: docker/build-push-action@v7
         with:
           context: ./mcp-server
@@ -706,6 +876,18 @@ jobs:
           cache-from: type=gha,scope=mcp-amd64
           cache-to: type=gha,mode=max,scope=mcp-amd64
 
+      - name: Capture MCP digest (AMD64)
+        id: digest
+        run: |
+          DIGEST="${{ steps.build.outputs.digest }}"
+          if [ -z "$DIGEST" ]; then DIGEST="${{ steps.build_retry1.outputs.digest }}"; fi
+          if [ -z "$DIGEST" ]; then DIGEST="${{ steps.build_retry2.outputs.digest }}"; fi
+          if [ -z "$DIGEST" ]; then
+            echo "::error::No digest produced by any MCP build attempt"
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+
   build-mcp-arm64:
     name: Build MCP Image (ARM64)
     runs-on: ubuntu-24.04-arm
@@ -715,7 +897,7 @@ jobs:
       contents: read
       packages: write
     outputs:
-      digest: ${{ steps.build.outputs.digest }}
+      digest: ${{ steps.digest.outputs.digest }}
 
     steps:
       - name: Checkout repository
@@ -742,8 +924,50 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
 
+      # Build + push with 2 retries on transient GHCR 50x during layer blob push.
+      # See bd-42aai for the incident that motivated this.
       - name: Build and push MCP (ARM64)
         id: build
+        uses: docker/build-push-action@v7
+        continue-on-error: true
+        with:
+          context: ./mcp-server
+          platforms: linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha,scope=mcp-arm64
+          cache-to: type=gha,mode=max,scope=mcp-arm64
+
+      - name: Wait before MCP retry 1 (ARM64)
+        if: steps.build.outcome == 'failure'
+        run: |
+          echo "::warning::MCP build/push attempt 1 failed (likely transient GHCR 50x). Sleeping 30s before retry."
+          sleep 30
+
+      - name: Build and push MCP (ARM64) — retry 1
+        id: build_retry1
+        if: steps.build.outcome == 'failure'
+        uses: docker/build-push-action@v7
+        continue-on-error: true
+        with:
+          context: ./mcp-server
+          platforms: linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha,scope=mcp-arm64
+          cache-to: type=gha,mode=max,scope=mcp-arm64
+
+      - name: Wait before MCP retry 2 (ARM64)
+        if: steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'
+        run: |
+          echo "::warning::MCP build/push attempt 2 failed. Sleeping 60s before final retry."
+          sleep 60
+
+      - name: Build and push MCP (ARM64) — retry 2
+        id: build_retry2
+        if: steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'
         uses: docker/build-push-action@v7
         with:
           context: ./mcp-server
@@ -753,6 +977,18 @@ jobs:
           outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=mcp-arm64
           cache-to: type=gha,mode=max,scope=mcp-arm64
+
+      - name: Capture MCP digest (ARM64)
+        id: digest
+        run: |
+          DIGEST="${{ steps.build.outputs.digest }}"
+          if [ -z "$DIGEST" ]; then DIGEST="${{ steps.build_retry1.outputs.digest }}"; fi
+          if [ -z "$DIGEST" ]; then DIGEST="${{ steps.build_retry2.outputs.digest }}"; fi
+          if [ -z "$DIGEST" ]; then
+            echo "::error::No digest produced by any MCP build attempt"
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
 
   merge-mcp-manifests:
     name: Create MCP Multi-Arch Manifest
