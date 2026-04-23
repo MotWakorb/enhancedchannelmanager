@@ -419,32 +419,26 @@ export interface ValidationResult {
   warnings?: string[];
 }
 
-export interface RunPipelineResponse {
-  success: boolean;
+/**
+ * 202-Accepted response from POST /api/auto-creation/run and
+ * POST /api/auto-creation/rules/{id}/run (bd-enfsy: background-task pattern).
+ *
+ * Pipeline runs are now enqueued and the caller polls
+ * GET /api/auto-creation/executions/{id} until status is terminal.
+ */
+export interface RunPipelineEnqueuedResponse {
   execution_id: number;
-  mode: ExecutionMode;
-  duration_seconds: number;
-  streams_evaluated: number;
-  streams_matched: number;
-  channels_created: number;
-  channels_updated: number;
-  groups_created: number;
-  streams_merged: number;
-  streams_skipped: number;
-  streams_excluded: number;
-  streams_removed: number;
-  channels_removed: number;
-  channels_moved: number;
-  created_entities: CreatedEntity[];
-  modified_entities: ModifiedEntity[];
-  dry_run_results?: DryRunResult[];
-  conflicts?: {
-    stream_id: number;
-    stream_name: string;
-    winning_rule_id: number;
-    losing_rule_ids: number[];
-  }[];
+  status: 'running';
+  rule_id?: number;
+  message: string;
 }
+
+/**
+ * Result returned by the polling-based ``runPipeline`` hook helper —
+ * the terminal AutoCreationExecution row once polling resolves, or
+ * ``undefined`` if the request errored out before completion.
+ */
+export type RunPipelineResponse = AutoCreationExecution;
 
 export interface RollbackResponse {
   success: boolean;
