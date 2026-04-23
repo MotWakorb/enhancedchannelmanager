@@ -14,7 +14,7 @@ from typing import List, Optional
 import journal
 from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from starlette.responses import StreamingResponse
 
 from concurrency import run_cpu_bound
@@ -90,6 +90,21 @@ class BulkUpdateAutoCreationRulesRequest(UpdateAutoCreationRuleRequest):
 
     rule_ids: List[int] = Field(..., min_length=1, max_length=500)
     merge_streams_remove_non_matching: Optional[bool] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_conditions_and_actions(cls, data):
+        """bd-gjoe5: Bulk-update inherits conditions/actions from the single-rule
+        update request, but the handler does not apply them — silently dropping
+        them is the wrong default for an API contract. Reject the request so
+        callers route conditions/actions edits through PUT /rules/{id} instead.
+        """
+        if isinstance(data, dict) and ("conditions" in data or "actions" in data):
+            raise ValueError(
+                "conditions and actions are not supported in bulk-update; "
+                "use PUT /rules/{id}"
+            )
+        return data
 
 
 class RunPipelineRequest(BaseModel):
