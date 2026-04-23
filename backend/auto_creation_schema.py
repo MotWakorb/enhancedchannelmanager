@@ -11,6 +11,8 @@ from typing import Any, Optional, Union
 import re
 import json
 
+import safe_regex
+
 logger = logging.getLogger(__name__)
 
 
@@ -160,12 +162,14 @@ class Condition:
                 ConditionType.TVG_ID_MATCHES,
                 ConditionType.CHANNEL_EXISTS_MATCHING,
             ):
-                # TODO(enhancedchannelmanager-ltjyx): migrate write-time syntax validation
-                # to safe_regex.compile so length cap + compile-error surface match
-                # regex_lint.py (bd-eio04.7).
+                # bd-ltjyx: route write-time syntax validation through
+                # safe_regex.compile. SafeRegexError covers both
+                # PatternTooLongError (length cap) and wrapped regex
+                # syntax errors, mirroring the runtime path used by
+                # auto_creation_evaluator (bd-eio04.15).
                 try:
-                    re.compile(self.value)  # nosemgrep: no-bare-re-on-dynamic-pattern
-                except re.error as e:
+                    safe_regex.compile(self.value)
+                except safe_regex.SafeRegexError as e:
                     errors.append(f"Invalid regex pattern for {self.type}: {e}")
 
         elif cond_type in (ConditionType.QUALITY_MIN, ConditionType.QUALITY_MAX, ConditionType.CHANNEL_HAS_STREAMS, ConditionType.HAS_AUDIO_TRACKS):
@@ -487,10 +491,13 @@ class Action:
                     if not pattern or not isinstance(pattern, str):
                         errors.append(f"set_variable with mode '{mode}' requires a 'pattern'")
                     else:
-                        # TODO(enhancedchannelmanager-ltjyx): migrate to safe_regex.compile.
+                        # bd-ltjyx: route through safe_regex.compile so the
+                        # length cap and compile-error surface match the
+                        # runtime path that actually executes this pattern
+                        # (auto_creation_executor._execute_set_variable).
                         try:
-                            re.compile(pattern)  # nosemgrep: no-bare-re-on-dynamic-pattern
-                        except re.error as e:
+                            safe_regex.compile(pattern)
+                        except safe_regex.SafeRegexError as e:
                             errors.append(f"Invalid regex pattern for set_variable: {e}")
                     if mode == "regex_replace":
                         replacement = self.params.get("replacement")
@@ -515,10 +522,12 @@ class Action:
             if not isinstance(pattern, str):
                 errors.append("name_transform_pattern must be a string")
             else:
-                # TODO(enhancedchannelmanager-ltjyx): migrate to safe_regex.compile.
+                # bd-ltjyx: route through safe_regex.compile so the length
+                # cap and compile-error surface match the runtime path
+                # (auto_creation_executor._apply_name_transform).
                 try:
-                    re.compile(pattern)  # nosemgrep: no-bare-re-on-dynamic-pattern
-                except re.error as e:
+                    safe_regex.compile(pattern)
+                except safe_regex.SafeRegexError as e:
                     errors.append(f"Invalid name_transform_pattern: {e}")
             # replacement is optional (defaults to empty string), but must be string if present
             if replacement is not None and not isinstance(replacement, str):
