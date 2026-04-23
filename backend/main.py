@@ -348,6 +348,7 @@ _TIMEOUT_EXEMPT_PREFIXES = (
     "/api/ffmpeg/",            # long-running ffmpeg jobs
     "/api/tasks/",             # task triggering / status
     "/api/backup/",            # backup/restore can be large
+    "/api/auto-creation/",     # pipeline runs can exceed 30s on large catalogs
 )
 
 
