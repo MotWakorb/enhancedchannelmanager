@@ -362,6 +362,59 @@ class TestBulkUpdateAutoCreationRules:
         refreshed = test_session.query(AutoCreationRule).get(rule.id)
         assert json.loads(refreshed.actions) == [merge_action]
 
+    @pytest.mark.asyncio
+    async def test_rejects_conditions_in_payload(self, async_client, test_session):
+        """bd-gjoe5: conditions is not supported in bulk-update; silent-drop
+        is the wrong default for an API contract. Must reject (4xx) and name
+        the offending field in the error message.
+        """
+        r = _create_rule(test_session, name="RejectCond", enabled=True)
+        response = await async_client.post(
+            "/api/auto-creation/rules/bulk-update",
+            json={
+                "rule_ids": [r.id],
+                "conditions": [{"type": "stream_name_contains", "value": "X"}],
+            },
+        )
+        assert response.status_code in (400, 422), response.text
+        body = response.text.lower()
+        assert "conditions" in body
+
+    @pytest.mark.asyncio
+    async def test_rejects_actions_in_payload(self, async_client, test_session):
+        """bd-gjoe5: actions is not supported in bulk-update."""
+        r = _create_rule(test_session, name="RejectActs", enabled=True)
+        response = await async_client.post(
+            "/api/auto-creation/rules/bulk-update",
+            json={
+                "rule_ids": [r.id],
+                "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+            },
+        )
+        assert response.status_code in (400, 422), response.text
+        body = response.text.lower()
+        assert "actions" in body
+
+    @pytest.mark.asyncio
+    async def test_scalars_only_update_still_succeeds(self, async_client, test_session):
+        """bd-gjoe5 regression guard: scalars-only bulk updates must still
+        return 200 after the conditions/actions rejection is added.
+        """
+        r = _create_rule(test_session, name="ScalarsOnly", enabled=False)
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={"rule_ids": [r.id], "enabled": True, "priority": 5},
+            )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["updated_count"] == 1
+        test_session.expire_all()
+        refreshed = test_session.query(AutoCreationRule).get(r.id)
+        assert refreshed.enabled is True
+        assert refreshed.priority == 5
+
 
 class TestDeleteAutoCreationRule:
     """Tests for DELETE /api/auto-creation/rules/{rule_id}."""
