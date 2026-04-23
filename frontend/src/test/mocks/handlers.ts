@@ -1014,6 +1014,10 @@ export const handlers = [
   }),
 
   http.post(`${API_BASE}/auto-creation/run`, async ({ request }) => {
+    // bd-enfsy: 202 + poll background-task pattern. We mirror the backend by
+    // creating an execution with status='completed' immediately (so the
+    // poller's first GET sees a terminal status — the fastest possible
+    // poll path) and returning 202 + execution_id.
     const data = await request.json() as { dry_run?: boolean; rule_ids?: number[] }
     const dryRun = data.dry_run ?? false
     const execution = createMockAutoCreationExecution({
@@ -1024,25 +1028,41 @@ export const handlers = [
       streams_matched: 5,
       streams_evaluated: 100,
     })
-    if (!dryRun) {
-      mockDataStore.autoCreationExecutions.unshift(execution)
-    }
-    return HttpResponse.json({
-      success: true,
-      execution_id: execution.id,
-      mode: execution.mode,
-      duration_seconds: execution.duration_seconds,
-      streams_evaluated: execution.streams_evaluated,
-      streams_matched: execution.streams_matched,
-      channels_created: execution.channels_created,
-      channels_updated: execution.channels_updated,
-      groups_created: execution.groups_created,
-      streams_merged: execution.streams_merged,
-      streams_skipped: execution.streams_skipped,
-      created_entities: execution.created_entities,
-      modified_entities: execution.modified_entities,
-      dry_run_results: dryRun ? [] : undefined,
+    // Always store so the GET /executions/{id} poll target can find it.
+    mockDataStore.autoCreationExecutions.unshift(execution)
+    return HttpResponse.json(
+      {
+        execution_id: execution.id,
+        status: 'running',
+        message: 'Pipeline started; poll /api/auto-creation/executions/{id} for status',
+      },
+      { status: 202 }
+    )
+  }),
+
+  http.post(`${API_BASE}/auto-creation/rules/:ruleId/run`, async ({ params, request }) => {
+    // bd-enfsy: 202 + poll for the per-rule run too.
+    const ruleId = parseInt(params.ruleId as string)
+    const url = new URL(request.url)
+    const dryRun = url.searchParams.get('dry_run') === 'true'
+    const execution = createMockAutoCreationExecution({
+      mode: dryRun ? 'dry_run' : 'execute',
+      triggered_by: 'manual',
+      status: 'completed',
+      channels_created: dryRun ? 0 : 1,
+      streams_matched: 1,
+      streams_evaluated: 5,
     })
+    mockDataStore.autoCreationExecutions.unshift(execution)
+    return HttpResponse.json(
+      {
+        execution_id: execution.id,
+        status: 'running',
+        rule_id: ruleId,
+        message: 'Rule run started; poll /api/auto-creation/executions/{id} for status',
+      },
+      { status: 202 }
+    )
   }),
 
   http.post(`${API_BASE}/auto-creation/executions/:id/rollback`, ({ params }) => {

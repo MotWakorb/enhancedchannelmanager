@@ -12,6 +12,10 @@ import type {
 } from '../types/autoCreation';
 import * as api from '../services/autoCreationApi';
 
+// ExecutionStatus is referenced both at value-position (the TERMINAL list
+// inside pollExecutionUntilTerminal) and at type-position; keeping a single
+// type-only import is fine because TS erases the array element type at runtime.
+
 export interface UseAutoCreationExecutionOptions {
   /** Auto-refresh interval in milliseconds (0 to disable) */
   autoRefreshInterval?: number;
@@ -114,27 +118,103 @@ export function useAutoCreationExecution(
     }
   }, []);
 
+  /**
+   * Poll the executions endpoint until the run reaches a terminal status
+   * (bd-enfsy: 202 + poll background-task pattern). On every poll we also
+   * splice the latest snapshot into the executions list so the UI updates
+   * incrementally without waiting for the final fetchExecutions() call.
+   *
+   * Cancellation: callers (or component unmount) can abort the polling by
+   * passing an AbortSignal — we honor it both before each fetch and inside
+   * the inter-poll sleep.
+   */
+  const pollExecutionUntilTerminal = useCallback(async (
+    executionId: number,
+    signal?: AbortSignal,
+  ): Promise<AutoCreationExecution | undefined> => {
+    // Tunables — small and steady; backend status writes are cheap GETs.
+    const POLL_INTERVAL_MS = 1000;
+    const MAX_POLL_DURATION_MS = 30 * 60 * 1000; // 30 minutes safety cap
+    const TERMINAL: ExecutionStatus[] = ['completed', 'failed', 'rolled_back'];
+    const startedAt = Date.now();
+
+    while (true) {
+      if (signal?.aborted) return undefined;
+      let snapshot: AutoCreationExecution | undefined;
+      try {
+        snapshot = await api.getAutoCreationExecution(executionId);
+      } catch {
+        // Transient fetch failure — fall through to retry until cap.
+        snapshot = undefined;
+      }
+      if (snapshot) {
+        // Splice into list so the UI sees the row update without a full refetch.
+        setExecutions(prev => {
+          const idx = prev.findIndex(e => e.id === snapshot!.id);
+          if (idx === -1) return [snapshot!, ...prev];
+          const next = prev.slice();
+          next[idx] = snapshot!;
+          return next;
+        });
+        if (TERMINAL.includes(snapshot.status)) {
+          return snapshot;
+        }
+      }
+      if (Date.now() - startedAt > MAX_POLL_DURATION_MS) {
+        // Safety break — return the last snapshot we have (status still
+        // 'running' / 'pending'); caller can surface a stale-poll warning.
+        return snapshot;
+      }
+      await new Promise<void>((resolve) => {
+        const t = window.setTimeout(resolve, POLL_INTERVAL_MS);
+        signal?.addEventListener('abort', () => {
+          window.clearTimeout(t);
+          resolve();
+        }, { once: true });
+      });
+    }
+  }, []);
+
   const runPipeline = useCallback(async (options?: {
     dryRun?: boolean;
     ruleIds?: number[];
   }): Promise<RunPipelineResponse | undefined> => {
     setIsRunning(true);
     setError(null);
+    let pipelineError: string | null = null;
     try {
-      const response = await api.runAutoCreationPipeline({
+      // bd-enfsy: backend returns 202 with execution_id and runs the pipeline
+      // in a supervised background task. Poll until terminal so the caller
+      // (and the existing isRunning UI flag) still sees a "done" signal.
+      const enqueued = await api.runAutoCreationPipeline({
         dryRun: options?.dryRun,
         ruleIds: options?.ruleIds,
       });
-      // Refresh executions to include the new one
-      await fetchExecutions();
-      return response;
+      const terminal = await pollExecutionUntilTerminal(enqueued.execution_id);
+      return terminal;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to run pipeline');
+      pipelineError = err instanceof Error ? err.message : 'Failed to run pipeline';
+      setError(pipelineError);
       return undefined;
     } finally {
+      // Always refetch — both on success and on error — so the UI list is
+      // never stale after a POST attempt (bd-enfsy fix: previously only
+      // refetched inside the try block, leaving the list stale on 504/500
+      // until the user manually reloaded the browser). fetchExecutions
+      // internally clears the hook's error state, so re-apply our pipeline
+      // error after the refresh succeeds — otherwise the user's visible
+      // error message disappears the instant the refetch completes.
+      try {
+        await fetchExecutions();
+      } catch {
+        // Ignore: already in finally, don't shadow the original error.
+      }
+      if (pipelineError) {
+        setError(pipelineError);
+      }
       setIsRunning(false);
     }
-  }, [fetchExecutions]);
+  }, [fetchExecutions, pollExecutionUntilTerminal]);
 
   const rollback = useCallback(async (id: number): Promise<RollbackResponse | undefined> => {
     setError(null);
