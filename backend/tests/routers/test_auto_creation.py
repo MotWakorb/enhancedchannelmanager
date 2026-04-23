@@ -637,62 +637,193 @@ class TestDuplicateAutoCreationRule:
 
 
 class TestRunAutoCreationPipeline:
-    """Tests for POST /api/auto-creation/run."""
+    """Tests for POST /api/auto-creation/run (background-task pattern, bd-enfsy)."""
 
     @pytest.mark.asyncio
-    async def test_runs_pipeline(self, async_client):
-        """Runs the auto-creation pipeline."""
+    async def test_returns_202_with_execution_id(self, async_client, test_session):
+        """POST /run enqueues work and returns 202 + execution_id immediately."""
+        # Use an Event so the background task blocks until the assertion runs,
+        # so we can observe the "running" status before the engine completes.
+        import asyncio as _asyncio
+        gate = _asyncio.Event()
+
+        async def slow_run_pipeline(*args, **kwargs):
+            await gate.wait()
+            return {"success": True, "execution_id": kwargs.get("execution_id")}
+
         mock_engine = AsyncMock()
-        mock_engine.run_pipeline.return_value = {
-            "status": "completed",
-            "streams_matched": 10,
-            "channels_created": 5,
-        }
+        mock_engine.run_pipeline = AsyncMock(side_effect=slow_run_pipeline)
 
         with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
-            response = await async_client.post("/api/auto-creation/run", json={
-                "dry_run": False,
-            })
+            response = await async_client.post("/api/auto-creation/run", json={"dry_run": False})
 
-        assert response.status_code == 200
-        assert response.json()["channels_created"] == 5
-        mock_engine.run_pipeline.assert_called_once_with(
-            dry_run=False, triggered_by="api", m3u_account_ids=None, rule_ids=None,
-        )
+        assert response.status_code == 202, response.text
+        body = response.json()
+        assert "execution_id" in body
+        assert body["status"] == "running"
+        execution_id = body["execution_id"]
+
+        # Execution row should already exist with status="running"
+        from models import AutoCreationExecution
+        exe = test_session.query(AutoCreationExecution).filter_by(id=execution_id).first()
+        assert exe is not None
+        assert exe.status == "running"
+        assert exe.mode == "execute"
+        assert exe.triggered_by == "api"
+
+        # Release the background task
+        gate.set()
+        # Yield so the background task can complete (drain it)
+        for _ in range(20):
+            await _asyncio.sleep(0)
+        # Engine call must have been issued with execution_id binding
+        mock_engine.run_pipeline.assert_called()
+        call_kwargs = mock_engine.run_pipeline.call_args.kwargs
+        assert call_kwargs["dry_run"] is False
+        assert call_kwargs["triggered_by"] == "api"
+        assert call_kwargs["execution_id"] == execution_id
 
     @pytest.mark.asyncio
-    async def test_dry_run(self, async_client):
-        """Runs pipeline in dry-run mode."""
+    async def test_dry_run_creates_dry_run_execution(self, async_client, test_session):
+        """dry_run=True must create execution with mode='dry_run'."""
         mock_engine = AsyncMock()
-        mock_engine.run_pipeline.return_value = {"status": "dry_run"}
+        mock_engine.run_pipeline = AsyncMock(return_value={"success": True})
 
         with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
-            response = await async_client.post("/api/auto-creation/run", json={
-                "dry_run": True,
-            })
+            response = await async_client.post("/api/auto-creation/run", json={"dry_run": True})
 
-        assert response.status_code == 200
-        mock_engine.run_pipeline.assert_called_once_with(
-            dry_run=True, triggered_by="api", m3u_account_ids=None, rule_ids=None,
-        )
+        assert response.status_code == 202
+        execution_id = response.json()["execution_id"]
+        from models import AutoCreationExecution
+        exe = test_session.query(AutoCreationExecution).filter_by(id=execution_id).first()
+        assert exe is not None
+        assert exe.mode == "dry_run"
+
+    @pytest.mark.asyncio
+    async def test_background_task_failure_marks_execution_failed(self, async_client, test_session):
+        """If the engine raises, the background supervisor marks the execution failed."""
+        import asyncio as _asyncio
+
+        async def boom(*args, **kwargs):
+            raise RuntimeError("engine exploded")
+
+        mock_engine = AsyncMock()
+        mock_engine.run_pipeline = AsyncMock(side_effect=boom)
+
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+            response = await async_client.post("/api/auto-creation/run", json={"dry_run": False})
+
+        assert response.status_code == 202
+        execution_id = response.json()["execution_id"]
+
+        # Yield to let the background task run
+        for _ in range(50):
+            await _asyncio.sleep(0)
+
+        from models import AutoCreationExecution
+        # Use a fresh query to pick up the supervised handler's commit
+        test_session.expire_all()
+        exe = test_session.query(AutoCreationExecution).filter_by(id=execution_id).first()
+        assert exe is not None
+        assert exe.status == "failed"
+        assert exe.error_message and "engine exploded" in exe.error_message
+
+    @pytest.mark.asyncio
+    async def test_enqueue_completes_within_timeout_budget(self, async_client, test_session):
+        """The handler itself must return fast (well under the 30s timeout) — the
+        whole point of bd-enfsy is to make /run not synchronous."""
+        import asyncio as _asyncio
+        import time as _time
+        gate = _asyncio.Event()
+
+        async def slow(*args, **kwargs):
+            await gate.wait()
+            return {"success": True}
+
+        mock_engine = AsyncMock()
+        mock_engine.run_pipeline = AsyncMock(side_effect=slow)
+
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+            start = _time.monotonic()
+            response = await async_client.post("/api/auto-creation/run", json={"dry_run": False})
+            elapsed = _time.monotonic() - start
+
+        # Must enqueue and return well under 30s — even with a worker stuck in the engine
+        assert response.status_code == 202
+        assert elapsed < 5.0, f"enqueue took {elapsed:.2f}s — handler is not actually async-enqueuing"
+
+        gate.set()
+        for _ in range(20):
+            await _asyncio.sleep(0)
 
 
 class TestRunAutoCreationRule:
-    """Tests for POST /api/auto-creation/rules/{rule_id}/run."""
+    """Tests for POST /api/auto-creation/rules/{rule_id}/run (background-task pattern)."""
 
     @pytest.mark.asyncio
-    async def test_runs_single_rule(self, async_client):
-        """Runs a specific auto-creation rule."""
+    async def test_returns_202_and_invokes_run_rule_with_execution_id(self, async_client, test_session):
+        """POST /rules/{id}/run returns 202 + execution_id, runs in background."""
+        import asyncio as _asyncio
+        rule = _create_rule(test_session, name="Sports")
         mock_engine = AsyncMock()
-        mock_engine.run_rule.return_value = {"status": "completed"}
+        mock_engine.run_rule = AsyncMock(return_value={"success": True})
 
         with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
-            response = await async_client.post("/api/auto-creation/rules/42/run")
+            response = await async_client.post(f"/api/auto-creation/rules/{rule.id}/run")
 
-        assert response.status_code == 200
-        mock_engine.run_rule.assert_called_once_with(
-            rule_id=42, dry_run=False, triggered_by="api",
-        )
+        assert response.status_code == 202, response.text
+        body = response.json()
+        assert "execution_id" in body
+        assert body["status"] == "running"
+        assert body["rule_id"] == rule.id
+        execution_id = body["execution_id"]
+
+        # Yield to let background task run
+        for _ in range(20):
+            await _asyncio.sleep(0)
+
+        mock_engine.run_rule.assert_called()
+        call_kwargs = mock_engine.run_rule.call_args.kwargs
+        assert call_kwargs["rule_id"] == rule.id
+        assert call_kwargs["dry_run"] is False
+        assert call_kwargs["triggered_by"] == "api"
+        assert call_kwargs["execution_id"] == execution_id
+
+    @pytest.mark.asyncio
+    async def test_returns_404_for_unknown_rule(self, async_client):
+        """Pre-validation rejects unknown rule_id with a clean 404 (so the
+        FK-constrained execution row is never even attempted)."""
+        response = await async_client.post("/api/auto-creation/rules/99999/run")
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_rule_run_failure_marks_execution_failed(self, async_client, test_session):
+        """Background failure on per-rule run is captured to the execution record."""
+        import asyncio as _asyncio
+        rule = _create_rule(test_session, name="BoomRule")
+
+        async def boom(*args, **kwargs):
+            raise ValueError("rule borked")
+
+        mock_engine = AsyncMock()
+        mock_engine.run_rule = AsyncMock(side_effect=boom)
+
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+            response = await async_client.post(f"/api/auto-creation/rules/{rule.id}/run")
+
+        assert response.status_code == 202
+        execution_id = response.json()["execution_id"]
+
+        for _ in range(50):
+            await _asyncio.sleep(0)
+
+        from models import AutoCreationExecution
+        test_session.expire_all()
+        exe = test_session.query(AutoCreationExecution).filter_by(id=execution_id).first()
+        assert exe is not None
+        assert exe.status == "failed"
+        assert exe.error_message and "rule borked" in exe.error_message
+        assert exe.rule_id == rule.id
 
 
 class TestGetExecutions:

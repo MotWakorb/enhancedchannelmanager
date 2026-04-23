@@ -3,6 +3,7 @@ Auto-creation router — auto-creation pipeline CRUD, execution, import/export, 
 
 Extracted from main.py (Phase 3 of v0.13.0 backend refactor).
 """
+import asyncio
 import io
 import json
 import logging
@@ -14,7 +15,7 @@ from typing import List, Optional
 
 import journal
 from fastapi import APIRouter, Body, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field, model_validator
 from starlette.responses import StreamingResponse
 
@@ -27,6 +28,12 @@ from regex_lint import (
     lint_pattern,
     violations_to_http_detail,
 )
+
+# Strong references to in-flight background pipeline tasks (bd-enfsy). Without
+# this set, asyncio only weakly references created tasks and the GC could
+# cancel them mid-run — fire-and-forget without supervision is a known
+# footgun. Tasks remove themselves on completion via the done callback below.
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 logger = logging.getLogger(__name__)
 
@@ -740,54 +747,209 @@ async def duplicate_auto_creation_rule(rule_id: int):
 # =============================================================================
 
 
-@router.post("/run")
+async def _ensure_engine():
+    """Get the auto-creation engine, initializing it if necessary."""
+    from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
+
+    engine = get_auto_creation_engine()
+    if not engine:
+        client = get_client()
+        engine = await init_auto_creation_engine(client)
+    return engine
+
+
+def _create_pending_execution(
+    *,
+    mode: str,
+    triggered_by: str,
+    rule_id: int | None = None,
+    rule_name: str | None = None,
+) -> int:
+    """Create a status='running' execution row up front (bd-enfsy 202+poll).
+
+    Returns the new execution id so the caller can return it in the 202
+    response and the background task can finalize the same row when work
+    completes.
+    """
+    from models import AutoCreationExecution
+
+    session = get_session()
+    try:
+        execution = AutoCreationExecution(
+            mode=mode,
+            triggered_by=triggered_by,
+            started_at=datetime.utcnow(),
+            status="running",
+            rule_id=rule_id,
+            rule_name=rule_name,
+        )
+        session.add(execution)
+        session.commit()
+        session.refresh(execution)
+        return execution.id
+    finally:
+        session.close()
+
+
+def _mark_execution_failed(execution_id: int, error: BaseException) -> None:
+    """Mark a pre-created execution as failed and capture the error message."""
+    from models import AutoCreationExecution
+
+    session = get_session()
+    try:
+        execution = session.query(AutoCreationExecution).filter(
+            AutoCreationExecution.id == execution_id
+        ).first()
+        if execution is None:
+            logger.warning(
+                "[AUTO-CREATE] Cannot mark execution %s failed — row was deleted",
+                execution_id,
+            )
+            return
+        # Only finalize if still running (don't clobber a completed/rolled_back row)
+        if execution.status == "running":
+            now = datetime.utcnow()
+            execution.completed_at = now
+            execution.duration_seconds = (
+                (now - execution.started_at).total_seconds()
+                if execution.started_at else 0.0
+            )
+            execution.status = "failed"
+            execution.error_message = f"{type(error).__name__}: {error}"
+            session.commit()
+    finally:
+        session.close()
+
+
+def _supervise_background_pipeline(coro, *, execution_id: int, label: str) -> asyncio.Task:
+    """Schedule a coroutine as a supervised background task.
+
+    Wraps the coroutine in a try/except so any failure is captured to the
+    pre-created execution row (status='failed' + error_message) — no silent
+    fire-and-forget. Holds a strong reference to the task so the GC cannot
+    cancel it mid-run.
+    """
+    async def _runner():
+        try:
+            await coro
+            logger.info("[AUTO-CREATE] Background %s execution=%s completed", label, execution_id)
+        except asyncio.CancelledError:
+            logger.warning("[AUTO-CREATE] Background %s execution=%s cancelled", label, execution_id)
+            _mark_execution_failed(execution_id, RuntimeError("Background task cancelled"))
+            raise
+        except Exception as e:  # noqa: BLE001 — supervisor must catch broadly
+            logger.exception(
+                "[AUTO-CREATE] Background %s execution=%s failed: %s",
+                label, execution_id, e,
+            )
+            _mark_execution_failed(execution_id, e)
+
+    task = asyncio.create_task(_runner(), name=f"auto-creation-{label}-exec-{execution_id}")
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return task
+
+
+@router.post("/run", status_code=202)
 async def run_auto_creation_pipeline(request: RunPipelineRequest):
-    """Run the auto-creation pipeline."""
+    """Enqueue an auto-creation pipeline run and return immediately (bd-enfsy).
+
+    Pipeline runs on large catalogs can take minutes — running them inside the
+    request coroutine pinned an HTTP worker for the duration and forced us to
+    exempt this prefix from the 30s request-timeout middleware (bd-zv6pi). We
+    now pre-create the execution row, return its id, and run the pipeline in
+    a supervised background task. Clients poll
+    ``GET /api/auto-creation/executions/{id}`` until ``status`` is terminal
+    (``completed`` / ``failed`` / ``rolled_back``).
+    """
     logger.debug("[AUTO-CREATE] POST /run - dry_run=%s", request.dry_run)
     try:
-        from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
-
-        # Get or initialize engine
-        engine = get_auto_creation_engine()
-        if not engine:
-            client = get_client()
-            engine = await init_auto_creation_engine(client)
-
-        result = await engine.run_pipeline(
-            dry_run=request.dry_run,
+        engine = await _ensure_engine()
+        execution_id = _create_pending_execution(
+            mode="dry_run" if request.dry_run else "execute",
             triggered_by="api",
-            m3u_account_ids=request.m3u_account_ids,
-            rule_ids=request.rule_ids
         )
-
-        return result
+        _supervise_background_pipeline(
+            engine.run_pipeline(
+                dry_run=request.dry_run,
+                triggered_by="api",
+                m3u_account_ids=request.m3u_account_ids,
+                rule_ids=request.rule_ids,
+                execution_id=execution_id,
+            ),
+            execution_id=execution_id,
+            label="run_pipeline",
+        )
+        return JSONResponse(
+            status_code=202,
+            content={
+                "execution_id": execution_id,
+                "status": "running",
+                "message": "Pipeline started; poll /api/auto-creation/executions/{id} for status",
+            },
+        )
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.exception("[AUTO-CREATE] Failed to run auto-creation pipeline: %s", e)
+        logger.exception("[AUTO-CREATE] Failed to enqueue auto-creation pipeline: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.post("/rules/{rule_id}/run")
+@router.post("/rules/{rule_id}/run", status_code=202)
 async def run_auto_creation_rule(rule_id: int, dry_run: bool = False):
-    """Run a specific auto-creation rule."""
+    """Enqueue a single-rule auto-creation run and return immediately (bd-enfsy).
+
+    See ``run_auto_creation_pipeline`` for the 202 + poll contract.
+    """
     logger.debug("[AUTO-CREATE] POST /rules/%s/run - dry_run=%s", rule_id, dry_run)
     try:
-        from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
+        engine = await _ensure_engine()
+        # Verify the rule exists before enqueuing — otherwise the pre-created
+        # execution row violates the rule_id FK constraint and the caller would
+        # see a 500 instead of a clean 404. Capture the name so the execution
+        # row keeps it for display even if the rule is later deleted (matches
+        # the engine's pre-existing behavior).
+        from models import AutoCreationRule
+        session = get_session()
+        try:
+            rule = session.query(AutoCreationRule).filter(
+                AutoCreationRule.id == rule_id
+            ).first()
+            if rule is None:
+                raise HTTPException(status_code=404, detail="Rule not found")
+            rule_name = rule.name
+        finally:
+            session.close()
 
-        # Get or initialize engine
-        engine = get_auto_creation_engine()
-        if not engine:
-            client = get_client()
-            engine = await init_auto_creation_engine(client)
-
-        result = await engine.run_rule(
+        execution_id = _create_pending_execution(
+            mode="dry_run" if dry_run else "execute",
+            triggered_by="api",
             rule_id=rule_id,
-            dry_run=dry_run,
-            triggered_by="api"
+            rule_name=rule_name,
         )
-
-        return result
+        _supervise_background_pipeline(
+            engine.run_rule(
+                rule_id=rule_id,
+                dry_run=dry_run,
+                triggered_by="api",
+                execution_id=execution_id,
+            ),
+            execution_id=execution_id,
+            label="run_rule",
+        )
+        return JSONResponse(
+            status_code=202,
+            content={
+                "execution_id": execution_id,
+                "status": "running",
+                "rule_id": rule_id,
+                "message": "Rule run started; poll /api/auto-creation/executions/{id} for status",
+            },
+        )
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.exception("[AUTO-CREATE] Failed to run auto-creation rule %s: %s", rule_id, e)
+        logger.exception("[AUTO-CREATE] Failed to enqueue auto-creation rule %s: %s", rule_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

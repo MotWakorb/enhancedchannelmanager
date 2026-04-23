@@ -357,25 +357,39 @@ export function AutoCreationTab() {
 
   const handleRun = useCallback(async (dryRun: boolean = false, ruleIds?: number[]) => {
     try {
+      // bd-enfsy: runPipelineApi now polls the backend until the execution
+      // reaches a terminal status, then resolves with the AutoCreationExecution
+      // row. Orphan-reconciliation counters (channels_removed / channels_moved)
+      // are derived from results during the run but not persisted on the row,
+      // so the success message only quotes the persisted channels_created
+      // figure now. Detail-level orphan counts are still visible via the
+      // Execution History pane (which fetches the full execution).
       const response = await runPipelineApi({ dryRun, ruleIds });
 
       if (response) {
         const created = response.channels_created ?? 0;
-        const removed = response.channels_removed ?? 0;
-        const moved = response.channels_moved ?? 0;
-        const orphanParts: string[] = [];
-        if (removed > 0) orphanParts.push(`removed ${removed} orphan${removed !== 1 ? 's' : ''}`);
-        if (moved > 0) orphanParts.push(`moved ${moved} orphan${moved !== 1 ? 's' : ''}`);
-        const orphanSuffix = orphanParts.length > 0 ? `, ${orphanParts.join(', ')}` : '';
-        const msg = dryRun
-          ? `Dry run complete - Would create ${created} channel${created !== 1 ? 's' : ''}${orphanSuffix ? `, would remove ${removed} orphan${removed !== 1 ? 's' : ''}` : ''}`
-          : `Execution complete - Created ${created} channel${created !== 1 ? 's' : ''}${orphanSuffix}`;
-        notifications.success(msg, 'Auto-Creation');
-        // Refresh executions list and rule stats (match counts)
+        const status = response.status;
+        const succeeded = status === 'completed';
+        const msg = succeeded
+          ? (dryRun
+            ? `Dry run complete - Would create ${created} channel${created !== 1 ? 's' : ''}`
+            : `Execution complete - Created ${created} channel${created !== 1 ? 's' : ''}`)
+          : `Pipeline ${status}`;
+        if (succeeded) {
+          notifications.success(msg, 'Auto-Creation');
+        } else {
+          notifications.error(
+            response.error_message || msg,
+            'Auto-Creation',
+          );
+        }
+        // Refresh executions list and rule stats (match counts). The hook
+        // already refetches executions in its finally block, but rule stats
+        // (last_run_at / match_count) live on a separate endpoint.
         await fetchExecutions();
         await fetchRules();
         // Notify other panes to refresh (channels/groups may have changed)
-        if (!dryRun) {
+        if (!dryRun && succeeded) {
           window.dispatchEvent(new CustomEvent('channels-changed'));
         }
       }
