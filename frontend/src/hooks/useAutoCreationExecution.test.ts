@@ -158,7 +158,10 @@ describe('useAutoCreationExecution', () => {
   });
 
   describe('runPipeline', () => {
-    it('runs the pipeline in execute mode', async () => {
+    // bd-enfsy: contract is now POST returns 202 + execution_id and the hook
+    // polls GET /executions/{id} until terminal. The hook resolves with the
+    // terminal AutoCreationExecution row (or undefined on error/timeout).
+    it('runs the pipeline in execute mode and resolves to terminal execution', async () => {
       const { result } = renderHook(() => useAutoCreationExecution());
 
       let response: RunPipelineResponse | undefined;
@@ -167,7 +170,7 @@ describe('useAutoCreationExecution', () => {
       });
 
       expect(response).toBeDefined();
-      expect(response!.success).toBe(true);
+      expect(response!.status).toBe('completed');
       expect(response!.mode).toBe('execute');
     });
 
@@ -180,9 +183,8 @@ describe('useAutoCreationExecution', () => {
       });
 
       expect(response).toBeDefined();
-      expect(response!.success).toBe(true);
+      expect(response!.status).toBe('completed');
       expect(response!.mode).toBe('dry_run');
-      expect(response!.dry_run_results).toBeDefined();
     });
 
     it('supports filtering by rule IDs', async () => {
@@ -197,7 +199,7 @@ describe('useAutoCreationExecution', () => {
       });
 
       expect(response).toBeDefined();
-      expect(response!.success).toBe(true);
+      expect(response!.status).toBe('completed');
     });
 
     it('sets isRunning true during execution', async () => {
@@ -218,11 +220,8 @@ describe('useAutoCreationExecution', () => {
         await result.current.runPipeline({ dryRun: false });
       });
 
-      // Fetch to see the new execution
-      await act(async () => {
-        await result.current.fetchExecutions();
-      });
-
+      // bd-enfsy: the hook now refetches in finally — no need for a separate
+      // fetchExecutions() call. The list should contain the new execution.
       expect(result.current.executions.length).toBeGreaterThan(0);
     });
 
@@ -239,6 +238,89 @@ describe('useAutoCreationExecution', () => {
       expect(response!.channels_created).toBeDefined();
       expect(response!.channels_updated).toBeDefined();
       expect(response!.groups_created).toBeDefined();
+    });
+
+    it('refetches executions in finally block on POST error (bd-enfsy)', async () => {
+      // The 202 enqueue itself fails — list should still be refetched so the
+      // user sees fresh state without needing to reload the browser.
+      mockDataStore.autoCreationExecutions.push(
+        createMockAutoCreationExecution({ status: 'completed' })
+      );
+      server.use(
+        http.post('/api/auto-creation/run', () => {
+          return new HttpResponse(
+            JSON.stringify({ detail: 'enqueue exploded' }),
+            { status: 500 }
+          );
+        })
+      );
+
+      const { result } = renderHook(() => useAutoCreationExecution());
+
+      let response: RunPipelineResponse | undefined;
+      await act(async () => {
+        response = await result.current.runPipeline({ dryRun: false });
+      });
+
+      // Hook surfaces the error and returns undefined…
+      expect(response).toBeUndefined();
+      expect(result.current.error).toBeTruthy();
+      // …but the executions list must have been refreshed in the finally
+      // block (bd-enfsy: previously refetch only happened in the try path).
+      expect(result.current.executions.length).toBe(1);
+    });
+
+    it('updates the execution list incrementally during polling (bd-enfsy)', async () => {
+      // First execution row starts as 'running' so the poller observes a
+      // non-terminal status, then flips to 'completed' on the second poll.
+      const { result } = renderHook(() => useAutoCreationExecution());
+
+      let pollCount = 0;
+      let assignedExecutionId = 0;
+      // Override the run handler to enqueue a 'running' execution
+      server.use(
+        http.post('/api/auto-creation/run', () => {
+          const exe = createMockAutoCreationExecution({
+            status: 'running',
+            mode: 'execute',
+          });
+          mockDataStore.autoCreationExecutions.unshift(exe);
+          assignedExecutionId = exe.id;
+          return HttpResponse.json(
+            { execution_id: exe.id, status: 'running', message: 'started' },
+            { status: 202 }
+          );
+        }),
+        http.get('/api/auto-creation/executions/:id', ({ params }) => {
+          const id = parseInt(params.id as string);
+          const exe = mockDataStore.autoCreationExecutions.find(e => e.id === id);
+          if (!exe) {
+            return HttpResponse.json({ detail: 'not found' }, { status: 404 });
+          }
+          pollCount += 1;
+          // Flip to 'completed' on the second poll
+          if (pollCount >= 2 && exe.status === 'running') {
+            exe.status = 'completed';
+            exe.channels_created = 7;
+          }
+          return HttpResponse.json(exe);
+        })
+      );
+
+      let response: RunPipelineResponse | undefined;
+      await act(async () => {
+        response = await result.current.runPipeline({ dryRun: false });
+      });
+
+      expect(response).toBeDefined();
+      expect(response!.status).toBe('completed');
+      expect(response!.channels_created).toBe(7);
+      // Poller hit the endpoint at least twice (once saw running, once completed).
+      expect(pollCount).toBeGreaterThanOrEqual(2);
+      // Execution list contains the spliced-in row from the polling updates.
+      const inList = result.current.executions.find(e => e.id === assignedExecutionId);
+      expect(inList).toBeDefined();
+      expect(inList!.status).toBe('completed');
     });
   });
 
