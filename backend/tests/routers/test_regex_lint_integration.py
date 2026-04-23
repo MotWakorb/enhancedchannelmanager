@@ -293,6 +293,43 @@ class TestAutoCreationUpdateRuleLinting:
         assert response.status_code == 422
 
 
+class TestAutoCreationBulkUpdateRuleLinting:
+    """Regression-lock: bulk-update must call the same regex linter as PUT."""
+
+    @pytest.mark.asyncio
+    async def test_bulk_update_rejects_evil_sort_regex(
+        self, async_client, test_session
+    ):
+        rule = AutoCreationRule(
+            name="Bulk lint target",
+            conditions=json.dumps(
+                [{"type": "stream_name_contains", "value": "ESPN"}]
+            ),
+            actions=json.dumps(
+                [{"type": "create_channel", "name_template": "{stream_name}"}]
+            ),
+            sort_field="stream_name_regex",
+        )
+        test_session.add(rule)
+        test_session.commit()
+        test_session.refresh(rule)
+        rule_id = rule.id
+
+        response = await async_client.post(
+            "/api/auto-creation/rules/bulk-update",
+            json={"rule_ids": [rule_id], "sort_regex": EVIL_PATTERN},
+        )
+        assert response.status_code == 422
+        err = response.json()["detail"]["error"]
+        assert err["details"][0]["field"] == "sort_regex"
+        assert err["details"][0]["code"] == "REGEX_NESTED_QUANTIFIER"
+
+        # Defense in depth: the rule's sort_regex must not have been written.
+        test_session.expire_all()
+        refreshed = test_session.query(AutoCreationRule).get(rule_id)
+        assert refreshed.sort_regex is None
+
+
 # =========================================================================
 # Dummy-EPG router.
 # =========================================================================
