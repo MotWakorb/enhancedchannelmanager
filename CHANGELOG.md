@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `docs/runbooks/` scaffold with template and v0.16.0 hard-rollback exemplar (`bd-bwly4`).
 - New Settings → Normalization Rules → "Apply to existing channels" button with dry-run diff preview + per-row rename/merge/skip actions. Exposes POST /api/normalization/apply-to-channels endpoint (PR #107, bd-u9odj, GH-104).
 - Auto-creation per-rule flag `match_scope_target_group` (default off) that restricts the duplicate channel-name lookup in `create_channel` to the rule's target group. Two rules targeting different groups can now create separate channels with the same name instead of merging into an existing channel in another group. Opt-in, backwards-compatible (bd-r9mtd, GH-92). Adds Alembic revision `0002`.
+- Auto-Creation rules — bulk edit. Multi-select rules and apply per-section changes (options, normalization groups, channel/stream sort, orphan cleanup, Merge Streams prune) in one action. Adds POST `/api/auto-creation/rules/bulk-update`; omitted fields are left unchanged. (PR #99)
 
 ### Changed
 - `docs/backend_architecture.md` expanded with an Observability section covering logging schema, metric naming conventions, cardinality rules, `bind_context` usage, and the process for adding new metrics (`bd-ak1db`, PR #80).

@@ -329,6 +329,7 @@ See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#
 | `POST /api/auto-creation/rules` | Create rule |
 | `PUT /api/auto-creation/rules/{id}` | Update rule |
 | `DELETE /api/auto-creation/rules/{id}` | Delete rule |
+| `POST /api/auto-creation/rules/bulk-update` | Apply the same field changes to multiple rules (omitted fields unchanged) |
 | `POST /api/auto-creation/rules/reorder` | Reorder rules by priority |
 | `POST /api/auto-creation/rules/{id}/toggle` | Toggle rule enabled state |
 | `POST /api/auto-creation/rules/{id}/duplicate` | Duplicate a rule |

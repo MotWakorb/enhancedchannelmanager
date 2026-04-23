@@ -8,10 +8,12 @@ import type {
   CreateRuleData,
   ExecutionLogEntry,
   ActionLogEntry,
+  BulkUpdateRulesPatch,
 } from '../../types/autoCreation';
 import { useAutoCreationRules } from '../../hooks/useAutoCreationRules';
 import { useAutoCreationExecution } from '../../hooks/useAutoCreationExecution';
 import { RuleBuilder } from './RuleBuilder';
+import { BulkRuleSettingsModal } from './BulkRuleSettingsModal';
 import * as autoCreationApi from '../../services/autoCreationApi';
 import { copyToClipboard } from '../../utils/clipboard';
 import { useNotifications } from '../../contexts/NotificationContext';
@@ -68,6 +70,7 @@ export function AutoCreationTab() {
     duplicateRule,
     reorderRules,
     getEnabledRules,
+    bulkUpdateRules,
   } = useAutoCreationRules();
 
   const {
@@ -109,6 +112,10 @@ export function AutoCreationTab() {
   const [importNewCount, setImportNewCount] = useState(0);
 
   const notifications = useNotifications();
+
+  /** Multi-select rules for bulk settings edit */
+  const [selectedRuleIds, setSelectedRuleIds] = useState<Set<number>>(new Set());
+  const [showBulkRuleModal, setShowBulkRuleModal] = useState(false);
 
   // Drag-and-drop state for rule reordering
   const dragRuleId = useRef<number | null>(null);
@@ -170,6 +177,12 @@ export function AutoCreationTab() {
   // Check if any enabled rules exist
   const hasEnabledRules = useMemo(() => getEnabledRules().length > 0, [getEnabledRules]);
 
+  /** Stable identity for bulk modal props — `Array.from(selectedRuleIds)` in JSX is a new array every render. */
+  const bulkModalSelectedRuleIds = useMemo(
+    () => Array.from(selectedRuleIds).sort((a, b) => a - b),
+    [selectedRuleIds],
+  );
+
   // Handlers
   const handleCreateRule = useCallback(() => {
     setEditingRule(null);
@@ -209,7 +222,13 @@ export function AutoCreationTab() {
   const handleConfirmDelete = useCallback(async () => {
     if (showDeleteConfirm) {
       try {
-        await deleteRule(showDeleteConfirm.id);
+        const deletedId = showDeleteConfirm.id;
+        await deleteRule(deletedId);
+        setSelectedRuleIds(prev => {
+          const next = new Set(prev);
+          next.delete(deletedId);
+          return next;
+        });
         setShowDeleteConfirm(null);
       } catch (err) {
         notifications.error(err instanceof Error ? err.message : 'Failed to delete rule', 'Auto-Creation');
@@ -232,6 +251,62 @@ export function AutoCreationTab() {
       notifications.error(err instanceof Error ? err.message : 'Failed to duplicate rule', 'Auto-Creation');
     }
   }, [duplicateRule, notifications]);
+
+  const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
+
+  const visibleSelectedCount = useMemo(
+    () => filteredRules.filter(r => selectedRuleIds.has(r.id)).length,
+    [filteredRules, selectedRuleIds],
+  );
+
+  useEffect(() => {
+    const el = selectAllCheckboxRef.current;
+    if (el) {
+      el.indeterminate =
+        visibleSelectedCount > 0 && visibleSelectedCount < filteredRules.length;
+    }
+  }, [visibleSelectedCount, filteredRules.length]);
+
+  const toggleRuleSelected = useCallback((ruleId: number) => {
+    setSelectedRuleIds(prev => {
+      const next = new Set(prev);
+      if (next.has(ruleId)) next.delete(ruleId);
+      else next.add(ruleId);
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAllVisible = useCallback(() => {
+    setSelectedRuleIds(prev => {
+      const ids = filteredRules.map(r => r.id);
+      if (ids.length === 0) return prev;
+      const allSelected = ids.every(id => prev.has(id));
+      if (allSelected) {
+        const next = new Set(prev);
+        ids.forEach(id => next.delete(id));
+        return next;
+      }
+      return new Set([...prev, ...ids]);
+    });
+  }, [filteredRules]);
+
+  const handleBulkRuleSettingsApply = useCallback(
+    async (ids: number[], patch: BulkUpdateRulesPatch) => {
+      const n = ids.length;
+      try {
+        await bulkUpdateRules(ids, patch);
+        setSelectedRuleIds(new Set());
+        notifications.success(`Updated ${n} rule${n !== 1 ? 's' : ''}`, 'Auto-Creation');
+      } catch (err) {
+        notifications.error(
+          err instanceof Error ? err.message : 'Bulk update failed',
+          'Auto-Creation',
+        );
+        throw err;
+      }
+    },
+    [bulkUpdateRules, notifications],
+  );
 
   const handleDragStart = useCallback((e: React.DragEvent, ruleId: number) => {
     if (!dragAllowed.current) {
@@ -571,6 +646,18 @@ export function AutoCreationTab() {
           <div className="section-header">
             <h3>Rules</h3>
             <div className="section-controls">
+              <button
+                type="button"
+                className="btn-secondary rules-bulk-edit-btn"
+                disabled={selectedRuleIds.size === 0 || rulesLoading}
+                onClick={() => setShowBulkRuleModal(true)}
+                title={selectedRuleIds.size === 0 ? 'Select one or more rules' : 'Edit settings for selected rules'}
+                aria-label="Bulk edit selected rules"
+              >
+                <span className="material-icons">tune</span>
+                Bulk edit
+                {selectedRuleIds.size > 0 ? ` (${selectedRuleIds.size})` : ''}
+              </button>
               <input
                 type="text"
                 className="search-input"
@@ -634,6 +721,18 @@ export function AutoCreationTab() {
               <table>
                 <thead>
                   <tr>
+                    <th className="col-select" scope="col">
+                      <input
+                        ref={selectAllCheckboxRef}
+                        type="checkbox"
+                        checked={
+                          filteredRules.length > 0 && visibleSelectedCount === filteredRules.length
+                        }
+                        onChange={toggleSelectAllVisible}
+                        aria-label="Select all visible rules"
+                        title="Select all visible rules"
+                      />
+                    </th>
                     <th className="col-drag"></th>
                     <th className="col-name">Name</th>
                     <th className="col-priority">Priority</th>
@@ -649,12 +748,24 @@ export function AutoCreationTab() {
                       data-testid="rule-row"
                       tabIndex={0}
                       draggable
-                      className={dragOverIndex === index ? 'drag-over' : ''}
+                      className={`${dragOverIndex === index ? 'drag-over' : ''} ${selectedRuleIds.has(rule.id) ? 'selected' : ''}`.trim()}
                       onDragStart={(e) => handleDragStart(e, rule.id)}
                       onDragEnd={handleDragEnd}
                       onDragOver={(e) => handleDragOver(e, index)}
                       onDrop={(e) => handleDrop(e, index)}
                     >
+                      <td
+                        className="col-select"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedRuleIds.has(rule.id)}
+                          onChange={() => toggleRuleSelected(rule.id)}
+                          aria-label={`Select ${rule.name}`}
+                        />
+                      </td>
                       <td className="col-drag">
                         <span
                           className="drag-handle"
@@ -826,6 +937,15 @@ export function AutoCreationTab() {
           )}
         </section>
       </div>
+
+      {/* Bulk rule settings */}
+      <BulkRuleSettingsModal
+        isOpen={showBulkRuleModal}
+        onClose={() => setShowBulkRuleModal(false)}
+        selectedRuleIds={bulkModalSelectedRuleIds}
+        rules={rules}
+        onApply={handleBulkRuleSettingsApply}
+      />
 
       {/* Rule Builder Modal */}
       {showRuleBuilder && (

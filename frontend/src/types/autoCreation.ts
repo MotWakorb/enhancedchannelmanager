@@ -252,6 +252,20 @@ export interface CreateRuleData {
  */
 export type UpdateRuleData = Partial<CreateRuleData>;
 
+/**
+ * Bulk update payload (fields omitted are left unchanged on the server).
+ * `merge_streams_remove_non_matching` applies to all `merge_streams` actions on each rule.
+ */
+export type BulkUpdateRulesPatch = UpdateRuleData & {
+  merge_streams_remove_non_matching?: boolean;
+};
+
+/** Response from POST /auto-creation/rules/bulk-update */
+export interface BulkUpdateRulesResponse {
+  rules: AutoCreationRule[];
+  updated_count: number;
+}
+
 // =============================================================================
 // Execution
 // =============================================================================

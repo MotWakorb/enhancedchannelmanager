@@ -1,0 +1,54 @@
+.bulk-rule-settings-modal.modal-md {
+  max-width: 560px;
+}
+
+.bulk-rule-settings-body {
+  max-height: min(70vh, 640px);
+  overflow-y: auto;
+}
+
+.bulk-rule-settings-intro {
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+  color: var(--text-secondary, #aaa);
+}
+
+.bulk-section {
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-color, #333);
+}
+
+.bulk-section:last-of-type {
+  border-bottom: none;
+}
+
+.bulk-apply-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.bulk-checkbox-group {
+  flex-wrap: wrap;
+}
+
+.norm-group-disabled {
+  opacity: 0.6;
+}
+
+.bulk-rule-settings-modal .sort-config-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.bulk-rule-settings-modal .form-hint {
+  font-size: 0.85rem;
+  margin-top: 0.35rem;
+}

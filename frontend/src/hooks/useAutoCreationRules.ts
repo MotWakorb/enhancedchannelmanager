@@ -4,7 +4,13 @@
  * Provides CRUD operations, toggling, and helper methods for rules.
  */
 import { useState, useCallback, useEffect } from 'react';
-import type { AutoCreationRule, CreateRuleData, UpdateRuleData } from '../types/autoCreation';
+import type {
+  AutoCreationRule,
+  CreateRuleData,
+  UpdateRuleData,
+  BulkUpdateRulesPatch,
+  BulkUpdateRulesResponse,
+} from '../types/autoCreation';
 import * as api from '../services/autoCreationApi';
 
 export interface UseAutoCreationRulesOptions {
@@ -39,6 +45,8 @@ export interface UseAutoCreationRulesResult {
   reorderRules: (orderedIds: number[]) => Promise<void>;
   /** Duplicate a rule */
   duplicateRule: (id: number) => Promise<AutoCreationRule>;
+  /** Apply the same settings to multiple rules */
+  bulkUpdateRules: (ruleIds: number[], patch: BulkUpdateRulesPatch) => Promise<BulkUpdateRulesResponse>;
   /** Set error manually */
   setError: (error: string | null) => void;
   /** Clear error */
@@ -212,6 +220,26 @@ export function useAutoCreationRules(
     return newRule;
   }, [rules, createRule, reorderRules]);
 
+  const bulkUpdateRules = useCallback(async (
+    ruleIds: number[],
+    patch: BulkUpdateRulesPatch
+  ): Promise<BulkUpdateRulesResponse> => {
+    setLoading(true);
+    try {
+      const result = await api.bulkUpdateAutoCreationRules(ruleIds, patch);
+      setRules(prev => {
+        const byId = new Map(result.rules.map(r => [r.id, r]));
+        return prev.map(r => byId.get(r.id) ?? r);
+      });
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to bulk update rules';
+      throw new Error(message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   const clearError = useCallback(() => {
     setError(null);
   }, []);
@@ -237,6 +265,7 @@ export function useAutoCreationRules(
     getEnabledRules,
     reorderRules,
     duplicateRule,
+    bulkUpdateRules,
     setError,
     clearError,
   };
