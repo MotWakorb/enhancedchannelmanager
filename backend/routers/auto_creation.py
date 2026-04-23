@@ -8,6 +8,7 @@ import json
 import logging
 import tarfile
 import time
+import uuid
 from datetime import datetime
 from typing import List, Optional
 
@@ -134,44 +135,72 @@ def _apply_merge_streams_remove_non_matching(actions: list, value: bool) -> list
     return out
 
 
-def _apply_rule_scalar_updates(rule, request: UpdateAutoCreationRuleRequest) -> None:
-    """Apply scalar columns from an update request (excluding conditions/actions body)."""
+def _apply_rule_scalar_updates(
+    rule, request: UpdateAutoCreationRuleRequest
+) -> dict:
+    """Apply scalar columns from an update request (excluding conditions/actions body).
+
+    Returns a diff dict of the form ``{field: {"before": old, "after": new}}``
+    for every scalar column whose value actually changed. Fields set to the
+    same value they already had are omitted so callers can avoid emitting
+    no-op journal entries (bd-91mcq).
+    """
+    diff: dict = {}
+
+    def _set(field: str, new_value) -> None:
+        """Assign attribute and record a diff entry if the value changed."""
+        old_value = getattr(rule, field)
+        if old_value != new_value:
+            diff[field] = {"before": old_value, "after": new_value}
+        setattr(rule, field, new_value)
+
     if request.name is not None:
-        rule.name = request.name
+        _set("name", request.name)
     if request.description is not None:
-        rule.description = request.description
+        _set("description", request.description)
     if request.enabled is not None:
-        rule.enabled = request.enabled
+        _set("enabled", request.enabled)
     if request.priority is not None:
-        rule.priority = request.priority
+        _set("priority", request.priority)
     if request.m3u_account_id is not None:
-        rule.m3u_account_id = request.m3u_account_id
+        _set("m3u_account_id", request.m3u_account_id)
     if request.target_group_id is not None:
-        rule.target_group_id = request.target_group_id
+        _set("target_group_id", request.target_group_id)
     if request.run_on_refresh is not None:
-        rule.run_on_refresh = request.run_on_refresh
+        _set("run_on_refresh", request.run_on_refresh)
     if request.stop_on_first_match is not None:
-        rule.stop_on_first_match = request.stop_on_first_match
+        _set("stop_on_first_match", request.stop_on_first_match)
     if request.sort_field is not None:
-        rule.sort_field = request.sort_field or None
+        _set("sort_field", request.sort_field or None)
     if request.sort_order is not None:
-        rule.sort_order = request.sort_order
+        _set("sort_order", request.sort_order)
     if request.probe_on_sort is not None:
-        rule.probe_on_sort = request.probe_on_sort
+        _set("probe_on_sort", request.probe_on_sort)
     if request.sort_regex is not None:
-        rule.sort_regex = request.sort_regex or None
+        _set("sort_regex", request.sort_regex or None)
     if request.stream_sort_field is not None:
-        rule.stream_sort_field = request.stream_sort_field or None
+        _set("stream_sort_field", request.stream_sort_field or None)
     if request.stream_sort_order is not None:
-        rule.stream_sort_order = request.stream_sort_order
+        _set("stream_sort_order", request.stream_sort_order)
     if request.normalization_group_ids is not None:
+        # NormalizationRuleGroup IDs go through a setter; diff by before/after
+        # of the serialized value to keep comparison simple.
+        before_norm = rule.normalization_group_ids
         rule.set_normalization_group_ids(request.normalization_group_ids)
+        after_norm = rule.normalization_group_ids
+        if before_norm != after_norm:
+            diff["normalization_group_ids"] = {
+                "before": before_norm,
+                "after": after_norm,
+            }
     if request.skip_struck_streams is not None:
-        rule.skip_struck_streams = request.skip_struck_streams
+        _set("skip_struck_streams", request.skip_struck_streams)
     if request.orphan_action is not None:
-        rule.orphan_action = request.orphan_action
+        _set("orphan_action", request.orphan_action)
     if getattr(request, "match_scope_target_group", None) is not None:
-        rule.match_scope_target_group = request.match_scope_target_group
+        _set("match_scope_target_group", request.match_scope_target_group)
+
+    return diff
 
 
 def _resolve_normalization_group_ids(rule_data: dict, session) -> str | None:
@@ -467,18 +496,28 @@ async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRe
                 detail=f"Rules not found: {missing}",
             )
 
+        # Track per-rule diffs so we can emit per-entity journal entries with a
+        # shared batch_id after a successful commit (bd-91mcq). Matches the
+        # pattern at backend/routers/channels.py:800 (bulk channel renumber).
         updated: list = []
+        rule_diffs: list[tuple] = []  # (rule, scalar_diff, merge_streams_before, merge_streams_after)
         for rid in rule_ids:
             rule = rules_by_id[rid]
 
+            scalar_diff: dict = {}
             if payload:
-                _apply_rule_scalar_updates(rule, scalar_update)
+                scalar_diff = _apply_rule_scalar_updates(rule, scalar_update)
 
+            merge_before = None
+            merge_after = None
             if merge_streams_remove_non_matching is not None:
                 actions = rule.get_actions()
                 new_actions = _apply_merge_streams_remove_non_matching(
                     actions, merge_streams_remove_non_matching
                 )
+                if new_actions != actions:
+                    merge_before = actions
+                    merge_after = new_actions
                 rule.actions = json.dumps(new_actions)
 
             if mutated_rule_logic:
@@ -491,6 +530,7 @@ async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRe
                         "errors": validation["errors"],
                     })
             updated.append(rule)
+            rule_diffs.append((rule, scalar_diff, merge_before, merge_after))
 
         session.commit()
         # No per-rule session.refresh() — attached instances already reflect
@@ -500,16 +540,48 @@ async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRe
         # populated on the in-memory instance before to_dict() reads it.
         # (bd-bh1hh: drops another N SELECTs per bulk request.)
 
-        names = ", ".join(r.name for r in updated[:5])
-        if len(updated) > 5:
-            names += ", …"
-        journal.log_entry(
-            category="auto_creation",
-            action_type="update",
-            entity_id=0,
-            entity_name="bulk",
-            description=f"Bulk-updated {len(updated)} auto-creation rule(s): {names}",
-        )
+        # Emit one journal entry per rule that actually changed, all sharing
+        # the same batch_id so forensics can group them. Skip rules where no
+        # scalar column and no merge-streams action changed (bulk-toggle to
+        # the existing value is a no-op).
+        batch_id = str(uuid.uuid4())[:8]
+        for rule, scalar_diff, merge_before, merge_after in rule_diffs:
+            if not scalar_diff and merge_before is None:
+                continue
+
+            description_parts = [
+                f"{field}: {entry['before']} -> {entry['after']}"
+                for field, entry in scalar_diff.items()
+            ]
+            if merge_before is not None:
+                description_parts.append(
+                    "merge_streams.remove_non_matching -> "
+                    f"{merge_streams_remove_non_matching}"
+                )
+            description = (
+                f"Bulk-updated rule '{rule.name}': " + ", ".join(description_parts)
+            )
+
+            before_value = {
+                field: entry["before"] for field, entry in scalar_diff.items()
+            }
+            after_value = {
+                field: entry["after"] for field, entry in scalar_diff.items()
+            }
+            if merge_before is not None:
+                before_value["actions"] = merge_before
+                after_value["actions"] = merge_after
+
+            journal.log_entry(
+                category="auto_creation",
+                action_type="bulk_update",
+                entity_id=rule.id,
+                entity_name=rule.name,
+                description=description,
+                before_value=before_value,
+                after_value=after_value,
+                batch_id=batch_id,
+            )
 
         return {"rules": [r.to_dict() for r in updated], "updated_count": len(updated)}
     except HTTPException:
