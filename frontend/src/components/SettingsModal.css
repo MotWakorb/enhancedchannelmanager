@@ -72,3 +72,54 @@
 .settings-modal-restore-input::file-selector-button:hover {
   background: var(--bg-hover);
 }
+
+/* Dispatcharr auth-method toggle — segmented pill control */
+.auth-method-toggle {
+  display: inline-flex;
+  padding: 0.25rem;
+  background: var(--bg-primary, #1e1e23);
+  border: 1px solid var(--border-primary, #3a3a5a);
+  border-radius: var(--radius-md, 0.5rem);
+  margin-bottom: 0.375rem;
+  width: 100%;
+}
+
+.auth-method-option {
+  flex: 1;
+  padding: 0.5rem 1rem;
+  background: transparent;
+  border: none;
+  border-radius: calc(var(--radius-md, 0.5rem) - 0.125rem);
+  color: var(--text-secondary, #a8a8b8);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+  text-align: center;
+  font-family: inherit;
+}
+
+.auth-method-option:hover:not(.is-active) {
+  color: var(--text-primary, rgba(255, 255, 255, 0.95));
+  background: var(--bg-tertiary, #2a2a4a);
+}
+
+.auth-method-option:focus-visible {
+  outline: 2px solid var(--accent-50, #646cff);
+  outline-offset: 2px;
+}
+
+.auth-method-option.is-active {
+  background: #646cff;
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  font-weight: 600;
+  cursor: default;
+}
+
+.setup-hint {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  margin-top: 0.25rem;
+}

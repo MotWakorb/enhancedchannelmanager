@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from config import get_settings
 from database import get_session
+import journal
 from dispatcharr_client import get_client
 from stream_prober import StreamProber, get_prober, ensure_prober
 
@@ -228,7 +229,7 @@ async def compute_sort(request: ComputeSortRequest):
     settings = get_settings()
 
     # Determine sort priority based on mode
-    valid_criteria = {"resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"}
+    valid_criteria = {"resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels"}
     if request.mode == "smart":
         sort_priority = [c for c in settings.stream_sort_priority if settings.stream_sort_enabled.get(c, False)]
         sort_enabled = {c: True for c in sort_priority}
@@ -271,13 +272,23 @@ async def compute_sort(request: ComputeSortRequest):
             elapsed_ms = (time.time() - start_fetch) * 1000
             logger.debug("[STREAM-STATS-SORT] Fetched %s streams for M3U priority in %.1fms", len(streams_data), elapsed_ms)
             for s in streams_data:
-                stream_m3u_map[s["id"]] = extract_m3u_account_id(s.get("m3u_account"))
+                # Dispatcharr has historically returned either "id" or "stream_id" as the identifier.
+                # Be tolerant so M3U priority sorting doesn't silently no-op.
+                stream_id = s.get("id", s.get("stream_id"))
+                if stream_id is None:
+                    continue
+                stream_m3u_map[int(stream_id)] = extract_m3u_account_id(s.get("m3u_account"))
         except Exception as e:
             logger.warning("[STREAM-STATS-SORT] Failed to fetch M3U data: %s", e)
 
     # Sort each channel
     results = []
     for ch in request.channels:
+        # M3U priority does not require probe stats; respect priorities even if stats are missing.
+        deprioritize_failed = settings.deprioritize_failed_streams
+        if request.mode == "m3u_priority":
+            deprioritize_failed = False
+
         sorted_ids = smart_sort_streams(
             stream_ids=ch.stream_ids,
             stats_map=stats_map,
@@ -285,7 +296,10 @@ async def compute_sort(request: ComputeSortRequest):
             stream_sort_priority=sort_priority,
             stream_sort_enabled=sort_enabled,
             m3u_account_priorities=settings.m3u_account_priorities,
-            deprioritize_failed_streams=settings.deprioritize_failed_streams,
+            deprioritize_failed_streams=deprioritize_failed,
+            deprioritize_black_screen=getattr(settings, 'deprioritize_black_screen', True),
+            deprioritize_low_fps=getattr(settings, 'deprioritize_low_fps', True),
+            failed_stream_sort_order=getattr(settings, 'failed_stream_sort_order', None),
             channel_name=f"channel-{ch.channel_id}",
         )
         changed = sorted_ids != ch.stream_ids
@@ -391,6 +405,123 @@ async def probe_bulk_streams(request: BulkProbeRequest):
         raise HTTPException(status_code=500, detail="Internal server error")
 
     logger.info("[STREAM-STATS-PROBE] Bulk probe completed: %s streams probed", len(results))
+
+    # Trigger smart sort if auto_reorder_after_probe is enabled
+    settings = get_settings()
+    if getattr(settings, 'auto_reorder_after_probe', False):
+        logger.info("[STREAM-STATS-PROBE] auto_reorder_after_probe=True, sorting channels with probed streams")
+        try:
+            from stream_prober import smart_sort_streams, extract_m3u_account_id
+
+            # Find which channels contain the probed streams
+            client = get_client()
+            probed_ids = set(request.stream_ids)
+
+            # Fetch all channels and find those containing probed streams
+            all_channels = []
+            page = 1
+            while True:
+                ch_result = await client.get_channels(page=page, page_size=500)
+                batch = ch_result.get("results", [])
+                if not batch:
+                    break
+                all_channels.extend(batch)
+                if not ch_result.get("next"):
+                    break
+                page += 1
+
+            affected_channels = [
+                ch for ch in all_channels
+                if any(sid in probed_ids for sid in ch.get("streams", []))
+            ]
+
+            if affected_channels:
+                # Build stats map from DB
+                all_stream_ids = list({sid for ch in affected_channels for sid in ch.get("streams", [])})
+                from models import StreamStats as StreamStatsModel
+                session = get_session()
+                try:
+                    stats_map = {}
+                    for i in range(0, len(all_stream_ids), 500):
+                        batch = all_stream_ids[i:i + 500]
+                        stats = session.query(StreamStatsModel).filter(
+                            StreamStatsModel.stream_id.in_(batch)
+                        ).all()
+                        for s in stats:
+                            stats_map[s.stream_id] = s
+                finally:
+                    session.close()
+
+                # Build M3U map
+                stream_m3u_map = {}
+                try:
+                    streams_data = await client.get_streams_by_ids(all_stream_ids)
+                    for s in streams_data:
+                        stream_m3u_map[s["id"]] = extract_m3u_account_id(s.get("m3u_account"))
+                except Exception as e:
+                    logger.warning("[STREAM-STATS-PROBE] Failed to fetch M3U data for sort: %s", e)
+
+                reordered = 0
+                for ch in affected_channels:
+                    stream_ids = ch.get("streams", [])
+                    if len(stream_ids) < 2:
+                        continue
+                    sorted_ids = smart_sort_streams(
+                        stream_ids=stream_ids,
+                        stats_map=stats_map,
+                        stream_m3u_map=stream_m3u_map,
+                        stream_sort_priority=settings.stream_sort_priority,
+                        stream_sort_enabled=settings.stream_sort_enabled,
+                        m3u_account_priorities=settings.m3u_account_priorities,
+                        deprioritize_failed_streams=settings.deprioritize_failed_streams,
+                        deprioritize_black_screen=getattr(settings, 'deprioritize_black_screen', True),
+                        deprioritize_low_fps=getattr(settings, 'deprioritize_low_fps', True),
+                        failed_stream_sort_order=getattr(settings, 'failed_stream_sort_order', None),
+                        channel_name=ch.get("name", f"channel-{ch['id']}"),
+                    )
+                    if sorted_ids != stream_ids:
+                        await client.update_channel(ch["id"], {"streams": sorted_ids})
+                        reordered += 1
+                        ch_name = ch.get("name", f"channel-{ch['id']}")
+                        logger.info("[STREAM-STATS-PROBE] Reordered streams in '%s'", ch_name)
+
+                        # Journal with deprioritization details
+                        deprioritized = []
+                        for sid in sorted_ids:
+                            stat = stats_map.get(sid)
+                            if stat:
+                                if getattr(stat, 'is_black_screen', False):
+                                    deprioritized.append({"id": sid, "name": stat.stream_name, "reason": "black_screen"})
+                                elif getattr(stat, 'is_low_fps', False):
+                                    deprioritized.append({"id": sid, "name": stat.stream_name, "reason": "low_fps"})
+                                elif stat.probe_status in ('failed', 'timeout'):
+                                    deprioritized.append({"id": sid, "name": stat.stream_name, "reason": stat.probe_status})
+
+                        desc_parts = [f"Smart sort reordered {len(stream_ids)} streams in '{ch_name}'"]
+                        if deprioritized:
+                            reasons = {}
+                            for d in deprioritized:
+                                reasons.setdefault(d["reason"], []).append(d["name"])
+                            reason_strs = []
+                            for reason, names in reasons.items():
+                                label = {"black_screen": "black screen", "low_fps": "low FPS", "failed": "failed", "timeout": "timed out"}.get(reason, reason)
+                                reason_strs.append(f"{len(names)} {label}")
+                            desc_parts.append(f"({', '.join(reason_strs)} deprioritized)")
+
+                        journal.log_entry(
+                            category="channel",
+                            action_type="smart_sort",
+                            entity_id=ch["id"],
+                            entity_name=ch_name,
+                            description=" ".join(desc_parts),
+                            after_value={"deprioritized": deprioritized} if deprioritized else None,
+                        )
+
+                logger.info("[STREAM-STATS-PROBE] Smart sort after bulk probe: %d/%d channels reordered",
+                           reordered, len(affected_channels))
+        except Exception as e:
+            logger.warning("[STREAM-STATS-PROBE] Smart sort after bulk probe failed: %s", e)
+
     return {"probed": len(results), "results": results}
 
 

@@ -3,7 +3,9 @@ SQLite database setup for the Journal feature.
 Uses SQLAlchemy with async support via aiosqlite.
 """
 import logging
-from sqlalchemy import create_engine
+from pathlib import Path
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.pool import StaticPool
 
@@ -14,6 +16,10 @@ logger = logging.getLogger(__name__)
 # Database file location
 JOURNAL_DB_FILE = CONFIG_DIR / "journal.db"
 
+# Alembic config location. Bead bd-c5wf5 introduced Alembic as the migration
+# system; see ``docs/database_migrations.md``.
+ALEMBIC_INI_PATH = Path(__file__).resolve().parent / "alembic.ini"
+
 # SQLAlchemy Base for model declarations
 Base = declarative_base()
 
@@ -21,10 +27,154 @@ Base = declarative_base()
 _engine = None
 _SessionLocal = None
 
+# Track whether we've logged PRAGMA state at least once so the startup log is
+# informative without spamming once-per-connection lines.
+_pragma_logged = False
+
+
+@event.listens_for(Engine, "connect")
+def _set_sqlite_pragmas(dbapi_connection, connection_record):
+    """Apply SQLite PRAGMAs on every new connection.
+
+    Set at connection time because SQLite PRAGMAs are per-connection, not
+    per-database. Without this, `journal_mode` defaults to rollback journal
+    (which serializes readers vs writers → `database is locked` errors under
+    concurrent probe/task/HTTP load) and `foreign_keys=OFF` (which silently
+    ignores FK constraints declared in models.py → orphan rows).
+
+    SQLite-only: guarded by dialect check so this is a no-op for non-SQLite
+    engines if the backend is ever swapped.
+
+    In-memory databases (`:memory:`) cannot use WAL mode, so we skip
+    journal_mode for them but still enforce foreign keys.
+    """
+    global _pragma_logged
+
+    # Identify SQLite connections. The sqlite3 DB-API module exposes
+    # `Connection` objects from the stdlib `sqlite3` package; non-SQLite
+    # drivers will not match, so we stay safe for future engine swaps.
+    try:
+        import sqlite3
+        if not isinstance(dbapi_connection, sqlite3.Connection):
+            return
+    except Exception:
+        return
+
+    cursor = dbapi_connection.cursor()
+    try:
+        # Detect in-memory DB — WAL mode requires a file on disk. Tests using
+        # `sqlite:///:memory:` expose the database via a connection with no
+        # backing file; `PRAGMA database_list` returns an empty `file` column
+        # for those.
+        is_memory = False
+        try:
+            cursor.execute("PRAGMA database_list")
+            rows = cursor.fetchall()
+            # rows like (seq, name, file). Main DB is first.
+            if rows and len(rows[0]) >= 3:
+                main_file = rows[0][2]
+                if not main_file:
+                    is_memory = True
+        except Exception:
+            # If we can't determine, fall through and attempt WAL — SQLite
+            # will return the actual mode we land in.
+            pass
+
+        resulting_mode = None
+        if not is_memory:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            row = cursor.fetchone()
+            if row is not None:
+                resulting_mode = row[0]
+
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA foreign_keys=ON")
+
+        if not _pragma_logged:
+            logger.info(
+                "[DATABASE] SQLite PRAGMAs applied: journal_mode=%s synchronous=NORMAL foreign_keys=ON (memory=%s)",
+                resulting_mode or "memory",
+                is_memory,
+            )
+            _pragma_logged = True
+    finally:
+        cursor.close()
+
 
 def get_database_url() -> str:
     """Get the SQLite database URL."""
     return f"sqlite:///{JOURNAL_DB_FILE}"
+
+
+def _bootstrap_alembic(engine) -> None:
+    """Ensure ``alembic_version`` tracks the deployed schema state.
+
+    - Fresh install (no tables): ``alembic upgrade head`` creates everything.
+    - Existing install from before Alembic (tables exist, no ``alembic_version``):
+      ``alembic stamp head`` records the current revision without re-running
+      DDL that would crash on duplicate-table errors.
+    - Already on Alembic (``alembic_version`` row present): ``upgrade head`` is
+      a no-op when at head, otherwise applies pending revisions.
+    """
+    from alembic import command
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    if not ALEMBIC_INI_PATH.exists():
+        logger.warning(
+            "[DATABASE] alembic.ini not found at %s — skipping migrations",
+            ALEMBIC_INI_PATH,
+        )
+        return
+
+    alembic_cfg = Config(str(ALEMBIC_INI_PATH))
+    alembic_cfg.set_main_option("sqlalchemy.url", str(engine.url))
+
+    with engine.connect() as conn:
+        has_alembic_version = conn.execute(text(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='alembic_version'"
+        )).fetchone() is not None
+        has_any_user_table = conn.execute(text(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%' AND name != 'alembic_version' LIMIT 1"
+        )).fetchone() is not None
+
+    if not has_alembic_version and has_any_user_table:
+        head = ScriptDirectory.from_config(alembic_cfg).get_current_head()
+        logger.info(
+            "[DATABASE] Pre-Alembic install detected — stamping as revision %s",
+            head,
+        )
+        command.stamp(alembic_cfg, "head")
+        return
+
+    logger.info("[DATABASE] Running alembic upgrade head")
+    command.upgrade(alembic_cfg, "head")
+
+
+def get_current_schema_revision(engine=None) -> str:
+    """Return the ``alembic_version`` currently applied to the DB, or ``""``."""
+    eng = engine if engine is not None else _engine
+    if eng is None:
+        return ""
+    try:
+        with eng.connect() as conn:
+            row = conn.execute(text("SELECT version_num FROM alembic_version")).fetchone()
+            return row[0] if row else ""
+    except Exception:
+        return ""
+
+
+def get_alembic_head_revision() -> str:
+    """Return the head revision declared in ``alembic/versions/``."""
+    try:
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        cfg = Config(str(ALEMBIC_INI_PATH))
+        return ScriptDirectory.from_config(cfg).get_current_head() or ""
+    except Exception:
+        return ""
 
 
 def init_db() -> None:
@@ -52,10 +202,22 @@ def init_db() -> None:
         _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
         # Import models to register them with Base
-        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, AutoCreationRule, AutoCreationExecution, AutoCreationConflict, FFmpegProfile, DummyEPGProfile, DummyEPGChannelAssignment  # noqa: F401
+        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, AutoCreationRule, AutoCreationExecution, AutoCreationConflict, FFmpegProfile, DummyEPGProfile, DummyEPGChannelAssignment, LookupTable  # noqa: F401
         from export_models import PlaylistProfile, CloudStorageTarget, PublishConfiguration, PublishHistory  # noqa: F401
 
-        # Create all tables
+        # Apply Alembic migrations first so schema tracking is authoritative
+        # (see ``docs/database_migrations.md``). For legacy installs we stamp
+        # to head rather than re-run DDL that would fail on duplicate tables.
+        try:
+            _bootstrap_alembic(_engine)
+        except Exception:
+            logger.exception(
+                "[DATABASE] Alembic bootstrap failed; falling back to create_all()"
+            )
+
+        # Create all tables (idempotent; no-op on clean Alembic installs but
+        # keeps legacy in-process additions working until a proper revision
+        # lands for them).
         Base.metadata.create_all(bind=_engine)
         logger.debug("[DATABASE] Database tables created/verified")
 
@@ -68,7 +230,10 @@ def init_db() -> None:
         # Perform maintenance: purge old entries and vacuum
         _perform_maintenance(_engine)
 
-        logger.info("[DATABASE] Journal database initialized successfully")
+        logger.info(
+            "[DATABASE] Journal database initialized successfully (schema rev=%s)",
+            get_current_schema_revision(_engine) or "unstamped",
+        )
     except Exception as e:
         logger.exception("[DATABASE] Failed to initialize database: %s", e)
         raise
@@ -216,6 +381,12 @@ def _run_migrations(engine) -> None:
 
             # Add stream_sort_field and stream_sort_order columns to auto_creation_rules (v0.15.0)
             _add_auto_creation_rules_stream_sort_columns(conn)
+
+            # Migrate normalize_names -> normalization_group_ids (v0.16.0 - Per-rule normalization)
+            _migrate_normalize_names_to_normalization_group_ids(conn)
+
+            # Add user_id and username columns to unique_client_connections (v0.16.0 - User tracking)
+            _add_unique_client_connections_user_columns(conn)
 
             logger.debug("[DATABASE] All migrations complete - schema is up to date")
     except Exception as e:
@@ -1530,6 +1701,55 @@ def _add_auto_creation_rules_stream_sort_columns(conn) -> None:
         logger.info("[DATABASE] Migration complete: added stream_sort_order column")
 
 
+def _migrate_normalize_names_to_normalization_group_ids(conn) -> None:
+    """Migrate normalize_names boolean to normalization_group_ids JSON array."""
+    import json
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_rules'"
+    ))
+    if not result.fetchone():
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
+
+    if "normalization_group_ids" not in columns:
+        logger.info("[DATABASE] Adding normalization_group_ids column to auto_creation_rules")
+        conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN normalization_group_ids TEXT"))
+
+        # Migrate existing data: rules with normalize_names=1 get all enabled group IDs
+        if "normalize_names" in columns:
+            # Check if normalization_rule_groups table exists
+            has_groups = conn.execute(text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='normalization_rule_groups'"
+            )).fetchone()
+            if has_groups:
+                groups = conn.execute(text(
+                    "SELECT id FROM normalization_rule_groups WHERE enabled = 1 ORDER BY priority"
+                )).fetchall()
+                all_group_ids = json.dumps([g[0] for g in groups]) if groups else "[]"
+            else:
+                all_group_ids = "[]"
+
+            # Rules with normalize_names=True get all enabled groups
+            conn.execute(text(
+                "UPDATE auto_creation_rules SET normalization_group_ids = :ids WHERE normalize_names = 1"
+            ), {"ids": all_group_ids})
+
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: added normalization_group_ids column")
+
+    # Drop legacy normalize_names column now that data is migrated
+    # Re-read columns in case they changed above
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
+    if "normalize_names" in columns:
+        logger.info("[DATABASE] Dropping legacy normalize_names column from auto_creation_rules")
+        conn.execute(text("ALTER TABLE auto_creation_rules DROP COLUMN normalize_names"))
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: dropped normalize_names column")
+
+
 def _add_stream_stats_consecutive_failures_column(conn) -> None:
     """Add consecutive_failures column to stream_stats table (v0.12.5 - Strike rule)."""
     from sqlalchemy import text
@@ -1742,6 +1962,29 @@ def close_db() -> None:
         logger.info("[DATABASE] Database engine disposed")
     _engine = None
     _SessionLocal = None
+
+
+def _add_unique_client_connections_user_columns(conn) -> None:
+    """Add user_id and username columns to unique_client_connections table."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='unique_client_connections'"
+    ))
+    if not result.fetchone():
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(unique_client_connections)")).fetchall()]
+
+    if "user_id" not in columns:
+        logger.info("[DATABASE] Adding user_id column to unique_client_connections")
+        conn.execute(text("ALTER TABLE unique_client_connections ADD COLUMN user_id INTEGER"))
+        conn.commit()
+
+    if "username" not in columns:
+        logger.info("[DATABASE] Adding username column to unique_client_connections")
+        conn.execute(text("ALTER TABLE unique_client_connections ADD COLUMN username VARCHAR(255)"))
+        conn.commit()
 
 
 def get_session():

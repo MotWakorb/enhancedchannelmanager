@@ -3,19 +3,31 @@ Normalization router — normalization rule management and testing endpoints.
 
 Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 """
+import asyncio
+import hashlib
 import json
 import logging
+import re
 import time
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import yaml
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+import journal
+from auth import RequireAdminIfEnabled
+from auth.routes import limiter
+from concurrency import run_cpu_bound
 from config import get_settings
 from database import get_session
 from dispatcharr_client import get_client
+from regex_lint import (
+    lint_conditions_json,
+    lint_pattern,
+    violations_to_http_detail,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +126,29 @@ class ReorderRulesRequest(BaseModel):
 
 class ReorderGroupsRequest(BaseModel):
     group_ids: list[int]  # Groups in new priority order
+
+
+class ApplyChannelAction(BaseModel):
+    """Per-channel action override for apply-to-channels execute mode.
+
+    ``action`` is constrained to a Literal so invalid inputs are rejected by
+    FastAPI/Pydantic at the request boundary with HTTP 422 — the endpoint
+    itself only surfaces semantic/runtime errors (e.g., "target channel not
+    found", "rename would collide") in the ``errors[]`` list of its response.
+    """
+    channel_id: int
+    action: Literal["rename", "merge", "skip"]
+    merge_target_id: Optional[int] = None
+
+
+class ApplyToChannelsRequest(BaseModel):
+    """Request body for POST /api/normalization/apply-to-channels.
+
+    When ``dry_run`` is true (default), the endpoint returns the diff without
+    mutating anything. When ``dry_run`` is false, ``actions`` is consulted
+    per-channel to decide whether to rename, merge, or skip.
+    """
+    actions: Optional[List[ApplyChannelAction]] = None
 
 
 @router.get("/rules")
@@ -324,12 +359,42 @@ async def get_normalization_rule(rule_id: int):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+def _lint_normalization_rule_request(request) -> None:
+    """Raise HTTP 422 if the rule's pattern fields fail the regex linter.
+
+    Lints (bd-eio04.7):
+      - ``condition_value`` when ``condition_type == "regex"``
+      - Any pattern inside the compound ``conditions[]`` JSON (regex types)
+
+    Replacement strings on ``action_value`` / ``else_action_value`` are
+    templates, not regexes, so they are not linted here.
+    """
+    violations = []
+    if getattr(request, "condition_type", None) == "regex":
+        violations.extend(
+            lint_pattern(getattr(request, "condition_value", None), field="condition_value")
+        )
+    conditions = getattr(request, "conditions", None)
+    if conditions:
+        violations.extend(lint_conditions_json(conditions, prefix="conditions"))
+    if violations:
+        logger.warning(
+            "[NORMALIZE] Rejected rule — %d lint violation(s): %s",
+            len(violations),
+            [(v.field, v.code) for v in violations],
+        )
+        raise HTTPException(
+            status_code=422, detail=violations_to_http_detail(violations)
+        )
+
+
 @router.post("/rules")
 async def create_normalization_rule(request: CreateRuleRequest):
     """Create a new normalization rule."""
     logger.debug("[NORMALIZE] POST /rules - name=%s group_id=%s", request.name, request.group_id)
     try:
         from models import NormalizationRule, NormalizationRuleGroup
+        _lint_normalization_rule_request(request)
         session = get_session()
         try:
             # Verify group exists
@@ -382,6 +447,10 @@ async def update_normalization_rule(rule_id: int, request: UpdateRuleRequest):
     logger.debug("[NORMALIZE] PATCH /rules/%s", rule_id)
     try:
         from models import NormalizationRule
+        # Lint any pattern-bearing fields on the update request. The helper
+        # only lints what's actually supplied — PATCH semantics are
+        # preserved (unset fields pass through unchanged).
+        _lint_normalization_rule_request(request)
         session = get_session()
         try:
             rule = session.query(NormalizationRule).filter(
@@ -494,7 +563,9 @@ async def test_normalization_rule(request: TestRuleRequest):
         session = get_session()
         try:
             engine = get_normalization_engine(session)
-            result = engine.test_rule(
+            # Offload CPU-bound regex/rule eval to thread pool (bd-w3z4h)
+            result = await run_cpu_bound(
+                engine.test_rule,
                 text=request.text,
                 condition_type=request.condition_type,
                 condition_value=request.condition_value or "",
@@ -506,7 +577,7 @@ async def test_normalization_rule(request: TestRuleRequest):
                 tag_group_id=request.tag_group_id,
                 tag_match_position=request.tag_match_position or "contains",
                 else_action_type=request.else_action_type,
-                else_action_value=request.else_action_value
+                else_action_value=request.else_action_value,
             )
             return result
         finally:
@@ -517,15 +588,17 @@ async def test_normalization_rule(request: TestRuleRequest):
 
 
 @router.post("/test-batch")
-async def test_normalization_batch(request: TestRulesBatchRequest):
+@limiter.limit("30/minute")
+async def test_normalization_batch(request: Request, body: TestRulesBatchRequest):
     """Test all enabled rules against multiple sample texts."""
-    logger.debug("[NORMALIZE] POST /test-batch - count=%s", len(request.texts))
+    logger.debug("[NORMALIZE] POST /test-batch - count=%s", len(body.texts))
     try:
         from normalization_engine import get_normalization_engine
         session = get_session()
         try:
             engine = get_normalization_engine(session)
-            results = engine.test_rules_batch(request.texts)
+            # Offload batch evaluation off event loop (bd-w3z4h)
+            results = await run_cpu_bound(engine.test_rules_batch, body.texts)
             return {
                 "results": [
                     {
@@ -556,7 +629,8 @@ async def normalize_text(request: TestRulesBatchRequest):
         session = get_session()
         try:
             engine = get_normalization_engine(session)
-            results = engine.test_rules_batch(request.texts)
+            # Offload batch evaluation off event loop (bd-w3z4h)
+            results = await run_cpu_bound(engine.test_rules_batch, request.texts)
             return {
                 "results": [
                     {"original": r.original, "normalized": r.normalized}
@@ -623,14 +697,23 @@ async def get_normalization_rule_stats(limit: int = 500):
                 NormalizationRule.priority
             ).all()
 
-            rule_stats = []
-            for rule in rules:
-                match_count = 0
-                for name in stream_names:
-                    match = engine._match_condition(name, rule)
-                    if match.matched:
-                        match_count += 1
+            # Offload the R×S regex loop to the thread pool (bd-w3z4h).
+            # 500 streams × 100 rules = 50k regex evals — blocks the event loop
+            # for several seconds if run inline.
+            def _count_matches():
+                counts = []
+                for rule in rules:
+                    count = 0
+                    for name in stream_names:
+                        m = engine._match_condition(name, rule)
+                        if m.matched:
+                            count += 1
+                    counts.append(count)
+                return counts
 
+            match_counts = await run_cpu_bound(_count_matches)
+            rule_stats = []
+            for rule, match_count in zip(rules, match_counts):
                 rule_stats.append({
                     "rule_id": rule.id,
                     "rule_name": rule.name,
@@ -909,3 +992,460 @@ async def import_normalization_rules(request: ImportRulesRequest):
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to import normalization rules")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# -----------------------------------------------------------------------------
+# Apply-to-channels: force re-normalize existing channel names (GH-104).
+# -----------------------------------------------------------------------------
+
+
+_NUM_PREFIX_RE = re.compile(r'^(\d+\s*\|\s*)')
+
+
+def _split_channel_number_prefix(name: str) -> tuple[str, str]:
+    """Split a channel name into (number_prefix, core_name).
+
+    Matches the behavior of auto_creation_executor.py:519-521 so renames here
+    preserve the "107 | " style prefix when present.
+    """
+    m = _NUM_PREFIX_RE.match(name or "")
+    prefix = m.group(0) if m else ""
+    core = (name or "")[len(prefix):]
+    return prefix, core
+
+
+async def _build_apply_diff(client, engine) -> list[dict]:
+    """Walk all channels and compute normalization diff rows.
+
+    Returns one dict per channel whose normalized name differs from current,
+    tagged with collision info when a different channel already owns the
+    proposed name.
+    """
+    # Fetch all channels (paginate — some deployments have thousands)
+    all_channels: list[dict] = []
+    page = 1
+    while True:
+        result = await client.get_channels(page=page, page_size=500)
+        batch = result.get("results", []) or []
+        all_channels.extend(batch)
+        if not result.get("next"):
+            break
+        page += 1
+
+    # Fetch groups once so preview can surface group names
+    groups_by_id: dict[int, str] = {}
+    try:
+        groups = await client.get_channel_groups()
+        for g in groups or []:
+            if isinstance(g, dict) and g.get("id") is not None:
+                groups_by_id[g["id"]] = g.get("name") or ""
+    except Exception as e:
+        logger.warning("[NORMALIZE] Failed to fetch channel groups for preview: %s", e)
+
+    # Index current names so we can detect collisions when renaming.
+    # Key: lower-cased name WITH number prefix so "107 | RTL" and "RTL" don't collide.
+    channel_by_name_lower: dict[str, dict] = {}
+    for ch in all_channels:
+        nm = (ch.get("name") or "").lower()
+        if nm:
+            channel_by_name_lower.setdefault(nm, ch)
+
+    diffs: list[dict] = []
+    for ch in all_channels:
+        current_name = ch.get("name") or ""
+        if not current_name:
+            continue
+        prefix, core = _split_channel_number_prefix(current_name)
+        try:
+            norm_result = engine.normalize(core)
+        except Exception as e:
+            logger.warning("[NORMALIZE] Normalization failed for channel %s '%s': %s",
+                           ch.get("id"), current_name, e)
+            continue
+
+        normalized_core = (norm_result.normalized or core).strip()
+        proposed_name = f"{prefix}{normalized_core}" if prefix else normalized_core
+
+        # Skip rows where nothing would change
+        if proposed_name == current_name or not normalized_core:
+            continue
+
+        # Serialize per-rule trace so the preview UI can show which rules
+        # fired and how they rewrote the core name. Shape mirrors
+        # /test-batch's `transformations` output so the same frontend
+        # display component can consume both (bd-eio04.12).
+        transformations_serialized: list[dict] = []
+        for t in getattr(norm_result, "transformations", []) or []:
+            # NormalizationResult.transformations is a list of (rule_id, before, after) tuples.
+            # rule_id is usually an int but can be the sentinel "legacy_tag" string.
+            try:
+                rule_id, before, after = t
+            except (TypeError, ValueError):
+                continue
+            transformations_serialized.append({
+                "rule_id": rule_id,
+                "before": before,
+                "after": after,
+            })
+
+        # Check for collision: another channel already owns the proposed name.
+        collision_ch: Optional[dict] = None
+        proposed_lower = proposed_name.lower()
+        candidate = channel_by_name_lower.get(proposed_lower)
+        if candidate and candidate.get("id") != ch.get("id"):
+            collision_ch = candidate
+
+        group_id = ch.get("channel_group_id") or ch.get("channel_group")
+        target_group_id = None
+        target_group_name = None
+        if collision_ch:
+            target_group_id = (
+                collision_ch.get("channel_group_id")
+                or collision_ch.get("channel_group")
+            )
+            if target_group_id is not None:
+                target_group_name = groups_by_id.get(target_group_id)
+
+        diffs.append({
+            "channel_id": ch.get("id"),
+            "current_name": current_name,
+            "proposed_name": proposed_name,
+            "normalized_core": normalized_core,
+            "channel_number_prefix": prefix,
+            "group_id": group_id,
+            "group_name": groups_by_id.get(group_id) if group_id is not None else None,
+            "collision": bool(collision_ch),
+            "collision_target_id": collision_ch.get("id") if collision_ch else None,
+            "collision_target_name": collision_ch.get("name") if collision_ch else None,
+            "collision_target_group_id": target_group_id,
+            "collision_target_group_name": target_group_name,
+            "suggested_action": "merge" if collision_ch else "rename",
+            "transformations": transformations_serialized,
+        })
+
+    return diffs
+
+
+# Module-level lock prevents two concurrent bulk apply-executes from
+# stomping each other's renames/merges (bd-eio04.12). Only the execute
+# path holds it — dry-run reads are safe to run concurrently because they
+# don't mutate anything.
+_APPLY_TO_CHANNELS_EXECUTE_LOCK = asyncio.Lock()
+
+
+def _compute_rule_set_hash(engine) -> str:
+    """Stable hash of the enabled rule-set for audit-log correlation.
+
+    Hash is computed from (rule_id, condition_type, condition_value,
+    action_type, action_value) tuples in priority order so that any
+    meaningful change to the active rule-set produces a different hash.
+    Returns a 12-char prefix of the SHA-256 hex digest for log-friendly
+    identifiers.
+    """
+    try:
+        from models import NormalizationRule, NormalizationRuleGroup
+        session = getattr(engine, "db", None) or get_session()
+        rules = (
+            session.query(NormalizationRule)
+            .join(NormalizationRuleGroup, NormalizationRule.group_id == NormalizationRuleGroup.id)
+            .filter(NormalizationRule.enabled.is_(True))
+            .filter(NormalizationRuleGroup.enabled.is_(True))
+            .order_by(NormalizationRuleGroup.priority, NormalizationRule.priority)
+            .all()
+        )
+        parts = [
+            f"{r.id}|{r.condition_type}|{r.condition_value or ''}|{r.action_type}|{r.action_value or ''}"
+            for r in rules
+        ]
+        digest = hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+        return digest[:12]
+    except Exception as e:
+        logger.warning("[NORMALIZE] Failed to compute rule-set hash for audit log: %s", e)
+        return "unknown"
+
+
+@router.post("/apply-to-channels")
+@limiter.limit("5/minute")
+async def apply_normalization_to_channels(
+    request: Request,
+    dry_run: bool = True,
+    body: Optional[ApplyToChannelsRequest] = None,
+    _admin=RequireAdminIfEnabled,
+):
+    """Apply enabled normalization rules to existing channels.
+
+    When ``dry_run`` is true (default), returns the per-channel diff without
+    mutating anything. When ``dry_run`` is false, per-row ``actions`` decide
+    whether to rename, merge into an existing channel, or skip. Journal
+    entries are written for each rename/merge so users can audit and undo.
+
+    Admin-gated when auth is enabled: non-admin callers receive HTTP 403
+    (bd-ei4m9). Rate-limited to 5/minute per remote address to prevent
+    runaway bulk-apply loops (bd-eio04.12). Execute mode takes a module-
+    level lock so only one bulk rename/merge can run concurrently — a
+    second caller sees HTTP 409.
+    """
+    logger.debug("[NORMALIZE] POST /apply-to-channels dry_run=%s actions=%s",
+                 dry_run, len((body.actions if body else None) or []))
+
+    # Execute-mode guard: only one concurrent bulk apply at a time
+    # (bd-eio04.12). Dry-run reads are safe to interleave because they
+    # don't mutate anything. We grab the lock BEFORE touching Dispatcharr
+    # so a second caller sees 409 instead of racing the diff compute.
+    acquired = False
+    if not dry_run:
+        if _APPLY_TO_CHANNELS_EXECUTE_LOCK.locked():
+            raise HTTPException(
+                status_code=409,
+                detail="Another bulk apply-to-channels is already in progress",
+            )
+        # acquire() on an unlocked Lock completes immediately on the current
+        # task. The check-then-acquire is best-effort; a concurrent caller
+        # that wins the race will release quickly and the second caller
+        # proceeds. The mutual-exclusion guarantee that matters is that only
+        # one task is inside the critical section at a time.
+        await _APPLY_TO_CHANNELS_EXECUTE_LOCK.acquire()
+        acquired = True
+
+    try:
+        try:
+            from normalization_engine import get_normalization_engine
+            client = get_client()
+            session = get_session()
+            try:
+                engine = get_normalization_engine(session)
+                diffs = await _build_apply_diff(client, engine)
+                rule_set_hash = _compute_rule_set_hash(engine) if not dry_run else None
+            finally:
+                session.close()
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("[NORMALIZE] Failed to compute apply-to-channels diff")
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+        if dry_run:
+            return {
+                "dry_run": True,
+                "diffs": diffs,
+                "channels_with_changes": len(diffs),
+            }
+
+        # Execute mode --------------------------------------------------------
+        # Index diffs by channel_id for quick lookup against caller actions.
+        diffs_by_id = {d["channel_id"]: d for d in diffs if d.get("channel_id") is not None}
+
+        # Default: skip everything that wasn't explicitly called out (safest).
+        actions_by_id: dict[int, ApplyChannelAction] = {}
+        if body and body.actions:
+            for a in body.actions:
+                actions_by_id[a.channel_id] = a
+
+        renamed: list[dict] = []
+        merged: list[dict] = []
+        skipped: list[dict] = []
+        errors: list[dict] = []
+
+        for channel_id, diff in diffs_by_id.items():
+            requested = actions_by_id.get(channel_id)
+            if requested is None:
+                skipped.append({"channel_id": channel_id, "reason": "no action specified"})
+                continue
+
+            action = (requested.action or "skip").lower()
+            if action == "skip":
+                skipped.append({"channel_id": channel_id, "reason": "skip"})
+                continue
+
+            if action == "rename":
+                # Refuse to rename into a collision: caller should choose merge.
+                if diff.get("collision"):
+                    errors.append({
+                        "channel_id": channel_id,
+                        "error": "rename would collide with existing channel; choose merge or skip",
+                    })
+                    continue
+                new_name = diff["proposed_name"]
+                current_name = diff["current_name"]
+                try:
+                    await client.update_channel(channel_id, {"name": new_name})
+                    journal.log_entry(
+                        category="channel",
+                        action_type="rename",
+                        entity_id=channel_id,
+                        entity_name=new_name,
+                        description=f"Renamed channel '{current_name}' → '{new_name}' via normalization apply-to-channels",
+                        before_value={"name": current_name},
+                        after_value={"name": new_name},
+                        user_initiated=True,
+                    )
+                    renamed.append({
+                        "channel_id": channel_id,
+                        "old_name": current_name,
+                        "new_name": new_name,
+                    })
+                    logger.info("[NORMALIZE] Renamed channel id=%s '%s' -> '%s'",
+                                channel_id, current_name, new_name)
+                except Exception as e:
+                    logger.warning("[NORMALIZE] Failed to rename channel %s: %s", channel_id, e)
+                    errors.append({"channel_id": channel_id, "error": str(e)})
+                continue
+
+            if action == "merge":
+                target_id = requested.merge_target_id or diff.get("collision_target_id")
+                if not target_id:
+                    errors.append({
+                        "channel_id": channel_id,
+                        "error": "merge requested but no merge target identified",
+                    })
+                    continue
+                try:
+                    source_channel = await client.get_channel(channel_id)
+                    target_channel = await client.get_channel(target_id)
+                except Exception as e:
+                    logger.warning("[NORMALIZE] Failed to fetch channels for merge %s -> %s: %s",
+                                   channel_id, target_id, e)
+                    errors.append({"channel_id": channel_id, "error": str(e)})
+                    continue
+
+                # Merge streams into target preserving order, deduping by id.
+                target_streams = list(target_channel.get("streams", []) or [])
+                seen = set(target_streams)
+                added = 0
+                for sid in source_channel.get("streams", []) or []:
+                    if sid not in seen:
+                        target_streams.append(sid)
+                        seen.add(sid)
+                        added += 1
+
+                try:
+                    if added:
+                        await client.update_channel(target_id, {"streams": target_streams})
+                    await client.delete_channel(channel_id)
+                except Exception as e:
+                    logger.warning("[NORMALIZE] Merge failed %s -> %s: %s",
+                                   channel_id, target_id, e)
+                    errors.append({"channel_id": channel_id, "error": str(e)})
+                    continue
+
+                journal.log_entry(
+                    category="channel",
+                    action_type="merge",
+                    entity_id=target_id,
+                    entity_name=target_channel.get("name") or "",
+                    description=(
+                        f"Merged '{source_channel.get('name') or ''}' into "
+                        f"'{target_channel.get('name') or ''}' via normalization apply-to-channels"
+                    ),
+                    before_value={
+                        "source_channel": {
+                            "id": channel_id,
+                            "name": source_channel.get("name"),
+                            "stream_count": len(source_channel.get("streams") or []),
+                        },
+                        "target_channel": {
+                            "id": target_id,
+                            "name": target_channel.get("name"),
+                            "stream_count": len(target_channel.get("streams") or []),
+                        },
+                    },
+                    after_value={
+                        "target_channel_id": target_id,
+                        "streams_added": added,
+                        "deleted_source_id": channel_id,
+                    },
+                    user_initiated=True,
+                )
+                merged.append({
+                    "channel_id": channel_id,
+                    "target_id": target_id,
+                    "streams_added": added,
+                })
+                logger.info("[NORMALIZE] Merged channel %s into %s (+%s streams)",
+                            channel_id, target_id, added)
+                continue
+
+            errors.append({
+                "channel_id": channel_id,
+                "error": f"unknown action '{requested.action}'",
+            })
+
+        # Bulk-apply audit entry (bd-eio04.12). Captures who (user_initiated
+        # flag), counts for each outcome, and the rule-set hash so reviewers
+        # can correlate the run against the rules that were active at the
+        # time. Entity-level rename/merge entries are written above.
+        actor_name = "apply-to-channels"
+        if _admin is not None:
+            try:
+                actor_name = _admin.username or actor_name
+            except AttributeError:
+                pass
+
+        journal.log_entry(
+            category="channel",
+            action_type="bulk_apply_normalization",
+            entity_name=actor_name,
+            description=(
+                f"Bulk normalization apply-to-channels: "
+                f"renamed={len(renamed)}, merged={len(merged)}, "
+                f"skipped={len(skipped)}, errors={len(errors)}"
+            ),
+            before_value={
+                "actor": actor_name,
+                "rule_set_hash": rule_set_hash,
+                "channels_considered": len(diffs_by_id),
+            },
+            after_value={
+                "renamed": len(renamed),
+                "merged": len(merged),
+                "skipped": len(skipped),
+                "errors": len(errors),
+            },
+            user_initiated=True,
+        )
+
+        return {
+            "dry_run": False,
+            "status": "completed",
+            "renamed": renamed,
+            "merged": merged,
+            "skipped": skipped,
+            "errors": errors,
+            "rule_set_hash": rule_set_hash,
+        }
+    finally:
+        if not dry_run and acquired:
+            _APPLY_TO_CHANNELS_EXECUTE_LOCK.release()
+
+
+# =============================================================================
+# Lint findings (bd-eio04.7) — read-only view of the startup migration scan.
+# =============================================================================
+
+
+@router.get("/lint-findings")
+async def get_normalization_lint_findings():
+    """Return the cached lint findings for normalization rules.
+
+    Findings are produced by the one-time startup scan (bd-eio04.7 migration
+    pass) and also refreshed implicitly by write-time validation (write-time
+    rejections never reach here because they fail with 422). UI surfaces
+    these so pre-lint rows that would now fail can be fixed by the operator.
+    The scan does not modify or disable any rule — this is a pure view.
+    """
+    logger.debug("[NORMALIZE] GET /lint-findings")
+    try:
+        from models import RuleLintFinding
+        from tasks.rule_lint_scan import RULE_TYPE_NORMALIZATION
+
+        session = get_session()
+        try:
+            findings = session.query(RuleLintFinding).filter(
+                RuleLintFinding.rule_type == RULE_TYPE_NORMALIZATION
+            ).order_by(RuleLintFinding.rule_id, RuleLintFinding.id).all()
+            return {"findings": [f.to_dict() for f in findings]}
+        finally:
+            session.close()
+    except Exception as e:
+        logger.exception("[NORMALIZE] Failed to get lint findings: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")

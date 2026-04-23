@@ -388,7 +388,7 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   useEffect(() => {
     loadTasks(true); // Show loading on initial load only

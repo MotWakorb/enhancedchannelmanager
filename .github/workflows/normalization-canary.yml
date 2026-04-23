@@ -1,0 +1,126 @@
+name: Normalization Canary
+
+# Nightly parity check between the Test Rules preview path and the
+# auto-creation executor path (bd-eio04.9). Any divergence is an SLO-5
+# breach — see docs/sre/slos.md. Runbook:
+# docs/runbooks/normalization-canary-divergence.md.
+
+on:
+  # 07:00 UTC = 03:00 ET / 00:00 PT — post-midnight US, before morning
+  # standup in any US time zone. Cron minutes intentionally = 0 so the
+  # run-time is predictable for dashboards.
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  # Fallback alerting path (open a GH issue) needs issue:write.
+  issues: write
+  contents: read
+
+jobs:
+  canary:
+    name: Normalization parity canary
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Prepare test config directory
+        run: |
+          mkdir -p /tmp/ecm_canary_config
+
+      - name: Run canary harness
+        id: canary
+        working-directory: backend
+        env:
+          CONFIG_DIR: /tmp/ecm_canary_config
+          RATE_LIMIT_ENABLED: '0'
+        # ``set -o pipefail`` so the exit code survives the tee.
+        # The harness prints a JSON report to stdout on failure; we
+        # capture it to a file for downstream alerting steps.
+        run: |
+          set -o pipefail
+          python -m scripts.normalization_canary 2>&1 | tee /tmp/canary.log
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Upload canary log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: normalization-canary-log
+          path: /tmp/canary.log
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # -- Alerting: Slack first, GH issue as the durable fallback ----
+      - name: Notify Slack on divergence
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        uses: rtCamp/action-slack-notify@v2
+        with:
+          # action-slack-notify reads SLACK_WEBHOOK_URL from env.
+          SLACK_COLOR: 'danger'
+          SLACK_TITLE: 'Normalization canary DIVERGED'
+          SLACK_MESSAGE: |
+            Nightly normalization canary detected divergence between
+            Test Rules (HTTP) and auto-creation executor output.
+            This is an SLO-5 (Normalization Correctness) breach —
+            blocks next release cut until resolved.
+
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Runbook: docs/runbooks/normalization-canary-divergence.md
+
+      - name: File GH issue on divergence (fallback)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Always file the issue — Slack is fire-and-forget, the issue is
+        # the durable breach record the runbook references. De-dup via
+        # title that includes the date; if two failures land on the same
+        # calendar day, the second run's `gh issue create` still succeeds
+        # (issues are append-only), so nothing is lost.
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          BODY_FILE=$(mktemp)
+          {
+            echo "## Normalization canary divergence — ${DATE}"
+            echo ""
+            echo "The nightly canary found Test Rules ↔ auto-creation executor divergence."
+            echo "This is an **SLO-5 (Normalization Correctness) breach**."
+            echo ""
+            echo "**Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "**Branch:** \`${{ github.ref }}\`"
+            echo "**Commit:** \`${{ github.sha }}\`"
+            echo ""
+            echo "### Canary output (head 200 lines)"
+            echo '```'
+            head -200 /tmp/canary.log || true
+            echo '```'
+            echo ""
+            echo "### Next steps"
+            echo "1. Open the runbook: \`docs/runbooks/normalization-canary-divergence.md\`"
+            echo "2. Identify the diverging commit via \`git log backend/normalization_engine.py\`."
+            echo "3. Add the failing input to \`unicode_fixtures.py\` with \`origin=canary-${DATE}\`."
+            echo "4. **Block the next release cut until green.**"
+          } > "$BODY_FILE"
+
+          gh issue create \
+            --title "[CANARY] normalization divergence ${DATE}" \
+            --label "regression,normalization" \
+            --body-file "$BODY_FILE" || echo "::warning::gh issue create failed — check permissions"

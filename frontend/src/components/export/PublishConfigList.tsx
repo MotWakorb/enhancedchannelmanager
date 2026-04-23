@@ -48,7 +48,7 @@ export function PublishConfigList() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   useEffect(() => { loadData(); }, [loadData]);
 

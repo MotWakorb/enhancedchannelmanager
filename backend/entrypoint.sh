@@ -253,5 +253,20 @@ check_tls_config
 # Switch to non-root user and run the application
 # HTTP server runs as main process on port ECM_PORT (default 6100)
 # HTTPS server is managed by the application as a subprocess (if TLS enabled)
+#
+# Concurrency limits (bd-w3z4h):
+# --limit-concurrency caps the number of in-flight requests per worker so a
+#   burst of slow requests can't exhaust memory; once reached, uvicorn returns
+#   503 instead of queueing indefinitely.
+# --timeout-keep-alive closes idle keep-alive connections faster, freeing
+#   sockets under sustained load.
+# Values chosen to keep healthcheck comfortably inside the 10s HEALTHCHECK
+# budget and can be overridden via env vars without rebuilding.
 cd /app
-exec gosu appuser uvicorn main:app --host 0.0.0.0 --port ${ECM_PORT}
+ECM_LIMIT_CONCURRENCY=${ECM_LIMIT_CONCURRENCY:-100}
+ECM_TIMEOUT_KEEP_ALIVE=${ECM_TIMEOUT_KEEP_ALIVE:-30}
+exec gosu appuser uvicorn main:app \
+    --host 0.0.0.0 \
+    --port ${ECM_PORT} \
+    --limit-concurrency ${ECM_LIMIT_CONCURRENCY} \
+    --timeout-keep-alive ${ECM_TIMEOUT_KEEP_ALIVE}

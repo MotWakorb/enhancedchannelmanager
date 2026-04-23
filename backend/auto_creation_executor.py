@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 import re
 
+import safe_regex
 from auto_creation_schema import Action, ActionType, TemplateVariables
 from auto_creation_evaluator import StreamContext
 
@@ -61,6 +62,12 @@ class ExecutionContext:
     # Current state (updated during execution)
     current_channel_id: Optional[int] = None  # Channel created/selected for this stream
     current_group_id: Optional[int] = None  # Group created/selected
+
+    # Channel IDs actually CREATED during this stream's action execution
+    # (not merged-into or matched via fallback). Used by Pass 3 renumber
+    # gating to avoid renumbering foreign channels the rule doesn't own.
+    # See bd-yj5yi (GH-104) — PR #107 regression fix.
+    created_channel_ids: set = field(default_factory=set)
 
     # Custom variables set by set_variable actions
     custom_variables: dict = field(default_factory=dict)
@@ -175,6 +182,11 @@ class ActionExecutor:
         self._channel_m3u_counts: dict[tuple[int, int], int] = {}
         self._seeded_channels: set[int] = set()
 
+        # merge_streams reconciliation: for actions with remove_non_matching=True,
+        # we accumulate the desired stream IDs per channel and prune later.
+        self._merge_streams_added_by_channel: dict[int, set[int]] = {}
+        self._merge_prune_enabled_channels: set[int] = set()
+
         # Pre-populate base-name mapping for existing channels with "NUMBER | " prefixes
         _num_prefix = re.compile(r'^\d+\s*\|\s*')
         for c in self.existing_channels:
@@ -242,7 +254,8 @@ class ActionExecutor:
 
     async def execute(self, action: Action | dict, stream_ctx: StreamContext,
                       exec_ctx: ExecutionContext, rule_target_group_id: int = None,
-                      normalize_names: bool = False) -> ActionResult:
+                      normalization_group_ids: list[int] = None,
+                      match_scope_target_group: bool = False) -> ActionResult:
         """
         Execute a single action.
 
@@ -251,6 +264,13 @@ class ActionExecutor:
             stream_ctx: Stream context with stream data
             exec_ctx: Execution context for tracking results
             rule_target_group_id: Default target group from rule
+            normalization_group_ids: List of normalization rule group IDs to apply (empty/None = disabled)
+            match_scope_target_group: When True, restrict existing-channel name
+                lookups in create_channel to channels in the action's effective
+                target group. This allows two rules targeting different groups
+                to create separate channels with the same name instead of
+                merging into the first group's channel (GH-92, bd-r9mtd).
+                Default False preserves pre-GH-92 global-lookup behavior.
 
         Returns:
             ActionResult with execution details
@@ -283,13 +303,14 @@ class ActionExecutor:
         if action_type == ActionType.CREATE_CHANNEL:
             result = await self._execute_create_channel(
                 action, stream_ctx, exec_ctx, template_ctx, rule_target_group_id,
-                normalize_names=normalize_names
+                normalization_group_ids=normalization_group_ids,
+                match_scope_target_group=match_scope_target_group
             )
         elif action_type == ActionType.CREATE_GROUP:
             result = await self._execute_create_group(action, stream_ctx, exec_ctx, template_ctx)
         elif action_type == ActionType.MERGE_STREAMS:
             result = await self._execute_merge_streams(action, stream_ctx, exec_ctx, template_ctx,
-                                                         normalize_names=normalize_names)
+                                                         normalization_group_ids=normalization_group_ids)
         elif action_type == ActionType.ASSIGN_LOGO:
             result = await self._execute_assign_logo(action, stream_ctx, exec_ctx, template_ctx)
         elif action_type == ActionType.ASSIGN_TVG_ID:
@@ -400,14 +421,22 @@ class ActionExecutor:
         pattern = params.get("name_transform_pattern")
         if pattern:
             replacement = params.get("name_transform_replacement", "")
-            # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
+            # Convert JS-style backreferences ($1, $2) to Python (\1, \2).
+            # Pattern here is a hardcoded literal, so we leave this on stdlib re.
             py_replacement = re.sub(r'\$(\d+)', r'\\\1', replacement)
             try:
                 original = name
-                name = re.sub(pattern, py_replacement, name)
+                # bd-eio04.15: user-supplied pattern routed through safe_regex.
+                # On timeout safe_regex.sub returns 'name' unchanged — that
+                # matches the pre-migration fallback contract (no-op on
+                # regex error) and keeps the channel-name pipeline moving.
+                name = safe_regex.sub(pattern, py_replacement, name)
                 if name != original:
                     logger.debug("[AUTO-CREATE-EXEC] '%s' -> '%s' (pattern=/%s/ replacement='%s')", original, name, pattern, replacement)
             except re.error as e:
+                # safe_regex swallows regex.error internally and returns the
+                # input text unchanged; this arm is defensive for any
+                # lingering stdlib re escapes.
                 logger.warning("[AUTO-CREATE-EXEC] Name transform regex error: %s", e)
         return name.strip()
 
@@ -460,7 +489,8 @@ class ActionExecutor:
     async def _execute_create_channel(self, action: Action, stream_ctx: StreamContext,
                                        exec_ctx: ExecutionContext, template_ctx: dict,
                                        rule_target_group_id: int = None,
-                                       normalize_names: bool = False) -> ActionResult:
+                                       normalization_group_ids: list[int] = None,
+                                       match_scope_target_group: bool = False) -> ActionResult:
         """Execute create_channel action."""
         params = action.params
         name_template = params.get("name_template", "{stream_name}")
@@ -471,17 +501,30 @@ class ActionExecutor:
         # Track details for the execution log
         action_details = []
 
-        # Apply normalization engine if enabled
+        # Apply normalization engine if enabled (non-empty group IDs list)
         pre_norm_name = channel_name
-        if normalize_names and self._normalization_engine:
+        if normalization_group_ids and self._normalization_engine:
+            logger.debug("[AUTO-CREATE-EXEC] Applying normalization groups %s to '%s'", normalization_group_ids, channel_name)
             try:
-                norm_result = self._normalization_engine.normalize(channel_name)
+                # bd-eio04.1: preserve_superscripts kwarg removed. The
+                # auto-creation path now shares NormalizationPolicy with
+                # Test Rules — both strip letter-superscripts AND convert
+                # numeric superscripts (ESPN² -> ESPN2). Closes GH #104.
+                norm_result = self._normalization_engine.normalize(
+                    channel_name, group_ids=normalization_group_ids)
                 if norm_result.normalized != channel_name:
                     logger.debug("[AUTO-CREATE-EXEC] Normalized channel name: '%s' -> '%s'", channel_name, norm_result.normalized)
+                    for rule_id, before, after in norm_result.transformations:
+                        logger.debug("[AUTO-CREATE-EXEC]   Rule %s: '%s' -> '%s'", rule_id, before, after)
                     action_details.append(f"Name normalized: '{channel_name}' \u2192 '{norm_result.normalized}'")
                     channel_name = norm_result.normalized
+                else:
+                    logger.debug("[AUTO-CREATE-EXEC] Normalization applied %d groups but no changes for '%s'",
+                                len(normalization_group_ids), channel_name)
             except Exception as e:
                 logger.warning("[AUTO-CREATE-EXEC] Failed to normalize channel name '%s': %s", channel_name, e)
+        elif self._normalization_engine:
+            logger.debug("[AUTO-CREATE-EXEC] Normalization skipped for '%s' (no groups selected)", channel_name)
 
         if_exists = params.get("if_exists", "skip")
         group_id = params.get("group_id") or exec_ctx.current_group_id or rule_target_group_id
@@ -494,9 +537,17 @@ class ActionExecutor:
             exec_ctx.current_group_id, rule_target_group_id
         )
 
-        # Check if channel already exists (check with original name before number prefix)
-        existing = self._find_channel_by_name(channel_name)
-        logger.debug("[AUTO-CREATE-EXEC] Lookup '%s': %s", channel_name, 'found id=' + str(existing['id']) if existing else 'not found')
+        # Check if channel already exists (check with original name before number prefix).
+        # When match_scope_target_group is True, restrict the lookup to channels in the
+        # effective target group (GH-92, bd-r9mtd) so that two rules targeting different
+        # groups can create separate channels with the same name.
+        scope_group_id = group_id if match_scope_target_group else None
+        existing = self._find_channel_by_name(channel_name, scope_group_id=scope_group_id)
+        logger.debug(
+            "[AUTO-CREATE-EXEC] Lookup '%s' (scope_group_id=%s): %s",
+            channel_name, scope_group_id,
+            'found id=' + str(existing['id']) if existing else 'not found'
+        )
 
         if existing:
             existing_group_name = self._get_group_name(existing.get("channel_group_id"))
@@ -514,7 +565,7 @@ class ActionExecutor:
                 )
 
             # Rename channel if normalization produces a different name than what's stored
-            if normalize_names and self._normalization_engine:
+            if normalization_group_ids and self._normalization_engine:
                 existing_name = existing["name"]
                 _num_pfx = re.match(r'^(\d+\s*\|\s*)', existing_name)
                 existing_base = _num_pfx.group(0) if _num_pfx else ""
@@ -585,6 +636,18 @@ class ActionExecutor:
         group_name = self._get_group_name(group_id)
         group_label = f"'{group_name}'" if group_name else str(group_id)
 
+        # Observability (bd-eio04.9): record whether normalization was
+        # applied to this creation. Three buckets:
+        #   - "true"    — normalization ran AND changed the name
+        #   - "false"   — normalization ran but produced no change
+        #   - "skipped" — no normalization groups configured for the rule
+        # Only the non-dry-run path emits the metric (dry-run previews
+        # do not create channels in the real sense).
+        if normalization_group_ids and self._normalization_engine:
+            normalized_label = "true" if pre_norm_name != channel_name else "false"
+        else:
+            normalized_label = "skipped"
+
         # Create new channel
         if exec_ctx.dry_run:
             # Track simulated channel so subsequent streams in this run
@@ -602,6 +665,7 @@ class ActionExecutor:
                 self._base_name_to_channel[base_name.lower()] = simulated
             self._used_channel_numbers.add(channel_number)
             exec_ctx.current_channel_id = dry_id
+            exec_ctx.created_channel_ids.add(dry_id)
             return ActionResult(
                 success=True,
                 action_type=action.type,
@@ -631,6 +695,18 @@ class ActionExecutor:
 
             new_channel = await self.client.create_channel(channel_data)
 
+            # Observability (bd-eio04.9) — one counter increment per real
+            # channel creation. Wrapped in try/except so a missing
+            # metric registry (e.g. CI-without-prometheus) never blocks
+            # a creation that otherwise succeeded.
+            try:
+                from observability import get_metric
+                get_metric("auto_creation_channels_created_total").labels(
+                    normalized=normalized_label
+                ).inc()
+            except Exception:  # pragma: no cover
+                logger.debug("[AUTO-CREATE-EXEC] metric increment failed", exc_info=True)
+
             # Track the new channel
             self._created_channels[channel_name.lower()] = new_channel
             self._channel_by_id[new_channel["id"]] = new_channel
@@ -640,6 +716,7 @@ class ActionExecutor:
             self._used_channel_numbers.add(channel_number)
             self._channel_assigned_numbers[new_channel["id"]] = channel_number
             exec_ctx.current_channel_id = new_channel["id"]
+            exec_ctx.created_channel_ids.add(new_channel["id"])
 
             # Assign default channel profiles if configured
             profile_desc = await self._assign_default_profiles(new_channel["id"])
@@ -935,13 +1012,14 @@ class ActionExecutor:
 
     async def _execute_merge_streams(self, action: Action, stream_ctx: StreamContext,
                                       exec_ctx: ExecutionContext, template_ctx: dict,
-                                      normalize_names: bool = False) -> ActionResult:
+                                      normalization_group_ids: list[int] = None) -> ActionResult:
         """Execute merge_streams action."""
         params = action.params
         target = params.get("target", "auto")
         find_channel_by = params.get("find_channel_by")
         max_streams = params.get("max_streams_per_channel", 0)  # 0 = unlimited
         find_channel_value = params.get("find_channel_value")
+        remove_non_matching = params.get("remove_non_matching", False) is True
         logger.debug(
             "[AUTO-CREATE-EXEC] target=%s find_by=%s "
             "find_value=%s stream=%r",
@@ -978,7 +1056,7 @@ class ActionExecutor:
 
             # Core-name fallback: strip country prefix + quality suffix using
             # tag groups directly (works even when normalization rules are disabled)
-            if not channel and normalize_names and self._normalization_engine:
+            if not channel and normalization_group_ids and self._normalization_engine:
                 try:
                     core_name = self._normalization_engine.extract_core_name(stream_ctx.stream_name)
                     if core_name:
@@ -1022,7 +1100,7 @@ class ActionExecutor:
 
             # Call-sign fallback: match local affiliates by FCC call sign
             # (W/K + 2-3 letters) extracted from both stream and channel names
-            if not channel and normalize_names and self._normalization_engine:
+            if not channel and normalization_group_ids and self._normalization_engine:
                 try:
                     cs = self._normalization_engine.extract_call_sign(stream_ctx.stream_name)
                     if cs:
@@ -1034,6 +1112,12 @@ class ActionExecutor:
                     logger.debug("[AUTO-CREATE-EXEC] Call sign fallback failed: %s", e)
 
             if channel:
+                # Track merged stream IDs per channel for optional prune step.
+                # If prune is enabled for a channel by ANY merge action during this run,
+                # the prune step will keep only streams merged into that channel this run.
+                self._merge_streams_added_by_channel.setdefault(channel["id"], set()).add(stream_ctx.stream_id)
+                if remove_non_matching:
+                    self._merge_prune_enabled_channels.add(channel["id"])
                 # Enforce per-provider stream limit if configured
                 if max_streams > 0 and stream_ctx.m3u_account_id is not None:
                     await self._ensure_channel_m3u_counts(channel["id"])
@@ -1465,12 +1549,14 @@ class ActionExecutor:
         n = re.sub(r'^[A-Z]{2}\s*[:|]\s*', '', n)
         # Strip league prefix: "NFL: Arizona Cardinals"
         n = ActionExecutor._LEAGUE_PREFIXES_RE.sub('', n)
-        # Strip quality suffixes
+        # Strip quality suffixes — {suffix} iterates the hardcoded
+        # ActionExecutor._QUALITY_SUFFIXES tuple, not user input.
         for suffix in ActionExecutor._QUALITY_SUFFIXES:
-            n = re.sub(rf'[\s\-_|:]*{suffix}\s*$', '', n, flags=re.IGNORECASE)
-        # Strip timezone suffixes
+            n = re.sub(rf'[\s\-_|:]*{suffix}\s*$', '', n, flags=re.IGNORECASE)  # nosemgrep: no-bare-re-on-dynamic-pattern
+        # Strip timezone suffixes — {suffix} iterates the hardcoded
+        # ActionExecutor._TIMEZONE_SUFFIXES tuple.
         for suffix in ActionExecutor._TIMEZONE_SUFFIXES:
-            n = re.sub(rf'[\s\-_|:]*{suffix}\s*$', '', n, flags=re.IGNORECASE)
+            n = re.sub(rf'[\s\-_|:]*{suffix}\s*$', '', n, flags=re.IGNORECASE)  # nosemgrep: no-bare-re-on-dynamic-pattern
         # Convert semantic characters
         n = n.replace('+', 'plus').replace('&', 'and')
         # Lowercase alphanumeric only
@@ -1787,20 +1873,29 @@ class ActionExecutor:
         try:
             if mode == "regex_extract":
                 pattern = params.get("pattern", "")
-                match = re.search(pattern, str(source_value))
-                if match and match.groups():
-                    result_value = match.group(1)
-                elif match:
-                    result_value = match.group(0)
-                else:
+                # bd-eio04.15: user pattern routed through safe_regex. On
+                # timeout safe_regex.search returns None; the existing None
+                # arm sets result_value="" — that preserves the historical
+                # "pattern did not match" contract for this action.
+                match = safe_regex.search(pattern, str(source_value))
+                if match is None:
                     result_value = ""
+                elif match.groups():
+                    result_value = match.group(1)
+                else:
+                    result_value = match.group(0)
 
             elif mode == "regex_replace":
                 pattern = params.get("pattern", "")
                 replacement = params.get("replacement", "")
-                # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
+                # Convert JS-style backreferences ($1, $2) to Python (\1, \2).
+                # Hardcoded literal pattern — stays on stdlib re.
                 py_replacement = re.sub(r'\$(\d+)', r'\\\1', replacement)
-                result_value = re.sub(pattern, py_replacement, str(source_value))
+                # bd-eio04.15: user pattern through safe_regex.sub. Timeout
+                # => source_value returned unchanged (the variable ends up
+                # set to the original value), which is the least-surprising
+                # fallback for a failed replace.
+                result_value = safe_regex.sub(pattern, py_replacement, str(source_value))
 
             elif mode == "literal":
                 template = params.get("template", "")
@@ -1994,6 +2089,93 @@ class ActionExecutor:
                 error=str(e)
             )
 
+    async def prune_merge_streams(self, results: dict, dry_run: bool) -> None:
+        """Apply merge_streams pruning for actions that enabled remove_non_matching.
+
+        For each channel where any merge_streams action enabled remove_non_matching=True,
+        remove any streams from that channel that were not merged into the channel
+        during this rule run.
+        """
+        if not self._merge_prune_enabled_channels:
+            return
+
+        for channel_id in self._merge_prune_enabled_channels:
+            desired = self._merge_streams_added_by_channel.get(channel_id, set())
+            channel = self._channel_by_id.get(channel_id)
+            if not channel:
+                try:
+                    channel = await self.client.get_channel(channel_id)
+                except Exception as e:
+                    logger.warning(
+                        "[AUTO-CREATE-EXEC] Failed to fetch channel %s for merge prune: %s",
+                        channel_id, e,
+                    )
+                    continue
+
+            channel_name = channel.get("name", f"ID:{channel_id}")
+            current_streams = [s["id"] if isinstance(s, dict) else s for s in channel.get("streams", [])]
+
+            # Preserve current order, prune out non-desired.
+            pruned = [sid for sid in current_streams if sid in desired]
+            missing = desired - set(current_streams)
+            if missing:
+                logger.warning(
+                    "[AUTO-CREATE-EXEC] Channel '%s' merge prune: %s desired stream id(s) "
+                    "not present in channel streams (will not be appended): %s",
+                    channel_name, len(missing), sorted(list(missing))[:20],
+                )
+
+            if pruned == current_streams:
+                continue
+
+            removed_count = max(0, len(current_streams) - len(pruned))
+            if dry_run:
+                results["dry_run_results"].append({
+                    "stream_id": None,
+                    "stream_name": f"[AUTO-CREATE-EXEC] {channel_name}",
+                    "rule_id": None,
+                    "rule_name": None,
+                    "action": f"Would remove {removed_count} non-matching stream(s) from '{channel_name}'",
+                    "would_create": False,
+                    "would_modify": True
+                })
+                continue
+
+            try:
+                await self.client.update_channel(channel_id, {"streams": pruned})
+                channel["streams"] = pruned
+                results["execution_log"].append({
+                    "stream_id": None,
+                    "stream_name": f"[AUTO-CREATE-EXEC] {channel_name}",
+                    "m3u_account_id": None,
+                    "rules_evaluated": [],
+                    "actions_executed": [{
+                        "type": "merge_streams_prune",
+                        "description": f"Removed {removed_count} non-matching stream(s) from '{channel_name}'",
+                        "success": True,
+                        "entity_id": channel_id,
+                        "error": None
+                    }]
+                })
+            except Exception as e:
+                logger.error(
+                    "[AUTO-CREATE-EXEC] Failed to prune merged streams in '%s': %s",
+                    channel_name, e,
+                )
+                results["execution_log"].append({
+                    "stream_id": None,
+                    "stream_name": f"[AUTO-CREATE-EXEC] {channel_name}",
+                    "m3u_account_id": None,
+                    "rules_evaluated": [],
+                    "actions_executed": [{
+                        "type": "merge_streams_prune",
+                        "description": f"Failed to remove non-matching streams from '{channel_name}': {e}",
+                        "success": False,
+                        "entity_id": channel_id,
+                        "error": str(e)
+                    }]
+                })
+
     # =========================================================================
     # Reconciliation / Cleanup Methods
     # =========================================================================
@@ -2186,44 +2368,118 @@ class ActionExecutor:
             return desc
         return ""
 
-    def _find_channel_by_name(self, name: str) -> Optional[dict]:
+    def _find_channel_by_name(self, name: str, scope_group_id: Optional[int] = None) -> Optional[dict]:
         """Find channel by exact name (case-insensitive).
 
         Also checks the base-name mapping so that a lookup for "USA Network"
         finds a channel created as "4000 | USA Network", and the normalized-name
         mapping so that merge_streams can find channels the same way
         normalized_name_in_group does.
+
+        When a normalization engine is available and no exact match is found,
+        the lookup also normalizes the search name itself and re-queries the
+        channel/core-name indices. This prevents auto-creation from creating
+        duplicate channels when an existing channel was created before
+        normalization rules existed (GH-104 / bd-u9odj).
+
+        When ``scope_group_id`` is not None (enabled by the rule's
+        ``match_scope_target_group`` flag — GH-92 / bd-r9mtd), any candidate
+        channel is filtered to require ``channel_group_id == scope_group_id``.
+        A match in a different group is treated as "not found" so the caller
+        will create a new channel in the desired group instead of merging
+        across groups. Passing ``None`` (default) preserves the prior
+        group-agnostic behavior.
         """
+        def _in_scope(c: Optional[dict]) -> bool:
+            if c is None:
+                return False
+            if scope_group_id is None:
+                return True
+            return c.get("channel_group_id") == scope_group_id
+
         name_lower = name.lower()
         # Check newly created channels first (by exact name)
         if name_lower in self._created_channels:
-            logger.debug("[AUTO-CREATE-EXEC] '%s' found in created channels", name)
-            return self._created_channels[name_lower]
+            cand = self._created_channels[name_lower]
+            if _in_scope(cand):
+                logger.debug("[AUTO-CREATE-EXEC] '%s' found in created channels", name)
+                return cand
         # Check base-name mapping (base name -> number-prefixed channel)
         if name_lower in self._base_name_to_channel:
-            logger.debug("[AUTO-CREATE-EXEC] '%s' found via base-name mapping", name)
-            return self._base_name_to_channel[name_lower]
+            cand = self._base_name_to_channel[name_lower]
+            if _in_scope(cand):
+                logger.debug("[AUTO-CREATE-EXEC] '%s' found via base-name mapping", name)
+                return cand
         result = self._channel_by_name.get(name_lower)
-        if result:
+        if _in_scope(result):
             logger.debug("[AUTO-CREATE-EXEC] '%s' found in existing channels (id=%s)", name, result.get('id'))
             return result
         # Check normalized-name mapping (normalization-engine-processed channel names)
         if name_lower in self._normalized_name_to_channel:
-            result = self._normalized_name_to_channel[name_lower]
-            logger.debug("[AUTO-CREATE-EXEC] '%s' found via normalized-name mapping (id=%s, name='%s')", name, result.get('id'), result.get('name'))
-            return result
+            cand = self._normalized_name_to_channel[name_lower]
+            if _in_scope(cand):
+                logger.debug("[AUTO-CREATE-EXEC] '%s' found via normalized-name mapping (id=%s, name='%s')", name, cand.get('id'), cand.get('name'))
+                return cand
+        # Normalized-name fallback: when the search name isn't an exact match
+        # to any stored channel, normalize it through the engine and retry. This
+        # catches the case where an existing channel's stored name already
+        # equals the normalized form (e.g., stored "RTL", searching for
+        # "RTL ᴿᴬᵂ") — symmetric to the normalized-name map above which
+        # handles the opposite direction.
+        if self._normalization_engine is not None:
+            try:
+                norm = self._normalization_engine.normalize(name)
+                norm_lower = (norm.normalized or "").strip().lower()
+            except Exception as e:
+                logger.warning("[AUTO-CREATE-EXEC] Normalization of lookup name '%s' failed: %s", name, e)
+                norm_lower = ""
+            if norm_lower and norm_lower != name_lower:
+                cand = (
+                    self._channel_by_name.get(norm_lower)
+                    or self._base_name_to_channel.get(norm_lower)
+                    or self._normalized_name_to_channel.get(norm_lower)
+                    or self._core_name_to_channel.get(norm_lower)
+                )
+                if _in_scope(cand):
+                    logger.debug("[AUTO-CREATE-EXEC] '%s' found via normalized-search fallback ('%s' -> '%s', id=%s)",
+                                 name, name, norm_lower, cand.get('id'))
+                    return cand
+            # Core-name fallback: strip tag/country prefixes/suffixes and look
+            # up by core key. Only used when normalized fallback above didn't
+            # produce a hit, so we don't double-count.
+            try:
+                core = self._normalization_engine.extract_core_name(name)
+                core_lower = (core or "").strip().lower()
+            except Exception as e:
+                logger.warning("[AUTO-CREATE-EXEC] Core-name extraction for lookup '%s' failed: %s", name, e)
+                core_lower = ""
+            if core_lower and core_lower != name_lower:
+                cand = self._core_name_to_channel.get(core_lower)
+                if _in_scope(cand):
+                    logger.debug("[AUTO-CREATE-EXEC] '%s' found via core-name fallback (core='%s', id=%s)",
+                                 name, core_lower, cand.get('id'))
+                    return cand
         return None
 
     def _find_channel_by_regex(self, pattern: str) -> Optional[dict]:
         """Find first channel matching regex pattern."""
         try:
-            regex = re.compile(pattern, re.IGNORECASE)
+            # bd-eio04.15: safe_regex.compile rejects oversize patterns up
+            # front and wraps compile errors in SafeRegexError. The compiled
+            # pattern is reused for each channel lookup — safe_regex.search
+            # enforces a per-call ReDoS budget, so a pathological pattern
+            # fails a single channel comparison (returns None) rather than
+            # hanging the whole search. End state: "no channel matched",
+            # which is the existing fallback contract of this method.
+            compiled = safe_regex.compile(pattern, flags=re.IGNORECASE)
             for channel in self.existing_channels:
-                if regex.search(channel.get("name", "")):
+                if safe_regex.search(compiled, channel.get("name", "")) is not None:
                     return channel
             for channel in self._created_channels.values():
-                if regex.search(channel.get("name", "")):
+                if safe_regex.search(compiled, channel.get("name", "")) is not None:
                     return channel
+        except safe_regex.SafeRegexError:
+            logger.debug("[AUTO-CREATE-EXEC] Invalid regex in channel name pattern")
         except re.error:
             logger.debug("[AUTO-CREATE-EXEC] Invalid regex in channel name pattern")
         return None

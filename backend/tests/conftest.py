@@ -166,6 +166,56 @@ def sample_alert_method(test_session):
     return alert_method
 
 
+@pytest.fixture(scope="function")
+def ci_seed_db(tmp_path):
+    """
+    Opt-in CI fixture that materializes a tmp SQLite database seeded from
+    `tests/fixtures/ci_seed.sql`.
+
+    Yields a tuple of `(engine, session)`. The underlying database file lives
+    at `tmp_path / "ecm-test.db"` so the filesystem interaction is exercised
+    (matching the CI layout where pytest runs against a tmp SQLite rather
+    than an in-memory DB). The in-memory `test_engine`/`test_session`
+    fixtures remain the default for speed.
+
+    Usage:
+        def test_read_seeded_row(ci_seed_db):
+            engine, session = ci_seed_db
+            ...
+    """
+    db_path = tmp_path / "ecm-test.db"
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        echo=False,
+    )
+    database.Base.metadata.create_all(bind=engine)
+
+    seed_path = Path(__file__).parent / "fixtures" / "ci_seed.sql"
+    seed_sql = seed_path.read_text()
+    with engine.begin() as conn:
+        for statement in seed_sql.split(";"):
+            stripped = statement.strip()
+            if not stripped or stripped.upper() in {"BEGIN TRANSACTION", "COMMIT"}:
+                continue
+            conn.exec_driver_sql(stripped)
+
+    TestSessionLocal = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=engine,
+        expire_on_commit=False,
+    )
+    session = TestSessionLocal()
+    try:
+        yield engine, session
+    finally:
+        session.close()
+        database.Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+
+
 # Pytest-asyncio configuration
 @pytest.fixture(scope="session")
 def event_loop_policy():

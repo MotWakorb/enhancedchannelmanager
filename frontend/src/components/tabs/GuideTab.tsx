@@ -234,8 +234,8 @@ export function GuideTab({
           api.getChannelGroups(),
         ]);
 
-        if (!propChannels) setChannels((channelsData as { results: Channel[] }).results);
-        if (!propLogos) setLogos((logosData as { results: Logo[] }).results);
+        setChannels((channelsData as { results: Channel[] }).results);
+        setLogos((logosData as { results: Logo[] }).results);
         setPrograms(programsData);
         setChannelProfiles(profilesData);
         setChannelGroups(groupsData);
@@ -247,7 +247,7 @@ export function GuideTab({
     };
 
     loadData();
-  }, [propChannels, propLogos]);
+  }, [propChannels, propLogos, notifications]);
 
   // Refresh programs only
   const handleRefresh = useCallback(async () => {
@@ -260,7 +260,7 @@ export function GuideTab({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   // Synchronized scrolling between header and content, plus virtualization scroll tracking
   const handleContentScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {

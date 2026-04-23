@@ -696,6 +696,7 @@ class TaskEngine:
                         alert_category=alert_category,
                     )
             else:
+                logger.error("[%s] Task failed: %s (error=%s)", task_id, result.message, result.error)
                 log_entry(
                     category="task",
                     action_type="fail",

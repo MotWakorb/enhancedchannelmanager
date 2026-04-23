@@ -12,6 +12,7 @@ export interface SavedProfile {
   created_at: string;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- co-located API helpers; small self-contained file, splitting is mechanical churn
 export async function fetchSavedProfiles(): Promise<SavedProfile[]> {
   try {
     const res = await fetch('/api/ffmpeg/profiles');
@@ -23,6 +24,7 @@ export async function fetchSavedProfiles(): Promise<SavedProfile[]> {
   }
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- co-located API helper
 export async function apiSaveProfile(name: string, config: FFMPEGBuilderState): Promise<SavedProfile | null> {
   try {
     const res = await fetch('/api/ffmpeg/profiles', {
@@ -37,6 +39,7 @@ export async function apiSaveProfile(name: string, config: FFMPEGBuilderState): 
   }
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- co-located API helper
 export async function apiDeleteProfile(id: number): Promise<boolean> {
   try {
     const res = await fetch(`/api/ffmpeg/profiles/${id}`, { method: 'DELETE' });

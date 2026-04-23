@@ -10,8 +10,14 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from cache import get_cache
+from concurrency import run_cpu_bound
 from database import get_session
 from dispatcharr_client import get_client
+from regex_lint import (
+    lint_pattern,
+    lint_substitution_pairs,
+    violations_to_http_detail,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +146,15 @@ class PreviewRequest(BaseModel):
     channel_logo_url_template: Optional[str] = None
     program_poster_url_template: Optional[str] = None
     pattern_variants: Optional[list[PatternVariantModel]] = None
+    # Lookup tables — inline tables defined on this source + IDs of global
+    # tables stored in the lookup_tables table. The preview endpoint merges
+    # both into a single lookups dict for the template engine.
+    inline_lookups: dict[str, dict[str, str]] = {}
+    global_lookup_ids: list[int] = []
+    # When true, response includes a per-template trace of placeholders,
+    # pipe transforms (input→output), conditional branches taken, and
+    # lookup resolutions — powers the preview UI's expandable trace view.
+    include_trace: bool = False
 
 
 class BatchPreviewRequest(BaseModel):
@@ -162,6 +177,8 @@ class BatchPreviewRequest(BaseModel):
     channel_logo_url_template: Optional[str] = None
     program_poster_url_template: Optional[str] = None
     pattern_variants: Optional[list[PatternVariantModel]] = None
+    inline_lookups: dict[str, dict[str, str]] = {}
+    global_lookup_ids: list[int] = []
 
 
 # =============================================================================
@@ -189,12 +206,61 @@ async def list_profiles(db: Session = Depends(get_session)):
         db.close()
 
 
+def _lint_dummy_epg_profile_request(req) -> None:
+    """Raise HTTP 422 if any pattern field on the profile request fails
+    the regex linter (bd-eio04.7).
+
+    Lints:
+      - ``title_pattern``, ``time_pattern``, ``date_pattern`` (top-level)
+      - ``find`` on substitution pairs flagged ``is_regex=True``
+      - Pattern fields inside each ``pattern_variants`` entry
+    """
+    violations = []
+    for name in ("title_pattern", "time_pattern", "date_pattern"):
+        violations.extend(lint_pattern(getattr(req, name, None), field=name))
+
+    sub_pairs = getattr(req, "substitution_pairs", None)
+    if sub_pairs:
+        # Pydantic models need to be serialized so the helper sees dicts.
+        pairs_as_dicts = [
+            p.model_dump() if hasattr(p, "model_dump") else p for p in sub_pairs
+        ]
+        violations.extend(
+            lint_substitution_pairs(pairs_as_dicts, prefix="substitution_pairs")
+        )
+
+    variants = getattr(req, "pattern_variants", None)
+    if variants:
+        for idx, variant in enumerate(variants):
+            v = variant.model_dump() if hasattr(variant, "model_dump") else variant
+            if not isinstance(v, dict):
+                continue
+            for name in ("title_pattern", "time_pattern", "date_pattern"):
+                violations.extend(
+                    lint_pattern(
+                        v.get(name), field=f"pattern_variants[{idx}].{name}"
+                    )
+                )
+
+    if violations:
+        logger.warning(
+            "[DUMMY-EPG] Rejected profile — %d lint violation(s): %s",
+            len(violations),
+            [(v.field, v.code) for v in violations],
+        )
+        raise HTTPException(
+            status_code=422, detail=violations_to_http_detail(violations)
+        )
+
+
 @router.post("/profiles")
 async def create_profile(req: ProfileCreateRequest, db: Session = Depends(get_session)):
     """Create a new Dummy EPG profile."""
     logger.debug("[DUMMY-EPG] POST /profiles name=%s", req.name)
     try:
         from models import DummyEPGProfile
+        # Lint regex patterns before any DB work (bd-eio04.7).
+        _lint_dummy_epg_profile_request(req)
         # Check for duplicate name
         existing = db.query(DummyEPGProfile).filter(
             DummyEPGProfile.name == req.name
@@ -283,6 +349,10 @@ async def update_profile(profile_id: int, req: ProfileUpdateRequest, db: Session
     logger.debug("[DUMMY-EPG] PATCH /profiles/%s", profile_id)
     try:
         from models import DummyEPGProfile
+        # Lint regex patterns on the update (bd-eio04.7). Only fields
+        # actually present in the PATCH are linted — an operator renaming
+        # a profile shouldn't hit a 422 for a pattern they didn't edit.
+        _lint_dummy_epg_profile_request(req)
         profile = db.query(DummyEPGProfile).filter(
             DummyEPGProfile.id == profile_id
         ).first()
@@ -377,13 +447,22 @@ async def delete_profile(profile_id: int, db: Session = Depends(get_session)):
 
 
 @router.post("/preview")
-async def preview_epg(req: PreviewRequest):
-    """Test the EPG pipeline with sample data (no DB)."""
-    logger.debug("[DUMMY-EPG] POST /preview sample_name=%s", req.sample_name)
+async def preview_epg(req: PreviewRequest, db: Session = Depends(get_session)):
+    """Test the EPG pipeline with sample data. DB touched only to resolve
+    global_lookup_ids — skipped when the caller sends no IDs. When
+    include_trace=true the response carries a `traces` dict with per-field
+    step-by-step rendering (placeholders, pipes, conditionals, lookups)."""
+    logger.debug("[DUMMY-EPG] POST /preview sample_name=%s trace=%s", req.sample_name, req.include_trace)
     try:
         from dummy_epg_engine import preview_pipeline
         config = _build_preview_config(req)
-        result = preview_pipeline(config, req.sample_name)
+        lookups = _resolve_lookups(req.inline_lookups, req.global_lookup_ids, db)
+        # Offload template/regex rendering off event loop (bd-w3z4h)
+        result = await run_cpu_bound(
+            preview_pipeline,
+            config, req.sample_name,
+            lookups=lookups, include_trace=req.include_trace,
+        )
         return result
     except Exception as e:
         logger.warning("[DUMMY-EPG] Preview failed: %s", e)
@@ -391,13 +470,18 @@ async def preview_epg(req: PreviewRequest):
 
 
 @router.post("/preview/batch")
-async def preview_epg_batch(req: BatchPreviewRequest):
-    """Test the EPG pipeline with multiple sample names (no DB)."""
+async def preview_epg_batch(req: BatchPreviewRequest, db: Session = Depends(get_session)):
+    """Test the EPG pipeline with multiple sample names. Global lookups
+    are fetched once and reused across the batch."""
     logger.debug("[DUMMY-EPG] POST /preview/batch count=%s", len(req.sample_names))
     try:
         from dummy_epg_engine import preview_pipeline_batch
         config = _build_preview_config(req)
-        results = preview_pipeline_batch(config, req.sample_names[:100])  # Cap at 100
+        lookups = _resolve_lookups(req.inline_lookups, req.global_lookup_ids, db)
+        # Offload batch template/regex rendering off event loop (bd-w3z4h)
+        results = await run_cpu_bound(
+            preview_pipeline_batch, config, req.sample_names[:100], lookups=lookups,  # Cap at 100
+        )
         return results
     except Exception as e:
         logger.warning("[DUMMY-EPG] Batch preview failed: %s", e)
@@ -428,6 +512,37 @@ def _build_preview_config(req) -> dict:
     if req.pattern_variants:
         config["pattern_variants"] = [v.model_dump() for v in req.pattern_variants]
     return config
+
+
+def _resolve_lookups(
+    inline_lookups: dict[str, dict[str, str]],
+    global_lookup_ids: list[int],
+    db,
+) -> dict[str, dict[str, str]]:
+    """Merge inline tables with globals fetched from the DB by ID.
+
+    Later definitions win: inline tables override a same-named global, so a
+    per-source tweak can temporarily shadow a shared table without editing it.
+    """
+    import json as _json
+    from models import LookupTable
+
+    merged: dict[str, dict[str, str]] = {}
+    if global_lookup_ids:
+        rows = db.query(LookupTable).filter(LookupTable.id.in_(global_lookup_ids)).all()
+        for row in rows:
+            try:
+                entries = _json.loads(row.entries or "{}")
+            except (ValueError, TypeError):
+                entries = {}
+            if isinstance(entries, dict):
+                merged[row.name] = {str(k): str(v) for k, v in entries.items()}
+
+    for name, entries in (inline_lookups or {}).items():
+        if isinstance(entries, dict):
+            merged[name] = {str(k): str(v) for k, v in entries.items()}
+
+    return merged
 
 
 def _resolve_group_assignments(channel_group_ids: list, channel_map: dict) -> list:
@@ -512,7 +627,8 @@ async def get_xmltv_all(db: Session = Depends(get_session)):
             p_dict["channel_map"] = channel_map
             profile_data.append(p_dict)
 
-        xml_string = generate_xmltv(profile_data, channel_map)
+        # Offload XML generation off event loop (bd-w3z4h)
+        xml_string = await run_cpu_bound(generate_xmltv, profile_data, channel_map)
         cache.set("dummy_epg_xmltv_all", xml_string)
 
         logger.info("[DUMMY-EPG] Generated XMLTV for %s enabled profiles", len(profiles))
@@ -554,7 +670,8 @@ async def get_xmltv_profile(profile_id: int, db: Session = Depends(get_session))
         p_dict["channel_map"] = channel_map
         profile_data = [p_dict]
 
-        xml_string = generate_xmltv(profile_data, channel_map)
+        # Offload XML generation off event loop (bd-w3z4h)
+        xml_string = await run_cpu_bound(generate_xmltv, profile_data, channel_map)
         cache.set(cache_key, xml_string)
 
         logger.info("[DUMMY-EPG] Generated XMLTV for profile %s", profile_id)
@@ -595,17 +712,18 @@ async def force_regenerate(db: Session = Depends(get_session)):
             p_dict["channel_map"] = channel_map
             profile_data.append(p_dict)
 
-        xml_string = generate_xmltv(profile_data, channel_map)
+        # Offload XML generation off event loop (bd-w3z4h)
+        xml_string = await run_cpu_bound(generate_xmltv, profile_data, channel_map)
         cache.set("dummy_epg_xmltv_all", xml_string)
 
-        # Also cache per-profile
+        # Also cache per-profile (each offloaded)
         for profile in profiles:
             p_dict = profile.to_dict()
             p_dict["channel_assignments"] = _resolve_group_assignments(
                 p_dict.get("channel_group_ids", []), channel_map
             )
             p_dict["channel_map"] = channel_map
-            per_xml = generate_xmltv([p_dict], channel_map)
+            per_xml = await run_cpu_bound(generate_xmltv, [p_dict], channel_map)
             cache.set(f"dummy_epg_xmltv_{profile.id}", per_xml)
 
         logger.info("[DUMMY-EPG] Force-regenerated XMLTV for %s enabled profiles", len(profiles))
@@ -805,3 +923,29 @@ def _apply_profile_fields(profile, data: dict):
         profile.set_pattern_variants(data["pattern_variants"])
     if "channel_group_ids" in data and data["channel_group_ids"] is not None:
         profile.set_channel_group_ids(data["channel_group_ids"])
+
+
+# =============================================================================
+# Lint findings (bd-eio04.7) — read-only view of the startup migration scan.
+# =============================================================================
+
+
+@router.get("/lint-findings")
+async def get_dummy_epg_lint_findings(db: Session = Depends(get_session)):
+    """Return the cached lint findings for dummy-EPG profiles.
+
+    See ``routers/normalization.py::get_normalization_lint_findings`` for
+    semantics. Findings are scoped to ``rule_type='dummy_epg'``.
+    """
+    logger.debug("[DUMMY-EPG] GET /lint-findings")
+    try:
+        from models import RuleLintFinding
+        from tasks.rule_lint_scan import RULE_TYPE_DUMMY_EPG
+
+        findings = db.query(RuleLintFinding).filter(
+            RuleLintFinding.rule_type == RULE_TYPE_DUMMY_EPG
+        ).order_by(RuleLintFinding.rule_id, RuleLintFinding.id).all()
+        return {"findings": [f.to_dict() for f in findings]}
+    except Exception as e:
+        logger.warning("[DUMMY-EPG] Failed to get lint findings: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))

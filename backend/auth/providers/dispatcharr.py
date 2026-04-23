@@ -39,6 +39,28 @@ class DispatcharrAuthenticationError(DispatcharrAuthError):
     pass
 
 
+class DispatcharrRateLimitError(DispatcharrAuthError):
+    """Dispatcharr rate-limited the login (HTTP 429).
+
+    Dispatcharr 0.23.0+ limits login attempts to 3/minute per IP across both
+    /api/accounts/token/ and /api/accounts/auth/login/ (shared throttle scope).
+    Because ECM proxies logins through its own container IP, this bucket is
+    shared by every ECM user.
+    """
+    pass
+
+
+class DispatcharrNetworkPolicyError(DispatcharrAuthError):
+    """Dispatcharr denied the request by network policy (HTTP 403).
+
+    Dispatcharr's token and token-refresh endpoints gate on
+    network_access_allowed(request, "UI"). If ECM's container IP is not in
+    Dispatcharr's UI allow-list, logins are rejected before credentials are
+    evaluated.
+    """
+    pass
+
+
 class DispatcharrClient:
     """
     Client for authenticating users against Dispatcharr.
@@ -107,6 +129,26 @@ class DispatcharrClient:
                 logger.warning("[AUTH-DISPATCHARR] Dispatcharr auth failed for user '%s': Invalid credentials", username)
                 raise DispatcharrAuthenticationError("Invalid username or password")
 
+            if response.status_code == 429:
+                logger.warning(
+                    "[AUTH-DISPATCHARR] Dispatcharr rate-limited login for user '%s' (HTTP 429). "
+                    "Dispatcharr 0.23.0+ allows 3 logins/minute per IP, shared across all ECM users.",
+                    username,
+                )
+                raise DispatcharrRateLimitError(
+                    "Dispatcharr is rate-limiting login attempts (3/minute). Please wait a minute and try again."
+                )
+
+            if response.status_code == 403:
+                logger.error(
+                    "[AUTH-DISPATCHARR] Dispatcharr denied login for user '%s' by network policy (HTTP 403). "
+                    "Check Dispatcharr's UI network allow-list — it must include this ECM server's IP.",
+                    username,
+                )
+                raise DispatcharrNetworkPolicyError(
+                    "Dispatcharr rejected this server by network policy. Ask your Dispatcharr admin to allow this ECM server in the UI access list."
+                )
+
             if response.status_code != 200:
                 logger.error("[AUTH-DISPATCHARR] Dispatcharr auth failed: HTTP %s", response.status_code)
                 raise DispatcharrAuthenticationError(
@@ -140,7 +182,12 @@ class DispatcharrClient:
             logger.error("[AUTH-DISPATCHARR] Cannot connect to Dispatcharr: %s", e)
             raise DispatcharrConnectionError(f"Cannot connect to Dispatcharr: {e}")
 
-        except (DispatcharrAuthenticationError, TimeoutError):
+        except (
+            DispatcharrAuthenticationError,
+            DispatcharrRateLimitError,
+            DispatcharrNetworkPolicyError,
+            TimeoutError,
+        ):
             raise
 
         except Exception as e:
@@ -159,11 +206,18 @@ class DispatcharrClient:
             Dict with user info (may be partial if endpoint not available)
         """
         try:
-            # Try to get user profile
+            # Dispatcharr exposes the current-user endpoint on the users viewset.
+            # Try /api/accounts/users/me/ (Dispatcharr 0.23.0+) first, then fall
+            # back to /api/accounts/me/ for older forks/custom routes.
             response = await self._client.get(
-                f"{self._base_url}/api/accounts/me/",
+                f"{self._base_url}/api/accounts/users/me/",
                 headers={"Authorization": f"Bearer {access_token}"},
             )
+            if response.status_code == 404:
+                response = await self._client.get(
+                    f"{self._base_url}/api/accounts/me/",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
 
             if response.status_code == 200:
                 user_data = response.json()

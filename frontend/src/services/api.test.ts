@@ -21,6 +21,14 @@ import {
   getPopularityRankings,
   getTrendingChannels,
   calculatePopularity,
+  // Lookup tables (v0.14.0 dummy EPG template engine)
+  listLookupTables,
+  getLookupTable,
+  createLookupTable,
+  updateLookupTable,
+  deleteLookupTable,
+  // Dummy EPG preview
+  previewDummyEPG,
 } from './api';
 
 // Start/stop the mock server for these tests
@@ -756,6 +764,252 @@ describe('API Service', () => {
       );
 
       await expect(computeSort([{ channel_id: 1, stream_ids: [1] }])).rejects.toThrow();
+    });
+  });
+
+  // ===========================================================================
+  // Lookup tables (v0.14.0 dummy EPG template engine)
+  // ===========================================================================
+
+  describe('listLookupTables', () => {
+    it('returns summaries without entries payload', async () => {
+      const result = await listLookupTables();
+      expect(Array.isArray(result)).toBe(true);
+      expect(result[0]).toMatchObject({
+        id: 1,
+        name: 'callsigns',
+        entry_count: 2,
+      });
+      // The list endpoint omits `entries` — callers must fetch by id to edit.
+      expect((result[0] as unknown as { entries?: unknown }).entries).toBeUndefined();
+    });
+
+    it('surfaces server errors', async () => {
+      server.use(
+        http.get('/api/lookup-tables', () => HttpResponse.error()),
+      );
+      await expect(listLookupTables()).rejects.toThrow();
+    });
+  });
+
+  describe('getLookupTable', () => {
+    it('fetches a single table with entries', async () => {
+      const result = await getLookupTable(1);
+      expect(result.id).toBe(1);
+      expect(result.entries).toEqual({ ESPN: 'espn.com', CNN: 'cnn.com' });
+    });
+
+    it('interpolates the id into the URL', async () => {
+      let capturedId: string | undefined;
+      server.use(
+        http.get('/api/lookup-tables/:id', ({ params }) => {
+          capturedId = params.id as string;
+          return HttpResponse.json({
+            id: Number(capturedId),
+            name: 'test',
+            description: null,
+            entries: {},
+            entry_count: 0,
+            created_at: null,
+            updated_at: null,
+          });
+        }),
+      );
+
+      await getLookupTable(42);
+      expect(capturedId).toBe('42');
+    });
+  });
+
+  describe('createLookupTable', () => {
+    it('POSTs name + description + entries and returns the created table', async () => {
+      let requestBody: unknown;
+      server.use(
+        http.post('/api/lookup-tables', async ({ request }) => {
+          requestBody = await request.json();
+          return HttpResponse.json(
+            {
+              id: 99,
+              name: 'seasons',
+              description: 'TV seasons',
+              entries: { S1: 'Season 1' },
+              entry_count: 1,
+              created_at: '2026-04-19T00:00:00Z',
+              updated_at: '2026-04-19T00:00:00Z',
+            },
+            { status: 201 },
+          );
+        }),
+      );
+
+      const created = await createLookupTable({
+        name: 'seasons',
+        description: 'TV seasons',
+        entries: { S1: 'Season 1' },
+      });
+      expect(requestBody).toMatchObject({
+        name: 'seasons',
+        description: 'TV seasons',
+        entries: { S1: 'Season 1' },
+      });
+      expect(created.id).toBe(99);
+    });
+  });
+
+  describe('updateLookupTable', () => {
+    it('PATCHes and returns the updated table', async () => {
+      const result = await updateLookupTable(1, { entries: { A: '1', B: '2' } });
+      expect(result.entries).toEqual({ A: '1', B: '2' });
+      expect(result.entry_count).toBe(2);
+    });
+
+    it('allows renaming without touching entries', async () => {
+      let requestBody: { name?: string; entries?: unknown } | undefined;
+      server.use(
+        http.patch('/api/lookup-tables/:id', async ({ request }) => {
+          requestBody = (await request.json()) as { name?: string; entries?: unknown };
+          return HttpResponse.json({
+            id: 1,
+            name: requestBody.name ?? 'unchanged',
+            description: null,
+            entries: {},
+            entry_count: 0,
+            created_at: null,
+            updated_at: null,
+          });
+        }),
+      );
+
+      await updateLookupTable(1, { name: 'renamed' });
+      expect(requestBody?.name).toBe('renamed');
+      expect(requestBody?.entries).toBeUndefined();
+    });
+  });
+
+  describe('deleteLookupTable', () => {
+    it('issues a DELETE and resolves on 204', async () => {
+      await expect(deleteLookupTable(1)).resolves.toBeUndefined();
+    });
+
+    it('rejects on 404', async () => {
+      server.use(
+        http.delete('/api/lookup-tables/:id', () =>
+          new HttpResponse(JSON.stringify({ detail: 'Lookup table not found' }), { status: 404 }),
+        ),
+      );
+      await expect(deleteLookupTable(999)).rejects.toThrow();
+    });
+  });
+
+  // ===========================================================================
+  // Dummy EPG preview (lookup + trace surface used by the preview UI)
+  // ===========================================================================
+
+  describe('previewDummyEPG', () => {
+    it('returns the rendered shape for a basic request', async () => {
+      const result = await previewDummyEPG({
+        sample_name: 'ESPN',
+        title_pattern: '(?P<name>.+)',
+        title_template: '{name|uppercase}',
+      });
+      expect(result.rendered.title).toBe('{name|uppercase}');
+      expect(result.matched).toBe(true);
+      // No include_trace flag → traces should be absent.
+      expect(result.traces).toBeUndefined();
+    });
+
+    it('carries include_trace through to the server and exposes traces', async () => {
+      let sentBody: { include_trace?: boolean } | undefined;
+      server.use(
+        http.post('/api/dummy-epg/preview', async ({ request }) => {
+          sentBody = (await request.json()) as { include_trace?: boolean };
+          return HttpResponse.json({
+            original_name: 'x',
+            substituted_name: 'x',
+            substitution_steps: [],
+            matched: true,
+            matched_variant: null,
+            groups: null,
+            time_variables: null,
+            rendered: {
+              title: 'X',
+              description: '',
+              upcoming_title: '',
+              upcoming_description: '',
+              ended_title: '',
+              ended_description: '',
+              fallback_title: '',
+              fallback_description: '',
+              channel_logo_url: '',
+              program_poster_url: '',
+            },
+            traces: {
+              title_template: [
+                {
+                  kind: 'placeholder',
+                  raw: '{name|uppercase}',
+                  group_name: 'name',
+                  initial_value: 'x',
+                  pipes: [
+                    { transform: 'uppercase', arg: null, input: 'x', output: 'X' },
+                  ],
+                  final_value: 'X',
+                },
+              ],
+            },
+          });
+        }),
+      );
+
+      const result = await previewDummyEPG({
+        sample_name: 'x',
+        title_pattern: '(?P<name>.+)',
+        title_template: '{name|uppercase}',
+        include_trace: true,
+      });
+      expect(sentBody?.include_trace).toBe(true);
+      expect(result.traces?.title_template?.[0]?.kind).toBe('placeholder');
+    });
+
+    it('forwards inline_lookups + global_lookup_ids in the payload', async () => {
+      let sentBody: {
+        inline_lookups?: Record<string, Record<string, string>>;
+        global_lookup_ids?: number[];
+      } | undefined;
+      server.use(
+        http.post('/api/dummy-epg/preview', async ({ request }) => {
+          sentBody = (await request.json()) as typeof sentBody;
+          return HttpResponse.json({
+            original_name: 'x',
+            substituted_name: 'x',
+            substitution_steps: [],
+            matched: true,
+            matched_variant: null,
+            groups: null,
+            time_variables: null,
+            rendered: {
+              title: '',
+              description: '',
+              upcoming_title: '',
+              upcoming_description: '',
+              ended_title: '',
+              ended_description: '',
+              fallback_title: '',
+              fallback_description: '',
+              channel_logo_url: '',
+              program_poster_url: '',
+            },
+          });
+        }),
+      );
+
+      await previewDummyEPG({
+        sample_name: 'x',
+        inline_lookups: { codes: { a: '1' } },
+        global_lookup_ids: [7, 8, 9],
+      });
+      expect(sentBody?.inline_lookups).toEqual({ codes: { a: '1' } });
+      expect(sentBody?.global_lookup_ids).toEqual([7, 8, 9]);
     });
   });
 });

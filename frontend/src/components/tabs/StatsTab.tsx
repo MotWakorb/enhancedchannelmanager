@@ -1039,6 +1039,12 @@ export function StatsTab() {
                       {channel.clients.map((client, idx) => (
                         <div key={client.client_id || idx} className="client-item">
                           <div className="client-info">
+                            {(client.username || client.user_id) && (
+                              <span className="client-user">
+                                <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
+                                {client.username || `User #${client.user_id}`}
+                              </span>
+                            )}
                             <span className="client-ip">{client.ip_address || 'Unknown'}</span>
                             <span className="client-ua">{parseUserAgent(client.user_agent)}</span>
                           </div>

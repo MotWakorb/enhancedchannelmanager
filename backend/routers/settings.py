@@ -4,6 +4,7 @@ Settings router — Dispatcharr connection, preferences, and service management 
 Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 """
 import logging
+import secrets
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -38,8 +39,10 @@ class NormalizationSettings(BaseModel):
 
 class SettingsRequest(BaseModel):
     url: str
-    username: str
+    auth_method: str = "password"  # "password" or "api_key"
+    username: str = ""
     password: Optional[str] = None  # Optional - only required if changing auth settings
+    api_key: Optional[str] = None  # Optional - only required if changing to/rotating api_key
     auto_rename_channel_number: bool = False
     include_channel_number_in_name: bool = False
     channel_number_separator: str = "-"
@@ -74,6 +77,7 @@ class SettingsRequest(BaseModel):
     skip_recently_probed_hours: int = 0  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool = True  # Refresh all M3U accounts before starting probe
     auto_reorder_after_probe: bool = False  # Automatically reorder streams in channels after probe completes
+    push_stream_stats_to_dispatcharr: bool = False  # Reflect probe stats back to Dispatcharr after each probe
     probe_retry_count: int = 1  # Retries on transient ffprobe failure (0 = no retry, max 5)
     probe_retry_delay: int = 2  # Seconds between retries (1-30)
     stream_fetch_page_limit: int = 200  # Max pages when fetching streams (200 pages * 500 = 100K streams)
@@ -84,6 +88,9 @@ class SettingsRequest(BaseModel):
     black_screen_sample_duration: int = 5  # Seconds to sample for black screen detection (3-30)
     low_fps_threshold: int = 20  # FPS below this value is considered "low FPS" (5, 10, 15, or 20)
     deprioritize_failed_streams: bool = True  # When enabled, failed/timeout/pending streams sort to bottom
+    deprioritize_black_screen: bool = True  # When disabled, black screen streams sort by quality stats
+    deprioritize_low_fps: bool = True  # When disabled, low FPS streams sort by quality stats
+    failed_stream_sort_order: list[str] = ["failed", "black_screen", "low_fps"]  # Order of deprioritized categories (first = sorted higher)
     strike_threshold: int = 3  # Consecutive failures before flagging stream (0 = disabled)
     normalization_settings: Optional[NormalizationSettings] = None  # User-configurable normalization tags
     normalize_on_channel_create: bool = False  # Default state for normalization toggle when creating channels
@@ -111,7 +118,10 @@ class SettingsRequest(BaseModel):
 
 class SettingsResponse(BaseModel):
     url: str
+    auth_method: str
     username: str
+    # Non-empty signal that an API key is stored, without returning the secret.
+    api_key_configured: bool
     configured: bool
     auto_rename_channel_number: bool
     include_channel_number_in_name: bool
@@ -147,6 +157,7 @@ class SettingsResponse(BaseModel):
     skip_recently_probed_hours: int  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool  # Refresh all M3U accounts before starting probe
     auto_reorder_after_probe: bool  # Automatically reorder streams in channels after probe completes
+    push_stream_stats_to_dispatcharr: bool  # Reflect probe stats back to Dispatcharr after each probe
     probe_retry_count: int  # Retries on transient ffprobe failure (0 = no retry, max 5)
     probe_retry_delay: int  # Seconds between retries (1-30)
     stream_fetch_page_limit: int  # Max pages when fetching streams (200 pages * 500 = 100K streams)
@@ -157,6 +168,9 @@ class SettingsResponse(BaseModel):
     black_screen_sample_duration: int  # Seconds to sample for black screen detection (3-30)
     low_fps_threshold: int  # FPS below this value is considered "low FPS"
     deprioritize_failed_streams: bool  # When enabled, failed/timeout/pending streams sort to bottom
+    deprioritize_black_screen: bool = True  # When disabled, black screen streams sort by quality stats
+    deprioritize_low_fps: bool = True  # When disabled, low FPS streams sort by quality stats
+    failed_stream_sort_order: list[str]  # Order of deprioritized categories (first = sorted higher)
     strike_threshold: int  # Consecutive failures before flagging stream (0 = disabled)
     normalization_settings: NormalizationSettings  # User-configurable normalization tags
     normalize_on_channel_create: bool  # Default state for normalization toggle when creating channels
@@ -182,12 +196,16 @@ class SettingsResponse(BaseModel):
     auto_creation_excluded_terms: list[str]
     auto_creation_excluded_groups: list[str]
     auto_creation_exclude_auto_sync_groups: bool
+    # MCP integration
+    mcp_api_key_configured: bool  # Whether an MCP API key has been generated
 
 
 class TestConnectionRequest(BaseModel):
     url: str
-    username: str
-    password: str
+    auth_method: str = "password"  # "password" or "api_key"
+    username: str = ""
+    password: str = ""
+    api_key: str = ""
 
 
 class SMTPTestRequest(BaseModel):
@@ -236,7 +254,9 @@ async def get_current_settings():
     logger.debug("[SETTINGS] Settings retrieved - configured: %s, log level: %s", settings.is_configured(), settings.backend_log_level)
     return SettingsResponse(
         url=settings.url,
+        auth_method=settings.auth_method,
         username=settings.username,
+        api_key_configured=bool(settings.api_key),
         configured=settings.is_configured(),
         auto_rename_channel_number=settings.auto_rename_channel_number,
         include_channel_number_in_name=settings.include_channel_number_in_name,
@@ -271,6 +291,7 @@ async def get_current_settings():
         skip_recently_probed_hours=settings.skip_recently_probed_hours,
         refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
         auto_reorder_after_probe=settings.auto_reorder_after_probe,
+        push_stream_stats_to_dispatcharr=settings.push_stream_stats_to_dispatcharr,
         probe_retry_count=settings.probe_retry_count,
         probe_retry_delay=settings.probe_retry_delay,
         stream_fetch_page_limit=settings.stream_fetch_page_limit,
@@ -281,6 +302,9 @@ async def get_current_settings():
         black_screen_sample_duration=settings.black_screen_sample_duration,
         low_fps_threshold=settings.low_fps_threshold,
         deprioritize_failed_streams=settings.deprioritize_failed_streams,
+        deprioritize_black_screen=settings.deprioritize_black_screen,
+        deprioritize_low_fps=settings.deprioritize_low_fps,
+        failed_stream_sort_order=settings.failed_stream_sort_order,
         strike_threshold=settings.strike_threshold,
         normalization_settings=NormalizationSettings(
             disabledBuiltinTags=settings.disabled_builtin_tags,
@@ -310,6 +334,7 @@ async def get_current_settings():
         auto_creation_excluded_terms=settings.auto_creation_excluded_terms,
         auto_creation_excluded_groups=settings.auto_creation_excluded_groups,
         auto_creation_exclude_auto_sync_groups=settings.auto_creation_exclude_auto_sync_groups,
+        mcp_api_key_configured=bool(settings.mcp_api_key),
     )
 
 
@@ -319,29 +344,58 @@ async def update_settings(request: SettingsRequest):
     logger.debug("[SETTINGS] POST /api/settings - URL: %s, username: %s", request.url, request.username)
     current_settings = get_settings()
 
-    # If password is not provided, keep the existing password
-    # This allows updating non-auth settings without re-entering password
+    # If password is not provided, keep the existing password (preserve-on-omit
+    # lets the UI update non-auth fields without re-asking for the secret).
     password = request.password if request.password else current_settings.password
+    api_key = request.api_key if request.api_key else current_settings.api_key
 
     # Same for SMTP password - preserve existing if not provided
     smtp_password = request.smtp_password if request.smtp_password else current_settings.smtp_password
 
-    # Check if auth settings are being changed and password is required
-    auth_changed = (
-        request.url != current_settings.url or
-        request.username != current_settings.username
-    )
-    if auth_changed and not request.password:
-        logger.warning("[SETTINGS] Settings update failed: password required when changing URL or username")
+    if request.auth_method not in ("password", "api_key"):
         raise HTTPException(
             status_code=400,
-            detail="Password is required when changing URL or username"
+            detail=f"Invalid auth_method: {request.auth_method!r} (expected 'password' or 'api_key')",
         )
+
+    mode_changed = request.auth_method != current_settings.auth_method
+    # auth_changed tracks whether any credential-relevant field changed,
+    # used downstream for the save-success log line. Default False so it's
+    # always defined even in api_key mode.
+    auth_changed = mode_changed or request.url != current_settings.url
+    if request.auth_method == "api_key":
+        # api_key mode: url + api_key required; ignore password entirely.
+        # Require a new key when switching modes or rotating an empty key.
+        if mode_changed and not request.api_key:
+            raise HTTPException(
+                status_code=400,
+                detail="API key is required when switching to API key authentication",
+            )
+        if not api_key:
+            raise HTTPException(
+                status_code=400,
+                detail="API key is required when auth_method is 'api_key'",
+            )
+    else:
+        # password mode: url + username + password required. Ask for the password
+        # again if url/username/mode changed, to avoid silently reusing an old one.
+        auth_changed = (
+            auth_changed
+            or request.username != current_settings.username
+        )
+        if auth_changed and not request.password:
+            logger.warning("[SETTINGS] Settings update failed: password required when changing auth mode, URL or username")
+            raise HTTPException(
+                status_code=400,
+                detail="Password is required when changing auth method, URL or username",
+            )
 
     new_settings = DispatcharrSettings(
         url=request.url,
+        auth_method=request.auth_method,
         username=request.username,
         password=password,
+        api_key=api_key,
         auto_rename_channel_number=request.auto_rename_channel_number,
         include_channel_number_in_name=request.include_channel_number_in_name,
         channel_number_separator=request.channel_number_separator,
@@ -375,6 +429,7 @@ async def update_settings(request: SettingsRequest):
         skip_recently_probed_hours=request.skip_recently_probed_hours,
         refresh_m3us_before_probe=request.refresh_m3us_before_probe,
         auto_reorder_after_probe=request.auto_reorder_after_probe,
+        push_stream_stats_to_dispatcharr=request.push_stream_stats_to_dispatcharr,
         probe_retry_count=request.probe_retry_count,
         probe_retry_delay=request.probe_retry_delay,
         stream_fetch_page_limit=request.stream_fetch_page_limit,
@@ -385,6 +440,9 @@ async def update_settings(request: SettingsRequest):
         black_screen_sample_duration=request.black_screen_sample_duration,
         low_fps_threshold=request.low_fps_threshold,
         deprioritize_failed_streams=request.deprioritize_failed_streams,
+        deprioritize_black_screen=request.deprioritize_black_screen,
+        deprioritize_low_fps=request.deprioritize_low_fps,
+        failed_stream_sort_order=request.failed_stream_sort_order,
         strike_threshold=request.strike_threshold,
         # Convert normalization_settings from API format to backend format
         disabled_builtin_tags=(
@@ -473,13 +531,19 @@ async def update_settings(request: SettingsRequest):
     # Update prober's sort settings without requiring restart
     if (new_settings.stream_sort_priority != current_settings.stream_sort_priority or
             new_settings.stream_sort_enabled != current_settings.stream_sort_enabled or
-            new_settings.m3u_account_priorities != current_settings.m3u_account_priorities):
+            new_settings.m3u_account_priorities != current_settings.m3u_account_priorities or
+            new_settings.failed_stream_sort_order != current_settings.failed_stream_sort_order or
+            new_settings.deprioritize_black_screen != current_settings.deprioritize_black_screen or
+            new_settings.deprioritize_low_fps != current_settings.deprioritize_low_fps):
         prober = get_prober()
         if prober:
             prober.update_sort_settings(
                 new_settings.stream_sort_priority,
                 new_settings.stream_sort_enabled,
-                new_settings.m3u_account_priorities
+                new_settings.m3u_account_priorities,
+                failed_stream_sort_order=new_settings.failed_stream_sort_order,
+                deprioritize_black_screen=new_settings.deprioritize_black_screen,
+                deprioritize_low_fps=new_settings.deprioritize_low_fps,
             )
             logger.info("[SETTINGS] Updated prober sort settings from settings")
 
@@ -528,6 +592,12 @@ async def update_settings(request: SettingsRequest):
         if new_settings.deprioritize_failed_streams != current_settings.deprioritize_failed_streams:
             prober.deprioritize_failed_streams = new_settings.deprioritize_failed_streams
             changed.append(f"deprioritize_failed_streams={new_settings.deprioritize_failed_streams}")
+        if new_settings.deprioritize_black_screen != current_settings.deprioritize_black_screen:
+            prober.deprioritize_black_screen = new_settings.deprioritize_black_screen
+            changed.append(f"deprioritize_black_screen={new_settings.deprioritize_black_screen}")
+        if new_settings.deprioritize_low_fps != current_settings.deprioritize_low_fps:
+            prober.deprioritize_low_fps = new_settings.deprioritize_low_fps
+            changed.append(f"deprioritize_low_fps={new_settings.deprioritize_low_fps}")
         if new_settings.stream_fetch_page_limit != current_settings.stream_fetch_page_limit:
             prober.stream_fetch_page_limit = new_settings.stream_fetch_page_limit
             changed.append(f"stream_fetch_page_limit={new_settings.stream_fetch_page_limit}")
@@ -555,6 +625,28 @@ async def test_connection(request: TestConnectionRequest):
     base_url = urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
+            if request.auth_method == "api_key":
+                # API key auth: probe /api/accounts/users/me/ with X-API-Key.
+                # A 2xx means the key authenticates to an active user.
+                if not request.api_key:
+                    return {"success": False, "message": "API key is required"}
+                target_url = f"{base_url}/api/accounts/users/me/"
+                response = await client.get(
+                    target_url,
+                    headers={"X-API-Key": request.api_key},
+                )
+                if 200 <= response.status_code < 300:
+                    logger.info("[SETTINGS-TEST] API key connection test successful - %s", parsed.hostname)
+                    return {"success": True, "message": "Connection successful"}
+                if response.status_code == 401:
+                    logger.warning("[SETTINGS-TEST] API key rejected - %s", parsed.hostname)
+                    return {"success": False, "message": "Invalid API key"}
+                if response.status_code == 403:
+                    logger.warning("[SETTINGS-TEST] API key denied by network policy - %s", parsed.hostname)
+                    return {"success": False, "message": "Dispatcharr rejected this server by network policy"}
+                logger.warning("[SETTINGS-TEST] API key test failed - %s - status: %s", parsed.hostname, response.status_code)
+                return {"success": False, "message": f"Authentication failed: {response.status_code}"}
+
             target_url = f"{base_url}/api/accounts/token/"
             response = await client.post(
                 target_url,
@@ -566,12 +658,20 @@ async def test_connection(request: TestConnectionRequest):
             if response.status_code == 200:
                 logger.info("[SETTINGS-TEST] Connection test successful - %s", parsed.hostname)
                 return {"success": True, "message": "Connection successful"}
-            else:
-                logger.warning("[SETTINGS-TEST] Connection test failed - %s - status: %s", parsed.hostname, response.status_code)
+            if response.status_code == 429:
+                logger.warning("[SETTINGS-TEST] Login throttled by Dispatcharr - %s", parsed.hostname)
                 return {
                     "success": False,
-                    "message": f"Authentication failed: {response.status_code}",
+                    "message": "Dispatcharr is rate-limiting login (3/min per IP). Wait a minute or switch to API key auth.",
                 }
+            if response.status_code == 403:
+                logger.warning("[SETTINGS-TEST] Login denied by network policy - %s", parsed.hostname)
+                return {"success": False, "message": "Dispatcharr rejected this server by network policy"}
+            logger.warning("[SETTINGS-TEST] Connection test failed - %s - status: %s", parsed.hostname, response.status_code)
+            return {
+                "success": False,
+                "message": f"Authentication failed: {response.status_code}",
+            }
     except httpx.ConnectError as e:
         logger.error("[SETTINGS-TEST] Connection test failed - could not connect to %s: %s", parsed.hostname, e)
         return {"success": False, "message": "Could not connect to server"}
@@ -683,9 +783,11 @@ async def test_discord_webhook(request: DiscordTestRequest):
         return {"success": False, "message": "Webhook URL is required"}
 
     # Validate URL format - accept discord.com, discordapp.com, and variants (canary, ptb)
+    # TODO(enhancedchannelmanager-4mab3): promote to module-level _DISCORD_WEBHOOK_RE
+    # constant to match the ECM style guide convention.
     import re
     discord_pattern = r'^https://(discord\.com|discordapp\.com|canary\.discord\.com|ptb\.discord\.com)/api/webhooks/'
-    if not re.match(discord_pattern, webhook_url):
+    if not re.match(discord_pattern, webhook_url):  # nosemgrep: no-bare-re-on-dynamic-pattern
         return {"success": False, "message": "Invalid Discord webhook URL format"}
 
     try:
@@ -830,6 +932,8 @@ async def restart_services():
                 probe_retry_count=settings.probe_retry_count,
                 probe_retry_delay=settings.probe_retry_delay,
                 deprioritize_failed_streams=settings.deprioritize_failed_streams,
+                deprioritize_black_screen=settings.deprioritize_black_screen,
+                deprioritize_low_fps=settings.deprioritize_low_fps,
                 black_screen_detection_enabled=settings.black_screen_detection_enabled,
                 black_screen_sample_duration=settings.black_screen_sample_duration,
                 low_fps_threshold=settings.low_fps_threshold,
@@ -837,6 +941,7 @@ async def restart_services():
                 stream_sort_enabled=settings.stream_sort_enabled,
                 stream_fetch_page_limit=settings.stream_fetch_page_limit,
                 m3u_account_priorities=settings.m3u_account_priorities,
+                failed_stream_sort_order=settings.failed_stream_sort_order,
             )
             new_prober.set_notification_callbacks(
                 create_callback=create_notification_internal,
@@ -846,19 +951,15 @@ async def restart_services():
             logger.info("[SETTINGS] Notification callbacks configured for stream prober")
             set_prober(new_prober)
 
-            # Connect the new prober to the StreamProbeTask
+            # Connect the new prober to all prober-dependent tasks
             try:
                 from task_registry import get_registry
                 registry = get_registry()
-                stream_probe_task = registry.get_task_instance("stream_probe")
-                if stream_probe_task:
-                    stream_probe_task.set_prober(new_prober)
-                    logger.info("[SETTINGS] Connected new StreamProber to StreamProbeTask")
-
-                failed_reprobe_task = registry.get_task_instance("failed_stream_reprobe")
-                if failed_reprobe_task:
-                    failed_reprobe_task.set_prober(new_prober)
-                    logger.info("[SETTINGS] Connected new StreamProber to FailedStreamReprobeTask")
+                for tid in ("stream_probe", "failed_stream_reprobe", "black_screen_scan"):
+                    task_instance = registry.get_task_instance(tid)
+                    if task_instance:
+                        task_instance.set_prober(new_prober)
+                        logger.info("[SETTINGS] Connected new StreamProber to %s", tid)
             except Exception as e:
                 logger.warning("[SETTINGS] Failed to connect prober to task: %s", e)
 
@@ -905,3 +1006,49 @@ async def reset_stats():
     except Exception as e:
         logger.exception("[SETTINGS] Failed to reset stats: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# ============================================================================
+# MCP API Key Management
+# ============================================================================
+
+@router.post("/mcp-api-key")
+async def generate_mcp_api_key():
+    """Generate a new MCP API key (replaces any existing key)."""
+    settings = get_settings()
+    settings.mcp_api_key = secrets.token_urlsafe(32)
+    save_settings(settings)
+    clear_settings_cache()
+    logger.info("[SETTINGS] MCP API key generated")
+    return {"mcp_api_key": settings.mcp_api_key}
+
+
+@router.delete("/mcp-api-key")
+async def revoke_mcp_api_key():
+    """Revoke the current MCP API key."""
+    settings = get_settings()
+    settings.mcp_api_key = ""
+    save_settings(settings)
+    clear_settings_cache()
+    logger.info("[SETTINGS] MCP API key revoked")
+    return {"status": "revoked"}
+
+
+@router.get("/mcp-status")
+async def get_mcp_status():
+    """Check MCP server health by calling its /health endpoint."""
+    import os
+    import httpx
+
+    mcp_port = os.environ.get("MCP_PORT", "6101")
+    mcp_url = f"http://localhost:{mcp_port}/health"
+
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            r = await client.get(mcp_url)
+            r.raise_for_status()
+            return {"reachable": True, **r.json()}
+    except Exception as e:
+        logger.debug("[SETTINGS] MCP health check failed: %s", e)
+        return {"reachable": False, "error": str(e)}
+    return {"status": "revoked"}

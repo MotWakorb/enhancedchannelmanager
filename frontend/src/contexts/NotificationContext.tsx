@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useMemo, ReactNode } from 'react';
 import { ToastContainer, ToastData } from '../components/ToastContainer';
 import { ToastType, ToastAction } from '../components/Toast';
 
@@ -87,7 +87,10 @@ export function NotificationProvider({
     return notify({ type: 'error', message, title, duration: 8000 }); // Errors stay longer
   }, [notify]);
 
-  const value: NotificationContextValue = {
+  // Memoize the context value so consumers using it as a dep in
+  // useCallback/useEffect don't get a fresh reference on every provider
+  // render. All functions below are already stable via useCallback.
+  const value = useMemo<NotificationContextValue>(() => ({
     notify,
     info,
     success,
@@ -95,7 +98,7 @@ export function NotificationProvider({
     error,
     dismiss,
     dismissAll,
-  };
+  }), [notify, info, success, warning, error, dismiss, dismissAll]);
 
   return (
     <NotificationContext.Provider value={value}>
@@ -111,6 +114,7 @@ export function NotificationProvider({
 }
 
 // Hook to use notifications
+// eslint-disable-next-line react-refresh/only-export-components -- hook + provider co-located by convention; moving would require import updates across many consumers
 export function useNotifications(): NotificationContextValue {
   const context = useContext(NotificationContext);
   if (!context) {

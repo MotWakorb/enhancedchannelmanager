@@ -474,10 +474,14 @@ class TestM3UChangeDetector:
         """Test persisting changes creates correct log entries."""
         detector = M3UChangeDetector(test_session)
 
+        # Create a real snapshot so the FK on m3u_change_logs.snapshot_id
+        # resolves to a real row (FKs are enforced as of 844yr).
+        snapshot = detector.create_snapshot(1, [{"name": "Sports", "stream_count": 50}], 50)
+
         change_set = M3UChangeSet(
             m3u_account_id=1,
             previous_snapshot_id=None,
-            current_snapshot_id=1,
+            current_snapshot_id=snapshot.id,
         )
         change_set.groups_added.append(GroupChange("Sports", "added", 50, enabled=True))
         change_set.streams_added.append(

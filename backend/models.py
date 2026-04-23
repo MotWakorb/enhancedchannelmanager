@@ -1058,6 +1058,8 @@ class UniqueClientConnection(Base):
     ip_address = Column(String(45), nullable=False)  # IPv4 or IPv6
     channel_id = Column(String(64), nullable=False)  # Dispatcharr channel UUID
     channel_name = Column(String(255), nullable=False)  # Cached for display
+    user_id = Column(Integer, nullable=True)  # Dispatcharr user ID (null if not available)
+    username = Column(String(255), nullable=True)  # Cached username from Dispatcharr
     date = Column(Date, nullable=False)  # Date of connection (for daily aggregation)
     connected_at = Column(DateTime, nullable=False)  # When connection started
     disconnected_at = Column(DateTime, nullable=True)  # When connection ended (null if still active)
@@ -1082,6 +1084,8 @@ class UniqueClientConnection(Base):
             "ip_address": self.ip_address,
             "channel_id": self.channel_id,
             "channel_name": self.channel_name,
+            "user_id": self.user_id,
+            "username": self.username,
             "date": self.date.isoformat() if self.date else None,
             "connected_at": self.connected_at.isoformat() + "Z" if self.connected_at else None,
             "disconnected_at": self.disconnected_at.isoformat() + "Z" if self.disconnected_at else None,
@@ -1430,8 +1434,8 @@ class AutoCreationRule(Base):
     stream_sort_field = Column(String(50), nullable=True)  # None = no stream reorder
     stream_sort_order = Column(String(4), default="asc")   # "asc" or "desc"
 
-    # Normalization - apply normalization engine rules to channel names
-    normalize_names = Column(Boolean, default=False, nullable=False)
+    # Normalization - JSON array of NormalizationRuleGroup IDs to apply, null/empty = disabled
+    normalization_group_ids = Column(Text, nullable=True)
 
     # Strike filtering - skip streams that have been struck out (consecutive_failures >= strike_threshold)
     skip_struck_streams = Column(Boolean, default=False, nullable=False)
@@ -1447,6 +1451,13 @@ class AutoCreationRule(Base):
 
     # Orphan cleanup behavior: "delete", "move_uncategorized", "delete_and_cleanup_groups", or "none"
     orphan_action = Column(String(30), default="delete", nullable=False)
+
+    # Duplicate-check scope: when True, existing-channel name lookups during
+    # create_channel are restricted to the rule's target group, so two rules
+    # targeting different groups can create separate channels with the same
+    # name instead of merging into an existing channel in another group
+    # (GH-92, bd-r9mtd). Default False preserves the existing global lookup.
+    match_scope_target_group = Column(Boolean, default=False, nullable=False)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -1512,6 +1523,19 @@ class AutoCreationRule(Base):
         """Set managed_channel_ids from list of ints."""
         self.managed_channel_ids = json.dumps(sorted(set(ids))) if ids else None
 
+    def get_normalization_group_ids(self) -> list[int]:
+        """Parse normalization_group_ids JSON into list of ints."""
+        if not self.normalization_group_ids:
+            return []
+        try:
+            return json.loads(self.normalization_group_ids)
+        except (ValueError, TypeError):
+            return []
+
+    def set_normalization_group_ids(self, ids: list[int]) -> None:
+        """Set normalization_group_ids from list of ints."""
+        self.normalization_group_ids = json.dumps(sorted(set(ids))) if ids else None
+
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
         return {
@@ -1532,9 +1556,10 @@ class AutoCreationRule(Base):
             "sort_regex": self.sort_regex,
             "stream_sort_field": self.stream_sort_field,
             "stream_sort_order": self.stream_sort_order or "asc",
-            "normalize_names": self.normalize_names or False,
+            "normalization_group_ids": self.get_normalization_group_ids(),
             "skip_struck_streams": self.skip_struck_streams or False,
             "orphan_action": self.orphan_action or "delete",
+            "match_scope_target_group": self.match_scope_target_group or False,
             "last_run_at": self.last_run_at.isoformat() + "Z" if self.last_run_at else None,
             "last_run_stats": self.get_last_run_stats(),
             "match_count": self.match_count or 0,
@@ -2040,3 +2065,116 @@ class DummyEPGChannelAssignment(Base):
 
     def __repr__(self):
         return f"<DummyEPGChannelAssignment(id={self.id}, profile_id={self.profile_id}, channel_id={self.channel_id})>"
+
+
+class LookupTable(Base):
+    """
+    Named key→value lookup tables used by the dummy EPG template engine.
+
+    Referenced via the `|lookup:<name>` pipe transform. `entries` is a JSON
+    object (str → str); key miss falls back to the input value at render time.
+    """
+    __tablename__ = "lookup_tables"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False, unique=True)
+    description = Column(Text, nullable=True)
+    entries = Column(Text, nullable=False, default="{}")  # JSON-encoded dict[str, str]
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_lookup_table_name", name),
+    )
+
+    def to_dict(self) -> dict:
+        import json as _json
+        try:
+            entries_obj = _json.loads(self.entries) if self.entries else {}
+        except (ValueError, TypeError):
+            entries_obj = {}
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "entries": entries_obj,
+            "entry_count": len(entries_obj),
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<LookupTable(id={self.id}, name={self.name})>"
+
+
+class RuleLintFinding(Base):
+    """
+    Persistent lint finding for a stored rule pattern (bd-eio04.7).
+
+    Written by :mod:`regex_lint`'s migration-scan step for pre-lint rows
+    that would now fail the write-time lint. Kept separate from the rule
+    tables so the hot-path rows aren't widened with optional
+    audit-style metadata (DB-engineer grooming decision).
+
+    The table is purely diagnostic: findings do NOT disable or modify the
+    underlying rule. UI surfaces the findings via GET endpoints on each
+    router so an operator can decide whether to edit or keep the rule.
+
+    Scan semantics:
+    - Idempotent. Before each scan the existing findings for that
+      ``(rule_type, rule_id)`` pair are cleared; re-running the scan on
+      the same corpus produces the same flagged set.
+    - Best-effort. If a rule's JSON payload fails to deserialize the scan
+      logs and skips that row — a separate concern from the pattern
+      being pathological.
+    """
+
+    __tablename__ = "rule_lint_findings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # Logical rule type — one of "normalization", "auto_creation",
+    # "dummy_epg". Not a real FK because the three rule tables can't share
+    # one; the scan keeps the string coordinate and the rule_id together.
+    rule_type = Column(String(30), nullable=False)
+    rule_id = Column(Integer, nullable=False)
+    # Human-readable path (e.g., "condition_value", "actions[1].pattern").
+    field = Column(String(120), nullable=False)
+    # REGEX_TOO_LONG / REGEX_COMPILE_ERROR / REGEX_NESTED_QUANTIFIER —
+    # kept as a String column rather than an Enum so a newer scan can
+    # surface codes this column wasn't built knowing about.
+    code = Column(String(40), nullable=False)
+    message = Column(Text, nullable=False)
+    # JSON-encoded per-code context (pattern_len, compile_error, reason).
+    detail = Column(Text, nullable=True)
+    detected_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_rule_lint_finding_rule", rule_type, rule_id),
+        Index("idx_rule_lint_finding_code", code),
+    )
+
+    def to_dict(self) -> dict:
+        import json as _json
+
+        try:
+            detail_obj = _json.loads(self.detail) if self.detail else {}
+        except (ValueError, TypeError):
+            detail_obj = {}
+        return {
+            "id": self.id,
+            "rule_type": self.rule_type,
+            "rule_id": self.rule_id,
+            "field": self.field,
+            "code": self.code,
+            "message": self.message,
+            "detail": detail_obj,
+            "detected_at": (
+                self.detected_at.isoformat() + "Z" if self.detected_at else None
+            ),
+        }
+
+    def __repr__(self):
+        return (
+            f"<RuleLintFinding(id={self.id}, rule_type={self.rule_type}, "
+            f"rule_id={self.rule_id}, code={self.code})>"
+        )

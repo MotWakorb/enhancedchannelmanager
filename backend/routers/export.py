@@ -15,6 +15,7 @@ from pydantic import BaseModel, field_validator
 
 from cloud_storage.base import get_adapter
 from cloud_storage.crypto import encrypt_credentials, decrypt_credentials
+from cloud_storage.onedrive_adapter import _validate_tenant_id, _validate_drive_id
 from database import get_session
 from dispatcharr_client import get_client
 from export_manager import ExportManager
@@ -456,12 +457,40 @@ async def download_xmltv(profile_id: int, regenerate: bool = False):
 VALID_PROVIDERS = ("s3", "gdrive", "onedrive", "dropbox")
 
 
+def _validate_onedrive_credentials(provider_type: Optional[str], creds: Optional[dict]) -> Optional[dict]:
+    """If provider_type is onedrive, validate tenant_id/drive_id shape.
+
+    Rejects SSRF-prone identifiers at the API boundary. See CodeQL alerts
+    1361 and 1362 and bead enhancedchannelmanager-zbt74.
+    """
+    if provider_type != "onedrive" or not creds:
+        return creds
+    tenant_id = creds.get("tenant_id")
+    if tenant_id is not None:
+        try:
+            _validate_tenant_id(tenant_id)
+        except ValueError as exc:
+            raise ValueError(f"credentials.tenant_id: {exc}") from exc
+    drive_id = creds.get("drive_id")
+    if drive_id is not None and drive_id != "":
+        try:
+            _validate_drive_id(drive_id)
+        except ValueError as exc:
+            raise ValueError(f"credentials.drive_id: {exc}") from exc
+    return creds
+
+
 class CloudTargetCreateRequest(BaseModel):
     name: str
     provider_type: Literal["s3", "gdrive", "onedrive", "dropbox"]
     credentials: dict
     upload_path: str = "/"
     enabled: bool = True
+
+    @field_validator("credentials")
+    @classmethod
+    def _check_credentials(cls, v, info):
+        return _validate_onedrive_credentials(info.data.get("provider_type"), v)
 
 
 class CloudTargetUpdateRequest(BaseModel):
@@ -471,10 +500,20 @@ class CloudTargetUpdateRequest(BaseModel):
     upload_path: Optional[str] = None
     enabled: Optional[bool] = None
 
+    @field_validator("credentials")
+    @classmethod
+    def _check_credentials(cls, v, info):
+        return _validate_onedrive_credentials(info.data.get("provider_type"), v)
+
 
 class CloudTargetTestRequest(BaseModel):
     provider_type: Literal["s3", "gdrive", "onedrive", "dropbox"]
     credentials: dict
+
+    @field_validator("credentials")
+    @classmethod
+    def _check_credentials(cls, v, info):
+        return _validate_onedrive_credentials(info.data.get("provider_type"), v)
 
 
 def _mask_credentials(creds: dict) -> dict:
@@ -1105,8 +1144,10 @@ def _clean_channel_name(name: str, channel_number) -> str:
         try:
             num_val = float(channel_number)
             num_str = str(int(num_val)) if num_val == int(num_val) else str(num_val)
+            # escaped_num is re.escape() of a numeric string — can't contain
+            # regex metacharacters by construction; pattern is fixed-length.
             escaped_num = re.escape(num_str)
-            cleaned = re.sub(rf"^{escaped_num}\s*[-|:]?\s*", "", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(rf"^{escaped_num}\s*[-|:]?\s*", "", cleaned, flags=re.IGNORECASE)  # nosemgrep: no-bare-re-on-dynamic-pattern
         except (ValueError, TypeError):
             pass
     return cleaned.strip() or name

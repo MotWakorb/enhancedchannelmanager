@@ -12,11 +12,17 @@ from datetime import datetime, timedelta
 
 import pytz
 
+import safe_regex
+
 logger = logging.getLogger(__name__)
 
 
 def _js_to_python_named_groups(pattern: str) -> str:
-    """Convert JavaScript-style named groups (?<name>...) to Python (?P<name>...)."""
+    """Convert JavaScript-style named groups (?<name>...) to Python (?P<name>...).
+
+    The regex used here is a module-level, developer-authored pattern (not user
+    input), so stdlib ``re`` is correct — no ReDoS surface.
+    """
     if not pattern:
         return pattern
     return re.sub(r"\(\?<(?!\=|\!)", "(?P<", pattern)
@@ -69,14 +75,12 @@ def apply_substitutions(name: str, pairs: list[dict]) -> tuple[str, list[dict]]:
         before = current
 
         if is_regex:
-            try:
-                current = re.sub(find, replace, current)
-            except re.error as e:
-                logger.warning(
-                    "[DUMMY-EPG] Invalid regex in substitution find=%s: %s",
-                    find, e,
-                )
-                continue
+            # Fallback contract (bd-eio04.16): safe_regex.sub returns *text*
+            # unchanged on timeout / oversize pattern / invalid pattern and
+            # emits a [SAFE_REGEX] WARN. When the returned string matches
+            # ``before``, the rule is effectively a no-op and no step is
+            # recorded — equivalent to skipping a bad rule without crashing.
+            current = safe_regex.sub(find, replace, current)
         else:
             current = current.replace(find, replace)
 
@@ -118,76 +122,63 @@ def extract_groups(
     time_pattern = _js_to_python_named_groups(time_pattern)
     date_pattern = _js_to_python_named_groups(date_pattern)
 
-    try:
-        title_match = re.search(title_pattern, name)
-    except re.error as e:
-        logger.warning("[DUMMY-EPG] Invalid title_pattern regex: %s", e)
-        return None
-
+    # Fallback contract (bd-eio04.16): safe_regex.search returns None on
+    # timeout / oversize / invalid pattern (logging [SAFE_REGEX] WARN). For
+    # title_pattern this is treated as "no match" — the same outcome as a
+    # non-matching good pattern — so the caller renders fallback templates
+    # rather than crashing.
+    title_match = safe_regex.search(title_pattern, name)
     if not title_match:
         return None
 
     groups = dict(title_match.groupdict())
 
     if time_pattern:
-        try:
-            time_match = re.search(time_pattern, name)
-            if time_match:
-                groups.update(time_match.groupdict())
-        except re.error as e:
-            logger.warning("[DUMMY-EPG] Invalid time_pattern regex: %s", e)
+        # Fallback contract (bd-eio04.16): safe_regex.search returns None on
+        # timeout / oversize / invalid pattern. Missing time groups is already
+        # a supported state (compute_event_times falls back to "now"), so we
+        # simply skip updating the groups dict.
+        time_match = safe_regex.search(time_pattern, name)
+        if time_match:
+            groups.update(time_match.groupdict())
 
     if date_pattern:
-        try:
-            date_match = re.search(date_pattern, name)
-            if date_match:
-                groups.update(date_match.groupdict())
-        except re.error as e:
-            logger.warning("[DUMMY-EPG] Invalid date_pattern regex: %s", e)
+        # Fallback contract (bd-eio04.16): safe_regex.search returns None on
+        # timeout / oversize / invalid pattern. Missing date groups falls
+        # through to the "no date captured" branch in compute_event_times.
+        date_match = safe_regex.search(date_pattern, name)
+        if date_match:
+            groups.update(date_match.groupdict())
 
     return groups
 
 
-def render_template(template: str, groups: dict) -> str:
+def render_template(
+    template: str,
+    groups: dict,
+    lookups: dict[str, dict[str, str]] | None = None,
+) -> str:
     """
-    Replace {key} placeholders in template with values from groups.
+    Render a dummy-EPG template through the shared template engine.
 
-    Supports:
-      - {key} -> groups[key]
-      - {key_normalize} -> groups[key].lower() with non-alphanumeric removed
-      - Time/date variables from groups: {starttime}, {starttime24}, etc.
+    Supports all of ``template_engine.TemplateEngine``:
+      - {key} placeholder, {key_normalize} legacy suffix
+      - Chained pipes: {key|uppercase|trim|strip:-}
+      - Lookup tables: {key|lookup:tablename} — requires lookups dict
+      - Conditionals: {if:key}, {if:key=value}, {if:key~regex}
 
-    Args:
-        template: Template string with {placeholder} tokens.
-        groups: Dict of values to substitute.
-
-    Returns:
-        Rendered string, or empty string if template is empty/None.
+    Template syntax errors fall back to the raw template so a typo in a
+    profile config never crashes an XMLTV refresh.
     """
     if not template:
         return ""
-
-    result = template
-
-    # Find all placeholders
-    placeholders = re.findall(r"\{(\w+)\}", result)
-
-    for placeholder in placeholders:
-        # Handle _normalize suffix
-        if placeholder.endswith("_normalize"):
-            base_key = placeholder[: -len("_normalize")]
-            value = groups.get(base_key, "")
-            if value:
-                normalized = re.sub(r"[^a-z0-9]", "", value.lower())
-                result = result.replace("{%s}" % placeholder, normalized)
-            else:
-                result = result.replace("{%s}" % placeholder, "")
-        elif placeholder in groups:
-            result = result.replace(
-                "{%s}" % placeholder, str(groups[placeholder])
-            )
-
-    return result
+    from template_engine import TemplateEngine, TemplateSyntaxError
+    engine = TemplateEngine()
+    try:
+        return engine.render(template, groups, lookups=lookups)
+    except TemplateSyntaxError:
+        logger.warning("[DUMMY-EPG] Template syntax error; falling back to raw: %r", template)
+        return template
 
 
 def _parse_month(value: str) -> int | None:
@@ -418,6 +409,7 @@ def generate_channel_xml(
     tvg_id: str,
     profile: dict,
     streams: list[dict] = None,
+    lookups: dict[str, dict[str, str]] | None = None,
 ) -> tuple[ET.Element, list[ET.Element]]:
     """
     Generate XMLTV <channel> and <programme> elements for one channel.
@@ -508,6 +500,10 @@ def generate_channel_xml(
                 return val
         return profile.get(field, "") or ""
 
+    # All template rendering inside this function binds the same lookups dict.
+    def _render(template: str, groups: dict) -> str:
+        return render_template(template, groups, lookups=lookups)
+
     if groups is not None:
         # Matched -- compute times and render templates
         time_vars = compute_event_times(
@@ -521,17 +517,17 @@ def generate_channel_xml(
             if not isinstance(v, datetime)
         }
 
-        title = render_template(get_template("title_template"), template_groups)
-        description = render_template(get_template("description_template"), template_groups)
+        title = _render(get_template("title_template"), template_groups)
+        description = _render(get_template("description_template"), template_groups)
 
         # Channel logo — variant overrides profile
-        logo_url = render_template(get_template("channel_logo_url_template"), template_groups)
+        logo_url = _render(get_template("channel_logo_url_template"), template_groups)
         if logo_url:
             icon_el = ET.SubElement(channel_el, "icon")
             icon_el.set("src", logo_url)
 
         # Poster URL
-        poster_url = render_template(get_template("program_poster_url_template"), template_groups)
+        poster_url = _render(get_template("program_poster_url_template"), template_groups)
 
         start_dt = time_vars["start_dt"]
         end_dt = time_vars["end_dt"]
@@ -541,10 +537,10 @@ def generate_channel_xml(
         if has_time:
             # Upcoming filler: midnight to event start
             if start_dt > today_midnight:
-                upcoming_title = render_template(
+                upcoming_title = _render(
                     get_template("upcoming_title_template"), template_groups
                 )
-                upcoming_desc = render_template(
+                upcoming_desc = _render(
                     get_template("upcoming_description_template"), template_groups
                 )
                 programmes.append(_make_programme(
@@ -565,10 +561,10 @@ def generate_channel_xml(
 
             # Ended filler: event end to next midnight
             if end_dt < tomorrow_midnight:
-                ended_title = render_template(
+                ended_title = _render(
                     get_template("ended_title_template"), template_groups
                 )
-                ended_desc = render_template(
+                ended_desc = _render(
                     get_template("ended_description_template"), template_groups
                 )
                 programmes.append(_make_programme(
@@ -590,22 +586,22 @@ def generate_channel_xml(
         # Fallback -- no pattern match
         template_groups = dict(base_groups)
 
-        fallback_title = render_template(
+        fallback_title = _render(
             get_template("fallback_title_template"), template_groups
         )
-        fallback_desc = render_template(
+        fallback_desc = _render(
             get_template("fallback_description_template"), template_groups
         )
 
         # Channel logo (try with base groups)
-        logo_url = render_template(
+        logo_url = _render(
             get_template("channel_logo_url_template"), template_groups
         )
         if logo_url:
             icon_el = ET.SubElement(channel_el, "icon")
             icon_el.set("src", logo_url)
 
-        poster_url = render_template(
+        poster_url = _render(
             get_template("program_poster_url_template"), template_groups
         )
 
@@ -691,7 +687,12 @@ def generate_xmltv(
     return xml_declaration + tree_str
 
 
-def preview_pipeline(config: dict, sample_name: str) -> dict:
+def preview_pipeline(
+    config: dict,
+    sample_name: str,
+    lookups: dict[str, dict[str, str]] | None = None,
+    include_trace: bool = False,
+) -> dict:
     """
     Run the full EPG pipeline on a sample name and return preview results.
 
@@ -770,25 +771,59 @@ def preview_pipeline(config: dict, sample_name: str) -> dict:
             if not isinstance(v, datetime)
         }
 
-        rendered["title"] = render_template(get_template("title_template"), template_groups)
-        rendered["description"] = render_template(get_template("description_template"), template_groups)
-        rendered["upcoming_title"] = render_template(get_template("upcoming_title_template"), template_groups)
-        rendered["upcoming_description"] = render_template(get_template("upcoming_description_template"), template_groups)
-        rendered["ended_title"] = render_template(get_template("ended_title_template"), template_groups)
-        rendered["ended_description"] = render_template(get_template("ended_description_template"), template_groups)
-        rendered["fallback_title"] = render_template(get_template("fallback_title_template"), template_groups)
-        rendered["fallback_description"] = render_template(get_template("fallback_description_template"), template_groups)
-        rendered["channel_logo_url"] = render_template(get_template("channel_logo_url_template"), template_groups)
-        rendered["program_poster_url"] = render_template(get_template("program_poster_url_template"), template_groups)
+        traces: dict[str, list] = {}
+
+        def _render_field(field: str) -> str:
+            tpl = get_template(field)
+            if include_trace and tpl:
+                try:
+                    from template_engine import TemplateEngine, TemplateSyntaxError
+                    out, steps = TemplateEngine().render_with_trace(tpl, template_groups, lookups=lookups)
+                    traces[field] = steps
+                    return out
+                except TemplateSyntaxError:
+                    traces[field] = [{"kind": "error", "message": "template syntax error"}]
+                    return tpl
+            return render_template(tpl, template_groups, lookups=lookups)
+
+        for field in (
+            "title_template", "description_template",
+            "upcoming_title_template", "upcoming_description_template",
+            "ended_title_template", "ended_description_template",
+            "fallback_title_template", "fallback_description_template",
+            "channel_logo_url_template", "program_poster_url_template",
+        ):
+            rendered_key = field.removesuffix("_template")
+            # rendered uses shorter keys (title, upcoming_title, channel_logo_url, etc.)
+            if field == "channel_logo_url_template":
+                rendered_key = "channel_logo_url"
+            elif field == "program_poster_url_template":
+                rendered_key = "program_poster_url"
+            rendered[rendered_key] = _render_field(field)
     else:
         # Fallback rendering with base groups only
         template_groups = dict(base_groups)
-        rendered["fallback_title"] = render_template(get_template("fallback_title_template"), template_groups)
-        rendered["fallback_description"] = render_template(get_template("fallback_description_template"), template_groups)
-        rendered["channel_logo_url"] = render_template(get_template("channel_logo_url_template"), template_groups)
-        rendered["program_poster_url"] = render_template(get_template("program_poster_url_template"), template_groups)
+        traces = {}
 
-    return {
+        def _render_field_fb(field: str) -> str:
+            tpl = get_template(field)
+            if include_trace and tpl:
+                from template_engine import TemplateEngine, TemplateSyntaxError
+                try:
+                    out, steps = TemplateEngine().render_with_trace(tpl, template_groups, lookups=lookups)
+                    traces[field] = steps
+                    return out
+                except TemplateSyntaxError:
+                    traces[field] = [{"kind": "error", "message": "template syntax error"}]
+                    return tpl
+            return render_template(tpl, template_groups, lookups=lookups)
+
+        rendered["fallback_title"] = _render_field_fb("fallback_title_template")
+        rendered["fallback_description"] = _render_field_fb("fallback_description_template")
+        rendered["channel_logo_url"] = _render_field_fb("channel_logo_url_template")
+        rendered["program_poster_url"] = _render_field_fb("program_poster_url_template")
+
+    result = {
         "original_name": sample_name,
         "substituted_name": substituted_name,
         "substitution_steps": substitution_steps,
@@ -798,17 +833,27 @@ def preview_pipeline(config: dict, sample_name: str) -> dict:
         "time_variables": time_variables,
         "rendered": rendered,
     }
+    if include_trace:
+        # `traces` is always defined when include_trace is true (both branches
+        # initialize it). Preserve the order callers render fields in.
+        result["traces"] = traces  # type: ignore[name-defined]
+    return result
 
 
-def preview_pipeline_batch(config: dict, sample_names: list[str]) -> list[dict]:
+def preview_pipeline_batch(
+    config: dict,
+    sample_names: list[str],
+    lookups: dict[str, dict[str, str]] | None = None,
+) -> list[dict]:
     """
     Run the preview pipeline on multiple sample names.
 
     Args:
         config: Profile configuration dict.
         sample_names: List of sample names to test.
+        lookups: Optional merged lookup-table dict (see preview_pipeline).
 
     Returns:
         List of preview result dicts, one per sample name.
     """
-    return [preview_pipeline(config, name) for name in sample_names]
+    return [preview_pipeline(config, name, lookups=lookups) for name in sample_names]

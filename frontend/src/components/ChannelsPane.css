@@ -1126,6 +1126,39 @@
   outline: none;
 }
 
+/* bd-eio04.13 — per-channel would-normalize indicator */
+.channel-normalize-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  margin-left: 0.25rem;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--warning, #f59e0b);
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.channel-normalize-indicator .material-icons {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.channel-normalize-indicator:hover {
+  background-color: var(--bg-hover);
+  color: var(--warning, #f59e0b);
+}
+
+.channel-normalize-indicator:focus-visible {
+  outline: 2px solid var(--accent-primary, #646cff);
+  outline-offset: 1px;
+}
+
 .channel-url {
   font-size: 0.65rem;
   color: var(--text-secondary);

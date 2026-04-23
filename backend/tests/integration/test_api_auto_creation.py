@@ -114,7 +114,13 @@ class TestAutoCreationRulesAPI:
         assert response.status_code == 200
 
     def test_create_rule_invalid_conditions(self, test_client, mock_db_session):
-        """Create rule fails with invalid conditions."""
+        """Create rule fails with invalid regex conditions.
+
+        Pre-bd-eio04.7 this returned 400 from ``validate_rule``. Now the
+        regex linter runs FIRST (so the error envelope is the new
+        ``REGEX_VALIDATION_ERROR`` shape) and an uncompilable pattern
+        yields 422 with a ``REGEX_COMPILE_ERROR`` code.
+        """
         response = test_client.post(
             "/api/auto-creation/rules",
             json={
@@ -124,8 +130,11 @@ class TestAutoCreationRulesAPI:
             }
         )
 
-        assert response.status_code == 400
-        assert "Invalid" in str(response.json()["detail"])
+        assert response.status_code == 422
+        body = response.json()
+        err = body["detail"]["error"]
+        assert err["code"] == "REGEX_VALIDATION_ERROR"
+        assert err["details"][0]["code"] == "REGEX_COMPILE_ERROR"
 
     def test_create_rule_invalid_actions(self, test_client, mock_db_session):
         """Create rule fails with invalid actions."""
@@ -319,10 +328,11 @@ class TestAutoCreationYAMLAPI:
         mock_rule.sort_regex = None
         mock_rule.stream_sort_field = None
         mock_rule.stream_sort_order = None
-        mock_rule.normalize_names = False
+        mock_rule.get_normalization_group_ids.return_value = []
         mock_rule.skip_struck_streams = False
         mock_rule.probe_on_sort = False
         mock_rule.orphan_action = "delete"
+        mock_rule.match_scope_target_group = False
         mock_db_session.query.return_value.order_by.return_value.all.return_value = [mock_rule]
 
         response = test_client.get("/api/auto-creation/export/yaml")
