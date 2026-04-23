@@ -429,6 +429,13 @@ async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRe
     # accept conditions/actions, so only sort_regex can carry a pattern.
     _lint_auto_creation_rule_request(None, None, scalar_update.sort_regex)
 
+    # Only mutations that touch rule logic (conditions/actions) need post-update
+    # schema validation. Scalars-only bulk edits (enabled, priority, sort fields,
+    # …) must not be blocked by pre-existing schema drift in untouched rows
+    # (bd-z7xqy). Bulk-update does not accept raw conditions/actions, so today
+    # the only logic mutation is merge_streams_remove_non_matching.
+    mutated_rule_logic = merge_streams_remove_non_matching is not None
+
     session = get_session()
     try:
         updated: list = []
@@ -447,14 +454,15 @@ async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRe
                 )
                 rule.actions = json.dumps(new_actions)
 
-            conditions = rule.get_conditions()
-            actions = rule.get_actions()
-            validation = validate_rule(conditions, actions)
-            if not validation["valid"]:
-                raise HTTPException(status_code=400, detail={
-                    "message": f"Invalid rule configuration for rule id={rid}",
-                    "errors": validation["errors"],
-                })
+            if mutated_rule_logic:
+                conditions = rule.get_conditions()
+                actions = rule.get_actions()
+                validation = validate_rule(conditions, actions)
+                if not validation["valid"]:
+                    raise HTTPException(status_code=400, detail={
+                        "message": f"Invalid rule configuration for rule id={rid}",
+                        "errors": validation["errors"],
+                    })
             updated.append(rule)
 
         session.commit()
