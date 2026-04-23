@@ -5,6 +5,20 @@ name: "ECM CodeQL Configuration"
 # escaping newlines and carriage returns before they reach the formatter.
 # CodeQL's static analysis cannot trace through Python's logging framework
 # internals, so we exclude this query to avoid false positives.
+#
+# Unused global variable (py/unused-global-variable) on Alembic migration
+# files: every migration declares module-level identifiers (`revision`,
+# `down_revision`, `branch_labels`, `depends_on`) that Alembic reads via
+# runtime module introspection (getattr on the loaded migration module).
+# CodeQL's static analysis cannot see the framework consuming these, so
+# every new migration file generates 4 note-severity false positives
+# (see PR #110, alerts 1466-1469 dismissed as false-positive). Exclusion
+# is scoped to backend/alembic/versions/** only — all other CodeQL queries
+# (including SQL injection) still run against migration files.
 query-filters:
   - exclude:
       id: py/log-injection
+  - exclude:
+      id: py/unused-global-variable
+      paths:
+        - backend/alembic/versions/**
