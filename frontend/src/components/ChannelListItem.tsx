@@ -45,6 +45,14 @@ export interface ChannelListItemProps {
   hasBlackScreenStreams?: boolean;
   hasLowFpsStreams?: boolean;
   onPreviewChannel?: () => void;
+  /**
+   * bd-eio04.13 — proposed normalized name if the current channel name
+   * would change under the active normalization rules. Undefined if
+   * the row is already normalized or the preview has not loaded yet.
+   */
+  proposedNormalizedName?: string;
+  /** Click handler for the would-normalize indicator. */
+  onShowNormalizePreview?: () => void;
 }
 
 interface ChannelMenuProps {
@@ -237,6 +245,8 @@ export const ChannelListItem = memo(function ChannelListItem({
   hasBlackScreenStreams = false,
   hasLowFpsStreams = false,
   onPreviewChannel,
+  proposedNormalizedName,
+  onShowNormalizePreview,
 }: ChannelListItemProps) {
   const {
     attributes,
@@ -374,6 +384,22 @@ export const ChannelListItem = memo(function ChannelListItem({
         >
           {channel.name}
         </span>
+      )}
+      {proposedNormalizedName && !isEditingName && (
+        <button
+          type="button"
+          className="channel-normalize-indicator"
+          aria-label={`Channel name would normalize to "${proposedNormalizedName}". Click to preview.`}
+          title={`This name would be normalized to "${proposedNormalizedName}". Click to preview.`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onShowNormalizePreview?.();
+          }}
+          data-testid={`channel-normalize-indicator-${channel.id}`}
+          data-channel-id={channel.id}
+        >
+          <span className="material-icons" aria-hidden="true">auto_fix_high</span>
+        </button>
       )}
       {showStreamUrls && channelUrl && (
         <span className="channel-url" title={channelUrl}>

@@ -1,0 +1,89 @@
+rules:
+  # ---------------------------------------------------------------------
+  # bd-eio04.8 — block bare stdlib `re.*` on dynamic (non-literal) patterns.
+  #
+  # The rule flags a `re.search/match/sub/compile/findall/finditer` call
+  # whose first argument is anything OTHER than a raw-string literal
+  # (`r"..."` / `r'...'`). Raw-string literals are the ECM convention for
+  # module-level compiled constants (`_UPPER_SNAKE_RE = re.compile(r"…")`)
+  # and are safe — their value is authored in source and cannot be
+  # attacker-controlled.
+  #
+  # Any non-literal first arg — a bare variable, an f-string, or a
+  # string-concatenation expression — can carry a user-supplied pattern
+  # and must route through `backend.safe_regex` so the ReDoS timeout and
+  # pattern-length cap apply. See `docs/style_guide.md#regex`.
+  #
+  # Exclusions:
+  #   backend/safe_regex.py  — the wrapper itself calls `regex` not `re`,
+  #                             but we exclude to be defensive.
+  #   backend/tests/**       — test fixtures intentionally exercise
+  #                             dynamic patterns (including malicious
+  #                             ones) to verify ReDoS behaviour. Running
+  #                             safe_regex in tests is already covered
+  #                             by unit tests on safe_regex itself.
+  # ---------------------------------------------------------------------
+  - id: no-bare-re-on-dynamic-pattern
+    patterns:
+      - pattern-either:
+          - pattern: re.search($PAT, ...)
+          - pattern: re.match($PAT, ...)
+          - pattern: re.fullmatch($PAT, ...)
+          - pattern: re.sub($PAT, ...)
+          - pattern: re.subn($PAT, ...)
+          - pattern: re.split($PAT, ...)
+          - pattern: re.compile($PAT, ...)
+          - pattern: re.findall($PAT, ...)
+          - pattern: re.finditer($PAT, ...)
+      # Exempt raw-string literal patterns (`re.compile(r"...")`) — the
+      # ECM convention for module-level compiled constants.
+      - pattern-not: re.search(r"...", ...)
+      - pattern-not: re.match(r"...", ...)
+      - pattern-not: re.fullmatch(r"...", ...)
+      - pattern-not: re.sub(r"...", ...)
+      - pattern-not: re.subn(r"...", ...)
+      - pattern-not: re.split(r"...", ...)
+      - pattern-not: re.compile(r"...", ...)
+      - pattern-not: re.findall(r"...", ...)
+      - pattern-not: re.finditer(r"...", ...)
+      # Exempt f-strings whose interpolations go through `re.escape(...)`.
+      # `re.escape` neutralizes user input as a literal — the resulting
+      # pattern has no metacharacters from the interpolated value and so
+      # cannot backtrack catastrophically on that value. This covers the
+      # `rf"\b{re.escape(x)}\b"` idiom used throughout stream_normalization,
+      # epg_matching, auto_creation_engine, and similar modules where
+      # hardcoded lists are compiled into bounded word-boundary patterns.
+      - pattern-not: re.search(rf"...{re.escape(...)}...", ...)
+      - pattern-not: re.match(rf"...{re.escape(...)}...", ...)
+      - pattern-not: re.fullmatch(rf"...{re.escape(...)}...", ...)
+      - pattern-not: re.sub(rf"...{re.escape(...)}...", ...)
+      - pattern-not: re.subn(rf"...{re.escape(...)}...", ...)
+      - pattern-not: re.split(rf"...{re.escape(...)}...", ...)
+      - pattern-not: re.compile(rf"...{re.escape(...)}...", ...)
+      - pattern-not: re.findall(rf"...{re.escape(...)}...", ...)
+      - pattern-not: re.finditer(rf"...{re.escape(...)}...", ...)
+      # Exempt raw-string concatenations where all interpolated segments
+      # use `re.escape(...)`. Covers `r'\b' + re.escape(x) + r'\b'`.
+      - pattern-not: re.search(r"..." + re.escape(...) + r"...", ...)
+      - pattern-not: re.match(r"..." + re.escape(...) + r"...", ...)
+      - pattern-not: re.compile(r"..." + re.escape(...) + r"...", ...)
+      - pattern-not: re.sub(r"..." + re.escape(...) + r"...", ...)
+      - pattern-not: re.findall(r"..." + re.escape(...) + r"...", ...)
+      - pattern-not: re.finditer(r"..." + re.escape(...) + r"...", ...)
+    message: >-
+      Dynamic regex pattern must use `backend.safe_regex`, not stdlib `re`
+      (ReDoS protection). The stdlib `re` engine has no timeout — a
+      pathological user-supplied pattern can pin a CPU core indefinitely.
+      Route this call through `safe_regex.search/match/sub/compile` which
+      wraps the third-party `regex` library with a 100ms per-call timeout
+      and a 500-char pattern length cap. Module-level compiled constants
+      authored from raw-string literals (`r"..."`) are exempt — this rule
+      only fires on non-literal first arguments. See
+      `docs/style_guide.md#regex` for the full convention.
+    languages:
+      - python
+    severity: ERROR
+    paths:
+      exclude:
+        - "backend/tests/**"
+        - "backend/safe_regex.py"

@@ -20,6 +20,7 @@ from config import get_settings
 from csv_handler import parse_csv, generate_csv, generate_template, CSVParseError
 from database import get_session
 from dispatcharr_client import get_client
+from normalization_engine import get_normalization_engine
 import journal
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,38 @@ class BulkMergeItem(BaseModel):
 
 class BulkMergeRequest(BaseModel):
     merges: list[BulkMergeItem]
+
+
+class NormalizePreviewBatchItem(BaseModel):
+    """Single row in a batch normalize-preview request.
+
+    The frontend already knows the current channel name from the list
+    response — passing it here avoids an extra Dispatcharr roundtrip per
+    row. bd-eio04.13.
+    """
+    channel_id: int
+    name: str
+
+
+class NormalizePreviewBatchRequest(BaseModel):
+    """bd-eio04.13 — batch preview of would_normalize for currently-visible channel rows.
+
+    Accepts either:
+      - `channels`: list of {channel_id, name} pairs (preferred — no
+        Dispatcharr roundtrip, O(rules × M) instead of O(rules × M) +
+        M HTTP calls).
+      - `channel_ids`: list of ids (fallback — the backend fetches each
+        name from Dispatcharr). Retained for deep-link scenarios where
+        the caller only has IDs.
+    Exactly one of the two must be populated.
+    """
+    channels: Optional[list[NormalizePreviewBatchItem]] = None
+    channel_ids: Optional[list[int]] = None
+
+
+# Upper bound on a single batch to keep per-request cost O(rules × 100).
+# Frontend pages above this if more rows are visible. See bd-eio04.13.
+NORMALIZE_PREVIEW_BATCH_MAX = 100
 
 
 # Bulk commit operation types
@@ -1541,6 +1574,111 @@ async def bulk_commit_operations(request: BulkCommitRequest):
         return result
 
 
+@router.post("/normalize-preview-batch")
+async def normalize_preview_batch(request: NormalizePreviewBatchRequest):
+    """bd-eio04.13 — batch would-normalize preview for channel list rows.
+
+    Per-row result:
+
+        {
+          "channel_id": int,
+          "current_name": str,
+          "proposed_name": str,
+          "would_change": bool,
+          "transformations": [{rule_id, before, after}, ...],
+        }
+
+    Prefers the `channels` payload ({channel_id, name}) when provided —
+    no Dispatcharr roundtrip, O(rules × M) total cost. Falls back to
+    `channel_ids` for callers that only have IDs (e.g. deep-link flows);
+    in that case the backend fetches each name from Dispatcharr and
+    silently skips rows it can't resolve.
+
+    Batch size is capped at NORMALIZE_PREVIEW_BATCH_MAX (100) rows. The
+    frontend is responsible for paging above that window.
+    """
+    if request.channels is not None and request.channel_ids is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide exactly one of 'channels' or 'channel_ids', not both.",
+        )
+
+    rows = request.channels or []
+    ids_only: list[int] = list(request.channel_ids or [])
+    total = len(rows) + len(ids_only)
+
+    if total > NORMALIZE_PREVIEW_BATCH_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Too many rows ({total}); maximum "
+                f"{NORMALIZE_PREVIEW_BATCH_MAX} per batch."
+            ),
+        )
+
+    if total == 0:
+        return {"results": []}
+
+    logger.debug(
+        "[CHANNELS] POST /normalize-preview-batch - rows=%s ids_only=%s",
+        len(rows), len(ids_only),
+    )
+
+    session = get_session()
+    try:
+        engine = get_normalization_engine(session)
+        results: list[dict] = []
+        start = time.time()
+
+        # Fast path: names already supplied by caller.
+        for row in rows:
+            current_name = row.name or ""
+            preview = engine.normalize(current_name)
+            proposed = preview.normalized
+            results.append({
+                "channel_id": row.channel_id,
+                "current_name": current_name,
+                "proposed_name": proposed,
+                "would_change": proposed != current_name,
+                "transformations": [
+                    {"rule_id": t[0], "before": t[1], "after": t[2]}
+                    for t in (preview.transformations or [])
+                ],
+            })
+
+        # Fallback path: fetch names for bare IDs via Dispatcharr.
+        if ids_only:
+            client = get_client()
+            for cid in ids_only:
+                try:
+                    channel = await client.get_channel(cid)
+                except Exception as exc:
+                    logger.debug("[CHANNELS] normalize-preview: skipped id=%s: %s", cid, exc)
+                    continue
+                current_name = (channel or {}).get("name") or ""
+                preview = engine.normalize(current_name)
+                proposed = preview.normalized
+                results.append({
+                    "channel_id": cid,
+                    "current_name": current_name,
+                    "proposed_name": proposed,
+                    "would_change": proposed != current_name,
+                    "transformations": [
+                        {"rule_id": t[0], "before": t[1], "after": t[2]}
+                        for t in (preview.transformations or [])
+                    ],
+                })
+
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug(
+            "[CHANNELS] normalize-preview-batch: resolved %d/%d in %.1fms",
+            len(results), total, elapsed_ms,
+        )
+        return {"results": results}
+    finally:
+        session.close()
+
+
 @router.post("/clear-auto-created")
 async def clear_auto_created_flag(request: ClearAutoCreatedRequest):
     """Clear the auto_created flag from all channels in the specified groups.
@@ -1657,6 +1795,49 @@ async def get_channel(channel_id: int):
         return result
     except Exception as e:
         logger.exception("[CHANNELS] Failed to fetch channel id=%s", channel_id)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/{channel_id}/normalize-preview")
+async def normalize_preview_single(channel_id: int):
+    """bd-eio04.13 — would-normalize preview for a single channel.
+
+    Returns `{channel_id, current_name, proposed_name, would_change,
+    transformations}` by fetching the channel from Dispatcharr and running
+    the active NormalizationEngine against its current name.
+    """
+    logger.debug("[CHANNELS] GET /channels/%s/normalize-preview", channel_id)
+    client = get_client()
+    try:
+        start = time.time()
+        channel = await client.get_channel(channel_id)
+        current_name = (channel or {}).get("name") or ""
+
+        session = get_session()
+        try:
+            engine = get_normalization_engine(session)
+            preview = engine.normalize(current_name)
+        finally:
+            session.close()
+
+        proposed = preview.normalized
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug(
+            "[CHANNELS] normalize-preview id=%s '%s' -> '%s' in %.1fms",
+            channel_id, current_name, proposed, elapsed_ms,
+        )
+        return {
+            "channel_id": channel_id,
+            "current_name": current_name,
+            "proposed_name": proposed,
+            "would_change": proposed != current_name,
+            "transformations": [
+                {"rule_id": t[0], "before": t[1], "after": t[2]}
+                for t in (preview.transformations or [])
+            ],
+        }
+    except Exception as e:
+        logger.exception("[CHANNELS] Failed normalize-preview for id=%s: %s", channel_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

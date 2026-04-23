@@ -163,6 +163,60 @@ export async function getChannelStreams(channelId: number): Promise<Stream[]> {
   return fetchJson(`${API_BASE}/channels/${channelId}/streams`);
 }
 
+// -----------------------------------------------------------------------------
+// bd-eio04.13 — would-normalize preview for channel rows
+// -----------------------------------------------------------------------------
+
+export interface NormalizePreviewTransformation {
+  rule_id: number;
+  before: string;
+  after: string;
+}
+
+export interface NormalizePreviewResult {
+  channel_id: number;
+  current_name: string;
+  proposed_name: string;
+  would_change: boolean;
+  transformations: NormalizePreviewTransformation[];
+}
+
+/**
+ * bd-eio04.13 — Preview the normalized name for a single channel.
+ * Returns `would_change=true` if the current name differs from what the
+ * active NormalizationEngine would produce.
+ */
+export async function getChannelNormalizePreview(
+  channelId: number,
+  options?: { signal?: AbortSignal },
+): Promise<NormalizePreviewResult> {
+  return fetchJson(`${API_BASE}/channels/${channelId}/normalize-preview`, {
+    signal: options?.signal,
+  });
+}
+
+/**
+ * bd-eio04.13 — Batch preview for currently-visible channel rows.
+ *
+ * Prefer the `channels` form ({id, name}): the frontend already knows the
+ * names, so passing them avoids one Dispatcharr roundtrip per row. Capped
+ * at 100 rows per request — the caller is responsible for paging beyond
+ * that window. Backend silently skips rows it can't resolve, so the
+ * result set may be smaller than the input.
+ */
+export async function getChannelsNormalizePreviewBatch(
+  channels: Array<{ id: number; name: string }>,
+  options?: { signal?: AbortSignal },
+): Promise<{ results: NormalizePreviewResult[] }> {
+  return fetchJson(`${API_BASE}/channels/normalize-preview-batch`, {
+    method: 'POST',
+    body: JSON.stringify({
+      channels: channels.map(c => ({ channel_id: c.id, name: c.name })),
+    }),
+    signal: options?.signal,
+  });
+}
+
 export async function updateChannel(id: number, data: Partial<Channel>): Promise<Channel> {
   return fetchJson(`${API_BASE}/channels/${id}`, {
     method: 'PATCH',

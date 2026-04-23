@@ -14,7 +14,6 @@ on:
       - dev
     paths-ignore:
       - '.beads/**'
-      - '**.md'
   workflow_dispatch:
 
 jobs:
@@ -137,3 +136,42 @@ jobs:
           path: frontend/coverage/
           if-no-files-found: ignore
           retention-days: 14
+
+  # ─── Semgrep lint (ReDoS / safe_regex guard — bd-eio04.8) ──────────────
+  # Enforces the `no-bare-re-on-dynamic-pattern` rule in .semgrep.yml so
+  # new PRs cannot introduce a stdlib `re.search/match/sub/compile/…` call
+  # on a non-literal pattern. See docs/style_guide.md#regex for the
+  # full convention. Rule-level excludes cover backend/tests/** and
+  # backend/safe_regex.py; case-by-case exemptions are annotated inline
+  # with `# nosemgrep: no-bare-re-on-dynamic-pattern` + justification or
+  # a TODO(<bead-id>) pointer to a follow-up migration.
+  semgrep-lint:
+    name: Semgrep Lint
+    runs-on: ubuntu-latest
+    # Pinned image tag — semgrep 1.160.x (matches the version used to
+    # author and validate the .semgrep.yml rule). Bump deliberately; the
+    # rule self-test under .semgrep/tests/ is the canary for regressions.
+    container:
+      image: returntocorp/semgrep:1.160.0
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Validate Semgrep rule config
+        run: semgrep --validate --config .semgrep.yml
+
+      - name: Run Semgrep rule self-test
+        # Runs the fixture file (`# ruleid:` / `# ok:` annotations) against
+        # the live .semgrep.yml so the test locks the rule's accept/reject
+        # boundary — if the rule drifts, the self-test fails before the
+        # backend scan runs.
+        run: |
+          semgrep --test \
+            --config .semgrep.yml \
+            .semgrep/tests/no-bare-re-on-dynamic-pattern.py
+
+      - name: Run Semgrep against backend/
+        run: |
+          # --error flag exits non-zero on any finding. The rule is
+          # severity: ERROR so any hit blocks the job.
+          semgrep --config .semgrep.yml --error backend/

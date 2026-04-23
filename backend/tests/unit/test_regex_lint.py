@@ -232,7 +232,9 @@ class TestRegexCompileError:
         v = lint_pattern(r"^(")[0]
         assert v.code == "REGEX_COMPILE_ERROR"
         assert "sha256=" not in v.message
-        assert "/docs/patterns" in v.message
+        # Linter error messages must link back to the style-guide Regex
+        # section so the 422 response is actionable (bd-eio04.8).
+        assert "docs/style_guide.md#regex" in v.message
 
     def test_compile_error_short_circuits_ast_walk(self):
         """A pattern that can't compile MUST NOT also be AST-walked —
@@ -241,6 +243,39 @@ class TestRegexCompileError:
         viols = lint_pattern(r"^(unclosed")
         codes = {v.code for v in viols}
         assert codes == {"REGEX_COMPILE_ERROR"}
+
+
+class TestDocsURL:
+    """DOCS_URL must point at the live style-guide Regex section.
+
+    bd-eio04.8 replaced the bd-eio04.7 placeholder (``/docs/patterns``) with
+    an anchored link to ``docs/style_guide.md#regex``. These assertions lock
+    the value so any future rename surfaces as a test failure — the URL is
+    also baked into end-user-facing 422 error messages.
+    """
+
+    def test_docs_url_points_to_style_guide_regex_anchor(self):
+        assert regex_lint.DOCS_URL == "docs/style_guide.md#regex"
+
+    def test_docs_url_is_not_the_bd_eio04_7_placeholder(self):
+        # Guards against a stray revert — the original placeholder was
+        # '/docs/patterns' and is dead as of bd-eio04.8.
+        assert regex_lint.DOCS_URL != "/docs/patterns"
+
+    def test_all_lint_messages_embed_docs_url(self):
+        """Every user-facing violation message must link to the guide."""
+        # One pattern per code path.
+        too_long = "a" * (regex_lint.MAX_PATTERN_LEN + 1)
+        bad_compile = "^("
+        nested = "(a+)+b"
+        for pattern in (too_long, bad_compile, nested):
+            viols = lint_pattern(pattern)
+            assert viols, f"expected violations for {pattern!r}"
+            for v in viols:
+                assert regex_lint.DOCS_URL in v.message, (
+                    f"violation code={v.code} message missing DOCS_URL: "
+                    f"{v.message!r}"
+                )
 
 
 class TestRegexNestedQuantifier:

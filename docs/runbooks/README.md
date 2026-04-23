@@ -16,6 +16,13 @@ Operational playbooks for on-call and incident response. Read during incidents, 
 |-|-|-|
 | [v0.16.0 Hard Rollback](./v0.16.0-rollback.md) | Post-release rollback of a tagged version across git, GitHub Release, and GHCR | 2026-04-20 (real incident) |
 | [NormalizationPolicy Unified Mode](./normalization-unified-policy.md) | `ECM_NORMALIZATION_UNIFIED_POLICY` — rollback switch for the bd-eio04.1 unified Unicode preprocessor (GH #104) | Not exercised |
+| [Normalization Canary Divergence](./normalization-canary-divergence.md) | Nightly canary detected Test Rules vs Auto Create output drift — SLO-5 breach, zero error budget | Not exercised |
+| [Duplicate Channels — Unicode Suffix](./duplicate-channels-unicode-suffix.md) | Manual triage for user-reported duplicate channels caused by Unicode-suffix divergence (ᴴᴰ / ² / ZWSP / NFD) | Not exercised |
+| [Request Timeouts, Concurrency, CPU Offload](./request-timeout.md) | 504 / 503 response patterns; `ECM_REQUEST_TIMEOUT_SECONDS` + `ECM_LIMIT_CONCURRENCY` + CPU pool tuning (bd-w3z4h) | Not exercised |
+| [HTTP Error Rate](./http_error_rate.md) | SLO-1 breach — 5xx rate elevated above budget | Not exercised |
+| [HTTP Latency](./http_latency.md) | SLO-2 breach — P95 latency elevated above budget | Not exercised |
+| [Readiness Availability](./readiness_availability.md) | Readiness check failing across sub-checks | Not exercised |
+| [Readiness Sub-check Latency](./readiness_subcheck_latency.md) | Individual readiness sub-check exceeding its latency budget | Not exercised |
 
 ## Adding a runbook
 
