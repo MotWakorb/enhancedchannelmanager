@@ -425,6 +425,10 @@ async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRe
 
     scalar_update = UpdateAutoCreationRuleRequest(**payload) if payload else UpdateAutoCreationRuleRequest()
 
+    # Lint sort_regex (bd-eio04.7) before any DB work. Bulk-update does not
+    # accept conditions/actions, so only sort_regex can carry a pattern.
+    _lint_auto_creation_rule_request(None, None, scalar_update.sort_regex)
+
     session = get_session()
     try:
         updated: list = []
