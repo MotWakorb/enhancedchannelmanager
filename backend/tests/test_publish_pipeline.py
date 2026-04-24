@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from export_models import PlaylistProfile, CloudStorageTarget, PublishConfiguration, PublishHistory
-from cloud_storage.base import ConnectionTestResult
 
 
 def _create_profile(session, **overrides):
@@ -261,7 +260,8 @@ class TestPublishConfigCRUD:
     @patch("routers.export.journal")
     async def test_list_with_names(self, mock_journal, async_client, test_session):
         profile = _create_profile(test_session, name="My Profile")
-        config = _create_config(test_session, profile.id, name="My Config")
+        # Config is created so the list endpoint returns a row (side effect on test_session).
+        _create_config(test_session, profile.id, name="My Config")
         response = await async_client.get("/api/export/publish-configs")
         data = response.json()
         assert len(data) == 1

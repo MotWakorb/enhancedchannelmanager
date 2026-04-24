@@ -46,7 +46,7 @@ def register(mcp: FastMCP):
         """Mark all notifications as read."""
         try:
             client = get_ecm_client()
-            result = await client.patch("/api/notifications/mark-all-read")
+            await client.patch("/api/notifications/mark-all-read")
             return "All notifications marked as read."
         except Exception as e:
             logger.error("[MCP] mark_notifications_read failed: %s", e)
