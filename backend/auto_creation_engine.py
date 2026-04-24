@@ -1764,7 +1764,6 @@ class AutoCreationEngine:
         for src_id in dummy_source_ids:
             src = source_by_id.get(src_id)
             source_name = src.get("name", f"Source {src_id}") if src else f"Source {src_id}"
-            source_url = src.get("url", "") if src else ""
 
             if dry_run:
                 results["dry_run_results"].append({

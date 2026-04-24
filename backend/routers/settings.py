@@ -1052,7 +1052,11 @@ async def get_mcp_status():
             r = await client.get(mcp_url)
             r.raise_for_status()
             return {"reachable": True, **r.json()}
-    except Exception as e:
-        logger.debug("[SETTINGS] MCP health check failed: %s", e)
-        return {"reachable": False, "error": str(e)}
-    return {"status": "revoked"}
+    except Exception as e:  # noqa: F841 — exception class accessed via type(e)
+        # CodeQL py/stack-trace-exposure (#1415, bd-m8i9q): log the full
+        # exception for operator diagnosis but only return the exception
+        # class to the client. ADR-005 disallows "won't fix" dismissal.
+        # Trailing "return {'status': 'revoked'}" was unreachable and
+        # removed (bd-kdsn3 py/unreachable-statement at original L1058).
+        logger.exception("[SETTINGS] MCP health check failed")
+        return {"reachable": False, "error": type(e).__name__}

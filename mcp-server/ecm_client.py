@@ -27,6 +27,8 @@ def _get_client() -> httpx.AsyncClient:
                 import asyncio
                 asyncio.get_event_loop().create_task(_client.aclose())
             except Exception:
+                # No running loop or shutdown already in progress: drop the old
+                # client; httpx will close its sockets when the object is GC'd.
                 pass
         _client = httpx.AsyncClient(
             base_url=ECM_URL,

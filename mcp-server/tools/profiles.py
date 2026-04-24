@@ -67,7 +67,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.patch(
+            await client.patch(
                 f"/api/channel-profiles/{profile_id}/channels/bulk-update",
                 json_data={"channel_ids": channel_ids},
             )

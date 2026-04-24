@@ -26,6 +26,7 @@ Operational playbooks for on-call and incident response. Read during incidents, 
 | [Dep-Bump Fresh-Image Smoke Test](./dep-bump-smoke-test.md) | Pre-merge ADR-001 fresh-image smoke for dependency-upgrade PRs (`scripts/smoke_test_dev_container.sh`) — workflow runbook, not paging | 2026-04-23 (script self-test) |
 | [Dep-Bump Backend ASGI Regression](./dep-bump-backend-asgi-regression.md) | Post-merge rollback when PR1 of the v0.16.0 dep-bump epic (fastapi / starlette / uvicorn triplet) regresses the request path | Not exercised |
 | [Dep-Bump Frontend Regression](./dep-bump-frontend-regression.md) | Post-merge rollback when PR5 (React 19 + Vite 8 + TS 6 + @dnd-kit) regresses the SPA — includes browser-cache verification | Not exercised |
+| [Infra-Side Cache Invalidation](./infra-cache-invalidation.md) | Operator-facing: flush reverse-proxy / CDN (nginx, Cloudflare, Varnish, generic) caches after a frontend release — companion to the browser-side dep-bump frontend runbook | Not exercised |
 
 ## Adding a runbook
 

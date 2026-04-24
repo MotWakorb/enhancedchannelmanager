@@ -4,7 +4,6 @@ Uses Fernet symmetric encryption with auto-generated key.
 """
 import json
 import logging
-from pathlib import Path
 
 from cryptography.fernet import Fernet
 
