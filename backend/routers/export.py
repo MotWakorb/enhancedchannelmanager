@@ -17,7 +17,7 @@ from cloud_storage.crypto import encrypt_credentials, decrypt_credentials
 from cloud_storage.onedrive_adapter import _validate_tenant_id, _validate_drive_id
 from database import get_session
 from dispatcharr_client import get_client
-from export_manager import ExportManager
+from export_manager import ExportManager, ExportPathError, _safe_export_path
 from export_models import PlaylistProfile, CloudStorageTarget, PublishConfiguration, PublishHistory
 from publish_pipeline import execute_publish, VALID_EVENT_TRIGGERS
 import journal
@@ -393,7 +393,14 @@ async def download_m3u(profile_id: int, regenerate: bool = False):
     if regenerate:
         await _export_manager.generate(profile_dict)
 
-    m3u_path = _export_manager.get_export_path(profile_id) / f"{prefix}.m3u"
+    # Canonicalize-and-verify (defense-in-depth for CodeQL py/path-injection
+    # alerts 1356-1357). prefix is Pydantic-validated by FILENAME_RE on every
+    # write path, but we don't rely on that — we re-verify containment under
+    # EXPORTS_DIR at the read sink. Mirrors backup.py:1170-1175 (bd-0a1pr).
+    try:
+        m3u_path = _safe_export_path(profile_id, f"{prefix}.m3u")
+    except ExportPathError:
+        raise HTTPException(status_code=400, detail="Invalid export path")
     if not m3u_path.exists():
         raise HTTPException(status_code=404, detail="M3U file not generated yet. Call generate first.")
 
@@ -429,7 +436,12 @@ async def download_xmltv(profile_id: int, regenerate: bool = False):
     if regenerate:
         await _export_manager.generate(profile_dict)
 
-    xmltv_path = _export_manager.get_export_path(profile_id) / f"{prefix}.xml"
+    # Canonicalize-and-verify (defense-in-depth for CodeQL py/path-injection
+    # alerts 1358-1359). See download_m3u above for rationale.
+    try:
+        xmltv_path = _safe_export_path(profile_id, f"{prefix}.xml")
+    except ExportPathError:
+        raise HTTPException(status_code=400, detail="Invalid export path")
     if not xmltv_path.exists():
         raise HTTPException(status_code=404, detail="XMLTV file not generated yet. Call generate first.")
 
