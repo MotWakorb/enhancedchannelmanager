@@ -212,8 +212,44 @@ export function getRelease(): string {
   return 'dev';
 }
 
-/** Read the feature flag; defaults to enabled unless explicitly "false". */
+// Runtime override honoring ``settings.telemetry_client_errors_enabled``.
+// ``undefined`` means "no runtime decision yet — use the build-time flag".
+// ``false`` means the operator explicitly toggled telemetry off; we
+// short-circuit before building the payload so a crashed app still
+// respects the operator's choice without a page refresh. Updated from
+// ``applySettings()`` in ``hooks/useAuth`` (or any settings-loading site)
+// via ``setTelemetryRuntimeEnabled``.
+let _runtimeTelemetryEnabled: boolean | undefined = undefined;
+
+/**
+ * Mirror ``settings.telemetry_client_errors_enabled`` from the backend
+ * onto the reporter. Call this after ``GET /api/settings`` resolves.
+ * Pass ``undefined`` to defer to the build-time flag only.
+ */
+export function setTelemetryRuntimeEnabled(enabled: boolean | undefined): void {
+  _runtimeTelemetryEnabled = enabled;
+}
+
+/** Test-only accessor — returns the current runtime override state. */
+export function getTelemetryRuntimeOverride(): boolean | undefined {
+  return _runtimeTelemetryEnabled;
+}
+
+/**
+ * Read the feature flag; defaults to enabled unless explicitly "false".
+ *
+ * Two gates:
+ *  1. Build-time ``VITE_ECM_ERROR_TELEMETRY_ENABLED`` — set at Vite build
+ *     to disable the reporter entirely (never sends, never listens).
+ *  2. Runtime override mirroring ``settings.telemetry_client_errors_enabled``
+ *     — the operator can flip the toggle in ECM's settings UI and the
+ *     reporter short-circuits on the next event without a rebuild.
+ *
+ * Either gate set to false disables sending.
+ */
 export function isTelemetryEnabled(): boolean {
+  // Runtime gate (operator toggle via /api/settings) wins when set.
+  if (_runtimeTelemetryEnabled === false) return false;
   try {
     const flag = (import.meta as { env?: Record<string, string> }).env?.VITE_ECM_ERROR_TELEMETRY_ENABLED;
     if (flag !== undefined && String(flag).toLowerCase() === 'false') {
@@ -334,5 +370,52 @@ export function installGlobalErrorHandlers(): void {
       message,
       stack,
     });
+  });
+
+  // Vite 5+ emits ``vite:preloadError`` on the window when a lazy-loaded
+  // chunk cannot be fetched (typically a stale client hitting a deployed
+  // build whose hashed chunk no longer exists on the server). This is
+  // the most common real-world failure after a deploy, and the reason
+  // ``kind: 'chunk_load'`` exists in the ADR-006 enum.
+  window.addEventListener('vite:preloadError', (event: Event) => {
+    const payloadEvent = event as Event & {
+      payload?: { message?: string; stack?: string };
+    };
+    const err = payloadEvent.payload as Error | undefined;
+    void reportClientError({
+      kind: 'chunk_load',
+      message: err?.message ?? 'Vite preload error',
+      stack: err?.stack ?? '',
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic-import catch helper
+// ---------------------------------------------------------------------------
+/**
+ * Wrap a ``React.lazy(() => import(...))`` loader so any failure to
+ * fetch the chunk produces a ``kind: 'chunk_load'`` report before the
+ * promise rejection propagates to ``window.onerror`` / the React
+ * suspense boundary.
+ *
+ * Usage:
+ * ```ts
+ * const MyTab = lazy(() => withImportTelemetry(import('./MyTab')));
+ * ```
+ *
+ * The wrapper re-rejects with the original error — it's a pure
+ * side-effect site that adds telemetry without changing callers' error
+ * handling contract. Suspense / ErrorBoundary still see the failure.
+ */
+export function withImportTelemetry<T>(loader: Promise<T>): Promise<T> {
+  return loader.catch((err: unknown) => {
+    const error = err as Error | undefined;
+    void reportClientError({
+      kind: 'chunk_load',
+      message: error?.message ?? 'Dynamic import failed',
+      stack: error?.stack ?? '',
+    });
+    throw err;
   });
 }
