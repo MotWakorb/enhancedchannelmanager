@@ -80,6 +80,7 @@ def get_entries(
     date_to: Optional[datetime] = None,
     search: Optional[str] = None,
     user_initiated: Optional[bool] = None,
+    batch_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     Query journal entries with filtering and pagination.
@@ -100,6 +101,8 @@ def get_entries(
         filters_applied.append(f"search={search!r}")
     if user_initiated is not None:
         filters_applied.append(f"user_initiated={user_initiated}")
+    if batch_id:
+        filters_applied.append(f"batch_id={batch_id}")
 
     logger.debug(
         "[JOURNAL] Querying entries: page=%s page_size=%s filters=[%s]",
@@ -126,6 +129,10 @@ def get_entries(
             )
         if user_initiated is not None:
             query = query.filter(JournalEntry.user_initiated == user_initiated)
+        if batch_id:
+            # Indexed filter on batch_id (idx_journal_batch_id, bd-dmu8w).
+            # Surfaces the bulk-operation correlation primitive (bd-91mcq) via the API (bd-s4sph).
+            query = query.filter(JournalEntry.batch_id == batch_id)
 
         # Get total count
         total_count = query.count()
