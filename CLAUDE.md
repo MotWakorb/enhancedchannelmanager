@@ -32,6 +32,28 @@ bd sync                       # Sync beads data only (NOT for code commits)
 - **NEVER chain `bd create` and `bd close`** — run them as separate commands
 - The `.git/beads-worktrees/dev` worktree is **only for beads issue tracking** (sparse checkout of `.beads/` only — no code files). Do NOT edit code there.
 
+## Invoking Personas (project-engineer, qa-engineer, sre, etc.)
+
+Personas are skills at `~/.claude/skills/<persona>/SKILL.md`, NOT subagent types. To spawn them — especially in parallel — use the Agent tool with `subagent_type: "general-purpose"` and load the persona identity in the prompt:
+
+```
+Read ~/.claude/skills/<persona>/SKILL.md for your domain scope.
+Read ~/.claude/skills/<persona>/identity.md (if present).
+Read ~/.claude/skills/_shared/engineering-discipline.md.
+
+You are the <Persona>. <question/task>
+```
+
+The canonical pattern is documented in `~/.claude/skills/spike/SKILL.md` (Step 3). Do NOT try `subagent_type: "project-engineer"` — the registered subagent types are only `general-purpose`, `Explore`, `Plan`, `claude-code-guide`, `statusline-setup`.
+
+For multi-persona workflows (team-plan, team-review, spike, grooming, standup, retro, onboard), invoke the orchestrating skill via the Skill tool — it handles the fan-out itself.
+
+## Sizing Vocabulary — No Calendar Estimates
+
+Size work as **Small / Medium / Large / Epic — needs decomposition** (per `~/.claude/skills/grooming/SKILL.md`). Do NOT give the PO calendar estimates in hours/days/weeks/months. Calendar estimates invite commitment theater and are almost always wrong.
+
+Exception — governance cadence rules from ADRs (e.g., ADR-001's "one major bump merged to `dev` per 7-day window") are project-defined constraints and can be quoted verbatim. Do not multiply them out into wall-time estimates ("7 bumps × 7 days = 7 weeks"). Quote the rule; let the PO do the arithmetic if they want it.
+
 ## Reference Guides
 
 | Guide | Location |
@@ -59,6 +81,18 @@ bd sync                       # Sync beads data only (NOT for code commits)
 | API Reference | `docs/api.md` |
 | SLOs | `docs/sre/slos.md` |
 | User Guide (operator-facing) | `docs/user_guide/` |
+| Graphify findings (past traces) | `graphify-out/memory/*.md` |
+| Graph audit report | `graphify-out/GRAPH_REPORT.md` |
+
+## Architecture Questions
+
+For codebase-architecture questions (how X connects to Y, what a component's role is, where the hot path runs), the order of precedence is:
+
+1. **`docs/architecture.md`** — the hand-curated system overview + auto-creation pipeline internals + MCP + external API contract.
+2. **`graphify-out/memory/*.md`** — saved Q&A from past graph traces. Each file is one question + answer. Greppable. Cheap to read.
+3. **Rebuild the graph** only if (1) and (2) don't cover it: `/graphify backend frontend docs`. Then query via `graphify query "..."` / `graphify explain "NodeName"` / `graphify path "A" "B"`.
+
+The raw `graph.json` and `cross-repo-graph.json` files are gitignored (large, machine-local paths). Rebuild on demand.
 
 **For coding conventions** (naming, module organization, comments, error
 handling, regex, CSS, lint, tests), `docs/style_guide.md` is the canonical
