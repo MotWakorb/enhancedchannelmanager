@@ -24,6 +24,8 @@ Operational playbooks for on-call and incident response. Read during incidents, 
 | [Readiness Availability](./readiness_availability.md) | Readiness check failing across sub-checks | Not exercised |
 | [Readiness Sub-check Latency](./readiness_subcheck_latency.md) | Individual readiness sub-check exceeding its latency budget | Not exercised |
 | [Dep-Bump Fresh-Image Smoke Test](./dep-bump-smoke-test.md) | Pre-merge ADR-001 fresh-image smoke for dependency-upgrade PRs (`scripts/smoke_test_dev_container.sh`) — workflow runbook, not paging | 2026-04-23 (script self-test) |
+| [Dep-Bump Backend ASGI Regression](./dep-bump-backend-asgi-regression.md) | Post-merge rollback when PR1 of the v0.16.0 dep-bump epic (fastapi / starlette / uvicorn triplet) regresses the request path | Not exercised |
+| [Dep-Bump Frontend Regression](./dep-bump-frontend-regression.md) | Post-merge rollback when PR5 (React 19 + Vite 8 + TS 6 + @dnd-kit) regresses the SPA — includes browser-cache verification | Not exercised |
 
 ## Adding a runbook
 
