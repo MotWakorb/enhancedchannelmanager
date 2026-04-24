@@ -1053,6 +1053,9 @@ async def get_mcp_status():
             r.raise_for_status()
             return {"reachable": True, **r.json()}
     except Exception as e:
-        logger.debug("[SETTINGS] MCP health check failed: %s", e)
-        return {"reachable": False, "error": str(e)}
+        # CodeQL py/stack-trace-exposure (#1415): log the full exception for
+        # operator diagnosis but only return the exception class to the
+        # client. ADR-005 disallows "won't fix" dismissal.
+        logger.exception("[SETTINGS] MCP health check failed")
+        return {"reachable": False, "error": type(e).__name__}
     return {"status": "revoked"}

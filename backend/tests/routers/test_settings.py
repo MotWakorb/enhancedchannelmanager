@@ -634,3 +634,44 @@ class TestMCPApiKeyAuthMiddleware:
             )
 
         assert response.status_code == 401
+
+
+class TestMCPStatusSanitization:
+    """CodeQL py/stack-trace-exposure (#1415): GET /api/settings/mcp-status
+    MUST sanitize the underlying httpx exception. The MCP server URL +
+    connection error text could leak internal port/network topology.
+    """
+
+    @pytest.mark.asyncio
+    async def test_mcp_status_unreachable_returns_class_only(self, async_client):
+        """When the MCP server is unreachable, error contains only the class."""
+        import httpx
+
+        secret_msg = (
+            "All connection attempts failed: "
+            "http://10.0.5.42:6101/health (network unreachable)"
+        )
+
+        class _BoomClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc_info):
+                return False
+
+            async def get(self, *args, **kwargs):
+                raise httpx.ConnectError(secret_msg)
+
+        with patch("httpx.AsyncClient", _BoomClient):
+            response = await async_client.get("/api/settings/mcp-status")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["reachable"] is False
+        # Sanitization: only the class name leaks.
+        assert body["error"] == "ConnectError"
+        assert "10.0.5.42" not in body["error"]
+        assert "network unreachable" not in body["error"]

@@ -216,11 +216,19 @@ class TestReadiness:
 
     @pytest.mark.asyncio
     async def test_ready_returns_503_when_db_fails(self, async_client):
-        """Ready endpoint returns 503 when the DB check fails."""
+        """Ready endpoint returns 503 when the DB check fails.
+
+        CodeQL py/stack-trace-exposure (#1414): /api/health/ready is
+        AUTH-EXEMPT, so the response body is unauthenticated. The detail
+        field MUST be the exception class only — not the message body, which
+        on real DBAPI errors can include connection strings, file paths, or
+        credentials embedded in driver-formatted text.
+        """
         mock_settings = MagicMock()
         mock_settings.url = ""  # dispatcharr skipped
         mock_session = MagicMock()
-        mock_session.execute.side_effect = RuntimeError("database is locked")
+        secret_message = "database is locked /var/secret/path/to/db.sqlite"
+        mock_session.execute.side_effect = RuntimeError(secret_message)
 
         with patch("routers.health.get_session", return_value=mock_session), \
              patch("routers.health.get_settings", return_value=mock_settings), \
@@ -231,7 +239,11 @@ class TestReadiness:
         data = response.json()
         assert data["status"] == "not_ready"
         assert data["checks"]["database"]["status"] == "fail"
-        assert "database is locked" in data["checks"]["database"]["detail"]
+        # Sanitization assertion: detail is the exception class name only.
+        assert data["checks"]["database"]["detail"] == "RuntimeError"
+        # Negative assertion: no part of the original error message leaks.
+        assert "database is locked" not in data["checks"]["database"]["detail"]
+        assert "/var/secret" not in data["checks"]["database"]["detail"]
 
     @pytest.mark.asyncio
     async def test_ready_returns_503_when_dispatcharr_times_out(self, async_client):
