@@ -1,10 +1,40 @@
 # ADR-001: Dependency Upgrade Validation Gate
 
 - **Status**: Accepted
-- **Date**: 2026-04-20 (proposed) / 2026-04-20 (accepted)
+- **Date**: 2026-04-20 (proposed) / 2026-04-20 (accepted) / 2026-04-23 (scope clarification amended — see Scope below)
 - **Author**: IT Architect persona (on behalf of PO)
 - **Bead**: `enhancedchannelmanager-xnqgo` (blocks epic `bd-6rrl5`)
-- **Related**: `enhancedchannelmanager-tp681` (flake baseline — complementary, not a substitute)
+- **Amendment Bead**: `enhancedchannelmanager-umaop` (2026-04-23 scope clarification)
+- **Related**:
+  - `enhancedchannelmanager-tp681` — flake baseline (complementary, not a substitute)
+  - `enhancedchannelmanager-sm3n3` — ADR-005 (code security gating; see Scope below for the boundary)
+  - `enhancedchannelmanager-4lk1q` — ADR-004 (release-cut promotion discipline; complementary backstop)
+
+## Scope
+
+This ADR governs **dependency upgrades only**. It is not a general code-security gating ADR.
+
+**In scope (ADR-001 governs):**
+- Cadence policy for major dependency bumps (one major bump per PR, ~1 per 7-day window — see "Dependency Upgrade Cadence" below).
+- The PR-to-`dev` validation gate for dependency upgrades: fresh-image build (`build-amd64`), DAST `/api/health` smoke (`dast-scan`), and Trivy CRITICAL/HIGH CVE scan (`trivy-scan`), triggered via `paths-filter` on dependency manifest files (`backend/requirements*.txt`, `frontend/package*.json`, `mcp-server/requirements.txt`, `Dockerfile*`).
+- Acceptance criteria for dep-bump beads under epic `bd-6rrl5`.
+- Tagging convention: dep-bump PRs reference ADR-001 in the PR description.
+
+**Out of scope (ADR-001 does NOT govern):**
+- **General code-security gating** — CodeQL coverage, delta-zero enforcement on new HIGH/CRITICAL alerts, and required status checks for code scanning are governed by **ADR-005** (`enhancedchannelmanager-sm3n3`). ADR-001's `paths-filter` mechanism deliberately does NOT trigger CodeQL — non-dep-bump PRs (feature PRs, refactors, doc changes) are gated by ADR-005's CodeQL workflow, not by this ADR.
+- **Release-cut `dev`→`main` promotion discipline** — governed by **ADR-004** (`enhancedchannelmanager-4lk1q`). ADR-001 only covers PR-to-`dev`.
+- **Per-PR feature/refactor validation** — non-dep-bump PRs to `dev` are not subject to ADR-001's fresh-image-build gate (the `paths-filter` ensures this). They run the standard unit/integration test suite plus ADR-005's CodeQL gate.
+
+**Relationship to ADR-005 (the boundary that mattered most in PR #82 confusion):**
+
+ADR-001 and ADR-005 are **independent gates that both apply to dep-bump PRs** — they are not substitutes for one another:
+
+| Gate | Source ADR | Catches | Why both must pass on a dep-bump PR |
+|---|---|---|---|
+| Fresh-image build + DAST smoke + Trivy | ADR-001 | Runtime regressions from dep changes (transitive resolution skew, missing build deps, ARM64/AMD64 differences, image-boot failures, CVE introductions in dep tree) | A dep bump can pass static analysis and still break the running container. CodeQL cannot see this. |
+| CodeQL delta-zero + branch-protection required check | ADR-005 | New HIGH/CRITICAL static-analysis findings in code (path injection, log injection, etc.) — including findings in vendored or generated code that a dep bump may pull in | A dep bump can boot cleanly and still introduce a new injection sink in transitive code that only static analysis catches. |
+
+The fresh-image-smoke gate (ADR-001) is the larger of the two by wall-clock and infra cost (~10–14 min vs ~2–4 min) because it must catch the broader class of *runtime* regressions that no static-analysis tool can see. The CodeQL gate (ADR-005) is narrower in cost but applies to **all** PRs to `dev`/`main`, not just dep bumps. A dep-bump PR is therefore subject to both.
 
 ## Context
 
@@ -133,6 +163,9 @@ No data migration, no infrastructure teardown, no vendor relationship to unwind.
 - Bead `enhancedchannelmanager-xnqgo` — this ADR's tracker
 - Bead `enhancedchannelmanager-6rrl5` — dep-bump epic
 - Bead `enhancedchannelmanager-tp681` — flake baseline (companion)
+- Bead `enhancedchannelmanager-umaop` — 2026-04-23 scope clarification amendment (this revision)
+- `docs/adr/ADR-004-release-cut-promotion-discipline.md` — `dev`→`main` promotion gate (out of scope here)
+- `docs/adr/ADR-005-code-security-gating-strategy.md` — CodeQL delta-zero gate (out of scope here; complementary)
 - `.github/workflows/build.yml` — existing build/security/scan pipeline
 - `.github/workflows/test.yml` — existing unit/integration test pipeline
 - `Dockerfile` — multi-stage build, `python-builder` stage compiles deps
