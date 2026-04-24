@@ -100,6 +100,7 @@ tags_metadata = [
     {"name": "FFMPEG Profiles", "description": "Save and load FFMPEG Builder profiles"},
     {"name": "Backup", "description": "Backup and restore ECM configuration"},
     {"name": "Lookup Tables", "description": "Named key→value tables used by the dummy EPG template engine"},
+    {"name": "Observability", "description": "Telemetry endpoints — frontend runtime error reporting (ADR-006)"},
 ]
 
 app = FastAPI(
