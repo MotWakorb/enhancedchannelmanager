@@ -817,18 +817,22 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       // Load SMTP alert recipients from Alert Methods (used by task email alerts).
       setSmtpAlertRecipientsLoading(true);
       try {
+        const extractToEmails = (config: Record<string, unknown>): string | null => {
+          const raw = config.to_emails;
+          if (Array.isArray(raw)) {
+            const parts = raw.filter((v): v is string => typeof v === 'string').map(s => s.trim()).filter(Boolean);
+            return parts.length ? parts.join(', ') : '';
+          }
+          if (typeof raw === 'string') return raw;
+          return null;
+        };
+
         const methods = await api.listAlertMethods();
         const smtpMethod = methods.find(m => m.method_type === 'smtp');
         if (smtpMethod) {
           setSmtpAlertMethodId(smtpMethod.id);
-          const raw = (smtpMethod.config as any)?.to_emails;
-          if (Array.isArray(raw)) {
-            setSmtpAlertRecipients(raw.join(', '));
-          } else if (typeof raw === 'string') {
-            setSmtpAlertRecipients(raw);
-          } else {
-            setSmtpAlertRecipients('');
-          }
+          const recipients = extractToEmails(smtpMethod.config);
+          setSmtpAlertRecipients(recipients ?? '');
         } else {
           setSmtpAlertMethodId(null);
           setSmtpAlertRecipients('');
