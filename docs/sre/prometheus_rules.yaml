@@ -255,3 +255,63 @@ groups:
             ffprobe readiness sub-check is slow. Typically indicates
             disk I/O issues on the host or ffprobe binary degradation.
           runbook_url: docs/runbooks/readiness_subcheck_latency.md
+
+  # =====================================================================
+  # SLO-6: Frontend Error-free Session Rate (ADR-006, bd-i6a1m)
+  # =====================================================================
+  # Shipped alongside ADR-006 Phase 1 frontend error telemetry. The alert
+  # inherits the operator-provisioned posture from bd-5uxwh — defined in
+  # YAML, consumed by an operator's own Prometheus+Alertmanager, not shipped
+  # as a running service.
+  #
+  # Thresholds are first-pass defaults:
+  #   - Warning at >0.2 errors/sec (5m rate) sustained for 15m.
+  #   - Page at >2 errors/sec (5m rate) sustained for 5m — roughly the rate
+  #     at which a chunk-load incident on a small LAN instance becomes
+  #     operator-visible within a quarter-hour.
+  # Expect one round of tuning after 30 days of real traffic (ADR-006
+  # "Unresolved Questions" #1).
+  - name: ecm_client_error_rate
+    interval: 30s
+    rules:
+      - record: ecm:client_errors:rate5m
+        expr: sum by (kind, release) (rate(ecm_client_errors_total[5m]))
+
+      - alert: ECMClientErrorRateElevated
+        # Sustained low-but-nontrivial client-error rate. Likely a bad
+        # deploy ("release" label spikes on one value) or an API contract
+        # drift triggering many unhandled rejections.
+        expr: sum(ecm:client_errors:rate5m) > 0.2
+        for: 15m
+        labels:
+          severity: ticket
+          slo: client_error_rate
+          service: ecm
+        annotations:
+          summary: "ECM frontend client-error rate {{ $value | humanize }}/s > 0.2/s for 15m+"
+          description: |
+            Frontend runtime errors are being reported at >0.2/sec
+            sustained. Check /metrics for the breakdown by `kind` and
+            `release` labels; a spike on one `release` != current points
+            to a stale-bundle chunk-load incident (operator should bust
+            browser cache), while a spike on the current release points
+            to a regression in the just-deployed bundle.
+          runbook_url: docs/runbooks/frontend_error_rate.md
+
+      - alert: ECMClientErrorRateCritical
+        # Outage-scale client-error storm. Something in the latest bundle
+        # is broken for a significant fraction of active sessions.
+        expr: sum(ecm:client_errors:rate5m) > 2.0
+        for: 5m
+        labels:
+          severity: page
+          slo: client_error_rate
+          service: ecm
+        annotations:
+          summary: "ECM frontend client-error rate {{ $value | humanize }}/s > 2/s — critical"
+          description: |
+            Frontend client-error rate has exceeded 2/sec for 5 minutes.
+            Treat as an incident. Begin runbook, page on-call, identify
+            the offending `release` label from /metrics and consider
+            rolling back the last deploy.
+          runbook_url: docs/runbooks/frontend_error_rate.md

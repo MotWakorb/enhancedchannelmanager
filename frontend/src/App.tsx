@@ -24,6 +24,10 @@ import { VLCProtocolHelperModal } from './components/VLCProtocolHelperModal';
 import { NotificationCenter } from './components/NotificationCenter';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import {
+  setTelemetryRuntimeEnabled,
+  withImportTelemetry,
+} from './services/clientErrorReporter';
 import ECMLogo from './assets/ECMLogo.png';
 import './App.css';
 
@@ -52,18 +56,23 @@ function mergeSortCriteria(
   return { priority, enabled };
 }
 
-// Lazy load non-primary tabs
-const M3UManagerTab = lazy(() => import('./components/tabs/M3UManagerTab').then(m => ({ default: m.M3UManagerTab })));
-const EPGManagerTab = lazy(() => import('./components/tabs/EPGManagerTab').then(m => ({ default: m.EPGManagerTab })));
-const GuideTab = lazy(() => import('./components/tabs/GuideTab').then(m => ({ default: m.GuideTab })));
-const LogoManagerTab = lazy(() => import('./components/tabs/LogoManagerTab').then(m => ({ default: m.LogoManagerTab })));
-const M3UChangesTab = lazy(() => import('./components/tabs/M3UChangesTab').then(m => ({ default: m.M3UChangesTab })));
-const JournalTab = lazy(() => import('./components/tabs/JournalTab').then(m => ({ default: m.JournalTab })));
-const StatsTab = lazy(() => import('./components/tabs/StatsTab').then(m => ({ default: m.StatsTab })));
-const SettingsTab = lazy(() => import('./components/tabs/SettingsTab').then(m => ({ default: m.SettingsTab })));
-const AutoCreationTab = lazy(() => import('./components/autoCreation/AutoCreationTab').then(m => ({ default: m.AutoCreationTab })));
-const FFMPEGBuilderTab = lazy(() => import('./components/ffmpegBuilder/FFMPEGBuilderTab').then(m => ({ default: m.FFMPEGBuilderTab })));
-const ExportTab = lazy(() => import('./components/tabs/ExportTab').then(m => ({ default: m.ExportTab })));
+// Lazy load non-primary tabs. Each dynamic import is wrapped in
+// ``withImportTelemetry`` so chunk-load failures (stale bundles, 404s
+// on deployed hashed chunks) fire an ADR-006 ``kind: 'chunk_load'``
+// report in addition to the Vite ``vite:preloadError`` window event.
+// The wrapper is a pure side-effect — it re-rejects with the same
+// error so Suspense / ErrorBoundary behavior is unchanged.
+const M3UManagerTab = lazy(() => withImportTelemetry(import('./components/tabs/M3UManagerTab')).then(m => ({ default: m.M3UManagerTab })));
+const EPGManagerTab = lazy(() => withImportTelemetry(import('./components/tabs/EPGManagerTab')).then(m => ({ default: m.EPGManagerTab })));
+const GuideTab = lazy(() => withImportTelemetry(import('./components/tabs/GuideTab')).then(m => ({ default: m.GuideTab })));
+const LogoManagerTab = lazy(() => withImportTelemetry(import('./components/tabs/LogoManagerTab')).then(m => ({ default: m.LogoManagerTab })));
+const M3UChangesTab = lazy(() => withImportTelemetry(import('./components/tabs/M3UChangesTab')).then(m => ({ default: m.M3UChangesTab })));
+const JournalTab = lazy(() => withImportTelemetry(import('./components/tabs/JournalTab')).then(m => ({ default: m.JournalTab })));
+const StatsTab = lazy(() => withImportTelemetry(import('./components/tabs/StatsTab')).then(m => ({ default: m.StatsTab })));
+const SettingsTab = lazy(() => withImportTelemetry(import('./components/tabs/SettingsTab')).then(m => ({ default: m.SettingsTab })));
+const AutoCreationTab = lazy(() => withImportTelemetry(import('./components/autoCreation/AutoCreationTab')).then(m => ({ default: m.AutoCreationTab })));
+const FFMPEGBuilderTab = lazy(() => withImportTelemetry(import('./components/ffmpegBuilder/FFMPEGBuilderTab')).then(m => ({ default: m.FFMPEGBuilderTab })));
+const ExportTab = lazy(() => withImportTelemetry(import('./components/tabs/ExportTab')).then(m => ({ default: m.ExportTab })));
 
 // Self-contained timer component — updates only itself every second,
 // not the entire App tree (which was the previous behavior)
@@ -513,6 +522,12 @@ function App() {
       try {
         const settings = await api.getSettings();
         logger.info('Settings loaded', { configured: settings.configured, theme: settings.theme });
+
+        // Mirror the operator telemetry toggle onto the reporter so a
+        // flip of settings.telemetry_client_errors_enabled takes effect
+        // on the next runtime error without a page reload. Defaults to
+        // true when the field is absent (older backend schema).
+        setTelemetryRuntimeEnabled(settings.telemetry_client_errors_enabled ?? true);
 
         setAutoRenameChannelNumber(settings.auto_rename_channel_number);
         setDispatcharrUrl(settings.url);
