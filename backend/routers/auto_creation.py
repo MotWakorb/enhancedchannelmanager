@@ -225,6 +225,64 @@ def _resolve_normalization_group_ids(rule_data: dict, session) -> str | None:
     return None
 
 
+def _validate_normalization_group_ids(
+    submitted_ids: Optional[list[int]], session
+) -> None:
+    """bd-i75ax: Reject write requests that reference non-existent
+    NormalizationRuleGroup IDs.
+
+    Delta-on-write semantics: only the IDs the caller is *submitting* on this
+    request are validated. Already-stored values are left alone — a previously
+    valid stored ID whose group has since been deleted should not block an
+    unrelated PUT (e.g. renaming the rule). The startup audit (bd-i75ax)
+    confirmed zero stale IDs in production data; this guard prevents future
+    typos and copy-paste from the wrong environment.
+
+    Empty list and ``None`` are both valid (no normalization groups is a
+    legitimate state — it means normalization is disabled for the rule).
+
+    Raises:
+        HTTPException(422) with detail.invalid_normalization_group_ids listing
+        every offending ID, when any submitted ID is missing from
+        normalization_rule_groups.
+    """
+    if not submitted_ids:
+        # None or empty list — nothing to validate.
+        return
+
+    from models import NormalizationRuleGroup
+
+    # De-dup before query to keep the IN-list small; preserves order on report.
+    seen: set[int] = set()
+    unique_ids: list[int] = []
+    for gid in submitted_ids:
+        if gid not in seen:
+            seen.add(gid)
+            unique_ids.append(gid)
+
+    existing_rows = session.query(NormalizationRuleGroup.id).filter(
+        NormalizationRuleGroup.id.in_(unique_ids)
+    ).all()
+    existing_ids = {row[0] for row in existing_rows}
+
+    invalid_ids = [gid for gid in unique_ids if gid not in existing_ids]
+    if invalid_ids:
+        logger.warning(
+            "[AUTO-CREATE] Rejecting write — invalid normalization_group_ids: %s",
+            invalid_ids,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": (
+                    "One or more normalization_group_ids do not exist in "
+                    "normalization_rule_groups"
+                ),
+                "invalid_normalization_group_ids": invalid_ids,
+            },
+        )
+
+
 # =============================================================================
 # Rule CRUD Endpoints
 # =============================================================================
@@ -402,6 +460,14 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
             if not rule:
                 raise HTTPException(status_code=404, detail="Rule not found")
 
+            # bd-i75ax: write-time FK validation for normalization_group_ids.
+            # Run BEFORE mutation so a bad ID can't leave partial scalar
+            # changes on the row. Only validates IDs the caller submitted
+            # (delta-on-write — does not re-check stored values).
+            _validate_normalization_group_ids(
+                request.normalization_group_ids, session
+            )
+
             _apply_rule_scalar_updates(rule, request)
 
             # Validate and update conditions/actions if provided
@@ -502,6 +568,16 @@ async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRe
                 status_code=404,
                 detail=f"Rules not found: {missing}",
             )
+
+        # bd-i75ax: write-time FK validation for normalization_group_ids.
+        # Validate the SUBMITTED ids once (they're applied identically to
+        # every rule in scope), before any mutation. A bad ID must roll back
+        # the entire bulk-update — not leave half the rules updated and the
+        # other half rejected. Delta-on-write: stored values on rules in
+        # scope are not re-checked.
+        _validate_normalization_group_ids(
+            scalar_update.normalization_group_ids, session
+        )
 
         # Track per-rule diffs so we can emit per-entity journal entries with a
         # shared batch_id after a successful commit (bd-91mcq). Matches the
