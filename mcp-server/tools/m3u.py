@@ -134,7 +134,7 @@ def register(mcp: FastMCP):
             if not payload:
                 return "No changes specified."
 
-            result = await client.patch(f"/api/m3u/accounts/{account_id}", json_data=payload)
+            await client.patch(f"/api/m3u/accounts/{account_id}", json_data=payload)
             return f"M3U account {account_id} updated."
         except Exception as e:
             logger.error("[MCP] update_m3u_account failed: %s", e)
@@ -170,7 +170,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.patch(
+            await client.patch(
                 f"/api/m3u/accounts/{account_id}/group-settings",
                 json_data={group_name: enabled},
             )

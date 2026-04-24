@@ -26,10 +26,6 @@ import database
 import models  # noqa: F401 — registers all tables with SQLAlchemy Base
 import export_models  # noqa: F401 — registers export tables with SQLAlchemy Base
 from ffmpeg_builder import persistence  # noqa: F401 — registers table
-# Register SecurityError globally for test specs that reference it without import
-from ffmpeg_builder.execution import SecurityError as _SecurityError
-import builtins as _builtins
-_builtins.SecurityError = _SecurityError
 # Reference side-effect imports so static analysis sees them as used
 assert models and persistence and export_models
 

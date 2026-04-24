@@ -9,14 +9,13 @@ import time
 from enum import Enum
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from cache import get_cache
 from dispatcharr_client import get_client
 from stream_normalization import (
     enrich_stream,
-    get_stream_quality_priority,
     sort_streams_by_quality,
 )
 
