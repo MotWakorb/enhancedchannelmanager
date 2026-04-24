@@ -9,22 +9,17 @@ named groups, and simple branches — covering the shapes that dominate
 the real production corpus without ever composing a nested-unbounded
 quantifier.
 
-Skipped cleanly if ``hypothesis`` is not installed. The hand-curated
-sweep in :mod:`test_regex_lint.TestBenignSmokeSweep` runs unconditionally
-and is the minimum guaranteed coverage.
+``hypothesis`` is a hard requirement (pinned in backend/requirements.in
++ requirements.txt). This module imports it directly rather than via
+``pytest.importorskip`` so a missing install (e.g. CI didn't install
+backend/requirements.txt) surfaces as a loud collection error instead
+of a silent skip — see bd-s8kq3 for the install-gap policy.
 """
 from __future__ import annotations
 
-import pytest
+from hypothesis import given, settings, strategies as st
 
-hypothesis = pytest.importorskip(
-    "hypothesis",
-    reason="hypothesis not installed; hand-curated sweep in test_regex_lint covers the minimum",
-)
-
-from hypothesis import given, settings, strategies as st  # noqa: E402
-
-from regex_lint import lint_pattern  # noqa: E402
+from regex_lint import lint_pattern
 
 
 # ---------------------------------------------------------------------------

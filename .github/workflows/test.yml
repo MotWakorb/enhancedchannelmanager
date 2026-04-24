@@ -41,6 +41,17 @@ jobs:
           # pin them here so the CI command is self-documenting.
           pip install pytest pytest-asyncio pytest-cov httpx
 
+      - name: Verify required test deps are importable (bd-s8kq3)
+        working-directory: backend
+        # Fast-fail guard: if the install step above silently failed to
+        # bring in a required test dep (alembic for migration tests,
+        # hypothesis for property-based tests), surface a clear "install
+        # gap" error here BEFORE pytest runs. Without this, missing deps
+        # manifest as cryptic collection errors mid-suite, or — worse —
+        # silent skips that let CI pass green on a degraded suite.
+        # See bd-s8kq3 for the silent-skip → install-gap audit.
+        run: python scripts/verify_test_deps.py
+
       - name: Prepare CI SQLite database
         working-directory: backend
         run: |
