@@ -56,6 +56,7 @@ bd sync                       # Sync beads data only (NOT for code commits)
 | Versioning Scheme | `docs/versioning.md` |
 | API Reference | `docs/api.md` |
 | SLOs | `docs/sre/slos.md` |
+| User Guide (operator-facing) | `docs/user_guide/` |
 
 ## Development Workflow
 
