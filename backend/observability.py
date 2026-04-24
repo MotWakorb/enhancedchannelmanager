@@ -345,6 +345,49 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             "SLI numerator for SLO-5 — any non-zero rate over the window is a breach.",
             registry=registry,
         ),
+        # ----------------------------------------------------------------
+        # Frontend error telemetry (ADR-006, bd-i6a1m).
+        #
+        # ``client_errors_total`` labels:
+        #   kind    — fixed enum {boundary, unhandled_rejection, chunk_load,
+        #             resource, other}. Unknown values are collapsed to
+        #             "other" by routers/client_errors.py so cardinality is
+        #             bounded.
+        #   release — short build-env identifier. Cardinality is bounded
+        #             by the in-router LRU at 3 real values + "stale" roll-up
+        #             (see ADR-006 §9).
+        #
+        # ``client_errors_dropped_total`` labels:
+        #   reason  — fixed enum {rate_limited, oversized, invalid_schema}.
+        #             No other values are ever emitted by the router.
+        #
+        # ``client_error_reports_bytes`` records the post-parse request size
+        # so the operator can correlate payload size with reporter bugs.
+        # Buckets cover the expected range — most reports are <1 KB, the
+        # cap is 8 KB — plus a long tail for pre-scrub oversizes that got
+        # accepted anyway (they shouldn't, but we want the signal).
+        # ----------------------------------------------------------------
+        "client_errors_total": Counter(
+            "ecm_client_errors_total",
+            "Count of frontend error reports ingested by /api/client-errors, "
+            "labeled by kind (fixed enum) and release (bounded LRU).",
+            ["kind", "release"],
+            registry=registry,
+        ),
+        "client_errors_dropped_total": Counter(
+            "ecm_client_errors_dropped_total",
+            "Count of frontend error reports rejected before ingest. reason "
+            "∈ {rate_limited, oversized, invalid_schema}.",
+            ["reason"],
+            registry=registry,
+        ),
+        "client_error_reports_bytes": Histogram(
+            "ecm_client_error_reports_bytes",
+            "Size in bytes of accepted /api/client-errors request bodies, "
+            "post-parse. Buckets cover sub-kilobyte through the 8 KB cap.",
+            buckets=(128, 256, 512, 1024, 2048, 4096, 8192),
+            registry=registry,
+        ),
     }
 
 

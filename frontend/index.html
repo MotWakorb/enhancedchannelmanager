@@ -8,6 +8,55 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
     <title>Enhanced Channel Manager</title>
+    <!--
+      ADR-006 §6.6 (bd-i6a1m) — pre-bundle error telemetry.
+      Captures errors that fire BEFORE the main Vite module loads (e.g.,
+      bundle 404, syntax error in the main chunk). Fire-and-forget via
+      sendBeacon; swallows its own failures so it can never aggravate the
+      crash it's meant to report. Must stay framework-free — it runs
+      before React exists. Emits kind: 'resource' per the ADR-006 enum.
+    -->
+    <script>
+      (function () {
+        function send(kind, message, stack) {
+          try {
+            var payload = {
+              kind: kind,
+              message: String(message || '').slice(0, 512),
+              stack: String(stack || '').slice(0, 4096),
+              release: 'bootstrap',
+              route: (location && location.pathname) || '',
+              user_agent_hash:
+                '0000000000000000000000000000000000000000000000000000000000000000',
+              ts: new Date().toISOString(),
+            };
+            var body = JSON.stringify(payload);
+            if (navigator && typeof navigator.sendBeacon === 'function') {
+              var blob = new Blob([body], { type: 'application/json' });
+              navigator.sendBeacon('/api/client-errors', blob);
+            }
+          } catch (_e) {
+            /* telemetry must never break UX */
+          }
+        }
+        window.addEventListener('error', function (e) {
+          var err = e && e.error;
+          send(
+            'resource',
+            (err && err.message) || e.message || 'Bootstrap error',
+            (err && err.stack) || ''
+          );
+        });
+        window.addEventListener('unhandledrejection', function (e) {
+          var r = e && e.reason;
+          send(
+            'resource',
+            (r && r.message) || String(r || 'Bootstrap rejection'),
+            (r && r.stack) || ''
+          );
+        });
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

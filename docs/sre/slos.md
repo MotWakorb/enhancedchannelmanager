@@ -228,6 +228,60 @@ A bug-report ratio — `1 - (bug_reports_containing_normaliz_30d) / (auto_creati
 
 ---
 
+## SLO-6: Frontend Error-free Session Rate
+
+**SLI:** Fraction of authenticated user sessions that report zero client errors over a rolling 28-day window. A "session" is approximated by distinct `user_agent_hash` labels seen on `ecm_client_errors_total` within the window. The SLI is computed as:
+
+```
+1 - (sessions_with_errors / total_sessions)
+```
+
+**Prometheus expression (SLI, until a dedicated session counter exists):**
+```promql
+# Sessions that reported at least one client error, over 28d.
+# NOTE: ecm_client_errors_total is keyed by {kind, release} — the session
+# dimension is not exposed as a label (bounded cardinality, per ADR-006).
+# Until a session counter ships (see "Instrumentation gap" below), the
+# numerator here is approximated by 'count of distinct user_agent_hash
+# values seen in the structlog stream' via the log-aggregation substrate,
+# not by a PromQL-native expression. The denominator is the same over
+# the same window from the log stream.
+1
+-
+(
+  # Placeholder — replace with the session counter once instrumented.
+  sum(increase(ecm_client_errors_total[28d]))
+  /
+  # Denominator: total sessions. For now, read from the structured-log
+  # aggregator. When the session counter lands, swap this for:
+  #   sum(increase(ecm_session_starts_total[28d]))
+  1
+)
+```
+
+**SLO target:** **99.0%** error-free sessions over a rolling 28-day window, **marked uncalibrated** until 30 days of production data exists.
+
+**Why 99.0% (initial):** Consistent with SLO-1 (readiness availability) and SLO-3 (5xx error rate) at 99.0% — we have no production baseline for frontend crash rate, and a 99.5% target would front-run data we don't have. ADR-006 explicitly calls the SLO target "placeholder until 30 days of production data exists". Once baselined, the SLRE persona tightens to 99.5% (or looser — if LAN instances see 10%+ error rates, 99% is fiction).
+
+**Why 28-day window (not 30):** 28 days is four weekly cycles. A deploy cadence that ships one release per week produces four full cycles in the window, letting the SLO absorb a single bad week without triggering alert noise. 30 days is a slightly-off-cycle window that conflates weekly patterns with the rolling boundary.
+
+**Error budget:** 1% = up to 1 session in 100 reporting ≥1 client error, per 28d. On a LAN instance with 3 sessions/day (~84 sessions/28d), the budget is ≤0.84 error-affected sessions — functionally "one bad session per month". The `sessions >= 50/day` evaluation gate (below) prevents the SLO from reporting nonsense on instances too small for statistical meaning.
+
+**Evaluation gate:** Per ADR-006 §11, the SLI is computed only when the window contains **sessions ≥ 50/day** (1,400+ sessions over 28d). Below the gate, SLO-6 reports **insufficient-data** rather than a value — a LAN instance with 3 daily sessions cannot produce a statistically meaningful error-free-session rate. Operators below the gate still see the raw `ecm_client_errors_total` counter on `/metrics`; they just don't get a computed SLO.
+
+**Instrumentation gap:** The current backend emits `ecm_client_errors_total` per report but does not emit a session counter. To produce a Prometheus-native SLI (no log-aggregation dependency), a follow-up bead needs to add `ecm_session_starts_total` (incremented on frontend login or on first protected-route navigation per `user_agent_hash`). Until then, the SLI lives in the log substrate and the target above is aspirational.
+
+**What breaks this SLO:**
+
+- Stale-bundle chunk-load errors after a deploy (`kind: 'chunk_load'` counter spikes with `release != current`).
+- React runtime exceptions in a specific tab (`kind: 'boundary'`, correlates to a single code path).
+- Unhandled promise rejections from an API client contract change (`kind: 'unhandled_rejection'`).
+- Pre-mount bundle load failures (`kind: 'resource'`, emitted by the inline script in `index.html`).
+
+**Runbook:** [`docs/runbooks/frontend_error_rate.md`](../runbooks/frontend_error_rate.md) — *to be written as part of the i6a1m follow-up; the SLO lands with the alert rule and a placeholder runbook link.*
+
+---
+
 ## SLO-4: Readiness Sub-check Latency (informational)
 
 **SLI:** 95th percentile duration of readiness sub-checks, per `check` label (`database`, `dispatcharr`, `ffprobe`).
@@ -292,6 +346,7 @@ For the scaffold we ship simpler single-window thresholds for SLO-2/3 (p95 laten
 
 ## Changelog
 
+- **2026-04-24 (bd-i6a1m):** Added **SLO-6: Frontend Error-free Session Rate** — 99.0% error-free sessions over 28d, uncalibrated until 30d of data, gated at sessions ≥ 50/day. Supported by the new `/api/client-errors` router + `ecm_client_errors_total{kind,release}` counter from ADR-006 Phase 1. Instrumentation gap: a session-start counter is a follow-up bead; until then the SLI denominator lives in the log-aggregation substrate. Companion alert rule shipped in `prometheus_rules.yaml` (group `ecm_client_error_rate`).
 - **2026-04-24 (bd-5uxwh, absorbs bd-9mi6f):** Added **Alerting posture** section. Makes explicit that ECM emits SLI metrics on `/metrics` and ships `prometheus_rules.yaml` as rules-as-code, but does not ship a Prometheus/Alertmanager runtime — operators provision their own scraper if they want alerts to fire. Per-SLO ownership table added. SLO-5 noted as the edge case: its breach signal is the nightly CI canary, not Prometheus-primary.
 - **2026-04-22 (bd-eio04.9):** Added **SLO-5: Normalization Correctness** — canary-based parity SLI with zero-tolerance target. Supported by new metrics in `observability.py` (`ecm_normalization_canary_divergence_total`, plus rule-match / no-change / duration / per-creation-normalized counters), a structured decision log (see `NORMALIZATION_DECISION_LOGGER`), and a nightly CI canary (`.github/workflows/normalization-canary.yml`). Runbook at `docs/runbooks/normalization-canary-divergence.md`.
 - **2026-04-20 (bd-dl1bd):** Initial scaffold. Four SLOs defined, targets conservative, error-budget policy drafted, alert rules shipped in sibling YAML. **Not yet calibrated against real traffic** — targets must be revisited once 30 days of production metrics exist.
