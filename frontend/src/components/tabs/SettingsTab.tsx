@@ -421,6 +421,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [smtpConfigured, setSmtpConfigured] = useState(false);
   const [smtpTestEmail, setSmtpTestEmail] = useState('');
   const [smtpTesting, setSmtpTesting] = useState(false);
+  const [smtpAlertMethodId, setSmtpAlertMethodId] = useState<number | null>(null);
+  const [smtpAlertRecipients, setSmtpAlertRecipients] = useState('');
+  const [smtpAlertRecipientsLoading, setSmtpAlertRecipientsLoading] = useState(false);
+  const [smtpAlertRecipientsSaving, setSmtpAlertRecipientsSaving] = useState(false);
 
   // Shared Discord settings
   const [discordWebhookUrl, setDiscordWebhookUrl] = useState('');
@@ -809,8 +813,80 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setTelegramChatId(settings.telegram_chat_id ?? '');
       setTelegramConfigured(settings.telegram_configured ?? false);
       setNeedsRestart(false);
+
+      // Load SMTP alert recipients from Alert Methods (used by task email alerts).
+      setSmtpAlertRecipientsLoading(true);
+      try {
+        const methods = await api.listAlertMethods();
+        const smtpMethod = methods.find(m => m.method_type === 'smtp');
+        if (smtpMethod) {
+          setSmtpAlertMethodId(smtpMethod.id);
+          const raw = (smtpMethod.config as any)?.to_emails;
+          if (Array.isArray(raw)) {
+            setSmtpAlertRecipients(raw.join(', '));
+          } else if (typeof raw === 'string') {
+            setSmtpAlertRecipients(raw);
+          } else {
+            setSmtpAlertRecipients('');
+          }
+        } else {
+          setSmtpAlertMethodId(null);
+          setSmtpAlertRecipients('');
+        }
+      } catch (err) {
+        logger.warn('Failed to load alert methods (SMTP recipients)', err);
+      } finally {
+        setSmtpAlertRecipientsLoading(false);
+      }
     } catch (err) {
       logger.error('Failed to load settings:', err);
+    }
+  };
+
+  const handleSaveSmtpRecipients = async () => {
+    setSmtpAlertRecipientsSaving(true);
+    try {
+      const recipients = smtpAlertRecipients
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+
+      if (recipients.length === 0) {
+        notifications.error('Add at least one recipient email address', 'Email Alert Recipients');
+        return;
+      }
+
+      const config = { to_emails: recipients.join(', ') };
+
+      if (smtpAlertMethodId) {
+        await api.updateAlertMethod(smtpAlertMethodId, {
+          enabled: true,
+          config,
+          notify_info: false,
+          notify_success: true,
+          notify_warning: true,
+          notify_error: true,
+        });
+      } else {
+        const created = await api.createAlertMethod({
+          name: 'Email',
+          method_type: 'smtp',
+          enabled: true,
+          config,
+          notify_info: false,
+          notify_success: true,
+          notify_warning: true,
+          notify_error: true,
+        });
+        setSmtpAlertMethodId(created.id);
+      }
+
+      notifications.success('Email alert recipients saved', 'Email Alert Recipients');
+    } catch (err) {
+      logger.error('Failed to save SMTP alert recipients', err);
+      notifications.error(err instanceof Error ? err.message : 'Failed to save recipients', 'Email Alert Recipients');
+    } finally {
+      setSmtpAlertRecipientsSaving(false);
     }
   };
 
@@ -2770,6 +2846,53 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </div>
         </div>
 
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">alternate_email</span>
+          <h3>Email Alert Recipients</h3>
+          <span className={`badge badge-sm ${(smtpAlertMethodId && smtpAlertRecipients.trim()) ? 'badge-success' : ''}`}>
+            {(smtpAlertMethodId && smtpAlertRecipients.trim()) ? 'Configured' : 'Unconfigured'}
+          </span>
+        </div>
+        <p className="section-description">
+          Scheduled tasks use the Email alert channel to send notifications. Add one or more recipient email addresses here.
+        </p>
+
+        <div className="form-group-vertical">
+          <label htmlFor="smtpAlertRecipients">Recipients</label>
+          <div className="input-with-button">
+            <input
+              type="text"
+              id="smtpAlertRecipients"
+              value={smtpAlertRecipients}
+              onChange={(e) => setSmtpAlertRecipients(e.target.value)}
+              placeholder="you@example.com, another@example.com"
+              disabled={smtpAlertRecipientsLoading}
+            />
+            <button
+              className="btn-test"
+              onClick={handleSaveSmtpRecipients}
+              disabled={smtpAlertRecipientsSaving || smtpAlertRecipientsLoading}
+            >
+              {smtpAlertRecipientsSaving ? (
+                <>
+                  <span className="material-icons spinning">sync</span>
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <span className="material-icons">save</span>
+                  Save Recipients
+                </>
+              )}
+            </button>
+          </div>
+          <p className="field-hint">
+            Comma-separated list. Requires SMTP settings above to be configured.
+          </p>
+        </div>
       </div>
 
       <div className="settings-section">
