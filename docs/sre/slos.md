@@ -3,7 +3,7 @@
 **Status:** Initial scaffold (v1). Targets are conservative and MUST be recalibrated against 30+ days of production metrics before being treated as commitments.
 **Owner:** SRE persona.
 **Baseline:** Built on the observability substrate shipped in [PR #80](https://github.com/MotWakorb/enhancedchannelmanager/pull/80) (bd-ak1db). The four `ecm_*` series exposed on `/metrics` are the foundation for every SLI below.
-**Last updated:** 2026-04-20 (bd-dl1bd).
+**Last updated:** 2026-04-24 (bd-5uxwh — added Alerting posture section).
 
 ## Why this exists
 
@@ -27,6 +27,50 @@ Out of scope for v1:
 - Frontend asset delivery (served statically; different failure mode).
 - WebSocket long-lived connections (`/ws/*` — no histogram coverage yet).
 - Background task success rate (task scheduler has no `ecm_task_*` metrics yet — separate bead when we instrument it).
+
+---
+
+## Alerting posture
+
+**The SLO targets below are ECM's commitments. The *alerting* on those targets is operator-responsibility.**
+
+ECM emits Prometheus-compatible SLI metrics — the `ecm_*` family defined in [`backend/observability.py`](../../backend/observability.py) (`ecm_http_requests_total`, `ecm_http_request_duration_seconds`, `ecm_health_ready_ok`, `ecm_health_ready_check_duration_seconds`, and the `ecm_normalization_*` family) — on the unauthenticated `/metrics` endpoint mounted by `backend/main.py`. That endpoint is the SLI substrate; every SLI expression in this catalog resolves against it.
+
+What ECM does **not** ship today:
+
+- A Prometheus instance, scrape config, or retention policy.
+- An Alertmanager deployment, routing tree, or paging integration.
+- A bundled dashboard stack (Grafana, etc.).
+- Any reference `docker-compose` / Kubernetes manifest for the above.
+
+What ECM **does** ship:
+
+- The `/metrics` endpoint (always-on, no feature flag).
+- [`docs/sre/prometheus_rules.yaml`](./prometheus_rules.yaml) — the burn-rate and window-based alert rules that correspond to SLO-1, SLO-2, SLO-3, and SLO-4. This is *rules-as-code*: a YAML file intended to be loaded by a Prometheus instance the operator runs, not a live alerting system.
+- The runbooks in [`docs/runbooks/`](../runbooks/) — each alert in `prometheus_rules.yaml` carries a `runbook_url` annotation that resolves to one of them.
+
+**Implication:** if an operator does not run their own Prometheus + Alertmanager (or a compatible pull-based scraper) and point it at `/metrics` with `prometheus_rules.yaml` loaded, **no alerts fire**. The SLI data is still emitted — the metrics can be scraped at any time — but nothing is watching it on ECM's behalf. This is consistent with how the rollback runbooks ([dep-bump backend ASGI](../runbooks/dep-bump-backend-asgi-regression.md), [dep-bump frontend](../runbooks/dep-bump-frontend-regression.md)) describe detection: there is always a "with Prometheus scrape" and a "without Prometheus scrape" column, because both are live deployment modes in the field.
+
+### How to get alerting (operator checklist)
+
+Step-by-step Prometheus/Alertmanager deployment is out of scope for this doc — it depends on the operator's environment (bare Docker, Compose alongside ECM, Kubernetes, already-existing home-lab Prometheus, etc.). The two artifacts operators need from ECM are:
+
+1. **Scrape target:** point a Prometheus instance at `http://<ecm-host>:<ECM_PORT>/metrics`. The endpoint is intentionally unauthenticated so scrapers have no session context (see `backend/main.py` near the `/metrics` mount); operators who need to gate it should front it with their own network policy / reverse-proxy rule rather than expecting ECM to negotiate auth with a scraper.
+2. **Alert rules:** load [`docs/sre/prometheus_rules.yaml`](./prometheus_rules.yaml) into Prometheus (`rule_files:` entry) and route the resulting alerts to an Alertmanager of the operator's choosing. Validate syntax locally with `promtool check rules docs/sre/prometheus_rules.yaml` before loading.
+
+Everything downstream of that — severity routing, on-call rotations, Slack/email/Discord integrations, silences, dashboards — is the operator's infrastructure.
+
+### Per-SLO alerting ownership
+
+| SLO | Rules-as-code location | Alerting model | Who operates it |
+|-|-|-|-|
+| SLO-1: Readiness Availability | `prometheus_rules.yaml` group `ecm_readiness_availability` | Prometheus burn-rate + window-based | Operator-provisioned |
+| SLO-2: HTTP Request Latency | `prometheus_rules.yaml` group `ecm_http_latency` | Prometheus window-based | Operator-provisioned |
+| SLO-3: HTTP Error Rate | `prometheus_rules.yaml` group `ecm_http_error_rate` | Prometheus window-based | Operator-provisioned |
+| SLO-4: Readiness Sub-check Latency | `prometheus_rules.yaml` group `ecm_readiness_subcheck_latency` | Prometheus window-based (warning only) | Operator-provisioned |
+| SLO-5: Normalization Correctness | Nightly CI canary workflow (`.github/workflows/normalization-canary.yml`) + `ecm_normalization_canary_divergence_total` counter | **Not Prometheus-primary.** A divergent canary run is detected by the CI job itself and surfaces as a workflow failure; the metric exists for operators who *do* run Prometheus to alert on replayed local canary runs, but the source of truth for SLO-5 breach is the GitHub Actions job. | Maintained by ECM CI; operator Prometheus alerting is optional / supplementary |
+
+This keeps the SLO *targets* credible regardless of what infrastructure the operator runs — the metrics are emitted, the rules are authored, the runbooks exist. Whether an alert actually wakes someone up at 3 AM depends on a scraper that ECM does not ship.
 
 ---
 
@@ -230,7 +274,7 @@ What happens when the error budget burns? The rules below apply per-SLO; burns a
 
 ## Alerting strategy
 
-Alert rules are defined in [`prometheus_rules.yaml`](./prometheus_rules.yaml). The strategy is multi-window multi-burn-rate (MWMBR) where feasible:
+Alert rules are defined in [`prometheus_rules.yaml`](./prometheus_rules.yaml) — rules-as-code only. See the [Alerting posture](#alerting-posture) section above for why ECM ships the rules file but not a Prometheus/Alertmanager runtime: operators wire the scrape and routing themselves. The strategy embedded in the rules file is multi-window multi-burn-rate (MWMBR) where feasible:
 
 - **Fast burn (page):** If the current burn rate would consume 2% of a 30-day budget in 1 hour (14.4x burn), page immediately. This catches acute incidents.
 - **Slow burn (ticket):** If the current burn rate would consume 10% of a 30-day budget in 6 hours (6x burn) sustained, open a ticket / warning alert. This catches chronic degradation.
@@ -248,5 +292,6 @@ For the scaffold we ship simpler single-window thresholds for SLO-2/3 (p95 laten
 
 ## Changelog
 
+- **2026-04-24 (bd-5uxwh, absorbs bd-9mi6f):** Added **Alerting posture** section. Makes explicit that ECM emits SLI metrics on `/metrics` and ships `prometheus_rules.yaml` as rules-as-code, but does not ship a Prometheus/Alertmanager runtime — operators provision their own scraper if they want alerts to fire. Per-SLO ownership table added. SLO-5 noted as the edge case: its breach signal is the nightly CI canary, not Prometheus-primary.
 - **2026-04-22 (bd-eio04.9):** Added **SLO-5: Normalization Correctness** — canary-based parity SLI with zero-tolerance target. Supported by new metrics in `observability.py` (`ecm_normalization_canary_divergence_total`, plus rule-match / no-change / duration / per-creation-normalized counters), a structured decision log (see `NORMALIZATION_DECISION_LOGGER`), and a nightly CI canary (`.github/workflows/normalization-canary.yml`). Runbook at `docs/runbooks/normalization-canary-divergence.md`.
 - **2026-04-20 (bd-dl1bd):** Initial scaffold. Four SLOs defined, targets conservative, error-budget policy drafted, alert rules shipped in sibling YAML. **Not yet calibrated against real traffic** — targets must be revisited once 30 days of production metrics exist.
