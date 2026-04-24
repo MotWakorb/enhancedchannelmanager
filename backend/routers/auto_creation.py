@@ -3,22 +3,37 @@ Auto-creation router — auto-creation pipeline CRUD, execution, import/export, 
 
 Extracted from main.py (Phase 3 of v0.13.0 backend refactor).
 """
+import asyncio
 import io
 import json
 import logging
 import tarfile
 import time
+import uuid
 from datetime import datetime
 from typing import List, Optional
 
 import journal
 from fastapi import APIRouter, Body, HTTPException
-from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import BaseModel, Field, model_validator
 from starlette.responses import StreamingResponse
 
+from concurrency import run_cpu_bound
 from database import get_session
 from dispatcharr_client import get_client
+from regex_lint import (
+    lint_actions_json,
+    lint_conditions_json,
+    lint_pattern,
+    violations_to_http_detail,
+)
+
+# Strong references to in-flight background pipeline tasks (bd-enfsy). Without
+# this set, asyncio only weakly references created tasks and the GC could
+# cancel them mid-run — fire-and-forget without supervision is a known
+# footgun. Tasks remove themselves on completion via the done callback below.
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +63,10 @@ class CreateAutoCreationRuleRequest(BaseModel):
     sort_regex: Optional[str] = None
     stream_sort_field: Optional[str] = None
     stream_sort_order: str = "asc"
-    normalize_names: bool = False
+    normalization_group_ids: list[int] = []
     skip_struck_streams: bool = False
     orphan_action: str = "delete"
+    match_scope_target_group: bool = False
 
 
 class UpdateAutoCreationRuleRequest(BaseModel):
@@ -71,9 +87,32 @@ class UpdateAutoCreationRuleRequest(BaseModel):
     sort_regex: Optional[str] = None
     stream_sort_field: Optional[str] = None
     stream_sort_order: Optional[str] = None
-    normalize_names: Optional[bool] = None
+    normalization_group_ids: Optional[list[int]] = None
     skip_struck_streams: Optional[bool] = None
     orphan_action: Optional[str] = None
+    match_scope_target_group: Optional[bool] = None
+
+
+class BulkUpdateAutoCreationRulesRequest(UpdateAutoCreationRuleRequest):
+    """Bulk-update multiple rules. Only include fields to change (omit others)."""
+
+    rule_ids: List[int] = Field(..., min_length=1, max_length=500)
+    merge_streams_remove_non_matching: Optional[bool] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_conditions_and_actions(cls, data):
+        """bd-gjoe5: Bulk-update inherits conditions/actions from the single-rule
+        update request, but the handler does not apply them — silently dropping
+        them is the wrong default for an API contract. Reject the request so
+        callers route conditions/actions edits through PUT /rules/{id} instead.
+        """
+        if isinstance(data, dict) and ("conditions" in data or "actions" in data):
+            raise ValueError(
+                "conditions and actions are not supported in bulk-update; "
+                "use PUT /rules/{id}"
+            )
+        return data
 
 
 class RunPipelineRequest(BaseModel):
@@ -87,6 +126,161 @@ class ImportYAMLRequest(BaseModel):
     """Request to import rules from YAML."""
     yaml_content: str
     overwrite: bool = False
+
+
+def _apply_merge_streams_remove_non_matching(actions: list, value: bool) -> list:
+    """Set remove_non_matching on every merge_streams action (stored as flat keys on the action dict)."""
+    out = []
+    for a in actions:
+        if not isinstance(a, dict):
+            out.append(a)
+            continue
+        if a.get("type") != "merge_streams":
+            out.append(a)
+            continue
+        out.append({**a, "remove_non_matching": bool(value)})
+    return out
+
+
+def _apply_rule_scalar_updates(
+    rule, request: UpdateAutoCreationRuleRequest
+) -> dict:
+    """Apply scalar columns from an update request (excluding conditions/actions body).
+
+    Returns a diff dict of the form ``{field: {"before": old, "after": new}}``
+    for every scalar column whose value actually changed. Fields set to the
+    same value they already had are omitted so callers can avoid emitting
+    no-op journal entries (bd-91mcq).
+    """
+    diff: dict = {}
+
+    def _set(field: str, new_value) -> None:
+        """Assign attribute and record a diff entry if the value changed."""
+        old_value = getattr(rule, field)
+        if old_value != new_value:
+            diff[field] = {"before": old_value, "after": new_value}
+        setattr(rule, field, new_value)
+
+    if request.name is not None:
+        _set("name", request.name)
+    if request.description is not None:
+        _set("description", request.description)
+    if request.enabled is not None:
+        _set("enabled", request.enabled)
+    if request.priority is not None:
+        _set("priority", request.priority)
+    if request.m3u_account_id is not None:
+        _set("m3u_account_id", request.m3u_account_id)
+    if request.target_group_id is not None:
+        _set("target_group_id", request.target_group_id)
+    if request.run_on_refresh is not None:
+        _set("run_on_refresh", request.run_on_refresh)
+    if request.stop_on_first_match is not None:
+        _set("stop_on_first_match", request.stop_on_first_match)
+    if request.sort_field is not None:
+        _set("sort_field", request.sort_field or None)
+    if request.sort_order is not None:
+        _set("sort_order", request.sort_order)
+    if request.probe_on_sort is not None:
+        _set("probe_on_sort", request.probe_on_sort)
+    if request.sort_regex is not None:
+        _set("sort_regex", request.sort_regex or None)
+    if request.stream_sort_field is not None:
+        _set("stream_sort_field", request.stream_sort_field or None)
+    if request.stream_sort_order is not None:
+        _set("stream_sort_order", request.stream_sort_order)
+    if request.normalization_group_ids is not None:
+        # NormalizationRuleGroup IDs go through a setter; diff by before/after
+        # of the serialized value to keep comparison simple.
+        before_norm = rule.normalization_group_ids
+        rule.set_normalization_group_ids(request.normalization_group_ids)
+        after_norm = rule.normalization_group_ids
+        if before_norm != after_norm:
+            diff["normalization_group_ids"] = {
+                "before": before_norm,
+                "after": after_norm,
+            }
+    if request.skip_struck_streams is not None:
+        _set("skip_struck_streams", request.skip_struck_streams)
+    if request.orphan_action is not None:
+        _set("orphan_action", request.orphan_action)
+    if getattr(request, "match_scope_target_group", None) is not None:
+        _set("match_scope_target_group", request.match_scope_target_group)
+
+    return diff
+
+
+def _resolve_normalization_group_ids(rule_data: dict, session) -> str | None:
+    """Resolve normalization_group_ids from rule data, with backward compat for normalize_names."""
+    norm_ids = rule_data.get("normalization_group_ids")
+    if norm_ids is not None:
+        return json.dumps(norm_ids) if norm_ids else None
+    # Legacy: normalize_names=true -> all enabled groups
+    if rule_data.get("normalize_names"):
+        from models import NormalizationRuleGroup
+        groups = session.query(NormalizationRuleGroup.id).filter(
+            NormalizationRuleGroup.enabled == True
+        ).order_by(NormalizationRuleGroup.priority).all()
+        return json.dumps([g.id for g in groups]) if groups else None
+    return None
+
+
+def _validate_normalization_group_ids(
+    submitted_ids: Optional[list[int]], session
+) -> None:
+    """bd-i75ax: Reject write requests that reference non-existent
+    NormalizationRuleGroup IDs.
+
+    Delta-on-write semantics: only the IDs the caller is *submitting* on this
+    request are validated. Already-stored values are left alone — a previously
+    valid stored ID whose group has since been deleted should not block an
+    unrelated PUT (e.g. renaming the rule). The startup audit (bd-i75ax)
+    confirmed zero stale IDs in production data; this guard prevents future
+    typos and copy-paste from the wrong environment.
+
+    Empty list and ``None`` are both valid (no normalization groups is a
+    legitimate state — it means normalization is disabled for the rule).
+
+    Raises:
+        HTTPException(422) with detail.invalid_normalization_group_ids listing
+        every offending ID, when any submitted ID is missing from
+        normalization_rule_groups.
+    """
+    if not submitted_ids:
+        # None or empty list — nothing to validate.
+        return
+
+    from models import NormalizationRuleGroup
+
+    # De-dup before query to keep the IN-list small; preserves order on report.
+    seen: set[int] = set()
+    unique_ids: list[int] = []
+    for gid in submitted_ids:
+        if gid not in seen:
+            seen.add(gid)
+            unique_ids.append(gid)
+
+    existing_rows = session.query(NormalizationRuleGroup.id).filter(
+        NormalizationRuleGroup.id.in_(unique_ids)
+    ).all()
+    existing_ids = {row[0] for row in existing_rows}
+
+    invalid_ids = [gid for gid in unique_ids if gid not in existing_ids]
+    if invalid_ids:
+        logger.warning(
+            "[AUTO-CREATE] Rejecting write — invalid normalization_group_ids: %s",
+            invalid_ids,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": (
+                    "One or more normalization_group_ids do not exist in "
+                    "normalization_rule_groups"
+                ),
+                "invalid_normalization_group_ids": invalid_ids,
+            },
+        )
 
 
 # =============================================================================
@@ -141,6 +335,38 @@ async def get_auto_creation_rule(rule_id: int):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+def _lint_auto_creation_rule_request(
+    conditions: Optional[list], actions: Optional[list], sort_regex: Optional[str]
+) -> None:
+    """Raise HTTP 422 if any pattern field fails the regex linter (bd-eio04.7).
+
+    Auto-creation rules have regex-bearing fields scattered across:
+      - ``sort_regex`` (top-level rule column)
+      - Condition ``value`` for regex-flavored condition types
+        (``stream_name_matches``, ``stream_group_matches``,
+        ``tvg_id_matches``, ``channel_exists_matching``)
+      - Action ``pattern`` for ``set_variable`` in ``regex_extract`` /
+        ``regex_replace`` modes
+      - Action ``name_transform_pattern`` on ``create_channel`` /
+        ``create_group``
+    """
+    violations = []
+    violations.extend(lint_pattern(sort_regex, field="sort_regex"))
+    if conditions:
+        violations.extend(lint_conditions_json(conditions, prefix="conditions"))
+    if actions:
+        violations.extend(lint_actions_json(actions, prefix="actions"))
+    if violations:
+        logger.warning(
+            "[AUTO-CREATE] Rejected rule — %d lint violation(s): %s",
+            len(violations),
+            [(v.field, v.code) for v in violations],
+        )
+        raise HTTPException(
+            status_code=422, detail=violations_to_http_detail(violations)
+        )
+
+
 @router.post("/rules")
 async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
     """Create a new auto-creation rule."""
@@ -152,6 +378,11 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
         logger.debug("[AUTO-CREATE] Creating rule '%s' with %s actions", request.name, len(request.actions))
         for j, action in enumerate(request.actions):
             logger.debug("[AUTO-CREATE]   Action %s: %s", j, action)
+        # Lint regex patterns (bd-eio04.7) BEFORE schema validation so users
+        # see the specific pattern error rather than a generic schema message.
+        _lint_auto_creation_rule_request(
+            request.conditions, request.actions, request.sort_regex
+        )
         validation = validate_rule(request.conditions, request.actions)
         if not validation["valid"]:
             raise HTTPException(status_code=400, detail={
@@ -161,6 +392,14 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
 
         session = get_session()
         try:
+            # bd-j5p4k: write-time FK validation for normalization_group_ids.
+            # Run BEFORE the DB insert so a bad ID can't create a partially
+            # populated row. Mirrors the PUT/bulk-update guard added in
+            # bd-i75ax — same delta-on-write semantics, same 422 shape.
+            _validate_normalization_group_ids(
+                request.normalization_group_ids, session
+            )
+
             # Auto-assign priority: if requested priority already taken, append at end
             existing_priorities = [r.priority for r in session.query(AutoCreationRule).all()]
             if existing_priorities and request.priority in existing_priorities:
@@ -185,9 +424,10 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
                 sort_regex=request.sort_regex,
                 stream_sort_field=request.stream_sort_field,
                 stream_sort_order=request.stream_sort_order,
-                normalize_names=request.normalize_names,
+                normalization_group_ids=json.dumps(request.normalization_group_ids) if request.normalization_group_ids else None,
                 skip_struck_streams=request.skip_struck_streams,
-                orphan_action=request.orphan_action
+                orphan_action=request.orphan_action,
+                match_scope_target_group=request.match_scope_target_group
             )
             session.add(rule)
             session.commit()
@@ -228,41 +468,15 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
             if not rule:
                 raise HTTPException(status_code=404, detail="Rule not found")
 
-            # Update fields if provided
-            if request.name is not None:
-                rule.name = request.name
-            if request.description is not None:
-                rule.description = request.description
-            if request.enabled is not None:
-                rule.enabled = request.enabled
-            if request.priority is not None:
-                rule.priority = request.priority
-            if request.m3u_account_id is not None:
-                rule.m3u_account_id = request.m3u_account_id
-            if request.target_group_id is not None:
-                rule.target_group_id = request.target_group_id
-            if request.run_on_refresh is not None:
-                rule.run_on_refresh = request.run_on_refresh
-            if request.stop_on_first_match is not None:
-                rule.stop_on_first_match = request.stop_on_first_match
-            if request.sort_field is not None:
-                rule.sort_field = request.sort_field or None
-            if request.sort_order is not None:
-                rule.sort_order = request.sort_order
-            if request.probe_on_sort is not None:
-                rule.probe_on_sort = request.probe_on_sort
-            if request.sort_regex is not None:
-                rule.sort_regex = request.sort_regex or None
-            if request.stream_sort_field is not None:
-                rule.stream_sort_field = request.stream_sort_field or None
-            if request.stream_sort_order is not None:
-                rule.stream_sort_order = request.stream_sort_order
-            if request.normalize_names is not None:
-                rule.normalize_names = request.normalize_names
-            if request.skip_struck_streams is not None:
-                rule.skip_struck_streams = request.skip_struck_streams
-            if request.orphan_action is not None:
-                rule.orphan_action = request.orphan_action
+            # bd-i75ax: write-time FK validation for normalization_group_ids.
+            # Run BEFORE mutation so a bad ID can't leave partial scalar
+            # changes on the row. Only validates IDs the caller submitted
+            # (delta-on-write — does not re-check stored values).
+            _validate_normalization_group_ids(
+                request.normalization_group_ids, session
+            )
+
+            _apply_rule_scalar_updates(rule, request)
 
             # Validate and update conditions/actions if provided
             conditions = request.conditions if request.conditions is not None else rule.get_conditions()
@@ -271,6 +485,16 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
             logger.debug("[AUTO-CREATE] Updating rule id=%s '%s' with %s actions", rule_id, rule.name, len(actions))
             for j, action in enumerate(actions):
                 logger.debug("[AUTO-CREATE]   Action %s: %s", j, action)
+
+            # Lint regex patterns (bd-eio04.7). Only fields actually
+            # supplied on the PUT are linted — an operator renaming a rule
+            # shouldn't hit a 422 for a pattern they didn't edit. Pre-lint
+            # rows are surfaced separately by the startup scan.
+            _lint_auto_creation_rule_request(
+                request.conditions if request.conditions is not None else None,
+                request.actions if request.actions is not None else None,
+                request.sort_regex if request.sort_regex is not None else None,
+            )
 
             validation = validate_rule(conditions, actions)
             if not validation["valid"]:
@@ -305,6 +529,161 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to update auto-creation rule %s: %s", rule_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/rules/bulk-update")
+async def bulk_update_auto_creation_rules(request: BulkUpdateAutoCreationRulesRequest):
+    """Apply the same field changes to many rules. Omitted fields are left unchanged."""
+    from models import AutoCreationRule
+    from auto_creation_schema import validate_rule
+
+    payload = request.model_dump(exclude_unset=True)
+    rule_ids = payload.pop("rule_ids", None) or []
+    merge_streams_remove_non_matching = payload.pop("merge_streams_remove_non_matching", None)
+
+    if not rule_ids:
+        raise HTTPException(status_code=400, detail="rule_ids is required")
+    if len(rule_ids) != len(set(rule_ids)):
+        raise HTTPException(status_code=400, detail="duplicate rule_ids")
+    if not payload and merge_streams_remove_non_matching is None:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    scalar_update = UpdateAutoCreationRuleRequest(**payload) if payload else UpdateAutoCreationRuleRequest()
+
+    # Lint sort_regex (bd-eio04.7) before any DB work. Bulk-update does not
+    # accept conditions/actions, so only sort_regex can carry a pattern.
+    _lint_auto_creation_rule_request(None, None, scalar_update.sort_regex)
+
+    # Only mutations that touch rule logic (conditions/actions) need post-update
+    # schema validation. Scalars-only bulk edits (enabled, priority, sort fields,
+    # …) must not be blocked by pre-existing schema drift in untouched rows
+    # (bd-z7xqy). Bulk-update does not accept raw conditions/actions, so today
+    # the only logic mutation is merge_streams_remove_non_matching.
+    mutated_rule_logic = merge_streams_remove_non_matching is not None
+
+    session = get_session()
+    try:
+        # Single SELECT ... WHERE id IN (...) instead of N per-id queries
+        # (bd-bh1hh: avoid N+1 — at max_length=500 this collapses 500 round
+        # trips into 1).
+        rules_by_id = {
+            r.id: r for r in session.query(AutoCreationRule)
+            .filter(AutoCreationRule.id.in_(rule_ids)).all()
+        }
+        missing = [rid for rid in rule_ids if rid not in rules_by_id]
+        if missing:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Rules not found: {missing}",
+            )
+
+        # bd-i75ax: write-time FK validation for normalization_group_ids.
+        # Validate the SUBMITTED ids once (they're applied identically to
+        # every rule in scope), before any mutation. A bad ID must roll back
+        # the entire bulk-update — not leave half the rules updated and the
+        # other half rejected. Delta-on-write: stored values on rules in
+        # scope are not re-checked.
+        _validate_normalization_group_ids(
+            scalar_update.normalization_group_ids, session
+        )
+
+        # Track per-rule diffs so we can emit per-entity journal entries with a
+        # shared batch_id after a successful commit (bd-91mcq). Matches the
+        # pattern at backend/routers/channels.py:800 (bulk channel renumber).
+        updated: list = []
+        rule_diffs: list[tuple] = []  # (rule, scalar_diff, merge_streams_before, merge_streams_after)
+        for rid in rule_ids:
+            rule = rules_by_id[rid]
+
+            scalar_diff: dict = {}
+            if payload:
+                scalar_diff = _apply_rule_scalar_updates(rule, scalar_update)
+
+            merge_before = None
+            merge_after = None
+            if merge_streams_remove_non_matching is not None:
+                actions = rule.get_actions()
+                new_actions = _apply_merge_streams_remove_non_matching(
+                    actions, merge_streams_remove_non_matching
+                )
+                if new_actions != actions:
+                    merge_before = actions
+                    merge_after = new_actions
+                rule.actions = json.dumps(new_actions)
+
+            if mutated_rule_logic:
+                conditions = rule.get_conditions()
+                actions = rule.get_actions()
+                validation = validate_rule(conditions, actions)
+                if not validation["valid"]:
+                    raise HTTPException(status_code=400, detail={
+                        "message": f"Invalid rule configuration for rule id={rid}",
+                        "errors": validation["errors"],
+                    })
+            updated.append(rule)
+            rule_diffs.append((rule, scalar_diff, merge_before, merge_after))
+
+        session.commit()
+        # No per-rule session.refresh() — attached instances already reflect
+        # the committed values. AutoCreationRule has no server_default or DB
+        # triggers on the columns written here; updated_at uses a Python-side
+        # onupdate callable which SQLAlchemy applies during flush, so it is
+        # populated on the in-memory instance before to_dict() reads it.
+        # (bd-bh1hh: drops another N SELECTs per bulk request.)
+
+        # Emit one journal entry per rule that actually changed, all sharing
+        # the same batch_id so forensics can group them. Skip rules where no
+        # scalar column and no merge-streams action changed (bulk-toggle to
+        # the existing value is a no-op).
+        batch_id = str(uuid.uuid4())[:8]
+        for rule, scalar_diff, merge_before, merge_after in rule_diffs:
+            if not scalar_diff and merge_before is None:
+                continue
+
+            description_parts = [
+                f"{field}: {entry['before']} -> {entry['after']}"
+                for field, entry in scalar_diff.items()
+            ]
+            if merge_before is not None:
+                description_parts.append(
+                    "merge_streams.remove_non_matching -> "
+                    f"{merge_streams_remove_non_matching}"
+                )
+            description = (
+                f"Bulk-updated rule '{rule.name}': " + ", ".join(description_parts)
+            )
+
+            before_value = {
+                field: entry["before"] for field, entry in scalar_diff.items()
+            }
+            after_value = {
+                field: entry["after"] for field, entry in scalar_diff.items()
+            }
+            if merge_before is not None:
+                before_value["actions"] = merge_before
+                after_value["actions"] = merge_after
+
+            journal.log_entry(
+                category="auto_creation",
+                action_type="bulk_update",
+                entity_id=rule.id,
+                entity_name=rule.name,
+                description=description,
+                before_value=before_value,
+                after_value=after_value,
+                batch_id=batch_id,
+            )
+
+        return {"rules": [r.to_dict() for r in updated], "updated_count": len(updated)}
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.exception("[AUTO-CREATE] Bulk update failed: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        session.close()
 
 
 @router.delete("/rules/{rule_id}")
@@ -426,8 +805,12 @@ async def duplicate_auto_creation_rule(rule_id: int):
                 sort_order=rule.sort_order,
                 stream_sort_field=rule.stream_sort_field,
                 stream_sort_order=rule.stream_sort_order,
-                normalize_names=rule.normalize_names,
-                skip_struck_streams=rule.skip_struck_streams
+                normalization_group_ids=rule.normalization_group_ids,
+                skip_struck_streams=rule.skip_struck_streams,
+                probe_on_sort=rule.probe_on_sort,
+                sort_regex=rule.sort_regex,
+                orphan_action=rule.orphan_action,
+                match_scope_target_group=rule.match_scope_target_group
             )
             session.add(new_rule)
             session.commit()
@@ -448,54 +831,209 @@ async def duplicate_auto_creation_rule(rule_id: int):
 # =============================================================================
 
 
-@router.post("/run")
+async def _ensure_engine():
+    """Get the auto-creation engine, initializing it if necessary."""
+    from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
+
+    engine = get_auto_creation_engine()
+    if not engine:
+        client = get_client()
+        engine = await init_auto_creation_engine(client)
+    return engine
+
+
+def _create_pending_execution(
+    *,
+    mode: str,
+    triggered_by: str,
+    rule_id: int | None = None,
+    rule_name: str | None = None,
+) -> int:
+    """Create a status='running' execution row up front (bd-enfsy 202+poll).
+
+    Returns the new execution id so the caller can return it in the 202
+    response and the background task can finalize the same row when work
+    completes.
+    """
+    from models import AutoCreationExecution
+
+    session = get_session()
+    try:
+        execution = AutoCreationExecution(
+            mode=mode,
+            triggered_by=triggered_by,
+            started_at=datetime.utcnow(),
+            status="running",
+            rule_id=rule_id,
+            rule_name=rule_name,
+        )
+        session.add(execution)
+        session.commit()
+        session.refresh(execution)
+        return execution.id
+    finally:
+        session.close()
+
+
+def _mark_execution_failed(execution_id: int, error: BaseException) -> None:
+    """Mark a pre-created execution as failed and capture the error message."""
+    from models import AutoCreationExecution
+
+    session = get_session()
+    try:
+        execution = session.query(AutoCreationExecution).filter(
+            AutoCreationExecution.id == execution_id
+        ).first()
+        if execution is None:
+            logger.warning(
+                "[AUTO-CREATE] Cannot mark execution %s failed — row was deleted",
+                execution_id,
+            )
+            return
+        # Only finalize if still running (don't clobber a completed/rolled_back row)
+        if execution.status == "running":
+            now = datetime.utcnow()
+            execution.completed_at = now
+            execution.duration_seconds = (
+                (now - execution.started_at).total_seconds()
+                if execution.started_at else 0.0
+            )
+            execution.status = "failed"
+            execution.error_message = f"{type(error).__name__}: {error}"
+            session.commit()
+    finally:
+        session.close()
+
+
+def _supervise_background_pipeline(coro, *, execution_id: int, label: str) -> asyncio.Task:
+    """Schedule a coroutine as a supervised background task.
+
+    Wraps the coroutine in a try/except so any failure is captured to the
+    pre-created execution row (status='failed' + error_message) — no silent
+    fire-and-forget. Holds a strong reference to the task so the GC cannot
+    cancel it mid-run.
+    """
+    async def _runner():
+        try:
+            await coro
+            logger.info("[AUTO-CREATE] Background %s execution=%s completed", label, execution_id)
+        except asyncio.CancelledError:
+            logger.warning("[AUTO-CREATE] Background %s execution=%s cancelled", label, execution_id)
+            _mark_execution_failed(execution_id, RuntimeError("Background task cancelled"))
+            raise
+        except Exception as e:  # noqa: BLE001 — supervisor must catch broadly
+            logger.exception(
+                "[AUTO-CREATE] Background %s execution=%s failed: %s",
+                label, execution_id, e,
+            )
+            _mark_execution_failed(execution_id, e)
+
+    task = asyncio.create_task(_runner(), name=f"auto-creation-{label}-exec-{execution_id}")
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return task
+
+
+@router.post("/run", status_code=202)
 async def run_auto_creation_pipeline(request: RunPipelineRequest):
-    """Run the auto-creation pipeline."""
+    """Enqueue an auto-creation pipeline run and return immediately (bd-enfsy).
+
+    Pipeline runs on large catalogs can take minutes — running them inside the
+    request coroutine pinned an HTTP worker for the duration and forced us to
+    exempt this prefix from the 30s request-timeout middleware (bd-zv6pi). We
+    now pre-create the execution row, return its id, and run the pipeline in
+    a supervised background task. Clients poll
+    ``GET /api/auto-creation/executions/{id}`` until ``status`` is terminal
+    (``completed`` / ``failed`` / ``rolled_back``).
+    """
     logger.debug("[AUTO-CREATE] POST /run - dry_run=%s", request.dry_run)
     try:
-        from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
-
-        # Get or initialize engine
-        engine = get_auto_creation_engine()
-        if not engine:
-            client = get_client()
-            engine = await init_auto_creation_engine(client)
-
-        result = await engine.run_pipeline(
-            dry_run=request.dry_run,
+        engine = await _ensure_engine()
+        execution_id = _create_pending_execution(
+            mode="dry_run" if request.dry_run else "execute",
             triggered_by="api",
-            m3u_account_ids=request.m3u_account_ids,
-            rule_ids=request.rule_ids
         )
-
-        return result
+        _supervise_background_pipeline(
+            engine.run_pipeline(
+                dry_run=request.dry_run,
+                triggered_by="api",
+                m3u_account_ids=request.m3u_account_ids,
+                rule_ids=request.rule_ids,
+                execution_id=execution_id,
+            ),
+            execution_id=execution_id,
+            label="run_pipeline",
+        )
+        return JSONResponse(
+            status_code=202,
+            content={
+                "execution_id": execution_id,
+                "status": "running",
+                "message": "Pipeline started; poll /api/auto-creation/executions/{id} for status",
+            },
+        )
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.exception("[AUTO-CREATE] Failed to run auto-creation pipeline: %s", e)
+        logger.exception("[AUTO-CREATE] Failed to enqueue auto-creation pipeline: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.post("/rules/{rule_id}/run")
+@router.post("/rules/{rule_id}/run", status_code=202)
 async def run_auto_creation_rule(rule_id: int, dry_run: bool = False):
-    """Run a specific auto-creation rule."""
+    """Enqueue a single-rule auto-creation run and return immediately (bd-enfsy).
+
+    See ``run_auto_creation_pipeline`` for the 202 + poll contract.
+    """
     logger.debug("[AUTO-CREATE] POST /rules/%s/run - dry_run=%s", rule_id, dry_run)
     try:
-        from auto_creation_engine import get_auto_creation_engine, init_auto_creation_engine
+        engine = await _ensure_engine()
+        # Verify the rule exists before enqueuing — otherwise the pre-created
+        # execution row violates the rule_id FK constraint and the caller would
+        # see a 500 instead of a clean 404. Capture the name so the execution
+        # row keeps it for display even if the rule is later deleted (matches
+        # the engine's pre-existing behavior).
+        from models import AutoCreationRule
+        session = get_session()
+        try:
+            rule = session.query(AutoCreationRule).filter(
+                AutoCreationRule.id == rule_id
+            ).first()
+            if rule is None:
+                raise HTTPException(status_code=404, detail="Rule not found")
+            rule_name = rule.name
+        finally:
+            session.close()
 
-        # Get or initialize engine
-        engine = get_auto_creation_engine()
-        if not engine:
-            client = get_client()
-            engine = await init_auto_creation_engine(client)
-
-        result = await engine.run_rule(
+        execution_id = _create_pending_execution(
+            mode="dry_run" if dry_run else "execute",
+            triggered_by="api",
             rule_id=rule_id,
-            dry_run=dry_run,
-            triggered_by="api"
+            rule_name=rule_name,
         )
-
-        return result
+        _supervise_background_pipeline(
+            engine.run_rule(
+                rule_id=rule_id,
+                dry_run=dry_run,
+                triggered_by="api",
+                execution_id=execution_id,
+            ),
+            execution_id=execution_id,
+            label="run_rule",
+        )
+        return JSONResponse(
+            status_code=202,
+            content={
+                "execution_id": execution_id,
+                "status": "running",
+                "rule_id": rule_id,
+                "message": "Rule run started; poll /api/auto-creation/executions/{id} for status",
+            },
+        )
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.exception("[AUTO-CREATE] Failed to run auto-creation rule %s: %s", rule_id, e)
+        logger.exception("[AUTO-CREATE] Failed to enqueue auto-creation rule %s: %s", rule_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -679,10 +1217,11 @@ async def export_auto_creation_rules_yaml():
                     "sort_regex": rule.sort_regex,
                     "stream_sort_field": rule.stream_sort_field,
                     "stream_sort_order": rule.stream_sort_order or "asc",
-                    "normalize_names": rule.normalize_names or False,
+                    "normalization_group_ids": rule.get_normalization_group_ids(),
                     "skip_struck_streams": rule.skip_struck_streams or False,
                     "probe_on_sort": rule.probe_on_sort or False,
-                    "orphan_action": rule.orphan_action or "delete"
+                    "orphan_action": rule.orphan_action or "delete",
+                    "match_scope_target_group": rule.match_scope_target_group or False
                 }
 
                 # Add group_name to actions that have group_id
@@ -843,10 +1382,11 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         existing.sort_regex = rule_data.get("sort_regex")
                         existing.stream_sort_field = rule_data.get("stream_sort_field")
                         existing.stream_sort_order = rule_data.get("stream_sort_order", "asc")
-                        existing.normalize_names = rule_data.get("normalize_names", False)
+                        existing.normalization_group_ids = _resolve_normalization_group_ids(rule_data, session)
                         existing.skip_struck_streams = rule_data.get("skip_struck_streams", False)
                         existing.probe_on_sort = rule_data.get("probe_on_sort", False)
                         existing.orphan_action = rule_data.get("orphan_action", "delete")
+                        existing.match_scope_target_group = rule_data.get("match_scope_target_group", False)
                         logger.debug("[AUTO-CREATE-YAML] Rule '%s': updated existing (id=%s), stored actions=%s", rule_name, existing.id, existing.actions)
                         imported.append({"name": existing.name, "action": "updated"})
                     else:
@@ -874,10 +1414,11 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         sort_regex=rule_data.get("sort_regex"),
                         stream_sort_field=rule_data.get("stream_sort_field"),
                         stream_sort_order=rule_data.get("stream_sort_order", "asc"),
-                        normalize_names=rule_data.get("normalize_names", False),
+                        normalization_group_ids=_resolve_normalization_group_ids(rule_data, session),
                         skip_struck_streams=rule_data.get("skip_struck_streams", False),
                         probe_on_sort=rule_data.get("probe_on_sort", False),
-                        orphan_action=rule_data.get("orphan_action", "delete")
+                        orphan_action=rule_data.get("orphan_action", "delete"),
+                        match_scope_target_group=rule_data.get("match_scope_target_group", False)
                     )
                     session.add(rule)
                     logger.debug("[AUTO-CREATE-YAML] Rule '%s': created new, stored actions=%s", rule_name, rule.actions)
@@ -938,7 +1479,8 @@ async def validate_auto_creation_rule(
     logger.debug("[AUTO-CREATE] POST /validate")
     try:
         from auto_creation_schema import validate_rule
-        result = validate_rule(conditions, actions)
+        # Offload regex compile/validation off event loop (bd-w3z4h)
+        result = await run_cpu_bound(validate_rule, conditions, actions)
         return result
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to validate auto-creation rule: %s", e)
@@ -1160,26 +1702,14 @@ async def generate_debug_bundle():
         groups = await client.get_channel_groups() or []
         group_lookup = {g.get("id"): g.get("name", "") for g in groups}
 
-        # -- 2. channels.json — minimal channel list ----------------------
-        channels_json_data = [
-            {
-                "id": ch.get("id"),
-                "name": ch.get("name", ""),
-                "channel_number": ch.get("channel_number"),
-                "channel_group_name": group_lookup.get(ch.get("channel_group_id"), ""),
-            }
-            for ch in all_channels
-        ]
-        channels_json_str = json.dumps(channels_json_data, indent=2)
-
-        # -- 3. channels.csv — full export with obfuscated URLs -----------
-        # Collect stream IDs
+        # -- 2. channels.json — channels with streams and stats -----------
+        # Collect all stream IDs across channels
         all_stream_ids = set()
         for ch in all_channels:
             all_stream_ids.update(ch.get("streams", []))
 
-        # Fetch stream URLs in batches
-        stream_url_lookup = {}
+        # Fetch stream details in batches (for names and M3U info)
+        stream_detail_lookup = {}  # stream_id -> {name, m3u_account_id, url}
         stream_ids_list = list(all_stream_ids)
         for i in range(0, len(stream_ids_list), 100):
             batch = stream_ids_list[i:i + 100]
@@ -1187,15 +1717,81 @@ async def generate_debug_bundle():
                 try:
                     streams = await client.get_streams_by_ids(batch)
                     for s in streams:
-                        url = s.get("url", "")
-                        stream_url_lookup[s.get("id")] = obfuscate_url(url) if url else ""
+                        m3u_acct = s.get("m3u_account")
+                        if isinstance(m3u_acct, dict):
+                            m3u_id = m3u_acct.get("id")
+                        else:
+                            m3u_id = m3u_acct
+                        stream_detail_lookup[s.get("id")] = {
+                            "name": s.get("name", ""),
+                            "m3u_account_id": m3u_id,
+                            "url": obfuscate_url(s.get("url", "")) if s.get("url") else "",
+                        }
                 except Exception as e:
                     logger.warning("[AUTO-CREATE] Debug bundle: failed to fetch stream batch: %s", e)
 
+        # Load stream stats from DB
+        from models import StreamStats
+        stats_session = get_session()
+        try:
+            stats_records = stats_session.query(StreamStats).filter(
+                StreamStats.stream_id.in_(stream_ids_list)
+            ).all() if stream_ids_list else []
+            stream_stats_lookup = {s.stream_id: s for s in stats_records}
+        finally:
+            stats_session.close()
+
+        # Build channels with embedded stream info, sorted by channel_number
+        channels_json_data = []
+        for ch in sorted(all_channels, key=lambda c: c.get("channel_number", 0) or 0):
+            stream_ids = ch.get("streams", [])
+            streams_data = []
+            for position, sid in enumerate(stream_ids, start=1):
+                detail = stream_detail_lookup.get(sid, {})
+                stat = stream_stats_lookup.get(sid)
+                stream_entry = {
+                    "id": sid,
+                    "position": position,
+                    "name": detail.get("name", ""),
+                    "m3u_account_id": detail.get("m3u_account_id"),
+                    "url": detail.get("url", ""),
+                }
+                if stat:
+                    stream_entry["stats"] = {
+                        "probe_status": stat.probe_status,
+                        "resolution": stat.resolution,
+                        "fps": stat.fps,
+                        "video_codec": stat.video_codec,
+                        "audio_codec": stat.audio_codec,
+                        "audio_channels": stat.audio_channels,
+                        "bitrate": stat.bitrate,
+                        "video_bitrate": stat.video_bitrate,
+                        "is_black_screen": stat.is_black_screen or False,
+                        "is_low_fps": stat.is_low_fps or False,
+                        "consecutive_failures": stat.consecutive_failures or 0,
+                        "last_probed": stat.last_probed.isoformat() + "Z" if stat.last_probed else None,
+                    }
+                streams_data.append(stream_entry)
+
+            channels_json_data.append({
+                "id": ch.get("id"),
+                "name": ch.get("name", ""),
+                "channel_number": ch.get("channel_number"),
+                "channel_group_name": group_lookup.get(ch.get("channel_group_id"), ""),
+                "stream_count": len(stream_ids),
+                "streams": streams_data,
+            })
+        channels_json_str = json.dumps(channels_json_data, indent=2)
+
+        # -- 3. channels.csv — full export with obfuscated URLs -----------
         csv_channels = []
         for ch in sorted(all_channels, key=lambda c: c.get("channel_number", 0) or 0):
             stream_ids = ch.get("streams", [])
-            stream_urls = [stream_url_lookup.get(sid, "") for sid in stream_ids if stream_url_lookup.get(sid)]
+            stream_urls = [
+                stream_detail_lookup.get(sid, {}).get("url", "")
+                for sid in stream_ids
+                if stream_detail_lookup.get(sid, {}).get("url")
+            ]
             csv_channels.append({
                 "channel_number": ch.get("channel_number"),
                 "name": ch.get("name", ""),
@@ -1246,7 +1842,7 @@ async def generate_debug_bundle():
                     "sort_regex": rule.sort_regex,
                     "stream_sort_field": rule.stream_sort_field,
                     "stream_sort_order": rule.stream_sort_order or "asc",
-                    "normalize_names": rule.normalize_names or False,
+                    "normalization_group_ids": rule.get_normalization_group_ids(),
                     "skip_struck_streams": rule.skip_struck_streams or False,
                     "probe_on_sort": rule.probe_on_sort or False,
                     "orphan_action": rule.orphan_action or "delete",
@@ -1262,27 +1858,88 @@ async def generate_debug_bundle():
         finally:
             session.close()
 
-        # -- 5. logs.txt — recent logs, obfuscated -----------------------
+        # -- 5. settings.json — user settings with secrets redacted -------
+        from config import get_settings as get_config_settings
+        settings_obj = get_config_settings()
+        settings_dict = settings_obj.model_dump()
+        # Redact sensitive fields
+        _REDACTED = "***REDACTED***"
+        for key in ("password", "smtp_password", "discord_webhook_url",
+                     "telegram_bot_token", "telegram_chat_id", "mcp_api_key"):
+            if settings_dict.get(key):
+                settings_dict[key] = _REDACTED
+        # Redact Dispatcharr URL credentials (keep host/port for debugging)
+        if settings_dict.get("url"):
+            from urllib.parse import urlparse, urlunparse
+            parsed = urlparse(settings_dict["url"])
+            if parsed.username or parsed.password:
+                clean = parsed._replace(netloc=f"{parsed.hostname}:{parsed.port}" if parsed.port else parsed.hostname)
+                settings_dict["url"] = urlunparse(clean)
+        if settings_dict.get("username"):
+            settings_dict["username"] = _REDACTED
+        settings_json_str = json.dumps(settings_dict, indent=2)
+
+        # -- 6. task_schedules.json — scheduled task configuration --------
+        from models import TaskSchedule
+        sched_session = get_session()
+        try:
+            schedules = sched_session.query(TaskSchedule).order_by(
+                TaskSchedule.task_id, TaskSchedule.id
+            ).all()
+            schedules_data = [s.to_dict() for s in schedules]
+        finally:
+            sched_session.close()
+        task_schedules_str = json.dumps(schedules_data, indent=2)
+
+        # -- 7. channel_groups_diagnostic.json — Channel Manager mismatch diagnosis
+        # Run BEFORE logs.txt is captured so [GROUPS-DIAG] lines land in the log dump too.
+        from routers.channel_groups import build_channel_groups_diagnostic
+        try:
+            cg_diagnostic = build_channel_groups_diagnostic(groups, all_channels)
+            cg_diagnostic_str = json.dumps(cg_diagnostic, indent=2, default=str)
+        except Exception as e:
+            logger.warning("[AUTO-CREATE] Debug bundle: channel groups diagnostic failed: %s", e)
+            cg_diagnostic_str = json.dumps({"error": str(e)})
+
+        # -- 8. logs.txt — recent logs, obfuscated -----------------------
         log_lines = get_recent_logs()
         obfuscated_lines = [obfuscate_text(line) for line in log_lines]
         logs_text = "\n".join(obfuscated_lines)
 
-        # -- 6. manifest.json --------------------------------------------
+        # -- 8. manifest.json --------------------------------------------
+        # Compute stream stats summary
+        total_streams = len(all_stream_ids)
+        probed_success = sum(1 for s in stream_stats_lookup.values() if s.probe_status == "success")
+        probed_failed = sum(1 for s in stream_stats_lookup.values() if s.probe_status in ("failed", "timeout"))
+        black_screen_count = sum(1 for s in stream_stats_lookup.values() if s.is_black_screen)
+        low_fps_count = sum(1 for s in stream_stats_lookup.values() if s.is_low_fps)
+
         manifest = {
             "ecm_version": APP_VERSION,
             "generated_at": datetime.utcnow().isoformat() + "Z",
             "channel_count": len(all_channels),
             "rule_count": rule_count,
             "group_count": len(groups),
+            "stream_count": total_streams,
+            "stream_stats": {
+                "probed_success": probed_success,
+                "probed_failed": probed_failed,
+                "unprobed": total_streams - probed_success - probed_failed,
+                "black_screen": black_screen_count,
+                "low_fps": low_fps_count,
+            },
         }
         manifest_str = json.dumps(manifest, indent=2)
 
-        # -- 7. Pack into tar.gz -----------------------------------------
+        # -- 9. Pack into tar.gz -----------------------------------------
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tf:
             _add_tar_entry(tf, "channels.json", channels_json_str)
             _add_tar_entry(tf, "channels.csv", csv_content)
             _add_tar_entry(tf, "rules.yaml", yaml_content)
+            _add_tar_entry(tf, "settings.json", settings_json_str)
+            _add_tar_entry(tf, "task_schedules.json", task_schedules_str)
+            _add_tar_entry(tf, "channel_groups_diagnostic.json", cg_diagnostic_str)
             _add_tar_entry(tf, "logs.txt", logs_text)
             _add_tar_entry(tf, "manifest.json", manifest_str)
         buf.seek(0)
@@ -1299,3 +1956,33 @@ async def generate_debug_bundle():
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to generate debug bundle: %s", e)
         raise HTTPException(status_code=500, detail="Failed to generate debug bundle")
+
+
+# =============================================================================
+# Lint findings (bd-eio04.7) — read-only view of the startup migration scan.
+# =============================================================================
+
+
+@router.get("/lint-findings")
+async def get_auto_creation_lint_findings():
+    """Return the cached lint findings for auto-creation rules.
+
+    See ``routers/normalization.py::get_normalization_lint_findings`` for
+    semantics. Findings are scoped to ``rule_type='auto_creation'``.
+    """
+    logger.debug("[AUTO-CREATE] GET /lint-findings")
+    try:
+        from models import RuleLintFinding
+        from tasks.rule_lint_scan import RULE_TYPE_AUTO_CREATION
+
+        session = get_session()
+        try:
+            findings = session.query(RuleLintFinding).filter(
+                RuleLintFinding.rule_type == RULE_TYPE_AUTO_CREATION
+            ).order_by(RuleLintFinding.rule_id, RuleLintFinding.id).all()
+            return {"findings": [f.to_dict() for f in findings]}
+        finally:
+            session.close()
+    except Exception as e:
+        logger.exception("[AUTO-CREATE] Failed to get lint findings: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")

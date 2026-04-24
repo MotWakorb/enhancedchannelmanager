@@ -20,8 +20,8 @@ export function useCopyFeedback(): UseCopyFeedbackReturn {
   const [copyError, setCopyError] = useState<string | null>(null);
 
   // Store timeout IDs to clear them if component unmounts
-  const successTimeoutRef = useRef<number | null>(null);
-  const errorTimeoutRef = useRef<number | null>(null);
+  const successTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleCopy = useCallback(async (url: string, itemName: string) => {
     // Clear any existing timeouts

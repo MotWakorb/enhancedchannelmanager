@@ -1,7 +1,7 @@
 """
 Unit tests for auto-creation endpoints.
 
-Tests: 19 endpoints covering rule CRUD, reorder, toggle, duplicate,
+Tests: rule CRUD, bulk-update, reorder, toggle, duplicate,
        pipeline execution, execution history, rollback, YAML import/export,
        validation, and schema endpoints.
 Mocks: auto_creation_engine, auto_creation_schema, get_client(), get_session().
@@ -9,9 +9,27 @@ Mocks: auto_creation_engine, auto_creation_schema, get_client(), get_session().
 import json
 import pytest
 from datetime import datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from models import AutoCreationRule, AutoCreationExecution
+from models import AutoCreationRule, AutoCreationExecution, NormalizationRuleGroup
+
+
+def _create_normalization_group(session, **overrides):
+    """Helper to create a NormalizationRuleGroup."""
+    defaults = {
+        "name": "Test Group",
+        "enabled": True,
+        "priority": 0,
+        "is_builtin": False,
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+    }
+    defaults.update(overrides)
+    group = NormalizationRuleGroup(**defaults)
+    session.add(group)
+    session.commit()
+    session.refresh(group)
+    return group
 
 
 def _create_rule(session, **overrides):
@@ -137,6 +155,96 @@ class TestCreateAutoCreationRule:
 
         assert response.status_code == 400
 
+    @pytest.mark.asyncio
+    async def test_accepts_valid_normalization_group_ids(
+        self, async_client, test_session
+    ):
+        """bd-j5p4k: POST accepts normalization_group_ids that all exist.
+
+        Mirrors the PUT/bulk-update validation added in bd-i75ax to close
+        the symmetric write-time gap on the create endpoint.
+        """
+        g1 = _create_normalization_group(test_session, name="Group A")
+        g2 = _create_normalization_group(test_session, name="Group B")
+
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post("/api/auto-creation/rules", json={
+                "name": "WithNorm",
+                "conditions": [{"type": "stream_name_contains", "value": "CNN"}],
+                "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+                "normalization_group_ids": [g1.id, g2.id],
+            })
+
+        assert response.status_code == 200, response.text
+        assert sorted(response.json()["normalization_group_ids"]) == sorted([g1.id, g2.id])
+
+    @pytest.mark.asyncio
+    async def test_accepts_empty_normalization_group_ids(
+        self, async_client
+    ):
+        """bd-j5p4k: POST accepts an empty normalization_group_ids list
+        (no normalization groups is a legitimate state)."""
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post("/api/auto-creation/rules", json={
+                "name": "EmptyNorm",
+                "conditions": [{"type": "stream_name_contains", "value": "CNN"}],
+                "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+                "normalization_group_ids": [],
+            })
+
+        assert response.status_code == 200, response.text
+        assert response.json()["normalization_group_ids"] == []
+
+    @pytest.mark.asyncio
+    async def test_rejects_missing_normalization_group_id(
+        self, async_client, test_session
+    ):
+        """bd-j5p4k: POST returns 422 when a submitted ID is not in
+        normalization_rule_groups, and the error names the offending ID."""
+        g1 = _create_normalization_group(test_session, name="Group Real")
+        missing_id = 999999
+
+        response = await async_client.post("/api/auto-creation/rules", json={
+            "name": "BadNorm",
+            "conditions": [{"type": "stream_name_contains", "value": "CNN"}],
+            "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+            "normalization_group_ids": [g1.id, missing_id],
+        })
+
+        assert response.status_code == 422, response.text
+        body = response.text
+        assert str(missing_id) in body
+        detail = response.json().get("detail")
+        assert detail is not None
+        if isinstance(detail, dict):
+            offending = detail.get("invalid_normalization_group_ids") or detail.get("offending_ids") or []
+            assert missing_id in offending
+            assert g1.id not in offending
+
+    @pytest.mark.asyncio
+    async def test_rejects_lists_all_invalid_normalization_group_ids(
+        self, async_client, test_session
+    ):
+        """bd-j5p4k: When multiple submitted IDs are missing on POST, all are listed."""
+        g1 = _create_normalization_group(test_session, name="Real Group")
+        bad_a, bad_b, bad_c = 700001, 700002, 700003
+
+        response = await async_client.post("/api/auto-creation/rules", json={
+            "name": "MultiBadNorm",
+            "conditions": [{"type": "stream_name_contains", "value": "CNN"}],
+            "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+            "normalization_group_ids": [g1.id, bad_a, bad_b, bad_c],
+        })
+
+        assert response.status_code == 422, response.text
+        detail = response.json().get("detail")
+        assert isinstance(detail, dict)
+        offending = detail.get("invalid_normalization_group_ids") or detail.get("offending_ids") or []
+        assert sorted(offending) == sorted([bad_a, bad_b, bad_c])
+        assert g1.id not in offending
+
 
 class TestUpdateAutoCreationRule:
     """Tests for PUT /api/auto-creation/rules/{rule_id}."""
@@ -166,6 +274,621 @@ class TestUpdateAutoCreationRule:
             )
 
         assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_accepts_valid_normalization_group_ids(
+        self, async_client, test_session
+    ):
+        """bd-i75ax: PUT accepts normalization_group_ids that all exist."""
+        rule = _create_rule(test_session, name="WithNorm")
+        g1 = _create_normalization_group(test_session, name="Group A")
+        g2 = _create_normalization_group(test_session, name="Group B")
+
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.put(
+                f"/api/auto-creation/rules/{rule.id}",
+                json={"normalization_group_ids": [g1.id, g2.id]},
+            )
+
+        assert response.status_code == 200, response.text
+        assert sorted(response.json()["normalization_group_ids"]) == sorted([g1.id, g2.id])
+
+    @pytest.mark.asyncio
+    async def test_accepts_empty_normalization_group_ids(
+        self, async_client, test_session
+    ):
+        """bd-i75ax: PUT accepts an empty normalization_group_ids list (disables normalization)."""
+        rule = _create_rule(test_session, name="EmptyNorm")
+        # Pre-populate with valid IDs to verify empty clears them
+        g1 = _create_normalization_group(test_session, name="Group X")
+        rule.set_normalization_group_ids([g1.id])
+        test_session.commit()
+
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.put(
+                f"/api/auto-creation/rules/{rule.id}",
+                json={"normalization_group_ids": []},
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["normalization_group_ids"] == []
+
+    @pytest.mark.asyncio
+    async def test_rejects_missing_normalization_group_id(
+        self, async_client, test_session
+    ):
+        """bd-i75ax: PUT returns 422 when a submitted ID is not in normalization_rule_groups,
+        and the error names the offending ID."""
+        rule = _create_rule(test_session, name="BadNorm")
+        g1 = _create_normalization_group(test_session, name="Group Real")
+        missing_id = 999999
+
+        response = await async_client.put(
+            f"/api/auto-creation/rules/{rule.id}",
+            json={"normalization_group_ids": [g1.id, missing_id]},
+        )
+
+        assert response.status_code == 422, response.text
+        body = response.text
+        assert str(missing_id) in body
+        # Sanity: the valid id should not be in the offending list
+        # (we look for the structured field rather than substring to avoid
+        # false-positive overlap with rule_id or other numbers in the error)
+        detail = response.json().get("detail")
+        assert detail is not None
+        # detail may be a dict with an offending list; assert structure carries it
+        if isinstance(detail, dict):
+            offending = detail.get("invalid_normalization_group_ids") or detail.get("offending_ids") or []
+            assert missing_id in offending
+            assert g1.id not in offending
+
+    @pytest.mark.asyncio
+    async def test_rejects_lists_all_invalid_normalization_group_ids(
+        self, async_client, test_session
+    ):
+        """bd-i75ax: When multiple submitted IDs are missing, all are listed."""
+        rule = _create_rule(test_session, name="MultiBadNorm")
+        g1 = _create_normalization_group(test_session, name="Real Group")
+        bad_a, bad_b, bad_c = 700001, 700002, 700003
+
+        response = await async_client.put(
+            f"/api/auto-creation/rules/{rule.id}",
+            json={"normalization_group_ids": [g1.id, bad_a, bad_b, bad_c]},
+        )
+
+        assert response.status_code == 422, response.text
+        detail = response.json().get("detail")
+        assert isinstance(detail, dict)
+        offending = detail.get("invalid_normalization_group_ids") or detail.get("offending_ids") or []
+        assert sorted(offending) == sorted([bad_a, bad_b, bad_c])
+        assert g1.id not in offending
+
+    @pytest.mark.asyncio
+    async def test_does_not_validate_when_normalization_group_ids_omitted(
+        self, async_client, test_session
+    ):
+        """bd-i75ax delta-on-write: PUT requests that don't include
+        normalization_group_ids must not re-validate the existing stored value.
+        This preserves backward-compat with rules whose stored IDs reference
+        groups that have since been deleted."""
+        rule = _create_rule(test_session, name="StaleStored")
+        # Simulate a stale stored id (group was deleted out from under us)
+        stale_id = 999998
+        rule.set_normalization_group_ids([stale_id])
+        test_session.commit()
+
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            # Update an unrelated field — must succeed even though stored
+            # normalization_group_ids reference a missing group.
+            response = await async_client.put(
+                f"/api/auto-creation/rules/{rule.id}",
+                json={"name": "Renamed"},
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["name"] == "Renamed"
+
+
+class TestBulkUpdateAutoCreationRules:
+    """Tests for POST /api/auto-creation/rules/bulk-update."""
+
+    @pytest.mark.asyncio
+    async def test_updates_multiple_rules(self, async_client, test_session):
+        """Applies the same scalar updates to several rules."""
+        r1 = _create_rule(test_session, name="BulkA", run_on_refresh=False, orphan_action="delete")
+        r2 = _create_rule(test_session, name="BulkB", run_on_refresh=False)
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
+                "rule_ids": [r1.id, r2.id],
+                "run_on_refresh": True,
+                "orphan_action": "none",
+            })
+        assert response.status_code == 200
+        data = response.json()
+        assert data["updated_count"] == 2
+        assert len(data["rules"]) == 2
+        test_session.expire_all()
+        assert test_session.query(AutoCreationRule).get(r1.id).run_on_refresh is True
+        assert test_session.query(AutoCreationRule).get(r1.id).orphan_action == "none"
+        assert test_session.query(AutoCreationRule).get(r2.id).run_on_refresh is True
+
+    @pytest.mark.asyncio
+    async def test_rejects_empty_rule_ids(self, async_client):
+        """rule_ids must be non-empty."""
+        response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
+            "rule_ids": [],
+            "enabled": False,
+        })
+        # Pydantic request validation rejects empty lists.
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_rejects_more_than_500_rule_ids(self, async_client):
+        """rule_ids is capped to prevent pathological requests."""
+        response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
+            "rule_ids": list(range(1, 502)),  # 501 ids
+            "enabled": False,
+        })
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_accepts_exactly_500_rule_ids(self, async_client, test_session):
+        rules = [_create_rule(test_session, name=f"Bulk500-{i}", enabled=True) for i in range(500)]
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
+                "rule_ids": [r.id for r in rules],
+                "enabled": False,
+            })
+        assert response.status_code == 200
+        assert response.json()["updated_count"] == 500
+
+    @pytest.mark.asyncio
+    async def test_rejects_duplicate_rule_ids(self, async_client, test_session):
+        r = _create_rule(test_session, name="DupRule", enabled=True)
+        response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
+            "rule_ids": [r.id, r.id],
+            "enabled": False,
+        })
+        assert response.status_code == 400
+        assert "duplicate" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_rejects_no_fields(self, async_client):
+        """At least one update field is required."""
+        response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
+            "rule_ids": [1],
+        })
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_rolls_back_when_any_rule_id_missing(self, async_client, test_session):
+        """If one rule id is missing, nothing is committed."""
+        r1 = _create_rule(test_session, name="BulkRB1", enabled=True)
+        r2 = _create_rule(test_session, name="BulkRB2", enabled=True)
+        r3 = _create_rule(test_session, name="BulkRB3", enabled=True)
+
+        missing_id = 999999
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
+                "rule_ids": [r1.id, r2.id, r3.id, missing_id],
+                "enabled": False,
+            })
+
+        assert response.status_code == 404
+
+        test_session.expire_all()
+        assert test_session.query(AutoCreationRule).get(r1.id).enabled is True
+        assert test_session.query(AutoCreationRule).get(r2.id).enabled is True
+        assert test_session.query(AutoCreationRule).get(r3.id).enabled is True
+
+    @pytest.mark.asyncio
+    async def test_reports_all_missing_ids(self, async_client, test_session):
+        """bd-bh1hh: When multiple rule_ids are missing, the 404 body mentions
+        every missing id (not just the first one encountered). This is a visible
+        API change from the original loop-and-fail-fast behavior.
+        """
+        r1 = _create_rule(test_session, name="BulkMiss1", enabled=True)
+        r2 = _create_rule(test_session, name="BulkMiss2", enabled=True)
+
+        missing_a = 99999
+        missing_b = 99998
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={
+                    "rule_ids": [r1.id, missing_a, r2.id, missing_b],
+                    "enabled": False,
+                },
+            )
+
+        assert response.status_code == 404
+        detail = str(response.json()["detail"])
+        assert str(missing_a) in detail
+        assert str(missing_b) in detail
+
+    @pytest.mark.asyncio
+    async def test_sets_merge_streams_remove_non_matching(self, async_client, test_session):
+        """Updates remove_non_matching on all merge_streams actions."""
+        merge_action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "match_by": "tvg_id",
+            "remove_non_matching": False,
+        }
+        r = _create_rule(
+            test_session,
+            name="MergeRule",
+            actions=json.dumps([merge_action]),
+        )
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post("/api/auto-creation/rules/bulk-update", json={
+                "rule_ids": [r.id],
+                "merge_streams_remove_non_matching": True,
+            })
+        assert response.status_code == 200
+        test_session.expire_all()
+        rule = test_session.query(AutoCreationRule).get(r.id)
+        acts = json.loads(rule.actions)
+        assert acts[0]["remove_non_matching"] is True
+
+    @pytest.mark.asyncio
+    async def test_scalars_only_update_skips_validate_on_drifted_rule(
+        self, async_client, test_session
+    ):
+        """bd-z7xqy: Scalar-only bulk edits must succeed even when the stored
+        rule's conditions/actions fail validate_rule (schema drift / legacy data).
+
+        Uses the real validate_rule — no mock — to prove the handler no longer
+        gates scalar-only updates on post-update schema validation.
+        """
+        rule = _create_rule(
+            test_session,
+            name="DriftedScalar",
+            enabled=False,
+            conditions=json.dumps([]),  # validate_rule rejects empty conditions
+        )
+
+        with patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={"rule_ids": [rule.id], "enabled": True},
+            )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["updated_count"] == 1
+
+        test_session.expire_all()
+        refreshed = test_session.query(AutoCreationRule).get(rule.id)
+        assert refreshed.enabled is True
+
+    @pytest.mark.asyncio
+    async def test_merge_streams_payload_still_validates_drifted_rule(
+        self, async_client, test_session
+    ):
+        """bd-z7xqy: When the bulk payload touches rule logic
+        (merge_streams_remove_non_matching), validate_rule must still gate
+        the change and the transaction must roll back on failure.
+        """
+        merge_action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "match_by": "tvg_id",
+            "remove_non_matching": False,
+        }
+        original_actions = json.dumps([merge_action])
+        rule = _create_rule(
+            test_session,
+            name="DriftedMerge",
+            conditions=json.dumps([]),  # drift: empty conditions fail validate_rule
+            actions=original_actions,
+        )
+
+        with patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={
+                    "rule_ids": [rule.id],
+                    "merge_streams_remove_non_matching": True,
+                },
+            )
+
+        assert response.status_code == 400, response.text
+        detail = response.json()["detail"]
+        # detail is a dict with {"message": "...", "errors": [...]}
+        message = detail["message"] if isinstance(detail, dict) else str(detail)
+        assert "Invalid rule configuration" in message
+
+        # Rollback: actions JSON must be unchanged.
+        test_session.expire_all()
+        refreshed = test_session.query(AutoCreationRule).get(rule.id)
+        assert json.loads(refreshed.actions) == [merge_action]
+
+    @pytest.mark.asyncio
+    async def test_rejects_conditions_in_payload(self, async_client, test_session):
+        """bd-gjoe5: conditions is not supported in bulk-update; silent-drop
+        is the wrong default for an API contract. Must reject (4xx) and name
+        the offending field in the error message.
+        """
+        r = _create_rule(test_session, name="RejectCond", enabled=True)
+        response = await async_client.post(
+            "/api/auto-creation/rules/bulk-update",
+            json={
+                "rule_ids": [r.id],
+                "conditions": [{"type": "stream_name_contains", "value": "X"}],
+            },
+        )
+        assert response.status_code in (400, 422), response.text
+        body = response.text.lower()
+        assert "conditions" in body
+
+    @pytest.mark.asyncio
+    async def test_rejects_actions_in_payload(self, async_client, test_session):
+        """bd-gjoe5: actions is not supported in bulk-update."""
+        r = _create_rule(test_session, name="RejectActs", enabled=True)
+        response = await async_client.post(
+            "/api/auto-creation/rules/bulk-update",
+            json={
+                "rule_ids": [r.id],
+                "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+            },
+        )
+        assert response.status_code in (400, 422), response.text
+        body = response.text.lower()
+        assert "actions" in body
+
+    @pytest.mark.asyncio
+    async def test_scalars_only_update_still_succeeds(self, async_client, test_session):
+        """bd-gjoe5 regression guard: scalars-only bulk updates must still
+        return 200 after the conditions/actions rejection is added.
+        """
+        r = _create_rule(test_session, name="ScalarsOnly", enabled=False)
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={"rule_ids": [r.id], "enabled": True, "priority": 5},
+            )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["updated_count"] == 1
+        test_session.expire_all()
+        refreshed = test_session.query(AutoCreationRule).get(r.id)
+        assert refreshed.enabled is True
+        assert refreshed.priority == 5
+
+    @pytest.mark.asyncio
+    async def test_emits_per_entity_journal_entries_with_shared_batch_id(
+        self, async_client, test_session
+    ):
+        """bd-91mcq: Bulk-update must emit one journal entry per mutated rule,
+        each with entity_id=rule.id, and all sharing the same batch_id.
+
+        Matches the pattern in backend/routers/channels.py:800 (bulk channel
+        renumber) — per-entity forensics over a single summary entry.
+        """
+        r1 = _create_rule(test_session, name="JournalA", enabled=False)
+        r2 = _create_rule(test_session, name="JournalB", enabled=False)
+        r3 = _create_rule(test_session, name="JournalC", enabled=False)
+
+        mock_journal = MagicMock()
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal", mock_journal):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={"rule_ids": [r1.id, r2.id, r3.id], "enabled": True},
+            )
+
+        assert response.status_code == 200, response.text
+
+        # One log_entry call per rule mutated.
+        assert mock_journal.log_entry.call_count == 3
+
+        # Collect entity_ids and batch_ids from each call.
+        call_entity_ids = []
+        call_batch_ids = []
+        for call in mock_journal.log_entry.call_args_list:
+            kwargs = call.kwargs
+            call_entity_ids.append(kwargs["entity_id"])
+            call_batch_ids.append(kwargs["batch_id"])
+
+        # Each entity_id matches one of the seeded rules, all distinct.
+        assert sorted(call_entity_ids) == sorted([r1.id, r2.id, r3.id])
+
+        # All three calls share the same batch_id (grouping).
+        assert len(set(call_batch_ids)) == 1
+        assert call_batch_ids[0] is not None and call_batch_ids[0] != ""
+
+    @pytest.mark.asyncio
+    async def test_journal_description_reflects_scalar_diff(
+        self, async_client, test_session
+    ):
+        """bd-91mcq: Journal description must show the before→after diff of
+        changed scalar fields (e.g. 'enabled: False → True, priority: 3 → 5').
+        """
+        rule = _create_rule(
+            test_session, name="DiffRule", enabled=False, priority=3
+        )
+
+        mock_journal = MagicMock()
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal", mock_journal):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={"rule_ids": [rule.id], "enabled": True, "priority": 5},
+            )
+
+        assert response.status_code == 200, response.text
+        assert mock_journal.log_entry.call_count == 1
+
+        call = mock_journal.log_entry.call_args
+        description = call.kwargs["description"]
+        # Description must reflect both transitions.
+        assert "enabled" in description
+        assert "priority" in description
+        assert "False" in description and "True" in description
+        assert "3" in description and "5" in description
+
+        # before/after also capture the diff, mirroring channels.py pattern.
+        before = call.kwargs.get("before_value") or {}
+        after = call.kwargs.get("after_value") or {}
+        assert before.get("enabled") is False
+        assert after.get("enabled") is True
+        assert before.get("priority") == 3
+        assert after.get("priority") == 5
+
+    @pytest.mark.asyncio
+    async def test_no_journal_entries_when_rollback(
+        self, async_client, test_session
+    ):
+        """bd-91mcq: On rollback path (missing rule id triggers 404), no
+        journal entries must be emitted.
+        """
+        r1 = _create_rule(test_session, name="NoJournalRB1", enabled=True)
+        r2 = _create_rule(test_session, name="NoJournalRB2", enabled=True)
+        missing_id = 999999
+
+        mock_journal = MagicMock()
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal", mock_journal):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={
+                    "rule_ids": [r1.id, r2.id, missing_id],
+                    "enabled": False,
+                },
+            )
+
+        assert response.status_code == 404
+        # Zero log_entry calls on the rollback path.
+        assert mock_journal.log_entry.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_accepts_valid_normalization_group_ids(
+        self, async_client, test_session
+    ):
+        """bd-i75ax: bulk-update accepts normalization_group_ids that all exist."""
+        r1 = _create_rule(test_session, name="BulkNormA")
+        r2 = _create_rule(test_session, name="BulkNormB")
+        g1 = _create_normalization_group(test_session, name="Bulk Group A")
+        g2 = _create_normalization_group(test_session, name="Bulk Group B")
+
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={
+                    "rule_ids": [r1.id, r2.id],
+                    "normalization_group_ids": [g1.id, g2.id],
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["updated_count"] == 2
+        test_session.expire_all()
+        for rid in (r1.id, r2.id):
+            refreshed = test_session.query(AutoCreationRule).get(rid)
+            assert sorted(refreshed.get_normalization_group_ids()) == sorted([g1.id, g2.id])
+
+    @pytest.mark.asyncio
+    async def test_accepts_empty_normalization_group_ids(
+        self, async_client, test_session
+    ):
+        """bd-i75ax: bulk-update accepts empty normalization_group_ids list."""
+        r1 = _create_rule(test_session, name="BulkEmptyNorm")
+        # Pre-populate so empty actually clears something
+        g1 = _create_normalization_group(test_session, name="Bulk Pre Group")
+        r1.set_normalization_group_ids([g1.id])
+        test_session.commit()
+
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={
+                    "rule_ids": [r1.id],
+                    "normalization_group_ids": [],
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        test_session.expire_all()
+        refreshed = test_session.query(AutoCreationRule).get(r1.id)
+        assert refreshed.get_normalization_group_ids() == []
+
+    @pytest.mark.asyncio
+    async def test_rejects_missing_normalization_group_id(
+        self, async_client, test_session
+    ):
+        """bd-i75ax: bulk-update returns 422 with offending IDs named when any
+        submitted ID is missing from normalization_rule_groups, and rolls back
+        (no rule is mutated)."""
+        r1 = _create_rule(test_session, name="BulkBadNormA", enabled=False)
+        r2 = _create_rule(test_session, name="BulkBadNormB", enabled=False)
+        g1 = _create_normalization_group(test_session, name="Bulk Real Group")
+        bad_a = 800001
+        bad_b = 800002
+
+        mock_journal = MagicMock()
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal", mock_journal):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={
+                    "rule_ids": [r1.id, r2.id],
+                    "normalization_group_ids": [g1.id, bad_a, bad_b],
+                    # Try a scalar update too — must not be applied on rollback
+                    "enabled": True,
+                },
+            )
+
+        assert response.status_code == 422, response.text
+        detail = response.json().get("detail")
+        assert isinstance(detail, dict)
+        offending = detail.get("invalid_normalization_group_ids") or detail.get("offending_ids") or []
+        assert sorted(offending) == sorted([bad_a, bad_b])
+        assert g1.id not in offending
+
+        # No journal entries should be written on the validation failure path.
+        assert mock_journal.log_entry.call_count == 0
+
+        # Sanity: scalar update must not have been persisted.
+        test_session.expire_all()
+        for rid in (r1.id, r2.id):
+            refreshed = test_session.query(AutoCreationRule).get(rid)
+            assert refreshed.enabled is False, f"rule id={rid} was mutated despite 422"
+
+    @pytest.mark.asyncio
+    async def test_does_not_validate_when_normalization_group_ids_omitted(
+        self, async_client, test_session
+    ):
+        """bd-i75ax delta-on-write: bulk-update requests that don't include
+        normalization_group_ids must not re-validate stored values, even if
+        any rule in scope has stale stored IDs."""
+        r1 = _create_rule(test_session, name="BulkStale", enabled=False)
+        # Simulate a stale stored id
+        r1.set_normalization_group_ids([999997])
+        test_session.commit()
+
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={"rule_ids": [r1.id], "enabled": True},
+            )
+
+        assert response.status_code == 200, response.text
+        test_session.expire_all()
+        refreshed = test_session.query(AutoCreationRule).get(r1.id)
+        assert refreshed.enabled is True
 
 
 class TestDeleteAutoCreationRule:
@@ -257,62 +980,193 @@ class TestDuplicateAutoCreationRule:
 
 
 class TestRunAutoCreationPipeline:
-    """Tests for POST /api/auto-creation/run."""
+    """Tests for POST /api/auto-creation/run (background-task pattern, bd-enfsy)."""
 
     @pytest.mark.asyncio
-    async def test_runs_pipeline(self, async_client):
-        """Runs the auto-creation pipeline."""
+    async def test_returns_202_with_execution_id(self, async_client, test_session):
+        """POST /run enqueues work and returns 202 + execution_id immediately."""
+        # Use an Event so the background task blocks until the assertion runs,
+        # so we can observe the "running" status before the engine completes.
+        import asyncio as _asyncio
+        gate = _asyncio.Event()
+
+        async def slow_run_pipeline(*args, **kwargs):
+            await gate.wait()
+            return {"success": True, "execution_id": kwargs.get("execution_id")}
+
         mock_engine = AsyncMock()
-        mock_engine.run_pipeline.return_value = {
-            "status": "completed",
-            "streams_matched": 10,
-            "channels_created": 5,
-        }
+        mock_engine.run_pipeline = AsyncMock(side_effect=slow_run_pipeline)
 
         with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
-            response = await async_client.post("/api/auto-creation/run", json={
-                "dry_run": False,
-            })
+            response = await async_client.post("/api/auto-creation/run", json={"dry_run": False})
 
-        assert response.status_code == 200
-        assert response.json()["channels_created"] == 5
-        mock_engine.run_pipeline.assert_called_once_with(
-            dry_run=False, triggered_by="api", m3u_account_ids=None, rule_ids=None,
-        )
+        assert response.status_code == 202, response.text
+        body = response.json()
+        assert "execution_id" in body
+        assert body["status"] == "running"
+        execution_id = body["execution_id"]
+
+        # Execution row should already exist with status="running"
+        from models import AutoCreationExecution
+        exe = test_session.query(AutoCreationExecution).filter_by(id=execution_id).first()
+        assert exe is not None
+        assert exe.status == "running"
+        assert exe.mode == "execute"
+        assert exe.triggered_by == "api"
+
+        # Release the background task
+        gate.set()
+        # Yield so the background task can complete (drain it)
+        for _ in range(20):
+            await _asyncio.sleep(0)
+        # Engine call must have been issued with execution_id binding
+        mock_engine.run_pipeline.assert_called()
+        call_kwargs = mock_engine.run_pipeline.call_args.kwargs
+        assert call_kwargs["dry_run"] is False
+        assert call_kwargs["triggered_by"] == "api"
+        assert call_kwargs["execution_id"] == execution_id
 
     @pytest.mark.asyncio
-    async def test_dry_run(self, async_client):
-        """Runs pipeline in dry-run mode."""
+    async def test_dry_run_creates_dry_run_execution(self, async_client, test_session):
+        """dry_run=True must create execution with mode='dry_run'."""
         mock_engine = AsyncMock()
-        mock_engine.run_pipeline.return_value = {"status": "dry_run"}
+        mock_engine.run_pipeline = AsyncMock(return_value={"success": True})
 
         with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
-            response = await async_client.post("/api/auto-creation/run", json={
-                "dry_run": True,
-            })
+            response = await async_client.post("/api/auto-creation/run", json={"dry_run": True})
 
-        assert response.status_code == 200
-        mock_engine.run_pipeline.assert_called_once_with(
-            dry_run=True, triggered_by="api", m3u_account_ids=None, rule_ids=None,
-        )
+        assert response.status_code == 202
+        execution_id = response.json()["execution_id"]
+        from models import AutoCreationExecution
+        exe = test_session.query(AutoCreationExecution).filter_by(id=execution_id).first()
+        assert exe is not None
+        assert exe.mode == "dry_run"
+
+    @pytest.mark.asyncio
+    async def test_background_task_failure_marks_execution_failed(self, async_client, test_session):
+        """If the engine raises, the background supervisor marks the execution failed."""
+        import asyncio as _asyncio
+
+        async def boom(*args, **kwargs):
+            raise RuntimeError("engine exploded")
+
+        mock_engine = AsyncMock()
+        mock_engine.run_pipeline = AsyncMock(side_effect=boom)
+
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+            response = await async_client.post("/api/auto-creation/run", json={"dry_run": False})
+
+        assert response.status_code == 202
+        execution_id = response.json()["execution_id"]
+
+        # Yield to let the background task run
+        for _ in range(50):
+            await _asyncio.sleep(0)
+
+        from models import AutoCreationExecution
+        # Use a fresh query to pick up the supervised handler's commit
+        test_session.expire_all()
+        exe = test_session.query(AutoCreationExecution).filter_by(id=execution_id).first()
+        assert exe is not None
+        assert exe.status == "failed"
+        assert exe.error_message and "engine exploded" in exe.error_message
+
+    @pytest.mark.asyncio
+    async def test_enqueue_completes_within_timeout_budget(self, async_client, test_session):
+        """The handler itself must return fast (well under the 30s timeout) — the
+        whole point of bd-enfsy is to make /run not synchronous."""
+        import asyncio as _asyncio
+        import time as _time
+        gate = _asyncio.Event()
+
+        async def slow(*args, **kwargs):
+            await gate.wait()
+            return {"success": True}
+
+        mock_engine = AsyncMock()
+        mock_engine.run_pipeline = AsyncMock(side_effect=slow)
+
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+            start = _time.monotonic()
+            response = await async_client.post("/api/auto-creation/run", json={"dry_run": False})
+            elapsed = _time.monotonic() - start
+
+        # Must enqueue and return well under 30s — even with a worker stuck in the engine
+        assert response.status_code == 202
+        assert elapsed < 5.0, f"enqueue took {elapsed:.2f}s — handler is not actually async-enqueuing"
+
+        gate.set()
+        for _ in range(20):
+            await _asyncio.sleep(0)
 
 
 class TestRunAutoCreationRule:
-    """Tests for POST /api/auto-creation/rules/{rule_id}/run."""
+    """Tests for POST /api/auto-creation/rules/{rule_id}/run (background-task pattern)."""
 
     @pytest.mark.asyncio
-    async def test_runs_single_rule(self, async_client):
-        """Runs a specific auto-creation rule."""
+    async def test_returns_202_and_invokes_run_rule_with_execution_id(self, async_client, test_session):
+        """POST /rules/{id}/run returns 202 + execution_id, runs in background."""
+        import asyncio as _asyncio
+        rule = _create_rule(test_session, name="Sports")
         mock_engine = AsyncMock()
-        mock_engine.run_rule.return_value = {"status": "completed"}
+        mock_engine.run_rule = AsyncMock(return_value={"success": True})
 
         with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
-            response = await async_client.post("/api/auto-creation/rules/42/run")
+            response = await async_client.post(f"/api/auto-creation/rules/{rule.id}/run")
 
-        assert response.status_code == 200
-        mock_engine.run_rule.assert_called_once_with(
-            rule_id=42, dry_run=False, triggered_by="api",
-        )
+        assert response.status_code == 202, response.text
+        body = response.json()
+        assert "execution_id" in body
+        assert body["status"] == "running"
+        assert body["rule_id"] == rule.id
+        execution_id = body["execution_id"]
+
+        # Yield to let background task run
+        for _ in range(20):
+            await _asyncio.sleep(0)
+
+        mock_engine.run_rule.assert_called()
+        call_kwargs = mock_engine.run_rule.call_args.kwargs
+        assert call_kwargs["rule_id"] == rule.id
+        assert call_kwargs["dry_run"] is False
+        assert call_kwargs["triggered_by"] == "api"
+        assert call_kwargs["execution_id"] == execution_id
+
+    @pytest.mark.asyncio
+    async def test_returns_404_for_unknown_rule(self, async_client):
+        """Pre-validation rejects unknown rule_id with a clean 404 (so the
+        FK-constrained execution row is never even attempted)."""
+        response = await async_client.post("/api/auto-creation/rules/99999/run")
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_rule_run_failure_marks_execution_failed(self, async_client, test_session):
+        """Background failure on per-rule run is captured to the execution record."""
+        import asyncio as _asyncio
+        rule = _create_rule(test_session, name="BoomRule")
+
+        async def boom(*args, **kwargs):
+            raise ValueError("rule borked")
+
+        mock_engine = AsyncMock()
+        mock_engine.run_rule = AsyncMock(side_effect=boom)
+
+        with patch("auto_creation_engine.get_auto_creation_engine", return_value=mock_engine):
+            response = await async_client.post(f"/api/auto-creation/rules/{rule.id}/run")
+
+        assert response.status_code == 202
+        execution_id = response.json()["execution_id"]
+
+        for _ in range(50):
+            await _asyncio.sleep(0)
+
+        from models import AutoCreationExecution
+        test_session.expire_all()
+        exe = test_session.query(AutoCreationExecution).filter_by(id=execution_id).first()
+        assert exe is not None
+        assert exe.status == "failed"
+        assert exe.error_message and "rule borked" in exe.error_message
+        assert exe.rule_id == rule.id
 
 
 class TestGetExecutions:

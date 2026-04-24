@@ -161,6 +161,26 @@
   font-size: 32px;
 }
 
+/* Rules table: selection column */
+.rules-list th.col-select,
+.rules-list td.col-select {
+  width: 36px;
+  text-align: center;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.rules-list td.col-select input[type='checkbox'] {
+  cursor: pointer;
+}
+
+.rules-bulk-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  white-space: nowrap;
+}
+
 /* Rules List Table */
 .rules-list table {
   width: 100%;

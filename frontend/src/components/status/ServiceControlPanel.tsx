@@ -7,6 +7,7 @@ import { useState } from 'react';
 import type { ServiceWithStatus } from '../../types';
 import { StatusIndicator } from './StatusIndicator';
 import * as api from '../../services/api';
+import { logger } from '../../utils/logger';
 import './ServiceControlPanel.css';
 
 export interface ServiceControlPanelProps {
@@ -36,6 +37,7 @@ export function ServiceControlPanel({
       }
       onRefresh?.();
     } catch (err) {
+      logger.error('ServiceControlPanel: failed to toggle service enabled state', err);
       setError(`Failed to ${currentlyEnabled ? 'disable' : 'enable'} service`);
     } finally {
       setLoading(prev => ({ ...prev, [serviceId]: false }));
@@ -51,6 +53,7 @@ export function ServiceControlPanel({
       await api.restartService(serviceId);
       onRefresh?.();
     } catch (err) {
+      logger.error('ServiceControlPanel: failed to restart service', err);
       setError('Failed to restart service');
     } finally {
       setLoading(prev => ({ ...prev, [`restart-${serviceId}`]: false }));
@@ -65,6 +68,7 @@ export function ServiceControlPanel({
     try {
       await api.triggerHealthCheck(serviceId);
     } catch (err) {
+      logger.error('ServiceControlPanel: failed to trigger health check', err);
       setError('Failed to trigger health check');
     } finally {
       setLoading(prev => ({ ...prev, [`check-${serviceId}`]: false }));

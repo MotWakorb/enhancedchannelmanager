@@ -31,11 +31,11 @@ export const NormalizeNamesModal = memo(function NormalizeNamesModal({ channels,
   const [checked, setChecked] = useState<Record<number, boolean>>({});
   const [editedNames, setEditedNames] = useState<Record<number, string>>({});
 
-  // Call backend normalization engine
+  // Call backend normalization engine. Loading/error resets for a new `channels`
+  // input are handled by keying the component on channel-id list at the parent,
+  // so here the effect only publishes fetched results (async setState).
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
 
     const names = channels.map(c => c.name);
     normalizeTexts(names)

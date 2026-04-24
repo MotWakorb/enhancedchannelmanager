@@ -38,7 +38,7 @@ export function PlaylistProfileList() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   useEffect(() => { loadProfiles(); }, [loadProfiles]);
 

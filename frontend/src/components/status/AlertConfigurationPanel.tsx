@@ -7,6 +7,7 @@ import { useState, useEffect, useMemo } from 'react';
 import type { ServiceAlertRule, ServiceWithStatus } from '../../types';
 import * as api from '../../services/api';
 import { CustomSelect } from '../CustomSelect';
+import { logger } from '../../utils/logger';
 import './AlertConfigurationPanel.css';
 
 export interface AlertConfigurationPanelProps {
@@ -80,6 +81,7 @@ export function AlertConfigurationPanel({ onRefresh: _onRefresh }: AlertConfigur
         }
         setNotificationMethods(methods);
       } catch (err) {
+        logger.error('AlertConfigurationPanel: failed to load alert configuration', err);
         setError('Failed to load alert configuration');
       } finally {
         setLoading(false);
@@ -96,6 +98,7 @@ export function AlertConfigurationPanel({ onRefresh: _onRefresh }: AlertConfigur
         r.id === ruleId ? { ...r, enabled: !enabled } : r
       ));
     } catch (err) {
+      logger.error('AlertConfigurationPanel: failed to update rule', err);
       setError('Failed to update rule');
     }
   };
@@ -108,6 +111,7 @@ export function AlertConfigurationPanel({ onRefresh: _onRefresh }: AlertConfigur
       await api.deleteServiceAlertRule(ruleId);
       setRules(prev => prev.filter(r => r.id !== ruleId));
     } catch (err) {
+      logger.error('AlertConfigurationPanel: failed to delete rule', err);
       setError('Failed to delete rule');
     }
   };
@@ -145,6 +149,7 @@ export function AlertConfigurationPanel({ onRefresh: _onRefresh }: AlertConfigur
         notify_method_ids: [],
       });
     } catch (err) {
+      logger.error('AlertConfigurationPanel: failed to create rule', err);
       setError('Failed to create rule');
     } finally {
       setSaving(false);

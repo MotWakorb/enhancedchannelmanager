@@ -28,7 +28,7 @@ export interface MergeChannelsRequest {
   target_stream_profile_id?: number | null;
 }
 
-export type SortMode = 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels';
+export type SortMode = 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels';
 
 export type EPGSourceType = 'xmltv' | 'schedules_direct' | 'dummy';
 export type EPGSourceStatus = 'idle' | 'fetching' | 'parsing' | 'error' | 'success' | 'disabled';
@@ -66,6 +66,10 @@ export interface DummyEPGCustomProperties {
   include_date_tag?: boolean;                // Add <date> tag to EPG output
   include_live_tag?: boolean;                // Mark programs as live content
   include_new_tag?: boolean;                 // Mark programs as new content
+
+  // Lookup tables used by the template engine's {key|lookup:<name>} pipe.
+  inline_lookups?: Record<string, Record<string, string>>;  // Per-source tables (name → entries)
+  global_lookup_ids?: number[];                             // IDs from /api/lookup-tables to attach
 }
 
 export interface EPGSource {
@@ -364,6 +368,8 @@ export interface StreamClient {
   bytes_sent?: number;
   avg_rate_KBps?: number;
   current_rate_KBps?: number;
+  user_id?: string;
+  username?: string;
 }
 
 // Active channel stats from /proxy/ts/status
@@ -772,6 +778,55 @@ export interface NormalizationBatchResponse {
   results: NormalizationResult[];
 }
 
+// Single row of the apply-to-channels preview diff (GH-104)
+export interface ApplyToChannelsDiffRow {
+  channel_id: number;
+  current_name: string;
+  proposed_name: string;
+  normalized_core: string;
+  channel_number_prefix: string;
+  group_id: number | null;
+  group_name: string | null;
+  collision: boolean;
+  collision_target_id: number | null;
+  collision_target_name: string | null;
+  collision_target_group_id: number | null;
+  collision_target_group_name: string | null;
+  suggested_action: 'rename' | 'merge' | 'skip';
+  // bd-eio04.12: per-rule trace so the UI can render a "Rules fired"
+  // drawer that matches the Test Rules preview shape.
+  transformations?: NormalizationTransformation[];
+}
+
+// Response from dry-run apply-to-channels
+export interface ApplyToChannelsDryRunResponse {
+  dry_run: true;
+  diffs: ApplyToChannelsDiffRow[];
+  channels_with_changes: number;
+}
+
+// Per-row override sent when executing apply-to-channels
+export type ApplyToChannelsAction = 'rename' | 'merge' | 'skip';
+
+export interface ApplyToChannelsActionOverride {
+  channel_id: number;
+  action: ApplyToChannelsAction;
+  merge_target_id?: number;
+}
+
+// Response from executing apply-to-channels
+export interface ApplyToChannelsExecuteResponse {
+  dry_run: false;
+  status: string;
+  renamed: Array<{ channel_id: number; old_name: string; new_name: string }>;
+  merged: Array<{ channel_id: number; target_id: number; streams_added: number }>;
+  skipped: Array<{ channel_id: number; reason: string }>;
+  errors: Array<{ channel_id: number; error: string }>;
+  // bd-eio04.12: correlates the audit-log entry with the rule-set that
+  // was active when the bulk apply ran.
+  rule_set_hash?: string;
+}
+
 // Migration status response
 export interface NormalizationMigrationStatus {
   builtin_groups: number;
@@ -1045,6 +1100,8 @@ export interface WatchHistoryEntry {
   channel_id: string;
   channel_name: string;
   ip_address: string;
+  user_id: number | null;
+  username: string | null;
   date: string;  // ISO date string (YYYY-MM-DD)
   connected_at: string;  // ISO timestamp
   disconnected_at: string | null;  // ISO timestamp or null if still watching
@@ -1528,6 +1585,38 @@ export interface DummyEPGPreviewRequest {
   channel_logo_url_template?: string;
   program_poster_url_template?: string;
   pattern_variants?: PatternVariant[];
+  inline_lookups?: Record<string, Record<string, string>>;
+  global_lookup_ids?: number[];
+  include_trace?: boolean;
+}
+
+// One step in the per-field trace returned when include_trace=true.
+export type DummyEPGPreviewTraceStep =
+  | { kind: 'literal'; text: string }
+  | {
+      kind: 'placeholder';
+      raw: string;
+      group_name: string;
+      initial_value: string;
+      pipes: DummyEPGPreviewPipeStep[];
+      final_value: string;
+    }
+  | {
+      kind: 'conditional';
+      condition: string;
+      kind_detail: 'truthy' | 'equality' | 'regex';
+      taken: boolean;
+      value: string;
+      body: DummyEPGPreviewTraceStep[];
+    };
+
+export interface DummyEPGPreviewPipeStep {
+  transform: string;
+  arg: string | null;
+  input: string;
+  output: string;
+  source?: string;
+  matched?: boolean;
 }
 
 // Batch preview request
@@ -1574,6 +1663,10 @@ export interface DummyEPGPreviewResult {
     channel_logo_url: string;
     program_poster_url: string;
   };
+  // Present when the request set include_trace=true. Keys are template field
+  // names (title_template, description_template, etc.); values are the
+  // step-by-step render trace for that field.
+  traces?: Record<string, DummyEPGPreviewTraceStep[]>;
 }
 
 // Channel assignment for Dummy EPG profiles

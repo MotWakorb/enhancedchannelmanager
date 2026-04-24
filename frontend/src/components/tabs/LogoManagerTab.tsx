@@ -57,7 +57,7 @@ export function LogoManagerTab() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   // Handle image load error
   const handleImageError = useCallback((logoId: number) => {

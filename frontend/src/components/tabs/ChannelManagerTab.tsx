@@ -96,6 +96,7 @@ export interface ChannelManagerTabProps {
 
   // Streams
   allStreams: Stream[];  // All streams (unfiltered) - for ChannelsPane lookups
+  seenStreamsMap: Map<number, Stream>;  // Persistent cache across searches - lets ChannelsPane resolve staged stream IDs that aren't in the current search results
   streams: Stream[];     // Filtered streams - for StreamsPane display
   providers: M3UAccount[];
   streamGroups: StreamGroupInfo[];
@@ -279,6 +280,7 @@ export function ChannelManagerTab({
 
   // Streams
   allStreams,
+  seenStreamsMap,
   streams,
   providers,
   streamGroups,
@@ -354,6 +356,7 @@ export function ChannelManagerTab({
           channelGroups={channelGroups}
           channels={channels}
           streams={allStreams}
+          seenStreamsMap={seenStreamsMap}
           providers={providers}
           selectedChannelId={selectedChannelId}
           onChannelSelect={onChannelSelect}

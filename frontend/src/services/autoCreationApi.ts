@@ -7,11 +7,13 @@ import type {
   AutoCreationRule,
   CreateRuleData,
   UpdateRuleData,
+  BulkUpdateRulesPatch,
+  BulkUpdateRulesResponse,
   RulesListResponse,
   ExecutionsListResponse,
   AutoCreationExecution,
   ValidationResult,
-  RunPipelineResponse,
+  RunPipelineEnqueuedResponse,
   RollbackResponse,
   SchemaResponse,
   ConditionSchema,
@@ -89,6 +91,19 @@ export async function toggleAutoCreationRule(id: number): Promise<AutoCreationRu
   });
 }
 
+/**
+ * Apply the same settings changes to multiple rules. Only include fields to change.
+ */
+export async function bulkUpdateAutoCreationRules(
+  ruleIds: number[],
+  patch: BulkUpdateRulesPatch
+): Promise<BulkUpdateRulesResponse> {
+  return fetchJson<BulkUpdateRulesResponse>(`${API_BASE}/auto-creation/rules/bulk-update`, {
+    method: 'POST',
+    body: JSON.stringify({ rule_ids: ruleIds, ...patch }),
+  });
+}
+
 // =============================================================================
 // Validation & Schema
 // =============================================================================
@@ -135,19 +150,39 @@ export async function getTemplateVariables(): Promise<TemplateVariableSchema[]> 
 // =============================================================================
 
 /**
- * Run the auto-creation pipeline.
+ * Enqueue an auto-creation pipeline run (bd-enfsy: 202+poll background-task pattern).
+ *
+ * The handler now returns ``202 Accepted`` with ``{ execution_id, status: 'running' }``
+ * after queuing the work. Callers (see ``useAutoCreationExecution.runPipeline``)
+ * are expected to poll ``getAutoCreationExecution(execution_id)`` until
+ * ``status`` is terminal (``completed`` / ``failed`` / ``rolled_back``).
  */
 export async function runAutoCreationPipeline(options?: {
   dryRun?: boolean;
   ruleIds?: number[];
-}): Promise<RunPipelineResponse> {
-  return fetchJson<RunPipelineResponse>(`${API_BASE}/auto-creation/run`, {
+}): Promise<RunPipelineEnqueuedResponse> {
+  return fetchJson<RunPipelineEnqueuedResponse>(`${API_BASE}/auto-creation/run`, {
     method: 'POST',
     body: JSON.stringify({
       dry_run: options?.dryRun ?? false,
       rule_ids: options?.ruleIds,
     }),
   });
+}
+
+/**
+ * Enqueue a single-rule auto-creation run (bd-enfsy 202+poll, see
+ * ``runAutoCreationPipeline`` for the contract).
+ */
+export async function runAutoCreationRule(
+  ruleId: number,
+  options?: { dryRun?: boolean }
+): Promise<RunPipelineEnqueuedResponse> {
+  const query = buildQuery({ dry_run: options?.dryRun });
+  return fetchJson<RunPipelineEnqueuedResponse>(
+    `${API_BASE}/auto-creation/rules/${ruleId}/run${query}`,
+    { method: 'POST' }
+  );
 }
 
 /**

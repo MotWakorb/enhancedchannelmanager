@@ -967,6 +967,8 @@ async def dispatcharr_login(
         DispatcharrClient,
         DispatcharrAuthenticationError,
         DispatcharrConnectionError,
+        DispatcharrNetworkPolicyError,
+        DispatcharrRateLimitError,
     )
 
     # Check if Dispatcharr auth is enabled
@@ -984,6 +986,21 @@ async def dispatcharr_login(
                 login_request.username,
                 login_request.password,
             )
+    except DispatcharrRateLimitError as e:
+        client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+        logger.warning("[AUTH] Dispatcharr rate-limited login for user: %s from %s", login_request.username, client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(e),
+            headers={"Retry-After": "60"},
+        )
+    except DispatcharrNetworkPolicyError as e:
+        client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+        logger.error("[AUTH] Dispatcharr network policy rejected login for user: %s from %s", login_request.username, client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e),
+        )
     except DispatcharrAuthenticationError as e:
         client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
         logger.warning("[AUTH] Dispatcharr auth failed for user: %s from %s", login_request.username, client_ip)
@@ -1590,6 +1607,8 @@ async def link_identity(
             DispatcharrClient,
             DispatcharrAuthenticationError,
             DispatcharrConnectionError,
+            DispatcharrNetworkPolicyError,
+            DispatcharrRateLimitError,
         )
 
         settings = get_auth_settings()
@@ -1605,6 +1624,17 @@ async def link_identity(
                     link_request.username,
                     link_request.password,
                 )
+        except DispatcharrRateLimitError as e:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=str(e),
+                headers={"Retry-After": "60"},
+            )
+        except DispatcharrNetworkPolicyError as e:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=str(e),
+            )
         except DispatcharrAuthenticationError as e:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

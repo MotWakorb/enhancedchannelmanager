@@ -182,7 +182,7 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `POST /api/stream-stats/clear-all` | Clear all probe stats |
 | `GET /api/stream-stats/struck-out` | List struck-out streams (exceeding failure threshold) |
 | `POST /api/stream-stats/struck-out/remove` | Bulk remove struck-out streams from all channels |
-| `POST /api/stream-stats/compute-sort` | Compute sort scores for streams based on probe data |
+| `POST /api/stream-stats/compute-sort` | Compute sort scores for streams (resolution, bitrate, framerate, video codec, M3U priority, audio channels) |
 
 ## Enhanced Stats
 
@@ -198,7 +198,7 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `GET /api/stats/unique-viewers` | Get unique viewer summary for period |
 | `GET /api/stats/channel-bandwidth` | Get per-channel bandwidth stats |
 | `GET /api/stats/unique-viewers-by-channel` | Get unique viewers per channel |
-| `GET /api/stats/watch-history` | Get watch history log (paginated) |
+| `GET /api/stats/watch-history` | Get watch history log (paginated, filterable by channel/IP/days, includes user attribution) |
 
 ## Popularity
 
@@ -228,11 +228,23 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `POST /api/normalization/test` | Test a rule against sample text |
 | `POST /api/normalization/test-batch` | Test all enabled rules against multiple texts |
 | `POST /api/normalization/normalize` | Normalize text using all enabled rules |
+| `POST /api/normalization/apply-to-channels` | Apply enabled rules to existing channels — admin-gated, rate-limited 5/minute, `dry_run=true` by default (see note below) |
 | `GET /api/normalization/rule-stats` | Get stream match statistics per rule |
+| `GET /api/normalization/lint-findings` | Read-only view of saved normalization rules that fail the current write-time linter (bd-eio04.7) |
 | `GET /api/normalization/export` | Export normalization rules |
 | `POST /api/normalization/import` | Import normalization rules |
 | `GET /api/normalization/migration/status` | Get migration status |
 | `POST /api/normalization/migration/run` | Run demo rules migration |
+
+`POST /api/normalization/apply-to-channels` computes a diff of "what would change if we applied the current rule set to every existing channel" and, in execute mode, renames or merges per-row according to the caller-supplied `actions[]` array. Guarantees:
+
+- **Admin-gated** — protected by `RequireAdminIfEnabled`; non-admin callers see HTTP 403 when auth is enabled.
+- **Rate-limited** — 5 requests/minute per remote address (slowapi) to prevent runaway bulk-apply loops.
+- **Dry-run by default** — `dry_run=true` returns `{dry_run, diffs, channels_with_changes}` without mutating. `dry_run=false` requires an explicit `actions[]` body; unspecified channels default to `skip`.
+- **Single-flight execute** — only one concurrent execute run is allowed; a second caller sees HTTP 409.
+- **Journaled** — every rename and merge writes a journal entry with the `rule_set_hash` captured at execute time for audit and undo.
+
+See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#re-normalize-existing-channels) for the operator workflow.
 
 ## Tags
 
@@ -264,6 +276,8 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `GET /api/journal` | Get journal entries (paginated, filterable) |
 | `GET /api/journal/stats` | Get journal statistics |
 | `DELETE /api/journal/purge` | Purge old journal entries |
+
+`GET /api/journal` accepts `page`, `page_size` (capped at 200), `category`, `action_type`, `date_from`, `date_to`, `search`, `user_initiated`, and `batch_id`. Each result row carries `batch_id` in the response body — bulk operations (e.g. `POST /api/auto-creation/rules/bulk-update`, channel renumber) write **N per-entity rows sharing one `batch_id`** so callers can stitch a forensic view of a single batch. The `batch_id` query parameter (added in bd-s4sph) is an exact-match filter that hits `idx_journal_batch_id` directly — pass the 8-character `batch_id` returned by a bulk handler to retrieve only that batch's rows. An unknown `batch_id` returns an empty result set (not `422`); the parameter is purely a filter. See the auto-creation `bulk-update` notes above for a worked example.
 
 ## Notifications
 
@@ -317,6 +331,7 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `POST /api/auto-creation/rules` | Create rule |
 | `PUT /api/auto-creation/rules/{id}` | Update rule |
 | `DELETE /api/auto-creation/rules/{id}` | Delete rule |
+| `POST /api/auto-creation/rules/bulk-update` | Apply the same scalar field changes to multiple rules; rejects `conditions`/`actions` (see notes below) |
 | `POST /api/auto-creation/rules/reorder` | Reorder rules by priority |
 | `POST /api/auto-creation/rules/{id}/toggle` | Toggle rule enabled state |
 | `POST /api/auto-creation/rules/{id}/duplicate` | Duplicate a rule |
@@ -331,6 +346,63 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `GET /api/auto-creation/schema/conditions` | Get available condition types |
 | `GET /api/auto-creation/schema/actions` | Get available action types |
 | `GET /api/auto-creation/schema/template-variables` | Get available template variables |
+| `GET /api/auto-creation/lint-findings` | Read-only view of saved auto-creation rules that fail the current write-time linter (bd-eio04.7) |
+| `GET /api/auto-creation/debug-bundle` | Download diagnostic bundle (obfuscated channels, rules, streams, probe stats, settings, task schedules, logs) |
+
+`POST /api/auto-creation/rules/bulk-update` applies the same partial update to every rule in `rule_ids` in a single transaction. Send only the fields you want to change; omitted fields are left as-is per rule.
+
+**Request body:**
+
+```json
+{
+  "rule_ids": [12, 14, 17],
+  "enabled": true,
+  "priority": 5,
+  "merge_streams_remove_non_matching": true
+}
+```
+
+- `rule_ids` (required) — `1..500` distinct rule IDs. Empty list, missing list, or duplicates return `400`.
+- Scalar fields accepted (any subset): `name`, `description`, `enabled`, `priority`, `m3u_account_id`, `target_group_id`, `run_on_refresh`, `stop_on_first_match`, `sort_field`, `sort_order`, `probe_on_sort`, `sort_regex`, `stream_sort_field`, `stream_sort_order`, `normalization_group_ids`, `skip_struck_streams`, `orphan_action`, `match_scope_target_group`.
+- `merge_streams_remove_non_matching` (bulk-only convenience field) — when set, every `merge_streams` action on every targeted rule is rewritten with this `remove_non_matching` flag. Rules with no `merge_streams` action are unaffected.
+- **Rejected fields (`422 Unprocessable Entity`):** `conditions`, `actions`. Per-rule logic edits must go through `PUT /api/auto-creation/rules/{id}` so silent payload drops can't lose intent at scale (bd-gjoe5). The error message names the offending field.
+- At least one mutating field is required alongside `rule_ids`; otherwise `400 "No fields to update"`.
+- If any `rule_ids` entry doesn't exist, the entire batch aborts with `404 "Rules not found: [...]"` and no rows are written.
+- `sort_regex` is run through the auto-creation regex linter before any DB work (bd-eio04.7); a failing pattern returns `400` with the linter findings.
+
+**Response: `200 OK`**
+
+```json
+{
+  "rules": [
+    { "id": 12, "name": "...", "enabled": true, "priority": 5, "...": "..." },
+    { "id": 14, "name": "...", "enabled": true, "priority": 5, "...": "..." },
+    { "id": 17, "name": "...", "enabled": true, "priority": 5, "...": "..." }
+  ],
+  "updated_count": 3
+}
+```
+
+`rules` is the full post-update `to_dict()` for every rule in `rule_ids` (in input order), built directly from the in-memory ORM instances after `commit()` — no per-rule round-trip. `updated_count` always equals `len(rule_ids)` on success, including rules where the requested values matched the current state (no-op rules are still returned but do not emit a journal entry — see below).
+
+**Performance contract (bd-bh1hh):** the handler issues a single `SELECT ... WHERE id IN (rule_ids)` rather than N per-id queries, and skips per-rule `session.refresh()` after commit because the affected scalar columns have no DB-side defaults or triggers. At `max_length=500` this collapses what was previously ~1000 round trips into 2 (1 SELECT + 1 commit).
+
+**Audit trail / `batch_id` correlation contract (bd-91mcq):** every bulk-update writes **N per-entity journal rows** — one row per rule whose state actually changed — all sharing a single 8-character `batch_id` (UUID4 prefix). Rules where no scalar column changed and `merge_streams_remove_non_matching` was either omitted or already at the requested value are skipped (no-op rules emit no journal row). Each row uses `category="auto_creation"`, `action_type="bulk_update"`, and carries the per-rule before/after diff in `before_value`/`after_value`.
+
+To reconstruct one batch:
+
+- **Preferred:** call `GET /api/journal?batch_id=<id>` (added in bd-s4sph). The handler applies an exact-match filter against `JournalEntry.batch_id`, hitting `idx_journal_batch_id` (added in bd-dmu8w) for an indexed lookup. The response is the standard paginated journal payload — every row will carry the same `batch_id`. An unknown `batch_id` returns an empty result set (not `422`); the parameter is purely a filter.
+- For ad-hoc forensic queries directly against the database, the same index is reachable from SQL:
+  ```sql
+  SELECT id, timestamp, entity_id, entity_name, before_value, after_value
+  FROM journal_entries
+  WHERE batch_id = '1a2b3c4d'
+  ORDER BY timestamp;
+  ```
+- Every journal row returned by `GET /api/journal` already includes `batch_id` in its body, so client-side grouping by `batch_id` from a broader query is also supported (pagination caveats apply on large windows).
+- The `search` parameter does an `ILIKE %term%` on `entity_name` and `description` and can complement `batch_id` (e.g., narrow a batch to rules whose name matches a substring) — the two filters compose with `AND` semantics.
+
+**Normalization interaction:** `normalization_group_ids` is an accepted scalar field, so bulk-update can reassign normalization groups across many rules in one call. The list is stored as-is (deduplicated and sorted) — IDs are **not** verified against `NormalizationRuleGroup` at write time, matching the behavior of `PUT /api/auto-creation/rules/{id}`. See [`docs/normalization.md`](normalization.md) for the full normalization model and how groups feed the auto-creation pipeline.
 
 ## FFMPEG Builder
 
@@ -404,6 +476,27 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `GET /api/dummy-epg/xmltv/{id}` | Get XMLTV output for a profile |
 | `GET /api/dummy-epg/profiles/export/yaml` | Export profiles as YAML |
 | `POST /api/dummy-epg/profiles/import/yaml` | Import profiles from YAML |
+| `GET /api/dummy-epg/lint-findings` | Read-only view of saved dummy-EPG templates that fail the current write-time linter (bd-eio04.7) |
+
+`POST /api/dummy-epg/preview` accepts the full profile config plus:
+
+- `inline_lookups: {<name>: {<key>: <value>, ...}, ...}` — per-source lookup tables referenced by `{key|lookup:<name>}`. Inline tables override globals of the same name.
+- `global_lookup_ids: [id, ...]` — IDs of saved tables from `/api/lookup-tables`.
+- `include_trace: bool` — when true, the response carries a `traces` dict keyed by template field (`title_template`, `description_template`, …). Trace entries describe literals, placeholders (with per-pipe input/output and lookup hit/miss), and conditionals (taken/skipped + branch kind).
+
+## Lookup Tables
+
+Named key → value tables used by the dummy EPG template engine's `{key|lookup:<name>}` pipe.
+
+| Endpoint | Description |
+|-|-|
+| `GET /api/lookup-tables` | List all tables (summary — entry counts, no entries) |
+| `POST /api/lookup-tables` | Create a table (`{name, description?, entries?}`) |
+| `GET /api/lookup-tables/{id}` | Get a single table with full `entries` dict |
+| `PATCH /api/lookup-tables/{id}` | Rename, edit description, and/or replace entries |
+| `DELETE /api/lookup-tables/{id}` | Delete a table (cascades to any source still referencing it by ID — the preview path skips missing IDs silently) |
+
+Names are unique. Each table is capped at 10 000 entries.
 
 ## Export
 
@@ -440,6 +533,11 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `GET /api/backup/create` | Download backup zip of all configuration |
 | `POST /api/backup/restore` | Restore from uploaded backup zip |
 | `POST /api/backup/restore-initial` | Restore from backup during initial setup (no auth) |
+| `GET /api/backup/export-sections` | List available YAML export sections |
+| `POST /api/backup/export` | Export selected sections as YAML |
+| `POST /api/backup/import` | Import from YAML backup |
+| `GET /api/backup/saved` | List saved YAML backup files |
+| `DELETE /api/backup/saved/{filename}` | Delete a saved YAML backup file |
 
 ## Authentication
 

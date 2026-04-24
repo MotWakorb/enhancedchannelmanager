@@ -1,94 +1,148 @@
 # Changelog
 
-All notable changes to Enhanced Channel Manager will be documented in this file.
+All notable changes to Enhanced Channel Manager are documented in this file.
 
-## [0.3.1] - 2026-01-02
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-### Highlights
+## [Unreleased]
 
-**Multi-Group Bulk Channel Creation** - The standout feature of this release! You can now select multiple stream groups and create channels from all of them at once. Choose to create separate channel groups (with independent naming and starting numbers for each) or combine everything into a single group.
+### Added
+- `docs/adr/ADR-004-release-cut-promotion-discipline.md` — mandates short-lived `release/vX.Y.Z` branches + merge-commit PR + a seven-item pre-cut gate (G1a–G7) for all `dev`→`main` promotions. Narrow hotfix carve-out with a mechanical ceiling (>2 hotfixes between cuts triggers a mandatory incident review). Directly closes the 0.16.0-rollback root cause (zero-open-P0/P1 gate) and the PR #82 scope-sprawl pattern (non-release PRs to `main` forbidden) (`bd-4lk1q`).
+- `docs/adr/ADR-005-code-security-gating-strategy.md` — extends CodeQL to run on PR-to-`dev` and push-to-`dev` (currently only fires on `main`-adjacent events); enforces delta-zero via GitHub Code Scanning merge protection rules on both `dev` and `main`; disables "Allow administrators to bypass required status checks" on both branches. Three-week phased rollout (advisory → dirty-base remediation → enforcement). Dismiss-with-comment policy with only two Phase-1 categories (false-positive / test-only); "won't fix" intentionally excluded until a mechanical co-sign enforcer exists (`bd-sm3n3`).
+- Structured JSON logging on stdout with `trace_id` correlation middleware (honors inbound `X-Request-ID`, generates UUIDv4 otherwise, echoes in response header). `bind_context()` helper for attaching structured fields to long-running tasks (`bd-ak1db`, PR #80).
+- Prometheus `/metrics` endpoint exposing `ecm_http_requests_total`, `ecm_http_request_duration_seconds`, `ecm_health_ready_ok`, and `ecm_health_ready_check_duration_seconds`. HTTP middleware labels by matched FastAPI route pattern so cardinality stays bounded. `/metrics` is unauthenticated by design (Prometheus scrapers have no session context) — hardening via reverse-proxy allowlist or bearer-token scrape credential is a separate future bead (`bd-ak1db`, PR #80).
+- Alembic schema migration system with baseline revision `0001` capturing the current SQLAlchemy metadata (36 tables). `alembic upgrade head` wired into app startup; legacy pre-Alembic DBs are `stamp`ed rather than re-DDLed (`bd-c5wf5`, PR #81).
+- `GET /api/health/schema` public endpoint returning `current_revision`, `head_revision`, `up_to_date`, `foreign_keys_enabled`, and `journal_mode` — required by DBAS restore/sync to gate backup imports on schema version (`bd-c5wf5`, PR #81).
+- `docs/database_migrations.md` authoring conventions (`bd-c5wf5`, PR #81).
+- `docs/runbooks/` scaffold with template and v0.16.0 hard-rollback exemplar (`bd-bwly4`).
+- New Settings → Normalization Rules → "Apply to existing channels" button with dry-run diff preview + per-row rename/merge/skip actions. Exposes POST /api/normalization/apply-to-channels endpoint (PR #107, bd-u9odj, GH-104).
+- Auto-creation per-rule flag `match_scope_target_group` (default off) that restricts the duplicate channel-name lookup in `create_channel` to the rule's target group. Two rules targeting different groups can now create separate channels with the same name instead of merging into an existing channel in another group. Opt-in, backwards-compatible (bd-r9mtd, GH-92). Adds Alembic revision `0002`.
+- Auto-Creation rules — bulk edit. Multi-select rules and apply per-section changes (options, normalization groups, channel/stream sort, orphan cleanup, Merge Streams prune) in one action. Adds POST `/api/auto-creation/rules/bulk-update`; omitted fields are left unchanged. (PR #99)
+- `GET /api/journal` now accepts an optional `?batch_id=` query parameter that filters to a single bulk operation's journal rows. Hits the `idx_journal_batch_id` index shipped in bd-dmu8w; an unknown `batch_id` returns `200` with an empty list (not 422 — `batch_id` is just a filter). Composes with the existing `?search=` filter via AND. Closes the integrator gap that bd-pf82j flagged in `docs/api.md` and obviates direct DB lookups for forensic batch correlation (PR #143, bd-s4sph).
+- `.github/PULL_REQUEST_TEMPLATE/release.md` — release-cut PR template per ADR-004 §Implementation Sketch §3. Invoked via `gh pr create --base main --head release/vX.Y.Z --template release.md`. Carries the verbatim G1a–G7 pre-cut gate checklist, separate G1a-Justifications and G1b-Waivers sections matching the formally-waived semantics in `docs/shipping.md`, the hotfix-coexistence note (G7 tiebreaker), and post-merge tasks (tag + release + back-merge + dev counter bump). Default repo PR template (`.github/pull_request_template.md`) remains the catch-all for non-release PRs (`bd-tvlxz` item 3).
 
-### New Features
+### Changed
+- `docs/backend_architecture.md` expanded with an Observability section covering logging schema, metric naming conventions, cardinality rules, `bind_context` usage, and the process for adding new metrics (`bd-ak1db`, PR #80).
+- `docs/shipping.md` — replaced the "Release Workflow (Merging to Main)" section with the ADR-004-authoritative Cut Mechanics (steps 0–10), a verbatim Pre-Cut Gate Checklist (G1a–G7) for pasting into release-cut PR descriptions, and a new Hotfix Path subsection covering the one carve-out from the "no non-release PRs to `main`" rule. The "When User Says 'Ship the Fix'" dev-cycle section is unchanged (`bd-tvlxz`).
+- `docs/runbooks/v0.16.0-rollback.md` — reordered the two force-push paths: Option 2 (temporary `allow_force_pushes` flip) is now primary per ADR-005 (admin-bypass disabled on `main`), with Option 1 (admin bypass) retained as a fallback only for the transitional window. Added a mandatory post-action verification step (`gh api ... | jq '.allow_force_pushes.enabled'` must return `false`) and a design note considering a short-TTL wrapper that auto-reverts via `trap` regardless of outcome (`bd-tvlxz`).
+- `docs/shipping.md` — added a §G1b "formally waived" semantics subsection in the Pre-Cut Gate Checklist clarifying that a HIGH/CRITICAL alert is waived for G1b only when **both** (a) it is dismissed in the GitHub Security tab with a non-empty rationale matching ADR-005's permitted dismissal categories (false-positive-with-evidence or test-only sink; "won't fix" remains excluded) AND (b) the release-cut PR description carries a cross-reference line citing the alert number, dismissal category, and dismissing user. Belt-and-suspenders gate that mirrors and extends ADR-005's Dismiss-With-Comment Policy item 1 to the release-cut surface. Resolves the ambiguity flagged in `bd-tvlxz` item 5 (`bd-tvlxz`).
+- Auto-creation `POST /api/auto-creation/run` and `POST /api/auto-creation/rules/{id}/run` are now async-enqueue endpoints — they pre-create the `AutoCreationExecution(status="running")` row, return `202` with `{execution_id, status, ...}` immediately, and dispatch the engine call as a supervised background task (`asyncio.create_task` + strong-ref set + done-callback for GC safety + wrapping `try/except` that marks the row `failed` with `error_message` so failures are observable, not lost). The frontend `useAutoCreationExecution.runPipeline` hook polls `GET /api/auto-creation/executions/{id}` every 1s (30-min safety cap, `AbortSignal`-aware) and splices snapshots into the executions state for incremental UI updates. `fetchExecutions()` moved into a `finally` block so the list refreshes on both success and error paths. Per-rule endpoint now pre-validates rule existence (returns `404` instead of FK-violation `500`). With this change, `/api/auto-creation/` is removed from `_TIMEOUT_EXEMPT_PREFIXES` in `backend/main.py` — the 30s defense-in-depth that bd-zv6pi exempted as a hotfix is restored, and a regression test guards against re-introduction. Completes the follow-up flagged in the bd-zv6pi Fixed entry below (PR #134, bd-enfsy).
+- `PUT /api/auto-creation/rules/{id}` and `POST /api/auto-creation/rules/bulk-update` now perform write-time foreign-key validation on `normalization_group_ids` against the `normalization_rule_groups` table. A submission referencing a missing or deleted group returns `422` with `detail.invalid_normalization_group_ids` listing every offending ID; previously the IDs were stored as-is and surfaced later as a silent "no normalization happened" runtime symptom. Validation runs after the rule lookup but before scalar mutations on PUT (no partial state on a bad ID), and after the rules-by-id fetch but before the per-rule mutation loop on bulk-update (single 422 rolls back the whole batch — verified by the integration test asserting zero journal entries + zero scalar mutations on rollback). Delta-on-write semantics: only IDs being newly submitted are validated, so future group deletions cannot retroactively break already-stored rules. POST `/api/auto-creation/rules` (create endpoint) has the same gap; tracked separately as bd-j5p4k for symmetric coverage (PR #145, bd-i75ax).
 
-#### Multi-Group Bulk Channel Creation
-- Select and drag multiple stream groups to create channels from all at once
-- **Separate Groups Mode**: Create a channel group for each stream group with independent settings
-  - Per-group custom naming
-  - Per-group starting channel numbers
-  - Automatic continuation from previous group's last channel
-- **Combined Mode**: Merge all streams into a single channel group
-- Visual preview showing first 3 channels per group with calculated numbers
+### Fixed
+- Auto-creation `/run` and `/rules/{id}/run` no longer return `504 Gateway Timeout` on large catalogs. The bd-w3z4h request-timeout middleware (30s default) did not exempt `/api/auto-creation/`, so pipeline runs that exceeded 30s were cancelled client-side even though the work continued to completion server-side (the engine commits as it progresses). Added `/api/auto-creation/` to `_TIMEOUT_EXEMPT_PREFIXES` in `backend/main.py` alongside the other inherently long-running prefixes (`/api/tasks/`, `/api/backup/`, `/api/ffmpeg/`). Secondary symptom — the Execution History panel not auto-refreshing until browser reload — resolves with this fix because the frontend's post-run `fetchExecutions()` now runs on the success path instead of being skipped by the error. Follow-up refactor to convert `/run` to an async enqueue + polling pattern tracked as bd-enfsy (bd-zv6pi).
+- Auto-creation no longer renumbers foreign-group channels that were matched via PR #107's normalized-name fallback. A rule with `sort_field` set would pick up any pre-existing channel found via the new normalized-search path — even channels owned by a different rule — and Pass 3 (channel renumber) would then reassign their channel numbers to fit its own sort. Fix: gate the Pass 3 append so a rule only tracks channels it created this run OR that were already in its pre-run managed set; cross-rule matches via fallback are still merged/skipped correctly but no longer trigger a foreign renumber (bd-yj5yi, GH-104 regression from PR #107).
+- Auto-creation now strips letter-superscripts (ᴿᴬᵂ → RAW, ᴴᴰ → HD) from channel names it creates, while still preserving numeric superscripts (ESPN² stays ESPN²). PR #61 added a `preserve_superscripts=True` flag to `normalize()` that short-circuited ALL superscript conversion — including letter-superscripts used as quality-tag cruft — so auto-creation output retained `ᴿᴬᵂ`/`ᴴᴰ` even when Settings → Normalization's "Test" button stripped them. Fix splits the internal superscript map into `LETTER_SUPERSCRIPTS` (always converted) and `NUMERIC_SUPERSCRIPTS` (preserved when flag set); `convert_superscripts()` gains a `preserve_numeric` argument; the `preserve_superscripts` call-site in `normalize()` now routes through the letter-only path. Backward-compatible: the public `SUPERSCRIPT_MAP` still exists as the union of both (bd-yui1k, supersedes coarser PR #61 behavior).
+- Stream probing now works on HTTPS streams. The ffprobe/ffmpeg `-protocol_whitelist` was missing `tls` (and `crypto`), so every HTTPS `.ts`/`.m3u8` source failed with `[tls @ ...] Protocol 'tls' not on whitelist ...!` and `Invalid argument`. Added `tls,crypto` to the whitelist in `backend/stream_prober.py`, `backend/ffmpeg_builder/probe.py`, and `backend/routers/stream_preview.py`. Neither is a user-supplied URL scheme (they are internal demuxers chained from `https://` / encrypted HLS), so the existing threat model against `file://`, `data:`, `concat:`, `subfile:`, etc. is preserved. New regression tests lock `tls` and `crypto` into the whitelist and assert dangerous schemes stay out (GH-106, bd-4awsl).
+- Auto-creation rule duplicate preserves stream/channel sort, normalization groups, orphan cleanup, and option toggles — duplicates now match the original's configuration instead of silently dropping fields (PR #94, external contributor stevencoutts, bd-x3lto).
+- Auto-creation no longer creates duplicate channels when an existing channel's name differs only by a normalization-matched suffix (e.g., "RTL ᴿᴬᵂ" and incoming "RTL"). Root causes: normalization engine wasn't initialized unless at least one rule opted in via normalize_names=True, and the channel-lookup map only indexed stored-name → normalized. Fix: always initialize engine when any NormalizationRuleGroup is enabled; add symmetric normalized-search + core-name fallbacks in _find_channel_by_name (PR #107, bd-u9odj, GH-104).
+- Frontend test `NormalizationEngineSection.applyToChannels.test.tsx` no longer hangs in CI — the `useNotifications` test mock returned a fresh object on every call, which invalidated the component's `loadData` `useCallback` and triggered an infinite re-render loop that kept the test stuck in the loading state. Mock now returns a stable singleton (PR #107, bd-u9odj).
+- Auto-Creation Pass 3.5 stream reorder now runs on channels modified via `merge_stream`/`merge_streams_prune` — previously silent when Channels Created = 0, leaving streams unsorted after a pure-merge run. (PR #113, enhancedchannelmanager-f55hm, gh-113)
+- Auto-Creation name-based stream sort now works when probe stats are unavailable — the reorder path now seeds stream names from the channel's stream payload so natural-order and alphabetic sort have something to sort on. (PR #113, enhancedchannelmanager-f55hm, gh-113)
+- Auto-Creation quality (resolution) sort now honors `deprioritize_failed_streams` — black-screen / failed / low-fps streams no longer promote to the top ahead of working higher-resolution streams. (PR #113, enhancedchannelmanager-f55hm, gh-113)
+- `journal_entries` table now has the indexes its access patterns require. bd-91mcq introduced per-entity journal rows with a shared `batch_id` for bulk auto-creation operations, but the table only had indexes on `timestamp DESC`, `category`, and `action_type` — so the forensic "show me everything in batch X" lookup full-scanned, and "history for entity N" queries fell back on the timestamp index. Adds Alembic revision `0004` creating `idx_journal_batch_id` on `(batch_id)` and `idx_journal_entity` on `(category, entity_id, timestamp DESC)`; mirrors them in the SQLAlchemy model so model + migration stay in sync (drift test confirms). Also raises `CleanupTask.journal_days` default from `30` → `90` to align with `journal.purge_old_entries`'s existing 90-day default — bulk operations now amplify journal row volume N-fold, and the inconsistent retention default would have masked unbounded table growth. CleanupTask was already wired into the scheduler; no integration changes required (PR #133, bd-dmu8w).
 
-#### Auto-Assign Logos
-- Channels created from streams now automatically inherit the stream's logo
-- Works for both single stream drops and bulk channel creation
-- Logo matching uses stream's logo URL against existing logos in the system
+### Security
+- `backend/routers/backup.py` — canonicalize-and-verify (`resolve()` + `relative_to()`) applied to `download_saved_backup` and `delete_saved_backup` as defense-in-depth alongside the existing `_BACKUP_FILENAME_RE` guard. Closes CodeQL py/path-injection alerts 1416-1419 (CWE-22/23/36/73/99). Pattern mirrors the zip-restore remediation in the same file. New tests cover traversal, absolute paths, symlink-escape, and null bytes (PR #98, bd-0a1pr).
+- `backend/cloud_storage/onedrive_adapter.py` — Pydantic + adapter-level validators on `tenant_id` (GUID or verified domain) and `drive_id` (base64url-style) prevent SSRF via Microsoft Graph URL interpolation. Closes CodeQL CRITICAL py/partial-ssrf alerts 1361, 1362 (CWE-918). New tests at `backend/tests/test_cloud_storage.py` cover validator unit coverage + HTTP 422 at the cloud-target API (PR #101, bd-zbt74).
+- `backend/auto_creation_schema.py` — three write-time `re.compile(<user_input>)` sites (condition regex validation, set_variable pattern validation, name_transform_pattern validation) now route through `safe_regex.compile`, which enforces a length cap and uniform compile-error surface. User-controlled regex from auto-creation rule definitions can no longer pin a worker via crafted ReDoS patterns. The bd-91mcq auto-creation bulk merges expanded request volume through these paths; this hardening closes the exposure window. Removes the three `# nosemgrep: no-bare-re-on-dynamic-pattern` annotations + their `TODO(enhancedchannelmanager-ltjyx)` markers. Backward-compatible: error message substrings (`"Invalid regex"`, `"Invalid name_transform_pattern"`) preserved for existing test/UI assertions. New `TestSafeRegexMigrationWriteTimeValidation` (10 tests) covers oversize-pattern rejection at all three sites + boundary-at-cap acceptance (PR #136, bd-ltjyx).
+- `backend/routers/m3u_digest.py` — two write-time `re.compile(<user_input>)` sites validating `exclude_group_patterns` and `exclude_stream_patterns` from request bodies now route through `safe_regex.compile`. Same ReDoS class as bd-ltjyx, different surface (M3U digest endpoint instead of auto-creation rule endpoint). Removes the two `# nosemgrep` annotations. New tests in `TestUpdateDigestSettings` cover oversize-pattern rejection on both fields plus a `TestRouterUsesSafeRegex` source-level revert guard (PR #135, bd-3u6p0).
 
-#### Staged Group Creation
-- New channel groups are now staged along with their channels
-- Groups are only created when committing changes (not immediately)
-- Prevents orphaned groups if you discard your changes
+### Documentation
+- `docs/api.md` — `POST /api/auto-creation/rules/bulk-update` now documents three previously-undocumented behaviors that shipped in earlier merges: the rejected-fields contract (`conditions` and `actions` return 422 per bd-gjoe5), the single-fetch response shape `{rules, updated_count}` (bd-bh1hh), and the `batch_id` correlation primitive — every bulk operation writes N per-entity journal rows sharing one 8-char `batch_id` (bd-91mcq), retrievable today via direct `journal_entries.batch_id` lookup against `idx_journal_batch_id` (bd-dmu8w; a `?batch_id=` query param on `GET /api/journal` is tracked as bd-s4sph for a future release). Also adds a Journal-section paragraph documenting the actual `GET /api/journal` filter set. Surfaces two write-time validation gaps as separate beads (bd-s4sph + bd-i75ax). Style matches existing inline-narrative blocks (PR #139, bd-pf82j).
 
-#### Bulk Delete with Groups
-- When deleting all channels in a group, option to also delete the now-empty group
-- Checkbox appears: "Also delete X empty group(s)"
-- Both channel and group deletions shown in the exit dialog
+## [0.16.0] — Yanked 2026-04-20
 
-### Bug Fixes
+**This release was rolled back** before any external consumer pulled the tag. The GitHub Release, git tag, and GHCR image for `0.16.0` were deleted; `:latest` was retagged back to the `v0.15.2` multi-arch index. Rollback executed per `bd-vgm4l`; see `docs/runbooks/v0.16.0-rollback.md` for the procedure. The PO chose rollback over a forward hotfix because open P0/P1 bugs needed to clear before a release could ship. Work originally tagged `0.16.0` will re-ship in a later version once blockers are cleared.
 
-#### EPG Matching Improvements
-- **Balanced HD Preference**: HD entries are preferred, but not when a non-HD variant has a significantly better call sign match
-- **Call Sign Scoring**: Improved algorithm rates matches (exact > starts with > common prefix > none)
-- **Regional Variant Detection**: Now catches WestCoastFeed, EasternFeed, WesternFeed and other compound variants
-- Fixed matching for channels like FYI, GET TV, Lifetime Movie, MGM+, Ovation, Pursuit, Reelz, TCM, TV Land
+## [0.15.2] — 2026-04-16
 
-#### Channel Renaming
-- Fixed auto-rename not applying when moving channels between other channels
-- Added support for channel names with numbers in the middle (e.g., "US | 5034 - DABL")
-- Added colon as valid channel number separator in renumbering patterns
+### Security
+- Upgraded `vite` out of the vulnerable 7.0.0–7.3.1 range, resolving three high-severity advisories affecting the frontend dev tooling:
+  - [GHSA-4w7w-66w2-5vf9](https://github.com/advisories/GHSA-4w7w-66w2-5vf9) — path traversal in optimized-deps `.map` handling.
+  - [GHSA-v2wj-q39q-566r](https://github.com/advisories/GHSA-v2wj-q39q-566r) — `server.fs.deny` bypass with queries.
+  - [GHSA-p9ff-h696-f583](https://github.com/advisories/GHSA-p9ff-h696-f583) — arbitrary file read via dev server WebSocket.
+- No runtime code changes; only the frontend build tooling is affected. Dev server users should upgrade promptly.
 
-#### Multi-Group Modal UI
-- Fixed layout issues with per-group starting number input
-- Fixed "Create Channels" button being incorrectly disabled
-- Added per-group channel preview (was previously hidden)
+## [0.15.1] — 2026-03-31
 
-### Technical Changes
+### Added
+- Login rate limiting — 5 attempts per minute per IP via slowapi on both local and Dispatcharr login endpoints.
+- Security headers: `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`.
+- Client IP in login-failure logs (includes `X-Forwarded-For` for forensics).
 
-- Version bump from 0.3.0 series to 0.3.1
-- Improved edit mode state management for staged groups
-- Added newGroupName and logoUrl to createChannel API call spec
+### Changed
+- **Password policy now follows NIST 800-63B** — dropped composition rules (uppercase/lowercase/number), replaced the 33-word list with the 10k common-passwords list, uniform 8-character minimum for all users including admin-created.
+- CORS tightened — explicit method and header allow-lists instead of wildcards.
 
----
+### Fixed
+- EPG matching: channel names with a number prefix (e.g. `535 | ESPN`) were normalizing to `535espn` instead of `espn`, causing zero matches against EPG data.
 
-## [0.3.0] - 2026-01-01
+### Security
+- Injection / SSRF (OWASP A03/A10):
+  - ffmpeg protocol allow-list on all invocations — blocks `file://`, `data://`, `concat:` and other dangerous protocols.
+  - URL-scheme validation at input time on M3U, Xtream Codes, and EPG source endpoints — only `http://` and `https://` allowed.
+  - Zip backup path canonicalization — defense-in-depth `resolve()` check alongside existing traversal guards.
+- Logging hardening (OWASP A09):
+  - 500-response scrubbing — global handler returns generic `Internal server error` to clients; real error stays in server logs.
+  - Validation-error log redaction — `Authorization` / `Cookie` headers and auth-endpoint request bodies redacted from logs.
 
-### New Features
+## [0.15.0] — 2026-03-29
 
-- Bulk channel creation from stream groups
-- Stream name normalization (quality variants, country prefixes, network prefixes)
-- Smart stream ordering by quality and provider for failover
-- Bulk EPG assignment with intelligent matching
-- EPG conflict resolution UI with card-based navigation
-- Group header checkbox to select all channels in group
-- Accept All Recommended button for bulk EPG
-- High contrast and light themes
+### Added
+- **Export & Publish** — generate M3U/XMLTV playlists from channel profiles and publish to cloud targets (S3, WebDAV, etc.) on a cron schedule. Includes channel selector, playlist preview, cloud-target management, and publish history.
+- **Low-FPS detection** — streams below a configurable threshold (5/10/15/20 FPS) are flagged with an amber icon and deprioritized in Smart Sort. Zero-overhead, always-on, configurable in Settings → Maintenance.
+- **Black-screen detection** — optional ffmpeg `signalstats` check after each probe flags dark/blank streams with a purple icon. Configurable sample duration (3–30s) in Settings → Maintenance.
+- **Normalize Names engine** — tag-based rules engine for cleaning up stream names during bulk channel creation. YAML import/export, edit/revert controls, drag-and-drop priority ordering.
+- **Backup & Restore** — full configuration backup/restore from Settings, with restore option during the first-run setup wizard.
+- **Merge Channels** — combine two or more channels into one, consolidating their streams.
+- Auto-creation enhancements — EPG logo-source action, Probe Streams action, Set Channel Profile action; Smart Sort option in rule sort dropdown; rule selection in Auto-Create schedule; separate stream sort from channel sort per rule.
+- PUID/PGID support for Docker container user identity.
+- TV Guide print view.
+- JWT authentication in Swagger UI with `/swagger` redirect.
+- Debug bundle for troubleshooting auth issues.
 
-### Improvements
+### Changed
+- Server-side migration of EPG matching, stream normalization, and edit consolidation (previously client-side).
+- Settings UI consistency — compact dropdowns, unified admin section CSS, proper field ordering.
+- Scoped reprobe to last scheduled probe's channel groups.
+- Capped Dispatcharr HTTP client connection pool.
+- All GitHub Actions updated to Node.js 24-compatible versions.
+- Migrated 161 `console.log` call sites to the structured logger.
 
-- Theme support with CSS variables
-- Stream caching for faster loading
-- Hide auto-sync groups setting
-- Channel defaults settings section
+### Fixed
+- Persistent 503 when stream prober not initialized — prober now self-heals and auto-creates.
+- `assign_logo` from EPG and duplicate rule priorities.
+- Radio buttons, undefined CSS variables, and card backgrounds in admin tabs.
+- Push-down renumbering, menu overflow, task-card grid.
 
----
+### Removed
+- ~2,000+ lines of dead code across backend and frontend, including duplicate `formatDate` implementations.
 
-## [0.2.0] - Initial Release
+### Security
+- Secured backup endpoints; improved token handling.
+- Fixed npm audit vulnerabilities in `brace-expansion`, `flatted`, `picomatch`.
 
-### Features
+## [0.14.0] — 2026-03-06
 
-- Channel management with drag-and-drop
-- Stream management with multi-select
-- Edit mode with staged changes
-- EPG management with drag-and-drop priority
-- Logo management with upload support
-- Settings with Dispatcharr connection configuration
+Highlights: black-screen detection during probes; failed-stream re-probe scheduled task; auto-creation per-rule `skip_struck_streams`, provider order, and channel-number sort; pattern-builder UI for normalization rules; configurable HTTP/HTTPS ports via env vars. Numerous auto-creation and notification-center bug fixes. Full notes: [GitHub Release v0.14.0](https://github.com/MotWakorb/enhancedchannelmanager/releases/tag/v0.14.0).
+
+## [0.13.1] — 2026-02-20
+
+Bug-fix release. Full notes: [GitHub Release v0.13.1](https://github.com/MotWakorb/enhancedchannelmanager/releases/tag/v0.13.1).
+
+## [0.13.0] — 2026-02-19
+
+Full notes: [GitHub Release v0.13.0](https://github.com/MotWakorb/enhancedchannelmanager/releases/tag/v0.13.0).
+
+## Earlier versions
+
+Entries for `0.12.x` and earlier have not been backfilled into this file. See the [GitHub Releases page](https://github.com/MotWakorb/enhancedchannelmanager/releases) for the original release notes. Future releases will be recorded here under the appropriate Keep-a-Changelog sections.
+
+[Unreleased]: https://github.com/MotWakorb/enhancedchannelmanager/compare/v0.15.2...HEAD
+[0.15.2]: https://github.com/MotWakorb/enhancedchannelmanager/releases/tag/v0.15.2
+[0.15.1]: https://github.com/MotWakorb/enhancedchannelmanager/releases/tag/v0.15.1
+[0.15.0]: https://github.com/MotWakorb/enhancedchannelmanager/releases/tag/v0.15.0
+[0.14.0]: https://github.com/MotWakorb/enhancedchannelmanager/releases/tag/v0.14.0
+[0.13.1]: https://github.com/MotWakorb/enhancedchannelmanager/releases/tag/v0.13.1
+[0.13.0]: https://github.com/MotWakorb/enhancedchannelmanager/releases/tag/v0.13.0

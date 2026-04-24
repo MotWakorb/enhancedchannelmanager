@@ -1,5 +1,5 @@
 import { logger } from '../utils/logger';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -95,11 +95,7 @@ export function ChannelDetail({
     })
   );
 
-  useEffect(() => {
-    loadStreams();
-  }, [channel.id, channel.streams]);
-
-  const loadStreams = async () => {
+  const loadStreams = useCallback(async () => {
     if (channel.streams.length === 0) {
       setStreams([]);
       setLoading(false);
@@ -119,7 +115,11 @@ export function ChannelDetail({
     } finally {
       setLoading(false);
     }
-  };
+  }, [channel.id, channel.streams]);
+
+  useEffect(() => {
+    loadStreams();
+  }, [loadStreams]);
 
   const handleRemoveStream = async (streamId: number) => {
     try {

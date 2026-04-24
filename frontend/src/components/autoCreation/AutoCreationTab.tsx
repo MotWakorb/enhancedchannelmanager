@@ -8,10 +8,12 @@ import type {
   CreateRuleData,
   ExecutionLogEntry,
   ActionLogEntry,
+  BulkUpdateRulesPatch,
 } from '../../types/autoCreation';
 import { useAutoCreationRules } from '../../hooks/useAutoCreationRules';
 import { useAutoCreationExecution } from '../../hooks/useAutoCreationExecution';
 import { RuleBuilder } from './RuleBuilder';
+import { BulkRuleSettingsModal } from './BulkRuleSettingsModal';
 import * as autoCreationApi from '../../services/autoCreationApi';
 import { copyToClipboard } from '../../utils/clipboard';
 import { useNotifications } from '../../contexts/NotificationContext';
@@ -46,7 +48,7 @@ function getActionCategory(action: ActionLogEntry): string | null {
     return 'removed';
   } else if (action.type === 'set_stream_priority') {
     return 'updated';
-  } else if ((action as any).action === 'excluded' || desc.includes('excluded:')) {
+  } else if ((action as ActionLogEntry & { action?: string }).action === 'excluded' || desc.includes('excluded:')) {
     return 'excluded';
   } else if (['assign_logo', 'assign_tvg_id', 'assign_epg', 'assign_profile', 'set_channel_number'].includes(action.type)) {
     return 'assigned';
@@ -68,6 +70,7 @@ export function AutoCreationTab() {
     duplicateRule,
     reorderRules,
     getEnabledRules,
+    bulkUpdateRules,
   } = useAutoCreationRules();
 
   const {
@@ -109,6 +112,10 @@ export function AutoCreationTab() {
   const [importNewCount, setImportNewCount] = useState(0);
 
   const notifications = useNotifications();
+
+  /** Multi-select rules for bulk settings edit */
+  const [selectedRuleIds, setSelectedRuleIds] = useState<Set<number>>(new Set());
+  const [showBulkRuleModal, setShowBulkRuleModal] = useState(false);
 
   // Drag-and-drop state for rule reordering
   const dragRuleId = useRef<number | null>(null);
@@ -170,6 +177,12 @@ export function AutoCreationTab() {
   // Check if any enabled rules exist
   const hasEnabledRules = useMemo(() => getEnabledRules().length > 0, [getEnabledRules]);
 
+  /** Stable identity for bulk modal props — `Array.from(selectedRuleIds)` in JSX is a new array every render. */
+  const bulkModalSelectedRuleIds = useMemo(
+    () => Array.from(selectedRuleIds).sort((a, b) => a - b),
+    [selectedRuleIds],
+  );
+
   // Handlers
   const handleCreateRule = useCallback(() => {
     setEditingRule(null);
@@ -195,7 +208,7 @@ export function AutoCreationTab() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to save rule', 'Auto-Creation');
     }
-  }, [editingRule, updateRule, createRule, rules]);
+  }, [editingRule, updateRule, createRule, rules, notifications]);
 
   const handleCancelRuleBuilder = useCallback(() => {
     setShowRuleBuilder(false);
@@ -209,13 +222,19 @@ export function AutoCreationTab() {
   const handleConfirmDelete = useCallback(async () => {
     if (showDeleteConfirm) {
       try {
-        await deleteRule(showDeleteConfirm.id);
+        const deletedId = showDeleteConfirm.id;
+        await deleteRule(deletedId);
+        setSelectedRuleIds(prev => {
+          const next = new Set(prev);
+          next.delete(deletedId);
+          return next;
+        });
         setShowDeleteConfirm(null);
       } catch (err) {
         notifications.error(err instanceof Error ? err.message : 'Failed to delete rule', 'Auto-Creation');
       }
     }
-  }, [showDeleteConfirm, deleteRule]);
+  }, [showDeleteConfirm, deleteRule, notifications]);
 
   const handleToggleEnabled = useCallback(async (rule: AutoCreationRule) => {
     try {
@@ -223,7 +242,7 @@ export function AutoCreationTab() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to toggle rule', 'Auto-Creation');
     }
-  }, [toggleRule]);
+  }, [toggleRule, notifications]);
 
   const handleDuplicate = useCallback(async (rule: AutoCreationRule) => {
     try {
@@ -231,7 +250,63 @@ export function AutoCreationTab() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to duplicate rule', 'Auto-Creation');
     }
-  }, [duplicateRule]);
+  }, [duplicateRule, notifications]);
+
+  const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
+
+  const visibleSelectedCount = useMemo(
+    () => filteredRules.filter(r => selectedRuleIds.has(r.id)).length,
+    [filteredRules, selectedRuleIds],
+  );
+
+  useEffect(() => {
+    const el = selectAllCheckboxRef.current;
+    if (el) {
+      el.indeterminate =
+        visibleSelectedCount > 0 && visibleSelectedCount < filteredRules.length;
+    }
+  }, [visibleSelectedCount, filteredRules.length]);
+
+  const toggleRuleSelected = useCallback((ruleId: number) => {
+    setSelectedRuleIds(prev => {
+      const next = new Set(prev);
+      if (next.has(ruleId)) next.delete(ruleId);
+      else next.add(ruleId);
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAllVisible = useCallback(() => {
+    setSelectedRuleIds(prev => {
+      const ids = filteredRules.map(r => r.id);
+      if (ids.length === 0) return prev;
+      const allSelected = ids.every(id => prev.has(id));
+      if (allSelected) {
+        const next = new Set(prev);
+        ids.forEach(id => next.delete(id));
+        return next;
+      }
+      return new Set([...prev, ...ids]);
+    });
+  }, [filteredRules]);
+
+  const handleBulkRuleSettingsApply = useCallback(
+    async (ids: number[], patch: BulkUpdateRulesPatch) => {
+      const n = ids.length;
+      try {
+        await bulkUpdateRules(ids, patch);
+        setSelectedRuleIds(new Set());
+        notifications.success(`Updated ${n} rule${n !== 1 ? 's' : ''}`, 'Auto-Creation');
+      } catch (err) {
+        notifications.error(
+          err instanceof Error ? err.message : 'Bulk update failed',
+          'Auto-Creation',
+        );
+        throw err;
+      }
+    },
+    [bulkUpdateRules, notifications],
+  );
 
   const handleDragStart = useCallback((e: React.DragEvent, ruleId: number) => {
     if (!dragAllowed.current) {
@@ -278,29 +353,43 @@ export function AutoCreationTab() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to reorder rules', 'Auto-Creation');
     }
-  }, [filteredRules, reorderRules]);
+  }, [filteredRules, reorderRules, notifications]);
 
   const handleRun = useCallback(async (dryRun: boolean = false, ruleIds?: number[]) => {
     try {
+      // bd-enfsy: runPipelineApi now polls the backend until the execution
+      // reaches a terminal status, then resolves with the AutoCreationExecution
+      // row. Orphan-reconciliation counters (channels_removed / channels_moved)
+      // are derived from results during the run but not persisted on the row,
+      // so the success message only quotes the persisted channels_created
+      // figure now. Detail-level orphan counts are still visible via the
+      // Execution History pane (which fetches the full execution).
       const response = await runPipelineApi({ dryRun, ruleIds });
 
       if (response) {
         const created = response.channels_created ?? 0;
-        const removed = response.channels_removed ?? 0;
-        const moved = response.channels_moved ?? 0;
-        const orphanParts: string[] = [];
-        if (removed > 0) orphanParts.push(`removed ${removed} orphan${removed !== 1 ? 's' : ''}`);
-        if (moved > 0) orphanParts.push(`moved ${moved} orphan${moved !== 1 ? 's' : ''}`);
-        const orphanSuffix = orphanParts.length > 0 ? `, ${orphanParts.join(', ')}` : '';
-        const msg = dryRun
-          ? `Dry run complete - Would create ${created} channel${created !== 1 ? 's' : ''}${orphanSuffix ? `, would remove ${removed} orphan${removed !== 1 ? 's' : ''}` : ''}`
-          : `Execution complete - Created ${created} channel${created !== 1 ? 's' : ''}${orphanSuffix}`;
-        notifications.success(msg, 'Auto-Creation');
-        // Refresh executions list and rule stats (match counts)
+        const status = response.status;
+        const succeeded = status === 'completed';
+        const msg = succeeded
+          ? (dryRun
+            ? `Dry run complete - Would create ${created} channel${created !== 1 ? 's' : ''}`
+            : `Execution complete - Created ${created} channel${created !== 1 ? 's' : ''}`)
+          : `Pipeline ${status}`;
+        if (succeeded) {
+          notifications.success(msg, 'Auto-Creation');
+        } else {
+          notifications.error(
+            response.error_message || msg,
+            'Auto-Creation',
+          );
+        }
+        // Refresh executions list and rule stats (match counts). The hook
+        // already refetches executions in its finally block, but rule stats
+        // (last_run_at / match_count) live on a separate endpoint.
         await fetchExecutions();
         await fetchRules();
         // Notify other panes to refresh (channels/groups may have changed)
-        if (!dryRun) {
+        if (!dryRun && succeeded) {
           window.dispatchEvent(new CustomEvent('channels-changed'));
         }
       }
@@ -333,7 +422,7 @@ export function AutoCreationTab() {
         notifications.error(err instanceof Error ? err.message : 'Failed to rollback', 'Auto-Creation');
       }
     }
-  }, [showRollbackConfirm, rollback, fetchExecutions]);
+  }, [showRollbackConfirm, rollback, fetchExecutions, notifications]);
 
   const handleViewDetails = useCallback(async (execution: AutoCreationExecution) => {
     setShowExecutionDetails(execution);
@@ -371,7 +460,7 @@ export function AutoCreationTab() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to export rules', 'Auto-Creation');
     }
-  }, []);
+  }, [notifications]);
 
   const [debugBundleLoading, setDebugBundleLoading] = useState(false);
   const handleDebugBundle = useCallback(async () => {
@@ -396,7 +485,7 @@ export function AutoCreationTab() {
     } finally {
       setDebugBundleLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   const handleImport = useCallback(async (overwrite = false) => {
     setImportLoading(true);
@@ -448,7 +537,7 @@ export function AutoCreationTab() {
     } finally {
       setImportLoading(false);
     }
-  }, [importYaml, fetchRules]);
+  }, [importYaml, fetchRules, notifications]);
 
   const handleRetry = useCallback(() => {
     fetchRules();
@@ -571,6 +660,18 @@ export function AutoCreationTab() {
           <div className="section-header">
             <h3>Rules</h3>
             <div className="section-controls">
+              <button
+                type="button"
+                className="btn-secondary rules-bulk-edit-btn"
+                disabled={selectedRuleIds.size === 0 || rulesLoading}
+                onClick={() => setShowBulkRuleModal(true)}
+                title={selectedRuleIds.size === 0 ? 'Select one or more rules' : 'Edit settings for selected rules'}
+                aria-label="Bulk edit selected rules"
+              >
+                <span className="material-icons">tune</span>
+                Bulk edit
+                {selectedRuleIds.size > 0 ? ` (${selectedRuleIds.size})` : ''}
+              </button>
               <input
                 type="text"
                 className="search-input"
@@ -634,6 +735,18 @@ export function AutoCreationTab() {
               <table>
                 <thead>
                   <tr>
+                    <th className="col-select" scope="col">
+                      <input
+                        ref={selectAllCheckboxRef}
+                        type="checkbox"
+                        checked={
+                          filteredRules.length > 0 && visibleSelectedCount === filteredRules.length
+                        }
+                        onChange={toggleSelectAllVisible}
+                        aria-label="Select all visible rules"
+                        title="Select all visible rules"
+                      />
+                    </th>
                     <th className="col-drag"></th>
                     <th className="col-name">Name</th>
                     <th className="col-priority">Priority</th>
@@ -649,12 +762,24 @@ export function AutoCreationTab() {
                       data-testid="rule-row"
                       tabIndex={0}
                       draggable
-                      className={dragOverIndex === index ? 'drag-over' : ''}
+                      className={`${dragOverIndex === index ? 'drag-over' : ''} ${selectedRuleIds.has(rule.id) ? 'selected' : ''}`.trim()}
                       onDragStart={(e) => handleDragStart(e, rule.id)}
                       onDragEnd={handleDragEnd}
                       onDragOver={(e) => handleDragOver(e, index)}
                       onDrop={(e) => handleDrop(e, index)}
                     >
+                      <td
+                        className="col-select"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedRuleIds.has(rule.id)}
+                          onChange={() => toggleRuleSelected(rule.id)}
+                          aria-label={`Select ${rule.name}`}
+                        />
+                      </td>
                       <td className="col-drag">
                         <span
                           className="drag-handle"
@@ -826,6 +951,15 @@ export function AutoCreationTab() {
           )}
         </section>
       </div>
+
+      {/* Bulk rule settings */}
+      <BulkRuleSettingsModal
+        isOpen={showBulkRuleModal}
+        onClose={() => setShowBulkRuleModal(false)}
+        selectedRuleIds={bulkModalSelectedRuleIds}
+        rules={rules}
+        onApply={handleBulkRuleSettingsApply}
+      />
 
       {/* Rule Builder Modal */}
       {showRuleBuilder && (
@@ -1129,9 +1263,11 @@ export function AutoCreationTab() {
                     <div className="log-entries">
                       {filteredLog.map((entry: ExecutionLogEntry) => {
                         const isExpanded = expandedLogEntries.has(entry.stream_id);
-                        const winnerRule = entry.rules_evaluated.find(r => r.was_winner);
-                        const actionCount = entry.actions_executed.length;
-                        const hasErrors = entry.actions_executed.some(a => !a.success);
+                        const rulesEvaluated = entry.rules_evaluated ?? [];
+                        const actionsExecuted = entry.actions_executed ?? [];
+                        const winnerRule = rulesEvaluated.find(r => r.was_winner);
+                        const actionCount = actionsExecuted.length;
+                        const hasErrors = actionsExecuted.some(a => !a.success);
 
                         return (
                           <div key={entry.stream_id} className={`log-entry ${isExpanded ? 'expanded' : ''}`}>
@@ -1159,7 +1295,9 @@ export function AutoCreationTab() {
                             {isExpanded && (
                               <div className="log-entry-body">
                                 {/* Condition evaluations */}
-                                {entry.rules_evaluated.filter(r => r.matched || r.conditions.length > 0).map((rule, ri) => (
+                                {rulesEvaluated
+                                  .filter(r => r.matched || r.conditions.length > 0)
+                                  .map((rule, ri) => (
                                   <div key={ri} className="log-rule-section">
                                     <div className="log-rule-title">
                                       <span className={`material-icons ${rule.matched ? 'condition-pass' : 'condition-fail'}`}>

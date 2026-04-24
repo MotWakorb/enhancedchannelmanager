@@ -240,6 +240,28 @@ TASK_PARAMETER_SCHEMAS = {
             },
         ],
     },
+    "yaml_backup": {
+        "description": "YAML backup parameters",
+        "parameters": [
+            {
+                "name": "sections",
+                "type": "string_array",
+                "label": "Sections to Include",
+                "description": "Which sections to include in the backup (empty = all sections)",
+                "default": [],
+                "source": "backup_sections",
+            },
+            {
+                "name": "retention_count",
+                "type": "number",
+                "label": "Backups to Keep",
+                "description": "Number of backup files to retain (oldest are deleted)",
+                "default": 10,
+                "min": 1,
+                "max": 100,
+            },
+        ],
+    },
 }
 
 

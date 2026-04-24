@@ -242,9 +242,9 @@ async def test_compute_sort_no_stats(async_client, mock_settings):
     assert response.status_code == 200
     data = response.json()
     assert len(data["results"]) == 1
-    # No stats -> original order preserved
-    assert data["results"][0]["sorted_stream_ids"] == [999, 998]
-    assert data["results"][0]["changed"] is False
+    # No stats -> deterministic order by stream_id tiebreaker (bd-thfal / PR #77)
+    assert data["results"][0]["sorted_stream_ids"] == [998, 999]
+    assert data["results"][0]["changed"] is True
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,26 @@ import { BackupRestoreSection } from './BackupRestoreSection';
 vi.mock('../../services/api', () => ({
   getBackupDownloadUrl: vi.fn(() => '/api/backup/create'),
   restoreBackup: vi.fn(),
+  exportBackup: vi.fn(),
+  validateBackup: vi.fn(),
+  restoreBackupYaml: vi.fn(),
+  getExportSections: vi.fn(() => Promise.resolve([
+    { key: 'settings', label: 'Settings' },
+    { key: 'tag_groups', label: 'Tag Groups' },
+    { key: 'ffmpeg_profiles', label: 'FFmpeg Profiles' },
+  ])),
+  listSavedBackups: vi.fn(() => Promise.resolve([])),
+  getSavedBackupDownloadUrl: vi.fn((f: string) => `/api/backup/saved/${f}`),
+  deleteSavedBackup: vi.fn(),
+}));
+
+// Mock BackupRestoreModal to avoid complex rendering
+vi.mock('../BackupRestoreModal', () => ({
+  BackupRestoreModal: ({ onClose }: { onClose: () => void }) => (
+    <div data-testid="backup-restore-modal">
+      <button onClick={onClose}>Close Modal</button>
+    </div>
+  ),
 }));
 
 // Mock notification context
@@ -28,7 +48,6 @@ import * as api from '../../services/api';
 describe('BackupRestoreSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Mock fetch for backup download
     globalThis.fetch = vi.fn();
   });
 
@@ -40,26 +59,43 @@ describe('BackupRestoreSection', () => {
 
     it('does not show backup or restore buttons', () => {
       render(<BackupRestoreSection isAdmin={false} />);
-      expect(screen.queryByText('Download Backup')).not.toBeInTheDocument();
+      expect(screen.queryByText('Export YAML')).not.toBeInTheDocument();
       expect(screen.queryByText('Restore')).not.toBeInTheDocument();
     });
   });
 
   describe('when admin', () => {
-    it('renders backup and restore sections', () => {
+    it('renders all sections', () => {
       render(<BackupRestoreSection isAdmin={true} />);
-      expect(screen.getByText('Create Backup')).toBeInTheDocument();
-      expect(screen.getByText('Restore from Backup')).toBeInTheDocument();
+      expect(screen.getByText('Export Configuration (YAML)')).toBeInTheDocument();
+      expect(screen.getByText('Restore from YAML Export')).toBeInTheDocument();
+      expect(screen.getByText('Create Full Backup')).toBeInTheDocument();
+      expect(screen.getByText('Restore Full Backup')).toBeInTheDocument();
     });
 
-    it('renders download backup button', () => {
+    it('renders page header', () => {
       render(<BackupRestoreSection isAdmin={true} />);
-      expect(screen.getByText('Download Backup')).toBeInTheDocument();
+      expect(screen.getByText('Backup & Restore')).toBeInTheDocument();
     });
 
-    it('renders restore button', () => {
+    it('renders YAML export button', () => {
       render(<BackupRestoreSection isAdmin={true} />);
-      expect(screen.getByText('Restore')).toBeInTheDocument();
+      expect(screen.getByText('Export YAML')).toBeInTheDocument();
+    });
+
+    it('renders full backup download button', () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+      expect(screen.getByText('Download Full Backup')).toBeInTheDocument();
+    });
+
+    it('shows sensitive data warning on YAML export', () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+      expect(screen.getByText(/redacted in the export/i)).toBeInTheDocument();
+    });
+
+    it('shows sensitive data warning on full backup', () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+      expect(screen.getByText(/contains sensitive data/i)).toBeInTheDocument();
     });
 
     it('renders file input for zip files', () => {
@@ -68,18 +104,89 @@ describe('BackupRestoreSection', () => {
       expect(fileInput).toBeInTheDocument();
     });
 
-    it('shows warning about restore replacing data', () => {
+    it('shows warning about full restore replacing data', () => {
       render(<BackupRestoreSection isAdmin={true} />);
       expect(screen.getByText(/replace all current settings/i)).toBeInTheDocument();
     });
+  });
 
-    it('renders page header', () => {
+  describe('YAML export', () => {
+    it('triggers YAML download on button click', async () => {
+      const mockBlob = new Blob(['yaml-data'], { type: 'text/yaml' });
+      vi.mocked(api.exportBackup).mockResolvedValue(mockBlob);
+
+      const mockUrl = 'blob:http://test/mock-url';
+      globalThis.URL.createObjectURL = vi.fn(() => mockUrl);
+      globalThis.URL.revokeObjectURL = vi.fn();
+
       render(<BackupRestoreSection isAdmin={true} />);
-      expect(screen.getByText('Backup & Restore')).toBeInTheDocument();
+
+      // Wait for sections to load before clicking
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('Export YAML'));
+
+      await waitFor(() => {
+        expect(api.exportBackup).toHaveBeenCalled();
+      });
+
+      await waitFor(() => {
+        expect(mockSuccess).toHaveBeenCalledWith('YAML export downloaded successfully');
+      });
+    });
+
+    it('shows error on export failure', async () => {
+      vi.mocked(api.exportBackup).mockRejectedValue(new Error('Export failed'));
+
+      render(<BackupRestoreSection isAdmin={true} />);
+
+      // Wait for sections to load
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('Export YAML'));
+
+      await waitFor(() => {
+        expect(mockError).toHaveBeenCalledWith('Export failed', 'Export Failed');
+      });
+    });
+
+    it('renders section checkboxes', async () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+        expect(screen.getByText('Tag Groups')).toBeInTheDocument();
+        expect(screen.getByText('FFmpeg Profiles')).toBeInTheDocument();
+      });
+
+      // All should be pre-selected
+      const checkboxes = screen.getAllByRole('checkbox');
+      expect(checkboxes.filter(cb => (cb as HTMLInputElement).checked).length).toBe(3);
     });
   });
 
-  describe('backup download', () => {
+  describe('YAML restore modal', () => {
+    it('opens restore modal on button click', () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+      fireEvent.click(screen.getByText('Restore from YAML...'));
+
+      expect(screen.getByTestId('backup-restore-modal')).toBeInTheDocument();
+    });
+
+    it('closes restore modal', () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+      fireEvent.click(screen.getByText('Restore from YAML...'));
+      fireEvent.click(screen.getByText('Close Modal'));
+
+      expect(screen.queryByTestId('backup-restore-modal')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('full backup download', () => {
     it('triggers download on button click', async () => {
       const mockBlob = new Blob(['zip-data'], { type: 'application/zip' });
       const mockResponse = {
@@ -91,13 +198,12 @@ describe('BackupRestoreSection', () => {
       };
       (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockResponse);
 
-      // Mock URL.createObjectURL and revokeObjectURL
       const mockUrl = 'blob:http://test/mock-url';
       globalThis.URL.createObjectURL = vi.fn(() => mockUrl);
       globalThis.URL.revokeObjectURL = vi.fn();
 
       render(<BackupRestoreSection isAdmin={true} />);
-      fireEvent.click(screen.getByText('Download Backup'));
+      fireEvent.click(screen.getByText('Download Full Backup'));
 
       await waitFor(() => {
         expect(globalThis.fetch).toHaveBeenCalledWith('/api/backup/create');
@@ -114,7 +220,7 @@ describe('BackupRestoreSection', () => {
       });
 
       render(<BackupRestoreSection isAdmin={true} />);
-      fireEvent.click(screen.getByText('Download Backup'));
+      fireEvent.click(screen.getByText('Download Full Backup'));
 
       await waitFor(() => {
         expect(mockError).toHaveBeenCalled();
@@ -122,7 +228,7 @@ describe('BackupRestoreSection', () => {
     });
   });
 
-  describe('restore', () => {
+  describe('full zip restore', () => {
     it('shows error when no file selected', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
       fireEvent.click(screen.getByText('Restore'));
@@ -141,7 +247,6 @@ describe('BackupRestoreSection', () => {
       };
       vi.mocked(api.restoreBackup).mockResolvedValue(mockResult);
 
-      // Prevent actual reload
       const reloadMock = vi.fn();
       Object.defineProperty(window, 'location', {
         value: { ...window.location, reload: reloadMock },
@@ -150,7 +255,6 @@ describe('BackupRestoreSection', () => {
 
       render(<BackupRestoreSection isAdmin={true} />);
 
-      // Simulate file selection
       const file = new File(['zip-content'], 'backup.zip', { type: 'application/zip' });
       const input = document.querySelector('input[type="file"]') as HTMLInputElement;
       Object.defineProperty(input, 'files', { value: [file] });
@@ -183,4 +287,3 @@ describe('BackupRestoreSection', () => {
     });
   });
 });
-

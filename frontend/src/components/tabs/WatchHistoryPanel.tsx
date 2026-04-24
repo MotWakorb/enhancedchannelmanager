@@ -51,7 +51,7 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, channelFilter, ipFilter, daysFilter]);
+  }, [page, pageSize, channelFilter, ipFilter, daysFilter, notifications]);
 
   useEffect(() => {
     fetchData();
@@ -185,6 +185,7 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
               <tr>
                 <th>Time</th>
                 <th>Channel</th>
+                <th>User</th>
                 <th>Viewer IP</th>
                 <th>Duration</th>
                 <th>Status</th>
@@ -204,6 +205,9 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
                     <td className="channel-cell">
                       <span className="channel-name">{entry.channel_name}</span>
                     </td>
+                    <td className="user-cell">
+                      <span className="username">{entry.username || '—'}</span>
+                    </td>
                     <td className="ip-cell">
                       <span className="ip-address">{entry.ip_address}</span>
                     </td>
@@ -220,7 +224,7 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
                   </tr>
                   {expandedId === entry.id && (
                     <tr className="expanded-row">
-                      <td colSpan={5}>
+                      <td colSpan={6}>
                         <div className="expanded-content">
                           <div className="detail-grid">
                             <div className="detail-item">
@@ -235,6 +239,12 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
                               <span className="detail-label">Channel ID</span>
                               <span className="detail-value channel-id">{entry.channel_id}</span>
                             </div>
+                            {entry.user_id && (
+                              <div className="detail-item">
+                                <span className="detail-label">User ID</span>
+                                <span className="detail-value">{entry.user_id}</span>
+                              </div>
+                            )}
                             <div className="detail-item">
                               <span className="detail-label">Date</span>
                               <span className="detail-value">{entry.date}</span>
