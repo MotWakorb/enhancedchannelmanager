@@ -1,0 +1,18 @@
+# Keep only human-readable graphify artifacts in git.
+# Graph JSON files are large (24-36MB) and embed machine-specific absolute paths,
+# so we track GRAPH_REPORT.md + memory/*.md instead and rebuild the rest on demand.
+
+# Raw graph data — rebuild with `/graphify backend frontend docs`
+graph.json
+cross-repo-graph.json
+
+# Interactive viz — regenerate from graph.json as needed
+graph.html
+
+# Machine-local extraction cache
+cache/
+
+# Session state / cost tracking / detection state
+.graphify_*
+cost.json
+manifest.json
