@@ -139,6 +139,12 @@ The operation is successful when the `<hash>` matches the server's expected
 `/assets/index-<hash>.js`. Only once that matches is a symptom that remains
 on the client side a real regression (not a cache artifact).
 
+> **If the browser-side invalidation doesn't resolve the symptom**, suspect
+> an infrastructure-side cache in front of ECM (reverse proxy, CDN, corporate
+> proxy) that is still serving a stale `index.html` or `/assets/*` chunk. See
+> [Infra-Side Cache Invalidation](./infra-cache-invalidation.md) for
+> nginx / Cloudflare / Varnish / generic-CDN flush procedures.
+
 ### Escalate instead of continuing if
 
 - You cannot identify which bump is responsible and the symptom does not match
@@ -147,7 +153,7 @@ on the client side a real regression (not a cache artifact).
   the rollback has already been done) but multiple users still report breakage
   after completing the cache-invalidation steps — this implies an
   infrastructure-side cache (reverse proxy, CDN, corporate proxy) that needs
-  its own flush.
+  its own flush. Follow [Infra-Side Cache Invalidation](./infra-cache-invalidation.md).
 - Rolling the frontend back leaves users on broken chunks because the
   frontend-bump commit also changed `index.html`'s asset ref format in a way
   that the previous server version cannot serve — page the Project Engineer
@@ -304,7 +310,8 @@ Stop and page the Project Engineer if:
   on a clean checkout of the pre-bump commit — environment issue that the
   runbook cannot resolve.
 - Cache invalidation ladder completes for one user but symptom persists
-  across multiple users even post-rollback — infrastructure-side cache.
+  across multiple users even post-rollback — infrastructure-side cache. Follow
+  [Infra-Side Cache Invalidation](./infra-cache-invalidation.md) before paging.
 - The regression appears on a tagged release (`v0.16.0`), not just `dev` —
   scope expands to [v0.16.0 Hard Rollback](./v0.16.0-rollback.md).
 
@@ -331,5 +338,6 @@ the decision-tree outcome (which bump is suspected), `/tmp/ecm-frontend-regressi
 - `CLAUDE.md` — frontend deploy path: `cd frontend && npm run build`, clean `/app/static/assets/*`, `docker cp dist/. ecm-ecm-1:/app/static/`. The clean step is mandatory.
 - `.github/workflows/build.yml` — GHCR tag scheme (`dev`, `dev-<short-sha>`, semver tags on `main`).
 - [Backend ASGI Regression runbook](./dep-bump-backend-asgi-regression.md) — sibling runbook for the backend triplet.
+- [Infra-Side Cache Invalidation runbook](./infra-cache-invalidation.md) — companion runbook for flushing reverse-proxy / CDN caches when the browser-side cache invalidation ladder above is not sufficient.
 - Bead `enhancedchannelmanager-jpyz4` — PO decision: the full dep-bump epic lands on `dev` before v0.16.0 is cut.
 - `docs/discord_release_notes.md` — release announcement channel; user reports of a broken bundle often surface here first.
