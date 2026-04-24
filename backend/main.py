@@ -1037,6 +1037,21 @@ if os.path.exists(static_dir):
             "/docs", StaticFiles(directory=docs_dir, html=True), name="docs"
         )
 
+    # Any /api/* path not claimed by a registered router returns JSON 404.
+    # Without this the SPA catch-all below would serve index.html for GET
+    # /api/<unknown> (200) and 405 for other methods, masking proper API
+    # error semantics and breaking path-injection tests where URL-encoded
+    # slashes decode into multi-segment paths that the typed {filename}
+    # param cannot match. Registered before the SPA so real routers
+    # (registered earlier via include_router) still win by match order.
+    @app.api_route(
+        "/api/{full_path:path}",
+        methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+        include_in_schema=False,
+    )
+    async def api_not_found(full_path: str):
+        raise HTTPException(status_code=404, detail="Not Found")
+
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         # Serve index.html for all non-API routes (SPA routing)
