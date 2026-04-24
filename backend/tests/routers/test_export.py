@@ -4,7 +4,6 @@ Unit tests for Export router endpoints.
 Tests: Profile CRUD, generate, preview, download, validation, journal logging.
 Mocks: Dispatcharr client, ExportManager internals.
 """
-import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 

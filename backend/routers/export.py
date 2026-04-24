@@ -7,7 +7,6 @@ import logging
 import re
 import time
 from datetime import datetime
-from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Response
@@ -640,8 +639,15 @@ async def update_cloud_target(target_id: int, req: CloudTargetUpdateRequest):
         try:
             decrypted = decrypt_credentials(target.credentials)
             data["credentials"] = _mask_credentials(decrypted)
-        except Exception:
-            pass
+        except Exception as decrypt_err:
+            # Decryption can fail if FERNET_KEY rotated since the row was written;
+            # fall back to the masked-credentials placeholder from to_dict() so
+            # the API still returns the rest of the target metadata.
+            logger.warning(
+                "[EXPORT] Could not decrypt credentials for target %s for masked echo: %s",
+                target_id,
+                decrypt_err,
+            )
         logger.info("[EXPORT] Updated cloud target id=%s", target_id)
         return data
     except HTTPException:
@@ -1149,6 +1155,8 @@ def _clean_channel_name(name: str, channel_number) -> str:
             escaped_num = re.escape(num_str)
             cleaned = re.sub(rf"^{escaped_num}\s*[-|:]?\s*", "", cleaned, flags=re.IGNORECASE)  # nosemgrep: no-bare-re-on-dynamic-pattern
         except (ValueError, TypeError):
+            # channel_number is non-numeric (e.g., "5.1.2" or "N/A"); skip the
+            # numeric-prefix strip and use the already-cleaned name as-is.
             pass
     return cleaned.strip() or name
 
