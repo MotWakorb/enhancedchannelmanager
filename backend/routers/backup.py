@@ -11,7 +11,6 @@ import re
 import shutil
 import zipfile
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 import yaml
@@ -674,8 +673,16 @@ async def restore_from_yaml(
             logger.info("[BACKUP] Restored section: %s", section_key)
         except Exception as e:
             sections_failed.append(section_key)
-            errors.append("%s: %s" % (section_key, str(e)))
-            logger.warning("[BACKUP] Failed to restore section %s: %s", section_key, e)
+            # CodeQL py/stack-trace-exposure (#1412): do NOT include str(e) in
+            # the response. The full exception is logged with type and trace
+            # via logger.exception so operators can correlate via X-Request-ID;
+            # the client receives only the section key + exception class so
+            # internal paths/values do not leak. Restore is admin-only, but
+            # ADR-005 disallows "won't fix" dismissal — this is the real fix.
+            errors.append("%s: %s" % (section_key, type(e).__name__))
+            logger.exception(
+                "[BACKUP] Failed to restore section %s", section_key
+            )
 
     success = len(sections_failed) == 0
 

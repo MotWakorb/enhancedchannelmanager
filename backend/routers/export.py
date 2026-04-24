@@ -7,7 +7,6 @@ import logging
 import re
 import time
 from datetime import datetime
-from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Response
@@ -18,7 +17,7 @@ from cloud_storage.crypto import encrypt_credentials, decrypt_credentials
 from cloud_storage.onedrive_adapter import _validate_tenant_id, _validate_drive_id
 from database import get_session
 from dispatcharr_client import get_client
-from export_manager import ExportManager
+from export_manager import ExportManager, ExportPathError, _safe_export_path
 from export_models import PlaylistProfile, CloudStorageTarget, PublishConfiguration, PublishHistory
 from publish_pipeline import execute_publish, VALID_EVENT_TRIGGERS
 import journal
@@ -394,7 +393,14 @@ async def download_m3u(profile_id: int, regenerate: bool = False):
     if regenerate:
         await _export_manager.generate(profile_dict)
 
-    m3u_path = _export_manager.get_export_path(profile_id) / f"{prefix}.m3u"
+    # Canonicalize-and-verify (defense-in-depth for CodeQL py/path-injection
+    # alerts 1356-1357). prefix is Pydantic-validated by FILENAME_RE on every
+    # write path, but we don't rely on that — we re-verify containment under
+    # EXPORTS_DIR at the read sink. Mirrors backup.py:1170-1175 (bd-0a1pr).
+    try:
+        m3u_path = _safe_export_path(profile_id, f"{prefix}.m3u")
+    except ExportPathError:
+        raise HTTPException(status_code=400, detail="Invalid export path")
     if not m3u_path.exists():
         raise HTTPException(status_code=404, detail="M3U file not generated yet. Call generate first.")
 
@@ -430,7 +436,12 @@ async def download_xmltv(profile_id: int, regenerate: bool = False):
     if regenerate:
         await _export_manager.generate(profile_dict)
 
-    xmltv_path = _export_manager.get_export_path(profile_id) / f"{prefix}.xml"
+    # Canonicalize-and-verify (defense-in-depth for CodeQL py/path-injection
+    # alerts 1358-1359). See download_m3u above for rationale.
+    try:
+        xmltv_path = _safe_export_path(profile_id, f"{prefix}.xml")
+    except ExportPathError:
+        raise HTTPException(status_code=400, detail="Invalid export path")
     if not xmltv_path.exists():
         raise HTTPException(status_code=404, detail="XMLTV file not generated yet. Call generate first.")
 
@@ -640,8 +651,15 @@ async def update_cloud_target(target_id: int, req: CloudTargetUpdateRequest):
         try:
             decrypted = decrypt_credentials(target.credentials)
             data["credentials"] = _mask_credentials(decrypted)
-        except Exception:
-            pass
+        except Exception as decrypt_err:
+            # Decryption can fail if FERNET_KEY rotated since the row was written;
+            # fall back to the masked-credentials placeholder from to_dict() so
+            # the API still returns the rest of the target metadata.
+            logger.warning(
+                "[EXPORT] Could not decrypt credentials for target %s for masked echo: %s",
+                target_id,
+                decrypt_err,
+            )
         logger.info("[EXPORT] Updated cloud target id=%s", target_id)
         return data
     except HTTPException:
@@ -711,10 +729,26 @@ async def test_cloud_target(target_id: int):
             "provider_info": result.provider_info,
         }
     except ImportError as e:
-        return {"success": False, "message": f"Missing dependency: {e}"}
+        # CodeQL py/stack-trace-exposure (#1350): the missing-module name
+        # alone (e.g. "msal", "boto3") is operational hint, not a stack trace.
+        # Sanitize via ImportError.name so the only field returned is the
+        # adapter dep name; do not echo the full str(e) which can include
+        # interpreter paths on some platforms.
+        logger.exception("[EXPORT] Cloud target test missing dependency")
+        missing = getattr(e, "name", None) or "unknown"
+        return {
+            "success": False,
+            "message": f"Missing dependency: {missing}",
+        }
     except Exception as e:
-        logger.warning("[EXPORT] Cloud target test failed: %s", e)
-        return {"success": False, "message": str(e)}
+        # CodeQL py/stack-trace-exposure (#1351): log full exception for
+        # operator diagnosis; return generic message + class to client. Cloud
+        # adapter errors can include URLs, tenant IDs, or token fragments.
+        logger.exception("[EXPORT] Cloud target test failed")
+        return {
+            "success": False,
+            "message": f"Connection test failed ({type(e).__name__})",
+        }
 
 
 @router.post("/cloud-targets/test")
@@ -729,10 +763,20 @@ async def test_cloud_target_inline(req: CloudTargetTestRequest):
             "provider_info": result.provider_info,
         }
     except ImportError as e:
-        return {"success": False, "message": f"Missing dependency: {e}"}
+        # CodeQL py/stack-trace-exposure (#1352): see test_cloud_target above.
+        logger.exception("[EXPORT] Inline cloud target test missing dependency")
+        missing = getattr(e, "name", None) or "unknown"
+        return {
+            "success": False,
+            "message": f"Missing dependency: {missing}",
+        }
     except Exception as e:
-        logger.warning("[EXPORT] Inline cloud target test failed: %s", e)
-        return {"success": False, "message": str(e)}
+        # CodeQL py/stack-trace-exposure (#1353): see test_cloud_target above.
+        logger.exception("[EXPORT] Inline cloud target test failed")
+        return {
+            "success": False,
+            "message": f"Connection test failed ({type(e).__name__})",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -1149,6 +1193,8 @@ def _clean_channel_name(name: str, channel_number) -> str:
             escaped_num = re.escape(num_str)
             cleaned = re.sub(rf"^{escaped_num}\s*[-|:]?\s*", "", cleaned, flags=re.IGNORECASE)  # nosemgrep: no-bare-re-on-dynamic-pattern
         except (ValueError, TypeError):
+            # channel_number is non-numeric (e.g., "5.1.2" or "N/A"); skip the
+            # numeric-prefix strip and use the already-cleaned name as-is.
             pass
     return cleaned.strip() or name
 
