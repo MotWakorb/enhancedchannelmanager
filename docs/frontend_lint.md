@@ -1,5 +1,12 @@
 # Frontend Lint Policy
 
+> This document is **authoritative for ESLint policy** — the
+> `--max-warnings 0` floor, per-rule fix patterns, and CI behavior. The
+> general `docs/style_guide.md` summarises the policy and the inline-disable
+> rationale rule, then defers here for the recurring-pattern catalog. If
+> the two disagree, this document wins; please file a PR against the style
+> guide so they are reconciled.
+
 **Policy:** `npm run lint` must exit clean — zero errors, zero warnings
 (`--max-warnings 0`). Enforced in CI via `.github/workflows/test.yml` on every
 push and pull request.
