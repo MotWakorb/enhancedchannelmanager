@@ -1,6 +1,4 @@
 """Tests for stream_normalization module."""
-import pytest
-
 from stream_normalization import (
     normalize_unicode_to_ascii,
     strip_quality_suffixes,

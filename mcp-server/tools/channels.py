@@ -253,7 +253,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(
+            await client.post(
                 f"/api/channels/{channel_id}/add-stream",
                 json_data={"stream_id": stream_id},
             )
@@ -341,7 +341,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(
+            await client.post(
                 f"/api/channels/{channel_id}/remove-stream",
                 json_data={"stream_id": stream_id},
             )
@@ -360,7 +360,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(
+            await client.post(
                 f"/api/channels/{channel_id}/reorder-streams",
                 json_data={"stream_ids": stream_ids},
             )
@@ -385,7 +385,7 @@ def register(mcp: FastMCP):
             payload = {"channel_ids": channel_ids}
             if starting_number is not None:
                 payload["starting_number"] = starting_number
-            result = await client.post("/api/channels/assign-numbers", json_data=payload)
+            await client.post("/api/channels/assign-numbers", json_data=payload)
             return f"Assigned numbers to {len(channel_ids)} channels starting from {starting_number or 'auto'}."
         except Exception as e:
             logger.error("[MCP] assign_channel_numbers failed: %s", e)
@@ -404,7 +404,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post("/api/channels/merge", json_data={
+            await client.post("/api/channels/merge", json_data={
                 "target_channel_id": target_channel_id,
                 "source_channel_ids": source_channel_ids,
             })
@@ -533,7 +533,9 @@ def register(mcp: FastMCP):
             }
             result = await client.post("/api/channels/bulk-commit", json_data=payload)
             success = result.get("success", False)
-            results = result.get("results", [])
+            # Per-operation result list is available at result["results"] but not
+            # surfaced in the response below — the operator gets aggregate status,
+            # id_mappings, and validation issues only.
             id_mappings = result.get("idMappings", {})
             issues = result.get("validationIssues", [])
 

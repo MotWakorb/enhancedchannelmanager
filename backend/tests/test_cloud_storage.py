@@ -2,12 +2,10 @@
 Tests for cloud storage framework: adapters, crypto, and cloud target API.
 """
 import json
-import os
 import pytest
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from cloud_storage.base import get_adapter, UploadResult, ConnectionTestResult
+from cloud_storage.base import get_adapter, ConnectionTestResult
 from cloud_storage.crypto import encrypt_credentials, decrypt_credentials, reset_key_cache
 
 

@@ -1,7 +1,5 @@
 """Unit tests for epg_matching module."""
 
-import pytest
-
 from epg_matching import (
     batch_find_epg_matches,
     build_epg_lookup,
