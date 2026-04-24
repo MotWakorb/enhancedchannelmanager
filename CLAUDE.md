@@ -65,6 +65,7 @@ Exception — governance cadence rules from ADRs (e.g., ADR-001's "one major bum
 | Pytest Conventions | `docs/pytest_conventions.md` |
 | Project Architecture | `docs/project_architecture.md` |
 | Runbooks | `docs/runbooks/` |
+| **Style Guide (canonical)** | `docs/style_guide.md` |
 | CSS Guidelines | `docs/css_guidelines.md` |
 | Beads (Issue Tracking) | `~/.claude/projects/<project-slug>/memory/beads.md` |
 | Dispatcharr API | `docs/dispatcharr_api.md` |
@@ -92,6 +93,12 @@ For codebase-architecture questions (how X connects to Y, what a component's rol
 3. **Rebuild the graph** only if (1) and (2) don't cover it: `/graphify backend frontend docs`. Then query via `graphify query "..."` / `graphify explain "NodeName"` / `graphify path "A" "B"`.
 
 The raw `graph.json` and `cross-repo-graph.json` files are gitignored (large, machine-local paths). Rebuild on demand.
+
+**For coding conventions** (naming, module organization, comments, error
+handling, regex, CSS, lint, tests), `docs/style_guide.md` is the canonical
+reference. Other guides in this table cover their own subject (CSS shared
+classes, lint per-rule patterns, etc.) and are cited from the style guide
+where they remain authoritative.
 
 ## Development Workflow
 

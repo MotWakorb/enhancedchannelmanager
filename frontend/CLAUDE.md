@@ -1,6 +1,10 @@
 # Frontend Agent Instructions
 
 > Full system architecture diagram: `docs/architecture.md`
+> Coding conventions (naming, file pairing, components, hooks, CSS naming,
+> state classes, API layer, tests): `docs/style_guide.md` is canonical.
+> This file covers stack/structure orientation only — it defers to the
+> style guide for any rule about how code should be written.
 
 ## Framework & Stack
 
@@ -44,11 +48,10 @@ frontend/src/
 
 ## Component Conventions
 
-- **File pairing**: `ComponentName.tsx` + `ComponentName.css` + `ComponentName.test.tsx`
-- **PascalCase** for components, **camelCase** for utilities/hooks
-- **CustomSelect** for all dropdowns — never use native `<select>`
-- Modals named `*Modal.tsx`, base styles in `ModalBase.css`
-- Icons: `<span className="material-icons">icon_name</span>`
+See `docs/style_guide.md` — sections **Naming Conventions**, **Filenames**,
+and **Module Organization → Frontend (React)** — for the canonical rules
+on file pairing, casing, the `CustomSelect` requirement, modal naming,
+and Material Icons usage.
 
 ## State Management
 
@@ -59,19 +62,13 @@ frontend/src/
 
 ## CSS & Styling
 
-- **CSS variables** in `:root` (dark theme default) — defined in `index.css`
-- **BEM-inspired** naming: `.component-name`, `.component-name-child`, `.component-name-item`
-- **State classes**: `.is-active`, `.is-disabled`, `.is-loading`, `.active`, `.filter-active`
-- **Component-scoped CSS** — each component has its own `.css` file
-- No CSS modules or styled-components
+CSS naming, state classes, layer architecture, theme variables, and the
+shared-class catalog live in `docs/css_guidelines.md` (authoritative for
+CSS) with a summary in `docs/style_guide.md` → **CSS Conventions**.
 
-Key variables:
-```css
---bg-primary: #1e1e23;     --text-primary: rgba(255, 255, 255, 0.95);
---bg-secondary: #252530;   --text-secondary: #a8a8b8;
---accent-50: rgba(100, 108, 255, 0.5);
---success: #10b981;  --error: #ef4444;  --warning: #f59e0b;
-```
+Quick orientation only: theme variables live in `:root` in `index.css`,
+the dark theme is the default, and each component owns its own `.css`
+file (no CSS modules, no styled-components).
 
 ## Tab Navigation
 
@@ -94,6 +91,10 @@ type TabId = 'm3u-manager' | 'epg-manager' | 'channel-manager' | 'guide' |
 
 ## API Layer
 
+Convention rules (named exports per endpoint, all HTTP via `fetchJson()`)
+are in `docs/style_guide.md` → **Module Organization → Frontend (React)**.
+Quick orientation:
+
 ```typescript
 // services/api.ts — named exports per endpoint
 export async function getChannels(): Promise<Channel[]>
@@ -101,16 +102,18 @@ export async function getEPGSources(): Promise<EPGSource[]>
 export async function getChannelGroups(): Promise<ChannelGroup[]>
 ```
 
-- Uses `fetchJson()` from `httpClient.ts` for all HTTP calls
-- Endpoints match backend routes (e.g., `/api/channels`, `/api/m3u`)
+Endpoints match backend routes (e.g., `/api/channels`, `/api/m3u`).
 
 ## Testing
 
-- Run: `npm test` (984 tests, Vitest + @testing-library/react)
+Test conventions (naming, AAA structure, colocation, MSW setup) live in
+`docs/style_guide.md` → **Test Conventions**, with deeper testing strategy
+in `docs/testing.md`.
+
+Quick commands:
+
+- Run: `npm test` (Vitest + @testing-library/react)
 - Run watch: `npm run test:watch`
-- **MSW** mocks API responses in `src/test/mocks/`
-- Test setup in `src/test/setup.ts` (mocks matchMedia, ResizeObserver, IntersectionObserver)
-- Tests colocated with components: `Component.test.tsx`
 
 ## Build & Deploy
 
