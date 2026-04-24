@@ -1,0 +1,188 @@
+/**
+ * FindDuplicatesModal.css - Component-specific styles only
+ *
+ * Shared classes used from ModalBase.css:
+ *   modal-container, modal-lg, modal-header, modal-body, modal-footer,
+ *   modal-close-btn, modal-btn, modal-btn-primary, modal-btn-secondary,
+ *   modal-form-group, modal-checkbox-label, modal-error-banner
+ *
+ * Shared classes used from common.css:
+ *   loading-state, spinning, empty-state
+ */
+
+/* Summary bar */
+.dup-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin-bottom: 0.75rem;
+}
+
+.dup-summary .material-icons {
+  font-size: 1.1rem;
+  color: var(--text-muted);
+}
+
+/* Merge result banner */
+.dup-merge-result {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  color: var(--success);
+  font-size: 0.85rem;
+  margin-bottom: 0.75rem;
+}
+
+.dup-merge-result .material-icons {
+  font-size: 1.1rem;
+}
+
+.dup-merge-failed {
+  color: var(--error);
+}
+
+/* Group list */
+.dup-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 55vh;
+  overflow-y: auto;
+}
+
+/* Individual group */
+.dup-group {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+  transition: opacity 0.15s ease;
+}
+
+.dup-group.is-excluded {
+  opacity: 0.5;
+}
+
+.dup-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.dup-group-header .modal-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.dup-group-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.dup-group-count {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* Channel list within a group */
+.dup-channel-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.dup-channel-item {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  transition: background 0.1s ease;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.dup-channel-item:last-child {
+  border-bottom: none;
+}
+
+.dup-channel-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.dup-channel-item.is-target {
+  background: var(--bg-tertiary);
+}
+
+.dup-channel-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.dup-channel-name {
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dup-channel-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.dup-channel-number {
+  font-family: monospace;
+}
+
+.dup-channel-streams {
+  color: var(--text-secondary);
+}
+
+.dup-channel-group {
+  padding: 0.1rem 0.35rem;
+  background: var(--bg-secondary);
+  border-radius: 3px;
+  font-size: 0.7rem;
+}
+
+.dup-keep-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--success);
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--success);
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+/* Header icon alignment */
+.find-duplicates-modal .modal-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.find-duplicates-modal .modal-header h2 .material-icons {
+  font-size: 1.25rem;
+}

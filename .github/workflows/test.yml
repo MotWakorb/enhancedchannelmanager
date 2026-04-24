@@ -1,0 +1,188 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+    paths-ignore:
+      - '.beads/**'
+      - '**.md'
+  pull_request:
+    branches:
+      - main
+      - dev
+    paths-ignore:
+      - '.beads/**'
+  workflow_dispatch:
+
+jobs:
+  # ─── Backend tests ────────────────────────────────────────────────────
+  backend:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Belt-and-suspenders: these are in requirements.txt already, but
+          # pin them here so the CI command is self-documenting.
+          pip install pytest pytest-asyncio pytest-cov httpx
+
+      - name: Verify required test deps are importable (bd-s8kq3)
+        working-directory: backend
+        # Fast-fail guard: if the install step above silently failed to
+        # bring in a required test dep (alembic for migration tests,
+        # hypothesis for property-based tests), surface a clear "install
+        # gap" error here BEFORE pytest runs. Without this, missing deps
+        # manifest as cryptic collection errors mid-suite, or — worse —
+        # silent skips that let CI pass green on a degraded suite.
+        # See bd-s8kq3 for the silent-skip → install-gap audit.
+        run: python scripts/verify_test_deps.py
+
+      - name: Prepare CI SQLite database
+        working-directory: backend
+        run: |
+          mkdir -p /tmp/ecm_test_config
+          rm -f /tmp/ecm-test.db
+          # Materialize an empty SQLite file — tests that opt into the
+          # `ci_seed_db` fixture load their own tmp DBs; this file exists so
+          # smoke checks (e.g. DB driver import, write permissions) work.
+          python -c "import sqlite3; sqlite3.connect('/tmp/ecm-test.db').close()"
+
+      - name: Run pytest
+        working-directory: backend
+        env:
+          CONFIG_DIR: /tmp/ecm_test_config
+          RATE_LIMIT_ENABLED: '0'
+          ECM_CI_DB_PATH: /tmp/ecm-test.db
+        run: |
+          # tests/e2e/ hits a running ECM container at localhost:6100 and is
+          # only meaningful against a live service. E2E coverage as a CI gate
+          # is deferred to bead enhancedchannelmanager-2lw25; skip it here so
+          # the backend unit+integration suite can run without a live service.
+          #
+          # Coverage threshold is configured in backend/pytest.ini addopts
+          # (--cov=. --cov-fail-under=56) with paths filtered by .coveragerc.
+          # Pytest exits non-zero if coverage drops below the threshold, so
+          # this step enforces the ratchet automatically.
+          # See docs/testing.md § "Coverage ratchet cadence".
+          python -m pytest \
+            --ignore=tests/e2e \
+            -m "not slow" --tb=short --no-header -p no:warnings
+
+      - name: Upload backend coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: |
+            backend/.coverage
+            backend/coverage.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ─── Frontend lint / typecheck / unit tests ───────────────────────────
+  frontend:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          # Need full history so we can diff against origin/main in PR mode.
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint (full repo, blocking)
+        working-directory: frontend
+        run: |
+          # Full-repo lint at --max-warnings 0. Baseline was cleared in
+          # enhancedchannelmanager-zjge5 session 3. See docs/frontend_lint.md
+          # for the zero-warnings policy and exception handling.
+          npm run lint
+
+      - name: Typecheck
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Unit tests with coverage (blocking)
+        working-directory: frontend
+        run: |
+          # Coverage thresholds are configured in frontend/vitest.config.ts
+          # (lines 13 / branches 12 / functions 13 / statements 13 —
+          # measured 2026-04-20 − 2 point regression buffer).
+          # Vitest exits non-zero if coverage drops below any threshold, so
+          # this step enforces the ratchet automatically.
+          # See docs/testing.md § "Coverage ratchet cadence".
+          npm run test:coverage
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: frontend/coverage/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ─── Semgrep lint (ReDoS / safe_regex guard — bd-eio04.8) ──────────────
+  # Enforces the `no-bare-re-on-dynamic-pattern` rule in .semgrep.yml so
+  # new PRs cannot introduce a stdlib `re.search/match/sub/compile/…` call
+  # on a non-literal pattern. See docs/style_guide.md#regex for the
+  # full convention. Rule-level excludes cover backend/tests/** and
+  # backend/safe_regex.py; case-by-case exemptions are annotated inline
+  # with `# nosemgrep: no-bare-re-on-dynamic-pattern` + justification or
+  # a TODO(<bead-id>) pointer to a follow-up migration.
+  semgrep-lint:
+    name: Semgrep Lint
+    runs-on: ubuntu-latest
+    # Pinned image tag — semgrep 1.160.x (matches the version used to
+    # author and validate the .semgrep.yml rule). Bump deliberately; the
+    # rule self-test under .semgrep/tests/ is the canary for regressions.
+    container:
+      image: returntocorp/semgrep:1.160.0
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Validate Semgrep rule config
+        run: semgrep --validate --config .semgrep.yml
+
+      - name: Run Semgrep rule self-test
+        # Runs the fixture file (`# ruleid:` / `# ok:` annotations) against
+        # the live .semgrep.yml so the test locks the rule's accept/reject
+        # boundary — if the rule drifts, the self-test fails before the
+        # backend scan runs.
+        run: |
+          semgrep --test \
+            --config .semgrep.yml \
+            .semgrep/tests/no-bare-re-on-dynamic-pattern.py
+
+      - name: Run Semgrep against backend/
+        run: |
+          # --error flag exits non-zero on any finding. The rule is
+          # severity: ERROR so any hit blocks the job.
+          semgrep --config .semgrep.yml --error backend/

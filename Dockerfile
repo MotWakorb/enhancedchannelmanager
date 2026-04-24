@@ -11,6 +11,26 @@ ENV GIT_COMMIT=$GIT_COMMIT
 COPY frontend/ ./
 RUN npm run build
 
+# Build Python dependencies in a separate stage to reduce peak memory
+# ARM64 needs build tools + Rust for packages like cryptography
+FROM python:3.12-slim AS python-builder
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Install build tools in their own layer (cached separately from pip install)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        python3-dev \
+        libffi-dev \
+        cargo \
+        rustc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Compile Python packages into a virtual env we can copy to the final image
+COPY backend/requirements.txt /tmp/requirements.txt
+RUN uv venv /opt/venv \
+    && uv pip install --python /opt/venv/bin/python --no-cache -r /tmp/requirements.txt
+
 # Production image
 FROM python:3.12-slim
 
@@ -24,27 +44,17 @@ ENV RELEASE_CHANNEL=$RELEASE_CHANNEL
 
 WORKDIR /app
 
-# Install gosu for proper user switching, ffmpeg for stream probing, and create non-root user
-RUN apt-get update && apt-get install -y --no-install-recommends gosu ffmpeg \
+# Install gosu for proper user switching, ffmpeg for stream probing, and create non-root user.
+# apt-get upgrade pulls in Debian security updates (e.g. openssl CVE fixes) that the base image lags behind on.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends gosu ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --shell /bin/bash appuser
 
-# Install uv for fast Python package management
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-
-# Install Python dependencies
-# Note: Build tools needed for ARM64 where some packages lack pre-built wheels
-COPY backend/requirements.txt ./
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        python3-dev \
-        libffi-dev \
-        cargo \
-        rustc \
-    && uv pip install --system --no-cache -r requirements.txt \
-    && apt-get purge -y build-essential python3-dev libffi-dev cargo rustc \
-    && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/* /root/.cargo
+# Copy pre-built Python packages from builder stage (no build tools needed)
+COPY --from=python-builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy backend code
 COPY backend/ ./

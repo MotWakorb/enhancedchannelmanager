@@ -41,23 +41,23 @@ export function RuleBuilder({
   const [sortRegex, setSortRegex] = useState(rule?.sort_regex || '');
   const [streamSortField, setStreamSortField] = useState(rule?.stream_sort_field ?? 'smart_sort');
   const [streamSortOrder, setStreamSortOrder] = useState(rule?.stream_sort_order || 'asc');
-  const [normalizeNames, setNormalizeNames] = useState(rule?.normalize_names ?? false);
+  const [normalizationGroupIds, setNormalizationGroupIds] = useState<number[]>(rule?.normalization_group_ids ?? []);
   const [skipStruckStreams, setSkipStruckStreams] = useState(rule?.skip_struck_streams ?? false);
   const [orphanAction, setOrphanAction] = useState(rule?.orphan_action || 'delete');
+  const [matchScopeTargetGroup, setMatchScopeTargetGroup] = useState(rule?.match_scope_target_group ?? false);
   const [conditions, setConditions] = useState<Condition[]>(rule?.conditions || []);
   const [actions, setActions] = useState<Action[]>(rule?.actions || []);
 
-  const [hasActiveNormRules, setHasActiveNormRules] = useState(false);
+  const [availableNormGroups, setAvailableNormGroups] = useState<{id: number; name: string; enabled: boolean}[]>([]);
   const [errors, setErrors] = useState<ValidationErrors>({});
   const [saving, setSaving] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
-  // Check if any enabled normalization groups have enabled rules
+  // Load available normalization groups
   useEffect(() => {
     getNormalizationRules().then(({ groups }) => {
-      const active = groups.some(g => g.enabled && g.rules?.some(r => r.enabled));
-      setHasActiveNormRules(active);
+      setAvailableNormGroups(groups.map(g => ({ id: g.id, name: g.name, enabled: g.enabled })));
     }).catch(() => {});
   }, []);
 
@@ -170,9 +170,10 @@ export function RuleBuilder({
         sort_regex: sortRegex || '',
         stream_sort_field: streamSortField || '',
         stream_sort_order: streamSortOrder,
-        normalize_names: normalizeNames,
+        normalization_group_ids: normalizationGroupIds,
         skip_struck_streams: skipStruckStreams,
         orphan_action: orphanAction,
+        match_scope_target_group: matchScopeTargetGroup,
       });
     } finally {
       setSaving(false);
@@ -314,22 +315,6 @@ export function RuleBuilder({
               <label className="checkbox-item">
                 <input
                   type="checkbox"
-                  checked={normalizeNames}
-                  onChange={e => setNormalizeNames(e.target.checked)}
-                  disabled={isLoading}
-                  aria-label="Normalize channel names"
-                />
-                <span>Normalize names</span>
-              </label>
-              {!normalizeNames && hasActiveNormRules && (
-                <span className="norm-hint">
-                  <span className="material-icons norm-hint-icon">info</span>
-                  Active normalization rules won't apply unless this is enabled
-                </span>
-              )}
-              <label className="checkbox-item">
-                <input
-                  type="checkbox"
                   checked={skipStruckStreams}
                   onChange={e => setSkipStruckStreams(e.target.checked)}
                   disabled={isLoading}
@@ -337,7 +322,71 @@ export function RuleBuilder({
                 />
                 <span>Skip struck-out streams</span>
               </label>
+              <label
+                className="checkbox-item"
+                title="When enabled, the duplicate-name check for create_channel is restricted to this rule's target group. Two rules targeting different groups can then create separate channels with the same name instead of merging into an existing channel in another group (GH-92)."
+              >
+                <input
+                  type="checkbox"
+                  checked={matchScopeTargetGroup}
+                  onChange={e => setMatchScopeTargetGroup(e.target.checked)}
+                  disabled={isLoading}
+                  aria-label="Scope duplicate-name check to target group"
+                />
+                <span>Scope duplicate-name check to target group</span>
+              </label>
             </div>
+          </div>
+
+          <div className="form-field">
+            <label>Normalization Groups</label>
+            <span className="field-hint">Select which normalization rule groups to apply to channel names</span>
+            {availableNormGroups.length === 0 ? (
+              <span className="norm-hint">
+                <span className="material-icons norm-hint-icon">info</span>
+                No normalization rule groups configured
+              </span>
+            ) : (
+              <>
+                <div className="norm-group-actions">
+                  <button type="button" className="text-button" disabled={isLoading}
+                    onClick={() => setNormalizationGroupIds(availableNormGroups.filter(g => g.enabled).map(g => g.id))}>
+                    Select all enabled
+                  </button>
+                  <button type="button" className="text-button" disabled={isLoading}
+                    onClick={() => setNormalizationGroupIds([])}>
+                    Clear all
+                  </button>
+                </div>
+                <div className="checkbox-group vertical">
+                  {availableNormGroups.map(group => (
+                    <label key={group.id} className="checkbox-item">
+                      <input
+                        type="checkbox"
+                        checked={normalizationGroupIds.includes(group.id)}
+                        onChange={e => {
+                          if (e.target.checked) {
+                            setNormalizationGroupIds([...normalizationGroupIds, group.id]);
+                          } else {
+                            setNormalizationGroupIds(normalizationGroupIds.filter(id => id !== group.id));
+                          }
+                        }}
+                        disabled={isLoading}
+                      />
+                      <span className={!group.enabled ? 'norm-group-disabled' : ''}>
+                        {group.name}{!group.enabled ? ' (disabled)' : ''}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                {normalizationGroupIds.length === 0 && availableNormGroups.some(g => g.enabled) && (
+                  <span className="norm-hint">
+                    <span className="material-icons norm-hint-icon">info</span>
+                    No normalization groups selected — names won't be normalized
+                  </span>
+                )}
+              </>
+            )}
           </div>
 
           <div className="form-field">
@@ -450,6 +499,11 @@ export function RuleBuilder({
                   Gathers resolution data for streams that haven't been probed. Adds time to execution.
                 </p>
               </div>
+            )}
+            {streamSortField === 'provider_order' && (
+              <p className="form-hint">
+                Uses priority values from M3U Manager (Save Priorities). Choose Descending so the highest priority number is first; Ascending puts the lowest priority first.
+              </p>
             )}
           </div>
 

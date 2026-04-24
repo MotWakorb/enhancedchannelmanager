@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from database import get_session
 import journal
+import safe_regex
 
 logger = logging.getLogger(__name__)
 
@@ -305,10 +306,14 @@ async def update_m3u_digest_settings(request: M3UDigestSettingsUpdate):
             settings.send_to_discord = request.send_to_discord
 
         if request.exclude_group_patterns is not None:
+            # Validate via safe_regex.compile so the write-time check enforces
+            # the same length cap (DEFAULT_MAX_PATTERN_LEN=500) and uniform
+            # compile-error surface as the runtime evaluator in tasks/m3u_digest.py
+            # (bd-3u6p0; safe_regex shipped in bd-eio04.5).
             for pattern in request.exclude_group_patterns:
                 try:
-                    re.compile(pattern)
-                except re.error as e:
+                    safe_regex.compile(pattern)
+                except safe_regex.SafeRegexError as e:
                     raise HTTPException(
                         status_code=400,
                         detail=f"Invalid group exclude regex '{pattern}': {e}"
@@ -316,10 +321,12 @@ async def update_m3u_digest_settings(request: M3UDigestSettingsUpdate):
             settings.set_exclude_group_patterns(request.exclude_group_patterns)
 
         if request.exclude_stream_patterns is not None:
+            # See safe_regex.compile note on exclude_group_patterns above
+            # (bd-3u6p0).
             for pattern in request.exclude_stream_patterns:
                 try:
-                    re.compile(pattern)
-                except re.error as e:
+                    safe_regex.compile(pattern)
+                except safe_regex.SafeRegexError as e:
                     raise HTTPException(
                         status_code=400,
                         detail=f"Invalid stream exclude regex '{pattern}': {e}"

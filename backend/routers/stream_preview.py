@@ -18,7 +18,10 @@ from dispatcharr_client import get_client
 logger = logging.getLogger(__name__)
 
 # Restrict ffmpeg to safe network protocols only — blocks file://, data://, concat:, etc.
-FFMPEG_PROTOCOL_WHITELIST = "http,https,tcp,udp,rtp,rtmp,pipe"
+# tls and crypto are required internal protocols: HTTPS chains to tls for the TLS
+# handshake, HLS AES-128 encrypted segments chain to crypto. Without tls ffmpeg
+# fails on every HTTPS URL with "Protocol 'tls' not on whitelist" (GH-106).
+FFMPEG_PROTOCOL_WHITELIST = "http,https,tls,crypto,tcp,udp,rtp,rtmp,pipe"
 
 router = APIRouter(tags=["Stream Preview"])
 

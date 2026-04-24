@@ -13,6 +13,7 @@ import {
   DragStartEvent,
   useDroppable,
 } from '@dnd-kit/core';
+import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core';
 import {
   arrayMove,
   SortableContext,
@@ -35,12 +36,14 @@ import { BulkLCNFetchModal, type LCNAssignment } from './BulkLCNFetchModal';
 import { GracenoteConflictModal, type GracenoteConflict } from './GracenoteConflictModal';
 import { EditChannelModal, type ChannelMetadataChanges } from './EditChannelModal';
 import { NormalizeNamesModal } from './NormalizeNamesModal';
+import { FindDuplicatesModal } from './FindDuplicatesModal';
 import { naturalCompare } from '../utils/naturalSort';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { useNotifications } from '../contexts/NotificationContext';
 import { useDropdown } from '../hooks/useDropdown';
 import { useContextMenu } from '../hooks/useContextMenu';
 import { useModal } from '../hooks/useModal';
+import { useNormalizePreview } from '../hooks/useNormalizePreview';
 import { ChannelListItem } from './ChannelListItem';
 import { StreamListItem } from './StreamListItem';
 import { PreviewStreamModal } from './PreviewStreamModal';
@@ -54,6 +57,7 @@ interface ChannelsPaneProps {
   channelGroups: ChannelGroup[];
   channels: Channel[];
   streams: Stream[];
+  seenStreamsMap?: Map<number, Stream>;
   providers: M3UAccount[];
   selectedChannelId: number | null;
   onChannelSelect: (channel: Channel | null) => void;
@@ -166,8 +170,20 @@ interface SortDropdownButtonProps {
   className?: string;
   showLabel?: boolean;
   labelText?: string;
-  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels', boolean>;
+  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels', boolean>;
 }
+
+// Sort mode labels for journal/description. Module-scoped so it's stable
+// across renders and doesn't need to appear in useCallback dep arrays.
+const SORT_MODE_LABELS: Record<SortMode, string> = {
+  smart: 'Smart Sort',
+  resolution: 'resolution',
+  bitrate: 'bitrate',
+  framerate: 'framerate',
+  video_codec: 'video codec',
+  m3u_priority: 'M3U priority',
+  audio_channels: 'audio channels',
+};
 
 const SortDropdownButton = memo(function SortDropdownButton({
   onSortByMode,
@@ -176,13 +192,13 @@ const SortDropdownButton = memo(function SortDropdownButton({
   className = '',
   showLabel = false,
   labelText = 'Sort',
-  enabledCriteria = { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false },
+  enabledCriteria = { resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false },
 }: SortDropdownButtonProps) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Check if any criteria are enabled (for Smart Sort to be useful)
-  const anyEnabled = enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate || enabledCriteria.m3u_priority || enabledCriteria.audio_channels;
+  const anyEnabled = enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate || enabledCriteria.video_codec || enabledCriteria.m3u_priority || enabledCriteria.audio_channels;
 
   // Close on outside click
   useEffect(() => {
@@ -244,6 +260,12 @@ const SortDropdownButton = memo(function SortDropdownButton({
               <span>By Framerate</span>
             </button>
           )}
+          {enabledCriteria.video_codec && (
+            <button className="sort-dropdown-item" onClick={() => handleModeClick('video_codec')}>
+              <span className="material-icons">movie_filter</span>
+              <span>By Video Codec</span>
+            </button>
+          )}
           {enabledCriteria.m3u_priority && (
             <button className="sort-dropdown-item" onClick={() => handleModeClick('m3u_priority')}>
               <span className="material-icons">low_priority</span>
@@ -276,9 +298,11 @@ interface PaneToolbarMenuProps {
   onAssignEPG: () => void;
   onFetchLCN: () => void;
   onNormalize: () => void;
+  onFindDuplicates: () => void;
   onRenumber: () => void;
   onRenumberAllGroups: () => void;
   onSetLogoFromM3U: () => void;
+  onSetLogoFromEPG: () => void;
   onSortSelectedByMode: (mode: SortMode) => void;
   onProbe: () => void;
   hasSelection: boolean;
@@ -286,6 +310,8 @@ interface PaneToolbarMenuProps {
   bulkLCNLoading: boolean;
   bulkLogoLoading: boolean;
   probingChannels: boolean;
+  channelProfiles: ChannelProfile[];
+  onBulkAssignProfile: (profileId: number, enable: boolean) => void;
 }
 
 const PaneToolbarMenu = memo(function PaneToolbarMenu({
@@ -301,9 +327,11 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
   onAssignEPG,
   onFetchLCN,
   onNormalize,
+  onFindDuplicates,
   onRenumber,
   onRenumberAllGroups,
   onSetLogoFromM3U,
+  onSetLogoFromEPG,
   onSortSelectedByMode,
   onProbe,
   hasSelection,
@@ -311,10 +339,14 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
   bulkLCNLoading,
   bulkLogoLoading,
   probingChannels,
+  channelProfiles,
+  onBulkAssignProfile,
 }: PaneToolbarMenuProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [sortSubMenuOpen, setSortSubMenuOpen] = useState(false);
   const [sortSelectedSubMenuOpen, setSortSelectedSubMenuOpen] = useState(false);
+  const [enableProfileSubMenuOpen, setEnableProfileSubMenuOpen] = useState(false);
+  const [disableProfileSubMenuOpen, setDisableProfileSubMenuOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -333,6 +365,8 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
         setMenuOpen(false);
         setSortSubMenuOpen(false);
         setSortSelectedSubMenuOpen(false);
+        setEnableProfileSubMenuOpen(false);
+        setDisableProfileSubMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -343,6 +377,8 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
     setMenuOpen(false);
     setSortSubMenuOpen(false);
     setSortSelectedSubMenuOpen(false);
+    setEnableProfileSubMenuOpen(false);
+    setDisableProfileSubMenuOpen(false);
   };
 
   const handleSortAllClick = (mode: SortMode) => {
@@ -507,6 +543,10 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
                 <span className="material-icons">text_format</span>
                 <span>Normalize Names</span>
               </button>
+              <button className="pane-toolbar-menu-item" onClick={() => { close(); onFindDuplicates(); }}>
+                <span className="material-icons">merge_type</span>
+                <span>Find Duplicates</span>
+              </button>
               <button className="pane-toolbar-menu-item" onClick={() => { close(); onRenumber(); }}>
                 <span className="material-icons">tag</span>
                 <span>Renumber</span>
@@ -520,6 +560,16 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
                   {bulkLogoLoading ? 'sync' : 'image'}
                 </span>
                 <span>Set Logo from M3U</span>
+              </button>
+              <button
+                className={`pane-toolbar-menu-item ${bulkLogoLoading ? 'loading' : ''}`}
+                onClick={() => !bulkLogoLoading && (() => { close(); onSetLogoFromEPG(); })()}
+                disabled={bulkLogoLoading}
+              >
+                <span className={`material-icons ${bulkLogoLoading ? 'spinning' : ''}`}>
+                  {bulkLogoLoading ? 'sync' : 'image'}
+                </span>
+                <span>Set Logo from EPG</span>
               </button>
 
               {/* Sort Selected Streams submenu */}
@@ -589,6 +639,69 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
                 </span>
                 <span>Probe Streams</span>
               </button>
+
+              {channelProfiles.length > 0 && (
+                <>
+                  <button
+                    className={`pane-toolbar-menu-item has-submenu ${enableProfileSubMenuOpen ? 'submenu-open' : ''}`}
+                    onClick={() => {
+                      setEnableProfileSubMenuOpen(!enableProfileSubMenuOpen);
+                      setDisableProfileSubMenuOpen(false);
+                      setSortSubMenuOpen(false);
+                      setSortSelectedSubMenuOpen(false);
+                    }}
+                  >
+                    <span className="material-icons">visibility</span>
+                    <span>Enable in Profile</span>
+                    <span className="material-icons submenu-arrow">
+                      {enableProfileSubMenuOpen ? 'expand_less' : 'expand_more'}
+                    </span>
+                  </button>
+                  {enableProfileSubMenuOpen && (
+                    <div className="pane-toolbar-menu-submenu">
+                      {channelProfiles.map(profile => (
+                        <button
+                          key={profile.id}
+                          className="pane-toolbar-menu-item submenu-item"
+                          onClick={() => { close(); onBulkAssignProfile(profile.id, true); }}
+                        >
+                          <span className="material-icons">group</span>
+                          <span>{profile.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <button
+                    className={`pane-toolbar-menu-item has-submenu ${disableProfileSubMenuOpen ? 'submenu-open' : ''}`}
+                    onClick={() => {
+                      setDisableProfileSubMenuOpen(!disableProfileSubMenuOpen);
+                      setEnableProfileSubMenuOpen(false);
+                      setSortSubMenuOpen(false);
+                      setSortSelectedSubMenuOpen(false);
+                    }}
+                  >
+                    <span className="material-icons">visibility_off</span>
+                    <span>Disable in Profile</span>
+                    <span className="material-icons submenu-arrow">
+                      {disableProfileSubMenuOpen ? 'expand_less' : 'expand_more'}
+                    </span>
+                  </button>
+                  {disableProfileSubMenuOpen && (
+                    <div className="pane-toolbar-menu-submenu">
+                      {channelProfiles.map(profile => (
+                        <button
+                          key={profile.id}
+                          className="pane-toolbar-menu-item submenu-item"
+                          onClick={() => { close(); onBulkAssignProfile(profile.id, false); }}
+                        >
+                          <span className="material-icons">group</span>
+                          <span>{profile.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
             </>
           )}
         </div>,
@@ -656,13 +769,17 @@ interface DroppableGroupHeaderProps {
   onSelectAll?: () => void;
   onStreamDropOnGroup?: (groupId: number | 'ungrouped', streamIds: number[]) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
-  dragHandleProps?: any;
+  // Drag handle props: `{ ...attributes, ...listeners }` from @dnd-kit/sortable's
+  // useSortable(). `attributes` is ARIA/a11y metadata (strings/booleans) and `listeners`
+  // is a map of DOM event handlers. dnd-kit's SyntheticListenerMap (Record<string, Function>)
+  // doesn't compose cleanly with DraggableAttributes, so we widen to the spread shape.
+  dragHandleProps?: DraggableAttributes | (DraggableAttributes & NonNullable<DraggableSyntheticListeners>);
   onProbeGroup?: () => void;
   isProbing?: boolean;
   onSortStreamsByQuality?: () => void;
   onSortStreamsByMode?: (mode: SortMode) => void;
   isSortingByQuality?: boolean;
-  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels', boolean>;
+  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels', boolean>;
   failedChannelCount?: number;
   successChannelCount?: number;
 }
@@ -691,7 +808,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   onSortStreamsByQuality,
   onSortStreamsByMode,
   isSortingByQuality = false,
-  enabledCriteria = { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false },
+  enabledCriteria = { resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false },
   failedChannelCount = 0,
   successChannelCount = 0,
 }: DroppableGroupHeaderProps) {
@@ -1068,6 +1185,7 @@ export function ChannelsPane({
   channelGroups,
   channels,
   streams: allStreams,
+  seenStreamsMap,
   providers,
   selectedChannelId,
   onChannelSelect,
@@ -1166,7 +1284,6 @@ export function ChannelsPane({
   // These props are no longer used directly since channel creation is routed to bulk create modal
   void onCreateChannel;
   void onStageAddStream;
-  void channelProfiles;
   const [expandedGroups, setExpandedGroups] = useState<GroupState>({});
   const [groupOrder, setGroupOrder] = useState<number[]>([]); // Custom order for groups
   const [dragOverChannelId, setDragOverChannelId] = useState<number | null>(null);
@@ -1287,6 +1404,13 @@ export function ChannelsPane({
 
   // Normalize names modal state
   const normalizeModal = useModal();
+  const findDuplicatesModal = useModal();
+
+  // bd-eio04.13 — per-row would-normalize indicator deep-link target.
+  // When set, the NormalizeNamesModal opens filtered to this single
+  // channel instead of the current selection. Cleared when the modal
+  // closes.
+  const [normalizePreviewChannelId, setNormalizePreviewChannelId] = useState<number | null>(null);
 
   // CSV import modal state
   const csvImportModal = useModal();
@@ -1421,7 +1545,7 @@ export function ChannelsPane({
       editChannelModal.open();
       onExternalChannelEditHandled?.();
     }
-  }, [externalChannelToEdit, onExternalChannelEditHandled]);
+  }, [externalChannelToEdit, onExternalChannelEditHandled, editChannelModal]);
 
   // Create a Map for O(1) logo lookups instead of O(n) array.find()
   const logoMap = useMemo(() => {
@@ -1448,8 +1572,15 @@ export function ChannelsPane({
         return;
       }
 
-      // Build a map of locally available streams (for edit mode staged streams)
-      const localStreamMap = new Map(allStreams.map((s) => [s.id, s]));
+      // Build a map of locally available streams (for edit mode staged streams).
+      // Seed with streams previously seen in any search so staged streams whose
+      // objects only appeared in a prior search term still resolve correctly.
+      const localStreamMap = new Map<number, Stream>(
+        seenStreamsMap ? Array.from(seenStreamsMap) : []
+      );
+      for (const s of allStreams) {
+        localStreamMap.set(s.id, s);
+      }
 
       // For new channels (negative IDs), never call API - only use local streams
       // The channel doesn't exist on the server yet
@@ -1479,6 +1610,7 @@ export function ChannelsPane({
         const streamDetails = await api.getChannelStreams(selectedChannelId);
         // Combine API results with local streams (local takes precedence for staged changes)
         const combinedMap = new Map<number, Stream>([
+          ...(seenStreamsMap ? Array.from(seenStreamsMap) : []),
           ...streamDetails.map((s: Stream) => [s.id, s] as [number, Stream]),
           ...allStreams.map((s) => [s.id, s] as [number, Stream]),
         ]);
@@ -1494,7 +1626,7 @@ export function ChannelsPane({
       }
     };
     loadStreams();
-  }, [selectedChannelId, channels, allStreams]);
+  }, [selectedChannelId, channels, allStreams, seenStreamsMap]);
 
   // Fetch stream stats when channelStreams changes
   useEffect(() => {
@@ -1676,6 +1808,58 @@ export function ChannelsPane({
       setBulkLogoLoading(false);
     }
   }, [selectedChannelIds, channels, notifications, onChannelsChange, onLogosChange]);
+
+  // Handle bulk set logo from linked EPG entry's icon_url
+  const handleBulkSetLogoFromEPG = useCallback(async () => {
+    setBulkLogoLoading(true);
+    const logoCache = new Map<string, import('../types').Logo>();
+    const epgById = new Map((epgData || []).map((e) => [e.id, e]));
+    let assigned = 0, skipped = 0;
+
+    logger.info(`[BulkLogoEPG] Starting bulk EPG-logo assignment for ${selectedChannelIds.size} channels`);
+
+    try {
+      for (const channelId of selectedChannelIds) {
+        const channel = channels.find(c => c.id === channelId);
+        if (!channel) continue;
+
+        try {
+          if (channel.epg_data_id == null) {
+            logger.debug(`[BulkLogoEPG] Channel ${channel.name} (${channelId}) has no epg_data_id`);
+            skipped++;
+            continue;
+          }
+
+          const epgEntry = epgById.get(channel.epg_data_id);
+          const logoUrl = epgEntry?.icon_url || null;
+
+          if (!logoUrl) {
+            logger.debug(`[BulkLogoEPG] No icon_url on EPG entry ${channel.epg_data_id} for channel ${channel.name} (${channelId})`);
+            skipped++;
+            continue;
+          }
+
+          logger.debug(`[BulkLogoEPG] Assigning EPG logo to channel ${channel.name} (${channelId}) from ${logoUrl}`);
+          const logo = await api.getOrCreateLogo(channel.name, logoUrl, logoCache);
+          await api.updateChannel(channelId, { logo_id: logo.id });
+          assigned++;
+        } catch (err) {
+          logger.warn(`[BulkLogoEPG] Failed to assign EPG logo for channel ${channelId}:`, err);
+          skipped++;
+        }
+      }
+
+      logger.info(`[BulkLogoEPG] Complete: ${assigned} assigned, ${skipped} skipped`);
+      notifications.success(`Set logos: ${assigned} assigned, ${skipped} skipped (no EPG logo)`);
+      onChannelsChange?.();
+      onLogosChange?.();
+    } catch (err) {
+      logger.error('[BulkLogoEPG] Bulk set logo from EPG failed:', err);
+      notifications.error('Failed to set logos from EPG');
+    } finally {
+      setBulkLogoLoading(false);
+    }
+  }, [selectedChannelIds, channels, epgData, notifications, onChannelsChange, onLogosChange]);
 
   // Handle probe group request - probes all streams in all channels of a group
   // Uses the same backend probe logic as "Probe All Streams Now" but filtered to a single group
@@ -1908,6 +2092,51 @@ export function ChannelsPane({
     createGroupModal.open();
     setNewGroupName('');
   };
+
+  const handleBulkAssignProfile = useCallback(async (
+    profileId: number,
+    channelIds: number[],
+    enable: boolean,
+  ) => {
+    const profile = channelProfiles.find(p => p.id === profileId);
+    if (!profile || channelIds.length === 0) return;
+
+    const verb = enable ? 'Enabling' : 'Disabling';
+    notifications.info(
+      `${verb} ${channelIds.length} channel${channelIds.length !== 1 ? 's' : ''} in profile "${profile.name}"...`,
+      'Channel Profile',
+    );
+
+    const BATCH_SIZE = 10;
+    let succeeded = 0;
+    let failed = 0;
+    for (let i = 0; i < channelIds.length; i += BATCH_SIZE) {
+      const batch = channelIds.slice(i, i + BATCH_SIZE);
+      const results = await Promise.allSettled(
+        batch.map(chId => api.updateProfileChannel(profileId, chId, { enabled: enable })),
+      );
+      for (const r of results) {
+        if (r.status === 'fulfilled') succeeded++;
+        else failed++;
+      }
+    }
+
+    if (failed === 0) {
+      notifications.success(
+        `${enable ? 'Enabled' : 'Disabled'} ${succeeded} channel${succeeded !== 1 ? 's' : ''} in profile "${profile.name}"`,
+        'Channel Profile',
+      );
+    } else {
+      notifications.error(
+        `${enable ? 'Enabled' : 'Disabled'} ${succeeded}, ${failed} failed in profile "${profile.name}"`,
+        'Channel Profile',
+      );
+    }
+
+    if (onChannelProfilesChange) {
+      await onChannelProfilesChange();
+    }
+  }, [channelProfiles, notifications, onChannelProfilesChange]);
 
   // Handle context menu on group header (when entire group is selected)
   const handleGroupContextMenu = (groupChannelIds: number[], e: React.MouseEvent) => {
@@ -2508,15 +2737,7 @@ export function ChannelsPane({
 
 
 
-  // Sort mode labels for journal/description
-  const SORT_MODE_LABELS: Record<SortMode, string> = {
-    smart: 'Smart Sort',
-    resolution: 'resolution',
-    bitrate: 'bitrate',
-    framerate: 'framerate',
-    m3u_priority: 'M3U priority',
-    audio_channels: 'audio channels',
-  };
+  // SORT_MODE_LABELS is at module scope above.
 
   // Sort streams by specified mode (single channel) — delegates to backend
   const handleSortStreamsByMode = useCallback(async (mode: SortMode) => {
@@ -2538,6 +2759,10 @@ export function ChannelsPane({
       const result = response.results[0];
       if (!result || !result.changed) {
         logger.info(`[SmartSort] No change needed - streams already in sorted order`);
+        notifications.info(
+          'No reorder needed: stream order already matches this sort (or all streams tie on the same metrics). Enable more criteria in Settings → Smart Sort, or probe streams for quality data.',
+          'Sort Complete'
+        );
         return;
       }
 
@@ -2621,7 +2846,10 @@ export function ChannelsPane({
       if (changesCount > 0) {
         notifications.success(`Sorted ${changesCount} of ${channelsToProcess.length} channel${channelsToProcess.length !== 1 ? 's' : ''} by ${SORT_MODE_LABELS[mode]}`, 'Sort Complete');
       } else {
-        notifications.info(`Streams already in ${SORT_MODE_LABELS[mode]} order`, 'Sort Complete');
+        notifications.info(
+          `No channels reordered: order already matches ${SORT_MODE_LABELS[mode]} (or all streams tie). Check Settings → Smart Sort, or probe streams.`,
+          'Sort Complete'
+        );
       }
       logger.info(`Bulk sort by ${SORT_MODE_LABELS[mode]}: ${changesCount} of ${channelsToProcess.length} channels reordered`);
     } catch (err) {
@@ -2924,7 +3152,7 @@ export function ChannelsPane({
   const stripCountryPrefix = useCallback((channelName: string): string => {
     // Match country code (2-3 uppercase letters) followed by separator and the rest
     // Supports: "US | Name", "UK: Name", "CA - Name", "USA | Name", etc.
-    const match = channelName.match(/^[A-Z]{2,3}\s*[|:\-]\s*(.+)$/);
+    const match = channelName.match(/^[A-Z]{2,3}\s*[|:-]\s*(.+)$/);
     if (match) {
       return match[1].trim();
     }
@@ -3194,19 +3422,23 @@ export function ChannelsPane({
   // Build a set of group IDs that are related to auto_channel_sync:
   // 1. Groups that have auto_channel_sync: true directly
   // 2. Groups that are group_override targets of auto_channel_sync groups
-  const autoSyncRelatedGroups = new Set<number>();
-  if (providerSettingsMap) {
-    for (const setting of Object.values(providerSettingsMap)) {
-      if (setting.auto_channel_sync) {
-        // Add the source group itself
-        autoSyncRelatedGroups.add(setting.channel_group);
-        // Also add the group_override target if set
-        if (setting.custom_properties?.group_override) {
-          autoSyncRelatedGroups.add(setting.custom_properties.group_override);
+  // Memoized so downstream useMemo deps are stable across renders.
+  const autoSyncRelatedGroups = useMemo(() => {
+    const result = new Set<number>();
+    if (providerSettingsMap) {
+      for (const setting of Object.values(providerSettingsMap)) {
+        if (setting.auto_channel_sync) {
+          // Add the source group itself
+          result.add(setting.channel_group);
+          // Also add the group_override target if set
+          if (setting.custom_properties?.group_override) {
+            result.add(setting.custom_properties.group_override);
+          }
         }
       }
     }
-  }
+    return result;
+  }, [providerSettingsMap]);
 
   // Memoize expensive channel filtering and grouping operations
   const channelsByGroup = useMemo(() => {
@@ -3294,6 +3526,19 @@ export function ChannelsPane({
     return grouped;
   }, [localChannels, searchTerm, channelListFilters, autoSyncRelatedGroups, streamStatsMap]);
 
+  // bd-eio04.13 — flatten the visible channels into a stable (id, name)
+  // list so useNormalizePreview can batch-fetch would_normalize state
+  // for currently-rendered rows. Reorders alone don't change the
+  // signature (the hook keys on id+name), so this won't refetch when
+  // the user drags a channel within a group.
+  const visibleChannelsForPreview = useMemo(
+    () => Object.values(channelsByGroup)
+      .flat()
+      .map(ch => ({ id: ch.id, name: ch.name })),
+    [channelsByGroup],
+  );
+  const { previews: normalizePreviews } = useNormalizePreview(visibleChannelsForPreview);
+
   // Sort channel groups by their lowest channel number (only groups with channels)
   const sortedChannelGroups = useMemo(() => {
     return [...channelGroups]
@@ -3324,7 +3569,7 @@ export function ChannelsPane({
   }, [channelGroups]);
 
   // Helper function to determine if a group should be visible based on filter settings
-  const shouldShowGroup = (groupId: number): boolean => {
+  const shouldShowGroup = useCallback((groupId: number): boolean => {
     if (!channelListFilters) return true;
 
     const groupHasChannels = (channelsByGroup[groupId]?.length ?? 0) > 0;
@@ -3364,12 +3609,12 @@ export function ChannelsPane({
     }
 
     return true;
-  };
+  }, [channelListFilters, channelsByGroup, newlyCreatedGroupIds, autoSyncRelatedGroups, providerSettingsMap]);
 
   // Filter sorted channel groups based on filter settings
   const filteredChannelGroups = useMemo(() => {
     return sortedChannelGroups.filter((g) => shouldShowGroup(g.id));
-  }, [sortedChannelGroups, channelListFilters, channelsByGroup, newlyCreatedGroupIds, autoSyncRelatedGroups, providerSettingsMap]);
+  }, [sortedChannelGroups, shouldShowGroup]);
 
   const handleDragStart = (event: DragStartEvent) => {
     const activeId = event.active.id;
@@ -4437,12 +4682,13 @@ export function ChannelsPane({
           handleCrossGroupMoveConfirm(false, crossGroupMoveData.suggestedChannelNumber, renumberSourceGroup);
         }
         break;
-      case 'custom':
+      case 'custom': {
         const customNum = parseInt(customStartingNumber, 10);
         if (!isNaN(customNum) && customNum >= 1) {
           handleCrossGroupMoveConfirm(false, customNum, renumberSourceGroup);
         }
         break;
+      }
     }
   };
 
@@ -4573,7 +4819,7 @@ export function ChannelsPane({
       const newNumber = startingNumber + index;
       if (channel.channel_number !== newNumber) {
         // Apply auto-rename if enabled in dialog
-        let updates: Partial<Channel> = { channel_number: newNumber };
+        const updates: Partial<Channel> = { channel_number: newNumber };
         if (sortRenumberUpdateNames && channel.channel_number !== null) {
           const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
           if (newName && newName !== channel.name) {
@@ -4798,7 +5044,7 @@ export function ChannelsPane({
       sortedConflicts.forEach((channel, index) => {
         // New number = endNum + 1 + (position from the end of conflicts)
         const newNumber = endNum + 1 + (sortedConflicts.length - 1 - index);
-        let updates: Partial<Channel> = { channel_number: newNumber };
+        const updates: Partial<Channel> = { channel_number: newNumber };
 
         // Apply auto-rename if enabled in the dialog
         if (massRenumberUpdateNames && channel.channel_number !== null) {
@@ -4819,7 +5065,7 @@ export function ChannelsPane({
     massRenumberChannels.forEach((channel, index) => {
       const newNumber = startNum + index;
       if (channel.channel_number !== newNumber) {
-        let updates: Partial<Channel> = { channel_number: newNumber };
+        const updates: Partial<Channel> = { channel_number: newNumber };
 
         // Apply auto-rename if enabled in the dialog
         if (massRenumberUpdateNames && channel.channel_number !== null) {
@@ -5098,6 +5344,14 @@ export function ChannelsPane({
                         return stats && stats.probe_status === 'success' && stats.is_low_fps;
                       })}
                       onPreviewChannel={() => handlePreviewChannel(channel)}
+                      proposedNormalizedName={(() => {
+                        const preview = normalizePreviews.get(channel.id);
+                        return preview?.would_change ? preview.proposed_name : undefined;
+                      })()}
+                      onShowNormalizePreview={() => {
+                        setNormalizePreviewChannelId(channel.id);
+                        normalizeModal.open();
+                      }}
                     />
                     {selectedChannelId === channel.id && (
                       <div
@@ -5358,6 +5612,7 @@ export function ChannelsPane({
               setTimeout(() => bulkLCNModal.open(), 50);
             }}
             onNormalize={() => normalizeModal.open()}
+            onFindDuplicates={() => findDuplicatesModal.open()}
             onRenumber={handleMassRenumberClick}
             onRenumberAllGroups={() => {
               setRenumberAllStartingNumber('1');
@@ -5367,12 +5622,17 @@ export function ChannelsPane({
             }}
             onSortSelectedByMode={handleSortSelectedStreamsByMode}
             onSetLogoFromM3U={handleBulkSetLogoFromM3U}
+            onSetLogoFromEPG={handleBulkSetLogoFromEPG}
             onProbe={handleBulkProbe}
             hasSelection={selectedChannelIds.size > 0}
             bulkEPGLoading={bulkEPGLoading}
             bulkLCNLoading={bulkLCNLoading}
             bulkLogoLoading={bulkLogoLoading}
             probingChannels={probingChannels.size > 0}
+            channelProfiles={channelProfiles}
+            onBulkAssignProfile={(profileId, enable) =>
+              handleBulkAssignProfile(profileId, Array.from(selectedChannelIds), enable)
+            }
           />
         </div>
       </div>
@@ -5751,11 +6011,36 @@ export function ChannelsPane({
       />
 
       {/* Normalize Names Modal */}
-      {normalizeModal.isOpen && selectedChannelIds.size > 0 && (
+      {normalizeModal.isOpen && (normalizePreviewChannelId !== null || selectedChannelIds.size > 0) && (
         <NormalizeNamesModal
-          channels={channels.filter(c => selectedChannelIds.has(c.id))}
-          onConfirm={handleNormalizeNames}
-          onCancel={() => normalizeModal.close()}
+          channels={
+            // bd-eio04.13 — deep-link focus takes priority: if a row's
+            // would-normalize indicator was clicked, scope the modal to
+            // just that channel. Otherwise fall back to the current
+            // selection (original bulk-normalize flow).
+            normalizePreviewChannelId !== null
+              ? channels.filter(c => c.id === normalizePreviewChannelId)
+              : channels.filter(c => selectedChannelIds.has(c.id))
+          }
+          onConfirm={(updates) => {
+            handleNormalizeNames(updates);
+            setNormalizePreviewChannelId(null);
+          }}
+          onCancel={() => {
+            normalizeModal.close();
+            setNormalizePreviewChannelId(null);
+          }}
+        />
+      )}
+
+      {/* Find Duplicates Modal */}
+      {findDuplicatesModal.isOpen && (
+        <FindDuplicatesModal
+          onClose={() => findDuplicatesModal.close()}
+          onMerged={() => {
+            findDuplicatesModal.close();
+            onChannelsChange?.();
+          }}
         />
       )}
 
@@ -7085,6 +7370,49 @@ export function ChannelsPane({
             <div className="context-menu-item" onClick={handleCreateGroupAndMove}>
               Create new group and move
             </div>
+            {channelProfiles.length > 0 && (() => {
+              const renderProfileSubmenu = (enable: boolean) => {
+                const submenu = document.createElement('div');
+                submenu.className = 'context-menu-submenu';
+                submenu.style.position = 'fixed';
+                submenu.style.top = `${contextMenu.y}px`;
+                submenu.style.left = `${contextMenu.x + 200}px`;
+
+                const channelIds = contextMenu.metadata.channelIds;
+                channelProfiles.forEach(profile => {
+                  const option = document.createElement('div');
+                  option.className = 'context-menu-item';
+                  option.textContent = profile.name;
+                  option.onclick = () => {
+                    handleBulkAssignProfile(profile.id, channelIds, enable);
+                    if (submenu.parentNode) document.body.removeChild(submenu);
+                    hideContextMenu();
+                  };
+                  submenu.appendChild(option);
+                });
+
+                document.body.appendChild(submenu);
+
+                const closeSubmenu = (e: MouseEvent) => {
+                  if (!submenu.contains(e.target as Node)) {
+                    if (submenu.parentNode) document.body.removeChild(submenu);
+                    document.removeEventListener('mousedown', closeSubmenu);
+                  }
+                };
+                setTimeout(() => document.addEventListener('mousedown', closeSubmenu), 0);
+              };
+
+              return (
+                <>
+                  <div className="context-menu-item" onClick={() => renderProfileSubmenu(true)}>
+                    Enable in profile... <span className="context-menu-arrow">▶</span>
+                  </div>
+                  <div className="context-menu-item" onClick={() => renderProfileSubmenu(false)}>
+                    Disable in profile... <span className="context-menu-arrow">▶</span>
+                  </div>
+                </>
+              );
+            })()}
             {contextMenu.metadata.channelIds.length >= 2 && (
               <div className="context-menu-item" onClick={() => {
                 setMergeChannelIds(contextMenu.metadata.channelIds);

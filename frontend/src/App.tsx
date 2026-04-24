@@ -1,3 +1,9 @@
+// Pre-existing react-hooks/exhaustive-deps warnings in this file predate
+// PR #70 (ErrorBoundary wiring) and are tracked for cleanup in bead
+// enhancedchannelmanager-zjge5. Suppress at file scope so the PR-mode
+// lint gate blocks only new violations introduced here, not grandfathered
+// ones inherited from dev. Remove this directive once zjge5 lands.
+/* eslint-disable react-hooks/exhaustive-deps */
 import { useState, useEffect, useCallback, useRef, useMemo, Suspense, lazy } from 'react';
 import {
   SettingsModal,
@@ -17,13 +23,14 @@ import { registerVLCModalCallback, downloadM3U } from './utils/vlc';
 import { VLCProtocolHelperModal } from './components/VLCProtocolHelperModal';
 import { NotificationCenter } from './components/NotificationCenter';
 import { NotificationProvider } from './contexts/NotificationContext';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import ECMLogo from './assets/ECMLogo.png';
 import './App.css';
 
 // All known sort criteria - used to merge new criteria into saved settings
-const ALL_SORT_CRITERIA: api.SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels'];
+const ALL_SORT_CRITERIA: api.SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels'];
 const DEFAULT_SORT_ENABLED: api.SortEnabledMap = {
-  resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false
+  resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false
 };
 
 // Merge saved sort criteria with any new criteria that may have been added
@@ -61,10 +68,16 @@ const ExportTab = lazy(() => import('./components/tabs/ExportTab').then(m => ({ 
 // Self-contained timer component — updates only itself every second,
 // not the entire App tree (which was the previous behavior)
 function EditModeTimer({ enteredAt }: { enteredAt: number }) {
+  // Initial value is derived from `enteredAt` via lazy init so the first
+  // render shows the correct elapsed time without needing a synchronous
+  // setState inside the effect (which triggers cascading renders and is
+  // flagged by react-hooks/set-state-in-effect). The component remounts
+  // whenever edit mode toggles (the callsite renders <EditModeTimer/> only
+  // while `editModeEnteredAt !== null`), so `enteredAt` is stable for the
+  // lifetime of the component.
   const [seconds, setSeconds] = useState(() => Math.floor((Date.now() - enteredAt) / 1000));
 
   useEffect(() => {
-    setSeconds(Math.floor((Date.now() - enteredAt) / 1000));
     const interval = setInterval(() => {
       setSeconds(Math.floor((Date.now() - enteredAt) / 1000));
     }, 1000);
@@ -104,6 +117,24 @@ function App() {
   const [streams, setStreams] = useState<Stream[]>([]);
   const [providers, setProviders] = useState<M3UAccount[]>([]);
   const [streamGroups, setStreamGroups] = useState<StreamGroupInfo[]>([]);
+
+  // Accumulates every stream ever returned by a search so ChannelsPane can
+  // resolve staged stream IDs even after the stream search term has changed.
+  const [seenStreams, setSeenStreams] = useState<Map<number, Stream>>(new Map());
+  const rememberSeenStreams = useCallback((list: Stream[]) => {
+    if (list.length === 0) return;
+    setSeenStreams((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const s of list) {
+        if (!next.has(s.id)) {
+          next.set(s.id, s);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, []);
 
   // Stream filters - grouped state (with localStorage initialization)
   const [streamFilters, setStreamFilters] = useState(() => {
@@ -161,6 +192,8 @@ function App() {
     streamSortPriority: ['resolution', 'bitrate', 'framerate'] as api.SortCriterion[],
     streamSortEnabled: DEFAULT_SORT_ENABLED as api.SortEnabledMap,
     deprioritizeFailedStreams: true,
+    deprioritizeBlackScreen: true,
+    deprioritizeLowFps: true,
     m3uAccountPriorities: {} as api.M3UAccountPriorities,
   });
   // Also keep separate state for use in callbacks (to avoid stale closure issues)
@@ -508,6 +541,8 @@ function App() {
             return { streamSortPriority: merged.priority, streamSortEnabled: merged.enabled };
           })(),
           deprioritizeFailedStreams: settings.deprioritize_failed_streams ?? true,
+          deprioritizeBlackScreen: settings.deprioritize_black_screen ?? true,
+          deprioritizeLowFps: settings.deprioritize_low_fps ?? true,
           m3uAccountPriorities: settings.m3u_account_priorities ?? {},
         });
         setDefaultChannelProfileIds(settings.default_channel_profile_ids);
@@ -721,6 +756,8 @@ function App() {
           return { streamSortPriority: merged.priority, streamSortEnabled: merged.enabled };
         })(),
         deprioritizeFailedStreams: settings.deprioritize_failed_streams ?? true,
+        deprioritizeBlackScreen: settings.deprioritize_black_screen ?? true,
+        deprioritizeLowFps: settings.deprioritize_low_fps ?? true,
         m3uAccountPriorities: settings.m3u_account_priorities ?? {},
       });
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
@@ -996,6 +1033,7 @@ function App() {
         signal,
       });
       setStreams(response.results);
+      rememberSeenStreams(response.results);
 
       // Also refresh group metadata so groups show correct filtered counts
       const m3uAccountId = streamFilters.selectedProviders?.length === 1
@@ -1065,6 +1103,7 @@ function App() {
         const newStreams = allGroupStreams.filter(s => !existingIds.has(s.id));
         return [...prevStreams, ...newStreams];
       });
+      rememberSeenStreams(allGroupStreams);
     } catch (err) {
       // Remove from loaded set on error so user can retry
       loadedStreamGroupsRef.current.delete(groupName);
@@ -1072,7 +1111,7 @@ function App() {
         logger.error(`Failed to load streams for group ${groupName}:`, err);
       }
     }
-  }, [streamFilters.search]);
+  }, [streamFilters.search, rememberSeenStreams]);
 
   // Reload channels when search changes
   useEffect(() => {
@@ -2211,6 +2250,7 @@ function App() {
       <main className="main">
         <Suspense fallback={<div className="tab-loading"><span className="material-icons spinning">sync</span><p>Loading...</p></div>}>
           {activeTab === 'channel-manager' && (
+            <ErrorBoundary key="tab-channel-manager" scopeLabel="Channel Manager tab" reloadMode="reset">
             <ChannelManagerTab
               // Channel Groups
               channelGroups={displayChannelGroups}
@@ -2303,6 +2343,7 @@ function App() {
 
               // Streams
               allStreams={streams}
+              seenStreamsMap={seenStreams}
               streams={filteredStreams}
               providers={providers}
               streamGroups={streamGroups}
@@ -2362,8 +2403,10 @@ function App() {
               // Lazy loading - load only the expanded group's streams
               onStreamGroupExpand={loadStreamGroup}
             />
+            </ErrorBoundary>
           )}
           {activeTab === 'm3u-manager' && (
+            <ErrorBoundary key="tab-m3u-manager" scopeLabel="M3U Manager tab" reloadMode="reset">
             <M3UManagerTab
               epgSources={epgSources}
               channelGroups={channelGroups}
@@ -2373,9 +2416,15 @@ function App() {
               onAccountsChange={() => { loadProviders(); loadStreamGroups(); }}
               hideM3uUrls={hideM3uUrls}
             />
+            </ErrorBoundary>
           )}
-          {activeTab === 'epg-manager' && <EPGManagerTab onSourcesChange={loadEpgSources} hideEpgUrls={hideEpgUrls} />}
+          {activeTab === 'epg-manager' && (
+            <ErrorBoundary key="tab-epg-manager" scopeLabel="EPG Manager tab" reloadMode="reset">
+              <EPGManagerTab onSourcesChange={loadEpgSources} hideEpgUrls={hideEpgUrls} />
+            </ErrorBoundary>
+          )}
           {activeTab === 'guide' && (
+            <ErrorBoundary key="tab-guide" scopeLabel="Guide tab" reloadMode="reset">
             <GuideTab
               channels={channels}
               logos={logos}
@@ -2388,15 +2437,48 @@ function App() {
               onLogoUpload={handleLogoUpload}
               onLogosChange={loadLogos}
             />
+            </ErrorBoundary>
           )}
-          {activeTab === 'logo-manager' && <LogoManagerTab />}
-          {activeTab === 'm3u-changes' && <M3UChangesTab />}
-          {activeTab === 'auto-creation' && <AutoCreationTab />}
-          {activeTab === 'export' && <ExportTab />}
-          {activeTab === 'journal' && <JournalTab />}
-          {activeTab === 'stats' && <StatsTab />}
-          {activeTab === 'ffmpeg-builder' && <FFMPEGBuilderTab />}
-          {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} onProbeComplete={loadChannels} initialSettingsPage={settingsPage} onSettingsPageChange={setSettingsPage} />}
+          {activeTab === 'logo-manager' && (
+            <ErrorBoundary key="tab-logo-manager" scopeLabel="Logo Manager tab" reloadMode="reset">
+              <LogoManagerTab />
+            </ErrorBoundary>
+          )}
+          {activeTab === 'm3u-changes' && (
+            <ErrorBoundary key="tab-m3u-changes" scopeLabel="M3U Changes tab" reloadMode="reset">
+              <M3UChangesTab />
+            </ErrorBoundary>
+          )}
+          {activeTab === 'auto-creation' && (
+            <ErrorBoundary key="tab-auto-creation" scopeLabel="Auto-Creation tab" reloadMode="reset">
+              <AutoCreationTab />
+            </ErrorBoundary>
+          )}
+          {activeTab === 'export' && (
+            <ErrorBoundary key="tab-export" scopeLabel="Export tab" reloadMode="reset">
+              <ExportTab />
+            </ErrorBoundary>
+          )}
+          {activeTab === 'journal' && (
+            <ErrorBoundary key="tab-journal" scopeLabel="Journal tab" reloadMode="reset">
+              <JournalTab />
+            </ErrorBoundary>
+          )}
+          {activeTab === 'stats' && (
+            <ErrorBoundary key="tab-stats" scopeLabel="Stats tab" reloadMode="reset">
+              <StatsTab />
+            </ErrorBoundary>
+          )}
+          {activeTab === 'ffmpeg-builder' && (
+            <ErrorBoundary key="tab-ffmpeg-builder" scopeLabel="FFMPEG Builder tab" reloadMode="reset">
+              <FFMPEGBuilderTab />
+            </ErrorBoundary>
+          )}
+          {activeTab === 'settings' && (
+            <ErrorBoundary key="tab-settings" scopeLabel="Settings tab" reloadMode="reset">
+              <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} onProbeComplete={loadChannels} initialSettingsPage={settingsPage} onSettingsPageChange={setSettingsPage} />
+            </ErrorBoundary>
+          )}
         </Suspense>
       </main>
 

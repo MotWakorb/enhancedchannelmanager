@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import * as api from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
-import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode, StreamPreviewMode } from '../../services/api';
+import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, FailedStreamCategory, GracenoteConflictMode, StreamPreviewMode } from '../../services/api';
 import { NormalizationEngineSection } from '../settings/NormalizationEngineSection';
 import { TagEngineSection } from '../settings/TagEngineSection';
 import { AuthSettingsSection } from '../settings/AuthSettingsSection';
@@ -9,6 +9,8 @@ import { UserManagementSection } from '../settings/UserManagementSection';
 import { LinkedAccountsSection } from '../settings/LinkedAccountsSection';
 import { TLSSettingsSection } from '../settings/TLSSettingsSection';
 import { BackupRestoreSection } from '../settings/BackupRestoreSection';
+import { MCPSettingsSection } from '../settings/MCPSettingsSection';
+import { LookupTableSection } from '../settings/LookupTableSection';
 import { useAuth } from '../../hooks/useAuth';
 import type { ChannelProfile, M3UDigestSettings, M3UDigestFrequency } from '../../types';
 import { logger } from '../../utils/logger';
@@ -43,18 +45,29 @@ const SORT_CRITERION_CONFIG: Record<SortCriterion, { icon: string; label: string
   resolution: { icon: 'aspect_ratio', label: 'Resolution', description: '4K > 1080p > 720p' },
   bitrate: { icon: 'speed', label: 'Bitrate', description: 'Higher bitrate first' },
   framerate: { icon: 'slow_motion_video', label: 'Framerate', description: '60fps > 30fps' },
+  video_codec: { icon: 'movie_filter', label: 'Video Codec', description: 'AV1 > HEVC > H.264 > MPEG2' },
   m3u_priority: { icon: 'low_priority', label: 'M3U Priority', description: 'Higher priority M3U first' },
   audio_channels: { icon: 'surround_sound', label: 'Audio Channels', description: '5.1 > Stereo > Mono' },
 };
 
+// Failed stream category configuration for drag-and-drop ordering
+const FAILED_CATEGORY_CONFIG: Record<FailedStreamCategory, { icon: string; label: string; description: string }> = {
+  failed: { icon: 'error', label: 'Failed Streams', description: 'Dead, timeout, or pending' },
+  black_screen: { icon: 'videocam_off', label: 'Black Screen', description: 'Probe OK but no video content' },
+  low_fps: { icon: 'slow_motion_video', label: 'Low FPS', description: 'Below FPS threshold' },
+};
+
+const DEFAULT_FAILED_STREAM_ORDER: FailedStreamCategory[] = ['failed', 'black_screen', 'low_fps'];
+
 // All known sort criteria - used to merge new criteria into saved settings
-const ALL_SORT_CRITERIA: SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels'];
+const ALL_SORT_CRITERIA: SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels'];
 
 // Default enabled state for each criterion
 const DEFAULT_SORT_ENABLED: SortEnabledMap = {
   resolution: true,
   bitrate: true,
   framerate: true,
+  video_codec: false,
   m3u_priority: false,
   audio_channels: false,
 };
@@ -180,6 +193,83 @@ function SortablePriorityItem({
   );
 }
 
+// Sortable item for failed stream category ordering (no checkbox, always active)
+function SortableFailedCategoryItem({
+  id,
+  index,
+}: {
+  id: FailedStreamCategory;
+  index: number;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
+
+  const config = FAILED_CATEGORY_CONFIG[id];
+
+  const containerStyle: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.75rem',
+    padding: '0.75rem 1rem',
+    backgroundColor: 'var(--input-bg)',
+    border: '1px solid var(--border-primary)',
+    borderRadius: '6px',
+    opacity: isDragging ? 0.5 : 1,
+    boxShadow: isDragging ? '0 4px 12px rgba(0, 0, 0, 0.3)' : undefined,
+  };
+
+  return (
+    <div ref={setNodeRef} style={containerStyle}>
+      <span
+        {...attributes}
+        {...listeners}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          cursor: 'grab',
+          color: 'var(--text-muted)',
+          touchAction: 'none',
+        }}
+      >
+        <span className="material-icons" style={{ fontSize: '20px' }}>drag_indicator</span>
+      </span>
+      <span
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: '24px',
+          height: '24px',
+          borderRadius: '50%',
+          backgroundColor: 'var(--text-muted, #6b7280)',
+          color: 'var(--bg-primary, #1e1e23)',
+          fontSize: '0.75rem',
+          fontWeight: 600,
+          flexShrink: 0,
+          lineHeight: 1,
+        }}
+      >
+        {index + 1}
+      </span>
+      <span className="material-icons" style={{ fontSize: '20px', color: 'var(--text-secondary)', flexShrink: 0 }}>
+        {config.icon}
+      </span>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.125rem', minWidth: 0 }}>
+        <span style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text-primary)' }}>{config.label}</span>
+        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{config.description}</span>
+      </div>
+    </div>
+  );
+}
+
 interface SettingsTabProps {
   onSaved: () => void;
   onThemeChange?: (theme: Theme) => void;
@@ -234,8 +324,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   // Connection settings
   const [url, setUrl] = useState('');
+  const [authMethod, setAuthMethod] = useState<'password' | 'api_key'>('password');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
 
   // Channel defaults
   const [autoRenameChannelNumber, setAutoRenameChannelNumber] = useState(false);
@@ -251,10 +343,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [customNetworkSuffixes, setCustomNetworkSuffixes] = useState<string[]>([]);
   const [normalizeOnChannelCreate, setNormalizeOnChannelCreate] = useState(false);
 
-  const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels']);
-  const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false });
+  const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels']);
+  const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false });
   const [m3uAccountPriorities, setM3uAccountPriorities] = useState<Record<string, number>>({});
   const [deprioritizeFailedStreams, setDeprioritizeFailedStreams] = useState(true);
+  const [deprioritizeBlackScreen, setDeprioritizeBlackScreen] = useState(true);
+  const [deprioritizeLowFps, setDeprioritizeLowFps] = useState(true);
+  const [failedStreamSortOrder, setFailedStreamSortOrder] = useState<FailedStreamCategory[]>(DEFAULT_FAILED_STREAM_ORDER);
   const [strikeThreshold, setStrikeThreshold] = useState(3);
 
   // Appearance settings
@@ -265,7 +360,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [hideM3uUrls, setHideM3uUrls] = useState(false);
   const [gracenoteConflictMode, setGracenoteConflictMode] = useState<GracenoteConflictMode>('ask');
   const [theme, setTheme] = useState<Theme>('dark');
-  const [vlcOpenBehavior, setVlcOpenBehavior] = useState('m3u_fallback');
+  const [vlcOpenBehavior, setVlcOpenBehavior] = useState<'protocol_only' | 'm3u_fallback' | 'm3u_only'>('m3u_fallback');
   const [streamPreviewMode, setStreamPreviewMode] = useState<StreamPreviewMode>('passthrough');
 
   // Stats settings
@@ -275,6 +370,31 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // Log level settings
   const [backendLogLevel, setBackendLogLevel] = useState('INFO');
   const [frontendLogLevel, setFrontendLogLevel] = useState('INFO');
+  const [debugBundleLoading, setDebugBundleLoading] = useState(false);
+
+  const handleDownloadDebugBundle = async () => {
+    setDebugBundleLoading(true);
+    try {
+      const response = await fetch('/api/auto-creation/debug-bundle', { credentials: 'include' });
+      if (!response.ok) throw new Error('Failed to generate debug bundle');
+      const blob = await response.blob();
+      const disposition = response.headers.get('Content-Disposition');
+      const filename = disposition?.match(/filename="(.+)"/)?.[1] || 'ecm-debug-bundle.tar.gz';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      notifications.success('Debug bundle downloaded', 'Logging');
+    } catch (err) {
+      notifications.error(err instanceof Error ? err.message : 'Failed to generate debug bundle', 'Logging');
+    } finally {
+      setDebugBundleLoading(false);
+    }
+  };
 
   // Auto-creation exclusion settings
   const [autoCreationExcludedTerms, setAutoCreationExcludedTerms] = useState<string[]>([]);
@@ -322,6 +442,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [skipRecentlyProbedHours, setSkipRecentlyProbedHours] = useState(0);
   const [refreshM3usBeforeProbe, setRefreshM3usBeforeProbe] = useState(true);
   const [autoReorderAfterProbe, setAutoReorderAfterProbe] = useState(false);
+  const [pushStreamStatsToDispatcharr, setPushStreamStatsToDispatcharr] = useState(false);
   const [probeRetryCount, setProbeRetryCount] = useState(1);
   const [probeRetryDelay, setProbeRetryDelay] = useState(2);
   const [blackScreenDetectionEnabled, setBlackScreenDetectionEnabled] = useState(false);
@@ -428,6 +549,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
+  const handleFailedOrderDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      setFailedStreamSortOrder((items) => {
+        const oldIndex = items.indexOf(active.id as FailedStreamCategory);
+        const newIndex = items.indexOf(over.id as FailedStreamCategory);
+        return arrayMove(items, oldIndex, newIndex);
+      });
+    }
+  };
+
   useEffect(() => {
     loadSettings();
     loadStreamCount();
@@ -441,6 +573,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     if (activePage === 'm3u-digest' && !digestSettings && !digestLoading) {
       loadDigestSettings();
     }
+    // loadDigestSettings is a local function reference that never changes
+    // identity in a harmful way (no closed-over state that would stale).
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- safe local function reference
   }, [activePage, digestSettings, digestLoading]);
 
   // Load available stream groups when auto-creation page is activated
@@ -450,6 +585,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         setAvailableStreamGroups(groups.map(g => g.name).sort((a, b) => a.localeCompare(b)));
       }).catch(() => {});
     }
+    // The `length === 0` guard makes repeated activations safe even if
+    // availableStreamGroups changes identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: fetch only when first activated
   }, [activePage]);
 
   // Load M3U accounts to show guidance for max concurrent probes
@@ -497,7 +635,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           setProbeProgress(progress);
           setProbingAll(true);
         }
-      } catch (err) {
+      } catch {
         // Silently ignore errors - this is background polling
       }
     };
@@ -550,7 +688,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     return () => {
       clearInterval(interval);
     };
-  }, [probingAll]);
+    // onProbeComplete is an optional parent callback; not including it is fine
+    // since the polling shuts down on progress completion regardless.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- polling lifecycle is owned by `probingAll`; parent callback identity doesn't need to restart polling
+  }, [probingAll, notifications]);
 
   const loadStreamCount = async () => {
     try {
@@ -578,10 +719,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     try {
       const settings = await api.getSettings();
       setUrl(settings.url);
+      setAuthMethod(settings.auth_method || 'password');
       setUsername(settings.username);
       setOriginalUrl(settings.url);
       setOriginalUsername(settings.username);
       setPassword(''); // Never load password from server
+      setApiKeyConfigured(settings.api_key_configured);
       setAutoRenameChannelNumber(settings.auto_rename_channel_number);
       setIncludeChannelNumberInName(settings.include_channel_number_in_name);
       setChannelNumberSeparator(settings.channel_number_separator);
@@ -596,7 +739,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setHideM3uUrls(settings.hide_m3u_urls ?? false);
       setGracenoteConflictMode(settings.gracenote_conflict_mode || 'ask');
       setTheme(settings.theme || 'dark');
-      setVlcOpenBehavior(settings.vlc_open_behavior || 'm3u_fallback');
+      const vlcBehavior = settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only';
+      setVlcOpenBehavior(vlcBehavior || 'm3u_fallback');
       setStreamPreviewMode(settings.stream_preview_mode || 'passthrough');
       setAutoCreationExcludedTerms(settings.auto_creation_excluded_terms ?? []);
       setAutoCreationExcludedGroups(settings.auto_creation_excluded_groups ?? []);
@@ -630,6 +774,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setOriginalRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
       setAutoReorderAfterProbe(settings.auto_reorder_after_probe ?? false);
       setOriginalAutoReorder(settings.auto_reorder_after_probe ?? false);
+      setPushStreamStatsToDispatcharr(settings.push_stream_stats_to_dispatcharr ?? false);
       setProbeRetryCount(settings.probe_retry_count ?? 1);
       setProbeRetryDelay(settings.probe_retry_delay ?? 2);
       setBlackScreenDetectionEnabled(settings.black_screen_detection_enabled ?? false);
@@ -642,6 +787,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setStreamSortEnabled(merged.enabled);
       setM3uAccountPriorities(settings.m3u_account_priorities ?? {});
       setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
+      setDeprioritizeBlackScreen(settings.deprioritize_black_screen ?? true);
+      setDeprioritizeLowFps(settings.deprioritize_low_fps ?? true);
+      setFailedStreamSortOrder(settings.failed_stream_sort_order ?? DEFAULT_FAILED_STREAM_ORDER);
       setStrikeThreshold(settings.strike_threshold ?? 3);
       // Shared SMTP settings
       setSmtpHost(settings.smtp_host ?? '');
@@ -688,6 +836,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         notifications.error('Failed to reset statistics', 'Reset Statistics');
       }
     } catch (err) {
+      logger.error('SettingsTab: failed to reset statistics', err);
       notifications.error('Failed to reset statistics', 'Reset Statistics');
     } finally {
       setResettingStats(false);
@@ -695,19 +844,25 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   };
 
   const handleSave = async () => {
-    // Check if auth settings (URL or username) have changed
+    // Check if password-auth fields have changed (only meaningful in password mode)
     const authChanged = url !== originalUrl || username !== originalUsername;
 
-    // Validate required fields
-    if (!url || !username) {
-      notifications.error('URL and username are required');
+    if (!url) {
+      notifications.error('URL is required');
       return;
     }
 
-    // Password is only required if auth settings changed
-    if (authChanged && !password) {
-      notifications.error('Password is required when changing URL or username');
-      return;
+    // Validation only for password-mode; api_key mode validation lives in the
+    // connection modal since the key field isn't on this page.
+    if (authMethod === 'password') {
+      if (!username) {
+        notifications.error('URL and username are required');
+        return;
+      }
+      if (authChanged && !password) {
+        notifications.error('Password is required when changing URL or username');
+        return;
+      }
     }
 
     setLoading(true);
@@ -715,6 +870,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     try {
       const result = await api.saveSettings({
         url,
+        auth_method: authMethod,
         username,
         // Only send password if it was entered
         ...(password ? { password } : {}),
@@ -756,6 +912,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         skip_recently_probed_hours: skipRecentlyProbedHours,
         refresh_m3us_before_probe: refreshM3usBeforeProbe,
         auto_reorder_after_probe: autoReorderAfterProbe,
+        push_stream_stats_to_dispatcharr: pushStreamStatsToDispatcharr,
         probe_retry_count: probeRetryCount,
         probe_retry_delay: probeRetryDelay,
         black_screen_detection_enabled: blackScreenDetectionEnabled,
@@ -766,6 +923,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         stream_sort_enabled: streamSortEnabled,
         m3u_account_priorities: m3uAccountPriorities,
         deprioritize_failed_streams: deprioritizeFailedStreams,
+        deprioritize_black_screen: deprioritizeBlackScreen,
+        deprioritize_low_fps: deprioritizeLowFps,
+        failed_stream_sort_order: failedStreamSortOrder,
         strike_threshold: strikeThreshold,
         // Shared SMTP settings
         smtp_host: smtpHost,
@@ -1030,6 +1190,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         notifications.error(result.message || 'Failed to restart services', 'Restart Failed');
       }
     } catch (err) {
+      logger.error('SettingsTab: failed to restart services', err);
       notifications.error('Failed to restart services', 'Restart Failed');
     } finally {
       setRestarting(false);
@@ -1333,13 +1494,28 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <span className="connection-value">{url || 'Not configured'}</span>
           </div>
           <div className="connection-info-row">
-            <span className="connection-label">Username:</span>
-            <span className="connection-value">{username || 'Not configured'}</span>
+            <span className="connection-label">Auth Method:</span>
+            <span className="connection-value">
+              {authMethod === 'api_key' ? 'API Key' : 'Username & Password'}
+            </span>
           </div>
-          <div className="connection-info-row">
-            <span className="connection-label">Password:</span>
-            <span className="connection-value">••••••••</span>
-          </div>
+          {authMethod === 'api_key' ? (
+            <div className="connection-info-row">
+              <span className="connection-label">API Key:</span>
+              <span className="connection-value">{apiKeyConfigured ? '••••••••' : 'Not configured'}</span>
+            </div>
+          ) : (
+            <>
+              <div className="connection-info-row">
+                <span className="connection-label">Username:</span>
+                <span className="connection-value">{username || 'Not configured'}</span>
+              </div>
+              <div className="connection-info-row">
+                <span className="connection-label">Password:</span>
+                <span className="connection-value">••••••••</span>
+              </div>
+            </>
+          )}
         </div>
         <div className="connection-actions">
           <button
@@ -1475,6 +1651,24 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               { value: 'ERROR', label: 'ERROR - Show errors only' },
             ]}
           />
+        </div>
+
+        <div className="form-group-vertical">
+          <label>Debug Bundle</label>
+          <span className="form-description">
+            Download a tar.gz containing channels, rules, settings, recent logs, and a
+            channel groups diagnostic. Sensitive fields (URLs, passwords, tokens) are redacted.
+            Share this when reporting issues.
+          </span>
+          <button
+            className="btn-secondary"
+            onClick={handleDownloadDebugBundle}
+            disabled={debugBundleLoading}
+            style={{ alignSelf: 'flex-start' }}
+          >
+            <span className="material-icons">{debugBundleLoading ? 'hourglass_empty' : 'bug_report'}</span>
+            {debugBundleLoading ? 'Generating...' : 'Generate Debug Bundle'}
+          </button>
         </div>
       </div>
 
@@ -1664,7 +1858,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           <label htmlFor="vlcOpenBehavior">Open in VLC Behavior</label>
           <CustomSelect
             value={vlcOpenBehavior}
-            onChange={(val) => setVlcOpenBehavior(val)}
+            onChange={(val) => setVlcOpenBehavior(val as 'protocol_only' | 'm3u_fallback' | 'm3u_only')}
             options={[
               { value: 'protocol_only', label: 'Try VLC Protocol (show helper if it fails)' },
               { value: 'm3u_fallback', label: 'Try VLC Protocol, then fallback to M3U download' },
@@ -1988,6 +2182,63 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             This ensures working streams are prioritized for playback.
           </p>
         </div>
+
+        {deprioritizeFailedStreams && (
+          <>
+          <div className="form-group">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={deprioritizeBlackScreen}
+                onChange={(e) => setDeprioritizeBlackScreen(e.target.checked)}
+              />
+              <span>Deprioritize Black Screen Streams</span>
+            </label>
+            <p className="form-hint">
+              When disabled, streams detected as black screen will be sorted by their actual quality stats (resolution, bitrate, etc.) instead of being pushed to the bottom.
+            </p>
+          </div>
+
+          <div className="form-group">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={deprioritizeLowFps}
+                onChange={(e) => setDeprioritizeLowFps(e.target.checked)}
+              />
+              <span>Deprioritize Low FPS Streams</span>
+            </label>
+            <p className="form-hint">
+              When disabled, streams with low frame rates will be sorted by their actual quality stats instead of being pushed to the bottom.
+            </p>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Failed Stream Ordering</label>
+            <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
+              Drag to set the order of deprioritized streams. Streams in the first category sort higher (closer to working streams).
+            </p>
+
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleFailedOrderDragEnd}
+            >
+              <SortableContext items={failedStreamSortOrder} strategy={verticalListSortingStrategy}>
+                <div className="sort-priority-list">
+                  {failedStreamSortOrder.map((category, index) => (
+                    <SortableFailedCategoryItem
+                      key={category}
+                      id={category}
+                      index={index}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+          </div>
+          </>
+        )}
       </div>
 
       <div className="settings-actions">
@@ -2131,6 +2382,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         notifications.error(result.message, 'SMTP Test');
       }
     } catch (err) {
+      logger.error('SettingsTab: failed to test SMTP connection', err);
       notifications.error('Failed to test SMTP connection', 'SMTP Test');
     } finally {
       setSmtpTesting(false);
@@ -2189,6 +2441,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         notifications.error(result.message, 'Telegram Test');
       }
     } catch (err) {
+      logger.error('SettingsTab: failed to test Telegram bot', err);
       notifications.error('Failed to test Telegram bot', 'Telegram Test');
     } finally {
       setTelegramTesting(false);
@@ -3239,6 +3492,22 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             </div>
 
             <div className="form-group-vertical">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={pushStreamStatsToDispatcharr}
+                  onChange={(e) => setPushStreamStatsToDispatcharr(e.target.checked)}
+                />
+                Reflect stream stats to Dispatcharr
+              </label>
+              <span className="form-description">
+                After each successful probe, push resolution, codec, fps, and bitrate back to
+                Dispatcharr so its UI shows them without needing playback. Existing keys set by
+                Dispatcharr are preserved.
+              </span>
+            </div>
+
+            <div className="form-group-vertical">
               <label htmlFor="probeRetryCount">Probe retry count</label>
               <span className="form-description">
                 Number of times to retry when ffprobe fails but the stream URL is reachable (HTTP 200).
@@ -3968,6 +4237,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Tags
           </li>
           <li
+            className={`settings-nav-item ${activePage === 'lookup-tables' ? 'active' : ''}`}
+            onClick={() => setActivePage('lookup-tables')}
+          >
+            <span className="material-icons">table_view</span>
+            Lookup Tables
+          </li>
+          <li
             className={`settings-nav-item ${activePage === 'appearance' ? 'active' : ''}`}
             onClick={() => setActivePage('appearance')}
           >
@@ -4047,6 +4323,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 <span className="material-icons">https</span>
                 TLS Certificates
               </li>
+              <li
+                className={`settings-nav-item ${activePage === 'mcp-settings' ? 'active' : ''}`}
+                onClick={() => setActivePage('mcp-settings')}
+              >
+                <span className="material-icons">smart_toy</span>
+                MCP Integration
+              </li>
             </>
           )}
         </ul>
@@ -4057,6 +4340,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
         {activePage === 'normalization' && renderNormalizationPage()}
         {activePage === 'tag-engine' && <TagEngineSection />}
+        {activePage === 'lookup-tables' && <LookupTableSection />}
         {activePage === 'appearance' && renderAppearancePage()}
         {activePage === 'email' && renderEmailSettingsPage()}
         {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}
@@ -4067,6 +4351,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'auth-settings' && <AuthSettingsSection isAdmin={user?.is_admin ?? false} />}
         {activePage === 'user-management' && <UserManagementSection isAdmin={user?.is_admin ?? false} currentUserId={user?.id ?? 0} />}
         {activePage === 'tls-settings' && <TLSSettingsSection isAdmin={user?.is_admin ?? false} />}
+        {activePage === 'mcp-settings' && <MCPSettingsSection isAdmin={user?.is_admin ?? false} />}
         {activePage === 'backup-restore' && <BackupRestoreSection isAdmin={!user || user.is_admin} />}
       </div>
 

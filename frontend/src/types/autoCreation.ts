@@ -118,6 +118,8 @@ export interface Action {
   find_channel_by?: 'name_exact' | 'name_regex' | 'tvg_id';
   find_channel_value?: string;
   max_streams_per_channel?: number;
+  /** When true, remove streams from the target channel that no longer match this rule run. */
+  remove_non_matching?: boolean;
   message?: string;
   // Name transform (for create_channel and create_group)
   name_transform_pattern?: string;
@@ -205,9 +207,14 @@ export interface AutoCreationRule {
   sort_regex?: string | null;
   stream_sort_field?: string | null;
   stream_sort_order?: 'asc' | 'desc';
-  normalize_names?: boolean;
+  normalization_group_ids?: number[];
   skip_struck_streams?: boolean;
   orphan_action?: 'delete' | 'move_uncategorized' | 'delete_and_cleanup_groups' | 'none';
+  // When true, the executor's existing-channel name lookup during
+  // create_channel is scoped to the rule's target group so two rules
+  // targeting different groups can create separate channels with the
+  // same name instead of merging into a foreign group (GH-92).
+  match_scope_target_group?: boolean;
   last_run_at?: string;
   match_count: number;
   created_at: string;
@@ -234,15 +241,30 @@ export interface CreateRuleData {
   sort_regex?: string | null;
   stream_sort_field?: string | null;
   stream_sort_order?: string;
-  normalize_names?: boolean;
+  normalization_group_ids?: number[];
   skip_struck_streams?: boolean;
   orphan_action?: string;
+  match_scope_target_group?: boolean;
 }
 
 /**
  * Data for updating an existing rule.
  */
-export interface UpdateRuleData extends Partial<CreateRuleData> {}
+export type UpdateRuleData = Partial<CreateRuleData>;
+
+/**
+ * Bulk update payload (fields omitted are left unchanged on the server).
+ * `merge_streams_remove_non_matching` applies to all `merge_streams` actions on each rule.
+ */
+export type BulkUpdateRulesPatch = UpdateRuleData & {
+  merge_streams_remove_non_matching?: boolean;
+};
+
+/** Response from POST /auto-creation/rules/bulk-update */
+export interface BulkUpdateRulesResponse {
+  rules: AutoCreationRule[];
+  updated_count: number;
+}
 
 // =============================================================================
 // Execution
@@ -397,32 +419,26 @@ export interface ValidationResult {
   warnings?: string[];
 }
 
-export interface RunPipelineResponse {
-  success: boolean;
+/**
+ * 202-Accepted response from POST /api/auto-creation/run and
+ * POST /api/auto-creation/rules/{id}/run (bd-enfsy: background-task pattern).
+ *
+ * Pipeline runs are now enqueued and the caller polls
+ * GET /api/auto-creation/executions/{id} until status is terminal.
+ */
+export interface RunPipelineEnqueuedResponse {
   execution_id: number;
-  mode: ExecutionMode;
-  duration_seconds: number;
-  streams_evaluated: number;
-  streams_matched: number;
-  channels_created: number;
-  channels_updated: number;
-  groups_created: number;
-  streams_merged: number;
-  streams_skipped: number;
-  streams_excluded: number;
-  streams_removed: number;
-  channels_removed: number;
-  channels_moved: number;
-  created_entities: CreatedEntity[];
-  modified_entities: ModifiedEntity[];
-  dry_run_results?: DryRunResult[];
-  conflicts?: {
-    stream_id: number;
-    stream_name: string;
-    winning_rule_id: number;
-    losing_rule_ids: number[];
-  }[];
+  status: 'running';
+  rule_id?: number;
+  message: string;
 }
+
+/**
+ * Result returned by the polling-based ``runPipeline`` hook helper —
+ * the terminal AutoCreationExecution row once polling resolves, or
+ * ``undefined`` if the request errored out before completion.
+ */
+export type RunPipelineResponse = AutoCreationExecution;
 
 export interface RollbackResponse {
   success: boolean;

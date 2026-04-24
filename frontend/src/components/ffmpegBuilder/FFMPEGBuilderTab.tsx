@@ -38,6 +38,7 @@ export interface StreamOptionsState {
   streamMapping: boolean;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- constant co-located with component; HMR impact is minor (full reload on dev edits of this file)
 export const DEFAULT_STREAM_OPTIONS: StreamOptionsState = {
   networkResilience: true,
   reconnectDelayMax: '10',
@@ -50,6 +51,7 @@ export const DEFAULT_STREAM_OPTIONS: StreamOptionsState = {
 };
 
 /** Convert StreamOptionsState into FFMPEGBuilderState fragments */
+// eslint-disable-next-line react-refresh/only-export-components -- co-located builder for the component's preset bar; splitting is mechanical churn
 export function buildIPTVOptions(opts: StreamOptionsState): {
   inputOptions: Record<string, string>;
   globalOptions: Record<string, string>;

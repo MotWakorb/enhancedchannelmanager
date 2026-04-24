@@ -8,17 +8,84 @@ types, and various transformation actions.
 The engine loads rules from the database, organized into groups with
 priority ordering. Rules execute in order until a match with stop_processing
 is found, or all rules have been evaluated.
+
+Unified NormalizationPolicy (bd-eio04.1, closes GH #104)
+--------------------------------------------------------
+The Test Rules preview path (`engine.test_rule`,
+`engine.test_rules_batch`) and the auto-creation execution path
+(`engine.normalize`) now share a single NormalizationPolicy. Both paths
+apply identical Unicode preprocessing before condition matching:
+  * NFC canonicalization (unicodedata.normalize('NFC', ...)) — collapses
+    NFD-decomposed input like 'Café' (e + U+0301) to pre-composed form.
+    NFC, not NFKC, to avoid over-normalizing ligatures / fullwidth /
+    Roman-numeral compatibility forms.
+  * Strip a narrow whitelist of invisible Cf code points: U+200B ZWSP,
+    U+200C ZWNJ, U+200D ZWJ, U+FEFF BOM. RTL marks (U+200F, U+202E) are
+    preserved.
+  * Convert ALL Unicode superscripts to ASCII (both letter-superscripts
+    ᴴᴰ -> HD and numeric superscripts ² -> 2). The prior
+    `preserve_superscripts` kwarg / `preserve_numeric` carve-out
+    introduced by PR #61 / bd-yui1k is deleted outright — divergence
+    between the two code paths was the root cause of GH #104.
+
+Operator knobs
+--------------
+ECM_NORMALIZATION_UNIFIED_POLICY (default: "true")
+    Feature flag for the unified policy. Set to "false" (or "0") to
+    roll back to the pre-bd-eio04.1 behavior (separate superscript
+    carve-outs, no NFC, no Cf-stripping) without re-deploying. Intended
+    as a one-pull-request rollback switch; remove once the new policy
+    has soaked in production.
 """
+import os
 import re
 import logging
+import time
+import unicodedata
 from typing import Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
+import safe_regex  # bd-eio04.14: ReDoS-guarded wrapper for user-supplied regex
 from models import NormalizationRule, NormalizationRuleGroup, TagGroup, Tag
 
 logger = logging.getLogger(__name__)
+
+
+# Policy version string emitted into the structured decision log (bd-eio04.9).
+# Bumped when the unified-policy flag flips so on-call can correlate
+# divergence reports with the policy the run was using.
+POLICY_VERSION_UNIFIED = "unified-v1"
+POLICY_VERSION_LEGACY = "legacy"
+
+
+def _current_policy_version(policy_obj: "NormalizationPolicy") -> str:
+    """Return the canonical policy-version tag for the decision log."""
+    return POLICY_VERSION_UNIFIED if policy_obj.unified_enabled else POLICY_VERSION_LEGACY
+
+
+# -----------------------------------------------------------------------------
+# Feature flag — operators can toggle to fall back to pre-bd-eio04.1 behavior.
+# Evaluated once at import time. To change at runtime, restart the container.
+# -----------------------------------------------------------------------------
+
+def _unified_policy_enabled() -> bool:
+    """Parse ECM_NORMALIZATION_UNIFIED_POLICY. Default-on."""
+    raw = os.environ.get("ECM_NORMALIZATION_UNIFIED_POLICY", "true")
+    return raw.strip().lower() not in {"false", "0", "no", "off"}
+
+
+# Cf code points stripped by the unified policy. Intentionally narrow: we
+# only strip invisible markers that commonly appear as copy-paste artifacts
+# (ZWJ/ZWSP/ZWNJ/BOM). RTL/LTR bidi marks (U+200F, U+202E) are preserved
+# because they can carry legitimate directional meaning in channel names.
+_STRIPPED_CF_CODEPOINTS = frozenset({
+    "​",  # ZERO WIDTH SPACE
+    "‌",  # ZERO WIDTH NON-JOINER
+    "‍",  # ZERO WIDTH JOINER
+    "﻿",  # BYTE ORDER MARK / ZERO WIDTH NO-BREAK SPACE
+})
 
 
 # Cache for tag groups to avoid repeated database queries
@@ -32,9 +99,18 @@ def invalidate_tag_cache():
     clear_abbreviation_cache()
 
 
-# Unicode superscript to ASCII mapping for quality tags
-# Common patterns: ᴴᴰ (HD), ᶠᴴᴰ (FHD), ᵁᴴᴰ (UHD), ᴿᴬᵂ (RAW), ˢᴰ (SD), etc.
-SUPERSCRIPT_MAP = {
+# Unicode superscript to ASCII mapping. The historical split into
+# LETTER_SUPERSCRIPTS + NUMERIC_SUPERSCRIPTS (bd-yui1k) was retained only
+# to support the `preserve_superscripts` kwarg, which bd-eio04.1 removed
+# outright — both letter AND numeric superscripts now convert on ALL
+# paths. The two maps are preserved as internal detail so historical
+# imports of LETTER_SUPERSCRIPTS / NUMERIC_SUPERSCRIPTS / SUPERSCRIPT_MAP
+# continue to resolve.
+#
+# Common letter patterns used as quality tags:
+#   ᴴᴰ (HD), ᶠᴴᴰ (FHD), ᵁᴴᴰ (UHD), ᴿᴬᵂ (RAW), ˢᴰ (SD), etc.
+# Common numeric patterns: ESPN² (ESPN2), ⁶⁰fps (60fps), ¹²⁰Hz (120Hz).
+LETTER_SUPERSCRIPTS = {
     # Uppercase superscripts
     '\u1d2c': 'A',  # ᴬ
     '\u1d2e': 'B',  # ᴮ
@@ -82,16 +158,135 @@ SUPERSCRIPT_MAP = {
     '\u1dbb': 'z',  # ᶻ
 }
 
+# Numeric and math-symbol superscripts (ESPN², ⁺⁻⁼⁽⁾). Prior to
+# bd-yui1k these were not in the conversion map at all — PR #61's
+# "preserve" flag worked for ESPN² only by accident. bd-eio04.1 drops
+# the preservation carve-out entirely; numerics convert on every path.
+NUMERIC_SUPERSCRIPTS = {
+    '\u2070': '0',  # ⁰
+    '\u00b9': '1',  # ¹
+    '\u00b2': '2',  # ²
+    '\u00b3': '3',  # ³
+    '\u2074': '4',  # ⁴
+    '\u2075': '5',  # ⁵
+    '\u2076': '6',  # ⁶
+    '\u2077': '7',  # ⁷
+    '\u2078': '8',  # ⁸
+    '\u2079': '9',  # ⁹
+    '\u207a': '+',  # ⁺
+    '\u207b': '-',  # ⁻
+    '\u207c': '=',  # ⁼
+    '\u207d': '(',  # ⁽
+    '\u207e': ')',  # ⁾
+}
+
+# Combined superscript map used by convert_superscripts(). Exported for
+# historical callers / tests that import it directly.
+SUPERSCRIPT_MAP = {**LETTER_SUPERSCRIPTS, **NUMERIC_SUPERSCRIPTS}
+
 
 def convert_superscripts(text: str) -> str:
     """
     Convert Unicode superscript characters to their ASCII equivalents.
-    This allows quality tags like ᴴᴰ, ᵁᴴᴰ, ᴿᴬᵂ to be matched by normal rules.
+
+    Under the unified NormalizationPolicy (bd-eio04.1), every superscript
+    — both letter-superscripts (ᴴᴰ -> HD, ᴿᴬᵂ -> RAW) and numeric
+    superscripts (² -> 2, ⁶⁰ -> 60) — converts on every code path. The
+    prior `preserve_numeric` kwarg is removed; divergence between paths
+    was the bug class behind GH #104.
+
+    When the ECM_NORMALIZATION_UNIFIED_POLICY flag is disabled, this
+    function also applies NFC canonicalization and Cf-stripping at the
+    top of the pipeline (inside NormalizationPolicy.apply_to_text). When
+    the flag is enabled (default), NormalizationPolicy is the canonical
+    entry point; call it directly rather than this helper if you want
+    the full preprocessing.
     """
-    result = []
-    for char in text:
-        result.append(SUPERSCRIPT_MAP.get(char, char))
-    return ''.join(result)
+    if not text:
+        return text
+    # NFC canonicalize so NFD-decomposed inputs (e + U+0301) look
+    # identical to pre-composed inputs (U+00E9) after conversion.
+    text = unicodedata.normalize("NFC", text)
+    return ''.join(SUPERSCRIPT_MAP.get(ch, ch) for ch in text)
+
+
+# -----------------------------------------------------------------------------
+# NormalizationPolicy — single canonical Unicode preprocessor shared by the
+# Test Rules and Auto-Create code paths. Introduced for bd-eio04.1 to close
+# the divergence behind GH #104. The dataclass is intentionally minimal and
+# frozen so .4 (observability fields) and .9 (hook fields) can add members
+# later without breaking callers.
+# -----------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class NormalizationPolicy:
+    """
+    Unified Unicode preprocessing policy.
+
+    The policy is a frozen dataclass applied identically by
+    `NormalizationEngine.normalize` and `NormalizationEngine.test_rule` /
+    `test_rules_batch`. It exists so subsequent beads (bd-eio04.9 for
+    observability, others for further unification) can add fields
+    without hunting down preprocessor call sites.
+
+    Attributes:
+        unified_enabled: When True (default, gated by
+            ECM_NORMALIZATION_UNIFIED_POLICY env var), apply NFC +
+            Cf-stripping + full superscript conversion at every policy
+            entry point. When False, fall back to the pre-bd-eio04.1
+            behavior (superscript conversion only, no NFC, no
+            Cf-stripping) so operators have a rollback switch.
+    """
+
+    unified_enabled: bool = True
+
+    def apply_to_text(self, text: str) -> str:
+        """
+        Apply the policy to an input text. Returns a new string.
+
+        Order (under unified_enabled=True):
+            1. NFC canonicalize.
+            2. Strip whitelisted Cf code points (ZWSP/ZWNJ/ZWJ/BOM).
+            3. Convert superscripts to ASCII (letters AND numerics).
+
+        Under unified_enabled=False, only step (3) runs, via the legacy
+        preserve_numeric=False path — this matches pre-bd-eio04.1
+        default behavior.
+        """
+        if not text:
+            return text
+        if self.unified_enabled:
+            text = unicodedata.normalize("NFC", text)
+            if any(ch in _STRIPPED_CF_CODEPOINTS for ch in text):
+                text = ''.join(
+                    ch for ch in text if ch not in _STRIPPED_CF_CODEPOINTS
+                )
+            return ''.join(SUPERSCRIPT_MAP.get(ch, ch) for ch in text)
+        # Legacy fallback path — behavior prior to bd-eio04.1. Keeps
+        # superscript conversion (bd-yui1k behavior with
+        # preserve_numeric=False) but NO NFC, NO Cf-stripping.
+        return ''.join(SUPERSCRIPT_MAP.get(ch, ch) for ch in text)
+
+
+# Process-wide canonical policy instance. Both code paths read this. The
+# instance is created at module load so the env-var feature flag is
+# latched once; to change, restart the container.
+_DEFAULT_POLICY = NormalizationPolicy(unified_enabled=_unified_policy_enabled())
+
+
+def get_default_policy() -> NormalizationPolicy:
+    """Return the process-wide NormalizationPolicy instance."""
+    return _DEFAULT_POLICY
+
+
+def _reset_default_policy_for_tests() -> NormalizationPolicy:
+    """Re-read the ECM_NORMALIZATION_UNIFIED_POLICY env var and refresh the
+    singleton. ONLY for tests — production toggles the flag via container
+    restart, not at runtime.
+    """
+    global _DEFAULT_POLICY
+    _DEFAULT_POLICY = NormalizationPolicy(unified_enabled=_unified_policy_enabled())
+    return _DEFAULT_POLICY
 
 
 @dataclass
@@ -412,9 +607,17 @@ class NormalizationEngine:
         """
         Check if text matches a single condition.
         Returns RuleMatch with match details.
+
+        Applies the unified NormalizationPolicy (bd-eio04.1) to BOTH the
+        input text and the pattern so NFC/NFD variants, invisible Cf
+        code points, and Unicode superscripts collapse to canonical form
+        before matching. This is the shared preprocessing entry point
+        for test_rule / test_rules_batch; normalize() preprocesses once
+        at the top of the loop and hands already-canonical text in.
         """
-        # Convert superscripts in pattern (so rules with ᴿᴬᵂ match RAW)
-        pattern = convert_superscripts(pattern)
+        policy = get_default_policy()
+        text = policy.apply_to_text(text)
+        pattern = policy.apply_to_text(pattern)
 
         # Prepare text for matching
         match_text = text if case_sensitive else text.lower()
@@ -462,18 +665,22 @@ class NormalizationEngine:
             return RuleMatch(matched=False)
 
         elif condition_type == "regex":
-            try:
-                flags = 0 if case_sensitive else re.IGNORECASE
-                match = re.search(pattern, text, flags)
-                if match:
-                    return RuleMatch(
-                        matched=True,
-                        match_start=match.start(),
-                        match_end=match.end(),
-                        groups=match.groups()
-                    )
-            except re.error as e:
-                logger.warning("[NORMALIZE] Invalid regex pattern: %s", e)
+            # bd-eio04.14: migrated to safe_regex. User-supplied pattern;
+            # on timeout / oversize / compile-error safe_regex.search
+            # returns None and logs a [SAFE_REGEX] WARN (with pattern
+            # sha256 + excerpt). Falling through to RuleMatch(matched=False)
+            # preserves the pre-migration no-match arm, which is the
+            # contract bd-eio04.1's NormalizationPolicy relies on when a
+            # regex condition fails to evaluate.
+            flags = 0 if case_sensitive else re.IGNORECASE
+            match = safe_regex.search(pattern, text, flags=flags)
+            if match:
+                return RuleMatch(
+                    matched=True,
+                    match_start=match.start(),
+                    match_end=match.end(),
+                    groups=match.groups()
+                )
             return RuleMatch(matched=False)
 
         else:
@@ -550,9 +757,17 @@ class NormalizationEngine:
                 sep = r'[\s:\-|/]+'
                 tag_pat = re.escape(match_tag)
                 flags = 0 if case_sensitive else re.IGNORECASE
+                # bd-eio04.14: tag-group contains patterns are built from
+                # user tag values via re.escape (length-bounded in practice
+                # but still user-controlled). Route through safe_regex so
+                # a pathological tag value cannot trigger ReDoS inside the
+                # normalization loop. Fallback contract for both calls: on
+                # timeout safe_regex returns None -> fall through to the
+                # non-match return at the bottom of the loop, tag group
+                # simply "didn't apply" for this entry.
                 # Try to match with separators on both sides first
                 pattern = r'(' + sep + r')' + tag_pat + r'(?=' + sep + r'|$)'
-                m = re.search(pattern, text, flags)
+                m = safe_regex.search(pattern, text, flags=flags)
                 if m:
                     # Consume the leading separator group + tag, leave trailing for next segment
                     return RuleMatch(
@@ -563,7 +778,7 @@ class NormalizationEngine:
                     )
                 # Try at start of string: tag followed by separator
                 pattern = tag_pat + r'(' + sep + r')'
-                m = re.match(pattern, text, flags)
+                m = safe_regex.match(pattern, text, flags=flags)
                 if m:
                     return RuleMatch(
                         matched=True,
@@ -675,14 +890,17 @@ class NormalizationEngine:
             if rule.condition_type != "regex":
                 logger.warning("[NORMALIZE] regex_replace requires regex condition in rule %s", rule.id)
                 return text
-            try:
-                flags = 0 if case_sensitive else re.IGNORECASE
-                # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
-                py_replacement = re.sub(r'\$(\d+)', r'\\\1', action_value)
-                return re.sub(pattern, py_replacement, text, flags=flags)
-            except re.error as e:
-                logger.warning("[NORMALIZE] Regex replace error in rule %s: %s", rule.id, e)
-                return text
+            # bd-eio04.14: migrated user-regex call to safe_regex.sub.
+            # The inner re.sub on action_value (backreference rewrite) stays
+            # on stdlib re — that pattern is a hardcoded module literal,
+            # not user-supplied. Fallback contract: safe_regex.sub returns
+            # text unchanged on timeout / oversize / compile error. The
+            # safe_regex module emits its own [SAFE_REGEX] WARN log, so no
+            # additional log here.
+            flags = 0 if case_sensitive else re.IGNORECASE
+            # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
+            py_replacement = re.sub(r'\$(\d+)', r'\\\1', action_value)
+            return safe_regex.sub(pattern, py_replacement, text, flags=flags)
 
         elif action_type == "strip_prefix":
             # Remove pattern from start, including any following separator
@@ -771,13 +989,16 @@ class NormalizationEngine:
         elif action_type == "regex_replace":
             # For else, apply the regex pattern to the whole text
             if rule.condition_value:
-                try:
-                    flags = 0 if rule.case_sensitive else re.IGNORECASE
-                    # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
-                    py_replacement = re.sub(r'\$(\d+)', r'\\\1', action_value)
-                    return re.sub(rule.condition_value, py_replacement, text, flags=flags)
-                except re.error as e:
-                    logger.warning("[NORMALIZE] Regex replace error in else action of rule %s: %s", rule.id, e)
+                # bd-eio04.14: migrated user-regex call to safe_regex.sub.
+                # Backreference-rewrite sub on action_value stays on stdlib
+                # re (hardcoded literal pattern). Fallback contract: on
+                # timeout / oversize / compile-error safe_regex.sub
+                # returns text unchanged — matches pre-migration behavior
+                # where re.error was caught and text was returned.
+                flags = 0 if rule.case_sensitive else re.IGNORECASE
+                # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
+                py_replacement = re.sub(r'\$(\d+)', r'\\\1', action_value)
+                return safe_regex.sub(rule.condition_value, py_replacement, text, flags=flags)
             return text
 
         elif action_type == "strip_prefix":
@@ -815,9 +1036,9 @@ class NormalizationEngine:
             logger.warning("[NORMALIZE] Unknown else action type: %s", action_type)
             return text
 
-    def normalize(self, name: str) -> NormalizationResult:
+    def normalize(self, name: str, group_ids: list[int] | None = None) -> NormalizationResult:
         """
-        Apply all enabled rules to normalize a stream name.
+        Apply enabled rules to normalize a stream name.
 
         Rules are applied in multiple passes until no more changes occur.
         This handles cases like "4K/UHD" (both quality tags) or "HD (NA)"
@@ -825,10 +1046,34 @@ class NormalizationEngine:
 
         Args:
             name: The stream name to normalize
+            group_ids: Optional list of NormalizationRuleGroup IDs to apply.
+                       None = all enabled groups (default behavior).
 
         Returns:
-            NormalizationResult with original, normalized name, and applied rules
+            NormalizationResult with original, normalized name, and applied rules.
+
+        Unified NormalizationPolicy (bd-eio04.1)
+        ----------------------------------------
+        The Unicode preprocessing (NFC canonicalization, narrow Cf-code-point
+        stripping, superscript-to-ASCII conversion for both letters AND
+        numerics) is applied ONCE at the top of this pipeline via the
+        process-wide NormalizationPolicy. The Test Rules preview path
+        (`test_rule`, `test_rules_batch`) applies the same policy inside
+        `_match_single_condition`. Both paths therefore preprocess input
+        identically — that is the contract exercised by
+        tests/unit/test_normalization_parity.py.
+
+        The prior `preserve_superscripts` kwarg is removed. PO decision
+        2026-04-22: numerics convert on every path; there is no
+        carve-out for intentional marks like ESPN².
         """
+        # Observability hook (bd-eio04.9) — stamp the start time here so
+        # the decision log captures the full normalize() path including
+        # policy preprocessing + rule loading. The call to
+        # `record_normalization_decision` at the end is deliberately in
+        # a try/finally so the hook never alters the return value when
+        # an exception inside the engine would otherwise surface.
+        _norm_started_at = time.perf_counter()
         result = NormalizationResult(
             original=name,
             normalized=name,
@@ -838,10 +1083,21 @@ class NormalizationEngine:
 
         current = name.strip()
 
-        # Convert Unicode superscripts to ASCII (e.g., ᴴᴰ -> HD, ᵁᴴᴰ -> UHD, ᴿᴬᵂ -> RAW)
-        current = convert_superscripts(current)
+        # Apply the unified NormalizationPolicy once up front. Under the
+        # default (ECM_NORMALIZATION_UNIFIED_POLICY=true) this does
+        # NFC + Cf-strip + superscript conversion; under the legacy
+        # fallback it applies superscript conversion only.
+        current = get_default_policy().apply_to_text(current)
 
         grouped_rules = self._load_rules()
+
+        # Filter to specific groups if requested (per-rule normalization)
+        if group_ids is not None:
+            all_count = len(grouped_rules)
+            allowed = set(group_ids)
+            grouped_rules = [(g, r) for g, r in grouped_rules if g.id in allowed]
+            logger.debug("[NORMALIZE] Filtered to %d/%d groups (ids=%s) for '%s'",
+                        len(grouped_rules), all_count, group_ids, name)
 
         # Multi-pass normalization: keep applying rules until no changes occur
         max_passes = 10  # Safety limit to prevent infinite loops
@@ -864,6 +1120,52 @@ class NormalizationEngine:
             logger.debug("[NORMALIZE] Normalization pass %s: '%s' -> '%s'", pass_num + 1, before_pass, current)
 
         result.normalized = current
+
+        # Observability hook (bd-eio04.9): record a structured decision
+        # for the metrics + sampled INFO log. Import is local so the
+        # module stays importable in environments where observability
+        # is not installed (tests that stub out logging, etc.). The
+        # hook is idempotent and exception-safe — a failure here must
+        # never change the normalize() return value.
+        try:
+            from observability import record_normalization_decision
+
+            elapsed = time.perf_counter() - _norm_started_at
+            policy = get_default_policy()
+            # Best-effort "coarse rule category" for the metric label:
+            # report the action_type of the first transformation when
+            # present, else None so the hook skips the rule_matches
+            # counter. Per-rule-id detail lives in the INFO log.
+            first_action: Optional[str] = None
+            if result.transformations:
+                first_rule_id = result.transformations[0][0]
+                # The rule_id may be the sentinel "legacy_tag" for
+                # settings-based tags; pass through.
+                if first_rule_id == "legacy_tag":
+                    first_action = "legacy_tag"
+                else:
+                    # Resolve rule_id -> action_type from the cached rules.
+                    for _, rules in grouped_rules:
+                        for rule in rules:
+                            if rule.id == first_rule_id:
+                                first_action = rule.action_type
+                                break
+                        if first_action is not None:
+                            break
+
+            record_normalization_decision(
+                input_text=name,
+                output_text=current,
+                matched_rule_ids=list(result.rules_applied),
+                applied=bool(result.rules_applied) or (name != current),
+                policy_version=_current_policy_version(policy),
+                duration_seconds=elapsed,
+                rule_category=first_action,
+                extra={"source": "normalize"},
+            )
+        except Exception:  # pragma: no cover — observability must not break the caller
+            logger.debug("[NORMALIZE] decision-log hook failed", exc_info=True)
+
         return result
 
     def _apply_rules_single_pass(
@@ -889,8 +1191,8 @@ class NormalizationEngine:
                         result.transformations.append((rule.id, before, current))
 
                         logger.debug(
-                            "[NORMALIZE] Rule %s (%s): '%s' -> '%s'",
-                            rule.id, rule.name, before, current
+                            "[NORMALIZE] Rule %s (%s, group '%s'): '%s' -> '%s'",
+                            rule.id, rule.name, group.name, before, current
                         )
 
                     # Stop processing if rule says so
@@ -1107,7 +1409,7 @@ class NormalizationEngine:
         # channel number — this prevents matching random words in names
         # like "(MC Radio) New Wave" or "DOCUBOX: MILITARY AND WAR"
         has_network = any(
-            re.search(r'\b' + net + r'\b', upper)
+            safe_regex.search(r'\b' + net + r'\b', upper)
             for net in NormalizationEngine._BROADCAST_NETWORKS
         )
         has_channel_num = bool(re.search(r'\b\d{1,2}\b', upper))
@@ -1179,12 +1481,20 @@ class NormalizationEngine:
             condition_logic=condition_logic
         )
 
-        match = self._match_condition(text, rule)
+        # bd-eio04.1: apply the unified NormalizationPolicy to the input
+        # before matching + action so the Test Rules preview path
+        # reaches byte-identical output with normalize(). Prior behavior
+        # preprocessed inside _match_condition for matching but applied
+        # actions to the raw input — that split was the root cause of
+        # GH #104's "Test shows HD but auto-create shows ᴴᴰ" divergence.
+        preprocessed_text = get_default_policy().apply_to_text(text)
+
+        match = self._match_condition(preprocessed_text, rule)
 
         result = {
             "matched": match.matched,
             "before": text,
-            "after": text,
+            "after": preprocessed_text,
             "match_start": match.match_start if match.matched else None,
             "match_end": match.match_end if match.matched else None,
             "matched_tag": match.matched_tag if match.matched_tag else None,
@@ -1192,14 +1502,44 @@ class NormalizationEngine:
         }
 
         if match.matched:
-            result["after"] = self._apply_action(text, rule, match)
+            result["after"] = self._apply_action(preprocessed_text, rule, match)
             # Final cleanup
             result["after"] = re.sub(r'\s+', ' ', result["after"]).strip()
         elif else_action_type:
             # Condition didn't match, apply else action
-            result["after"] = self._apply_else_action(text, rule)
+            result["after"] = self._apply_else_action(preprocessed_text, rule)
             result["after"] = re.sub(r'\s+', ' ', result["after"]).strip()
             result["else_applied"] = True
+        else:
+            # Also strip/normalize whitespace for consistency with
+            # normalize()'s per-pass cleanup.
+            result["after"] = re.sub(r'\s+', ' ', preprocessed_text).strip()
+
+        # Observability hook (bd-eio04.9): emit a decision log for the
+        # Test Rules preview path too, tagged source=test_rule so
+        # SRE can compare the two paths in kibana/loki and catch a
+        # divergence without waiting for the nightly canary.
+        try:
+            from observability import record_normalization_decision
+
+            policy = get_default_policy()
+            applied = bool(match.matched) or result.get("else_applied", False)
+            matched_ids: list = []
+            # test_rule uses a synthetic rule with id=0; surface that
+            # so the log shows the preview path ran a concrete rule.
+            if applied:
+                matched_ids = [0]
+            record_normalization_decision(
+                input_text=text,
+                output_text=result["after"],
+                matched_rule_ids=matched_ids,
+                applied=applied,
+                policy_version=_current_policy_version(policy),
+                rule_category=action_type,
+                extra={"source": "test_rule"},
+            )
+        except Exception:  # pragma: no cover — observability must not break the caller
+            logger.debug("[NORMALIZE] decision-log hook failed in test_rule", exc_info=True)
 
         return result
 

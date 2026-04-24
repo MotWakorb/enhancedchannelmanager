@@ -91,15 +91,17 @@ test.describe('SettingsModal - Dispatcharr Connection', () => {
 
     // Look for the Edit button in the Dispatcharr Connection section
     const editBtn = appPage.locator('.btn-edit-connection, button:has-text("Edit")').first()
+    const editBtnAvailable = (await editBtn.count()) > 0 && (await editBtn.isVisible())
 
-    if ((await editBtn.count()) > 0 && (await editBtn.isVisible())) {
-      await editBtn.click()
-      await waitForModal(appPage)
-      await testModalLayout(appPage, 'SettingsModal', '.settings-modal, .modal-container')
-      await closeModal(appPage)
-    } else {
-      test.skip()
-    }
+    test.fixme(
+      !editBtnAvailable,
+      'fixme: requires Settings > General to render the Dispatcharr Connection "Edit" button (see bd-2lw25)'
+    )
+
+    await editBtn.click()
+    await waitForModal(appPage)
+    await testModalLayout(appPage, 'SettingsModal', '.settings-modal, .modal-container')
+    await closeModal(appPage)
   })
 })
 
@@ -114,15 +116,17 @@ test.describe('M3UAccountModal', () => {
 
     // Click add account button
     const addBtn = appPage.locator('button:has-text("Add"), button:has-text("New Account")').first()
+    const addBtnAvailable = (await addBtn.count()) > 0 && (await addBtn.isVisible())
 
-    if ((await addBtn.count()) > 0 && (await addBtn.isVisible())) {
-      await addBtn.click()
-      await waitForModal(appPage)
-      await testModalLayout(appPage, 'M3UAccountModal-Add', '.m3u-account-modal, .modal-content')
-      await closeModal(appPage)
-    } else {
-      test.skip()
-    }
+    test.fixme(
+      !addBtnAvailable,
+      'fixme: requires M3U Manager tab to render an "Add"/"New Account" button (see bd-2lw25)'
+    )
+
+    await addBtn.click()
+    await waitForModal(appPage)
+    await testModalLayout(appPage, 'M3UAccountModal-Add', '.m3u-account-modal, .modal-content')
+    await closeModal(appPage)
   })
 })
 
@@ -136,35 +140,42 @@ test.describe('DeleteOrphanedGroupsModal', () => {
 
     // First, scan for orphaned groups - the modal only appears if orphans are found
     const scanBtn = appPage.locator('button:has-text("Scan for Orphaned Groups")').first()
+    const scanBtnAvailable = (await scanBtn.count()) > 0 && (await scanBtn.isVisible())
 
-    if ((await scanBtn.count()) > 0 && (await scanBtn.isVisible())) {
-      await scanBtn.click()
-      // Wait for scan to complete (button text changes or results appear)
-      await appPage.waitForTimeout(2000)
+    test.fixme(
+      !scanBtnAvailable,
+      'fixme: requires Settings > Maintenance to render the "Scan for Orphaned Groups" button (see bd-2lw25)'
+    )
 
-      // Check if any orphaned groups were found - look for delete button or results
-      const deleteBtn = appPage.locator('button:has-text("Delete"), button:has-text("Orphaned Group")').first()
-      if ((await deleteBtn.count()) > 0 && (await deleteBtn.isVisible())) {
-        // Note: DeleteOrphanedGroupsModal is a confirmation modal that appears inline,
-        // not a separate modal overlay. Skip this test if no orphans found.
-        await deleteBtn.click()
-        await appPage.waitForTimeout(500)
+    await scanBtn.click()
+    // Wait for scan to complete (button text changes or results appear)
+    await appPage.waitForTimeout(2000)
 
-        // Check if modal appeared
-        const modal = appPage.locator('.delete-orphaned-modal, .modal-content, .modal-overlay')
-        if ((await modal.count()) > 0 && (await modal.first().isVisible())) {
-          await testModalLayout(appPage, 'DeleteOrphanedGroupsModal', '.delete-orphaned-modal, .modal-content')
-          await closeModal(appPage)
-        } else {
-          test.skip()
-        }
-      } else {
-        // No orphaned groups found in test data - skip test
-        test.skip()
-      }
-    } else {
-      test.skip()
-    }
+    // Check if any orphaned groups were found - look for delete button or results
+    const deleteBtn = appPage.locator('button:has-text("Delete"), button:has-text("Orphaned Group")').first()
+    const deleteBtnAvailable = (await deleteBtn.count()) > 0 && (await deleteBtn.isVisible())
+
+    test.fixme(
+      !deleteBtnAvailable,
+      'fixme: requires Dispatcharr-provided orphaned groups so the scan yields a Delete button (see bd-2lw25)'
+    )
+
+    // Note: DeleteOrphanedGroupsModal is a confirmation modal that appears inline,
+    // not a separate modal overlay.
+    await deleteBtn.click()
+    await appPage.waitForTimeout(500)
+
+    // Check if modal appeared
+    const modal = appPage.locator('.delete-orphaned-modal, .modal-content, .modal-overlay')
+    const modalAvailable = (await modal.count()) > 0 && (await modal.first().isVisible())
+
+    test.fixme(
+      !modalAvailable,
+      'fixme: requires the orphan-delete confirmation modal to render after clicking Delete (see bd-2lw25)'
+    )
+
+    await testModalLayout(appPage, 'DeleteOrphanedGroupsModal', '.delete-orphaned-modal, .modal-content')
+    await closeModal(appPage)
   })
 })
 
@@ -188,25 +199,28 @@ test.describe('BulkEPGAssignModal', () => {
     const channelItems = appPage.locator('.channel-item')
     const channelCount = await channelItems.count()
 
-    if (channelCount > 0) {
-      // Click first channel to select it
-      await channelItems.first().click()
-      await appPage.waitForTimeout(300)
+    test.fixme(
+      channelCount === 0,
+      'fixme: requires Dispatcharr-provided channels in Channel Manager to select for bulk EPG assign (see bd-2lw25)'
+    )
 
-      // Look for bulk EPG assign button (icon-only button with title attribute)
-      const bulkEpgBtn = appPage.locator('button[title*="EPG"], button.bulk-action-btn').first()
+    // Click first channel to select it
+    await channelItems.first().click()
+    await appPage.waitForTimeout(300)
 
-      if ((await bulkEpgBtn.count()) > 0 && (await bulkEpgBtn.isVisible())) {
-        await bulkEpgBtn.click()
-        await waitForModal(appPage)
-        await testModalLayout(appPage, 'BulkEPGAssignModal', '.bulk-epg-modal, .modal-content')
-        await closeModal(appPage)
-      } else {
-        test.skip()
-      }
-    } else {
-      test.skip()
-    }
+    // Look for bulk EPG assign button (icon-only button with title attribute)
+    const bulkEpgBtn = appPage.locator('button[title*="EPG"], button.bulk-action-btn').first()
+    const bulkEpgBtnAvailable = (await bulkEpgBtn.count()) > 0 && (await bulkEpgBtn.isVisible())
+
+    test.fixme(
+      !bulkEpgBtnAvailable,
+      'fixme: requires the bulk EPG assign toolbar button to appear after channel selection (see bd-2lw25)'
+    )
+
+    await bulkEpgBtn.click()
+    await waitForModal(appPage)
+    await testModalLayout(appPage, 'BulkEPGAssignModal', '.bulk-epg-modal, .modal-content')
+    await closeModal(appPage)
   })
 })
 
@@ -220,17 +234,18 @@ test.describe('AutoSyncSettingsModal', () => {
     await appPage.waitForTimeout(1000)
 
     // Need to expand an M3U account first, then click groups, then settings icon
-    // This is complex - skip for now if we can't find the direct path
     const settingsIcon = appPage.locator('.settings-btn, button[title*="sync"], button[title*="Settings"]').first()
+    const settingsIconAvailable = (await settingsIcon.count()) > 0 && (await settingsIcon.isVisible())
 
-    if ((await settingsIcon.count()) > 0 && (await settingsIcon.isVisible())) {
-      await settingsIcon.click()
-      await waitForModal(appPage)
-      await testModalLayout(appPage, 'AutoSyncSettingsModal', '.auto-sync-settings-modal, .modal-content')
-      await closeModal(appPage)
-    } else {
-      test.skip()
-    }
+    test.fixme(
+      !settingsIconAvailable,
+      'fixme: requires a Dispatcharr-linked M3U account row to render the sync settings icon (see bd-2lw25)'
+    )
+
+    await settingsIcon.click()
+    await waitForModal(appPage)
+    await testModalLayout(appPage, 'AutoSyncSettingsModal', '.auto-sync-settings-modal, .modal-content')
+    await closeModal(appPage)
   })
 })
 
@@ -245,15 +260,17 @@ test.describe('NormalizeNamesModal', () => {
 
     // Look for normalize button
     const normalizeBtn = appPage.locator('button:has-text("Normalize")').first()
+    const normalizeBtnAvailable = (await normalizeBtn.count()) > 0 && (await normalizeBtn.isVisible())
 
-    if ((await normalizeBtn.count()) > 0 && (await normalizeBtn.isVisible())) {
-      await normalizeBtn.click()
-      await waitForModal(appPage)
-      await testModalLayout(appPage, 'NormalizeNamesModal', '.normalize-modal, .modal-content')
-      await closeModal(appPage)
-    } else {
-      test.skip()
-    }
+    test.fixme(
+      !normalizeBtnAvailable,
+      'fixme: requires Channel Manager toolbar to render a "Normalize" button (needs Dispatcharr channels present) (see bd-2lw25)'
+    )
+
+    await normalizeBtn.click()
+    await waitForModal(appPage)
+    await testModalLayout(appPage, 'NormalizeNamesModal', '.normalize-modal, .modal-content')
+    await closeModal(appPage)
   })
 })
 
@@ -268,15 +285,17 @@ test.describe('M3ULinkedAccountsModal', () => {
 
     // Look for linked accounts button
     const linkedBtn = appPage.locator('button:has-text("Linked"), button:has-text("Link")').first()
+    const linkedBtnAvailable = (await linkedBtn.count()) > 0 && (await linkedBtn.isVisible())
 
-    if ((await linkedBtn.count()) > 0 && (await linkedBtn.isVisible())) {
-      await linkedBtn.click()
-      await waitForModal(appPage)
-      await testModalLayout(appPage, 'M3ULinkedAccountsModal', '.m3u-linked-accounts-modal, .modal-content')
-      await closeModal(appPage)
-    } else {
-      test.skip()
-    }
+    test.fixme(
+      !linkedBtnAvailable,
+      'fixme: requires Dispatcharr-provided linked M3U accounts so the "Linked"/"Link" button renders (see bd-2lw25)'
+    )
+
+    await linkedBtn.click()
+    await waitForModal(appPage)
+    await testModalLayout(appPage, 'M3ULinkedAccountsModal', '.m3u-linked-accounts-modal, .modal-content')
+    await closeModal(appPage)
   })
 })
 
@@ -292,15 +311,17 @@ test.describe('ChannelProfilesListModal', () => {
 
     // Look for profiles button (icon-only button with title or class)
     const profilesBtn = appPage.locator('.profiles-btn, .pane-toolbar-menu-item:has-text("Manage Profiles"), button[title*="profile"], button[title*="Profile"]').first()
+    const profilesBtnAvailable = (await profilesBtn.count()) > 0 && (await profilesBtn.isVisible())
 
-    if ((await profilesBtn.count()) > 0 && (await profilesBtn.isVisible())) {
-      await profilesBtn.click()
-      await waitForModal(appPage)
-      await testModalLayout(appPage, 'ChannelProfilesListModal', '.channel-profiles-modal, .modal-content')
-      await closeModal(appPage)
-    } else {
-      test.skip()
-    }
+    test.fixme(
+      !profilesBtnAvailable,
+      'fixme: requires Channel Manager to render the Manage Profiles button (needs Dispatcharr channel profiles) (see bd-2lw25)'
+    )
+
+    await profilesBtn.click()
+    await waitForModal(appPage)
+    await testModalLayout(appPage, 'ChannelProfilesListModal', '.channel-profiles-modal, .modal-content')
+    await closeModal(appPage)
   })
 })
 
@@ -315,15 +336,17 @@ test.describe('M3UGroupsModal', () => {
 
     // Look for groups button on an M3U account row
     const groupsBtn = appPage.locator('button:has-text("Groups")').first()
+    const groupsBtnAvailable = (await groupsBtn.count()) > 0 && (await groupsBtn.isVisible())
 
-    if ((await groupsBtn.count()) > 0 && (await groupsBtn.isVisible())) {
-      await groupsBtn.click()
-      await waitForModal(appPage)
-      await testModalLayout(appPage, 'M3UGroupsModal', '.m3u-groups-modal, .modal-content')
-      await closeModal(appPage)
-    } else {
-      test.skip()
-    }
+    test.fixme(
+      !groupsBtnAvailable,
+      'fixme: requires Dispatcharr-provided M3U account row to render a "Groups" button (see bd-2lw25)'
+    )
+
+    await groupsBtn.click()
+    await waitForModal(appPage)
+    await testModalLayout(appPage, 'M3UGroupsModal', '.m3u-groups-modal, .modal-content')
+    await closeModal(appPage)
   })
 })
 
@@ -339,15 +362,17 @@ test.describe('VLCProtocolHelperModal', () => {
     // This modal usually appears when clicking a VLC link
     // Look for VLC button or link
     const vlcBtn = appPage.locator('button:has-text("VLC"), a:has-text("VLC")').first()
+    const vlcBtnAvailable = (await vlcBtn.count()) > 0 && (await vlcBtn.isVisible())
 
-    if ((await vlcBtn.count()) > 0 && (await vlcBtn.isVisible())) {
-      await vlcBtn.click()
-      await waitForModal(appPage)
-      await testModalLayout(appPage, 'VLCProtocolHelperModal', '.vlc-helper-modal, .modal-content')
-      await closeModal(appPage)
-    } else {
-      test.skip()
-    }
+    test.fixme(
+      !vlcBtnAvailable,
+      'fixme: requires Guide tab to render a VLC button/link (needs Dispatcharr channels with stream URLs) (see bd-2lw25)'
+    )
+
+    await vlcBtn.click()
+    await waitForModal(appPage)
+    await testModalLayout(appPage, 'VLCProtocolHelperModal', '.vlc-helper-modal, .modal-content')
+    await closeModal(appPage)
   })
 })
 
@@ -362,15 +387,17 @@ test.describe('M3UProfileModal', () => {
 
     // Look for profiles button
     const profilesBtn = appPage.locator('button:has-text("Profile")').first()
+    const profilesBtnAvailable = (await profilesBtn.count()) > 0 && (await profilesBtn.isVisible())
 
-    if ((await profilesBtn.count()) > 0 && (await profilesBtn.isVisible())) {
-      await profilesBtn.click()
-      await waitForModal(appPage)
-      await testModalLayout(appPage, 'M3UProfileModal', '.m3u-profile-modal, .modal-content')
-      await closeModal(appPage)
-    } else {
-      test.skip()
-    }
+    test.fixme(
+      !profilesBtnAvailable,
+      'fixme: requires Dispatcharr-provided M3U profiles so the "Profile" button renders (see bd-2lw25)'
+    )
+
+    await profilesBtn.click()
+    await waitForModal(appPage)
+    await testModalLayout(appPage, 'M3UProfileModal', '.m3u-profile-modal, .modal-content')
+    await closeModal(appPage)
   })
 })
 
@@ -385,15 +412,17 @@ test.describe('PrintGuideModal', () => {
 
     // Look for print button
     const printBtn = appPage.locator('button:has-text("Print"), button[title*="Print"]').first()
+    const printBtnAvailable = (await printBtn.count()) > 0 && (await printBtn.isVisible())
 
-    if ((await printBtn.count()) > 0 && (await printBtn.isVisible())) {
-      await printBtn.click()
-      await waitForModal(appPage)
-      await testModalLayout(appPage, 'PrintGuideModal', '.print-guide-modal, .modal-content')
-      await closeModal(appPage)
-    } else {
-      test.skip()
-    }
+    test.fixme(
+      !printBtnAvailable,
+      'fixme: requires Guide tab to render a "Print" button (needs Dispatcharr channels + EPG data) (see bd-2lw25)'
+    )
+
+    await printBtn.click()
+    await waitForModal(appPage)
+    await testModalLayout(appPage, 'PrintGuideModal', '.print-guide-modal, .modal-content')
+    await closeModal(appPage)
   })
 })
 
@@ -409,21 +438,26 @@ test.describe('GracenoteConflictModal', () => {
     // This modal appears during Gracenote sync with conflicts
     // Look for sync button that might trigger it
     const syncBtn = appPage.locator('button:has-text("Sync"), button:has-text("Gracenote")').first()
+    const syncBtnAvailable = (await syncBtn.count()) > 0 && (await syncBtn.isVisible())
 
-    if ((await syncBtn.count()) > 0 && (await syncBtn.isVisible())) {
-      await syncBtn.click()
-      await appPage.waitForTimeout(2000)
+    test.fixme(
+      !syncBtnAvailable,
+      'fixme: requires a Gracenote EPG source in EPG Manager to render the Sync button (see bd-2lw25)'
+    )
 
-      const modal = appPage.locator('.gracenote-conflict-modal')
-      if ((await modal.count()) > 0 && (await modal.isVisible())) {
-        await testModalLayout(appPage, 'GracenoteConflictModal', '.gracenote-conflict-modal')
-        await closeModal(appPage)
-      } else {
-        test.skip()
-      }
-    } else {
-      test.skip()
-    }
+    await syncBtn.click()
+    await appPage.waitForTimeout(2000)
+
+    const modal = appPage.locator('.gracenote-conflict-modal')
+    const modalAvailable = (await modal.count()) > 0 && (await modal.isVisible())
+
+    test.fixme(
+      !modalAvailable,
+      'fixme: requires Gracenote sync to surface a conflict so the conflict modal renders (see bd-2lw25)'
+    )
+
+    await testModalLayout(appPage, 'GracenoteConflictModal', '.gracenote-conflict-modal')
+    await closeModal(appPage)
   })
 })
 
@@ -438,15 +472,17 @@ test.describe('LogoModal', () => {
 
     // Look for add logo button
     const addBtn = appPage.locator('button:has-text("Add"), button:has-text("Upload")').first()
+    const addBtnAvailable = (await addBtn.count()) > 0 && (await addBtn.isVisible())
 
-    if ((await addBtn.count()) > 0 && (await addBtn.isVisible())) {
-      await addBtn.click()
-      await waitForModal(appPage)
-      await testModalLayout(appPage, 'LogoModal-Add', '.logo-modal, .modal-content')
-      await closeModal(appPage)
-    } else {
-      test.skip()
-    }
+    test.fixme(
+      !addBtnAvailable,
+      'fixme: requires Logo Manager tab to render an "Add"/"Upload" button (needs Dispatcharr logos API) (see bd-2lw25)'
+    )
+
+    await addBtn.click()
+    await waitForModal(appPage)
+    await testModalLayout(appPage, 'LogoModal-Add', '.logo-modal, .modal-content')
+    await closeModal(appPage)
   })
 })
 
@@ -463,15 +499,17 @@ test.describe('M3UFiltersModal', () => {
     // Look for filters button within the main content area (not the tab navigation,
     // since "movie_filter" icon text in FFMPEG Builder tab matches has-text("Filter"))
     const filtersBtn = appPage.locator('main button:has-text("Filter"), .m3u-manager button:has-text("Filter")').first()
+    const filtersBtnAvailable = (await filtersBtn.count()) > 0 && (await filtersBtn.isVisible())
 
-    if ((await filtersBtn.count()) > 0 && (await filtersBtn.isVisible())) {
-      await filtersBtn.click()
-      await waitForModal(appPage, 10000)
-      await testModalLayout(appPage, 'M3UFiltersModal', '.m3u-filters-modal, .modal-content')
-      await closeModal(appPage)
-    } else {
-      test.skip()
-    }
+    test.fixme(
+      !filtersBtnAvailable,
+      'fixme: requires Dispatcharr-provided M3U account row to render a "Filter" button (see bd-2lw25)'
+    )
+
+    await filtersBtn.click()
+    await waitForModal(appPage, 10000)
+    await testModalLayout(appPage, 'M3UFiltersModal', '.m3u-filters-modal, .modal-content')
+    await closeModal(appPage)
   })
 })
 
@@ -486,15 +524,17 @@ test.describe('DummyEPGSourceModal', () => {
 
     // Look for add dummy EPG button
     const addBtn = appPage.locator('button:has-text("Dummy"), button:has-text("Add")').first()
+    const addBtnAvailable = (await addBtn.count()) > 0 && (await addBtn.isVisible())
 
-    if ((await addBtn.count()) > 0 && (await addBtn.isVisible())) {
-      await addBtn.click()
-      await waitForModal(appPage)
-      await testModalLayout(appPage, 'DummyEPGSourceModal', '.dummy-epg-modal, .modal-content')
-      await closeModal(appPage)
-    } else {
-      test.skip()
-    }
+    test.fixme(
+      !addBtnAvailable,
+      'fixme: requires EPG Manager tab to render a "Dummy"/"Add" button (ECM-native; blocked on E2E infra, see bd-2lw25)'
+    )
+
+    await addBtn.click()
+    await waitForModal(appPage)
+    await testModalLayout(appPage, 'DummyEPGSourceModal', '.dummy-epg-modal, .modal-content')
+    await closeModal(appPage)
   })
 })
 
@@ -509,15 +549,17 @@ test.describe('BulkLCNFetchModal', () => {
 
     // Look for bulk LCN button
     const lcnBtn = appPage.locator('button:has-text("LCN"), button:has-text("Fetch")').first()
+    const lcnBtnAvailable = (await lcnBtn.count()) > 0 && (await lcnBtn.isVisible())
 
-    if ((await lcnBtn.count()) > 0 && (await lcnBtn.isVisible())) {
-      await lcnBtn.click()
-      await waitForModal(appPage)
-      await testModalLayout(appPage, 'BulkLCNFetchModal', '.bulk-lcn-modal')
-      await closeModal(appPage)
-    } else {
-      test.skip()
-    }
+    test.fixme(
+      !lcnBtnAvailable,
+      'fixme: requires Channel Manager to render an "LCN"/"Fetch" button (needs Dispatcharr LCN-capable channels) (see bd-2lw25)'
+    )
+
+    await lcnBtn.click()
+    await waitForModal(appPage)
+    await testModalLayout(appPage, 'BulkLCNFetchModal', '.bulk-lcn-modal')
+    await closeModal(appPage)
   })
 })
 

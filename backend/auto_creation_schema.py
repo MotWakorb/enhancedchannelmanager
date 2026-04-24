@@ -11,6 +11,8 @@ from typing import Any, Optional, Union
 import re
 import json
 
+import safe_regex
+
 logger = logging.getLogger(__name__)
 
 
@@ -160,9 +162,14 @@ class Condition:
                 ConditionType.TVG_ID_MATCHES,
                 ConditionType.CHANNEL_EXISTS_MATCHING,
             ):
+                # bd-ltjyx: route write-time syntax validation through
+                # safe_regex.compile. SafeRegexError covers both
+                # PatternTooLongError (length cap) and wrapped regex
+                # syntax errors, mirroring the runtime path used by
+                # auto_creation_evaluator (bd-eio04.15).
                 try:
-                    re.compile(self.value)
-                except re.error as e:
+                    safe_regex.compile(self.value)
+                except safe_regex.SafeRegexError as e:
                     errors.append(f"Invalid regex pattern for {self.type}: {e}")
 
         elif cond_type in (ConditionType.QUALITY_MIN, ConditionType.QUALITY_MAX, ConditionType.CHANNEL_HAS_STREAMS, ConditionType.HAS_AUDIO_TRACKS):
@@ -402,6 +409,13 @@ class Action:
                 elif self.params["find_channel_by"] not in ("name_exact", "name_regex", "tvg_id"):
                     errors.append("merge_streams.find_channel_by must be 'name_exact', 'name_regex', or 'tvg_id'")
 
+            # Optional prune toggle
+            remove_non_matching = self.params.get("remove_non_matching", False)
+            if remove_non_matching is not None and not isinstance(remove_non_matching, bool):
+                errors.append("merge_streams.remove_non_matching must be a boolean")
+            if "remove_non_matching" not in self.params:
+                self.params["remove_non_matching"] = False
+
         # Validate assign_logo
         elif action_type == ActionType.ASSIGN_LOGO:
             value = self.params.get("value")
@@ -477,9 +491,13 @@ class Action:
                     if not pattern or not isinstance(pattern, str):
                         errors.append(f"set_variable with mode '{mode}' requires a 'pattern'")
                     else:
+                        # bd-ltjyx: route through safe_regex.compile so the
+                        # length cap and compile-error surface match the
+                        # runtime path that actually executes this pattern
+                        # (auto_creation_executor._execute_set_variable).
                         try:
-                            re.compile(pattern)
-                        except re.error as e:
+                            safe_regex.compile(pattern)
+                        except safe_regex.SafeRegexError as e:
                             errors.append(f"Invalid regex pattern for set_variable: {e}")
                     if mode == "regex_replace":
                         replacement = self.params.get("replacement")
@@ -504,9 +522,12 @@ class Action:
             if not isinstance(pattern, str):
                 errors.append("name_transform_pattern must be a string")
             else:
+                # bd-ltjyx: route through safe_regex.compile so the length
+                # cap and compile-error surface match the runtime path
+                # (auto_creation_executor._apply_name_transform).
                 try:
-                    re.compile(pattern)
-                except re.error as e:
+                    safe_regex.compile(pattern)
+                except safe_regex.SafeRegexError as e:
                     errors.append(f"Invalid name_transform_pattern: {e}")
             # replacement is optional (defaults to empty string), but must be string if present
             if replacement is not None and not isinstance(replacement, str):

@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import type { TabId } from '../components/TabNavigation';
 
-export type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'appearance' | 'email' | 'scheduled-tasks' | 'auto-creation' | 'm3u-digest' | 'maintenance' | 'linked-accounts' | 'auth-settings' | 'user-management' | 'tls-settings' | 'backup-restore';
+export type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'lookup-tables' | 'appearance' | 'email' | 'scheduled-tasks' | 'auto-creation' | 'm3u-digest' | 'maintenance' | 'linked-accounts' | 'auth-settings' | 'user-management' | 'tls-settings' | 'mcp-settings' | 'backup-restore';
 
 const VALID_TABS: Set<string> = new Set([
   'm3u-manager', 'epg-manager', 'channel-manager', 'guide',
@@ -10,10 +10,10 @@ const VALID_TABS: Set<string> = new Set([
 ]);
 
 const VALID_SETTINGS_PAGES: Set<string> = new Set([
-  'general', 'channel-defaults', 'normalization', 'tag-engine',
+  'general', 'channel-defaults', 'normalization', 'tag-engine', 'lookup-tables',
   'appearance', 'email', 'scheduled-tasks', 'auto-creation',
   'm3u-digest', 'maintenance', 'linked-accounts', 'auth-settings',
-  'user-management', 'tls-settings', 'backup-restore',
+  'user-management', 'tls-settings', 'mcp-settings', 'backup-restore',
 ]);
 
 const DEFAULT_TAB: TabId = 'channel-manager';
