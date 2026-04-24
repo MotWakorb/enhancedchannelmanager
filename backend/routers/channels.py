@@ -2336,12 +2336,18 @@ async def bulk_merge_channels(request: BulkMergeRequest):
 
         except Exception as e:
             failed_count += 1
-            logger.warning("[CHANNELS] bulk-merge: group failed (target=%s): %s",
-                          item.target_channel_id, e)
+            # CodeQL py/stack-trace-exposure (#1413): log full exception (with
+            # trace) but only return the exception type to the client. ADR-005
+            # disallows "won't fix" dismissal, so we replace str(e) with
+            # type(e).__name__ — operators correlate via X-Request-ID.
+            logger.exception(
+                "[CHANNELS] bulk-merge: group failed (target=%s)",
+                item.target_channel_id,
+            )
             results.append({
                 "target_channel_id": item.target_channel_id,
                 "success": False,
-                "error": str(e),
+                "error": type(e).__name__,
             })
 
     logger.info("[CHANNELS] bulk-merge complete: %d merged, %d failed", merged_count, failed_count)
