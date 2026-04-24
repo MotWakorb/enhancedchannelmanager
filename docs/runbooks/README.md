@@ -23,6 +23,7 @@ Operational playbooks for on-call and incident response. Read during incidents, 
 | [HTTP Latency](./http_latency.md) | SLO-2 breach — P95 latency elevated above budget | Not exercised |
 | [Readiness Availability](./readiness_availability.md) | Readiness check failing across sub-checks | Not exercised |
 | [Readiness Sub-check Latency](./readiness_subcheck_latency.md) | Individual readiness sub-check exceeding its latency budget | Not exercised |
+| [Dep-Bump Fresh-Image Smoke Test](./dep-bump-smoke-test.md) | Pre-merge ADR-001 fresh-image smoke for dependency-upgrade PRs (`scripts/smoke_test_dev_container.sh`) — workflow runbook, not paging | 2026-04-23 (script self-test) |
 
 ## Adding a runbook
 
