@@ -187,6 +187,17 @@ All seven items must pass before the release-cut PR can merge. Copy-paste this b
 | G6 | Version updated in `frontend/package.json` from the current `0.A.B-NNNN` dev build to the target release version `X.Y.Z`. The target is not necessarily `A.B` with the suffix stripped — a minor or patch bump is permitted (e.g., current dev tip `0.16.0-0041` → release `0.17.0`) — but must match the release-branch name (`release/vX.Y.Z`) | Manual in PR review; trivially automatable | `shipping.md` §Increment the Version |
 | G7 | **No other release-cut or hotfix PR targeting `main` is open at merge time.** If a hotfix PR and a release-cut PR contend simultaneously, the **hotfix has priority**: the release-cut PR rebases on the merged hotfix and re-runs the gate. Prevents live-lock during an incident. | Manual verification; one-line `gh pr list --base main --state open --json number,title` | PR #82 root cause |
 
+#### G1b "formally waived" semantics
+
+A HIGH/CRITICAL CodeQL or active security advisory finding is **formally waived** for purposes of G1b only when **both** of the following are true at merge time:
+
+1. **GitHub Security-tab dismissal with rationale.** The alert is dismissed in the repository's Security tab via the GitHub UI, with a non-empty comment recording the dismissal category and a one-line justification. The dismissal becomes part of the alert's audit record and is visible to the monthly/quarterly dismissal-log audit. Permitted dismissal categories are exactly those defined in [ADR-005](adr/ADR-005-code-security-gating-strategy.md) §Dismiss-With-Comment Policy: **false-positive (with linked evidence)** or **test-only sink**. "Won't fix" is **not** a Phase 1 dismissal category — risk acceptance for a confirmed true-positive runs through a separate Security-Engineer-reviewed bead, and the alert stays open (G1b is therefore **not** satisfied for that finding).
+2. **PR-description cross-reference.** The release-cut PR description includes a line citing the alert number, the dismissal category, and the dismissing user, e.g. `- Alert #1418 (py/path-injection, HIGH): dismissed as false-positive (with evidence) on 2026-04-22 by @user — sanitized via Path.resolve().relative_to() at backup.py:164-167.` This belt-and-suspenders cross-reference makes the waiver legible to the cut-authorizing reviewer without requiring them to context-switch into the Security tab, and survives in `git log` after the dismissal record is later edited or the alert is reopened.
+
+A Security-tab dismissal **without** a corresponding PR-description line does **not** satisfy G1b — the cross-reference is the visible-in-PR-record half of the gate. Conversely, a PR-description claim of dismissal **without** an actual Security-tab dismissal is a false attestation; reviewers must spot-check by running the G1b query in `Cut Mechanics` step 0 and confirming it returns `0` after the claimed dismissals.
+
+This mirrors ADR-005's Dismiss-With-Comment Policy item 1 ("the comment becomes part of the alert record and is visible in future audits") and extends it to the release-cut surface so the same dismissal evidence is visible in two places — the Security tab (for security audits) and the PR description (for release-cut audits).
+
 ### Hotfix Path
 
 Genuine production-blocking bugs, critical security advisories, and GHCR/branch-protection emergencies can bypass the release-branch mechanism via a **hotfix PR branched directly from `main`** — not from `dev`. Prose rules (per ADR-004 §4):
