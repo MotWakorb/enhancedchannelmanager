@@ -329,29 +329,29 @@ class TestDownloadM3U:
 
     @pytest.mark.asyncio
     @patch("routers.export.journal")
-    @patch("routers.export._export_manager")
-    async def test_downloads_m3u(self, mock_mgr, mock_journal, async_client, test_session, tmp_path):
+    async def test_downloads_m3u(self, mock_journal, async_client, test_session, tmp_path):
         profile = _create_profile(test_session)
-        export_dir = tmp_path / str(profile.id)
-        export_dir.mkdir()
+        exports_root = tmp_path / "exports"
+        export_dir = exports_root / str(profile.id)
+        export_dir.mkdir(parents=True)
         m3u_file = export_dir / "playlist.m3u"
         m3u_file.write_text("#EXTM3U\n#EXTINF:-1,Test\nhttp://test\n")
-        mock_mgr.get_export_path.return_value = export_dir
 
-        response = await async_client.get(f"/api/export/profiles/{profile.id}/download/m3u")
+        with patch("export_manager.EXPORTS_DIR", exports_root):
+            response = await async_client.get(f"/api/export/profiles/{profile.id}/download/m3u")
         assert response.status_code == 200
         assert response.headers["content-type"] == "audio/x-mpegurl"
         assert "playlist.m3u" in response.headers["content-disposition"]
         assert "#EXTM3U" in response.text
 
     @pytest.mark.asyncio
-    @patch("routers.export._export_manager")
-    async def test_not_generated_returns_404(self, mock_mgr, async_client, test_session, tmp_path):
+    async def test_not_generated_returns_404(self, async_client, test_session, tmp_path):
         profile = _create_profile(test_session)
-        export_dir = tmp_path / str(profile.id)
-        export_dir.mkdir()
-        mock_mgr.get_export_path.return_value = export_dir
-        response = await async_client.get(f"/api/export/profiles/{profile.id}/download/m3u")
+        exports_root = tmp_path / "exports"
+        export_dir = exports_root / str(profile.id)
+        export_dir.mkdir(parents=True)
+        with patch("export_manager.EXPORTS_DIR", exports_root):
+            response = await async_client.get(f"/api/export/profiles/{profile.id}/download/m3u")
         assert response.status_code == 404
 
     @pytest.mark.asyncio
@@ -365,28 +365,28 @@ class TestDownloadXMLTV:
 
     @pytest.mark.asyncio
     @patch("routers.export.journal")
-    @patch("routers.export._export_manager")
-    async def test_downloads_xmltv(self, mock_mgr, mock_journal, async_client, test_session, tmp_path):
+    async def test_downloads_xmltv(self, mock_journal, async_client, test_session, tmp_path):
         profile = _create_profile(test_session)
-        export_dir = tmp_path / str(profile.id)
-        export_dir.mkdir()
+        exports_root = tmp_path / "exports"
+        export_dir = exports_root / str(profile.id)
+        export_dir.mkdir(parents=True)
         xml_file = export_dir / "playlist.xml"
         xml_file.write_text('<?xml version="1.0"?>\n<tv></tv>\n')
-        mock_mgr.get_export_path.return_value = export_dir
 
-        response = await async_client.get(f"/api/export/profiles/{profile.id}/download/xmltv")
+        with patch("export_manager.EXPORTS_DIR", exports_root):
+            response = await async_client.get(f"/api/export/profiles/{profile.id}/download/xmltv")
         assert response.status_code == 200
         assert response.headers["content-type"] == "application/xml"
         assert "playlist.xml" in response.headers["content-disposition"]
 
     @pytest.mark.asyncio
-    @patch("routers.export._export_manager")
-    async def test_not_generated_returns_404(self, mock_mgr, async_client, test_session, tmp_path):
+    async def test_not_generated_returns_404(self, async_client, test_session, tmp_path):
         profile = _create_profile(test_session)
-        export_dir = tmp_path / str(profile.id)
-        export_dir.mkdir()
-        mock_mgr.get_export_path.return_value = export_dir
-        response = await async_client.get(f"/api/export/profiles/{profile.id}/download/xmltv")
+        exports_root = tmp_path / "exports"
+        export_dir = exports_root / str(profile.id)
+        export_dir.mkdir(parents=True)
+        with patch("export_manager.EXPORTS_DIR", exports_root):
+            response = await async_client.get(f"/api/export/profiles/{profile.id}/download/xmltv")
         assert response.status_code == 404
 
     @pytest.mark.asyncio
@@ -394,16 +394,17 @@ class TestDownloadXMLTV:
     @patch("routers.export._export_manager")
     async def test_regenerate_flag(self, mock_mgr, mock_journal, async_client, test_session, tmp_path):
         profile = _create_profile(test_session)
-        export_dir = tmp_path / str(profile.id)
-        export_dir.mkdir()
+        exports_root = tmp_path / "exports"
+        export_dir = exports_root / str(profile.id)
+        export_dir.mkdir(parents=True)
         xml_file = export_dir / "playlist.xml"
         xml_file.write_text("<tv></tv>")
-        mock_mgr.get_export_path.return_value = export_dir
         mock_mgr.generate = AsyncMock()
 
-        response = await async_client.get(
-            f"/api/export/profiles/{profile.id}/download/xmltv?regenerate=true"
-        )
+        with patch("export_manager.EXPORTS_DIR", exports_root):
+            response = await async_client.get(
+                f"/api/export/profiles/{profile.id}/download/xmltv?regenerate=true"
+            )
         assert response.status_code == 200
         mock_mgr.generate.assert_called_once()
 
@@ -524,3 +525,245 @@ class TestPrintGuideXSS:
         assert "A &amp; B &lt;tag&gt;" in body
         # Raw `<tag>` substring must not appear.
         assert "A & B <tag>" not in body
+
+
+# =============================================================================
+# Export Path-Injection Regression (bd-h5rfv / CodeQL 1354-1359)
+# =============================================================================
+#
+# CodeQL py/path-injection (CWE-22/23/36/73/99) flagged six sinks in the
+# export pipeline:
+#
+#   1354 — backend/export_manager.py:87  (Path.exists in cleanup)
+#   1355 — backend/export_manager.py:89  (shutil.rmtree in cleanup) DESTRUCTIVE
+#   1356 — backend/routers/export.py:397 (m3u path construction)
+#   1357 — backend/routers/export.py:408 (m3u_path.read_text)
+#   1358 — backend/routers/export.py:433 (xmltv path construction)
+#   1359 — backend/routers/export.py:444 (xmltv_path.read_text)
+#
+# Upstream sanitizers (FastAPI int path-param, Pydantic FILENAME_RE on
+# filename_prefix) make the dataflow unreachable today, but bd-h5rfv adds
+# defense-in-depth canonicalize-and-verify (`_safe_export_path`) that
+# guarantees containment at the sink rather than relying on caller hygiene.
+# These tests prove the containment check fires for the standard traversal
+# and symlink-escape payload set, mirroring TestSavedBackupsPathInjection
+# in test_backup.py (bd-0a1pr / CodeQL 1416-1419).
+# =============================================================================
+
+
+class TestExportPathInjection:
+    """Path-injection regression tests for export download / cleanup paths.
+
+    Backstops `_safe_export_path` containment in `export_manager` and the
+    download endpoints in `routers.export`. Mirrors the coverage shape of
+    `TestSavedBackupsPathInjection` (bd-0a1pr).
+    """
+
+    # Profile-id payloads that must never reach a filesystem sink.
+    # FastAPI's int coercion handles most of these at the router boundary
+    # (returning 422), but `_safe_export_path` is also called directly from
+    # ExportManager.cleanup, where the int contract is by Python type-hint
+    # only — no runtime enforcement. The unit tests below exercise both
+    # paths.
+    TRAVERSAL_PROFILE_IDS = [
+        "..%2F1",
+        "..%2F..%2Fetc%2Fpasswd",
+        "%2Fetc%2Fpasswd",
+        "1%00.evil",
+        "..%5C1",
+    ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("payload", TRAVERSAL_PROFILE_IDS)
+    async def test_download_m3u_rejects_traversal_in_profile_id(self, async_client, payload):
+        """download_m3u must reject non-int profile_id payloads with 4xx.
+
+        FastAPI's int coercion is the first line of defense — the request
+        never reaches the path-construction sink. Any non-2xx is acceptable;
+        the critical guarantee is that we never reach Path.read_text on an
+        attacker-controlled path component.
+        """
+        response = await async_client.get(f"/api/export/profiles/{payload}/download/m3u")
+        assert response.status_code in (400, 404, 422), (
+            f"payload {payload!r} was not rejected: status={response.status_code}"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("payload", TRAVERSAL_PROFILE_IDS)
+    async def test_download_xmltv_rejects_traversal_in_profile_id(self, async_client, payload):
+        """download_xmltv must reject non-int profile_id payloads with 4xx."""
+        response = await async_client.get(f"/api/export/profiles/{payload}/download/xmltv")
+        assert response.status_code in (400, 404, 422), (
+            f"payload {payload!r} was not rejected: status={response.status_code}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_safe_export_path_rejects_absolute_traversal(self, tmp_path):
+        """_safe_export_path raises ExportPathError if profile_id forces escape.
+
+        Direct unit test of the helper: even if a caller bypasses Pydantic
+        and passes a string with traversal, the resolved path must be
+        verified under EXPORTS_DIR or rejected.
+        """
+        from export_manager import _safe_export_path, ExportPathError
+
+        exports_root = tmp_path / "exports"
+        exports_root.mkdir()
+        with patch("export_manager.EXPORTS_DIR", exports_root):
+            # Absolute-path injection: str(profile_id) being an absolute path
+            # would otherwise overwrite EXPORTS_DIR via Path joining semantics.
+            with pytest.raises(ExportPathError):
+                _safe_export_path("/etc/passwd")
+
+    @pytest.mark.asyncio
+    async def test_safe_export_path_rejects_dotdot_traversal(self, tmp_path):
+        """_safe_export_path raises on `..` traversal in the file-name part."""
+        from export_manager import _safe_export_path, ExportPathError
+
+        exports_root = tmp_path / "exports"
+        exports_root.mkdir()
+        with patch("export_manager.EXPORTS_DIR", exports_root):
+            with pytest.raises(ExportPathError):
+                _safe_export_path(1, "../../etc/passwd")
+
+    @pytest.mark.asyncio
+    async def test_safe_export_path_accepts_legitimate_path(self, tmp_path):
+        """_safe_export_path returns a canonical Path for legitimate input."""
+        from export_manager import _safe_export_path
+
+        exports_root = tmp_path / "exports"
+        exports_root.mkdir()
+        with patch("export_manager.EXPORTS_DIR", exports_root):
+            path = _safe_export_path(42, "playlist.m3u")
+            assert path == (exports_root / "42" / "playlist.m3u").resolve()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_refuses_traversal_payload(self, tmp_path):
+        """ExportManager.cleanup must not rmtree on a traversal payload.
+
+        Even if a caller bypasses the int type hint and passes a string with
+        traversal, the rmtree sink (alert 1355, DESTRUCTIVE) must never run
+        on a path outside EXPORTS_DIR. This is the strongest defense — if
+        cleanup leaks rmtree to attacker-controlled paths, an attacker could
+        delete arbitrary directories.
+        """
+        from export_manager import ExportManager
+
+        exports_root = tmp_path / "exports"
+        exports_root.mkdir()
+        # Create a sentinel directory OUTSIDE exports_root — this must NOT
+        # be deleted by cleanup, even if cleanup is somehow called with a
+        # crafted profile_id that resolves to it.
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        sentinel = outside / "do-not-delete"
+        sentinel.write_text("sentinel-content")
+
+        mgr = ExportManager()
+        with patch("export_manager.EXPORTS_DIR", exports_root):
+            # str(profile_id) resolves to absolute /tmp/.../outside via
+            # joinpath semantics — _safe_export_path must reject this and
+            # cleanup must short-circuit before reaching rmtree.
+            mgr.cleanup(str(outside))
+
+        # Sentinel must still exist with original contents.
+        assert sentinel.exists()
+        assert sentinel.read_text() == "sentinel-content"
+
+    @pytest.mark.asyncio
+    async def test_cleanup_handles_dotdot_traversal(self, tmp_path):
+        """ExportManager.cleanup short-circuits on `..` traversal in profile_id."""
+        from export_manager import ExportManager
+
+        exports_root = tmp_path / "exports"
+        exports_root.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        sentinel = outside / "do-not-delete"
+        sentinel.write_text("sentinel-content")
+
+        mgr = ExportManager()
+        with patch("export_manager.EXPORTS_DIR", exports_root):
+            # Profile id "../outside" resolves under tmp_path/outside,
+            # which is NOT under exports_root — must short-circuit.
+            mgr.cleanup("../outside")
+
+        assert sentinel.exists()
+        assert sentinel.read_text() == "sentinel-content"
+
+    @pytest.mark.asyncio
+    async def test_download_m3u_rejects_symlink_escape(
+        self, async_client, test_session, tmp_path
+    ):
+        """A symlink in the export dir pointing outside must not leak contents.
+
+        Creates a symlink whose name passes the FILENAME_RE prefix check but
+        whose resolved target is outside EXPORTS_DIR. After canonicalization,
+        `_safe_export_path.relative_to()` must raise and produce a 400.
+        """
+        import os
+
+        exports_root = tmp_path / "exports"
+        export_dir = exports_root / "1"
+        export_dir.mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        secret = outside / "secret.m3u"
+        secret.write_text("top-secret-contents")
+
+        # filename_prefix "playlist" is the default — the m3u file the
+        # router will look for is "playlist.m3u". Make that a symlink
+        # pointing outside.
+        link_path = export_dir / "playlist.m3u"
+        try:
+            os.symlink(secret, link_path)
+        except (OSError, NotImplementedError):
+            pytest.skip("Symlinks not supported in this environment")
+
+        profile = _create_profile(test_session, name="SymTest", filename_prefix="playlist")
+        with patch("export_manager.EXPORTS_DIR", exports_root):
+            response = await async_client.get(f"/api/export/profiles/{profile.id}/download/m3u")
+
+        # The canonicalized path resolves outside EXPORTS_DIR, so the
+        # containment check must reject with 400. If the check regressed,
+        # the response body would contain "top-secret-contents".
+        assert response.status_code == 400
+        assert "top-secret-contents" not in response.text
+
+    @pytest.mark.asyncio
+    async def test_download_xmltv_rejects_symlink_escape(
+        self, async_client, test_session, tmp_path
+    ):
+        """A symlink-escape in the xmltv path must not leak contents."""
+        import os
+
+        exports_root = tmp_path / "exports"
+        export_dir = exports_root / "2"
+        export_dir.mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        secret = outside / "secret.xml"
+        secret.write_text("top-secret-xml")
+
+        link_path = export_dir / "playlist.xml"
+        try:
+            os.symlink(secret, link_path)
+        except (OSError, NotImplementedError):
+            pytest.skip("Symlinks not supported in this environment")
+
+        profile = _create_profile(test_session, name="SymTestX", filename_prefix="playlist")
+        # Use this profile's id, but force EXPORTS_DIR so the symlinked
+        # file is under <exports_root>/<profile.id> not "/2".
+        export_dir_for_profile = exports_root / str(profile.id)
+        export_dir_for_profile.mkdir(parents=True, exist_ok=True)
+        link_for_profile = export_dir_for_profile / "playlist.xml"
+        try:
+            os.symlink(secret, link_for_profile)
+        except (OSError, NotImplementedError):
+            pytest.skip("Symlinks not supported in this environment")
+
+        with patch("export_manager.EXPORTS_DIR", exports_root):
+            response = await async_client.get(f"/api/export/profiles/{profile.id}/download/xmltv")
+
+        assert response.status_code == 400
+        assert "top-secret-xml" not in response.text
