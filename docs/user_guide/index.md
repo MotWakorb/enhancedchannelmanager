@@ -57,3 +57,4 @@ Common problems, how to read ECM's logs, and what to gather before asking for he
 | On-call runbooks (incident response) | [`docs/runbooks/`](../runbooks/) |
 | Service-level objectives | [`docs/sre/slos.md`](../sre/slos.md) |
 | Release notes | Discord release-notes channel (see [`docs/discord_release_notes.md`](../discord_release_notes.md)) |
+| Error telemetry & how to opt out | [`error-telemetry-opt-out.md`](error-telemetry-opt-out.md) |
