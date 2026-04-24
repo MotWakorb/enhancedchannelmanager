@@ -120,6 +120,109 @@ class TestGetJournalEntries:
         data = response.json()
         assert data["page_size"] == 200
 
+    @pytest.mark.asyncio
+    async def test_filter_by_batch_id_returns_only_matching_rows(self, async_client, test_session):
+        """batch_id filter returns only rows tagged with the requested batch (bd-s4sph)."""
+        # Three rows in batch "1a2b3c4d", two rows in batch "ffffffff", one with no batch_id
+        for i in range(3):
+            _create_journal_entry(
+                test_session,
+                entity_name=f"Batched A {i}",
+                batch_id="1a2b3c4d",
+            )
+        for i in range(2):
+            _create_journal_entry(
+                test_session,
+                entity_name=f"Batched B {i}",
+                batch_id="ffffffff",
+            )
+        _create_journal_entry(
+            test_session,
+            entity_name="Unbatched",
+            batch_id=None,
+        )
+
+        response = await async_client.get("/api/journal", params={"batch_id": "1a2b3c4d"})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 3
+        assert len(data["results"]) == 3
+        for row in data["results"]:
+            assert row["batch_id"] == "1a2b3c4d"
+            assert row["entity_name"].startswith("Batched A")
+
+    @pytest.mark.asyncio
+    async def test_no_batch_id_preserves_existing_behavior(self, async_client, test_session):
+        """Omitting batch_id returns all rows in the existing newest-first order (bd-s4sph)."""
+        _create_journal_entry(
+            test_session,
+            timestamp=datetime.utcnow() - timedelta(hours=2),
+            entity_name="Old",
+            batch_id="aaaaaaaa",
+        )
+        _create_journal_entry(
+            test_session,
+            timestamp=datetime.utcnow() - timedelta(hours=1),
+            entity_name="Mid",
+            batch_id=None,
+        )
+        _create_journal_entry(
+            test_session,
+            timestamp=datetime.utcnow(),
+            entity_name="New",
+            batch_id="bbbbbbbb",
+        )
+
+        response = await async_client.get("/api/journal")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 3
+        # Newest-first ordering preserved
+        assert [r["entity_name"] for r in data["results"]] == ["New", "Mid", "Old"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_batch_id_returns_empty_not_422(self, async_client, test_session):
+        """An unknown batch_id is a no-match filter, not a validation error (bd-s4sph)."""
+        _create_journal_entry(test_session, batch_id="1a2b3c4d")
+
+        response = await async_client.get("/api/journal", params={"batch_id": "not-a-real-batch"})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 0
+        assert data["results"] == []
+
+    @pytest.mark.asyncio
+    async def test_batch_id_combines_with_search_filter(self, async_client, test_session):
+        """batch_id and search compose with AND semantics (bd-s4sph)."""
+        _create_journal_entry(
+            test_session,
+            entity_name="ESPN HD",
+            description="Created channel",
+            batch_id="1a2b3c4d",
+        )
+        _create_journal_entry(
+            test_session,
+            entity_name="BBC One",
+            description="Created channel",
+            batch_id="1a2b3c4d",
+        )
+        _create_journal_entry(
+            test_session,
+            entity_name="ESPN HD",
+            description="Created channel",
+            batch_id="ffffffff",
+        )
+
+        response = await async_client.get(
+            "/api/journal",
+            params={"batch_id": "1a2b3c4d", "search": "ESPN"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 1
+        assert data["results"][0]["entity_name"] == "ESPN HD"
+        assert data["results"][0]["batch_id"] == "1a2b3c4d"
+
 
 class TestGetJournalStats:
     """Tests for GET /api/journal/stats endpoint."""

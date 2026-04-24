@@ -277,7 +277,7 @@ See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#
 | `GET /api/journal/stats` | Get journal statistics |
 | `DELETE /api/journal/purge` | Purge old journal entries |
 
-`GET /api/journal` accepts `page`, `page_size` (capped at 200), `category`, `action_type`, `date_from`, `date_to`, `search`, and `user_initiated`. Each result row carries `batch_id` in the response body — bulk operations (e.g. `POST /api/auto-creation/rules/bulk-update`, channel renumber) write **N per-entity rows sharing one `batch_id`** so callers can stitch a forensic view of a single batch. There is no `?batch_id=` query parameter today; client-side grouping or a direct `journal_entries.batch_id` SQL lookup (indexed by `idx_journal_batch_id`) is the supported pattern. See the auto-creation `bulk-update` notes above for a worked example.
+`GET /api/journal` accepts `page`, `page_size` (capped at 200), `category`, `action_type`, `date_from`, `date_to`, `search`, `user_initiated`, and `batch_id`. Each result row carries `batch_id` in the response body — bulk operations (e.g. `POST /api/auto-creation/rules/bulk-update`, channel renumber) write **N per-entity rows sharing one `batch_id`** so callers can stitch a forensic view of a single batch. The `batch_id` query parameter (added in bd-s4sph) is an exact-match filter that hits `idx_journal_batch_id` directly — pass the 8-character `batch_id` returned by a bulk handler to retrieve only that batch's rows. An unknown `batch_id` returns an empty result set (not `422`); the parameter is purely a filter. See the auto-creation `bulk-update` notes above for a worked example.
 
 ## Notifications
 
@@ -391,17 +391,16 @@ See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#
 
 To reconstruct one batch:
 
-- The `batch_id` is **not currently exposed as a query parameter** on `GET /api/journal`. Two options:
-  1. Use the `search` parameter — it does an `ILIKE %term%` on `entity_name` and `description`, which can match a rule name in the description but not the raw `batch_id`. Best when you know the rule names that were touched.
-  2. Read journal rows directly from `journal_entries` and filter by `batch_id` — `idx_journal_batch_id` (added in bd-dmu8w) makes this an indexed lookup. Example:
-     ```sql
-     SELECT id, timestamp, entity_id, entity_name, before_value, after_value
-     FROM journal_entries
-     WHERE batch_id = '1a2b3c4d'
-     ORDER BY timestamp;
-     ```
-- Every journal row returned by `GET /api/journal` already includes `batch_id` in its body, so client-side grouping by `batch_id` is supported without a server-side filter (pagination caveats apply on large windows).
-- A first-class `?batch_id=` filter on `GET /api/journal` is a known follow-up; until it lands, prefer the direct DB lookup for forensic queries.
+- **Preferred:** call `GET /api/journal?batch_id=<id>` (added in bd-s4sph). The handler applies an exact-match filter against `JournalEntry.batch_id`, hitting `idx_journal_batch_id` (added in bd-dmu8w) for an indexed lookup. The response is the standard paginated journal payload — every row will carry the same `batch_id`. An unknown `batch_id` returns an empty result set (not `422`); the parameter is purely a filter.
+- For ad-hoc forensic queries directly against the database, the same index is reachable from SQL:
+  ```sql
+  SELECT id, timestamp, entity_id, entity_name, before_value, after_value
+  FROM journal_entries
+  WHERE batch_id = '1a2b3c4d'
+  ORDER BY timestamp;
+  ```
+- Every journal row returned by `GET /api/journal` already includes `batch_id` in its body, so client-side grouping by `batch_id` from a broader query is also supported (pagination caveats apply on large windows).
+- The `search` parameter does an `ILIKE %term%` on `entity_name` and `description` and can complement `batch_id` (e.g., narrow a batch to rules whose name matches a substring) — the two filters compose with `AND` semantics.
 
 **Normalization interaction:** `normalization_group_ids` is an accepted scalar field, so bulk-update can reassign normalization groups across many rules in one call. The list is stored as-is (deduplicated and sorted) — IDs are **not** verified against `NormalizationRuleGroup` at write time, matching the behavior of `PUT /api/auto-creation/rules/{id}`. See [`docs/normalization.md`](normalization.md) for the full normalization model and how groups feed the auto-creation pipeline.
 
