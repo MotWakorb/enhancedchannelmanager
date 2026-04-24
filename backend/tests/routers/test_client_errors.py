@@ -340,3 +340,108 @@ class TestReleaseLabel:
     def test_label_release_empty_rolls_up_to_stale(self):
         from routers.client_errors import _label_release
         assert _label_release("") == "stale"
+
+
+# ---------------------------------------------------------------------------
+# Settings toggle (ADR-006 §10)
+# ---------------------------------------------------------------------------
+class TestSettingsToggle:
+    """``settings.telemetry_client_errors_enabled`` honored server-side.
+
+    Belt-and-suspenders: the frontend short-circuits first, but the backend
+    also ignores reports when the operator has flipped the toggle off so a
+    stale bundle in a cached browser cannot override the setting.
+    """
+
+    @pytest.mark.asyncio
+    async def test_disabled_telemetry_returns_204_without_counter(self, async_client):
+        """When disabled, endpoint returns 204 but counter does NOT increment."""
+        from config import DispatcharrSettings
+
+        disabled = DispatcharrSettings(telemetry_client_errors_enabled=False)
+        before = _get_metric_sample(
+            "ecm_client_errors_total", kind="boundary", release=VALID_RELEASE,
+        )
+        with patch("routers.client_errors.get_settings", return_value=disabled, create=True):
+            # Patch works because the endpoint imports get_settings at call
+            # time (inside the handler, not at module scope). Using
+            # create=True because get_settings is resolved dynamically.
+            from config import get_settings as real_get_settings
+            # Real integration: monkeypatch the config module lookup.
+            import config as _config
+            original = _config.get_settings
+            _config.get_settings = lambda: disabled
+            try:
+                response = await async_client.post(
+                    "/api/client-errors", json=_valid_payload(),
+                )
+            finally:
+                _config.get_settings = original
+        assert response.status_code == 204
+        assert response.content == b""
+        after = _get_metric_sample(
+            "ecm_client_errors_total", kind="boundary", release=VALID_RELEASE,
+        )
+        assert after == pytest.approx(before), "Counter must not increment when telemetry disabled"
+
+    @pytest.mark.asyncio
+    async def test_disabled_telemetry_does_not_bump_dropped(self, async_client):
+        """Disabled telemetry is not a 'drop' — dropped counter stays flat."""
+        from config import DispatcharrSettings
+        import config as _config
+
+        disabled = DispatcharrSettings(telemetry_client_errors_enabled=False)
+        before_oversized = _get_metric_sample(
+            "ecm_client_errors_dropped_total", reason="oversized",
+        )
+        before_invalid = _get_metric_sample(
+            "ecm_client_errors_dropped_total", reason="invalid_schema",
+        )
+        before_rate = _get_metric_sample(
+            "ecm_client_errors_dropped_total", reason="rate_limited",
+        )
+        original = _config.get_settings
+        _config.get_settings = lambda: disabled
+        try:
+            response = await async_client.post(
+                "/api/client-errors", json=_valid_payload(),
+            )
+        finally:
+            _config.get_settings = original
+        assert response.status_code == 204
+        assert (
+            _get_metric_sample("ecm_client_errors_dropped_total", reason="oversized")
+            == pytest.approx(before_oversized)
+        )
+        assert (
+            _get_metric_sample("ecm_client_errors_dropped_total", reason="invalid_schema")
+            == pytest.approx(before_invalid)
+        )
+        assert (
+            _get_metric_sample("ecm_client_errors_dropped_total", reason="rate_limited")
+            == pytest.approx(before_rate)
+        )
+
+    @pytest.mark.asyncio
+    async def test_enabled_telemetry_increments_counter(self, async_client):
+        """Sanity: default-ON settings still increment the counter."""
+        from config import DispatcharrSettings
+        import config as _config
+
+        enabled = DispatcharrSettings(telemetry_client_errors_enabled=True)
+        before = _get_metric_sample(
+            "ecm_client_errors_total", kind="boundary", release=VALID_RELEASE,
+        )
+        original = _config.get_settings
+        _config.get_settings = lambda: enabled
+        try:
+            response = await async_client.post(
+                "/api/client-errors", json=_valid_payload(),
+            )
+        finally:
+            _config.get_settings = original
+        assert response.status_code == 204
+        after = _get_metric_sample(
+            "ecm_client_errors_total", kind="boundary", release=VALID_RELEASE,
+        )
+        assert after - before == pytest.approx(1.0)

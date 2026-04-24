@@ -122,6 +122,10 @@ class SettingsRequest(BaseModel):
     auto_creation_excluded_terms: list[str] = []
     auto_creation_excluded_groups: list[str] = []
     auto_creation_exclude_auto_sync_groups: bool = False
+    # Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m).
+    # Default ON; honored by both the backend /api/client-errors endpoint
+    # and the frontend clientErrorReporter.
+    telemetry_client_errors_enabled: bool = True
 
 
 class SettingsResponse(BaseModel):
@@ -206,6 +210,8 @@ class SettingsResponse(BaseModel):
     auto_creation_exclude_auto_sync_groups: bool
     # MCP integration
     mcp_api_key_configured: bool  # Whether an MCP API key has been generated
+    # Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m)
+    telemetry_client_errors_enabled: bool
 
 
 class TestConnectionRequest(BaseModel):
@@ -343,6 +349,7 @@ async def get_current_settings():
         auto_creation_excluded_groups=settings.auto_creation_excluded_groups,
         auto_creation_exclude_auto_sync_groups=settings.auto_creation_exclude_auto_sync_groups,
         mcp_api_key_configured=bool(settings.mcp_api_key),
+        telemetry_client_errors_enabled=settings.telemetry_client_errors_enabled,
     )
 
 
@@ -480,6 +487,7 @@ async def update_settings(request: SettingsRequest):
         auto_creation_excluded_terms=request.auto_creation_excluded_terms,
         auto_creation_excluded_groups=request.auto_creation_excluded_groups,
         auto_creation_exclude_auto_sync_groups=request.auto_creation_exclude_auto_sync_groups,
+        telemetry_client_errors_enabled=request.telemetry_client_errors_enabled,
     )
     save_settings(new_settings)
     clear_settings_cache()

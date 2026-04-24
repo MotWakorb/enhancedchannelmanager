@@ -17,6 +17,7 @@ import {
   buildPayload,
   ClientRateLimiter,
   CLIENT_ERRORS_ENDPOINT,
+  getTelemetryRuntimeOverride,
   hashUserAgent,
   isTelemetryEnabled,
   MAX_MESSAGE_CHARS,
@@ -29,6 +30,8 @@ import {
   scrubRoute,
   scrubStack,
   sendPayload,
+  setTelemetryRuntimeEnabled,
+  withImportTelemetry,
 } from './clientErrorReporter';
 
 describe('scrubStack', () => {
@@ -344,7 +347,141 @@ describe('reportClientError', () => {
 });
 
 describe('isTelemetryEnabled', () => {
+  afterEach(() => {
+    // Clear any runtime override so other suites see defaults.
+    setTelemetryRuntimeEnabled(undefined);
+  });
+
   it('defaults to enabled when the env flag is unset', () => {
     expect(isTelemetryEnabled()).toBe(true);
+  });
+
+  it('returns false when the runtime override is set to false', () => {
+    setTelemetryRuntimeEnabled(false);
+    expect(isTelemetryEnabled()).toBe(false);
+  });
+
+  it('returns true when the runtime override is set to true', () => {
+    setTelemetryRuntimeEnabled(true);
+    expect(isTelemetryEnabled()).toBe(true);
+  });
+
+  it('falls back to the build flag when the runtime override is undefined', () => {
+    setTelemetryRuntimeEnabled(undefined);
+    expect(isTelemetryEnabled()).toBe(true);
+    expect(getTelemetryRuntimeOverride()).toBeUndefined();
+  });
+});
+
+describe('setTelemetryRuntimeEnabled (ADR-006 §10 operator toggle)', () => {
+  beforeEach(() => {
+    resetReporterForTests();
+    setTelemetryRuntimeEnabled(undefined);
+  });
+
+  afterEach(() => {
+    setTelemetryRuntimeEnabled(undefined);
+    vi.restoreAllMocks();
+  });
+
+  it('short-circuits reportClientError without issuing a network call when disabled', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{}', { status: 200 }) as unknown as Response,
+    );
+    setTelemetryRuntimeEnabled(false);
+
+    const sent = await reportClientError({
+      kind: 'boundary',
+      message: 'should not be sent',
+    });
+
+    expect(sent).toBe(false);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('allows reportClientError to send when re-enabled', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{}', { status: 200 }) as unknown as Response,
+    );
+    // sendBeacon usually wins on jsdom — stub it to force the fetch path
+    // so we can assert delivery from a single spy.
+    const originalBeacon = navigator.sendBeacon;
+    Object.defineProperty(navigator, 'sendBeacon', {
+      configurable: true,
+      value: undefined,
+    });
+    setTelemetryRuntimeEnabled(true);
+
+    try {
+      const sent = await reportClientError({
+        kind: 'boundary',
+        message: 'sent once',
+      });
+      expect(sent).toBe(true);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      Object.defineProperty(navigator, 'sendBeacon', {
+        configurable: true,
+        value: originalBeacon,
+      });
+    }
+  });
+});
+
+describe('withImportTelemetry (ADR-006 §6.5 dynamic-import chunk-load)', () => {
+  beforeEach(() => {
+    resetReporterForTests();
+    setTelemetryRuntimeEnabled(undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('passes the resolved module through on success without extra reports', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{}', { status: 200 }) as unknown as Response,
+    );
+    const module = { default: { tag: 'ok' } };
+    const wrapped = await withImportTelemetry(Promise.resolve(module));
+    expect(wrapped).toBe(module);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('reports a chunk_load error and re-rejects on failure', async () => {
+    const originalBeacon = navigator.sendBeacon;
+    Object.defineProperty(navigator, 'sendBeacon', {
+      configurable: true,
+      value: undefined,
+    });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{}', { status: 200 }) as unknown as Response,
+    );
+
+    const err = new Error('Failed to fetch dynamically imported module: ./Tab.js');
+    let rethrown: unknown;
+    try {
+      await withImportTelemetry(Promise.reject(err));
+    } catch (caught) {
+      rethrown = caught;
+    }
+
+    // The wrapper must re-reject with the original error so callers'
+    // ErrorBoundary / Suspense still sees the failure.
+    expect(rethrown).toBe(err);
+
+    // Allow the fire-and-forget report to settle.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetchSpy).toHaveBeenCalled();
+    const [, init] = fetchSpy.mock.calls[0] as [unknown, RequestInit];
+    expect(init.method).toBe('POST');
+    const body = JSON.parse(init.body as string);
+    expect(body.kind).toBe('chunk_load');
+    expect(body.message).toContain('Failed to fetch');
+
+    Object.defineProperty(navigator, 'sendBeacon', {
+      configurable: true,
+      value: originalBeacon,
+    });
   });
 });

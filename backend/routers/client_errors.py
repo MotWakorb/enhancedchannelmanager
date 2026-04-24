@@ -355,7 +355,30 @@ async def post_client_error(request: Request) -> Response:
       * 429 when the per-bucket sliding window is full.
 
     All drops bump ``ecm_client_errors_dropped_total{reason}``.
+
+    When the operator has disabled telemetry via
+    ``settings.telemetry_client_errors_enabled = False`` the endpoint
+    returns 204 immediately without reading the body, validating the
+    payload, incrementing counters, or writing a structlog line. The
+    frontend reporter short-circuits too, but we honor the toggle
+    server-side as belt-and-suspenders so a stale bundle (cached by a
+    browser that missed the toggle flip) cannot override the operator's
+    choice.
     """
+    # ---- Settings gate ------------------------------------------------------
+    # Cheap dynamic import — avoids a top-level ``config`` import loop in
+    # tests that stub ``get_settings``. The settings cache is in-memory so
+    # the call cost is a dict lookup.
+    try:
+        from config import get_settings
+        if not get_settings().telemetry_client_errors_enabled:
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except Exception:  # pragma: no cover — settings subsystem misconfigured
+        # Fail open: if we can't read the setting, fall through to the
+        # full path rather than silently losing signal. The audit log line
+        # on the full path will surface the problem.
+        logger.debug("[CLIENT-ERROR] Could not read telemetry setting; proceeding")
+
     # ---- Size check (before parsing body) -----------------------------------
     # Stream the body into memory up to the cap + 1. An operator-facing
     # FastAPI/uvicorn deployment will usually already cap request size at
