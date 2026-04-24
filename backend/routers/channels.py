@@ -1955,8 +1955,6 @@ async def merge_channels(request: "MergeChannelsRequest"):
                     all_streams.append(sid)
                     seen_streams.add(sid)
 
-        source_names = [ch.get("name", "Unknown") for ch in source_channels]
-
         # 2. Create the new merged channel
         create_data = {"name": request.target_name}
         if request.target_channel_number is not None:

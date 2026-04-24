@@ -104,8 +104,15 @@ def register(mcp: FastMCP):
                     try:
                         await client.delete(f"/api/channels/{cid}")
                         deleted_count += 1
-                    except Exception:
-                        pass
+                    except Exception as channel_delete_err:
+                        # Best-effort: continue with the remaining channels and let
+                        # the operator see the final deleted_count. Individual
+                        # channel-delete failures are logged but don't abort the group.
+                        logger.warning(
+                            "[MCP] delete_channel_group: failed to delete channel %s: %s",
+                            cid,
+                            channel_delete_err,
+                        )
 
             await client.delete(f"/api/channel-groups/{group_id}")
 

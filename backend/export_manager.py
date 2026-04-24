@@ -3,7 +3,6 @@ Export manager — orchestrates M3U/XMLTV generation for a playlist profile.
 Fetches channel/stream/EPG data from Dispatcharr, generates files,
 and writes them to /config/exports/<profile_id>/.
 """
-import json
 import logging
 import os
 import tempfile
@@ -249,5 +248,8 @@ class ExportManager:
             try:
                 os.unlink(tmp_path)
             except OSError:
+                # Temp file may already be gone (race with rename, or never
+                # created); the original write failure below is the real error
+                # we want to propagate, so suppress this cleanup error.
                 pass
             raise
