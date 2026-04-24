@@ -11,7 +11,7 @@ import zipfile
 
 import pytest
 import yaml
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from models import (
     AutoCreationRule,

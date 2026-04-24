@@ -1055,4 +1055,3 @@ async def get_mcp_status():
     except Exception as e:
         logger.debug("[SETTINGS] MCP health check failed: %s", e)
         return {"reachable": False, "error": str(e)}
-    return {"status": "revoked"}

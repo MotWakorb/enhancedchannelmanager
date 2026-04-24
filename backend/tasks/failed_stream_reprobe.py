@@ -179,8 +179,14 @@ class FailedStreamReprobeTask(TaskScheduler):
 
             try:
                 await probe_task
-            except Exception:
-                pass
+            except Exception as probe_err:
+                # The probe task surfaces individual stream failures via
+                # _probe_progress_failed_count below; we only need to drain the
+                # task here so finalisation runs even when some probes raised.
+                logger.warning(
+                    "[FAILED-STREAM-REPROBE] Underlying probe task raised: %s",
+                    probe_err,
+                )
 
             # Get final results
             success_count = self._prober._probe_progress_success_count

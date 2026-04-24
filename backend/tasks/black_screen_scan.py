@@ -242,8 +242,15 @@ class BlackScreenScanTask(TaskScheduler):
         if self._channel_groups and not self._auto_sync_groups:
             try:
                 reorder_group_names = await self._resolve_group_names()
-            except Exception:
-                pass
+            except Exception as resolve_err:
+                # Group-name lookup failure is non-fatal: post-scan reorder is a
+                # convenience step. Leaving reorder_group_names=None means the
+                # reorder block below is skipped — preferable to aborting the scan.
+                logger.warning(
+                    "[%s] Failed to resolve group names for post-scan reorder: %s",
+                    self.task_id,
+                    resolve_err,
+                )
 
         try:
             tasks = [scan_one(sid, name, url) for sid, name, url in work_items]
