@@ -277,6 +277,8 @@ See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#
 | `GET /api/journal/stats` | Get journal statistics |
 | `DELETE /api/journal/purge` | Purge old journal entries |
 
+`GET /api/journal` accepts `page`, `page_size` (capped at 200), `category`, `action_type`, `date_from`, `date_to`, `search`, and `user_initiated`. Each result row carries `batch_id` in the response body — bulk operations (e.g. `POST /api/auto-creation/rules/bulk-update`, channel renumber) write **N per-entity rows sharing one `batch_id`** so callers can stitch a forensic view of a single batch. There is no `?batch_id=` query parameter today; client-side grouping or a direct `journal_entries.batch_id` SQL lookup (indexed by `idx_journal_batch_id`) is the supported pattern. See the auto-creation `bulk-update` notes above for a worked example.
+
 ## Notifications
 
 | Endpoint | Description |
@@ -329,7 +331,7 @@ See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#
 | `POST /api/auto-creation/rules` | Create rule |
 | `PUT /api/auto-creation/rules/{id}` | Update rule |
 | `DELETE /api/auto-creation/rules/{id}` | Delete rule |
-| `POST /api/auto-creation/rules/bulk-update` | Apply the same field changes to multiple rules (omitted fields unchanged) |
+| `POST /api/auto-creation/rules/bulk-update` | Apply the same scalar field changes to multiple rules; rejects `conditions`/`actions` (see notes below) |
 | `POST /api/auto-creation/rules/reorder` | Reorder rules by priority |
 | `POST /api/auto-creation/rules/{id}/toggle` | Toggle rule enabled state |
 | `POST /api/auto-creation/rules/{id}/duplicate` | Duplicate a rule |
@@ -346,6 +348,62 @@ See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#
 | `GET /api/auto-creation/schema/template-variables` | Get available template variables |
 | `GET /api/auto-creation/lint-findings` | Read-only view of saved auto-creation rules that fail the current write-time linter (bd-eio04.7) |
 | `GET /api/auto-creation/debug-bundle` | Download diagnostic bundle (obfuscated channels, rules, streams, probe stats, settings, task schedules, logs) |
+
+`POST /api/auto-creation/rules/bulk-update` applies the same partial update to every rule in `rule_ids` in a single transaction. Send only the fields you want to change; omitted fields are left as-is per rule.
+
+**Request body:**
+
+```json
+{
+  "rule_ids": [12, 14, 17],
+  "enabled": true,
+  "priority": 5,
+  "merge_streams_remove_non_matching": true
+}
+```
+
+- `rule_ids` (required) — `1..500` distinct rule IDs. Empty list, missing list, or duplicates return `400`.
+- Scalar fields accepted (any subset): `name`, `description`, `enabled`, `priority`, `m3u_account_id`, `target_group_id`, `run_on_refresh`, `stop_on_first_match`, `sort_field`, `sort_order`, `probe_on_sort`, `sort_regex`, `stream_sort_field`, `stream_sort_order`, `normalization_group_ids`, `skip_struck_streams`, `orphan_action`, `match_scope_target_group`.
+- `merge_streams_remove_non_matching` (bulk-only convenience field) — when set, every `merge_streams` action on every targeted rule is rewritten with this `remove_non_matching` flag. Rules with no `merge_streams` action are unaffected.
+- **Rejected fields (`422 Unprocessable Entity`):** `conditions`, `actions`. Per-rule logic edits must go through `PUT /api/auto-creation/rules/{id}` so silent payload drops can't lose intent at scale (bd-gjoe5). The error message names the offending field.
+- At least one mutating field is required alongside `rule_ids`; otherwise `400 "No fields to update"`.
+- If any `rule_ids` entry doesn't exist, the entire batch aborts with `404 "Rules not found: [...]"` and no rows are written.
+- `sort_regex` is run through the auto-creation regex linter before any DB work (bd-eio04.7); a failing pattern returns `400` with the linter findings.
+
+**Response: `200 OK`**
+
+```json
+{
+  "rules": [
+    { "id": 12, "name": "...", "enabled": true, "priority": 5, "...": "..." },
+    { "id": 14, "name": "...", "enabled": true, "priority": 5, "...": "..." },
+    { "id": 17, "name": "...", "enabled": true, "priority": 5, "...": "..." }
+  ],
+  "updated_count": 3
+}
+```
+
+`rules` is the full post-update `to_dict()` for every rule in `rule_ids` (in input order), built directly from the in-memory ORM instances after `commit()` — no per-rule round-trip. `updated_count` always equals `len(rule_ids)` on success, including rules where the requested values matched the current state (no-op rules are still returned but do not emit a journal entry — see below).
+
+**Performance contract (bd-bh1hh):** the handler issues a single `SELECT ... WHERE id IN (rule_ids)` rather than N per-id queries, and skips per-rule `session.refresh()` after commit because the affected scalar columns have no DB-side defaults or triggers. At `max_length=500` this collapses what was previously ~1000 round trips into 2 (1 SELECT + 1 commit).
+
+**Audit trail / `batch_id` correlation contract (bd-91mcq):** every bulk-update writes **N per-entity journal rows** — one row per rule whose state actually changed — all sharing a single 8-character `batch_id` (UUID4 prefix). Rules where no scalar column changed and `merge_streams_remove_non_matching` was either omitted or already at the requested value are skipped (no-op rules emit no journal row). Each row uses `category="auto_creation"`, `action_type="bulk_update"`, and carries the per-rule before/after diff in `before_value`/`after_value`.
+
+To reconstruct one batch:
+
+- The `batch_id` is **not currently exposed as a query parameter** on `GET /api/journal`. Two options:
+  1. Use the `search` parameter — it does an `ILIKE %term%` on `entity_name` and `description`, which can match a rule name in the description but not the raw `batch_id`. Best when you know the rule names that were touched.
+  2. Read journal rows directly from `journal_entries` and filter by `batch_id` — `idx_journal_batch_id` (added in bd-dmu8w) makes this an indexed lookup. Example:
+     ```sql
+     SELECT id, timestamp, entity_id, entity_name, before_value, after_value
+     FROM journal_entries
+     WHERE batch_id = '1a2b3c4d'
+     ORDER BY timestamp;
+     ```
+- Every journal row returned by `GET /api/journal` already includes `batch_id` in its body, so client-side grouping by `batch_id` is supported without a server-side filter (pagination caveats apply on large windows).
+- A first-class `?batch_id=` filter on `GET /api/journal` is a known follow-up; until it lands, prefer the direct DB lookup for forensic queries.
+
+**Normalization interaction:** `normalization_group_ids` is an accepted scalar field, so bulk-update can reassign normalization groups across many rules in one call. The list is stored as-is (deduplicated and sorted) — IDs are **not** verified against `NormalizationRuleGroup` at write time, matching the behavior of `PUT /api/auto-creation/rules/{id}`. See [`docs/normalization.md`](normalization.md) for the full normalization model and how groups feed the auto-creation pipeline.
 
 ## FFMPEG Builder
 
