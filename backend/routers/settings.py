@@ -4,6 +4,7 @@ Settings router — Dispatcharr connection, preferences, and service management 
 Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 """
 import logging
+import re
 import secrets
 from typing import Optional
 
@@ -19,6 +20,13 @@ from bandwidth_tracker import BandwidthTracker, get_tracker, set_tracker
 from services.notification_service import create_notification_internal, update_notification_internal, delete_notifications_by_source_internal
 
 logger = logging.getLogger(__name__)
+
+# Discord webhook URL prefix — accepts the canonical discord.com host, the legacy
+# discordapp.com host, and the canary/ptb subdomains. Anchored to the start so
+# only well-formed webhook URLs are admitted by the test-discord endpoint.
+_DISCORD_WEBHOOK_RE = re.compile(
+    r"^https://(discord\.com|discordapp\.com|canary\.discord\.com|ptb\.discord\.com)/api/webhooks/"
+)
 
 router = APIRouter(prefix="/api/settings", tags=["Settings"])
 
@@ -783,11 +791,7 @@ async def test_discord_webhook(request: DiscordTestRequest):
         return {"success": False, "message": "Webhook URL is required"}
 
     # Validate URL format - accept discord.com, discordapp.com, and variants (canary, ptb)
-    # TODO(enhancedchannelmanager-4mab3): promote to module-level _DISCORD_WEBHOOK_RE
-    # constant to match the ECM style guide convention.
-    import re
-    discord_pattern = r'^https://(discord\.com|discordapp\.com|canary\.discord\.com|ptb\.discord\.com)/api/webhooks/'
-    if not re.match(discord_pattern, webhook_url):  # nosemgrep: no-bare-re-on-dynamic-pattern
+    if not _DISCORD_WEBHOOK_RE.match(webhook_url):
         return {"success": False, "message": "Invalid Discord webhook URL format"}
 
     try:
