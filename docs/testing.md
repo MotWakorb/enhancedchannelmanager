@@ -307,20 +307,25 @@ Both pass in isolation and fail when run after the second half of
 an integration test into the observability middleware's capture fixture.
 Tracked in bead **enhancedchannelmanager-hhsz0** (`flaky` label, P1).
 
-**Not flakes, but deterministic environment drift (three BE tests):**
-- `tests/integration/test_api_tasks.py::TestRunTaskWithSchedule::test_run_task_with_schedule_id`
-  — references a POST route that was removed from `routers/tasks.py`.
-- `tests/integration/test_router_registration.py::TestRoutePrefixes::test_all_routes_under_api`
-  — fails because the SPA fallback route `/{full_path:path}` registers only
-    when `backend/static/` exists (present in prod image, absent on CI).
-- `tests/unit/test_ffmpeg_execution.py::TestExecutionSafety::test_validates_output_path_writable`
-  — the code under test never implements the output-writability check its
-    docstring promises.
+**Not flakes, but deterministic environment drift (cleared in bead 0gcu9):**
 
-These pass on CI (`backend/` workdir, no `static/`, stubbed ffmpeg mocks) but
-fail in `ecm-ecm-1`. Tracked in bead **enhancedchannelmanager-0gcu9** as
-test-authorship repair. Until that bead lands, the container-side 3-run
-cadence uses `--deselect` for these three tests.
+The original three BE tests covered by `enhancedchannelmanager-0gcu9` were:
+- `tests/integration/test_api_tasks.py::TestRunTaskWithSchedule::test_run_task_with_schedule_id`
+  — referenced a POST route that was removed from `routers/tasks.py`. **Test
+    deleted.**
+- `tests/integration/test_router_registration.py::TestRoutePrefixes::test_all_routes_under_api`
+  — failed because the SPA fallback route `/{full_path:path}` registers only
+    when `backend/static/` exists (present in prod image, absent on CI). **Fixed
+    by adding the SPA fallback path to `NON_API_ROUTES`.**
+- `tests/unit/test_ffmpeg_execution.py::TestExecutionSafety::test_validates_output_path_writable`
+  — the code under test promised an output-writability check its docstring
+    described. **Resolved by deleting `ffmpeg_builder/execution.py` and the
+    whole `test_ffmpeg_execution.py` file — the module was dead code (zero live
+    callers; ECM builds ffmpeg command configs but never executes ffmpeg).**
+
+None of these tests need deselection any longer; the 3-run cadence command
+below still references the two `test_observability_middleware` flakes tracked
+under `enhancedchannelmanager-hhsz0`.
 
 ### Full-suite 3-run cadence command
 
@@ -329,9 +334,6 @@ The exact command used for the `tp681` baseline and the quarterly sweep:
 ```bash
 # BE — from inside ecm-ecm-1
 python -m pytest tests/ --ignore=tests/e2e \
-  --deselect tests/integration/test_api_tasks.py::TestRunTaskWithSchedule::test_run_task_with_schedule_id \
-  --deselect tests/integration/test_router_registration.py::TestRoutePrefixes::test_all_routes_under_api \
-  --deselect tests/unit/test_ffmpeg_execution.py::TestExecutionSafety::test_validates_output_path_writable \
   --deselect tests/routers/test_observability_middleware.py::TestTraceIdMiddleware::test_trace_id_appears_in_log_line \
   --deselect tests/routers/test_observability_middleware.py::TestTraceIdMiddleware::test_generated_trace_id_matches_uuidv4_format_in_logs \
   -p no:cacheprovider --tb=line -q
