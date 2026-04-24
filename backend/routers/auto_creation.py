@@ -392,6 +392,14 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
 
         session = get_session()
         try:
+            # bd-j5p4k: write-time FK validation for normalization_group_ids.
+            # Run BEFORE the DB insert so a bad ID can't create a partially
+            # populated row. Mirrors the PUT/bulk-update guard added in
+            # bd-i75ax — same delta-on-write semantics, same 422 shape.
+            _validate_normalization_group_ids(
+                request.normalization_group_ids, session
+            )
+
             # Auto-assign priority: if requested priority already taken, append at end
             existing_priorities = [r.priority for r in session.query(AutoCreationRule).all()]
             if existing_priorities and request.priority in existing_priorities:
