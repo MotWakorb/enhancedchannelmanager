@@ -5,6 +5,7 @@ Provides a subprocess-based executor with progress parsing, event emission,
 timeout handling, cancellation, and security checks.
 """
 import logging
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -58,6 +59,58 @@ class ExecutionEvent:
 # ---------------------------------------------------------------------------
 
 _SHELL_METACHAR_RE = re.compile(r'[;&|`$()]')
+
+# URL scheme detector for non-file output targets (e.g. udp://, rtmp://,
+# http://, pipe:, -). Writable-dir check does not apply to these.
+_URL_SCHEME_RE = re.compile(r'^[a-zA-Z][a-zA-Z0-9+\-.]*://')
+
+
+def _looks_like_file_output(arg: str) -> bool:
+    """True when ``arg`` looks like a local filesystem output path.
+
+    False for URL schemes (``udp://``, ``rtmp://``, ``http://``, ...),
+    ffmpeg's stdout target (``-``), ``pipe:`` / ``pipe:1``, empty strings,
+    and option flags (``-i``, ``-c:v``, ...). The writable-directory check
+    only applies to true filesystem outputs.
+    """
+    if not arg:
+        return False
+    if arg == "-":
+        return False
+    if arg.startswith("pipe:"):
+        return False
+    if _URL_SCHEME_RE.match(arg):
+        return False
+    # Option flags (``-c:v``, ``-i``, ``-filter_complex``, ...). A single
+    # ``-`` was handled above.
+    if arg.startswith("-"):
+        return False
+    return True
+
+
+def _validate_output_path_writable(command: List[str]) -> None:
+    """Verify the ffmpeg output directory exists and is writable.
+
+    ffmpeg places the output file as the last positional argument by
+    convention. This check fails fast (before subprocess spawn) so callers
+    get a clean :class:`PermissionError` instead of an opaque ffmpeg exit
+    code when they target a read-only or missing directory.
+
+    Non-file outputs (URLs, pipes, ``-``) are skipped. If the output
+    directory does not exist, treat it as not writable — ffmpeg will not
+    create parent directories on its own.
+    """
+    if not command:
+        return
+    output_arg = command[-1]
+    if not _looks_like_file_output(output_arg):
+        return
+
+    output_dir = os.path.dirname(output_arg) or "."
+    if not os.access(output_dir, os.W_OK):
+        raise PermissionError(
+            f"Output directory is not writable: {output_dir!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +255,10 @@ class FFMPEGExecutor:
                 raise SecurityError(
                     f"Command argument contains shell metacharacters: {arg!r}"
                 )
+
+        # Validate output directory is writable (fail fast before spawn).
+        # Skipped for non-file targets (URLs, pipes, ``-``).
+        _validate_output_path_writable(command)
 
         # --- Check pre-cancelled ---
         if self._cancelled:
