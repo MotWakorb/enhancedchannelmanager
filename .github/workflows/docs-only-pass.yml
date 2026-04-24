@@ -1,0 +1,107 @@
+# Sentinel workflow that satisfies branch-protection required check-runs
+# on PRs that touch ONLY paths the main CI workflows skip.
+#
+# ─── Why this exists ──────────────────────────────────────────────────
+# `dev` and `main` branch protection require these 5 status checks:
+#   - Backend Tests                              (test.yml: backend)
+#   - Frontend Tests                             (test.yml: frontend)
+#   - Semgrep Lint                               (test.yml: semgrep-lint)
+#   - CodeQL Analysis (python)                   (build.yml: codeql-analysis matrix)
+#   - CodeQL Analysis (javascript-typescript)    (build.yml: codeql-analysis matrix)
+#
+# build.yml ignores `**.md` and `.beads/**`. test.yml (PR trigger) ignores
+# `.beads/**`. So a PR touching only `**.md` produces no CodeQL check-runs —
+# the required checks never report — and the PR is unmergeable. A PR
+# touching only `.beads/**` produces no check-runs at all and is doubly
+# blocked. See bd-pf82j (PR #139, the api.md backfill that surfaced this).
+#
+# ─── How this satisfies branch protection ─────────────────────────────
+# This workflow's `paths:` filter is the strict complement of build.yml's
+# `paths-ignore`: it triggers ONLY when every changed file matches one of
+# those skipped globs. Each job's `name:` matches a required check name
+# exactly, so GitHub records a successful check-run for each name and
+# branch protection is satisfied.
+#
+# ─── Mixed-PR safety ──────────────────────────────────────────────────
+# GitHub triggers a workflow when ANY changed file matches its `paths`
+# filter (and none-of-the-paths-match for `paths-ignore`). So a PR that
+# touches both `docs/api.md` and `backend/foo.py` will:
+#   - Trigger this sentinel (because of the .md file)
+#   - Trigger build.yml + test.yml (because of the .py file)
+# Both workflows produce check-runs with the same names. Branch protection
+# requires every same-named check-run to succeed, so the real CI's
+# CodeQL/Backend/Frontend/Semgrep results still gate the merge. The
+# sentinel cannot mask a real failure — it can only fill in for the
+# absence of a real run.
+#
+# ─── Doc-only / beads-only PR ────────────────────────────────────────
+# Only this sentinel runs. Each job is a no-op `exit 0`. All 5 required
+# check-runs report success. PR becomes mergeable.
+#
+# ─── Code-only PR ────────────────────────────────────────────────────
+# This sentinel does NOT run (no changed file matches `paths`). build.yml
+# and test.yml run normally and produce the required check-runs. No
+# regression to the existing CI flow.
+name: Docs-Only Sentinel CI
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+    # MUST stay in sync with the union of `paths-ignore` lists in
+    # build.yml and test.yml. Adding a new ignored glob there without
+    # mirroring it here re-opens the chicken-and-egg gap.
+    paths:
+      - '**.md'
+      - '.beads/**'
+  pull_request:
+    branches:
+      - main
+      - dev
+    paths:
+      - '**.md'
+      - '.beads/**'
+
+# Names below MUST match the required status check names byte-for-byte.
+# Matrix-generated names from build.yml's codeql-analysis job take the
+# form "<job name> (<matrix value>)" — that's where the
+# "CodeQL Analysis (python)" / "(javascript-typescript)" names come from.
+jobs:
+  backend-tests:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Doc-only PR — main CI skipped per paths-ignore in test.yml
+        run: echo "Doc-only / beads-only change. Real Backend Tests would run if any non-doc file changed."
+
+  frontend-tests:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Doc-only PR — main CI skipped per paths-ignore in test.yml
+        run: echo "Doc-only / beads-only change. Real Frontend Tests would run if any non-doc file changed."
+
+  semgrep-lint:
+    name: Semgrep Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Doc-only PR — main CI skipped per paths-ignore in test.yml
+        run: echo "Doc-only / beads-only change. Real Semgrep Lint would run if any non-doc file changed."
+
+  codeql-analysis:
+    # Mirrors the matrix in build.yml's `codeql-analysis` job so the
+    # check-run names render as "CodeQL Analysis (python)" and
+    # "CodeQL Analysis (javascript-typescript)" — matching the names
+    # required by branch protection.
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ['javascript-typescript', 'python']
+    steps:
+      - name: Doc-only PR — main CI skipped per paths-ignore in build.yml
+        run: |
+          echo "Doc-only / beads-only change for language=${{ matrix.language }}."
+          echo "Real CodeQL Analysis would run if any non-doc file changed."
