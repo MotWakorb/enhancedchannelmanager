@@ -9,9 +9,137 @@
 - **Severity**: P1 — backend request path is either broken or degraded for every user.
 - **Owner**: SRE (runbook owner); Project Engineer (post-rollback root cause).
 - **Last reviewed**: 2026-04-24
-- **Related beads**: `enhancedchannelmanager-eqmop` (this runbook), `enhancedchannelmanager-6rrl5` (dep-bump epic), `enhancedchannelmanager-jpyz4` (PO decision: epic lands on `dev` before v0.16.0 cut), `enhancedchannelmanager-j9xrz` + `-6rrl5.1` + `-6rrl5.2` (the ASGI triplet PR1).
+- **Related beads**: `enhancedchannelmanager-eqmop` (original post-merge rollback runbook), `enhancedchannelmanager-d0pbr` (pre-merge dry-run gate for PR #170 — starlette 1.0 triplet), `enhancedchannelmanager-6rrl5` (dep-bump epic), `enhancedchannelmanager-jpyz4` (PO decision: epic lands on `dev` before v0.16.0 cut), `enhancedchannelmanager-j9xrz` + `-6rrl5.1` + `-6rrl5.2` (the ASGI triplet PR1 — PR #170).
 - **Related ADR**: [ADR-001 — Dependency Upgrade Validation Gate](../adr/ADR-001-dependency-upgrade-validation-gate.md).
-- **Complementary runbook**: [Dep-Bump Fresh-Image Smoke Test](./dep-bump-smoke-test.md) — pre-merge gate; this runbook covers the post-merge case the pre-merge gate missed.
+- **Complementary runbook**: [Dep-Bump Fresh-Image Smoke Test](./dep-bump-smoke-test.md) — generic pre-merge gate; the "Pre-merge dry-run gate" section below is the ASGI-triplet-specific companion that dry-runs the rollback *before* merge.
+
+## Pre-merge dry-run gate (PR #170 and any future ASGI-triplet bump)
+
+This section is the **merge prerequisite** for any PR that bumps
+`starlette`, `fastapi`, or `uvicorn` in `backend/requirements.txt`. The
+generic smoke test confirms a fresh image boots; this section proves the
+rollback works *before* you need it. Do not merge the triplet PR until
+every box below is checked.
+
+The risk this section defends against is silent SLI degradation on a major
+starlette bump (0.52 → 1.0 is the canonical case, bead `j9xrz`): the
+container boots, serves 200s, the generic smoke goes green — and one of
+the four `ecm_*` metric families stops emitting. SLOs burn undetected.
+Container-up is not sufficient; the four families must be verified.
+
+### 1. Capture the pre-merge `dev` HEAD SHA
+
+```bash
+# Run on the PO's / ops' local checkout of dev, BEFORE merging PR #170.
+git fetch origin
+PREV_DEV_SHA=$(git rev-parse origin/dev)
+echo "Pre-merge dev HEAD: ${PREV_DEV_SHA}"
+# Record this SHA in the PR comment — it is the rollback target if post-merge
+# verification (below) fails.
+```
+
+If the GHCR `dev-${PREV_DEV_SHA:0:7}` image tag does not exist
+(`docker manifest inspect ghcr.io/motwakorb/enhancedchannelmanager:dev-${PREV_DEV_SHA:0:7}`
+returns `manifest unknown`), **hold the merge** — the rollback target is
+not pinned in the registry, so Mode A rollback below is unavailable and
+Mode B is a rebuild under pressure. Wait for the CI build of the
+pre-merge `dev` tip to publish before merging.
+
+### 2. Baseline: all four `ecm_*` families emit under synthetic traffic
+
+Before merging, exercise the **pre-merge** image and capture the baseline
+shape of `/metrics`. This is what "good" looks like — you compare against
+it after merge.
+
+```bash
+# Point curl at the running ecm-ecm-1 (the pre-merge image).
+# Drive synthetic traffic so counters/histograms have samples to emit.
+for i in $(seq 1 50); do
+  curl -sS -o /dev/null http://localhost:${ECM_PORT:-6100}/api/health
+  curl -sS -o /dev/null http://localhost:${ECM_PORT:-6100}/api/health/ready
+done
+
+# All four ecm_* families must appear with non-zero samples.
+curl -s http://localhost:${ECM_PORT:-6100}/metrics \
+  | grep -E '^ecm_(http_requests_total|http_request_duration_seconds|health_ready_ok|health_ready_check_duration_seconds)' \
+  | tee /tmp/ecm-metrics-baseline-${PREV_DEV_SHA:0:7}.txt
+
+# Sanity: each family should have at least one sample line (HELP/TYPE lines
+# don't count — the grep above filters them out).
+awk '{print $1}' /tmp/ecm-metrics-baseline-${PREV_DEV_SHA:0:7}.txt \
+  | sed -E 's/\{.*//' | sort -u
+# Expected output — exactly these four roots (ignore _bucket/_count/_sum
+# suffixes which widen the line count but collapse here):
+#   ecm_health_ready_check_duration_seconds
+#   ecm_health_ready_ok
+#   ecm_http_request_duration_seconds
+#   ecm_http_requests_total
+```
+
+If the baseline does not show all four families, **stop** — the pre-merge
+image is already mis-instrumented and the comparison has no baseline. File
+a bead against `observability` before merging anything.
+
+### 3. Dry-run the rollback on the PR branch
+
+Simulate the Mode B rollback path locally against the PR #170 branch so
+you know `git revert` + rebuild + restart actually restores the baseline.
+
+```bash
+# Check out the PR branch and locally merge it into dev (no push).
+git fetch origin pull/170/head:pr-170-asgi-triplet
+git checkout -b pre-merge-dry-run-170 origin/dev
+git merge --no-ff pr-170-asgi-triplet -m "DRY-RUN: merge PR #170"
+MERGE_SHA=$(git rev-parse HEAD)
+
+# Revert the merge (the rollback commit you'd push post-merge if it broke).
+git revert -m 1 "${MERGE_SHA}" --no-edit
+REVERT_SHA=$(git rev-parse HEAD)
+
+# Build and run the reverted image in an isolated container (do NOT touch
+# ecm-ecm-1). The smoke-test harness handles isolation for you:
+./scripts/smoke_test_dev_container.sh
+
+# After it passes, tear down the throwaway branches/worktree.
+git checkout dev && git branch -D pre-merge-dry-run-170 pr-170-asgi-triplet
+```
+
+Dry-run passes if: the smoke-test script emits all 7 PASS lines, and the
+reverted image's `/metrics` emits all four `ecm_*` families (rerun the
+baseline curl from step 2 against the dry-run container's port).
+
+### 4. Pin the previous image tag in compose / registry *before* merging
+
+The Mode A rollback below assumes `ghcr.io/motwakorb/enhancedchannelmanager:dev-${PREV_SHA}`
+resolves. Before merging PR #170:
+
+```bash
+# Confirm the tag exists on GHCR and record its digest for the PR comment.
+docker manifest inspect ghcr.io/motwakorb/enhancedchannelmanager:dev-${PREV_DEV_SHA:0:7} \
+  | jq -r '.manifests[0].digest // .config.digest' \
+  | tee /tmp/ecm-prev-dev-digest.txt
+```
+
+If the operator uses a pinned compose override (`image: ghcr.io/…:dev-<sha>`
+rather than `:dev`), update the override to the `PREV_DEV_SHA` tag and
+verify `docker compose pull` succeeds — so the rollback is a one-command
+`docker compose up -d --force-recreate ecm`, not a hand-rolled
+`docker run`.
+
+### 5. Pre-merge checklist
+
+All boxes must be checked in the PR #170 thread before merge:
+
+- [ ] `PREV_DEV_SHA` captured and posted as a PR comment.
+- [ ] `ghcr.io/motwakorb/enhancedchannelmanager:dev-${PREV_DEV_SHA:0:7}` manifest resolves; digest posted.
+- [ ] Pre-merge `/metrics` baseline captured; all four `ecm_*` families emit non-zero samples under synthetic traffic.
+- [ ] Local dry-run (step 3) executed; `git revert` + rebuild + `./scripts/smoke_test_dev_container.sh` all green.
+- [ ] Compose / registry override pinned to `PREV_DEV_SHA` so Mode A rollback is one command.
+- [ ] Rollback triggers (below, § "Rollback triggers — numeric thresholds") acknowledged by the reviewing engineer.
+
+Once all five are checked, merge is authorized. The post-merge verification
+in the rest of this runbook (Diagnosis + Resolution) remains the live
+contract — the pre-merge gate does not replace it.
 
 ## Alert / Trigger
 
@@ -28,6 +156,28 @@ of `fastapi`, `starlette`, or `uvicorn` in `backend/requirements.txt`:
 > `ecm_*` metrics are only useful if the operator has already wired a scraper
 > to `/metrics`. For everyone else, the "no-metrics detection" path below
 > (container logs + `curl` on `/api/health`) is the actual detection surface.
+
+### Rollback triggers — numeric thresholds
+
+Alert on any of these post-deploy. Meeting any one is sufficient cause to
+execute the Resolution section below; do not wait for a second signal.
+
+| Trigger | Threshold | Window | Baseline source |
+|-|-|-|-|
+| `ecm_*` family stops emitting | Count of series in any of the four families (`ecm_http_requests_total`, `ecm_http_request_duration_seconds`, `ecm_health_ready_ok`, `ecm_health_ready_check_duration_seconds`) drops below the pre-merge baseline line-count | Any 5-minute window post-deploy | `/tmp/ecm-metrics-baseline-<PREV_SHA>.txt` from Pre-merge § 2 |
+| p95 latency delta | > +10% vs pre-merge 5-minute baseline on `/api/*` | Sustained 10 min | Pre-merge `ecm_http_request_duration_seconds` p95, same synthetic traffic pattern |
+| 5xx rate delta | > baseline + 0.1 percentage points | Sustained 5 min | Pre-merge `rate(ecm_http_requests_total{status=~"5.."}) / rate(ecm_http_requests_total)` |
+| Container-baseline test count regresses | Failure count from beads `vjlzf` (9 known-red) + `pvq6s` (12 known-red, partial overlap) **grows** after the merge | Any post-merge full-suite run | Pre-merge known-red set — the red set should stay constant or shrink; growth = new regression introduced by the bump |
+| Readiness flaps | `ecm_health_ready_ok` oscillates 0↔1 — *any* 0 sample on a supposedly-steady-state container | Any single sample | Pre-merge: always 1 |
+| Container restart loop | `docker ps --filter name=ecm-ecm-1 --format '{{.Status}}'` shows `Restarting (N)` with N ≥ 1 | Any observation | Pre-merge: "Up X" with N=0 |
+
+The first four are the SLI-level triggers (they tie directly to
+[SLO-1 readiness](../sre/slos.md#slo-1-readiness-availability),
+[SLO-2 p95 latency](../sre/slos.md#slo-2-http-latency), and
+[SLO-3 5xx rate](../sre/slos.md#slo-3-http-error-rate)). The test-count
+trigger is a leading indicator that surfaces *before* the SLI metrics
+shift, because the test suite exercises contract edges that production
+traffic may not hit immediately.
 
 ## Symptoms
 
@@ -112,6 +262,29 @@ Two other isolation signals:
 - **Rollback candidate A** — revert only the `fastapi` line in `requirements.txt`, rebuild, and retest. If the error changes or clears, fastapi is involved.
 - **Rollback candidate B** — revert only the `starlette` line. Same test. Note that fastapi pins a narrow starlette range, so reverting starlette without reverting fastapi may resolve to an incompatible pair — if pip fails to resolve, that confirms the triplet must be rolled back together.
 - In practice, the ADR-001 cadence policy is **"one major bump per PR"** but PR1 bundles three because fastapi's pins force the triplet. Plan to roll back the triplet together; use the isolation above only to name the root cause in the follow-up bead.
+
+### 5. Regression modes specific to starlette 1.0 (and uvicorn 0.46)
+
+The table in step 4 routes by *frame*; this section routes by *behavior*.
+Starlette 1.0 is a major bump; these are the contract surfaces most likely
+to shift silently — no traceback, just a changed response shape or a
+swallowed exception. Run through the list when the symptoms are present
+but step-4 tracebacks are absent.
+
+| Regression mode | What breaks | Verification command / check |
+|-|-|-|
+| **`BaseHTTPMiddleware` exception propagation** — ECM uses `@app.middleware("http")` (the decorator form of `BaseHTTPMiddleware`). Starlette 4.x let unhandled exceptions bubble; 1.0 may swallow, re-raise wrapped, or route them through a different handler. | A downstream handler exception that used to surface as 500 with `ecm_http_requests_total{status="500"}` incremented now surfaces as 200 with a partial body, or vice-versa. 5xx SLI stops tracking real errors. | Run `pytest backend/tests/integration/test_exception_propagation.py -v` (or any test that asserts a deliberate 500 path). If the expected 500s now return 200 or 422, exception propagation has shifted. Cross-check `/metrics` after a known-bad request: `ecm_http_requests_total{status="500"}` must increment by 1. |
+| **Middleware ordering** — `backend/main.py` stacks five `@app.middleware("http")` decorators (outermost → innermost as FastAPI executes them): `security_headers` → `observability` (trace-id + Prometheus) → `request_timeout` → `auth` → `request_timing`. Starlette 1.0 is known to rework the `Middleware` stack internals; order-sensitive behavior can regress silently. | Trace-id contextvar unset when metrics middleware runs (observability can't label samples); auth middleware runs *before* request_timeout so a 504 path bypasses the auth context — wrong in both directions. | After a synthetic request: (1) every log line for the request carries the same `trace_id` field, (2) the `X-Request-ID` response header echoes the inbound value when provided, (3) a request to a slow route exceeds `ECM_REQUEST_TIMEOUT_SECONDS` and returns 504 (not a 502 or a hung connection). The order-preserving integration test is `backend/tests/integration/test_event_loop_responsiveness.py::TestRequestTimeoutMiddleware` — note this test is in the `vjlzf` known-red set in the container baseline; a **net** count shift is the signal, not any single pass/fail. |
+| **ASGI scope mutation** — `backend/main.py:223` and `backend/observability.py` read `request.scope["route"].path` to label metrics by route pattern (bounds cardinality). Starlette 1.0 may change when `scope["route"]` is populated, populate it with a different object shape, or move it to `scope["endpoint"]`. | Metrics labels collapse to raw paths (cardinality bomb — `/api/channels/1`, `/api/channels/2`, …) or blank out (one `{path=""}` series instead of many patterns). | After synthetic traffic mix that hits parameterized routes: `curl -s /metrics \| grep 'ecm_http_requests_total{' \| awk -F'path="' '{print $2}' \| awk -F'"' '{print $1}' \| sort -u`. Expected: route *patterns* (e.g. `/api/channels/{channel_id}`), not concrete IDs. If you see `/api/channels/1`, `/api/channels/2`, … the scope contract has regressed. |
+| **`request.state` access paths** — `app.state.limiter` (slowapi), any `request.state.<x>` set by a middleware and read by a handler. Starlette 1.0 has tightened `State` access semantics in prior minors; the 1.0 cut is where residual AttributeError divergences land. | Rate-limit middleware stops applying (every request gets full budget) or raises AttributeError on a previously-set attr. | `curl` the same endpoint at a rate known to trigger slowapi's 429 (usually >10 req/s for the default limiter). Pre-merge: 429 after threshold. Post-merge: all 200s → limiter contract broke. |
+| **uvicorn 0.46 event-loop / cancellation** — `backend/main.py:361 request_timeout_middleware` wraps `call_next` in `asyncio.wait_for(..., timeout=ECM_REQUEST_TIMEOUT_SECONDS)` and catches `asyncio.TimeoutError` to return 504. uvicorn 0.46 changes cancellation propagation at the transport layer; if `wait_for`'s cancellation does not reach the inner task the same way, the 504 path either doesn't fire (request hangs) or fires twice (ASGI protocol error). | Slow endpoints hang past the configured timeout instead of returning 504; or the connection resets mid-response with a `RuntimeError: Response content longer than Content-Length` in logs. | `curl -w '%{http_code} %{time_total}\n' -o /dev/null -s -m 60 http://localhost:${ECM_PORT:-6100}/api/_slow_test_endpoint` (if available) — the code must be 504 and `time_total` within 1.5× of `ECM_REQUEST_TIMEOUT_SECONDS`. If it returns 200 after a long wait, or the curl times out at -m 60 with no response, cancellation regressed. |
+| **Lifespan protocol renegotiation** — starlette 1.0 may reject the `@app.on_event("startup")` / `@app.on_event("shutdown")` decorators (deprecated since 0.28) in favor of the `lifespan=` context manager. ECM still uses `@app.on_event` per the PR #170 audit. | Startup never completes (uvicorn logs "Waiting for application startup" but never "Application startup complete"); or shutdown hangs and SIGKILL is needed. | `docker logs ecm-ecm-1 2>&1 \| grep -E "Application (startup \|shutdown) complete"` — both must appear within 30s of boot/stop. If `startup complete` is missing, lifespan regressed. Migrate to `lifespan=` in a follow-up bead if starlette 1.0 has *hard*-removed `@app.on_event`. |
+| **`StreamingResponse` contract** — `backend/routers/auto_creation.py:20` imports `StreamingResponse` from `starlette.responses`. Starlette 1.0 may tighten what an async generator body can yield (bytes-only, no strings). | Streaming endpoints (DBAS import streaming, any SSE) break with `TypeError: expected bytes, got str`. | Exercise the DBAS import streaming endpoint; verify the response streams and completes. If `docker logs` shows a `TypeError` in a StreamingResponse frame, the contract regressed. |
+
+If any row above confirms a regression, treat it the same as a
+step-4 decision-tree hit — route to the Resolution section and roll the
+triplet back. Record which row matched in the follow-up bead so the
+re-cut PR can add a targeted regression test.
 
 ### Escalate instead of continuing if
 
@@ -252,10 +425,39 @@ curl -sS http://localhost:${ECM_PORT:-6100}/api/health/ready | jq '.status'
 # Expected: drops toward 0 over the next 5 minutes. If it doesn't, rollback
 # didn't fix the root cause — escalate.
 
+# All four ecm_* families emit non-zero samples — the "silent SLI degradation"
+# check. Container-up is NOT sufficient.
+for i in $(seq 1 20); do
+  curl -sS -o /dev/null http://localhost:${ECM_PORT:-6100}/api/health
+  curl -sS -o /dev/null http://localhost:${ECM_PORT:-6100}/api/health/ready
+done
+curl -s http://localhost:${ECM_PORT:-6100}/metrics \
+  | grep -E '^ecm_(http_requests_total|http_request_duration_seconds|health_ready_ok|health_ready_check_duration_seconds)' \
+  | awk '{print $1}' | sed -E 's/\{.*//' | sort -u
+# Expected: exactly four roots (ecm_health_ready_check_duration_seconds,
+# ecm_health_ready_ok, ecm_http_request_duration_seconds, ecm_http_requests_total).
+# If any are missing, rollback is incomplete — escalate.
+
+# Compare to the pre-merge baseline captured in Pre-merge § 2. The line counts
+# per family should match (within sample-noise); missing lines = missing series.
+diff <(sort /tmp/ecm-metrics-baseline-${PREV_DEV_SHA:0:7}.txt | awk '{print $1}' | sed -E 's/\{.*//' | sort -u) \
+     <(curl -s http://localhost:${ECM_PORT:-6100}/metrics \
+         | grep -E '^ecm_(http_requests_total|http_request_duration_seconds|health_ready_ok|health_ready_check_duration_seconds)' \
+         | awk '{print $1}' | sed -E 's/\{.*//' | sort -u)
+# Expected: no diff output.
+
 # Log-side confirmation (no Prometheus).
 docker logs ecm-ecm-1 --since 2m 2>&1 | grep -c '"level":"ERROR"'
 # Expected: low / zero. A non-trivial count after rollback means escalate.
 ```
+
+### Notify
+
+Once verification passes, notify the release-notes Discord channel per
+[`docs/discord_release_notes.md`](../discord_release_notes.md): post the
+rollback commit/tag, the SLI symptom that triggered it, and a pointer to
+this runbook. Users hit by the bad bundle need to know when the rollback
+took so they can retry without reporting duplicate incidents.
 
 ## Escalation
 
@@ -272,7 +474,7 @@ the rollback target SHA you used.
 
 ## Post-incident
 
-- [ ] File a bead under `enhancedchannelmanager-6rrl5` for the root-cause fix. Label: `dep-bump`, `roadmap:v0.16.0`, `backend`. Reference the traceback evidence.
+- [ ] Open a **P1 bead** documenting the break with enough evidence to un-red before re-attempt: the Diagnosis decision-tree row that matched, the starlette-1.0 regression-mode row (if any), the `/tmp/ecm-asgi-regression.log` snapshot, the pre- and post-merge `/metrics` diffs, and the rollback target SHA. File it under `enhancedchannelmanager-6rrl5` (dep-bump epic). Labels: `dep-bump`, `roadmap:v0.16.0`, `backend`, `sre`.
 - [ ] **Pin `backend/requirements.txt` back to the previous-good versions** in a follow-up PR to `dev` so a fresh `docker build` on `dev` does not re-introduce the regression. The PR should explicitly pin `fastapi`, `starlette`, and `uvicorn` to the pre-triplet versions.
 - [ ] Re-cut process: once the root cause is fixed, the dep-bump PR can be re-proposed. Follow ADR-001 — one-major-per-PR cadence, fresh-image smoke must be green ([dep-bump-smoke-test runbook](./dep-bump-smoke-test.md)), and the triplet stays bundled (fastapi's pin of starlette forces this).
 - [ ] If `ecm_http_requests_total` 5xx did **not** trigger an alert before users reported the issue, file a bead on alerting: either no Prometheus scrape is wired (infrastructure gap) or the alert threshold missed it (tuning gap). Reference [SLO-3 HTTP Error Rate](../sre/slos.md#slo-3-http-error-rate).
@@ -284,7 +486,10 @@ the rollback target SHA you used.
 - [ADR-001 — Dependency Upgrade Validation Gate](../adr/ADR-001-dependency-upgrade-validation-gate.md) — defines the pre-merge gate that was supposed to catch this; a successful runbook execution implies an ADR-001 gap worth capturing.
 - [Dep-Bump Fresh-Image Smoke Test](./dep-bump-smoke-test.md) — pre-merge counterpart; run it on the re-cut PR before re-proposing.
 - [SLOs](../sre/slos.md) — SLO-1 (readiness), SLO-2 (p95 latency), SLO-3 (5xx rate) are the SLIs this regression burns against.
-- `backend/observability.py` — registered metric names (`ecm_http_requests_total`, `ecm_http_request_duration_seconds`, `ecm_health_ready_ok`).
+- `backend/observability.py` — registered metric names: `ecm_http_requests_total`, `ecm_http_request_duration_seconds`, `ecm_health_ready_ok`, `ecm_health_ready_check_duration_seconds` (all four families gated by the Pre-merge § 2 baseline and the Verify block).
+- `backend/main.py` — the five-middleware stack (`security_headers` → `observability` → `request_timeout` → `auth` → `request_timing`) verified by the starlette-1.0 regression-mode table.
+- [`docs/discord_release_notes.md`](../discord_release_notes.md) — notification convention used by the post-rollback Notify step.
+- Beads `enhancedchannelmanager-vjlzf` (9 known-red container-baseline tests) + `enhancedchannelmanager-pvq6s` (12 known-red, partial overlap with vjlzf) — the stable red set used by the "test count regresses" rollback trigger.
 - `backend/entrypoint.sh` — exact uvicorn invocation (`uvicorn main:app --host 0.0.0.0 --port ${ECM_PORT} --limit-concurrency ${ECM_LIMIT_CONCURRENCY} --timeout-keep-alive ${ECM_TIMEOUT_KEEP_ALIVE}`); one worker, no `--workers` flag.
 - `backend/requirements.txt` — the pins rolled back by this runbook.
 - `docker-compose.yml` — container config (`ecm-config` volume, port mapping).
