@@ -1125,12 +1125,25 @@ class TestRestoreYaml:
 
     @pytest.mark.asyncio
     async def test_partial_failure_handling(self, async_client, test_session):
-        """Reports partial failures without aborting other sections."""
+        """Reports partial failures without aborting other sections.
+
+        CodeQL py/stack-trace-exposure (#1412): the response error list MUST
+        sanitize exception messages — the section key + exception class name
+        is the contract; the raw str(e) (which can contain DB paths, SQL
+        fragments, or schema details) MUST NOT leak.
+        """
         content = _make_yaml_export()
         sections = json.dumps(["tag_groups", "auto_creation_rules"])
 
+        # Use a distinctive secret-bearing message to assert it is NOT echoed
+        # back to the client. The test exercises the sanitization explicitly.
+        secret_msg = "DB error: /var/lib/secret/db.sqlite locked"
+
         # Make auto_creation_rules restore fail by patching the registry
-        with patch.dict("routers.backup._SECTION_RESTORERS", {"auto_creation_rules": MagicMock(side_effect=Exception("DB error"))}):
+        with patch.dict(
+            "routers.backup._SECTION_RESTORERS",
+            {"auto_creation_rules": MagicMock(side_effect=Exception(secret_msg))},
+        ):
             response = await async_client.post(
                 "/api/backup/restore-yaml",
                 data={"sections": sections},
@@ -1142,7 +1155,12 @@ class TestRestoreYaml:
         assert data["success"] is False
         assert "tag_groups" in data["sections_restored"]
         assert "auto_creation_rules" in data["sections_failed"]
-        assert any("auto_creation_rules: DB error" in e for e in data["errors"])
+        # New contract: errors carry the section key + exception class only.
+        assert any("auto_creation_rules: Exception" in e for e in data["errors"])
+        # Negative assertion: the original message body MUST NOT leak.
+        for entry in data["errors"]:
+            assert "/var/lib/secret" not in entry
+            assert "DB error" not in entry
 
         # tag_groups should still have been restored
         assert test_session.query(TagGroup).count() == 1
