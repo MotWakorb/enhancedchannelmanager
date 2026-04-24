@@ -336,20 +336,8 @@ class TestTaskParameterSchemas:
             assert "schemas" in data
 
 
-class TestRunTaskWithSchedule:
-    """Tests for running tasks with specific schedule parameters."""
-
-    @pytest.mark.asyncio
-    async def test_run_task_with_schedule_id(self, async_client, test_session):
-        """POST /api/tasks/{task_id}/schedules/{schedule_id}/run triggers task with params."""
-        from tests.fixtures.factories import create_task_schedule
-
-        schedule = create_task_schedule(test_session, task_id="stream_probe")
-        schedule.set_parameters({"batch_size": 15, "channel_groups": ["Test"]})
-        test_session.commit()
-
-        response = await async_client.post(
-            f"/api/tasks/stream_probe/schedules/{schedule.id}/run"
-        )
-        # May return 200 (started), 404 (not found), 409 (already running), or 500
-        assert response.status_code in (200, 404, 409, 500)
+# Note: TestRunTaskWithSchedule was removed in bead enhancedchannelmanager-0gcu9.
+# It covered POST /api/tasks/{task_id}/schedules/{schedule_id}/run, a route that
+# was removed from routers/tasks.py. Per-schedule "run" is not an exposed endpoint
+# today — running a task uses POST /api/tasks/{task_id}/run. If the per-schedule
+# run endpoint is re-introduced, re-add a focused test then.

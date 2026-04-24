@@ -1815,8 +1815,14 @@ async def generate_debug_bundle():
             try:
                 m3u_accounts = await client.get_m3u_accounts()
                 m3u_id_to_name = {a["id"]: a["name"] for a in m3u_accounts}
-            except Exception:
-                pass
+            except Exception as m3u_lookup_err:
+                # M3U-name lookup is decorative for the YAML export — when it
+                # fails we still export rules with raw m3u_account_ids and the
+                # operator can re-import on a host with M3U access.
+                logger.warning(
+                    "[AUTO-CREATE-EXPORT] Could not fetch M3U accounts for name resolution: %s",
+                    m3u_lookup_err,
+                )
 
             export_rules = {
                 "version": 1,

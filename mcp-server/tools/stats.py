@@ -215,8 +215,13 @@ def register(mcp: FastMCP):
                         name = c.get("channel_name", c.get("name", "Unknown"))
                         count = c.get("unique_viewers", c.get("viewer_count", 0))
                         lines.append(f"  {name}: {count} viewers")
-            except Exception:
-                pass
+            except Exception as channel_breakdown_err:
+                # Per-channel breakdown is supplementary detail; if Dispatcharr lacks the
+                # /unique-viewers-by-channel endpoint we still return the totals above.
+                logger.debug(
+                    "[MCP] get_unique_viewers: per-channel breakdown unavailable: %s",
+                    channel_breakdown_err,
+                )
 
             return "\n".join(lines)
         except Exception as e:

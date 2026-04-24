@@ -222,6 +222,7 @@ If Option 1 + Option 4 prove too noisy or too slow:
 - Bead `enhancedchannelmanager-xnqgo` — ADR-001 (dep-bump gate; scope overlaps)
 - `.github/workflows/build.yml` — workflow under change
 - `.github/codeql/codeql-config.yml` — query exclusion source of truth
+- `docs/security/codeql-config.md` — operational reference: how to add/remove rules, how to verify no Default-Setup drift (filed under bd-bsbr3)
 - `backend/routers/backup.py` — site of the 4 outstanding HIGH alerts
 - `backend/log_utils.py` — the runtime sanitizer justifying the `py/log-injection` exclusion
 - PR #82 — incident reference (aggregate promotion blocked by pre-existing findings)
