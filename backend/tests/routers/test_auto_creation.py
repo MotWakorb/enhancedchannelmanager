@@ -11,7 +11,25 @@ import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from models import AutoCreationRule, AutoCreationExecution
+from models import AutoCreationRule, AutoCreationExecution, NormalizationRuleGroup
+
+
+def _create_normalization_group(session, **overrides):
+    """Helper to create a NormalizationRuleGroup."""
+    defaults = {
+        "name": "Test Group",
+        "enabled": True,
+        "priority": 0,
+        "is_builtin": False,
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+    }
+    defaults.update(overrides)
+    group = NormalizationRuleGroup(**defaults)
+    session.add(group)
+    session.commit()
+    session.refresh(group)
+    return group
 
 
 def _create_rule(session, **overrides):
@@ -166,6 +184,122 @@ class TestUpdateAutoCreationRule:
             )
 
         assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_accepts_valid_normalization_group_ids(
+        self, async_client, test_session
+    ):
+        """bd-i75ax: PUT accepts normalization_group_ids that all exist."""
+        rule = _create_rule(test_session, name="WithNorm")
+        g1 = _create_normalization_group(test_session, name="Group A")
+        g2 = _create_normalization_group(test_session, name="Group B")
+
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.put(
+                f"/api/auto-creation/rules/{rule.id}",
+                json={"normalization_group_ids": [g1.id, g2.id]},
+            )
+
+        assert response.status_code == 200, response.text
+        assert sorted(response.json()["normalization_group_ids"]) == sorted([g1.id, g2.id])
+
+    @pytest.mark.asyncio
+    async def test_accepts_empty_normalization_group_ids(
+        self, async_client, test_session
+    ):
+        """bd-i75ax: PUT accepts an empty normalization_group_ids list (disables normalization)."""
+        rule = _create_rule(test_session, name="EmptyNorm")
+        # Pre-populate with valid IDs to verify empty clears them
+        g1 = _create_normalization_group(test_session, name="Group X")
+        rule.set_normalization_group_ids([g1.id])
+        test_session.commit()
+
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.put(
+                f"/api/auto-creation/rules/{rule.id}",
+                json={"normalization_group_ids": []},
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["normalization_group_ids"] == []
+
+    @pytest.mark.asyncio
+    async def test_rejects_missing_normalization_group_id(
+        self, async_client, test_session
+    ):
+        """bd-i75ax: PUT returns 422 when a submitted ID is not in normalization_rule_groups,
+        and the error names the offending ID."""
+        rule = _create_rule(test_session, name="BadNorm")
+        g1 = _create_normalization_group(test_session, name="Group Real")
+        missing_id = 999999
+
+        response = await async_client.put(
+            f"/api/auto-creation/rules/{rule.id}",
+            json={"normalization_group_ids": [g1.id, missing_id]},
+        )
+
+        assert response.status_code == 422, response.text
+        body = response.text
+        assert str(missing_id) in body
+        # Sanity: the valid id should not be in the offending list
+        # (we look for the structured field rather than substring to avoid
+        # false-positive overlap with rule_id or other numbers in the error)
+        detail = response.json().get("detail")
+        assert detail is not None
+        # detail may be a dict with an offending list; assert structure carries it
+        if isinstance(detail, dict):
+            offending = detail.get("invalid_normalization_group_ids") or detail.get("offending_ids") or []
+            assert missing_id in offending
+            assert g1.id not in offending
+
+    @pytest.mark.asyncio
+    async def test_rejects_lists_all_invalid_normalization_group_ids(
+        self, async_client, test_session
+    ):
+        """bd-i75ax: When multiple submitted IDs are missing, all are listed."""
+        rule = _create_rule(test_session, name="MultiBadNorm")
+        g1 = _create_normalization_group(test_session, name="Real Group")
+        bad_a, bad_b, bad_c = 700001, 700002, 700003
+
+        response = await async_client.put(
+            f"/api/auto-creation/rules/{rule.id}",
+            json={"normalization_group_ids": [g1.id, bad_a, bad_b, bad_c]},
+        )
+
+        assert response.status_code == 422, response.text
+        detail = response.json().get("detail")
+        assert isinstance(detail, dict)
+        offending = detail.get("invalid_normalization_group_ids") or detail.get("offending_ids") or []
+        assert sorted(offending) == sorted([bad_a, bad_b, bad_c])
+        assert g1.id not in offending
+
+    @pytest.mark.asyncio
+    async def test_does_not_validate_when_normalization_group_ids_omitted(
+        self, async_client, test_session
+    ):
+        """bd-i75ax delta-on-write: PUT requests that don't include
+        normalization_group_ids must not re-validate the existing stored value.
+        This preserves backward-compat with rules whose stored IDs reference
+        groups that have since been deleted."""
+        rule = _create_rule(test_session, name="StaleStored")
+        # Simulate a stale stored id (group was deleted out from under us)
+        stale_id = 999998
+        rule.set_normalization_group_ids([stale_id])
+        test_session.commit()
+
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            # Update an unrelated field — must succeed even though stored
+            # normalization_group_ids reference a missing group.
+            response = await async_client.put(
+                f"/api/auto-creation/rules/{rule.id}",
+                json={"name": "Renamed"},
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["name"] == "Renamed"
 
 
 class TestBulkUpdateAutoCreationRules:
@@ -546,6 +680,125 @@ class TestBulkUpdateAutoCreationRules:
         assert response.status_code == 404
         # Zero log_entry calls on the rollback path.
         assert mock_journal.log_entry.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_accepts_valid_normalization_group_ids(
+        self, async_client, test_session
+    ):
+        """bd-i75ax: bulk-update accepts normalization_group_ids that all exist."""
+        r1 = _create_rule(test_session, name="BulkNormA")
+        r2 = _create_rule(test_session, name="BulkNormB")
+        g1 = _create_normalization_group(test_session, name="Bulk Group A")
+        g2 = _create_normalization_group(test_session, name="Bulk Group B")
+
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={
+                    "rule_ids": [r1.id, r2.id],
+                    "normalization_group_ids": [g1.id, g2.id],
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["updated_count"] == 2
+        test_session.expire_all()
+        for rid in (r1.id, r2.id):
+            refreshed = test_session.query(AutoCreationRule).get(rid)
+            assert sorted(refreshed.get_normalization_group_ids()) == sorted([g1.id, g2.id])
+
+    @pytest.mark.asyncio
+    async def test_accepts_empty_normalization_group_ids(
+        self, async_client, test_session
+    ):
+        """bd-i75ax: bulk-update accepts empty normalization_group_ids list."""
+        r1 = _create_rule(test_session, name="BulkEmptyNorm")
+        # Pre-populate so empty actually clears something
+        g1 = _create_normalization_group(test_session, name="Bulk Pre Group")
+        r1.set_normalization_group_ids([g1.id])
+        test_session.commit()
+
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={
+                    "rule_ids": [r1.id],
+                    "normalization_group_ids": [],
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        test_session.expire_all()
+        refreshed = test_session.query(AutoCreationRule).get(r1.id)
+        assert refreshed.get_normalization_group_ids() == []
+
+    @pytest.mark.asyncio
+    async def test_rejects_missing_normalization_group_id(
+        self, async_client, test_session
+    ):
+        """bd-i75ax: bulk-update returns 422 with offending IDs named when any
+        submitted ID is missing from normalization_rule_groups, and rolls back
+        (no rule is mutated)."""
+        r1 = _create_rule(test_session, name="BulkBadNormA", enabled=False)
+        r2 = _create_rule(test_session, name="BulkBadNormB", enabled=False)
+        g1 = _create_normalization_group(test_session, name="Bulk Real Group")
+        bad_a = 800001
+        bad_b = 800002
+
+        mock_journal = MagicMock()
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal", mock_journal):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={
+                    "rule_ids": [r1.id, r2.id],
+                    "normalization_group_ids": [g1.id, bad_a, bad_b],
+                    # Try a scalar update too — must not be applied on rollback
+                    "enabled": True,
+                },
+            )
+
+        assert response.status_code == 422, response.text
+        detail = response.json().get("detail")
+        assert isinstance(detail, dict)
+        offending = detail.get("invalid_normalization_group_ids") or detail.get("offending_ids") or []
+        assert sorted(offending) == sorted([bad_a, bad_b])
+        assert g1.id not in offending
+
+        # No journal entries should be written on the validation failure path.
+        assert mock_journal.log_entry.call_count == 0
+
+        # Sanity: scalar update must not have been persisted.
+        test_session.expire_all()
+        for rid in (r1.id, r2.id):
+            refreshed = test_session.query(AutoCreationRule).get(rid)
+            assert refreshed.enabled is False, f"rule id={rid} was mutated despite 422"
+
+    @pytest.mark.asyncio
+    async def test_does_not_validate_when_normalization_group_ids_omitted(
+        self, async_client, test_session
+    ):
+        """bd-i75ax delta-on-write: bulk-update requests that don't include
+        normalization_group_ids must not re-validate stored values, even if
+        any rule in scope has stale stored IDs."""
+        r1 = _create_rule(test_session, name="BulkStale", enabled=False)
+        # Simulate a stale stored id
+        r1.set_normalization_group_ids([999997])
+        test_session.commit()
+
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post(
+                "/api/auto-creation/rules/bulk-update",
+                json={"rule_ids": [r1.id], "enabled": True},
+            )
+
+        assert response.status_code == 200, response.text
+        test_session.expire_all()
+        refreshed = test_session.query(AutoCreationRule).get(r1.id)
+        assert refreshed.enabled is True
 
 
 class TestDeleteAutoCreationRule:
