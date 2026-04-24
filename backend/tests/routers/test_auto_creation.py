@@ -155,6 +155,96 @@ class TestCreateAutoCreationRule:
 
         assert response.status_code == 400
 
+    @pytest.mark.asyncio
+    async def test_accepts_valid_normalization_group_ids(
+        self, async_client, test_session
+    ):
+        """bd-j5p4k: POST accepts normalization_group_ids that all exist.
+
+        Mirrors the PUT/bulk-update validation added in bd-i75ax to close
+        the symmetric write-time gap on the create endpoint.
+        """
+        g1 = _create_normalization_group(test_session, name="Group A")
+        g2 = _create_normalization_group(test_session, name="Group B")
+
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post("/api/auto-creation/rules", json={
+                "name": "WithNorm",
+                "conditions": [{"type": "stream_name_contains", "value": "CNN"}],
+                "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+                "normalization_group_ids": [g1.id, g2.id],
+            })
+
+        assert response.status_code == 200, response.text
+        assert sorted(response.json()["normalization_group_ids"]) == sorted([g1.id, g2.id])
+
+    @pytest.mark.asyncio
+    async def test_accepts_empty_normalization_group_ids(
+        self, async_client
+    ):
+        """bd-j5p4k: POST accepts an empty normalization_group_ids list
+        (no normalization groups is a legitimate state)."""
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.post("/api/auto-creation/rules", json={
+                "name": "EmptyNorm",
+                "conditions": [{"type": "stream_name_contains", "value": "CNN"}],
+                "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+                "normalization_group_ids": [],
+            })
+
+        assert response.status_code == 200, response.text
+        assert response.json()["normalization_group_ids"] == []
+
+    @pytest.mark.asyncio
+    async def test_rejects_missing_normalization_group_id(
+        self, async_client, test_session
+    ):
+        """bd-j5p4k: POST returns 422 when a submitted ID is not in
+        normalization_rule_groups, and the error names the offending ID."""
+        g1 = _create_normalization_group(test_session, name="Group Real")
+        missing_id = 999999
+
+        response = await async_client.post("/api/auto-creation/rules", json={
+            "name": "BadNorm",
+            "conditions": [{"type": "stream_name_contains", "value": "CNN"}],
+            "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+            "normalization_group_ids": [g1.id, missing_id],
+        })
+
+        assert response.status_code == 422, response.text
+        body = response.text
+        assert str(missing_id) in body
+        detail = response.json().get("detail")
+        assert detail is not None
+        if isinstance(detail, dict):
+            offending = detail.get("invalid_normalization_group_ids") or detail.get("offending_ids") or []
+            assert missing_id in offending
+            assert g1.id not in offending
+
+    @pytest.mark.asyncio
+    async def test_rejects_lists_all_invalid_normalization_group_ids(
+        self, async_client, test_session
+    ):
+        """bd-j5p4k: When multiple submitted IDs are missing on POST, all are listed."""
+        g1 = _create_normalization_group(test_session, name="Real Group")
+        bad_a, bad_b, bad_c = 700001, 700002, 700003
+
+        response = await async_client.post("/api/auto-creation/rules", json={
+            "name": "MultiBadNorm",
+            "conditions": [{"type": "stream_name_contains", "value": "CNN"}],
+            "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+            "normalization_group_ids": [g1.id, bad_a, bad_b, bad_c],
+        })
+
+        assert response.status_code == 422, response.text
+        detail = response.json().get("detail")
+        assert isinstance(detail, dict)
+        offending = detail.get("invalid_normalization_group_ids") or detail.get("offending_ids") or []
+        assert sorted(offending) == sorted([bad_a, bad_b, bad_c])
+        assert g1.id not in offending
+
 
 class TestUpdateAutoCreationRule:
     """Tests for PUT /api/auto-creation/rules/{rule_id}."""
