@@ -867,54 +867,57 @@ def test_extract_groups_date_pattern_adversarial_keeps_title_within_budget():
 # ---------------------------------------------------------------------------
 # Property-based equivalence: for benign (pattern, text) pairs, safe_regex
 # migrated sites produce the same result as the prior stdlib-re behavior.
+#
+# ``hypothesis`` is a hard requirement (pinned in backend/requirements.in
+# + requirements.txt). We import it directly rather than guarding with
+# ``try/except ImportError`` so a missing install (e.g. CI didn't install
+# backend/requirements.txt) surfaces as a loud collection error instead
+# of silently dropping these property tests — see bd-s8kq3 for the
+# install-gap policy.
 # ---------------------------------------------------------------------------
 
-try:
-    from hypothesis import given, settings, strategies as st
-    _HAS_HYPOTHESIS = True
-except ImportError:  # pragma: no cover
-    _HAS_HYPOTHESIS = False
+import re as _re_stdlib
+
+from hypothesis import given, settings, strategies as st
+
+# Benign patterns: simple literal + alternation that neither stdlib re
+# nor the regex library will treat pathologically. Keep the alphabet
+# tiny so patterns and texts exercise the same characters reliably.
+_BENIGN_PATTERNS = st.sampled_from([
+    r"foo", r"\d+", r"[a-z]+", r"ab?c", r"^hello", r"world$",
+    r"(?P<w>\w+)", r"a(b|c)d", r"x{1,3}y",
+])
+_BENIGN_TEXTS = st.text(alphabet="abcdefghijxyz 0123456789", min_size=0, max_size=64)
 
 
-if _HAS_HYPOTHESIS:
-    import re as _re_stdlib
+@given(pattern=_BENIGN_PATTERNS, text=_BENIGN_TEXTS)
+@settings(max_examples=50, deadline=1000)
+def test_apply_substitutions_benign_equivalence(pattern, text):
+    """For benign patterns, apply_substitutions produces the same string
+    as the prior stdlib re.sub behavior."""
+    try:
+        expected = _re_stdlib.sub(pattern, "REPL", text)
+    except _re_stdlib.error:
+        # Skip patterns stdlib rejects — migration behavior on invalid
+        # patterns (no-op) is covered by the explicit tests above.
+        return
+    pairs = [{"find": pattern, "replace": "REPL", "is_regex": True, "enabled": True}]
+    actual, _steps = apply_substitutions(text, pairs)
+    assert actual == expected
 
-    # Benign patterns: simple literal + alternation that neither stdlib re
-    # nor the regex library will treat pathologically. Keep the alphabet
-    # tiny so patterns and texts exercise the same characters reliably.
-    _BENIGN_PATTERNS = st.sampled_from([
-        r"foo", r"\d+", r"[a-z]+", r"ab?c", r"^hello", r"world$",
-        r"(?P<w>\w+)", r"a(b|c)d", r"x{1,3}y",
-    ])
-    _BENIGN_TEXTS = st.text(alphabet="abcdefghijxyz 0123456789", min_size=0, max_size=64)
 
-    @given(pattern=_BENIGN_PATTERNS, text=_BENIGN_TEXTS)
-    @settings(max_examples=50, deadline=1000)
-    def test_apply_substitutions_benign_equivalence(pattern, text):
-        """For benign patterns, apply_substitutions produces the same string
-        as the prior stdlib re.sub behavior."""
-        try:
-            expected = _re_stdlib.sub(pattern, "REPL", text)
-        except _re_stdlib.error:
-            # Skip patterns stdlib rejects — migration behavior on invalid
-            # patterns (no-op) is covered by the explicit tests above.
-            return
-        pairs = [{"find": pattern, "replace": "REPL", "is_regex": True, "enabled": True}]
-        actual, _steps = apply_substitutions(text, pairs)
-        assert actual == expected
-
-    @given(pattern=_BENIGN_PATTERNS, text=_BENIGN_TEXTS)
-    @settings(max_examples=50, deadline=1000)
-    def test_extract_groups_title_benign_equivalence(pattern, text):
-        """For benign title patterns, extract_groups behaves the same way
-        as stdlib re.search: match -> dict, no match -> None."""
-        try:
-            expected_match = _re_stdlib.search(pattern, text)
-        except _re_stdlib.error:
-            return
-        groups = extract_groups(text, pattern)
-        if expected_match is None:
-            assert groups is None
-        else:
-            assert groups is not None
-            assert groups == dict(expected_match.groupdict())
+@given(pattern=_BENIGN_PATTERNS, text=_BENIGN_TEXTS)
+@settings(max_examples=50, deadline=1000)
+def test_extract_groups_title_benign_equivalence(pattern, text):
+    """For benign title patterns, extract_groups behaves the same way
+    as stdlib re.search: match -> dict, no match -> None."""
+    try:
+        expected_match = _re_stdlib.search(pattern, text)
+    except _re_stdlib.error:
+        return
+    groups = extract_groups(text, pattern)
+    if expected_match is None:
+        assert groups is None
+    else:
+        assert groups is not None
+        assert groups == dict(expected_match.groupdict())
