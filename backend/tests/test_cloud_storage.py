@@ -330,6 +330,101 @@ class TestCloudTargetTestConnection:
         assert response.status_code == 200
         assert response.json()["success"] is False
 
+    @pytest.mark.asyncio
+    @patch("routers.export.get_adapter")
+    async def test_inline_adapter_exception_sanitizes_message(
+        self, mock_get_adapter, async_client
+    ):
+        """CodeQL py/stack-trace-exposure (#1353): inline cloud target test
+        MUST NOT echo str(e) — adapter exception messages can include URLs,
+        tenant IDs, and token fragments. The client receives the exception
+        class only.
+        """
+        secret = "AccessKey=AKIASECRET123 Bucket=internal://prod/db.sqlite"
+        mock_get_adapter.side_effect = RuntimeError(secret)
+
+        response = await async_client.post("/api/export/cloud-targets/test", json={
+            "provider_type": "s3",
+            "credentials": {
+                "bucket_name": "b",
+                "access_key_id": "a",
+                "secret_access_key": "s",
+            },
+        })
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        # Sanitization contract: only the class name leaks, not the message.
+        assert body["message"] == "Connection test failed (RuntimeError)"
+        assert "AKIASECRET123" not in body["message"]
+        assert "internal://" not in body["message"]
+
+    @pytest.mark.asyncio
+    @patch("routers.export.get_adapter")
+    async def test_inline_import_error_sanitizes_path(
+        self, mock_get_adapter, async_client
+    ):
+        """CodeQL py/stack-trace-exposure (#1352): missing-dependency replies
+        MUST surface only the missing module name (e.g. "msal", "boto3"), not
+        the str(e) form which on some platforms can include interpreter paths.
+        """
+        # ImportError preserves .name when constructed with name=...
+        err = ImportError("No module named 'fakedep' from /opt/secret/path")
+        err.name = "fakedep"
+        mock_get_adapter.side_effect = err
+
+        response = await async_client.post("/api/export/cloud-targets/test", json={
+            "provider_type": "s3",
+            "credentials": {
+                "bucket_name": "b",
+                "access_key_id": "a",
+                "secret_access_key": "s",
+            },
+        })
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert body["message"] == "Missing dependency: fakedep"
+        assert "/opt/secret" not in body["message"]
+
+    @pytest.mark.asyncio
+    @patch("routers.export.get_adapter")
+    @patch("routers.export.decrypt_credentials", return_value={"bucket_name": "b"})
+    @patch("routers.export.journal")
+    async def test_saved_adapter_exception_sanitizes_message(
+        self, mock_journal, mock_decrypt, mock_get_adapter, async_client
+    ):
+        """CodeQL py/stack-trace-exposure (#1351): saved cloud target test
+        MUST sanitize adapter exception messages (same contract as inline).
+        """
+        with patch("routers.export.encrypt_credentials", return_value="enc"):
+            create_resp = await async_client.post(
+                "/api/export/cloud-targets",
+                json={
+                    "name": "Sanitize Target",
+                    "provider_type": "s3",
+                    "credentials": {
+                        "bucket_name": "b",
+                        "access_key_id": "a",
+                        "secret_access_key": "s",
+                    },
+                },
+            )
+        target_id = create_resp.json()["id"]
+
+        secret = "TenantID=00000000-1111-2222-3333-444444444444 Token=eyJSECRET"
+        mock_get_adapter.side_effect = RuntimeError(secret)
+
+        response = await async_client.post(
+            f"/api/export/cloud-targets/{target_id}/test"
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert body["message"] == "Connection test failed (RuntimeError)"
+        assert "Token=" not in body["message"]
+        assert "TenantID=" not in body["message"]
+
 
 # =============================================================================
 # Credential masking

@@ -723,10 +723,26 @@ async def test_cloud_target(target_id: int):
             "provider_info": result.provider_info,
         }
     except ImportError as e:
-        return {"success": False, "message": f"Missing dependency: {e}"}
+        # CodeQL py/stack-trace-exposure (#1350): the missing-module name
+        # alone (e.g. "msal", "boto3") is operational hint, not a stack trace.
+        # Sanitize via ImportError.name so the only field returned is the
+        # adapter dep name; do not echo the full str(e) which can include
+        # interpreter paths on some platforms.
+        logger.exception("[EXPORT] Cloud target test missing dependency")
+        missing = getattr(e, "name", None) or "unknown"
+        return {
+            "success": False,
+            "message": f"Missing dependency: {missing}",
+        }
     except Exception as e:
-        logger.warning("[EXPORT] Cloud target test failed: %s", e)
-        return {"success": False, "message": str(e)}
+        # CodeQL py/stack-trace-exposure (#1351): log full exception for
+        # operator diagnosis; return generic message + class to client. Cloud
+        # adapter errors can include URLs, tenant IDs, or token fragments.
+        logger.exception("[EXPORT] Cloud target test failed")
+        return {
+            "success": False,
+            "message": f"Connection test failed ({type(e).__name__})",
+        }
 
 
 @router.post("/cloud-targets/test")
@@ -741,10 +757,20 @@ async def test_cloud_target_inline(req: CloudTargetTestRequest):
             "provider_info": result.provider_info,
         }
     except ImportError as e:
-        return {"success": False, "message": f"Missing dependency: {e}"}
+        # CodeQL py/stack-trace-exposure (#1352): see test_cloud_target above.
+        logger.exception("[EXPORT] Inline cloud target test missing dependency")
+        missing = getattr(e, "name", None) or "unknown"
+        return {
+            "success": False,
+            "message": f"Missing dependency: {missing}",
+        }
     except Exception as e:
-        logger.warning("[EXPORT] Inline cloud target test failed: %s", e)
-        return {"success": False, "message": str(e)}
+        # CodeQL py/stack-trace-exposure (#1353): see test_cloud_target above.
+        logger.exception("[EXPORT] Inline cloud target test failed")
+        return {
+            "success": False,
+            "message": f"Connection test failed ({type(e).__name__})",
+        }
 
 
 # ---------------------------------------------------------------------------
