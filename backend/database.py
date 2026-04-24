@@ -6,10 +6,15 @@ import logging
 from pathlib import Path
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from config import CONFIG_DIR
+# ``Base`` lives in a standalone module (``db_base``) so model modules can
+# import it without cycling through ``database`` itself. Re-exported below
+# so existing ``from database import Base`` call sites keep working. See
+# bead wlvxh.
+from db_base import Base
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +24,6 @@ JOURNAL_DB_FILE = CONFIG_DIR / "journal.db"
 # Alembic config location. Bead bd-c5wf5 introduced Alembic as the migration
 # system; see ``docs/database_migrations.md``.
 ALEMBIC_INI_PATH = Path(__file__).resolve().parent / "alembic.ini"
-
-# SQLAlchemy Base for model declarations
-Base = declarative_base()
 
 # Engine and session factory (initialized on startup)
 _engine = None
