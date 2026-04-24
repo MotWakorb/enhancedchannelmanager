@@ -1264,6 +1264,8 @@ class StreamProber:
                     mapped["width"] = int(w)
                     mapped["height"] = int(h)
                 except (ValueError, AttributeError):
+                    # Resolution string is malformed (e.g., "unknown"); skip width/height
+                    # but keep the raw resolution above so the operator still sees it.
                     pass
             if ecm_stats.get("video_codec") is not None:
                 mapped["video_codec"] = ecm_stats["video_codec"]
@@ -1281,6 +1283,8 @@ class StreamProber:
                 try:
                     mapped["source_fps"] = float(ecm_stats["fps"])
                 except (ValueError, TypeError):
+                    # fps was non-numeric (e.g., "30/1" already failed to parse upstream);
+                    # omit source_fps so we don't push a bogus value to Dispatcharr.
                     pass
             if ecm_stats.get("stream_type") is not None:
                 mapped["stream_type"] = ecm_stats["stream_type"]

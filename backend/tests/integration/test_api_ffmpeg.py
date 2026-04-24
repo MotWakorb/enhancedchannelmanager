@@ -15,7 +15,6 @@ from unittest.mock import patch
 
 from tests.fixtures.ffmpeg_factories import (
     create_builder_state,
-    create_saved_config,
     create_ffmpeg_job,
     create_capabilities,
     create_validation_result,
