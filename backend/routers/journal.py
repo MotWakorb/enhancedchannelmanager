@@ -6,7 +6,7 @@ Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 import logging
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 import journal
 
@@ -25,9 +25,16 @@ async def get_journal_entries(
     date_to: Optional[str] = None,
     search: Optional[str] = None,
     user_initiated: Optional[bool] = None,
+    batch_id: Optional[str] = Query(
+        None,
+        description="Filter to a single bulk operation's journal rows (8-char batch_id from bulk handlers, e.g. POST /api/auto-creation/rules/bulk-update). Indexed lookup via idx_journal_batch_id.",
+    ),
 ):
     """Query journal entries with filtering and pagination."""
-    logger.debug("[JOURNAL] GET /journal - page=%s category=%s action_type=%s search=%s", page, category, action_type, search)
+    logger.debug(
+        "[JOURNAL] GET /journal - page=%s category=%s action_type=%s search=%s batch_id=%s",
+        page, category, action_type, search, batch_id,
+    )
     from datetime import datetime
 
     # Parse date strings to datetime
@@ -56,6 +63,7 @@ async def get_journal_entries(
         date_to=date_to_dt,
         search=search,
         user_initiated=user_initiated,
+        batch_id=batch_id,
     )
 
 
