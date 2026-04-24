@@ -461,3 +461,42 @@ class TestDispatchToAlertChannels:
         payload = call_args[1]["json"]
         assert "EPG Refresh" in payload["content"]
         assert "12.5" in payload["content"]
+
+    @pytest.mark.asyncio
+    async def test_dispatch_queues_email_via_alert_methods_when_smtp_method_configured(self, test_session):
+        """Queues an SMTP alert method when email is enabled and SMTP is configured."""
+        # Shared SMTP is configured, but delivery uses Alert Methods for recipients.
+        mock_settings = MagicMock()
+        mock_settings.is_discord_configured.return_value = False
+        mock_settings.is_telegram_configured.return_value = False
+        mock_settings.is_smtp_configured.return_value = True
+
+        # Create an enabled SMTP alert method in the DB (recipients live in its config).
+        from models import AlertMethod
+        test_session.add(AlertMethod(
+            name="Email",
+            method_type="smtp",
+            enabled=True,
+            config=json.dumps({"to_emails": ["test@example.com"]}),
+            notify_info=True,
+            notify_success=True,
+            notify_warning=True,
+            notify_error=True,
+        ))
+        test_session.commit()
+
+        with patch("services.notification_service.get_settings", return_value=mock_settings), \
+             patch("services.notification_service.get_session", return_value=test_session), \
+             patch("alert_methods.send_alert", new_callable=AsyncMock) as mock_send_alert:
+            from services.notification_service import _dispatch_to_alert_channels
+
+            await _dispatch_to_alert_channels(
+                title="Test",
+                message="Hello",
+                notification_type="info",
+                source="test",
+                metadata=None,
+                channel_settings={"send_to_email": True},
+            )
+
+        mock_send_alert.assert_awaited_once()
