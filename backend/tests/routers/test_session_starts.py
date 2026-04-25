@@ -7,6 +7,7 @@ size cap, and Prometheus counter / gauge emission.
 from __future__ import annotations
 
 import uuid
+from unittest.mock import patch
 
 import pytest
 
@@ -314,6 +315,65 @@ class TestDedupGauge:
             "/api/session-start", json={"session_id": _valid_session_id()}
         )
         assert _get_metric_sample("ecm_session_dedup_set_size") == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# Auth posture — unauthenticated POSTs MUST be accepted (bd-m3vej)
+# ---------------------------------------------------------------------------
+class TestUnauthenticatedAccess:
+    """The endpoint is in ``AUTH_EXEMPT_PATHS`` (bd-m3vej, follow-up to
+    bd-arp3o). Pre-auth sessions MUST count toward the SLO-6 denominator;
+    requiring a JWT here would silently exclude login-page sessions and
+    re-introduce the SLI bias the spike (docs/sre/spike-slo-6-session-semantics.md
+    §3.1) warned about.
+    """
+
+    @pytest.mark.asyncio
+    async def test_unauthenticated_post_is_accepted_when_auth_enabled(
+        self, async_client
+    ):
+        """Even with ``require_auth=True`` and ``setup_complete=True``,
+        the global ``auth_middleware`` must let an unauthenticated POST
+        reach the handler — exemption is enforced by inclusion in
+        ``AUTH_EXEMPT_PATHS`` in main.py.
+        """
+        class _FakeAuthSettings:
+            require_auth = True
+            setup_complete = True
+
+        with patch("main.get_auth_settings", return_value=_FakeAuthSettings()):
+            response = await async_client.post(
+                "/api/session-start",
+                json={"session_id": _valid_session_id()},
+            )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body == {"deduplicated": False}
+
+    @pytest.mark.asyncio
+    async def test_unauthenticated_post_increments_counter(self, async_client):
+        """Unauthenticated POSTs still bump the SLO-6 denominator —
+        otherwise pre-auth sessions silently fall out of the SLI base."""
+        class _FakeAuthSettings:
+            require_auth = True
+            setup_complete = True
+
+        before = _get_metric_sample("ecm_session_starts_total")
+        with patch("main.get_auth_settings", return_value=_FakeAuthSettings()):
+            response = await async_client.post(
+                "/api/session-start",
+                json={"session_id": _valid_session_id()},
+            )
+        assert response.status_code == 200
+        after = _get_metric_sample("ecm_session_starts_total")
+        assert after - before == pytest.approx(1.0)
+
+    def test_session_start_path_is_in_auth_exempt_paths(self):
+        """Belt-and-suspenders structural check — the constant in main.py
+        must list this endpoint. Catches accidental removal during refactors.
+        """
+        from main import AUTH_EXEMPT_PATHS
+        assert "/api/session-start" in AUTH_EXEMPT_PATHS
 
 
 # ---------------------------------------------------------------------------

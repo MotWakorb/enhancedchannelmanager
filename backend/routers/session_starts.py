@@ -23,9 +23,13 @@ Architecture anchors from the spike doc:
     Prometheus counter state itself.
   * A second metric — ``ecm_session_dedup_set_size`` (Gauge) — exposes
     the dedup set's current cardinality so SRE can spot pruner leaks.
-  * Auth posture matches ``/api/client-errors`` (JWT-required when auth
-    is enabled). The spike defers the pre-auth-coverage question to a
-    separate ADR-006 amendment if the PO chooses to expand coverage.
+  * Auth posture: **unauthenticated by design** (bd-m3vej, follow-up
+    to bd-arp3o). Listed in ``AUTH_EXEMPT_PATHS`` in main.py so pre-auth
+    sessions count toward the SLO-6 denominator. Note the asymmetry
+    with ``/api/client-errors`` (which remains JWT-required): pre-auth
+    bootstrap errors are NOT counted in the SLO-6 numerator, so the
+    error rate is biased LOW. Documented in ADR-006 §1 and
+    docs/sre/slos.md (SLO-6 "Known measurement bias").
 """
 from __future__ import annotations
 
@@ -169,8 +173,9 @@ async def post_session_start(request: Request) -> JSONResponse:
       * 200 with ``{"deduplicated": false}`` on first sighting (counter +1).
       * 200 with ``{"deduplicated": true}`` on a re-submission inside TTL
         (no counter bump).
-      * 401 when auth is enabled and the JWT is missing/invalid (handled
-        by the global ``auth_middleware`` in main.py before this handler).
+      * No 401: the path is in ``AUTH_EXEMPT_PATHS`` so unauthenticated
+        POSTs are accepted by design (bd-m3vej, follow-up to bd-arp3o).
+        Pre-auth sessions MUST count in the SLO-6 denominator.
       * 413 when the raw body exceeds ``MAX_REQUEST_BYTES``.
       * 422 when the payload fails Pydantic validation (e.g. non-UUIDv4).
 
