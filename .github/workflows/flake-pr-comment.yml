@@ -94,8 +94,29 @@ jobs:
             --token "$GH_TOKEN" \
             --output flake_report.json
 
+      - name: Gate on signal
+        id: gate
+        # Suppress the comment entirely when there are zero flakes — a
+        # "no flakes" comment is not useful signal and emails the repo
+        # owner once per PR. Only emit when flake_count >= 1. This keeps
+        # the bootstrap window (where the inspected runs predate the
+        # JUnit upload step in test.yml, so flake_count is always 0)
+        # silent without changing the inspection window. Bead
+        # enhancedchannelmanager-sllwg.
+        run: |
+          FLAKE_COUNT=$(python -c "import json; print(json.load(open('flake_report.json'))['flake_count'])")
+          echo "flake_count=$FLAKE_COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$FLAKE_COUNT" -gt 0 ]; then
+            echo "should_comment=true" >> "$GITHUB_OUTPUT"
+            echo "[FLAKES] flake_count=$FLAKE_COUNT — will post/update PR comment"
+          else
+            echo "should_comment=false" >> "$GITHUB_OUTPUT"
+            echo "[FLAKES] flake_count=0 — suppressing PR comment (no signal)"
+          fi
+
       - name: Render comment body
         id: render
+        if: steps.gate.outputs.should_comment == 'true'
         run: |
           # Render the JSON report to a Markdown comment body. The
           # ``<!-- flake-pr-comment:xq19y -->`` marker on the first line
@@ -180,6 +201,7 @@ jobs:
           retention-days: 14
 
       - name: Post or update PR comment
+        if: steps.gate.outputs.should_comment == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
@@ -190,6 +212,13 @@ jobs:
           # Using `gh api` directly keeps the dependency surface minimal
           # (no third-party action), matching the project's existing CI
           # patterns (cf. .github/workflows/normalization-canary.yml).
+          # Gated on steps.gate.outputs.should_comment so we never post
+          # an empty "no flakes detected" comment — bead sllwg.
+          # Historical no-flake comments from the bootstrap window are
+          # intentionally left in place as-is; only NEW comments are
+          # suppressed. If a previous comment exists and this run has no
+          # flakes, it stays (history). When flakes return, the existing
+          # PATCH-in-place logic below updates it correctly via marker.
           MARKER="<!-- flake-pr-comment:xq19y -->"
           BODY=$(cat flake_comment.md)
 
