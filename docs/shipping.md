@@ -32,6 +32,8 @@ Re-run build to verify:
 cd frontend && npm run build
 ```
 
+The version-bump commit lands via PR like every other change to `dev` — the branch protection rule applies regardless of how trivial the diff is. This was surfaced by `bd-i6a1m`'s tag-stone bump (commit `c479b99a`, `0.16.0-0058 → 0.16.0-0059`), which was rejected on direct push and had to merge via [PR #175](https://github.com/MotWakorb/enhancedchannelmanager/pull/175). Tag-stone bumps follow the same §6 PR flow as feature work; there is no fast-path exemption.
+
 ### 4. Close the Bead
 
 ```bash
@@ -44,14 +46,43 @@ If the change adds, removes, or modifies a feature, update the documentation.
 
 Every user-facing change must also be recorded in [`CHANGELOG.md`](../CHANGELOG.md) under the `[Unreleased]` section, in the appropriate Keep-a-Changelog category (Added / Changed / Deprecated / Removed / Fixed / Security). When cutting a release, rename the `[Unreleased]` heading to the new version with the release date and start a fresh empty `[Unreleased]` section above it.
 
-### 6. Commit and Push
+### 6. Commit and Open the PR
+
+`dev` branch protection requires PRs with 5 passing status checks (`enforce_admins=true` — no one bypasses, including the PO). Direct push to `dev` is rejected. Branch from current `origin/dev`, push the branch, open a PR, wait for the required checks, then merge.
 
 ```bash
-git add frontend/package.json backend/main.py backend/routers/  # Add only changed files
+# Branch from current origin/dev
+git fetch origin
+git checkout -b <feature-or-chore-branch> origin/dev
+
+# Stage and commit only changed files
+git add frontend/package.json backend/main.py backend/routers/
 git commit -m "v0.x.x-xxxx: Brief description"
-git push origin dev
+
+# Push and open the PR
+git push -u origin <feature-or-chore-branch>
+gh pr create --base dev --head <feature-or-chore-branch> \
+  --title "v0.x.x-xxxx: Brief description" \
+  --body "Summary of the change and link to the bead."
+
+# Wait for the 5 required checks to pass:
+#   - Backend Tests
+#   - Frontend Tests
+#   - CodeQL Analysis (python)
+#   - CodeQL Analysis (javascript-typescript)
+#   - Semgrep Lint
+gh pr checks <#> --watch
+
+# Merge with a merge commit (NOT --squash, NOT --rebase) per ADR-004 —
+# preserves per-commit bisection/forensics into dev.
+gh pr merge <#> --merge --delete-branch
+
+# Verify
+git checkout dev && git pull
 git status  # MUST show "up to date with origin"
 ```
+
+The required check names above are pulled from `gh api /repos/MotWakorb/enhancedchannelmanager/branches/dev/protection | jq '.required_status_checks.contexts'` — if branch protection changes, update this list.
 
 ### 7. File Beads for Remaining Work
 
@@ -59,10 +90,10 @@ Create beads for anything that needs follow-up.
 
 ## Critical Shipping Rules
 
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing — that leaves work stranded locally
-- NEVER say "ready to push when you are" — YOU must push
-- If push fails, resolve and retry until it succeeds
+- Work is NOT complete until the PR merges into `dev`
+- NEVER stop before the PR is merged — an open PR is not a shipped change
+- NEVER say "ready to merge when you are" — YOU must drive the merge once the required checks are green
+- If a required check fails, fix the underlying issue and push to the same branch; do not bypass or skip checks
 - Always use `enhancedchannelmanager` as the repository name when creating beads
 - **NEVER chain `bd create` and `bd close` in one command** — the `bd list` output format doesn't work with shell parsing. Always run them as separate commands:
   ```bash
