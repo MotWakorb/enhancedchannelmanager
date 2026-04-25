@@ -131,9 +131,9 @@ docker restart ecm-ecm-1
 
 ### Shipping (When User Says "Ship the Fix")
 
-Follow `docs/shipping.md`.
+Follow `docs/shipping.md`. The full PR-driven flow (branch from `origin/dev`, push, open PR via `gh pr create --base dev`, wait for the 5 required checks, then `gh pr merge --merge --delete-branch`) lives in `docs/shipping.md` §6 — do not duplicate it here.
 
 **Non-negotiable rules:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing — that leaves work stranded locally
-- NEVER say "ready to push when you are" — YOU must push
+- Work is NOT complete until the PR merges into `dev`
+- NEVER stop before the PR is merged — an open PR is not a shipped change
+- NEVER say "ready to merge when you are" — YOU must drive the merge once the required checks are green
