@@ -1,0 +1,237 @@
+name: Flake List PR Comment
+
+# Surfaces the "flagged-in-last-30-runs" flake list as an idempotent PR
+# comment so reviewers see flake context without running `bd list --label
+# flaky` by hand. Implements the gate documented in
+# `docs/testing.md` § "Flake baseline gate for PR reviews"
+# (bead enhancedchannelmanager-xq19y, follow-up to tp681).
+#
+# Mechanism:
+#   1. On PR open / sync, walk the last 30 runs of the `Tests` workflow
+#      on the PR's base branch (typically `dev`).
+#   2. Parse the `junit-backend` and `junit-frontend` artifacts uploaded
+#      by .github/workflows/test.yml; collect tests that failed in
+#      >= 1 distinct run.
+#   3. Post or update a single PR comment containing the flake list
+#      (or a "no flakes detected" line). The comment is identified by
+#      a hidden marker so re-runs update in place rather than spamming.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - '.beads/**'
+      - '**.md'
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to update (manual run)'
+        required: true
+        type: string
+
+permissions:
+  # Reading workflow runs + artifacts on this repo.
+  actions: read
+  contents: read
+  # Writing the flake comment on the PR.
+  pull-requests: write
+
+# Single-comment-per-PR contract — if a new push lands while the previous
+# comment workflow is still running, cancel the old one so we don't race
+# two updates against the same comment.
+concurrency:
+  group: flake-pr-comment-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  comment:
+    name: Post flake list comment
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          # Sparse — we only need scripts/ and the workflow itself.
+          # Default fetch-depth=1 is fine; we don't run git history ops.
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Resolve PR + base branch
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER_INPUT: ${{ github.event.inputs.pr_number }}
+        run: |
+          # On pull_request, github.event.pull_request gives us
+          # everything we need. On workflow_dispatch we fetch the PR via
+          # the API so the same job body handles both triggers.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "pr_number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+            echo "base_branch=${{ github.event.pull_request.base.ref }}" >> "$GITHUB_OUTPUT"
+          else
+            BASE=$(gh pr view "$PR_NUMBER_INPUT" --repo "${{ github.repository }}" --json baseRefName -q .baseRefName)
+            echo "pr_number=$PR_NUMBER_INPUT" >> "$GITHUB_OUTPUT"
+            echo "base_branch=$BASE" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Aggregate flakes from last 30 runs
+        env:
+          # GITHUB_TOKEN has actions:read + pull-requests:write per the
+          # job-level permissions block above.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/aggregate_flakes.py \
+            --repo "${{ github.repository }}" \
+            --branch "${{ steps.pr.outputs.base_branch }}" \
+            --workflow test.yml \
+            --window 30 \
+            --threshold 1 \
+            --token "$GH_TOKEN" \
+            --output flake_report.json
+
+      - name: Gate on signal
+        id: gate
+        # Suppress the comment entirely when there are zero flakes — a
+        # "no flakes" comment is not useful signal and emails the repo
+        # owner once per PR. Only emit when flake_count >= 1. This keeps
+        # the bootstrap window (where the inspected runs predate the
+        # JUnit upload step in test.yml, so flake_count is always 0)
+        # silent without changing the inspection window. Bead
+        # enhancedchannelmanager-sllwg.
+        run: |
+          FLAKE_COUNT=$(python -c "import json; print(json.load(open('flake_report.json'))['flake_count'])")
+          echo "flake_count=$FLAKE_COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$FLAKE_COUNT" -gt 0 ]; then
+            echo "should_comment=true" >> "$GITHUB_OUTPUT"
+            echo "[FLAKES] flake_count=$FLAKE_COUNT — will post/update PR comment"
+          else
+            echo "should_comment=false" >> "$GITHUB_OUTPUT"
+            echo "[FLAKES] flake_count=0 — suppressing PR comment (no signal)"
+          fi
+
+      - name: Render comment body
+        id: render
+        if: steps.gate.outputs.should_comment == 'true'
+        run: |
+          # Render the JSON report to a Markdown comment body. The
+          # ``<!-- flake-pr-comment:xq19y -->`` marker on the first line
+          # is what the next step uses to find + replace the existing
+          # comment, keeping the comment idempotent.
+          python <<'PY'
+          import json
+          import os
+
+          MARKER = "<!-- flake-pr-comment:xq19y -->"
+          with open("flake_report.json", "r", encoding="utf-8") as f:
+              report = json.load(f)
+
+          inspected = report["runs_inspected"]
+          with_artifacts = report["runs_with_artifacts"]
+          flakes = report["flakes"]
+
+          lines = [
+              MARKER,
+              "## Flake list (last 30 runs on base branch)",
+              "",
+              f"Inspected **{inspected}** Tests workflow run(s); "
+              f"**{with_artifacts}** had JUnit artifacts to scan.",
+              "",
+          ]
+
+          if not flakes:
+              lines += [
+                  "No tests have flapped in the inspected window. "
+                  "If your CI run fails, treat the failure as deterministic "
+                  "(per `docs/testing.md` § _Flake baseline gate for PR reviews_).",
+              ]
+          else:
+              lines += [
+                  f"**{len(flakes)} test(s) failed in at least one of the last "
+                  f"{inspected} run(s).** If your CI run fails on one of these, "
+                  "re-run once before treating it as a deterministic regression "
+                  "(per `docs/testing.md` § _Flake baseline gate for PR reviews_).",
+                  "",
+                  "| Test | Runs failed |",
+                  "| --- | ---: |",
+              ]
+              # Cap visible rows so the comment stays readable on big
+              # regressions; the JSON artifact has the full list.
+              MAX_ROWS = 50
+              for entry in flakes[:MAX_ROWS]:
+                  test = entry["test"].replace("|", "\\|")
+                  lines.append(f"| `{test}` | {entry['fail_count']} / {inspected} |")
+              if len(flakes) > MAX_ROWS:
+                  hidden = len(flakes) - MAX_ROWS
+                  lines.append("")
+                  lines.append(
+                      f"_…and {hidden} more. See the `flake-report` artifact on this run for the full list._"
+                  )
+
+          lines += [
+              "",
+              "<sub>Generated by `.github/workflows/flake-pr-comment.yml` "
+              "(bead enhancedchannelmanager-xq19y). "
+              "Threshold = 1 failure across the window — informational only, "
+              "does not gate merge.</sub>",
+          ]
+
+          body = "\n".join(lines)
+          # Pass the rendered body to the next step via a file (avoids
+          # GITHUB_OUTPUT escaping headaches with multi-line Markdown).
+          with open("flake_comment.md", "w", encoding="utf-8") as f:
+              f.write(body)
+          # Echo a short summary to the job log for easy debugging.
+          print(f"[FLAKES] Rendered comment with {len(flakes)} flake(s)")
+          PY
+
+      - name: Upload flake report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-report
+          path: |
+            flake_report.json
+            flake_comment.md
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Post or update PR comment
+        if: steps.gate.outputs.should_comment == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Idempotency: find any existing comment whose body starts with
+          # the hidden marker and PATCH it; otherwise POST a new one.
+          # Using `gh api` directly keeps the dependency surface minimal
+          # (no third-party action), matching the project's existing CI
+          # patterns (cf. .github/workflows/normalization-canary.yml).
+          # Gated on steps.gate.outputs.should_comment so we never post
+          # an empty "no flakes detected" comment — bead sllwg.
+          # Historical no-flake comments from the bootstrap window are
+          # intentionally left in place as-is; only NEW comments are
+          # suppressed. If a previous comment exists and this run has no
+          # flakes, it stays (history). When flakes return, the existing
+          # PATCH-in-place logic below updates it correctly via marker.
+          MARKER="<!-- flake-pr-comment:xq19y -->"
+          BODY=$(cat flake_comment.md)
+
+          EXISTING_ID=$(gh api \
+            "repos/${REPO}/issues/${PR_NUMBER}/comments?per_page=100" \
+            --jq "[.[] | select(.body | startswith(\"${MARKER}\"))] | .[0].id // empty")
+
+          if [ -n "$EXISTING_ID" ]; then
+            echo "[FLAKES] Updating existing comment id=$EXISTING_ID"
+            gh api -X PATCH "repos/${REPO}/issues/comments/${EXISTING_ID}" \
+              -f body="$BODY" > /dev/null
+          else
+            echo "[FLAKES] Creating new flake comment on PR #${PR_NUMBER}"
+            gh api -X POST "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+              -f body="$BODY" > /dev/null
+          fi

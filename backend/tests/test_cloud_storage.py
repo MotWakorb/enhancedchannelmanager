@@ -5,7 +5,7 @@ import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from cloud_storage.base import get_adapter, ConnectionTestResult
+from cloud_storage import get_adapter, ConnectionTestResult
 from cloud_storage.crypto import encrypt_credentials, decrypt_credentials, reset_key_cache
 
 

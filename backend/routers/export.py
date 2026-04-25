@@ -12,7 +12,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, field_validator
 
-from cloud_storage.base import get_adapter
+from cloud_storage import get_adapter
 from cloud_storage.crypto import encrypt_credentials, decrypt_credentials
 from cloud_storage.onedrive_adapter import _validate_tenant_id, _validate_drive_id
 from database import get_session

@@ -904,6 +904,9 @@ export interface SettingsResponse {
   auto_creation_exclude_auto_sync_groups: boolean;
   // MCP integration
   mcp_api_key_configured: boolean;
+  // Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m).
+  // Default ON; operator can flip via /api/settings to disable reporting.
+  telemetry_client_errors_enabled: boolean;
 }
 
 // Stream preview mode for browser playback
@@ -993,6 +996,8 @@ export async function saveSettings(settings: {
   auto_creation_excluded_terms?: string[];
   auto_creation_excluded_groups?: string[];
   auto_creation_exclude_auto_sync_groups?: boolean;
+  // Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m)
+  telemetry_client_errors_enabled?: boolean;
 }): Promise<{ status: string; configured: boolean; server_changed: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',

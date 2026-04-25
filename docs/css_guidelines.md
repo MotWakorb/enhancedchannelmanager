@@ -1,5 +1,12 @@
 # CSS Guidelines
 
+> This document is **authoritative for CSS** — naming, layer architecture,
+> shared classes, modal patterns, theme variables. The general
+> `docs/style_guide.md` summarises the rules that intersect with broader
+> code style and points back here for the full catalog. If the two
+> disagree, this document wins; please file a PR against the style guide
+> so they are reconciled.
+
 ## Architecture Overview
 
 CSS is organized in layers. Always use the highest-level shared class available before creating component-specific styles.

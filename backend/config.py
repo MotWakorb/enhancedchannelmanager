@@ -181,6 +181,12 @@ class DispatcharrSettings(BaseModel):
     auto_creation_exclude_auto_sync_groups: bool = False  # Exclude streams in Dispatcharr auto-sync groups
     # MCP server API key for Claude integration (empty = not configured)
     mcp_api_key: str = ""
+    # Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m).
+    # Default ON — Phase 1 data never leaves the container. When False,
+    # the backend /api/client-errors endpoint returns 204 without logging
+    # or incrementing counters, and the frontend reporter short-circuits
+    # before building the payload.
+    telemetry_client_errors_enabled: bool = True
 
     def is_configured(self) -> bool:
         if not self.url:
