@@ -1,0 +1,66 @@
+/**
+ * Heatmap.css — bd-skqln.17.
+ *
+ * Shared classes consumed: none yet. The chart primitives directory is
+ * new; future charts (legend, multi-series tooltip) may share a
+ * `charts-*` token set, at which point the shared bits move into
+ * shared/common.css. Until then, scope styles to .heatmap-*.
+ *
+ * Theme variables consumed:
+ *   --bg-secondary, --border-primary, --text-secondary, --text-muted.
+ * No --accent-primary used (per style guide: it flips between themes
+ * and breaks contrast on backgrounds).
+ */
+
+.heatmap {
+  /* Container is the scroll surface at narrow viewports — see UX
+     finding "downgrades gracefully to scrollable cells at <1024px". */
+  overflow-x: auto;
+  overflow-y: hidden;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.heatmap-svg {
+  display: block;
+  /* SVG has explicit width attr; this min-width is just defensive in
+     case a parent overrides via CSS. */
+  min-width: 0;
+}
+
+.heatmap-cell {
+  /* Subtle stroke between cells — without it, equal-color neighbors
+     blur into each other on the dark theme. */
+  stroke: var(--bg-secondary);
+  stroke-width: 1;
+  /* Hint to the browser that this is interactive (the <title> tooltip
+     fires on hover, but only if the cell looks reachable). */
+  cursor: default;
+}
+
+.heatmap-row-label,
+.heatmap-col-label {
+  fill: var(--text-secondary);
+  font-size: 11px;
+  font-family: inherit;
+  /* Disable user select so dragging across the chart doesn't
+     accidentally select label text. */
+  user-select: none;
+}
+
+.heatmap-col-label {
+  fill: var(--text-muted);
+}
+
+.heatmap-empty {
+  /* Match the panel-empty / loading-state idiom from
+     EnhancedStatsPanel.css — neutral grey, centered, padded. */
+  padding: 24px;
+  color: var(--text-muted);
+  text-align: center;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+}
