@@ -59,10 +59,13 @@ Browser-side invalidation (per the [Dep-Bump Frontend Regression runbook](./dep-
 ### What ECM emits today
 
 - ECM serves static assets via FastAPI's [`StaticFiles`](https://fastapi.tiangolo.com/reference/staticfiles/) mount (`backend/main.py`, `/assets` and the SPA fallback).
-- **ECM does not set `Cache-Control` headers on `/assets/*` or `/index.html`.** Starlette's default `StaticFiles` emits `ETag` and `Last-Modified` only. This means each upstream cache decides its own TTL according to its own heuristics — which is why "why is this still cached?" varies by operator.
+- **ECM ships cache-safe `Cache-Control` defaults** (bd-hl603):
+  - `/assets/*` → `Cache-Control: public, max-age=31536000, immutable` — Vite's content-hashed filenames make each path eternal-cache-safe.
+  - `/` and the SPA fallback (which serves `index.html`) → `Cache-Control: no-cache, must-revalidate` — the entry-point HTML must always be revalidated so a fresh deploy's bundle URLs are picked up.
+- The headers above ride on top of Starlette's default `ETag` + `Last-Modified`. A correctly-configured downstream cache will honor them and you will not need this runbook for routine deploys. **This runbook still matters when** a reverse proxy or CDN strips, overrides, or pre-dates these headers — which is common with default Cloudflare configurations, nginx `proxy_cache` blocks that ignore origin `Cache-Control`, or any cache that was warmed before the bd-hl603 release.
 - **ECM ships no service worker.** Confirmed in `frontend/vite.config.ts` (no `vite-plugin-pwa`, no `workbox-*`). Any service-worker-induced caching seen in the wild is either a reverse proxy injecting one or a stale SW from a much older ECM build — treat as anomalous.
 
-Operators who want more predictable cache behavior should set `Cache-Control: no-cache` on `/` and `/index.html` and `Cache-Control: public, max-age=31536000, immutable` on `/assets/*` at their proxy. That configuration is the operator's call — ECM does not enforce it. See the per-proxy sections below for copy-pasteable snippets.
+Operators whose proxy ignores upstream `Cache-Control` (or who want belt-and-suspenders consistency at the edge) can apply the same policy at the proxy itself: `Cache-Control: no-cache` on `/` and `/index.html`, `Cache-Control: public, max-age=31536000, immutable` on `/assets/*`. See the per-proxy sections below for copy-pasteable snippets.
 
 ## Diagnosis
 
