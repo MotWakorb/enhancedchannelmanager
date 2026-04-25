@@ -396,6 +396,10 @@ AUTH_EXEMPT_PATHS = {
     "/api/health/ready",
     # Schema version — public so DBAS restore/sync can gate on revision
     "/api/health/schema",
+    # Build identity — public so operators can detect container drift from
+    # origin/dev (bd-h0wfu) without authenticating. Echoes the same env
+    # vars baked into the image at Docker build time. No subsystem access.
+    "/api/version",
     # Auth flow (must be public by definition)
     "/api/auth/login",
     "/api/auth/refresh",
