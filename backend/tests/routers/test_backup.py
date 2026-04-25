@@ -1249,3 +1249,376 @@ class TestRestoreYaml:
         assert test_session.query(TagGroup).first().name == "Countries"
         assert test_session.query(FFmpegProfile).count() == 1
         assert test_session.query(FFmpegProfile).first().name == "Test Profile"
+
+
+def _create_journal_db_with_alert_methods(path, rows):
+    """Create a real SQLite journal.db at `path` with the alert_methods table
+    and the supplied rows. Each row is a dict with at least name, method_type,
+    config (dict — will be JSON-encoded for storage)."""
+    import sqlite3
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute(
+            "CREATE TABLE alert_methods ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "name TEXT NOT NULL, "
+            "method_type TEXT NOT NULL, "
+            "enabled INTEGER NOT NULL DEFAULT 1, "
+            "config TEXT NOT NULL, "
+            "notify_info INTEGER NOT NULL DEFAULT 0, "
+            "notify_success INTEGER NOT NULL DEFAULT 1, "
+            "notify_warning INTEGER NOT NULL DEFAULT 1, "
+            "notify_error INTEGER NOT NULL DEFAULT 1, "
+            "alert_sources TEXT, "
+            "last_sent_at TEXT, "
+            "created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00', "
+            "updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00'"
+            ")"
+        )
+        for row in rows:
+            conn.execute(
+                "INSERT INTO alert_methods (id, name, method_type, config) VALUES (?, ?, ?, ?)",
+                (
+                    row.get("id"),
+                    row["name"],
+                    row["method_type"],
+                    json.dumps(row["config"]),
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+class TestZipExportRedaction:
+    """ZIP export must scrub credentials from settings.json AND journal.db.
+
+    Closes the secret-leak gap (bd-l0nhi): the YAML export path was already
+    redacting password + smtp_password, but the ZIP path wrote both files
+    raw, leaking 5 settings credentials AND alert_methods.config rows that
+    began carrying SMTP password as of PR #163.
+    """
+
+    @pytest.mark.asyncio
+    async def test_zip_export_redacts_all_5_settings_credentials(
+        self, async_client, tmp_path
+    ):
+        """Exported settings.json must contain ***REDACTED*** for all 5
+        credential fields and none of the raw values."""
+        settings_file = tmp_path / "settings.json"
+        # Distinctive values so we can search the ZIP for raw leaks.
+        raw_creds = {
+            "password": "raw-pass-DUDLAH",
+            "api_key": "raw-apikey-PORDOX",
+            "smtp_password": "raw-smtp-VOLTUM",
+            "telegram_bot_token": "raw-tg-bot-NIXAR",
+            "mcp_api_key": "raw-mcp-MERLIN",
+        }
+        settings_dict = {"url": "http://test:9191", "username": "admin", **raw_creds}
+        # File must exist for the CONFIG_FILE.exists() guard, but the actual
+        # values come from get_settings() — patched below.
+        settings_file.write_text(json.dumps(settings_dict))
+        db_file = tmp_path / "journal.db"
+        # Real (empty) SQLite DB — _scrub_journal_db_to_temp will open it.
+        import sqlite3
+        sqlite3.connect(str(db_file)).close()
+
+        mock_engine = MagicMock()
+        mock_conn = MagicMock()
+        mock_engine.connect.return_value.__enter__ = MagicMock(return_value=mock_conn)
+        mock_engine.connect.return_value.__exit__ = MagicMock(return_value=False)
+
+        mock_settings = MagicMock()
+        mock_settings.model_dump.return_value = settings_dict
+
+        with patch("routers.backup.CONFIG_DIR", tmp_path), \
+             patch("routers.backup.CONFIG_FILE", settings_file), \
+             patch("routers.backup.JOURNAL_DB_FILE", db_file), \
+             patch("routers.backup.get_engine", return_value=mock_engine), \
+             patch("routers.backup.get_settings", return_value=mock_settings):
+            response = await async_client.get("/api/backup/create")
+
+        assert response.status_code == 200
+        archive_bytes = response.content
+        # Belt-and-suspenders: raw values must not appear anywhere in the
+        # entire archive — defends against future leak paths beyond settings.json.
+        for field, value in raw_creds.items():
+            assert value.encode() not in archive_bytes, (
+                f"raw {field} value leaked into the ZIP archive"
+            )
+
+        buf = io.BytesIO(archive_bytes)
+        with zipfile.ZipFile(buf) as zf:
+            settings_in_zip = json.loads(zf.read("settings.json"))
+        for field in raw_creds:
+            assert settings_in_zip[field] == "***REDACTED***", (
+                f"settings.{field} not redacted in ZIP"
+            )
+        # Non-credential fields must survive untouched.
+        assert settings_in_zip["url"] == "http://test:9191"
+        assert settings_in_zip["username"] == "admin"
+
+    @pytest.mark.asyncio
+    async def test_zip_export_redacts_alert_methods_smtp_password(
+        self, async_client, tmp_path
+    ):
+        """alert_methods.config rows with credential-class keys must be
+        scrubbed before the journal.db gets zipped (bd-l0nhi, PR #163 leak)."""
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps({"url": "http://test:9191"}))
+        db_file = tmp_path / "journal.db"
+        smtp_password_literal = "TOPSECRET-SMTP-LITERAL-XYZ"
+        webhook_url_literal = "https://discord.example/leakme-WEBHOOK-XYZ"
+        bot_token_literal = "tg-bot-LEAK-XYZ"
+        _create_journal_db_with_alert_methods(db_file, [
+            {
+                "id": 1,
+                "name": "SMTP Alerts",
+                "method_type": "smtp",
+                "config": {
+                    "host": "smtp.example.com",
+                    "port": 587,
+                    "username": "alerts@example.com",
+                    "password": smtp_password_literal,
+                },
+            },
+            {
+                "id": 2,
+                "name": "Discord Alerts",
+                "method_type": "discord",
+                "config": {"webhook_url": webhook_url_literal},
+            },
+            {
+                "id": 3,
+                "name": "Telegram Alerts",
+                "method_type": "telegram",
+                "config": {"bot_token": bot_token_literal, "chat_id": "1234"},
+            },
+        ])
+
+        mock_engine = MagicMock()
+        mock_conn = MagicMock()
+        mock_engine.connect.return_value.__enter__ = MagicMock(return_value=mock_conn)
+        mock_engine.connect.return_value.__exit__ = MagicMock(return_value=False)
+
+        with patch("routers.backup.CONFIG_DIR", tmp_path), \
+             patch("routers.backup.CONFIG_FILE", settings_file), \
+             patch("routers.backup.JOURNAL_DB_FILE", db_file), \
+             patch("routers.backup.get_engine", return_value=mock_engine):
+            response = await async_client.get("/api/backup/create")
+
+        assert response.status_code == 200
+        # The whole archive payload must not contain any of the raw secrets.
+        archive_bytes = response.content
+        for literal in (smtp_password_literal, webhook_url_literal, bot_token_literal):
+            assert literal.encode() not in archive_bytes, (
+                f"raw alert_methods credential {literal!r} leaked into the ZIP"
+            )
+
+        # The scrubbed DB inside the ZIP should still be a valid SQLite
+        # database with the rows replaced by REDACTED.
+        buf = io.BytesIO(archive_bytes)
+        with zipfile.ZipFile(buf) as zf:
+            extracted = tmp_path / "extracted-journal.db"
+            extracted.write_bytes(zf.read("journal.db"))
+        import sqlite3
+        conn = sqlite3.connect(str(extracted))
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT id, config FROM alert_methods ORDER BY id")
+            rows = cur.fetchall()
+        finally:
+            conn.close()
+        configs = {row_id: json.loads(cfg) for row_id, cfg in rows}
+        assert configs[1]["password"] == "***REDACTED***"
+        assert configs[1]["host"] == "smtp.example.com"  # non-cred preserved
+        assert configs[2]["webhook_url"] == "***REDACTED***"
+        assert configs[3]["bot_token"] == "***REDACTED***"
+        assert configs[3]["chat_id"] == "1234"  # non-cred preserved
+
+
+class TestZipRestoreRedactionAware:
+    """ZIP restore must preserve existing creds when the ZIP contains the
+    REDACTED sentinel — both for settings.json and for alert_methods.config.
+
+    Backward compat: a legacy ZIP with raw values must still restore as-is.
+    """
+
+    @pytest.mark.asyncio
+    async def test_zip_restore_preserves_existing_creds_when_redacted(
+        self, async_client, tmp_path
+    ):
+        """settings.json with ***REDACTED*** sentinels must keep the
+        existing on-disk credential values."""
+        settings_file = tmp_path / "settings.json"
+        existing = {
+            "url": "http://old:9191",
+            "username": "existing_user",
+            "password": "EXISTING-PASS-9999",
+            "api_key": "EXISTING-API-9999",
+            "smtp_password": "EXISTING-SMTP-9999",
+            "telegram_bot_token": "EXISTING-TG-9999",
+            "mcp_api_key": "EXISTING-MCP-9999",
+        }
+        settings_file.write_text(json.dumps(existing))
+        db_file = tmp_path / "journal.db"
+
+        # Build a ZIP whose settings.json carries the redacted sentinels and a
+        # *new* url/username — those non-cred fields must override; the creds
+        # must survive from the existing on-disk file.
+        zipped_settings = json.dumps({
+            "url": "http://restored:9191",
+            "username": "restored_user",
+            "password": "***REDACTED***",
+            "api_key": "***REDACTED***",
+            "smtp_password": "***REDACTED***",
+            "telegram_bot_token": "***REDACTED***",
+            "mcp_api_key": "***REDACTED***",
+        })
+        backup = _make_backup_zip(settings_content=zipped_settings)
+
+        with patch("routers.backup.CONFIG_DIR", tmp_path), \
+             patch("routers.backup.CONFIG_FILE", settings_file), \
+             patch("routers.backup.JOURNAL_DB_FILE", db_file), \
+             patch("routers.backup.close_db"), \
+             patch("routers.backup.init_db"), \
+             patch("routers.backup.clear_settings_cache"), \
+             patch("routers.backup.reset_client"):
+            response = await async_client.post(
+                "/api/backup/restore",
+                files={"file": ("backup.zip", backup, "application/zip")},
+            )
+
+        assert response.status_code == 200
+        restored = json.loads(settings_file.read_text())
+        # Credentials kept from existing file
+        assert restored["password"] == "EXISTING-PASS-9999"
+        assert restored["api_key"] == "EXISTING-API-9999"
+        assert restored["smtp_password"] == "EXISTING-SMTP-9999"
+        assert restored["telegram_bot_token"] == "EXISTING-TG-9999"
+        assert restored["mcp_api_key"] == "EXISTING-MCP-9999"
+        # Non-credential fields took the restored values
+        assert restored["url"] == "http://restored:9191"
+        assert restored["username"] == "restored_user"
+
+    @pytest.mark.asyncio
+    async def test_zip_restore_preserves_alert_method_creds_when_redacted(
+        self, async_client, tmp_path
+    ):
+        """alert_methods.config rows whose credential-class fields are
+        REDACTED in the restored DB must be re-merged from the pre-restore
+        snapshot, matched by row id."""
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps({"url": "http://test:9191"}))
+        db_file = tmp_path / "journal.db"
+
+        # Pre-existing DB has real creds in row id=1 (SMTP) and id=2 (Discord).
+        existing_smtp_pass = "PRESERVE-SMTP-PASS-1234"
+        existing_webhook = "https://discord.example/PRESERVE-WEBHOOK"
+        _create_journal_db_with_alert_methods(db_file, [
+            {
+                "id": 1,
+                "name": "SMTP",
+                "method_type": "smtp",
+                "config": {"host": "smtp.old", "password": existing_smtp_pass},
+            },
+            {
+                "id": 2,
+                "name": "Discord",
+                "method_type": "discord",
+                "config": {"webhook_url": existing_webhook},
+            },
+        ])
+
+        # Build a ZIP whose journal.db has the same row ids but with REDACTED
+        # config keys — emulates a redacted backup made elsewhere.
+        zipped_db = tmp_path / "zipped-journal.db"
+        _create_journal_db_with_alert_methods(zipped_db, [
+            {
+                "id": 1,
+                "name": "SMTP-from-zip",
+                "method_type": "smtp",
+                "config": {"host": "smtp.new", "password": "***REDACTED***"},
+            },
+            {
+                "id": 2,
+                "name": "Discord-from-zip",
+                "method_type": "discord",
+                "config": {"webhook_url": "***REDACTED***"},
+            },
+        ])
+        backup = _make_backup_zip(db_content=zipped_db.read_bytes())
+
+        with patch("routers.backup.CONFIG_DIR", tmp_path), \
+             patch("routers.backup.CONFIG_FILE", settings_file), \
+             patch("routers.backup.JOURNAL_DB_FILE", db_file), \
+             patch("routers.backup.close_db"), \
+             patch("routers.backup.init_db"), \
+             patch("routers.backup.clear_settings_cache"), \
+             patch("routers.backup.reset_client"):
+            response = await async_client.post(
+                "/api/backup/restore",
+                files={"file": ("backup.zip", backup, "application/zip")},
+            )
+
+        assert response.status_code == 200
+        # Verify post-restore DB carries restored row contents BUT with creds
+        # re-merged from the pre-restore snapshot.
+        import sqlite3
+        conn = sqlite3.connect(str(db_file))
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT id, name, config FROM alert_methods ORDER BY id")
+            rows = cur.fetchall()
+        finally:
+            conn.close()
+        by_id = {row_id: (name, json.loads(cfg)) for row_id, name, cfg in rows}
+        # Names came from the ZIP (full row replacement)
+        assert by_id[1][0] == "SMTP-from-zip"
+        assert by_id[2][0] == "Discord-from-zip"
+        # Non-credential fields came from the ZIP
+        assert by_id[1][1]["host"] == "smtp.new"
+        # Credential fields re-merged from pre-restore snapshot
+        assert by_id[1][1]["password"] == existing_smtp_pass
+        assert by_id[2][1]["webhook_url"] == existing_webhook
+
+    @pytest.mark.asyncio
+    async def test_zip_restore_legacy_non_redacted_still_works(
+        self, async_client, tmp_path
+    ):
+        """Backward-compat smoke: a legacy ZIP with raw credential values
+        (no ***REDACTED*** sentinels) must restore values as-is."""
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps({
+            "url": "http://existing:9191",
+            "password": "should-be-overwritten",
+        }))
+        db_file = tmp_path / "journal.db"
+
+        legacy_settings = json.dumps({
+            "url": "http://restored:9191",
+            "username": "restored_user",
+            "password": "raw-restored-pass",
+            "smtp_password": "raw-restored-smtp",
+        })
+        backup = _make_backup_zip(settings_content=legacy_settings)
+
+        with patch("routers.backup.CONFIG_DIR", tmp_path), \
+             patch("routers.backup.CONFIG_FILE", settings_file), \
+             patch("routers.backup.JOURNAL_DB_FILE", db_file), \
+             patch("routers.backup.close_db"), \
+             patch("routers.backup.init_db"), \
+             patch("routers.backup.clear_settings_cache"), \
+             patch("routers.backup.reset_client"):
+            response = await async_client.post(
+                "/api/backup/restore",
+                files={"file": ("backup.zip", backup, "application/zip")},
+            )
+
+        assert response.status_code == 200
+        restored = json.loads(settings_file.read_text())
+        # All values came from the ZIP, raw, including credentials.
+        assert restored["url"] == "http://restored:9191"
+        assert restored["username"] == "restored_user"
+        assert restored["password"] == "raw-restored-pass"
+        assert restored["smtp_password"] == "raw-restored-smtp"

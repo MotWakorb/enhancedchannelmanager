@@ -7,10 +7,14 @@ YAML export: settings + DB tables + Dispatcharr state in a single file.
 import io
 import json
 import logging
+import os
 import re
 import shutil
+import sqlite3
+import tempfile
 import zipfile
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import yaml
@@ -60,6 +64,23 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # App version for manifest (imported at call time to avoid circular imports)
 APP_VERSION = "0.16.0"
 
+REDACTED = "***REDACTED***"
+
+# Credential fields in DispatcharrSettings that must never appear raw in an
+# exported backup. Mirrors the YAML export contract for parity (bd-l0nhi).
+_SETTINGS_CREDENTIAL_FIELDS = (
+    "password",
+    "api_key",
+    "smtp_password",
+    "telegram_bot_token",
+    "mcp_api_key",
+)
+
+# Credential-class keys that may live inside alert_methods.config JSON. Matches
+# the masking set in AlertMethod.to_dict (models.py) so backup redaction stays
+# in lock-step with the API-response masking already shipped to clients.
+_ALERT_METHOD_CREDENTIAL_KEYS = ("password", "bot_token", "webhook_url", "api_key")
+
 
 def _get_backup_filename() -> str:
     """Generate a timestamped backup filename."""
@@ -74,6 +95,71 @@ def _build_manifest(files: list[str]) -> dict:
         "created_at": datetime.now(timezone.utc).isoformat(),
         "files": files,
     }
+
+
+def _scrub_journal_db_to_temp(src: Path) -> Path:
+    """Copy journal.db to a temp file and redact credential-class keys in
+    alert_methods.config rows. Returns the temp file path; caller must unlink.
+
+    Per bd-l0nhi: PR #163 began storing SMTP password (and other creds) inside
+    alert_methods.config JSON, so the live DB cannot be zipped raw without
+    leaking credentials.
+    """
+    fd, tmp_name = tempfile.mkstemp(prefix="ecm-backup-journal-", suffix=".db")
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    shutil.copyfile(src, tmp_path)
+
+    try:
+        conn = sqlite3.connect(str(tmp_path))
+    except sqlite3.Error as e:
+        # Source isn't a usable SQLite DB — log and ship the byte-for-byte copy
+        # so the backup doesn't fail outright. The validator will still reject
+        # it on restore if it's truly malformed.
+        logger.warning("[BACKUP] Could not open journal.db for scrub, shipping as-is: %s", e)
+        return tmp_path
+
+    try:
+        cur = conn.cursor()
+        # alert_methods table may not exist on freshly-bootstrapped DBs.
+        try:
+            cur.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='alert_methods'"
+            )
+            if cur.fetchone() is None:
+                return tmp_path
+            cur.execute("SELECT id, config FROM alert_methods")
+            rows = cur.fetchall()
+        except sqlite3.DatabaseError as e:
+            logger.warning("[BACKUP] alert_methods scrub skipped (DB read failed): %s", e)
+            return tmp_path
+
+        for row_id, raw_config in rows:
+            if not raw_config:
+                continue
+            try:
+                cfg = json.loads(raw_config)
+            except (json.JSONDecodeError, TypeError):
+                # Leave malformed rows alone — restore-side will refuse to
+                # parse them anyway, and we don't want to silently rewrite.
+                continue
+            if not isinstance(cfg, dict):
+                continue
+            changed = False
+            for key in _ALERT_METHOD_CREDENTIAL_KEYS:
+                if key in cfg and cfg[key]:
+                    cfg[key] = REDACTED
+                    changed = True
+            if changed:
+                cur.execute(
+                    "UPDATE alert_methods SET config=? WHERE id=?",
+                    (json.dumps(cfg), row_id),
+                )
+        conn.commit()
+        logger.info("[BACKUP] Scrubbed alert_methods.config in %d rows", len(rows))
+    finally:
+        conn.close()
+    return tmp_path
 
 
 def _create_backup_zip() -> io.BytesIO:
@@ -93,35 +179,51 @@ def _create_backup_zip() -> io.BytesIO:
 
     buf = io.BytesIO()
     files_added = []
+    scrubbed_db_path: Optional[Path] = None
 
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        # Add settings.json
-        if CONFIG_FILE.exists():
-            zf.write(CONFIG_FILE, "settings.json")
-            files_added.append("settings.json")
-            logger.info("[BACKUP] Added settings.json")
+    try:
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            # Add settings.json — written from the redacted dict so credential
+            # fields (password, api_key, smtp_password, telegram_bot_token,
+            # mcp_api_key) never hit the archive raw.
+            if CONFIG_FILE.exists():
+                redacted = _gather_settings()
+                zf.writestr("settings.json", json.dumps(redacted, indent=2))
+                files_added.append("settings.json")
+                logger.info("[BACKUP] Added settings.json (redacted)")
 
-        # Add journal.db
-        if JOURNAL_DB_FILE.exists():
-            zf.write(JOURNAL_DB_FILE, "journal.db")
-            files_added.append("journal.db")
-            logger.info("[BACKUP] Added journal.db (%d bytes)", JOURNAL_DB_FILE.stat().st_size)
+            # Add journal.db — copied to a temp file and scrubbed of
+            # alert_methods.config credential-class keys before zipping.
+            if JOURNAL_DB_FILE.exists():
+                scrubbed_db_path = _scrub_journal_db_to_temp(JOURNAL_DB_FILE)
+                zf.write(scrubbed_db_path, "journal.db")
+                files_added.append("journal.db")
+                logger.info(
+                    "[BACKUP] Added journal.db (%d bytes, scrubbed)",
+                    scrubbed_db_path.stat().st_size,
+                )
 
-        # Add directories
-        for dir_rel in BACKUP_DIRS:
-            dir_path = CONFIG_DIR / dir_rel
-            if dir_path.exists() and dir_path.is_dir():
-                for file_path in dir_path.rglob("*"):
-                    if file_path.is_file():
-                        arcname = str(file_path.relative_to(CONFIG_DIR))
-                        zf.write(file_path, arcname)
-                        files_added.append(arcname)
-                if any(1 for _ in dir_path.rglob("*") if _.is_file()):
-                    logger.info("[BACKUP] Added directory %s", dir_rel)
+            # Add directories
+            for dir_rel in BACKUP_DIRS:
+                dir_path = CONFIG_DIR / dir_rel
+                if dir_path.exists() and dir_path.is_dir():
+                    for file_path in dir_path.rglob("*"):
+                        if file_path.is_file():
+                            arcname = str(file_path.relative_to(CONFIG_DIR))
+                            zf.write(file_path, arcname)
+                            files_added.append(arcname)
+                    if any(1 for _ in dir_path.rglob("*") if _.is_file()):
+                        logger.info("[BACKUP] Added directory %s", dir_rel)
 
-        # Add manifest
-        manifest = _build_manifest(files_added)
-        zf.writestr("ecm_backup.json", json.dumps(manifest, indent=2))
+            # Add manifest
+            manifest = _build_manifest(files_added)
+            zf.writestr("ecm_backup.json", json.dumps(manifest, indent=2))
+    finally:
+        if scrubbed_db_path is not None:
+            try:
+                scrubbed_db_path.unlink()
+            except OSError as e:
+                logger.warning("[BACKUP] Failed to unlink scrubbed journal temp %s: %s", scrubbed_db_path, e)
 
     buf.seek(0)
     logger.info("[BACKUP] Backup created with %d files", len(files_added))
@@ -168,18 +270,164 @@ def _validate_backup_zip(zf: zipfile.ZipFile) -> dict:
     return manifest
 
 
+def _merge_settings_preserving_redacted(zip_settings_bytes: bytes) -> bytes:
+    """Apply restored settings.json on top of existing settings, dropping
+    REDACTED sentinels so existing credentials are preserved.
+
+    Mirrors the YAML restore semantics in _restore_settings (lines below) so
+    a redacted ZIP behaves the same as a redacted YAML export. Backward-compat:
+    legacy non-redacted ZIPs have no sentinels, so every value is taken as-is.
+    """
+    try:
+        zipped = json.loads(zip_settings_bytes)
+    except (json.JSONDecodeError, TypeError):
+        # Validator has already accepted this as JSON; if it's somehow not a
+        # dict, fall back to writing as-is rather than corrupting the file.
+        return zip_settings_bytes
+    if not isinstance(zipped, dict):
+        return zip_settings_bytes
+
+    if CONFIG_FILE.exists():
+        try:
+            existing = json.loads(CONFIG_FILE.read_text())
+            if not isinstance(existing, dict):
+                existing = {}
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+    else:
+        existing = {}
+
+    merged = dict(existing)
+    skipped = []
+    for key, value in zipped.items():
+        if value == REDACTED:
+            skipped.append(key)
+            continue
+        merged[key] = value
+    if skipped:
+        logger.info("[BACKUP] Preserved existing values for redacted settings: %s", skipped)
+    return json.dumps(merged, indent=2).encode("utf-8")
+
+
+def _capture_existing_alert_method_configs() -> dict[int, dict]:
+    """Read existing alert_methods rows directly from journal.db so we can
+    re-merge non-redacted credential fields after the restored DB is written.
+
+    Returns {id: parsed_config_dict}. Rows with malformed JSON or missing
+    table are skipped silently — the caller treats absent ids as 'no merge'.
+    """
+    if not JOURNAL_DB_FILE.exists():
+        return {}
+    out: dict[int, dict] = {}
+    try:
+        conn = sqlite3.connect(str(JOURNAL_DB_FILE))
+    except sqlite3.Error as e:
+        logger.warning("[BACKUP] Could not open journal.db for pre-restore capture: %s", e)
+        return {}
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='alert_methods'"
+            )
+            if cur.fetchone() is None:
+                return {}
+            cur.execute("SELECT id, config FROM alert_methods")
+            rows = cur.fetchall()
+        except sqlite3.DatabaseError as e:
+            logger.warning("[BACKUP] Could not read alert_methods for pre-restore capture: %s", e)
+            return {}
+        for row_id, raw in rows:
+            if not raw:
+                continue
+            try:
+                cfg = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(cfg, dict):
+                out[row_id] = cfg
+    finally:
+        conn.close()
+    return out
+
+
+def _merge_alert_method_creds_after_restore(prior: dict[int, dict]) -> None:
+    """For each alert_methods row in the restored DB, restore non-redacted
+    credential-class values from the prior snapshot when the restored value
+    is the REDACTED sentinel. Match by row id.
+
+    Backward-compat: legacy non-redacted ZIPs carry no sentinel — every value
+    survives the merge unchanged.
+    """
+    if not JOURNAL_DB_FILE.exists():
+        return
+    try:
+        conn = sqlite3.connect(str(JOURNAL_DB_FILE))
+    except sqlite3.Error as e:
+        logger.warning("[BACKUP] Could not open restored journal.db for cred merge: %s", e)
+        return
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='alert_methods'"
+            )
+            if cur.fetchone() is None:
+                return
+            cur.execute("SELECT id, config FROM alert_methods")
+            rows = cur.fetchall()
+        except sqlite3.DatabaseError as e:
+            logger.warning("[BACKUP] Could not read alert_methods after restore for merge: %s", e)
+            return
+        merged_count = 0
+        for row_id, raw in rows:
+            if not raw:
+                continue
+            try:
+                cfg = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(cfg, dict):
+                continue
+            prior_cfg = prior.get(row_id, {})
+            changed = False
+            for key in _ALERT_METHOD_CREDENTIAL_KEYS:
+                if cfg.get(key) == REDACTED and prior_cfg.get(key) not in (None, "", REDACTED):
+                    cfg[key] = prior_cfg[key]
+                    changed = True
+            if changed:
+                cur.execute(
+                    "UPDATE alert_methods SET config=? WHERE id=?",
+                    (json.dumps(cfg), row_id),
+                )
+                merged_count += 1
+        conn.commit()
+        if merged_count:
+            logger.info(
+                "[BACKUP] Re-merged credentials into %d alert_methods rows after restore",
+                merged_count,
+            )
+    finally:
+        conn.close()
+
+
 def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
     """Restore files from a validated backup zip."""
     restored = []
+
+    # Capture existing alert_methods.config BEFORE we close/replace the DB so
+    # we can merge real creds back where the restored ZIP has REDACTED.
+    prior_alert_configs = _capture_existing_alert_method_configs()
 
     # Close database before replacing files
     close_db()
     logger.info("[BACKUP] Database closed for restore")
 
     try:
-        # Restore settings.json
+        # Restore settings.json — drop REDACTED sentinels in favor of the
+        # currently-on-disk value, mirroring YAML restore semantics.
         if "settings.json" in zf.namelist():
-            CONFIG_FILE.write_bytes(zf.read("settings.json"))
+            CONFIG_FILE.write_bytes(_merge_settings_preserving_redacted(zf.read("settings.json")))
             restored.append("settings.json")
             logger.info("[BACKUP] Restored settings.json")
 
@@ -188,6 +436,9 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
             JOURNAL_DB_FILE.write_bytes(zf.read("journal.db"))
             restored.append("journal.db")
             logger.info("[BACKUP] Restored journal.db")
+            # Merge any REDACTED alert_methods.config creds back from the
+            # pre-restore snapshot so existing rows aren't degraded.
+            _merge_alert_method_creds_after_restore(prior_alert_configs)
 
         # Restore directories — clear existing before writing
         for dir_rel in BACKUP_DIRS:
@@ -320,9 +571,9 @@ def _gather_settings() -> dict:
     settings = get_settings()
     data = settings.model_dump()
     # Redact credentials — the export is for review/portability, not secret storage
-    for key in ("password", "smtp_password"):
+    for key in _SETTINGS_CREDENTIAL_FIELDS:
         if key in data:
-            data[key] = "***REDACTED***"
+            data[key] = REDACTED
     return data
 
 
@@ -553,8 +804,6 @@ RESTORABLE_SECTIONS = {
     "channel_profiles": {"label": "Channel Profiles", "dispatcharr": True},
     "stream_profiles": {"label": "Stream Profiles", "dispatcharr": True},
 }
-
-REDACTED = "***REDACTED***"
 
 
 def _parse_yaml_export(content: bytes) -> dict:
