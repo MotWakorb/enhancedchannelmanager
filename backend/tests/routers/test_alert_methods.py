@@ -275,6 +275,236 @@ class TestDeleteAlertMethod:
         assert response.status_code == 404
 
 
+class TestSMTPToEmailsCanonicalization:
+    """Tests for SMTP to_emails canonicalization on POST/PATCH (bd-9vz32)."""
+
+    @pytest.mark.asyncio
+    async def test_post_persists_list_input_as_list(self, async_client, test_session):
+        """POST with list to_emails persists canonical list shape."""
+        from models import AlertMethod as AlertMethodModel
+
+        response = await async_client.post(
+            "/api/alert-methods",
+            json={
+                "name": "Email Alerts",
+                "method_type": "smtp",
+                "config": {"to_emails": ["alice@example.com", "bob@example.com"]},
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+
+        # Read the row back from the DB and confirm canonical shape persisted.
+        row = test_session.query(AlertMethodModel).filter_by(id=data["id"]).one()
+        persisted = json.loads(row.config)
+        assert isinstance(persisted["to_emails"], list)
+        assert persisted["to_emails"] == ["alice@example.com", "bob@example.com"]
+
+    @pytest.mark.asyncio
+    async def test_post_normalizes_string_input_to_list(self, async_client, test_session):
+        """POST with comma-joined string to_emails normalizes to list shape."""
+        from models import AlertMethod as AlertMethodModel
+
+        response = await async_client.post(
+            "/api/alert-methods",
+            json={
+                "name": "Email Alerts",
+                "method_type": "smtp",
+                "config": {"to_emails": "alice@example.com, bob@example.com"},
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+
+        row = test_session.query(AlertMethodModel).filter_by(id=data["id"]).one()
+        persisted = json.loads(row.config)
+        assert isinstance(persisted["to_emails"], list)
+        assert persisted["to_emails"] == ["alice@example.com", "bob@example.com"]
+
+    @pytest.mark.asyncio
+    async def test_patch_normalizes_string_input_to_list(self, async_client, test_session):
+        """PATCH with string to_emails normalizes to canonical list shape."""
+        method = _create_alert_method(
+            test_session,
+            name="Email",
+            method_type="smtp",
+            config=json.dumps({"to_emails": ["old@example.com"]}),
+        )
+        mock_manager = MagicMock()
+
+        with patch("routers.alert_methods.get_alert_manager", return_value=mock_manager):
+            response = await async_client.patch(
+                f"/api/alert-methods/{method.id}",
+                json={"config": {"to_emails": "new1@example.com,new2@example.com"}},
+            )
+
+        assert response.status_code == 200
+        test_session.refresh(method)
+        persisted = json.loads(method.config)
+        assert persisted["to_emails"] == ["new1@example.com", "new2@example.com"]
+
+    @pytest.mark.asyncio
+    async def test_round_trip_preserves_list_shape(self, async_client, test_session):
+        """List input round-trips back through GET as a list."""
+        post_response = await async_client.post(
+            "/api/alert-methods",
+            json={
+                "name": "Email Alerts",
+                "method_type": "smtp",
+                "config": {"to_emails": ["alice@example.com"]},
+            },
+        )
+        method_id = post_response.json()["id"]
+
+        get_response = await async_client.get(f"/api/alert-methods/{method_id}")
+        assert get_response.status_code == 200
+        config = get_response.json()["config"]
+        assert isinstance(config["to_emails"], list)
+        assert config["to_emails"] == ["alice@example.com"]
+
+    @pytest.mark.asyncio
+    async def test_legacy_string_row_reads_as_string(self, async_client, test_session):
+        """Existing rows persisted as a string still load successfully (read-tolerant)."""
+        # Simulate a pre-bd-9vz32 row whose config was persisted with a string.
+        method = _create_alert_method(
+            test_session,
+            name="Legacy SMTP",
+            method_type="smtp",
+            config=json.dumps({"to_emails": "old@example.com"}),
+        )
+
+        response = await async_client.get(f"/api/alert-methods/{method.id}")
+        assert response.status_code == 200
+        # Read returns whatever was stored — legacy rows still expose a string.
+        # The SMTP runtime path handles this via _coerce_to_emails_to_list.
+        config = response.json()["config"]
+        assert config["to_emails"] == "old@example.com"
+
+
+class TestSMTPValidateConfig:
+    """Tests for SMTPMethod.validate_config defense-in-depth (bd-6e8gv)."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_token_with_carriage_return(self, async_client):
+        """POST with CR in to_emails entry returns 400."""
+        response = await async_client.post(
+            "/api/alert-methods",
+            json={
+                "name": "Bad Email",
+                "method_type": "smtp",
+                "config": {"to_emails": ["alice@example.com\rinjected"]},
+            },
+        )
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_rejects_token_with_line_feed(self, async_client):
+        """POST with LF in to_emails entry returns 400."""
+        response = await async_client.post(
+            "/api/alert-methods",
+            json={
+                "name": "Bad Email",
+                "method_type": "smtp",
+                "config": {"to_emails": ["alice@example.com\nBcc: attacker@evil.com"]},
+            },
+        )
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_rejects_token_with_angle_bracket(self, async_client):
+        """POST with < in to_emails entry returns 400."""
+        response = await async_client.post(
+            "/api/alert-methods",
+            json={
+                "name": "Bad Email",
+                "method_type": "smtp",
+                "config": {"to_emails": ["<alice@example.com>"]},
+            },
+        )
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_email_format(self, async_client):
+        """POST with malformed email address returns 400."""
+        response = await async_client.post(
+            "/api/alert-methods",
+            json={
+                "name": "Bad Email",
+                "method_type": "smtp",
+                "config": {"to_emails": ["not-an-email"]},
+            },
+        )
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_accepts_valid_plus_addressed_email(self, async_client):
+        """POST with valid `+tag` plus-addressed email is accepted."""
+        response = await async_client.post(
+            "/api/alert-methods",
+            json={
+                "name": "Plus Addr",
+                "method_type": "smtp",
+                "config": {"to_emails": ["alice+tag@x.co"]},
+            },
+        )
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_accepts_legacy_string_input(self, async_client):
+        """POST with legacy comma-joined string is accepted and validated per token."""
+        response = await async_client.post(
+            "/api/alert-methods",
+            json={
+                "name": "Legacy",
+                "method_type": "smtp",
+                "config": {"to_emails": "alice@example.com, bob@example.com"},
+            },
+        )
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_rejects_legacy_string_with_invalid_token(self, async_client):
+        """POST with legacy string containing a bad token returns 400."""
+        response = await async_client.post(
+            "/api/alert-methods",
+            json={
+                "name": "Bad Legacy",
+                "method_type": "smtp",
+                "config": {"to_emails": "alice@example.com, not-an-email"},
+            },
+        )
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_rejects_empty_list(self, async_client):
+        """POST with an empty list returns 400 (presence-check fails first)."""
+        response = await async_client.post(
+            "/api/alert-methods",
+            json={
+                "name": "Empty",
+                "method_type": "smtp",
+                "config": {"to_emails": []},
+            },
+        )
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_patch_validates_new_config(self, async_client, test_session):
+        """PATCH with malformed token rejects with 400."""
+        method = _create_alert_method(
+            test_session,
+            name="Email",
+            method_type="smtp",
+            config=json.dumps({"to_emails": ["good@example.com"]}),
+        )
+
+        response = await async_client.patch(
+            f"/api/alert-methods/{method.id}",
+            json={"config": {"to_emails": ["alice@example.com\rinjected"]}},
+        )
+        assert response.status_code == 400
+
+
 class TestTestAlertMethod:
     """Tests for POST /api/alert-methods/{method_id}/test."""
 

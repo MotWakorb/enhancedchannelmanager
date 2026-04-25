@@ -42,6 +42,34 @@ class AlertMethodUpdate(BaseModel):
     alert_sources: Optional[dict] = None  # Granular source filtering
 
 
+def _normalize_smtp_config_for_persist(method_type: str, config: dict) -> dict:
+    """Canonicalize SMTP `to_emails` to `list[str]` before persistence (bd-9vz32).
+
+    The frontend has historically sent `to_emails` as either a comma-joined
+    string or a list. We persist as JSON via `json.dumps`, so the shape
+    round-trips unchanged — which means callers reading back have to
+    disambiguate. Decision (bd-9vz32): canonicalize on write to `list[str]`
+    so reads are typed and parse-free. Legacy string rows still load via
+    the SMTPMethod coerce helper, so this is a write-strict / read-tolerant
+    pattern (no Alembic migration needed for the JSON-blob field).
+    """
+    if method_type != "smtp" or not isinstance(config, dict):
+        return config
+    raw = config.get("to_emails")
+    if isinstance(raw, str):
+        normalized = [token.strip() for token in raw.split(",") if token.strip()]
+        # Return a shallow copy — config came from Pydantic and shouldn't be
+        # mutated for the caller.
+        config = {**config, "to_emails": normalized}
+    elif isinstance(raw, list):
+        # Re-strip and drop empties so list-shape input also lands cleanly.
+        config = {
+            **config,
+            "to_emails": [str(item).strip() for item in raw if str(item).strip()],
+        }
+    return config
+
+
 def validate_alert_sources(alert_sources: Optional[dict]) -> Optional[str]:
     """Validate alert_sources structure. Returns error message or None if valid."""
     if alert_sources is None:
@@ -150,10 +178,15 @@ async def create_alert_method(data: AlertMethodCreate):
             logger.warning("[ALERTS] Unknown method type attempted: %s", data.method_type)
             raise HTTPException(status_code=400, detail=f"Unknown method type: {data.method_type}")
 
+        # Canonicalize SMTP to_emails to list[str] before validation/persistence (bd-9vz32).
+        # Legacy comma-joined string input is normalized at the API boundary so all
+        # downstream readers see a single shape.
+        config = _normalize_smtp_config_for_persist(data.method_type, data.config)
+
         # Validate config
-        method = create_method(data.method_type, 0, data.name, data.config)
+        method = create_method(data.method_type, 0, data.name, config)
         if method:
-            is_valid, error = method.validate_config(data.config)
+            is_valid, error = method.validate_config(config)
             if not is_valid:
                 logger.warning("[ALERTS] Invalid config for method %s: %s", data.name, error)
                 raise HTTPException(status_code=400, detail=error)
@@ -169,7 +202,7 @@ async def create_alert_method(data: AlertMethodCreate):
         method_model = AlertMethodModel(
             name=data.name,
             method_type=data.method_type,
-            config=json.dumps(data.config),
+            config=json.dumps(config),
             enabled=data.enabled,
             notify_info=data.notify_info,
             notify_success=data.notify_success,
@@ -266,14 +299,16 @@ async def update_alert_method(method_id: int, data: AlertMethodUpdate):
         if data.name is not None:
             method.name = data.name
         if data.config is not None:
+            # Canonicalize SMTP to_emails to list[str] before validation/persistence (bd-9vz32).
+            new_config = _normalize_smtp_config_for_persist(method.method_type, data.config)
             # Validate new config
-            method_instance = create_method(method.method_type, method.id, method.name, data.config)
+            method_instance = create_method(method.method_type, method.id, method.name, new_config)
             if method_instance:
-                is_valid, error = method_instance.validate_config(data.config)
+                is_valid, error = method_instance.validate_config(new_config)
                 if not is_valid:
                     logger.warning("[ALERTS] Invalid config for method %s: %s", method_id, error)
                     raise HTTPException(status_code=400, detail=error)
-            method.config = json.dumps(data.config)
+            method.config = json.dumps(new_config)
         if data.enabled is not None:
             method.enabled = data.enabled
         if data.notify_info is not None:
