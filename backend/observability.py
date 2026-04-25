@@ -259,6 +259,32 @@ _NORMALIZATION_LATENCY_BUCKETS = (
 def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
     """Instantiate the ECM metric set against ``registry``."""
     return {
+        # ----------------------------------------------------------------
+        # Build identity (bd-h0wfu).
+        #
+        # ``ecm_app_info`` is the canonical Prometheus "info" pattern — a
+        # gauge stuck at 1.0 whose ONLY purpose is to carry build-identity
+        # labels (``version``, ``git_sha``, ``release_channel``). Operators
+        # use it to answer "what is the running container actually built
+        # from?" without having to parse JSON from /api/health, which is a
+        # recurring source of fake "test failure" beads where the real
+        # cause is container drift from origin/dev.
+        #
+        # Cardinality: bounded — each running container has exactly one
+        # (version, git_sha, release_channel) tuple for its lifetime. A
+        # fresh container build produces a single new time series.
+        # ``install_metrics`` sets the gauge to 1.0 with the labels read
+        # from the build-time environment (GIT_COMMIT, ECM_VERSION,
+        # RELEASE_CHANNEL — all baked into the image by Dockerfile ARGs).
+        # ----------------------------------------------------------------
+        "app_info": Gauge(
+            "ecm_app_info",
+            "Build identity of the running container. Labels carry the "
+            "version, git SHA, and release channel baked in at image-build "
+            "time. Value is always 1.0 — query the labels, not the value.",
+            ["version", "git_sha", "release_channel"],
+            registry=registry,
+        ),
         "http_requests_total": Counter(
             "ecm_http_requests_total",
             "Count of HTTP requests processed, labeled by method, route "
@@ -402,7 +428,42 @@ def install_metrics(registry: Optional[CollectorRegistry] = None) -> Dict[str, A
     if REGISTRY is None:
         REGISTRY = registry or CollectorRegistry()
         _METRICS = _build_metrics(REGISTRY)
+        _publish_app_info()
     return _METRICS
+
+
+def _publish_app_info() -> None:
+    """Stamp the build-identity labels onto ``ecm_app_info`` (bd-h0wfu).
+
+    Reads the same env vars that ``/api/health`` and ``/api/version`` echo
+    so operators see the same SHA in three places — Prometheus, the JSON
+    health probe, and the dedicated version endpoint. All three are
+    populated from Dockerfile build ARGs, so a fresh image build mints a
+    new (version, git_sha) time series and stale containers are
+    immediately distinguishable from the running ``origin/dev`` HEAD.
+
+    Defensive: never raises. If prometheus-client is missing or the env
+    vars are absent, the gauge is simply not stamped — better than taking
+    down app startup over an observability nicety.
+    """
+    if not _METRICS:
+        return
+    try:
+        gauge = _METRICS.get("app_info")
+        if gauge is None:
+            return
+        version = os.environ.get("ECM_VERSION", "unknown")
+        git_sha = os.environ.get("GIT_COMMIT", "unknown")
+        release_channel = os.environ.get("RELEASE_CHANNEL", "latest")
+        gauge.labels(
+            version=version,
+            git_sha=git_sha,
+            release_channel=release_channel,
+        ).set(1.0)
+    except Exception:  # pragma: no cover — observability must not break startup
+        logging.getLogger(__name__).debug(
+            "[OBSERVABILITY] Failed to publish ecm_app_info gauge", exc_info=True
+        )
 
 
 def get_metric(name: str) -> Any:
