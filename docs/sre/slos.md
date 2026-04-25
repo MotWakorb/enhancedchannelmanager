@@ -230,34 +230,24 @@ A bug-report ratio — `1 - (bug_reports_containing_normaliz_30d) / (auto_creati
 
 ## SLO-6: Frontend Error-free Session Rate
 
-**SLI:** Fraction of authenticated user sessions that report zero client errors over a rolling 28-day window. A "session" is approximated by distinct `user_agent_hash` labels seen on `ecm_client_errors_total` within the window. The SLI is computed as:
+**SLI:** Fraction of unique frontend sessions that report zero client errors over a rolling 28-day window. A "session" is defined per the [SLO-6 session-semantics spike](./spike-slo-6-session-semantics.md) (bd-1tl01) as one `sessionStorage` lifetime in a single browser tab — the frontend generates a SubtleCrypto-backed UUIDv4 on first SPA mount and POSTs it once to `/api/session-start`, where the backend deduplicates via a 24h in-memory TTL set before incrementing `ecm_session_starts_total`. The SLI is computed as:
 
 ```
-1 - (sessions_with_errors / total_sessions)
+1 - (sessions_with_boundary_errors / total_sessions)
 ```
 
-**Prometheus expression (SLI, until a dedicated session counter exists):**
+**Prometheus expression (SLI — PromQL-native, bd-arp3o):**
 ```promql
-# Sessions that reported at least one client error, over 28d.
-# NOTE: ecm_client_errors_total is keyed by {kind, release} — the session
-# dimension is not exposed as a label (bounded cardinality, per ADR-006).
-# Until a session counter ships (see "Instrumentation gap" below), the
-# numerator here is approximated by 'count of distinct user_agent_hash
-# values seen in the structlog stream' via the log-aggregation substrate,
-# not by a PromQL-native expression. The denominator is the same over
-# the same window from the log stream.
 1
 -
 (
-  # Placeholder — replace with the session counter once instrumented.
-  sum(increase(ecm_client_errors_total[28d]))
+  sum(rate(ecm_client_errors_total{kind="boundary"}[28d]))
   /
-  # Denominator: total sessions. For now, read from the structured-log
-  # aggregator. When the session counter lands, swap this for:
-  #   sum(increase(ecm_session_starts_total[28d]))
-  1
+  sum(rate(ecm_session_starts_total[28d]))
 )
 ```
+
+The numerator filters on `kind="boundary"` because React-tree boundary errors are the single most operationally-meaningful failure class — the user saw the fallback UI, not what they asked for. Other `kind` values (`chunk_load`, `unhandled_rejection`, `resource`, `other`) are tracked on the same counter family and surfaced via the alert rules in `prometheus_rules.yaml`, but `boundary` is the SLO-6 numerator by construction. Revisit if 30 days of production data shows the other kinds dominate user-perceived breakage.
 
 **SLO target:** **99.0%** error-free sessions over a rolling 28-day window, **marked uncalibrated** until 30 days of production data exists.
 
@@ -269,7 +259,7 @@ A bug-report ratio — `1 - (bug_reports_containing_normaliz_30d) / (auto_creati
 
 **Evaluation gate:** Per ADR-006 §11, the SLI is computed only when the window contains **sessions ≥ 50/day** (1,400+ sessions over 28d). Below the gate, SLO-6 reports **insufficient-data** rather than a value — a LAN instance with 3 daily sessions cannot produce a statistically meaningful error-free-session rate. Operators below the gate still see the raw `ecm_client_errors_total` counter on `/metrics`; they just don't get a computed SLO.
 
-**Instrumentation gap:** The current backend emits `ecm_client_errors_total` per report but does not emit a session counter. To produce a Prometheus-native SLI (no log-aggregation dependency), a follow-up bead needs to add `ecm_session_starts_total` (incremented on frontend login or on first protected-route navigation per `user_agent_hash`). Until then, the SLI lives in the log substrate and the target above is aspirational.
+**Instrumentation status:** PromQL-native as of bd-arp3o. The denominator counter `ecm_session_starts_total` is registered in `backend/observability.py` and incremented by `POST /api/session-start` (`backend/routers/session_starts.py`); the operational gauge `ecm_session_dedup_set_size` exposes the in-memory dedup set's current cardinality so SRE can spot pruner regressions. The frontend tracker in `frontend/src/services/sessionTracker.ts` emits the beacon once per `sessionStorage` lifetime per spike Option C. The SLI no longer depends on a log-aggregation substrate.
 
 **What breaks this SLO:**
 
@@ -278,7 +268,7 @@ A bug-report ratio — `1 - (bug_reports_containing_normaliz_30d) / (auto_creati
 - Unhandled promise rejections from an API client contract change (`kind: 'unhandled_rejection'`).
 - Pre-mount bundle load failures (`kind: 'resource'`, emitted by the inline script in `index.html`).
 
-**Runbook:** [`docs/runbooks/frontend_error_rate.md`](../runbooks/frontend_error_rate.md) — covers the `ECMClientErrorRateElevated` (ticket) and `ECMClientErrorRateCritical` (page) alerts in `prometheus_rules.yaml` group `ecm_client_error_rate`: triage by `kind` × `release`, kind-by-kind common causes, rollback / cache-flush / suppression mitigation patterns, and the severity-promotion ladder (bd-pls9m).
+**Runbook:** [`docs/runbooks/frontend_error_rate.md`](../runbooks/frontend_error_rate.md) — covers the `ECMClientErrorRatioElevated` (ticket) and `ECMClientErrorRatioCritical` (page) alerts in `prometheus_rules.yaml` group `ecm_client_error_rate`: triage by `kind` × `release`, kind-by-kind common causes, rollback / cache-flush / suppression mitigation patterns, and the severity-promotion ladder (bd-pls9m). Alert names changed from `Rate*` to `Ratio*` in bd-arp3o when the alerts switched from absolute-rate to ratio-based; the runbook update is tracked under a separate follow-up bead per spike §6.7.
 
 ---
 
@@ -346,6 +336,19 @@ For the scaffold we ship simpler single-window thresholds for SLO-2/3 (p95 laten
 
 ## Changelog
 
+- **2026-04-24 (bd-arp3o, spike bd-1tl01):** SLO-6 SLI promoted from
+  log-aggregation-fallback to PromQL-native. New backend counter
+  `ecm_session_starts_total` (no labels) registered in
+  `backend/observability.py`; new gauge `ecm_session_dedup_set_size`
+  exposes dedup set cardinality. New endpoint `POST /api/session-start`
+  in `backend/routers/session_starts.py` deduplicates by UUIDv4
+  `session_id` with a 24h in-memory TTL set. Frontend wiring
+  `installSessionTracker()` in `frontend/src/services/sessionTracker.ts`
+  generates the UUID via `crypto.randomUUID()`, persists in
+  `sessionStorage`, fail-open on strict-privacy browsers per spike §3.3.
+  `prometheus_rules.yaml` group `ecm_client_error_rate` swapped from
+  absolute-rate alerts to ratio-based alerts so the alert thresholds
+  match the SLO-6 ratio target.
 - **2026-04-24 (bd-i6a1m):** Added **SLO-6: Frontend Error-free Session Rate** — 99.0% error-free sessions over 28d, uncalibrated until 30d of data, gated at sessions ≥ 50/day. Supported by the new `/api/client-errors` router + `ecm_client_errors_total{kind,release}` counter from ADR-006 Phase 1. Instrumentation gap: a session-start counter is a follow-up bead; until then the SLI denominator lives in the log-aggregation substrate. Companion alert rule shipped in `prometheus_rules.yaml` (group `ecm_client_error_rate`).
 - **2026-04-24 (bd-5uxwh, absorbs bd-9mi6f):** Added **Alerting posture** section. Makes explicit that ECM emits SLI metrics on `/metrics` and ships `prometheus_rules.yaml` as rules-as-code, but does not ship a Prometheus/Alertmanager runtime — operators provision their own scraper if they want alerts to fire. Per-SLO ownership table added. SLO-5 noted as the edge case: its breach signal is the nightly CI canary, not Prometheus-primary.
 - **2026-04-22 (bd-eio04.9):** Added **SLO-5: Normalization Correctness** — canary-based parity SLI with zero-tolerance target. Supported by new metrics in `observability.py` (`ecm_normalization_canary_divergence_total`, plus rule-match / no-change / duration / per-creation-normalized counters), a structured decision log (see `NORMALIZATION_DECISION_LOGGER`), and a nightly CI canary (`.github/workflows/normalization-canary.yml`). Runbook at `docs/runbooks/normalization-canary-divergence.md`.
