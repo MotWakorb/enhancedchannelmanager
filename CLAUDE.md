@@ -52,7 +52,7 @@ For multi-persona workflows (team-plan, team-review, spike, grooming, standup, r
 
 Size work as **Small / Medium / Large / Epic — needs decomposition** (per `~/.claude/skills/grooming/SKILL.md`). Do NOT give the PO calendar estimates in hours/days/weeks/months. Calendar estimates invite commitment theater and are almost always wrong.
 
-Exception — governance cadence rules from ADRs (e.g., ADR-001's "one major bump merged to `dev` per 7-day window") are project-defined constraints and can be quoted verbatim. Do not multiply them out into wall-time estimates ("7 bumps × 7 days = 7 weeks"). Quote the rule; let the PO do the arithmetic if they want it.
+Exception — governance cadence rules from ADRs (e.g., ADR-005's monthly-then-quarterly audit cadence) are project-defined constraints and can be quoted verbatim. Do not multiply them out into wall-time estimates. Quote the rule; let the PO do the arithmetic if they want it.
 
 ## Reference Guides
 

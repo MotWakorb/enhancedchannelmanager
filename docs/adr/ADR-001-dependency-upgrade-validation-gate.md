@@ -1,10 +1,10 @@
 # ADR-001: Dependency Upgrade Validation Gate
 
-- **Status**: Accepted
-- **Date**: 2026-04-20 (proposed) / 2026-04-20 (accepted) / 2026-04-23 (scope clarification amended — see Scope below)
+- **Status**: Accepted (amended 2026-04-25 — per-week cadence rule removed)
+- **Date**: 2026-04-20 (proposed) / 2026-04-20 (accepted) / 2026-04-23 (scope clarification amended — see Scope below) / 2026-04-25 (per-week cadence rule excised — see Revision History)
 - **Author**: IT Architect persona (on behalf of PO)
 - **Bead**: `enhancedchannelmanager-xnqgo` (blocks epic `bd-6rrl5`)
-- **Amendment Bead**: `enhancedchannelmanager-umaop` (2026-04-23 scope clarification)
+- **Amendment Bead**: `enhancedchannelmanager-umaop` (2026-04-23 scope clarification), `enhancedchannelmanager-c7txa` (2026-04-25 cadence-rule removal)
 - **Related**:
   - `enhancedchannelmanager-tp681` — flake baseline (complementary, not a substitute)
   - `enhancedchannelmanager-sm3n3` — ADR-005 (code security gating; see Scope below for the boundary)
@@ -15,7 +15,7 @@
 This ADR governs **dependency upgrades only**. It is not a general code-security gating ADR.
 
 **In scope (ADR-001 governs):**
-- Cadence policy for major dependency bumps (one major bump per PR, ~1 per 7-day window — see "Dependency Upgrade Cadence" below).
+- PR-grouping policy for major dependency bumps (one major bump per PR — see "Dependency Upgrade PR Grouping" below).
 - The PR-to-`dev` validation gate for dependency upgrades: fresh-image build (`build-amd64`), DAST `/api/health` smoke (`dast-scan`), and Trivy CRITICAL/HIGH CVE scan (`trivy-scan`), triggered via `paths-filter` on dependency manifest files (`backend/requirements*.txt`, `frontend/package*.json`, `mcp-server/requirements.txt`, `Dockerfile*`).
 - Acceptance criteria for dep-bump beads under epic `bd-6rrl5`.
 - Tagging convention: dep-bump PRs reference ADR-001 in the PR description.
@@ -81,7 +81,7 @@ The mechanism already exists (`build-amd64`, `dast-scan`, `trivy-scan`) — it o
 
 ### Negative
 - **PR-to-dev latency** on dep bumps rises from ~4 min (unit tests only) to ~10–14 min (fresh build + DAST boot + Trivy). Acceptable — dep bumps are infrequent relative to feature PRs.
-- **Runner minutes** on dep-bump PRs roughly triple. Current open-source repo uses `ubuntu-latest` free tier; remains well under quota at the expected cadence (one bump per 1–2 weeks per ADR-001 cadence rule below).
+- **Runner minutes** on dep-bump PRs roughly triple. Current open-source repo uses `ubuntu-latest` free tier; remains well under quota even if multiple dep-bump PRs land per day, given the per-PR build cost.
 - **Branch-protection rule for `dev`** must list the new required checks; small admin action.
 - **First bump after this ADR lands** will be the canary — if any of the seven bumps silently broke fresh-build, we find out then. Recommended sequencing: run the cheapest/lowest-blast bump first (jsdom test-env-only) to validate the gate itself.
 
@@ -89,14 +89,15 @@ The mechanism already exists (`build-amd64`, `dast-scan`, `trivy-scan`) — it o
 - Does **not** replace flake baseline (`bd-tp681`). Flake de-duplication is a prerequisite for interpreting the unit-test signal during upgrades; this ADR assumes it lands first or in parallel.
 - Does **not** introduce staging or E2E-in-CI (`bd-2lw25` scope).
 
-## Dependency Upgrade Cadence (Policy)
+## Dependency Upgrade PR Grouping (Policy)
 
-Policy is as important as the gate. Proposed cadence, to be enforced by grooming:
+Policy is as important as the gate. PR-grouping rules, to be enforced by grooming:
 
 - **One major bump per PR** — no trains. A PR either bumps one package (and its direct peer deps, e.g. `react` + `react-dom` + `@types/react` + `@testing-library/react` together) or nothing. Transitive churn is acceptable.
-- **Target cadence**: at most one major bump merged to `dev` per 7-day window, to keep blame bisection cheap if a latent regression appears in integration testing on `dev`.
 - **Minor/patch bumps**: Dependabot-style, can bundle; not gated by this ADR.
-- **Security advisories**: CRITICAL/HIGH CVE fixes bypass the 7-day spacing rule but still require the full gate (B).
+- **Security advisories**: CRITICAL/HIGH CVE fixes still require the full gate (B).
+
+> **Note (2026-04-25):** an earlier revision of this policy capped major dep bumps at one merge to `dev` per 7-day window, on the rationale that human reviewers needed days to spot latent regressions before the next bump landed and to keep blame bisection cheap. That cadence rule has been removed (see Revision History). Branch protection serializes merges to `dev` so each merged SHA remains independently bisectable, the CI delta-zero gate (ADR-001's fresh-image smoke + ADR-005's CodeQL) catches regressions before they land rather than after, and AI-era execution makes verification cycles measured in CI minutes rather than human-observation days. The one-major-bump-per-PR grouping rule still stands — it preserves bisectability — but the per-week throttle was structurally anchored in human observation time and no longer applies.
 
 ## Application (Acceptance Criteria for `bd-6rrl5` Children)
 
@@ -154,16 +155,25 @@ No data migration, no infrastructure teardown, no vendor relationship to unwind.
 ## Open Questions (Resolved by PO — 2026-04-20)
 
 1. **Required vs. advisory on PR?** **Resolved: required.** New CI checks (`Build Docker Image (AMD64)`, `DAST Security Scan`, `Container Security Scan (Trivy)`) are required status checks on dep-bump PRs targeting `dev`, not advisory.
-2. **Apply cadence policy retroactively?** **Resolved: enforce 7-day cadence starting from this acceptance date (2026-04-20).** Parallel drafting is fine; only one major bump merges to `dev` per 7-day window.
+2. **Apply cadence policy retroactively?** **Originally resolved (2026-04-20): enforce 7-day cadence starting from this acceptance date.** **Superseded (2026-04-25): the per-week cadence rule was removed entirely (see Revision History).** The one-major-bump-per-PR grouping rule still applies; there is no longer a wall-clock spacing requirement between merged dep-bump PRs.
 3. **Flake baseline sequencing.** **Resolved: `bd-tp681` (flake baseline) merges before the first dep bump.** Dep-bump unit-test signals are not interpretable without a clean flake baseline.
 4. **First canary bump.** **Resolved: `bd-lx1gf` (jsdom 24→29) is the canary.** Test-env-only scope, minimal runtime blast radius, exercises the new gate end-to-end before higher-stakes bumps run through it.
+
+## Revision History
+
+| Date | Bead | Change | Rationale |
+|---|---|---|---|
+| 2026-04-20 | `enhancedchannelmanager-xnqgo` | Proposed and accepted | Initial validation contract for `bd-6rrl5` epic |
+| 2026-04-23 | `enhancedchannelmanager-umaop` | Scope clarification — boundary with ADR-004 / ADR-005 made explicit (see Scope) | PR #82 confusion exposed unclear gate boundaries |
+| 2026-04-25 | `enhancedchannelmanager-c7txa` | **Removed the per-week cadence rule** ("at most one major bump merged to `dev` per 7-day window") | The cadence rule was structurally anchored in human review/observation time — operators needed days to spot latent regressions before the next bump landed, and bisection cheapness was the bisectability backstop. Both rationales are now obsolete: branch protection serializes merges to `dev` so each merged SHA stays independently bisectable, the CI delta-zero gate (fresh-image smoke + CodeQL) catches regressions pre-merge rather than relying on post-merge human observation, and AI-era execution makes CI cycles (minutes) the binding constraint rather than human attention (days). The one-major-bump-per-PR grouping rule is preserved — it is the bisectability guarantee that does the load-bearing work. |
 
 ## References
 
 - Bead `enhancedchannelmanager-xnqgo` — this ADR's tracker
 - Bead `enhancedchannelmanager-6rrl5` — dep-bump epic
 - Bead `enhancedchannelmanager-tp681` — flake baseline (companion)
-- Bead `enhancedchannelmanager-umaop` — 2026-04-23 scope clarification amendment (this revision)
+- Bead `enhancedchannelmanager-umaop` — 2026-04-23 scope clarification amendment
+- Bead `enhancedchannelmanager-c7txa` — 2026-04-25 cadence-rule removal amendment
 - `docs/adr/ADR-004-release-cut-promotion-discipline.md` — `dev`→`main` promotion gate (out of scope here)
 - `docs/adr/ADR-005-code-security-gating-strategy.md` — CodeQL delta-zero gate (out of scope here; complementary)
 - `.github/workflows/build.yml` — existing build/security/scan pipeline
