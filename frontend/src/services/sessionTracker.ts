@@ -170,7 +170,7 @@ export async function installSessionTracker(): Promise<void> {
     return;
   }
 
-  let existing: string | null = null;
+  let existing: string | null;
   try {
     existing = storage.getItem(SESSION_STORAGE_KEY);
   } catch {
