@@ -261,7 +261,7 @@ Two other isolation signals:
 
 - **Rollback candidate A** — revert only the `fastapi` line in `requirements.txt`, rebuild, and retest. If the error changes or clears, fastapi is involved.
 - **Rollback candidate B** — revert only the `starlette` line. Same test. Note that fastapi pins a narrow starlette range, so reverting starlette without reverting fastapi may resolve to an incompatible pair — if pip fails to resolve, that confirms the triplet must be rolled back together.
-- In practice, the ADR-001 cadence policy is **"one major bump per PR"** but PR1 bundles three because fastapi's pins force the triplet. Plan to roll back the triplet together; use the isolation above only to name the root cause in the follow-up bead.
+- In practice, the ADR-001 PR-grouping rule is **"one major bump per PR"** but PR1 bundles three because fastapi's pins force the triplet. Plan to roll back the triplet together; use the isolation above only to name the root cause in the follow-up bead.
 
 ### 5. Regression modes specific to starlette 1.0 (and uvicorn 0.46)
 
@@ -476,7 +476,7 @@ the rollback target SHA you used.
 
 - [ ] Open a **P1 bead** documenting the break with enough evidence to un-red before re-attempt: the Diagnosis decision-tree row that matched, the starlette-1.0 regression-mode row (if any), the `/tmp/ecm-asgi-regression.log` snapshot, the pre- and post-merge `/metrics` diffs, and the rollback target SHA. File it under `enhancedchannelmanager-6rrl5` (dep-bump epic). Labels: `dep-bump`, `roadmap:v0.16.0`, `backend`, `sre`.
 - [ ] **Pin `backend/requirements.txt` back to the previous-good versions** in a follow-up PR to `dev` so a fresh `docker build` on `dev` does not re-introduce the regression. The PR should explicitly pin `fastapi`, `starlette`, and `uvicorn` to the pre-triplet versions.
-- [ ] Re-cut process: once the root cause is fixed, the dep-bump PR can be re-proposed. Follow ADR-001 — one-major-per-PR cadence, fresh-image smoke must be green ([dep-bump-smoke-test runbook](./dep-bump-smoke-test.md)), and the triplet stays bundled (fastapi's pin of starlette forces this).
+- [ ] Re-cut process: once the root cause is fixed, the dep-bump PR can be re-proposed. Follow ADR-001 — one-major-per-PR grouping rule, fresh-image smoke must be green ([dep-bump-smoke-test runbook](./dep-bump-smoke-test.md)), and the triplet stays bundled (fastapi's pin of starlette forces this).
 - [ ] If `ecm_http_requests_total` 5xx did **not** trigger an alert before users reported the issue, file a bead on alerting: either no Prometheus scrape is wired (infrastructure gap) or the alert threshold missed it (tuning gap). Reference [SLO-3 HTTP Error Rate](../sre/slos.md#slo-3-http-error-rate).
 - [ ] Schedule a blameless postmortem via the `/postmortem` skill. Per [SLO error-budget policy](../sre/slos.md#error-budget-policy), if the 30-day error budget burn is >10% this is mandatory.
 - [ ] Update this runbook with anything that was ambiguous in the execution — especially any traceback-to-culprit mapping that was missing from the decision tree.
