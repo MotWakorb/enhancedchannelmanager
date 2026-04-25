@@ -6,13 +6,13 @@ This alert method only configures recipients and alert filters - SMTP server
 configuration is centralized in Settings > Email Settings.
 """
 import logging
-import re
 import smtplib
 import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Any, Dict, List, Tuple
 
+import safe_regex  # bd-eio04.x: ReDoS-guarded wrapper for stdlib re
 from alert_methods import AlertMethod, AlertMessage, register_method
 from config import get_settings
 
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # frontend regex is extracted into `frontend/src/utils/smtpRecipients.ts`
 # (bd-cp14f), that file is the source-of-truth — keep this constant in sync
 # manually rather than importing across the JS/Python boundary.
-_HTML5_EMAIL_REGEX = re.compile(
+_HTML5_EMAIL_REGEX = safe_regex.compile(
     r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+"
     r"@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"
     r"(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
