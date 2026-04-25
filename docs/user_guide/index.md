@@ -30,15 +30,19 @@ Clean up noisy stream names so your channels have the names you actually want. I
 
 EPG sources, EPG matching, and the dummy EPG template engine for channels that don't have upstream EPG data.
 
-### 6. [Stats](stats/index.md) — Placeholder
+### 6. [Notifications & Alert Methods](notifications/index.md) — In progress
+
+Configure SMTP, Discord webhooks, and Telegram bots so scheduled-task alerts (M3U refresh failures, EPG warnings, probe results) reach you outside the UI. Covers the Email Alert Recipients list and how per-task toggles gate dispatch.
+
+### 7. [Stats](stats/index.md) — Placeholder
 
 The Stats tab. Currently a placeholder; the v0.17.0 Stats v2 work (bd-skqln.9) will fill in the metric glossary and operator interpretation guide.
 
-### 7. [Backup & Restore](backup-restore/index.md) — Placeholder
+### 8. [Backup & Restore](backup-restore/index.md) — Placeholder
 
 Backing up your ECM configuration and restoring it on a new install. Currently a placeholder; the v0.18.0 epic (bd-0i2vt) and the immediate import work (bd-gb5r5.3) will fill in the operator workflow.
 
-### 8. [Troubleshooting](troubleshooting/index.md) — Stub
+### 9. [Troubleshooting](troubleshooting/index.md) — Stub
 
 Common problems, how to read ECM's logs, and what to gather before asking for help.
 
