@@ -10,12 +10,47 @@ import smtplib
 import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import List
+from typing import Any, Dict, List, Tuple
 
+import safe_regex  # bd-eio04.x: ReDoS-guarded wrapper for stdlib re
 from alert_methods import AlertMethod, AlertMessage, register_method
 from config import get_settings
 
 logger = logging.getLogger(__name__)
+
+# HTML5-style email regex — copied verbatim from
+# frontend/src/components/tabs/SettingsTab.tsx (`isValidHtml5EmailAddress`)
+# so server-side and client-side validation accept the same set. When the
+# frontend regex is extracted into `frontend/src/utils/smtpRecipients.ts`
+# (bd-cp14f), that file is the source-of-truth — keep this constant in sync
+# manually rather than importing across the JS/Python boundary.
+_HTML5_EMAIL_REGEX = safe_regex.compile(
+    r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+"
+    r"@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"
+    r"(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
+)
+
+# Characters that must never appear in an email recipient token. CR/LF would
+# enable header injection if a future code path used to_emails inside a header
+# without sanitization; angle brackets and colons are header-structure
+# delimiters per RFC 5322. Python's stdlib (`email.generator`, `smtplib`)
+# already rejects CR/LF in headers — this defends the property at the sink.
+_FORBIDDEN_EMAIL_CHARS = ("\r", "\n", "<", ">", ":")
+
+
+def _coerce_to_emails_to_list(value: Any) -> List[str]:
+    """Normalize a to_emails value to a list of trimmed, non-empty strings.
+
+    Accepts both the canonical `list[str]` shape and the legacy comma-joined
+    `str` shape (kept for backward-compat reads of pre-bd-9vz32 rows).
+    Anything else returns an empty list — the caller is expected to treat
+    that as "no recipients configured" and surface an error.
+    """
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        return [token.strip() for token in value.split(",") if token.strip()]
+    return []
 
 
 @register_method
@@ -36,6 +71,42 @@ class SMTPMethod(AlertMethod):
         "warning": "[WARNING]",
         "error": "[ERROR]",
     }
+
+    @classmethod
+    def validate_config(cls, config: Dict[str, Any]) -> Tuple[bool, str]:
+        """Validate SMTP method config.
+
+        Extends the base presence check with token-shape and per-recipient
+        validation. Defense-in-depth (bd-6e8gv): rejects header-control
+        characters (CR/LF), header-structure delimiters (<, >, :), and any
+        token that fails the HTML5 email regex. No active exploit path today
+        — admin-authenticated input plus stdlib `smtplib`/`email.generator`
+        already reject CR/LF in headers — but this closes the property at
+        the sink rather than depending on incidental defenses.
+        """
+        is_valid, error = super().validate_config(config)
+        if not is_valid:
+            return is_valid, error
+
+        raw = config.get("to_emails")
+        # Accept both list[str] (canonical) and comma-joined str (legacy).
+        # Anything else (dict, int, None-after-presence-check) is a shape error.
+        if not isinstance(raw, (list, str)):
+            return False, "to_emails must be a list of email addresses"
+
+        tokens = _coerce_to_emails_to_list(raw)
+        if not tokens:
+            return False, "to_emails must contain at least one email address"
+
+        for token in tokens:
+            for forbidden in _FORBIDDEN_EMAIL_CHARS:
+                if forbidden in token:
+                    label = {"\r": "CR", "\n": "LF"}.get(forbidden, forbidden)
+                    return False, f"to_emails entry contains forbidden character ({label}): {token!r}"
+            if not _HTML5_EMAIL_REGEX.match(token):
+                return False, f"to_emails entry is not a valid email address: {token!r}"
+
+        return True, ""
 
     def _get_smtp_config(self) -> dict | None:
         """Get shared SMTP configuration from settings."""
@@ -142,18 +213,11 @@ class SMTPMethod(AlertMethod):
         from_email = smtp_config["from_email"]
         from_name = smtp_config["from_name"]
 
-        # Get recipients from this alert method's config
-        to_emails = self.config.get("to_emails")
+        # Canonical shape is list[str] (bd-9vz32). Legacy rows persisted as a
+        # comma-joined str continue to read correctly via the coerce helper.
+        to_emails = _coerce_to_emails_to_list(self.config.get("to_emails"))
 
         logger.debug("[ALERTS-SMTP] SMTP method %s: Using shared SMTP, recipients configured", self.name)
-
-        if not to_emails:
-            logger.error("[ALERTS-SMTP] SMTP method %s: No recipients configured", self.name)
-            return False
-
-        # Parse to_emails if it's a string
-        if isinstance(to_emails, str):
-            to_emails = [e.strip() for e in to_emails.split(",") if e.strip()]
 
         if not to_emails:
             logger.error("[ALERTS-SMTP] SMTP method %s: No recipients configured", self.name)
@@ -219,14 +283,8 @@ class SMTPMethod(AlertMethod):
         if not smtp_config:
             return False, "Shared SMTP not configured. Configure in Settings > Email Settings first."
 
-        to_emails = self.config.get("to_emails")
-        if not to_emails:
-            return False, "No recipient email addresses configured"
-
-        # Parse to_emails if it's a string
-        if isinstance(to_emails, str):
-            to_emails = [e.strip() for e in to_emails.split(",") if e.strip()]
-
+        # Canonical shape is list[str] (bd-9vz32); legacy str rows still read.
+        to_emails = _coerce_to_emails_to_list(self.config.get("to_emails"))
         if not to_emails:
             return False, "No recipient email addresses configured"
 
@@ -297,14 +355,8 @@ class SMTPMethod(AlertMethod):
         from_email = smtp_config["from_email"]
         from_name = smtp_config["from_name"]
 
-        to_emails = self.config.get("to_emails")
-        if not to_emails:
-            logger.error("[ALERTS-SMTP] SMTP method %s: No recipients configured", self.name)
-            return False
-
-        if isinstance(to_emails, str):
-            to_emails = [e.strip() for e in to_emails.split(",") if e.strip()]
-
+        # Canonical shape is list[str] (bd-9vz32); legacy str rows still read.
+        to_emails = _coerce_to_emails_to_list(self.config.get("to_emails"))
         if not to_emails:
             logger.error("[ALERTS-SMTP] SMTP method %s: No recipients configured", self.name)
             return False
