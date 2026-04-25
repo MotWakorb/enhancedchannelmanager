@@ -11,8 +11,9 @@ Before reading code, editing files, or exploring the codebase for ANY code task:
    ```
 2. **Create a bead** for the current task:
    ```bash
-   bd create enhancedchannelmanager "Brief description"
+   bd create "Brief title" --description "Why this exists and what needs to be done"
    ```
+   The first positional arg is the **title**, not the repo. Repo is auto-routed from `.beads/`. Don't pass `enhancedchannelmanager` as the title — that's the most common foot-gun.
 
 No exceptions. No "I'll do it later." The bead comes before the first Read, Grep, or Edit.
 After the work is deployed and verified, close it: `bd close <bead-id>`
@@ -28,7 +29,7 @@ bd list --status closed       # View closed beads for context
 bd sync                       # Sync beads data only (NOT for code commits)
 ```
 
-- Always use `enhancedchannelmanager` as the repository name
+- Beads auto-route to this repo via `.beads/`. If you ever need to override (e.g., creating a bead targeting a different rig), use `--repo enhancedchannelmanager`.
 - **NEVER chain `bd create` and `bd close`** — run them as separate commands
 - The `.git/beads-worktrees/dev` worktree is **only for beads issue tracking** (sparse checkout of `.beads/` only — no code files). Do NOT edit code there.
 
