@@ -117,12 +117,67 @@ Delta-zero enforcement is only workable if there's a defined path for **justifie
 
 5. **No global severity dismissals** — every dismissal is per-alert.
 
-6. **Audit cadence**: the Security Engineer reviews the dismissal log **monthly for the first quarter after Option 4 lands**, then **quarterly thereafter**. The first-quarter cadence catches early-calibration drift before it calcifies; quarterly is the steady state. Each audit surfaces:
+6. **Audit cadence**: the Security Engineer reviews **three audit scopes** on the same cadence — **monthly for the first quarter after Option 4 lands**, then **quarterly thereafter**. The first-quarter cadence catches early-calibration drift before it calcifies; quarterly is the steady state. Audits are filed as beads under `enhancedchannelmanager` so the cadence itself is visible and delinquent audits are themselves a signal.
+
+   ### Scope A — CodeQL dismissal log (original scope)
+
+   Reviews the GitHub Code Scanning dismissed-alerts list. Each audit surfaces:
    - Patterns of reflexive dismissals (same engineer, same rule, short justification).
    - Sanitizer-justified dismissals whose referenced tests have since been deleted or modified.
    - Any unresolved risk-accepted beads (the Phase-1 substitute for "won't fix") that have aged beyond their documented review date.
 
-   Audits are filed as beads under `enhancedchannelmanager` so the cadence itself is visible and delinquent audits are themselves a signal.
+   Pull command:
+   ```bash
+   gh api repos/MotWakorb/enhancedchannelmanager/code-scanning/alerts --paginate \
+     --jq '.[] | select(.state=="dismissed") | {number, rule: .rule.id, dismissed_by: .dismissed_by.login, dismissed_at, comment: .dismissed_comment, justification: .dismissed_reason}'
+   ```
+
+   ### Scope B — PO-downgrade detection (added 2026-04-24, bd-se7ay)
+
+   Reviews release-cut PRs in the audit window for the **G1a-bypass pattern** that ADR-004 §Decision G1a permits ("zero open P0/P1 bugs at the `dev` cut SHA … or each justified in PR"). A downgrade *is* authorized, but a recurring downgrade-immediately-before-cut pattern is a signal that the gate is being culturally weakened.
+
+   Per audit cycle:
+   1. Enumerate release-cut PRs merged into `main` in the audit window:
+      ```bash
+      # For monthly cadence — adjust --search window for quarterly
+      gh pr list --base main --state merged --search 'Release in:title merged:>=2026-MM-DD' \
+        --json number,title,mergedAt,mergeCommit
+      ```
+   2. For each release-cut PR, capture the cut SHA (the head of the release branch at merge time) and a 30-day pre-cut window.
+   3. Walk the `.beads/issues.jsonl` history (via `git log -p .beads/issues.jsonl` between the window start and the cut SHA) and flag any P1→P2-or-lower transitions whose closing line is `"priority":2` (or higher digit) where the prior line had `"priority":1`. Manual `git log -p` review is acceptable for Phase 1; if the audit becomes recurring noise, file a follow-on bead for a `scripts/bd-priority-history.sh` helper.
+   4. Cross-reference each downgrade event with the bead's owner and the release-cut PR author. **Flag** any case where the downgrader is the PO or the cut-PR author and the downgrade landed within 7 days of the cut SHA — that is the tightest signal of pre-cut gate-weakening.
+   5. File a separate bead per flagged event (per ADR-004 §Decision item 4); a clean audit closes with no follow-on beads.
+
+   ### Scope C — `allow_force_pushes` flip-event audit (added 2026-04-24, bd-se7ay)
+
+   Reviews `main` (and `dev`) branch protection for unsanctioned `allow_force_pushes` toggles. Every legitimate flip corresponds to an authorized rollback bead (e.g., `bd-vgm4l` for v0.16.0). Anything else is investigated — see ADR-004 §Interaction with ADR-005 item 3 for the underlying TOCTOU concern.
+
+   **GitHub audit-log API constraint.** The `/orgs/{org}/audit-log` endpoint is **org-only**; the `MotWakorb/enhancedchannelmanager` repository is hosted under a personal account, so the audit-log API returns 404 (verified 2026-04-24). The Phase 1 audit therefore uses a **snapshot-diff** strategy instead, captured by `scripts/audit-branch-protection-snapshot.sh`:
+
+   ```bash
+   # Capture today's protection state for both long-lived branches.
+   scripts/audit-branch-protection-snapshot.sh capture
+
+   # Diff against the previous audit's snapshot (lives under .audit/branch-protection/).
+   scripts/audit-branch-protection-snapshot.sh diff
+   ```
+
+   The diff alerts on **any change** to the protection JSON since the last audit. Audit-relevant fields the Security Engineer must explicitly inspect even when no diff lines fire:
+   - `allow_force_pushes.enabled` — must be `false` at audit time. A `true` value at audit time means a rollback flip-back was missed (TOCTOU realized).
+   - `enforce_admins.enabled` — must be `true` (per ADR-005 §Decision item 4 admin-bypass disabled).
+   - `required_status_checks.contexts` — must include the four ADR-005 mandates: `Backend Tests`, `Frontend Tests`, `CodeQL Analysis (python)`, `CodeQL Analysis (javascript-typescript)`. A shortened list is a PO-downgrade signal.
+   - `allow_deletions.enabled`, `block_creations.enabled`, `required_conversation_resolution.enabled` — record drift even if not currently mandated.
+
+   For each flip detected:
+   1. Look for a corresponding rollback bead (search closed beads with the `rollback` or `runbook` label, or `git log` for `runbooks/` activity in the same window).
+   2. If a rollback bead exists, the flip is authorized — record the bead reference in the audit bead's comment.
+   3. If no bead exists, file a P1 incident bead and page the PO.
+
+   **Phase 2 upgrade path.** If/when the repo migrates to an org or an org-admin PAT is provisioned, the audit can switch to the live audit-log API:
+   ```bash
+   gh api '/orgs/<org>/audit-log?phrase=action:protected_branch.update+repo:<org>/enhancedchannelmanager' --paginate
+   ```
+   File a sub-bead under the next audit cycle if PAT provisioning becomes the bottleneck (per bd-se7ay acceptance item 3).
 
 ## Sequencing & Rollout
 
