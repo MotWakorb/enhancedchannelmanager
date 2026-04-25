@@ -149,9 +149,7 @@ export const SubstitutionPairsEditor = memo(function SubstitutionPairsEditor({ p
   if (itemIds.length !== pairs.length) {
     const next = itemIds.slice(0, pairs.length);
     while (next.length < pairs.length) {
-      // eslint-disable-next-line react-hooks/refs -- bounded allocation inside a derive-state-from-props guard; counter monotonically increases and only when pairs grows
       idCounterRef.current += 1;
-      // eslint-disable-next-line react-hooks/refs -- see above
       next.push(`sp-${idCounterRef.current}`);
     }
     setItemIds(next);

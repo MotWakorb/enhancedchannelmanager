@@ -30,6 +30,20 @@ export default defineConfig([
           caughtErrorsIgnorePattern: '^_',
         },
       ],
+      // eslint-plugin-react-hooks 7.1 added several React-Compiler-aware rules
+      // to its `recommended` config. They flag hundreds of pre-existing
+      // patterns (set-state-in-effect call sites, ref reads tied to layout
+      // measurement, manual memoization that the compiler cannot preserve,
+      // immutability assumptions, throw-in-render purity). Addressing them
+      // is real refactor work, not in scope for the eslint 9 -> 10 bump
+      // (bd-5x6n7). Disabled here per docs/frontend_lint.md "Rules of the
+      // Road" #4 -- prefer config-level disables over scattering inline
+      // disables. Follow-up bead: triage and re-enable individually.
+      'react-hooks/set-state-in-effect': 'off',
+      'react-hooks/refs': 'off',
+      'react-hooks/preserve-manual-memoization': 'off',
+      'react-hooks/immutability': 'off',
+      'react-hooks/purity': 'off',
     },
   },
 ]);

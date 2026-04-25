@@ -83,7 +83,7 @@ export function useAutoCreationRules(
       return newRule;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to create rule';
-      throw new Error(message);
+      throw new Error(message, { cause: err });
     } finally {
       setLoading(false);
     }
@@ -97,7 +97,7 @@ export function useAutoCreationRules(
       return updatedRule;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to update rule';
-      throw new Error(message);
+      throw new Error(message, { cause: err });
     } finally {
       setLoading(false);
     }
@@ -110,7 +110,7 @@ export function useAutoCreationRules(
       setRules(prev => prev.filter(r => r.id !== id));
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to delete rule';
-      throw new Error(message);
+      throw new Error(message, { cause: err });
     } finally {
       setLoading(false);
     }
@@ -124,7 +124,7 @@ export function useAutoCreationRules(
       return toggledRule;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to toggle rule';
-      throw new Error(message);
+      throw new Error(message, { cause: err });
     } finally {
       setLoading(false);
     }
@@ -166,7 +166,7 @@ export function useAutoCreationRules(
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to reorder rules';
-      throw new Error(message);
+      throw new Error(message, { cause: err });
     } finally {
       setLoading(false);
     }
@@ -234,7 +234,7 @@ export function useAutoCreationRules(
       return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to bulk update rules';
-      throw new Error(message);
+      throw new Error(message, { cause: err });
     } finally {
       setLoading(false);
     }
