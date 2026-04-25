@@ -5,7 +5,7 @@ import logging
 import time
 from pathlib import Path
 
-from cloud_storage.base import CloudStorageAdapter, UploadResult, ConnectionTestResult
+from cloud_storage.types import CloudStorageAdapter, UploadResult, ConnectionTestResult
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ class DropboxAdapter(CloudStorageAdapter):
                 remote_path = "/" + remote_path
 
             with open(local_path, "rb") as f:
-                result = dbx.files_upload(
+                dbx.files_upload(
                     f.read(),
                     remote_path,
                     mode=dbx_module.files.WriteMode.overwrite,

@@ -300,7 +300,7 @@ class TestCloudTargetIntegration:
     @patch("routers.export.get_adapter")
     async def test_test_connection_inline(self, mock_get_adapter, async_client):
         """Inline connection test should use provided credentials."""
-        from cloud_storage.base import ConnectionTestResult
+        from cloud_storage import ConnectionTestResult
         mock_adapter = AsyncMock()
         mock_adapter.test_connection.return_value = ConnectionTestResult(
             success=True, message="Connected", provider_info={"bucket": "test"}

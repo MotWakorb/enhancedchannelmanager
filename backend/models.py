@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, date
 from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, Date, Float, Index, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
-from database import Base
+from db_base import Base
 
 logger = logging.getLogger(__name__)
 

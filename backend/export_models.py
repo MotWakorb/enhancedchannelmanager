@@ -6,7 +6,7 @@ import json
 import logging
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Index
-from database import Base
+from db_base import Base
 
 logger = logging.getLogger(__name__)
 
