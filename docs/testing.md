@@ -197,6 +197,63 @@ Do **not** lower the threshold in the config.
 - **Frontend tests**: MANDATORY for any frontend code changes
 - **E2E tests**: Run on merge to main only (CI/CD pipeline)
 
+## Container Freshness Check
+
+**Before triaging any "test failure" bead that reports failures from
+`ecm-ecm-1`, verify the container is actually running current `dev`
+HEAD.** This pattern (engineer files a "tests failing on dev" bead;
+investigation reveals tests pass locally and the container is stale)
+recurred enough times — beads `5dug8`, `0gcu9`, others — that it
+deserves its own check (bd-h0wfu).
+
+The container reports its source SHA in two places, populated from
+Docker build args at image-build time (`Dockerfile`: `ARG GIT_COMMIT`):
+
+```bash
+# Method A — JSON endpoint (no auth required, /api/version is exempt)
+curl -s http://localhost:6100/api/version | jq -r .git_commit
+
+# Method B — Prometheus metric label
+curl -s http://localhost:6100/metrics | grep ecm_app_info
+# ecm_app_info{git_sha="<sha>",release_channel="latest",version="<ver>"} 1.0
+```
+
+Compare against `origin/dev`:
+
+```bash
+git fetch origin dev
+git rev-parse origin/dev
+```
+
+**If the SHAs match**, the container is current — investigate the test
+failure as real. **If they don't match**, the container is stale; redeploy
+current dev HEAD before triaging:
+
+```bash
+# Backend
+docker cp backend/main.py ecm-ecm-1:/app/main.py
+docker cp backend/routers/. ecm-ecm-1:/app/routers/
+docker restart ecm-ecm-1
+
+# Frontend
+cd frontend && npm run build
+docker exec ecm-ecm-1 sh -c 'rm -rf /app/static/assets/*'
+docker cp dist/. ecm-ecm-1:/app/static/
+```
+
+Re-run the failing tests. If they now pass, the bead was deploy drift,
+not a code defect — close it without filing a code bead. The
+container-first development workflow (per `CLAUDE.md`) means agents
+`docker cp` specific files when iterating, so the shared `ecm-ecm-1`
+container can lag origin/dev when nobody re-deploys after a merge to
+`dev`. The freshness check above is a one-line cure for the entire
+class of fake test-failure beads.
+
+The same SHA labels also drive container-drift dashboards in Grafana —
+`max by (git_sha) (ecm_app_info)` shows the running build identity, and
+an alert can fire when it diverges from the `origin/dev` SHA published by
+the build pipeline.
+
 ## Quality Gate Commands
 
 ```bash

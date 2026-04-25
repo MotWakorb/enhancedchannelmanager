@@ -223,6 +223,35 @@ async def health_check():
     }
 
 
+@router.get("/api/version")
+async def version_endpoint() -> dict:
+    """Report the build identity of the running container (bd-h0wfu).
+
+    Dedicated, ultra-cheap endpoint whose ONLY job is to answer "what
+    SHA is this container running?". Same fields as ``/api/health`` but
+    without the ``status``/``service`` envelope, so operators can pipe
+    it through ``jq -r .git_commit`` and compare against
+    ``git rev-parse origin/dev`` to detect deploy drift in a one-liner::
+
+        curl -s http://localhost:6100/api/version | jq -r .git_commit
+
+    Why a separate endpoint instead of just reusing /api/health? The
+    health endpoint is the Dockerfile HEALTHCHECK target — its
+    semantics are "am I alive?" and downstream tooling parses its
+    response shape. Adding a dedicated /api/version keeps the
+    drift-check path discoverable by name and lets us evolve the
+    health response independently if we ever need to.
+
+    Public endpoint (see ``main.AUTH_EXEMPT_PATHS``): no auth, no rate
+    limit, no subsystem probing. Three env-var reads — that's it.
+    """
+    return {
+        "version": os.environ.get("ECM_VERSION", "unknown"),
+        "git_commit": os.environ.get("GIT_COMMIT", "unknown"),
+        "release_channel": os.environ.get("RELEASE_CHANNEL", "latest"),
+    }
+
+
 @router.get("/api/health/ready")
 async def readiness_check(response: Response) -> dict:
     """Rich readiness check — verifies DB, Dispatcharr, and ffprobe.
