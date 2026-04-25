@@ -278,7 +278,7 @@ A bug-report ratio — `1 - (bug_reports_containing_normaliz_30d) / (auto_creati
 - Unhandled promise rejections from an API client contract change (`kind: 'unhandled_rejection'`).
 - Pre-mount bundle load failures (`kind: 'resource'`, emitted by the inline script in `index.html`).
 
-**Runbook:** [`docs/runbooks/frontend_error_rate.md`](../runbooks/frontend_error_rate.md) — *to be written as part of the i6a1m follow-up; the SLO lands with the alert rule and a placeholder runbook link.*
+**Runbook:** [`docs/runbooks/frontend_error_rate.md`](../runbooks/frontend_error_rate.md) — covers the `ECMClientErrorRateElevated` (ticket) and `ECMClientErrorRateCritical` (page) alerts in `prometheus_rules.yaml` group `ecm_client_error_rate`: triage by `kind` × `release`, kind-by-kind common causes, rollback / cache-flush / suppression mitigation patterns, and the severity-promotion ladder (bd-pls9m).
 
 ---
 
