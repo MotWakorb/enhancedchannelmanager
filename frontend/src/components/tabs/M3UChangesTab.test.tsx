@@ -1,6 +1,7 @@
 /**
  * Unit tests for M3UChangesTab component and helper functions.
  */
+import type * as React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { M3UChangesTab } from './M3UChangesTab';
@@ -11,7 +12,7 @@ import type { M3UChangeLog, M3UChangeSummary, M3UAccount } from '../../types';
 // Mock the API module
 vi.mock('../../services/api');
 
-const renderWithProviders = (ui: JSX.Element) =>
+const renderWithProviders = (ui: React.JSX.Element) =>
   render(<NotificationProvider>{ui}</NotificationProvider>);
 
 // Helper function tests - extracted from the component for testing
