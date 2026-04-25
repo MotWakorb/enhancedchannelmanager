@@ -3,6 +3,7 @@
  *
  * These tests define the expected behavior of the main auto-creation tab BEFORE implementation.
  */
+import type * as React from 'react';
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -17,7 +18,7 @@ import {
 import { AutoCreationTab } from './AutoCreationTab';
 import { NotificationProvider } from '../../contexts/NotificationContext';
 
-const renderWithProviders = (ui: JSX.Element) =>
+const renderWithProviders = (ui: React.JSX.Element) =>
   render(<NotificationProvider>{ui}</NotificationProvider>);
 
 // Setup MSW server
