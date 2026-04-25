@@ -400,6 +400,19 @@ AUTH_EXEMPT_PATHS = {
     # origin/dev (bd-h0wfu) without authenticating. Echoes the same env
     # vars baked into the image at Docker build time. No subsystem access.
     "/api/version",
+    # SLO-6 denominator counter ingest — public by design (bd-m3vej,
+    # follow-up to bd-arp3o) so pre-auth sessions count in the denominator.
+    # Without this, the SLO-6 SLI is structurally biased: the numerator
+    # (/api/client-errors) stays JWT-required, so pre-auth bootstrap
+    # failures (login-page chunk-load errors, pre-mount crashes) cannot
+    # be observed at all, while pre-auth sessions WERE invisible to the
+    # denominator. Opening only this endpoint reduces the asymmetry —
+    # pre-auth sessions are now counted, accepting that pre-auth errors
+    # remain uncounted (PO option B). The endpoint accepts a single
+    # opaque UUIDv4 (no PII, never logged, never persisted). Documented
+    # as a known measurement bias in docs/sre/slos.md (SLO-6) and
+    # ADR-006 §1.
+    "/api/session-start",
     # Auth flow (must be public by definition)
     "/api/auth/login",
     "/api/auth/refresh",

@@ -261,6 +261,12 @@ The numerator filters on `kind="boundary"` because React-tree boundary errors ar
 
 **Instrumentation status:** PromQL-native as of bd-arp3o. The denominator counter `ecm_session_starts_total` is registered in `backend/observability.py` and incremented by `POST /api/session-start` (`backend/routers/session_starts.py`); the operational gauge `ecm_session_dedup_set_size` exposes the in-memory dedup set's current cardinality so SRE can spot pruner regressions. The frontend tracker in `frontend/src/services/sessionTracker.ts` emits the beacon once per `sessionStorage` lifetime per spike Option C. The SLI no longer depends on a log-aggregation substrate.
 
+**Known measurement bias (bd-m3vej, follow-up to bd-arp3o):** the denominator and numerator have asymmetric auth posture by design. `POST /api/session-start` is in `AUTH_EXEMPT_PATHS` (per the bd-m3vej ADR-006 §1 amendment), so **pre-auth sessions ARE counted in the denominator** — login-page mounts, login-page hard-refreshes, and pre-auth chunk loads all bump `ecm_session_starts_total`. `POST /api/client-errors` remains JWT-required (the PO chose option B over option A), so **pre-auth client errors are NOT counted in the numerator** — a stale-bundle chunk-load failure that crashes the login page itself produces a denominator increment with no matching numerator event. The net effect is that the computed error-free-session rate is **biased LOW** (looks healthier than reality) for any operator who experiences pre-auth bootstrap failures at a non-trivial rate. Implications:
+
+- Set alert thresholds with this bias in mind. A `ratio < 99%` breach is a stronger signal than the math implies (pre-auth failures inflate the denominator without inflating the numerator), while a `ratio == 100%` reading does NOT mean zero pre-auth failures occurred.
+- Per-`kind` decomposition in PromQL still reflects only authenticated events; if pre-auth chunk-load errors become a triage concern, the only operator-visible signal is the `ecm_session_starts_total` rate (denominator) climbing without a matching `ecm_client_errors_total{kind="chunk_load"}` rise — counterintuitive but real.
+- The asymmetry is fixed by either (a) opening `/api/client-errors` to unauthenticated POSTs (rejected by the PO due to payload-richness threat-model concerns; see ADR-006 §1 amendment) or (b) adding a separate pre-auth error sink with a narrower payload (deferred — would require its own ADR).
+
 **What breaks this SLO:**
 
 - Stale-bundle chunk-load errors after a deploy (`kind: 'chunk_load'` counter spikes with `release != current`).
@@ -336,6 +342,13 @@ For the scaffold we ship simpler single-window thresholds for SLO-2/3 (p95 laten
 
 ## Changelog
 
+- **2026-04-24 (bd-m3vej, follow-up to bd-arp3o):** SLO-6 entry gained
+  a **Known measurement bias** section. `POST /api/session-start` was
+  moved into `AUTH_EXEMPT_PATHS` in `backend/main.py` so pre-auth
+  sessions count toward the SLO-6 denominator. `POST /api/client-errors`
+  remains JWT-required (PO option B). The asymmetry biases the
+  computed error-free-session rate LOW; alert thresholds should be set
+  with this in mind. ADR-006 §1 amended with the rationale.
 - **2026-04-24 (bd-arp3o, spike bd-1tl01):** SLO-6 SLI promoted from
   log-aggregation-fallback to PromQL-native. New backend counter
   `ecm_session_starts_total` (no labels) registered in
