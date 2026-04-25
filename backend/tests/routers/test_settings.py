@@ -206,6 +206,69 @@ class TestUpdateSettings:
         assert response.status_code == 400
         assert "api key" in response.json()["detail"].lower()
 
+    @pytest.mark.asyncio
+    async def test_partial_update_preserves_mcp_api_key(self, async_client):
+        """bd-vj8n9: POST with a partial body must NOT clear the stored mcp_api_key.
+
+        Reproduction of the bug: SettingsRequest doesn't accept mcp_api_key, so
+        every POST that omits it would construct DispatcharrSettings(...) with
+        the field defaulting to "" and silently revoke the key.
+        """
+        current = _mock_settings(mcp_api_key="stored-mcp-key-abc123")
+        captured = {}
+
+        def capture_save(new_settings):
+            captured["mcp_api_key"] = new_settings.mcp_api_key
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+                "telemetry_client_errors_enabled": False,
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["mcp_api_key"] == "stored-mcp-key-abc123", (
+            "Partial POST cleared mcp_api_key — sensitive field not preserved"
+        )
+
+    @pytest.mark.asyncio
+    async def test_partial_update_preserves_smtp_password(self, async_client):
+        """bd-vj8n9: POST with a partial body must NOT clear the stored smtp_password.
+
+        Companion to mcp_api_key test — verifies the existing preserve-on-omit
+        contract for smtp_password still holds. Regression guard.
+        """
+        current = _mock_settings(smtp_password="stored-smtp-password-xyz")
+        captured = {}
+
+        def capture_save(new_settings):
+            captured["smtp_password"] = new_settings.smtp_password
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+                "telemetry_client_errors_enabled": False,
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["smtp_password"] == "stored-smtp-password-xyz", (
+            "Partial POST cleared smtp_password — sensitive field not preserved"
+        )
+
 
 class TestTestConnection:
     """Tests for POST /api/settings/test."""
