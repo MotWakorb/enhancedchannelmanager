@@ -108,15 +108,65 @@ def get_database_url() -> str:
     return f"sqlite:///{JOURNAL_DB_FILE}"
 
 
+# Canary list for the post-upgrade self-heal check in ``_bootstrap_alembic``.
+# Each entry guards against a specific class of pre-Alembic-stamping bug
+# (bd-fwpzw): users whose ``alembic_version`` was stamped at HEAD by an older
+# bootstrap path even though their physical schema is still at the baseline.
+# In that state ``alembic upgrade head`` is a no-op and the missing post-
+# baseline DDL never lands. We probe for at least one column from migration
+# 0002 and one index from migration 0004 so any divergence between the version
+# row and the actual schema fails the canary and triggers self-heal.
+#
+# Keep this list short — 2-3 entries that prove the most-recent migrations ran.
+# Adding a canary per migration is overkill; cross-cutting failure of one
+# representative artifact is enough to know the version row is lying.
+_BOOTSTRAP_CANARIES = (
+    # Migration 0002 — column missed by the original pre-Alembic stamping bug
+    # (the production 500 reported in bd-fwpzw).
+    {"kind": "column", "table": "auto_creation_rules", "name": "match_scope_target_group"},
+    # Migration 0004 — index added on top of the baseline journal_entries table.
+    {"kind": "index", "table": "journal_entries", "name": "idx_journal_batch_id"},
+)
+
+
+def _missing_canaries(engine) -> list[dict]:
+    """Return canaries from ``_BOOTSTRAP_CANARIES`` not present in ``engine``."""
+    missing: list[dict] = []
+    with engine.connect() as conn:
+        for canary in _BOOTSTRAP_CANARIES:
+            if canary["kind"] == "column":
+                rows = conn.execute(text(
+                    f"PRAGMA table_info({canary['table']})"
+                )).fetchall()
+                names = {row[1] for row in rows}
+                if canary["name"] not in names:
+                    missing.append(canary)
+            elif canary["kind"] == "index":
+                rows = conn.execute(text(
+                    f"PRAGMA index_list({canary['table']})"
+                )).fetchall()
+                # PRAGMA index_list returns (seq, name, unique, origin, partial).
+                names = {row[1] for row in rows}
+                if canary["name"] not in names:
+                    missing.append(canary)
+    return missing
+
+
 def _bootstrap_alembic(engine) -> None:
     """Ensure ``alembic_version`` tracks the deployed schema state.
 
     - Fresh install (no tables): ``alembic upgrade head`` creates everything.
     - Existing install from before Alembic (tables exist, no ``alembic_version``):
-      ``alembic stamp head`` records the current revision without re-running
-      DDL that would crash on duplicate-table errors.
+      stamp at the **baseline** revision (the lowest revision in the migration
+      history — by design the baseline schema mirrors the pre-Alembic shape),
+      then run ``upgrade head`` so post-baseline migrations apply. Stamping at
+      HEAD instead would silently skip every post-baseline migration forever
+      (bd-fwpzw).
     - Already on Alembic (``alembic_version`` row present): ``upgrade head`` is
       a no-op when at head, otherwise applies pending revisions.
+    - Self-heal: after upgrade, probe ``_BOOTSTRAP_CANARIES`` to detect any
+      schema/version mismatch (users stamped at HEAD by the buggy older path).
+      If a canary is missing, re-stamp at baseline and re-run upgrade head.
     """
     from alembic import command
     from alembic.config import Config
@@ -132,6 +182,10 @@ def _bootstrap_alembic(engine) -> None:
     alembic_cfg = Config(str(ALEMBIC_INI_PATH))
     alembic_cfg.set_main_option("sqlalchemy.url", str(engine.url))
 
+    script_dir = ScriptDirectory.from_config(alembic_cfg)
+    bases = script_dir.get_bases()
+    baseline_revision = bases[0] if bases else None
+
     with engine.connect() as conn:
         has_alembic_version = conn.execute(text(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='alembic_version'"
@@ -142,16 +196,49 @@ def _bootstrap_alembic(engine) -> None:
         )).fetchone() is not None
 
     if not has_alembic_version and has_any_user_table:
-        head = ScriptDirectory.from_config(alembic_cfg).get_current_head()
-        logger.info(
-            "[DATABASE] Pre-Alembic install detected — stamping as revision %s",
-            head,
-        )
-        command.stamp(alembic_cfg, "head")
-        return
+        if baseline_revision is None:
+            logger.error(
+                "[DATABASE] Pre-Alembic install detected but no baseline revision found in script directory — skipping stamp"
+            )
+        else:
+            logger.info(
+                "[DATABASE] Pre-Alembic install detected — stamping at baseline revision %s, then upgrading to head",
+                baseline_revision,
+            )
+            command.stamp(alembic_cfg, baseline_revision)
+            # Fall through to upgrade head so post-baseline migrations apply.
 
     logger.info("[DATABASE] Running alembic upgrade head")
     command.upgrade(alembic_cfg, "head")
+
+    # Self-heal: a user stamped at HEAD by the buggy pre-fix bootstrap will
+    # have ``upgrade head`` no-op, leaving missing post-baseline schema. Probe
+    # canaries to detect that state and recover by re-stamping at baseline and
+    # re-running ``upgrade head``.
+    missing = _missing_canaries(engine)
+    if missing:
+        current_rev = get_current_schema_revision(engine)
+        logger.error(
+            "[DATABASE] Schema/Alembic mismatch detected — re-stamping at baseline and re-running upgrade head (current_rev=%s, missing_canaries=%s)",
+            current_rev or "unstamped",
+            [c["name"] for c in missing],
+        )
+        if baseline_revision is None:
+            raise RuntimeError(
+                "Schema/Alembic mismatch detected but baseline revision is unavailable — cannot self-heal"
+            )
+        with engine.begin() as conn:
+            conn.execute(
+                text("UPDATE alembic_version SET version_num = :rev"),
+                {"rev": baseline_revision},
+            )
+        command.upgrade(alembic_cfg, "head")
+        still_missing = _missing_canaries(engine)
+        if still_missing:
+            raise RuntimeError(
+                "Schema/Alembic self-heal failed — canaries still missing after baseline re-run: "
+                f"{[c['name'] for c in still_missing]}"
+            )
 
 
 def get_current_schema_revision(engine=None) -> str:
