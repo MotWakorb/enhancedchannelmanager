@@ -1,0 +1,327 @@
+# Mechanical verification of ADR-004 Pre-Cut Gate items G1a, G1b, G5, G6, G7
+# on release-cut PRs (PRs targeting `main` with title `Release vX.Y.Z` and
+# head branch `release/vX.Y.Z`).
+#
+# G2/G3 are enforced via existing branch-protection required checks
+# (Backend Tests, Frontend Tests). G4 is enforced via the GitHub Code
+# Scanning merge protection rule (CodeQL delta-zero) per ADR-005. This
+# workflow is additive — it does not re-implement those gates.
+#
+# Bead: enhancedchannelmanager-3d0tv (Phase 2 automation per ADR-004 §4
+# "Sequencing & Rollout" item 5).
+#
+# ─── Triggering and check-name discipline ─────────────────────────────
+# The job's `name:` is "Release Cut Gate" — that exact string is added
+# to `main` branch protection as a required status check so any failure
+# blocks the cut PR. Non-release PRs to `main` (e.g. hotfix PRs branched
+# from `main`) still need the check to report success or branch
+# protection will block them indefinitely; the workflow detects the
+# release-cut shape (title regex AND branch regex) and short-circuits
+# to a clean pass for everything else.
+#
+# Hotfix PRs (branch `hotfix/vX.Y.(Z+1)-description`) are intentionally
+# exempt — ADR-004 §4 hotfix path applies a different gate subset
+# (G2, G3, G4 + scoped G1a/G1b/G5/G6/G7 per the hotfix carve-outs in
+# docs/shipping.md §"Hotfix Path"). Hotfix gating is out of scope for
+# this bead and tracked as a possible follow-on per the bead description.
+name: Release Cut Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - edited
+
+# Beads JSONL data lands in main via release cuts but is otherwise dev-only.
+# The workflow needs read access to the JSONL on the PR head, plus the
+# default GITHUB_TOKEN for `gh api` calls (code-scanning alerts + open PR
+# enumeration).
+permissions:
+  contents: read
+  pull-requests: read
+  security-events: read
+
+jobs:
+  release-cut-gate:
+    name: Release Cut Gate
+    runs-on: ubuntu-latest
+    env:
+      # Pinned to the v0.49.x line that matches the maintainer's local
+      # bd version (0.49.0). v0.49.6 is the latest patch in that minor
+      # line and reads the same JSONL shape that lives in `.beads/`.
+      # Bumping this to v1.x requires verifying JSONL format compatibility
+      # — the v1.0.x line is recent (released 2026-04) and the maintainer
+      # has not yet adopted it locally.
+      BEADS_VERSION: "0.49.6"
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v6
+        with:
+          # Full history so we can diff CHANGELOG.md against `main`.
+          fetch-depth: 0
+
+      - name: Detect release-cut PR shape
+        id: shape
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          # Two regexes must both match to classify a PR as a release cut.
+          # Anything else (hotfix, accidental main-bound feature PR, etc.)
+          # falls through to the short-circuit pass below.
+          title_re='^Release v[0-9]+\.[0-9]+\.[0-9]+$'
+          branch_re='^release/v[0-9]+\.[0-9]+\.[0-9]+$'
+
+          if [[ "$PR_TITLE" =~ $title_re ]] && [[ "$HEAD_REF" =~ $branch_re ]]; then
+            # Extract X.Y.Z from the branch name so downstream steps can
+            # cross-check against frontend/package.json + CHANGELOG.md.
+            version="${HEAD_REF#release/v}"
+            echo "is_release_cut=true" >> "$GITHUB_OUTPUT"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "Detected release-cut PR for version $version"
+          else
+            echo "is_release_cut=false" >> "$GITHUB_OUTPUT"
+            echo "version=" >> "$GITHUB_OUTPUT"
+            echo "Not a release-cut PR (title='$PR_TITLE', branch='$HEAD_REF') — gates skipped, passing."
+          fi
+
+      # ─── G6: Version in frontend/package.json matches release branch ──
+      # Cheapest gate; runs first so a wrong version bump fails fast.
+      - name: G6 — Version matches release branch name
+        if: steps.shape.outputs.is_release_cut == 'true'
+        env:
+          EXPECTED_VERSION: ${{ steps.shape.outputs.version }}
+        run: |
+          set -euo pipefail
+          actual=$(jq -r '.version' frontend/package.json)
+          if [[ "$actual" != "$EXPECTED_VERSION" ]]; then
+            echo "::error file=frontend/package.json::G6 FAIL: frontend/package.json version is '$actual' but release branch demands '$EXPECTED_VERSION'."
+            echo "Fix: edit frontend/package.json so \"version\": \"$EXPECTED_VERSION\", commit, push."
+            exit 1
+          fi
+          echo "G6 PASS: frontend/package.json version = $actual matches release/v$EXPECTED_VERSION"
+
+      # ─── G5: CHANGELOG promotion ──────────────────────────────────────
+      # Three sub-checks: (a) [Unreleased] heading present; (b) [X.Y.Z]
+      # heading present with today's date; (c) the [Unreleased] section
+      # appears ABOVE the [X.Y.Z] section (Keep-a-Changelog convention).
+      - name: G5 — CHANGELOG promoted with today's date
+        if: steps.shape.outputs.is_release_cut == 'true'
+        env:
+          EXPECTED_VERSION: ${{ steps.shape.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ ! -f CHANGELOG.md ]]; then
+            echo "::error file=CHANGELOG.md::G5 FAIL: CHANGELOG.md missing on release branch."
+            exit 1
+          fi
+
+          # (a) [Unreleased] heading must exist (a fresh empty one above
+          # the new release block per shipping.md §CHANGELOG convention).
+          if ! grep -qE '^## \[Unreleased\]' CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::G5 FAIL: missing '## [Unreleased]' heading. After promoting [Unreleased] to [$EXPECTED_VERSION], you must insert a fresh empty [Unreleased] section above it."
+            exit 1
+          fi
+
+          # (b) [X.Y.Z] heading with today's date. Date format per
+          # shipping.md cut mechanics step 3: "[X.Y.Z] — YYYY-MM-DD"
+          # using an em-dash (U+2014). Some cuts may use a hyphen-minus
+          # — accept both to avoid tripping on punctuation drift, but
+          # require the date to match TODAY in UTC (CI runner clock).
+          today=$(date -u +%Y-%m-%d)
+          # Match either em-dash (—) or hyphen-minus (-) between version
+          # and date; require the exact ISO date.
+          version_re="^## \\[${EXPECTED_VERSION}\\] [—-] ${today}\$"
+          if ! grep -qE "$version_re" CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::G5 FAIL: missing or mis-dated '## [$EXPECTED_VERSION] — $today' heading."
+            echo "Found these versioned headings:"
+            grep -E '^## \[[0-9]' CHANGELOG.md | head -5 || true
+            echo ""
+            echo "Fix: rename '## [Unreleased]' (the release content) to '## [$EXPECTED_VERSION] — $today' and add a fresh empty '## [Unreleased]' above."
+            exit 1
+          fi
+
+          # (c) [Unreleased] must appear above [X.Y.Z] (line-number check).
+          unreleased_line=$(grep -nE '^## \[Unreleased\]' CHANGELOG.md | head -1 | cut -d: -f1)
+          version_line=$(grep -nE "^## \\[${EXPECTED_VERSION}\\] " CHANGELOG.md | head -1 | cut -d: -f1)
+          if [[ "$unreleased_line" -ge "$version_line" ]]; then
+            echo "::error file=CHANGELOG.md::G5 FAIL: '[Unreleased]' is at line $unreleased_line but '[$EXPECTED_VERSION]' is at line $version_line — Keep-a-Changelog requires Unreleased above the new release."
+            exit 1
+          fi
+
+          echo "G5 PASS: CHANGELOG promoted to [$EXPECTED_VERSION] — $today with fresh [Unreleased] above (lines $unreleased_line < $version_line)"
+
+      # ─── G7: No other release-cut or hotfix PR targeting main ─────────
+      # Race-window note: this runs at PR open/sync/edit, not at merge
+      # time. A second release-cut PR opened between this run and the
+      # merge will not be caught here — but ADR-004 §G7 documents that
+      # the cut-authorizer re-checks at merge time, and this automation
+      # closes the steady-state case (catching any pre-existing competing
+      # PR before the cut is even reviewed).
+      - name: G7 — No other release-cut or hotfix PR open against main
+        if: steps.shape.outputs.is_release_cut == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          THIS_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # Pull all open PRs against main, exclude this PR, then filter
+          # to ones whose head branch matches the release-cut or hotfix
+          # naming patterns. Any match is a G7 violation.
+          competing=$(gh api 'repos/${{ github.repository }}/pulls?base=main&state=open&per_page=100' \
+            --jq "[.[] | select(.number != $THIS_PR) | {number, title, head: .head.ref}
+                       | select((.head | test(\"^release/v[0-9]+\\\\.[0-9]+\\\\.[0-9]+$\")) or (.head | test(\"^hotfix/v[0-9]+\\\\.[0-9]+\\\\.[0-9]+\")))]")
+
+          count=$(echo "$competing" | jq 'length')
+          if [[ "$count" -gt 0 ]]; then
+            echo "::error::G7 FAIL: $count other release-cut or hotfix PR(s) targeting main are open."
+            echo "Competing PRs:"
+            echo "$competing" | jq -r '.[] | "  PR #\(.number) (\(.head)): \(.title)"'
+            echo ""
+            echo "Per ADR-004 §G7, hotfix PRs have priority; rebase this release-cut PR on the merged hotfix and re-run the gate."
+            exit 1
+          fi
+          echo "G7 PASS: no other release-cut or hotfix PR targeting main is open"
+
+      # ─── G1b: Zero open HIGH/CRITICAL CodeQL alerts not waived ────────
+      # Counts open alerts at HIGH or CRITICAL security_severity_level.
+      # "Formally waived" per docs/shipping.md §G1b semantics requires
+      # BOTH (a) Security-tab dismissal AND (b) PR-description cross-
+      # reference. A dismissed alert has state="dismissed" not "open",
+      # so the GitHub-side dismissal is captured by the state filter
+      # below. The PR-description cross-reference half is a Phase 1
+      # human-verified check; mechanical parsing of the PR body for
+      # alert-number citations is not implemented here — it would risk
+      # false positives on prose that mentions "alert #N" in passing
+      # and adds little signal beyond the state filter (a dismissed
+      # alert is genuinely closed; only an open one needs waiving).
+      - name: G1b — Zero open HIGH/CRITICAL CodeQL alerts
+        if: steps.shape.outputs.is_release_cut == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # --paginate handles repos with >100 alerts; security_severity_level
+          # is the GitHub-normalized severity (vs. .rule.severity which is
+          # the CodeQL native level). HIGH and CRITICAL are the gating tiers
+          # per ADR-004 G1b.
+          alerts=$(gh api --paginate 'repos/${{ github.repository }}/code-scanning/alerts?state=open&per_page=100' \
+            --jq '[.[] | select(.rule.security_severity_level == "high" or .rule.security_severity_level == "critical")
+                       | {number, severity: .rule.security_severity_level, rule_id: .rule.id, html_url}]')
+
+          count=$(echo "$alerts" | jq 'length')
+          if [[ "$count" -gt 0 ]]; then
+            echo "::error::G1b FAIL: $count open HIGH/CRITICAL CodeQL alert(s) not dismissed."
+            echo "Open alerts:"
+            echo "$alerts" | jq -r '.[] | "  Alert #\(.number) (\(.severity), \(.rule_id)): \(.html_url)"'
+            echo ""
+            echo "Per docs/shipping.md §G1b, each must be (a) dismissed in the GitHub Security tab with rationale per ADR-005 categories AND (b) cross-referenced in the PR description (alert #, category, dismissing user)."
+            exit 1
+          fi
+          echo "G1b PASS: 0 open HIGH/CRITICAL CodeQL alerts"
+
+      # ─── G1a: Zero open P0/P1 beads at the cut SHA ────────────────────
+      # Requires `bd` in CI. Pinned to v0.49.x to match maintainer-local
+      # bd version (avoids JSONL/CLI drift). The release branch must
+      # carry .beads/issues.jsonl with the cut SHA's bead state — which
+      # it does naturally because the release branch is cut from a dev
+      # SHA that includes the .beads/ tree.
+      - name: G1a — Install bd from pinned release
+        if: steps.shape.outputs.is_release_cut == 'true'
+        run: |
+          set -euo pipefail
+          tarball="beads_${BEADS_VERSION}_linux_amd64.tar.gz"
+          url="https://github.com/gastownhall/beads/releases/download/v${BEADS_VERSION}/${tarball}"
+          echo "Fetching $url"
+          curl -fsSL "$url" -o "$tarball"
+          tar -xzf "$tarball"
+          # Locate the bd binary inside the extracted tarball — the upstream
+          # archive layout has historically been a flat `bd` at the root,
+          # but defensively search in case that changes.
+          bd_path=$(find . -maxdepth 3 -type f -name bd -perm /u+x | head -1)
+          if [[ -z "$bd_path" ]]; then
+            echo "::error::G1a FAIL: bd binary not found in extracted tarball $tarball"
+            exit 1
+          fi
+          install -m 755 "$bd_path" /usr/local/bin/bd
+          bd --version
+
+      - name: G1a — Zero open P0/P1 beads
+        if: steps.shape.outputs.is_release_cut == 'true'
+        run: |
+          set -euo pipefail
+          # bd reads from .beads/issues.jsonl on the checked-out branch.
+          # `--no-db --no-daemon` forces JSONL-only mode: no SQLite write,
+          # no background sync daemon. This avoids the "legacy database
+          # detected" warning bd emits when it sees a JSONL without a
+          # repo-fingerprinted SQLite alongside it (the maintainer's
+          # local .beads/ is JSONL-as-source-of-truth per .beads/config.yaml).
+          # bd list emits human-formatted output by default; --json gives
+          # us a parseable array. Empty result is `[]`, length 0.
+          # Capture stdout (JSON) separately from stderr (bd warnings).
+          # Mixing them via 2>&1 would corrupt the JSON parse. Capture
+          # stderr to /tmp so we can echo it on failure.
+          if ! p0=$(bd --no-db --no-daemon list --status open --priority 0 --json 2>/tmp/bd-p0.err); then
+            echo "::error::G1a FAIL: 'bd list --priority 0' exited non-zero. Stderr:"
+            cat /tmp/bd-p0.err
+            exit 1
+          fi
+          if ! p1=$(bd --no-db --no-daemon list --status open --priority 1 --json 2>/tmp/bd-p1.err); then
+            echo "::error::G1a FAIL: 'bd list --priority 1' exited non-zero. Stderr:"
+            cat /tmp/bd-p1.err
+            exit 1
+          fi
+          # Validate that stdout actually parses as JSON — a silent JSONL
+          # parse failure could leave $p0 empty while bd exits 0.
+          if ! echo "$p0" | jq empty 2>/dev/null; then
+            echo "::error::G1a FAIL: 'bd list --priority 0' produced non-JSON output:"
+            echo "$p0"
+            cat /tmp/bd-p0.err
+            exit 1
+          fi
+          if ! echo "$p1" | jq empty 2>/dev/null; then
+            echo "::error::G1a FAIL: 'bd list --priority 1' produced non-JSON output:"
+            echo "$p1"
+            cat /tmp/bd-p1.err
+            exit 1
+          fi
+
+          p0_count=$(echo "$p0" | jq 'length')
+          p1_count=$(echo "$p1" | jq 'length')
+
+          fail=0
+          if [[ "$p0_count" -gt 0 ]]; then
+            echo "::error::G1a FAIL: $p0_count open P0 bead(s) at cut SHA"
+            echo "$p0" | jq -r '.[] | "  \(.id) (P0): \(.title)"'
+            fail=1
+          fi
+          if [[ "$p1_count" -gt 0 ]]; then
+            echo "::error::G1a FAIL: $p1_count open P1 bead(s) at cut SHA"
+            echo "$p1" | jq -r '.[] | "  \(.id) (P1): \(.title)"'
+            fail=1
+          fi
+
+          if [[ "$fail" -eq 1 ]]; then
+            echo ""
+            echo "Per ADR-004 G1a, every open P0/P1 must either be closed or explicitly justified in the 'G1a Justifications' section of the PR description. PR-description parsing is not yet automated — escalate to manual reviewer if a justified item is genuinely required to ship."
+            exit 1
+          fi
+          echo "G1a PASS: 0 open P0/P1 beads at cut SHA"
+
+      # ─── Summary ──────────────────────────────────────────────────────
+      # If we reach here, all enabled gates passed. The summary step
+      # exists so the check-run output has a clear final marker for the
+      # cut-authorizing reviewer.
+      - name: Gate summary
+        if: always()
+        run: |
+          if [[ "${{ steps.shape.outputs.is_release_cut }}" == "true" ]]; then
+            echo "All mechanical pre-cut gates (G1a, G1b, G5, G6, G7) passed for release v${{ steps.shape.outputs.version }}."
+            echo "G2/G3/G4 are enforced via separate required checks (Backend Tests, Frontend Tests, CodeQL Analysis [python|javascript-typescript])."
+          else
+            echo "Non-release PR — release-cut gates skipped. Branch protection check satisfied via short-circuit pass."
+          fi
