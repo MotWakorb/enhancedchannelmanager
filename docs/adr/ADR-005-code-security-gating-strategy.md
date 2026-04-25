@@ -281,3 +281,11 @@ If Option 1 + Option 4 prove too noisy or too slow:
 - `backend/routers/backup.py` — site of the 4 outstanding HIGH alerts
 - `backend/log_utils.py` — the runtime sanitizer justifying the `py/log-injection` exclusion
 - PR #82 — incident reference (aggregate promotion blocked by pre-existing findings)
+
+## Audit History
+
+Index of completed audits under §Audit Cadence (item 6). Each entry links to the per-cycle report; the report carries the per-alert table, findings, and follow-up beads.
+
+| Audit period | Cadence | Report | Key finding |
+|---|---|---|---|
+| 2026-04-22 → 2026-04-25 | First monthly (post-Phase-3) | [`docs/security/audit-2026-04-codeql-dismissal-log.md`](../security/audit-2026-04-codeql-dismissal-log.md) | 1 discipline finding — 3 alerts dismissed under `won't fix` (forbidden in Phase 1); ~89% Scope A compliance. Scopes B and C clean. |
