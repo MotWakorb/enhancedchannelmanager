@@ -48,6 +48,53 @@ class TestHealthCheck:
             assert data["git_commit"] == "abc123"
 
 
+class TestVersionEndpoint:
+    """Tests for GET /api/version (bd-h0wfu).
+
+    The endpoint is the canonical "what SHA is this container running?"
+    probe used by operators to detect drift between ``ecm-ecm-1`` and
+    ``origin/dev`` before triaging fake test-failure beads.
+    """
+
+    @pytest.mark.asyncio
+    async def test_version_returns_200(self, async_client):
+        """GET /api/version returns 200 with build identity fields."""
+        response = await async_client.get("/api/version")
+        assert response.status_code == 200
+        data = response.json()
+        assert "version" in data
+        assert "git_commit" in data
+        assert "release_channel" in data
+
+    @pytest.mark.asyncio
+    async def test_version_reads_env_vars(self, async_client):
+        """GET /api/version surfaces ECM_VERSION / GIT_COMMIT / RELEASE_CHANNEL."""
+        with patch.dict("os.environ", {
+            "ECM_VERSION": "9.9.9",
+            "RELEASE_CHANNEL": "edge",
+            "GIT_COMMIT": "deadbeef",
+        }):
+            response = await async_client.get("/api/version")
+            data = response.json()
+            assert data["version"] == "9.9.9"
+            assert data["git_commit"] == "deadbeef"
+            assert data["release_channel"] == "edge"
+
+    @pytest.mark.asyncio
+    async def test_version_falls_back_to_unknown(self, async_client):
+        """Missing env vars produce 'unknown' / 'latest' defaults, never 500."""
+        # Wipe the relevant env vars so the defaults take effect.
+        with patch.dict("os.environ", {}, clear=False) as _env:
+            for key in ("ECM_VERSION", "GIT_COMMIT", "RELEASE_CHANNEL"):
+                _env.pop(key, None)
+            response = await async_client.get("/api/version")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["version"] == "unknown"
+            assert data["git_commit"] == "unknown"
+            assert data["release_channel"] == "latest"
+
+
 class TestSchemaVersionEndpoint:
     """Tests for GET /api/health/schema (bd-c5wf5)."""
 

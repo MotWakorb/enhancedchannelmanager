@@ -3,7 +3,7 @@
 **Status:** Initial scaffold (v1). Targets are conservative and MUST be recalibrated against 30+ days of production metrics before being treated as commitments.
 **Owner:** SRE persona.
 **Baseline:** Built on the observability substrate shipped in [PR #80](https://github.com/MotWakorb/enhancedchannelmanager/pull/80) (bd-ak1db). The four `ecm_*` series exposed on `/metrics` are the foundation for every SLI below.
-**Last updated:** 2026-04-20 (bd-dl1bd).
+**Last updated:** 2026-04-24 (bd-5uxwh — added Alerting posture section).
 
 ## Why this exists
 
@@ -27,6 +27,50 @@ Out of scope for v1:
 - Frontend asset delivery (served statically; different failure mode).
 - WebSocket long-lived connections (`/ws/*` — no histogram coverage yet).
 - Background task success rate (task scheduler has no `ecm_task_*` metrics yet — separate bead when we instrument it).
+
+---
+
+## Alerting posture
+
+**The SLO targets below are ECM's commitments. The *alerting* on those targets is operator-responsibility.**
+
+ECM emits Prometheus-compatible SLI metrics — the `ecm_*` family defined in [`backend/observability.py`](../../backend/observability.py) (`ecm_http_requests_total`, `ecm_http_request_duration_seconds`, `ecm_health_ready_ok`, `ecm_health_ready_check_duration_seconds`, and the `ecm_normalization_*` family) — on the unauthenticated `/metrics` endpoint mounted by `backend/main.py`. That endpoint is the SLI substrate; every SLI expression in this catalog resolves against it.
+
+What ECM does **not** ship today:
+
+- A Prometheus instance, scrape config, or retention policy.
+- An Alertmanager deployment, routing tree, or paging integration.
+- A bundled dashboard stack (Grafana, etc.).
+- Any reference `docker-compose` / Kubernetes manifest for the above.
+
+What ECM **does** ship:
+
+- The `/metrics` endpoint (always-on, no feature flag).
+- [`docs/sre/prometheus_rules.yaml`](./prometheus_rules.yaml) — the burn-rate and window-based alert rules that correspond to SLO-1, SLO-2, SLO-3, and SLO-4. This is *rules-as-code*: a YAML file intended to be loaded by a Prometheus instance the operator runs, not a live alerting system.
+- The runbooks in [`docs/runbooks/`](../runbooks/) — each alert in `prometheus_rules.yaml` carries a `runbook_url` annotation that resolves to one of them.
+
+**Implication:** if an operator does not run their own Prometheus + Alertmanager (or a compatible pull-based scraper) and point it at `/metrics` with `prometheus_rules.yaml` loaded, **no alerts fire**. The SLI data is still emitted — the metrics can be scraped at any time — but nothing is watching it on ECM's behalf. This is consistent with how the rollback runbooks ([dep-bump backend ASGI](../runbooks/dep-bump-backend-asgi-regression.md), [dep-bump frontend](../runbooks/dep-bump-frontend-regression.md)) describe detection: there is always a "with Prometheus scrape" and a "without Prometheus scrape" column, because both are live deployment modes in the field.
+
+### How to get alerting (operator checklist)
+
+Step-by-step Prometheus/Alertmanager deployment is out of scope for this doc — it depends on the operator's environment (bare Docker, Compose alongside ECM, Kubernetes, already-existing home-lab Prometheus, etc.). The two artifacts operators need from ECM are:
+
+1. **Scrape target:** point a Prometheus instance at `http://<ecm-host>:<ECM_PORT>/metrics`. The endpoint is intentionally unauthenticated so scrapers have no session context (see `backend/main.py` near the `/metrics` mount); operators who need to gate it should front it with their own network policy / reverse-proxy rule rather than expecting ECM to negotiate auth with a scraper.
+2. **Alert rules:** load [`docs/sre/prometheus_rules.yaml`](./prometheus_rules.yaml) into Prometheus (`rule_files:` entry) and route the resulting alerts to an Alertmanager of the operator's choosing. Validate syntax locally with `promtool check rules docs/sre/prometheus_rules.yaml` before loading.
+
+Everything downstream of that — severity routing, on-call rotations, Slack/email/Discord integrations, silences, dashboards — is the operator's infrastructure.
+
+### Per-SLO alerting ownership
+
+| SLO | Rules-as-code location | Alerting model | Who operates it |
+|-|-|-|-|
+| SLO-1: Readiness Availability | `prometheus_rules.yaml` group `ecm_readiness_availability` | Prometheus burn-rate + window-based | Operator-provisioned |
+| SLO-2: HTTP Request Latency | `prometheus_rules.yaml` group `ecm_http_latency` | Prometheus window-based | Operator-provisioned |
+| SLO-3: HTTP Error Rate | `prometheus_rules.yaml` group `ecm_http_error_rate` | Prometheus window-based | Operator-provisioned |
+| SLO-4: Readiness Sub-check Latency | `prometheus_rules.yaml` group `ecm_readiness_subcheck_latency` | Prometheus window-based (warning only) | Operator-provisioned |
+| SLO-5: Normalization Correctness | Nightly CI canary workflow (`.github/workflows/normalization-canary.yml`) + `ecm_normalization_canary_divergence_total` counter | **Not Prometheus-primary.** A divergent canary run is detected by the CI job itself and surfaces as a workflow failure; the metric exists for operators who *do* run Prometheus to alert on replayed local canary runs, but the source of truth for SLO-5 breach is the GitHub Actions job. | Maintained by ECM CI; operator Prometheus alerting is optional / supplementary |
+
+This keeps the SLO *targets* credible regardless of what infrastructure the operator runs — the metrics are emitted, the rules are authored, the runbooks exist. Whether an alert actually wakes someone up at 3 AM depends on a scraper that ECM does not ship.
 
 ---
 
@@ -184,6 +228,56 @@ A bug-report ratio — `1 - (bug_reports_containing_normaliz_30d) / (auto_creati
 
 ---
 
+## SLO-6: Frontend Error-free Session Rate
+
+**SLI:** Fraction of unique frontend sessions that report zero client errors over a rolling 28-day window. A "session" is defined per the [SLO-6 session-semantics spike](./spike-slo-6-session-semantics.md) (bd-1tl01) as one `sessionStorage` lifetime in a single browser tab — the frontend generates a SubtleCrypto-backed UUIDv4 on first SPA mount and POSTs it once to `/api/session-start`, where the backend deduplicates via a 24h in-memory TTL set before incrementing `ecm_session_starts_total`. The SLI is computed as:
+
+```
+1 - (sessions_with_boundary_errors / total_sessions)
+```
+
+**Prometheus expression (SLI — PromQL-native, bd-arp3o):**
+```promql
+1
+-
+(
+  sum(rate(ecm_client_errors_total{kind="boundary"}[28d]))
+  /
+  sum(rate(ecm_session_starts_total[28d]))
+)
+```
+
+The numerator filters on `kind="boundary"` because React-tree boundary errors are the single most operationally-meaningful failure class — the user saw the fallback UI, not what they asked for. Other `kind` values (`chunk_load`, `unhandled_rejection`, `resource`, `other`) are tracked on the same counter family and surfaced via the alert rules in `prometheus_rules.yaml`, but `boundary` is the SLO-6 numerator by construction. Revisit if 30 days of production data shows the other kinds dominate user-perceived breakage.
+
+**SLO target:** **99.0%** error-free sessions over a rolling 28-day window, **marked uncalibrated** until 30 days of production data exists.
+
+**Why 99.0% (initial):** Consistent with SLO-1 (readiness availability) and SLO-3 (5xx error rate) at 99.0% — we have no production baseline for frontend crash rate, and a 99.5% target would front-run data we don't have. ADR-006 explicitly calls the SLO target "placeholder until 30 days of production data exists". Once baselined, the SLRE persona tightens to 99.5% (or looser — if LAN instances see 10%+ error rates, 99% is fiction).
+
+**Why 28-day window (not 30):** 28 days is four weekly cycles. A deploy cadence that ships one release per week produces four full cycles in the window, letting the SLO absorb a single bad week without triggering alert noise. 30 days is a slightly-off-cycle window that conflates weekly patterns with the rolling boundary.
+
+**Error budget:** 1% = up to 1 session in 100 reporting ≥1 client error, per 28d. On a LAN instance with 3 sessions/day (~84 sessions/28d), the budget is ≤0.84 error-affected sessions — functionally "one bad session per month". The `sessions >= 50/day` evaluation gate (below) prevents the SLO from reporting nonsense on instances too small for statistical meaning.
+
+**Evaluation gate:** Per ADR-006 §11, the SLI is computed only when the window contains **sessions ≥ 50/day** (1,400+ sessions over 28d). Below the gate, SLO-6 reports **insufficient-data** rather than a value — a LAN instance with 3 daily sessions cannot produce a statistically meaningful error-free-session rate. Operators below the gate still see the raw `ecm_client_errors_total` counter on `/metrics`; they just don't get a computed SLO.
+
+**Instrumentation status:** PromQL-native as of bd-arp3o. The denominator counter `ecm_session_starts_total` is registered in `backend/observability.py` and incremented by `POST /api/session-start` (`backend/routers/session_starts.py`); the operational gauge `ecm_session_dedup_set_size` exposes the in-memory dedup set's current cardinality so SRE can spot pruner regressions. The frontend tracker in `frontend/src/services/sessionTracker.ts` emits the beacon once per `sessionStorage` lifetime per spike Option C. The SLI no longer depends on a log-aggregation substrate.
+
+**Known measurement bias (bd-m3vej, follow-up to bd-arp3o):** the denominator and numerator have asymmetric auth posture by design. `POST /api/session-start` is in `AUTH_EXEMPT_PATHS` (per the bd-m3vej ADR-006 §1 amendment), so **pre-auth sessions ARE counted in the denominator** — login-page mounts, login-page hard-refreshes, and pre-auth chunk loads all bump `ecm_session_starts_total`. `POST /api/client-errors` remains JWT-required (the PO chose option B over option A), so **pre-auth client errors are NOT counted in the numerator** — a stale-bundle chunk-load failure that crashes the login page itself produces a denominator increment with no matching numerator event. The net effect is that the computed error-free-session rate is **biased LOW** (looks healthier than reality) for any operator who experiences pre-auth bootstrap failures at a non-trivial rate. Implications:
+
+- Set alert thresholds with this bias in mind. A `ratio < 99%` breach is a stronger signal than the math implies (pre-auth failures inflate the denominator without inflating the numerator), while a `ratio == 100%` reading does NOT mean zero pre-auth failures occurred.
+- Per-`kind` decomposition in PromQL still reflects only authenticated events; if pre-auth chunk-load errors become a triage concern, the only operator-visible signal is the `ecm_session_starts_total` rate (denominator) climbing without a matching `ecm_client_errors_total{kind="chunk_load"}` rise — counterintuitive but real.
+- The asymmetry is fixed by either (a) opening `/api/client-errors` to unauthenticated POSTs (rejected by the PO due to payload-richness threat-model concerns; see ADR-006 §1 amendment) or (b) adding a separate pre-auth error sink with a narrower payload (deferred — would require its own ADR).
+
+**What breaks this SLO:**
+
+- Stale-bundle chunk-load errors after a deploy (`kind: 'chunk_load'` counter spikes with `release != current`).
+- React runtime exceptions in a specific tab (`kind: 'boundary'`, correlates to a single code path).
+- Unhandled promise rejections from an API client contract change (`kind: 'unhandled_rejection'`).
+- Pre-mount bundle load failures (`kind: 'resource'`, emitted by the inline script in `index.html`).
+
+**Runbook:** [`docs/runbooks/frontend_error_rate.md`](../runbooks/frontend_error_rate.md) — covers the `ECMClientErrorRatioElevated` (ticket) and `ECMClientErrorRatioCritical` (page) alerts in `prometheus_rules.yaml` group `ecm_client_error_rate`: triage by `kind` × `release`, kind-by-kind common causes, rollback / cache-flush / suppression mitigation patterns, and the severity-promotion ladder (bd-pls9m). Alert names changed from `Rate*` to `Ratio*` in bd-arp3o when the alerts switched from absolute-rate to ratio-based; the runbook update is tracked under a separate follow-up bead per spike §6.7.
+
+---
+
 ## SLO-4: Readiness Sub-check Latency (informational)
 
 **SLI:** 95th percentile duration of readiness sub-checks, per `check` label (`database`, `dispatcharr`, `ffprobe`).
@@ -230,7 +324,7 @@ What happens when the error budget burns? The rules below apply per-SLO; burns a
 
 ## Alerting strategy
 
-Alert rules are defined in [`prometheus_rules.yaml`](./prometheus_rules.yaml). The strategy is multi-window multi-burn-rate (MWMBR) where feasible:
+Alert rules are defined in [`prometheus_rules.yaml`](./prometheus_rules.yaml) — rules-as-code only. See the [Alerting posture](#alerting-posture) section above for why ECM ships the rules file but not a Prometheus/Alertmanager runtime: operators wire the scrape and routing themselves. The strategy embedded in the rules file is multi-window multi-burn-rate (MWMBR) where feasible:
 
 - **Fast burn (page):** If the current burn rate would consume 2% of a 30-day budget in 1 hour (14.4x burn), page immediately. This catches acute incidents.
 - **Slow burn (ticket):** If the current burn rate would consume 10% of a 30-day budget in 6 hours (6x burn) sustained, open a ticket / warning alert. This catches chronic degradation.
@@ -248,5 +342,27 @@ For the scaffold we ship simpler single-window thresholds for SLO-2/3 (p95 laten
 
 ## Changelog
 
+- **2026-04-24 (bd-m3vej, follow-up to bd-arp3o):** SLO-6 entry gained
+  a **Known measurement bias** section. `POST /api/session-start` was
+  moved into `AUTH_EXEMPT_PATHS` in `backend/main.py` so pre-auth
+  sessions count toward the SLO-6 denominator. `POST /api/client-errors`
+  remains JWT-required (PO option B). The asymmetry biases the
+  computed error-free-session rate LOW; alert thresholds should be set
+  with this in mind. ADR-006 §1 amended with the rationale.
+- **2026-04-24 (bd-arp3o, spike bd-1tl01):** SLO-6 SLI promoted from
+  log-aggregation-fallback to PromQL-native. New backend counter
+  `ecm_session_starts_total` (no labels) registered in
+  `backend/observability.py`; new gauge `ecm_session_dedup_set_size`
+  exposes dedup set cardinality. New endpoint `POST /api/session-start`
+  in `backend/routers/session_starts.py` deduplicates by UUIDv4
+  `session_id` with a 24h in-memory TTL set. Frontend wiring
+  `installSessionTracker()` in `frontend/src/services/sessionTracker.ts`
+  generates the UUID via `crypto.randomUUID()`, persists in
+  `sessionStorage`, fail-open on strict-privacy browsers per spike §3.3.
+  `prometheus_rules.yaml` group `ecm_client_error_rate` swapped from
+  absolute-rate alerts to ratio-based alerts so the alert thresholds
+  match the SLO-6 ratio target.
+- **2026-04-24 (bd-i6a1m):** Added **SLO-6: Frontend Error-free Session Rate** — 99.0% error-free sessions over 28d, uncalibrated until 30d of data, gated at sessions ≥ 50/day. Supported by the new `/api/client-errors` router + `ecm_client_errors_total{kind,release}` counter from ADR-006 Phase 1. Instrumentation gap: a session-start counter is a follow-up bead; until then the SLI denominator lives in the log-aggregation substrate. Companion alert rule shipped in `prometheus_rules.yaml` (group `ecm_client_error_rate`).
+- **2026-04-24 (bd-5uxwh, absorbs bd-9mi6f):** Added **Alerting posture** section. Makes explicit that ECM emits SLI metrics on `/metrics` and ships `prometheus_rules.yaml` as rules-as-code, but does not ship a Prometheus/Alertmanager runtime — operators provision their own scraper if they want alerts to fire. Per-SLO ownership table added. SLO-5 noted as the edge case: its breach signal is the nightly CI canary, not Prometheus-primary.
 - **2026-04-22 (bd-eio04.9):** Added **SLO-5: Normalization Correctness** — canary-based parity SLI with zero-tolerance target. Supported by new metrics in `observability.py` (`ecm_normalization_canary_divergence_total`, plus rule-match / no-change / duration / per-creation-normalized counters), a structured decision log (see `NORMALIZATION_DECISION_LOGGER`), and a nightly CI canary (`.github/workflows/normalization-canary.yml`). Runbook at `docs/runbooks/normalization-canary-divergence.md`.
 - **2026-04-20 (bd-dl1bd):** Initial scaffold. Four SLOs defined, targets conservative, error-budget policy drafted, alert rules shipped in sibling YAML. **Not yet calibrated against real traffic** — targets must be revisited once 30 days of production metrics exist.

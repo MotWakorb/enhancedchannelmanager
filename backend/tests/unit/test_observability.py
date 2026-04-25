@@ -134,6 +134,8 @@ class TestMetrics:
         assert "http_request_duration_seconds" in metrics
         assert "health_ready_ok" in metrics
         assert "health_ready_check_duration_seconds" in metrics
+        # bd-h0wfu: build identity gauge must also be installed.
+        assert "app_info" in metrics
 
     def test_install_metrics_is_idempotent(self):
         first = observability.install_metrics()
@@ -172,3 +174,52 @@ class TestMetrics:
         assert gauge._value.get() == 1.0
         gauge.set(0)
         assert gauge._value.get() == 0.0
+
+
+class TestAppInfoGauge:
+    """Tests for the ``ecm_app_info`` build-identity gauge (bd-h0wfu).
+
+    The gauge follows the standard Prometheus "info" pattern: value is
+    always 1.0; the meaningful payload is in the labels. Operators query
+    the labels (``version``, ``git_sha``, ``release_channel``) to detect
+    when the running container has drifted from ``origin/dev`` HEAD.
+    """
+
+    def test_app_info_is_published_with_env_labels(self, monkeypatch):
+        """install_metrics stamps ecm_app_info with env-var labels."""
+        monkeypatch.setenv("ECM_VERSION", "0.16.0-test")
+        monkeypatch.setenv("GIT_COMMIT", "cafebabe1234")
+        monkeypatch.setenv("RELEASE_CHANNEL", "dev")
+
+        observability.install_metrics()
+        body = observability.render_metrics().decode("utf-8")
+
+        assert "# HELP ecm_app_info" in body
+        assert "# TYPE ecm_app_info gauge" in body
+        assert 'version="0.16.0-test"' in body
+        assert 'git_sha="cafebabe1234"' in body
+        assert 'release_channel="dev"' in body
+
+    def test_app_info_falls_back_to_unknown(self, monkeypatch):
+        """Missing env vars resolve to 'unknown' / 'latest', never crash."""
+        monkeypatch.delenv("ECM_VERSION", raising=False)
+        monkeypatch.delenv("GIT_COMMIT", raising=False)
+        monkeypatch.delenv("RELEASE_CHANNEL", raising=False)
+
+        observability.install_metrics()
+        body = observability.render_metrics().decode("utf-8")
+
+        assert 'version="unknown"' in body
+        assert 'git_sha="unknown"' in body
+        assert 'release_channel="latest"' in body
+
+    def test_app_info_value_is_one(self, monkeypatch):
+        """The info-pattern gauge is always 1.0 — labels carry the payload."""
+        monkeypatch.setenv("ECM_VERSION", "v")
+        monkeypatch.setenv("GIT_COMMIT", "g")
+        monkeypatch.setenv("RELEASE_CHANNEL", "r")
+
+        observability.install_metrics()
+        gauge = observability.get_metric("app_info")
+        sample = gauge.labels(version="v", git_sha="g", release_channel="r")
+        assert sample._value.get() == 1.0

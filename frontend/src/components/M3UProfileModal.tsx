@@ -62,7 +62,6 @@ function M3UProfileModalInner({
   // synchronously in the effect body, so cascading-render concerns don't
   // apply here.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- setState is async (inside .then), not synchronous in effect body
     void loadProfiles();
   }, [loadProfiles]);
 

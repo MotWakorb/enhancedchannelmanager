@@ -3,7 +3,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 export interface UseDropdownReturn {
   isOpen: boolean;
   setIsOpen: (isOpen: boolean) => void;
-  dropdownRef: React.RefObject<HTMLDivElement>;
+  dropdownRef: React.RefObject<HTMLDivElement | null>;
   toggle: () => void;
   open: () => void;
   close: () => void;

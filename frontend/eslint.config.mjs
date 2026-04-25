@@ -30,6 +30,19 @@ export default defineConfig([
           caughtErrorsIgnorePattern: '^_',
         },
       ],
+      // eslint-plugin-react-hooks 7.1 added several React-Compiler-aware
+      // rules to its `recommended` config. They flag hundreds of
+      // pre-existing patterns. Triaged in bd-me2lt; the four below stay off
+      // per docs/frontend_lint.md "Rules of the Road" #4 (config-level
+      // disable preferred over scattering inline disables) -- the patterns
+      // they flag are idiomatic in this codebase and re-enabling would
+      // require broad refactors with marginal benefit. `react-hooks/purity`
+      // had only one violation (NotificationCenter.tsx Date.now() in a
+      // useMemo) which was fixed in bd-f5l03, so it is back on.
+      'react-hooks/set-state-in-effect': 'off',
+      'react-hooks/refs': 'off',
+      'react-hooks/preserve-manual-memoization': 'off',
+      'react-hooks/immutability': 'off',
     },
   },
 ]);

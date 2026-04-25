@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from cloud_storage.base import get_adapter
+from cloud_storage import get_adapter
 from cloud_storage.crypto import decrypt_credentials
 from database import get_session
 from export_manager import ExportManager

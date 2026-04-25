@@ -259,6 +259,32 @@ _NORMALIZATION_LATENCY_BUCKETS = (
 def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
     """Instantiate the ECM metric set against ``registry``."""
     return {
+        # ----------------------------------------------------------------
+        # Build identity (bd-h0wfu).
+        #
+        # ``ecm_app_info`` is the canonical Prometheus "info" pattern — a
+        # gauge stuck at 1.0 whose ONLY purpose is to carry build-identity
+        # labels (``version``, ``git_sha``, ``release_channel``). Operators
+        # use it to answer "what is the running container actually built
+        # from?" without having to parse JSON from /api/health, which is a
+        # recurring source of fake "test failure" beads where the real
+        # cause is container drift from origin/dev.
+        #
+        # Cardinality: bounded — each running container has exactly one
+        # (version, git_sha, release_channel) tuple for its lifetime. A
+        # fresh container build produces a single new time series.
+        # ``install_metrics`` sets the gauge to 1.0 with the labels read
+        # from the build-time environment (GIT_COMMIT, ECM_VERSION,
+        # RELEASE_CHANNEL — all baked into the image by Dockerfile ARGs).
+        # ----------------------------------------------------------------
+        "app_info": Gauge(
+            "ecm_app_info",
+            "Build identity of the running container. Labels carry the "
+            "version, git SHA, and release channel baked in at image-build "
+            "time. Value is always 1.0 — query the labels, not the value.",
+            ["version", "git_sha", "release_channel"],
+            registry=registry,
+        ),
         "http_requests_total": Counter(
             "ecm_http_requests_total",
             "Count of HTTP requests processed, labeled by method, route "
@@ -345,6 +371,79 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             "SLI numerator for SLO-5 — any non-zero rate over the window is a breach.",
             registry=registry,
         ),
+        # ----------------------------------------------------------------
+        # Frontend error telemetry (ADR-006, bd-i6a1m).
+        #
+        # ``client_errors_total`` labels:
+        #   kind    — fixed enum {boundary, unhandled_rejection, chunk_load,
+        #             resource, other}. Unknown values are collapsed to
+        #             "other" by routers/client_errors.py so cardinality is
+        #             bounded.
+        #   release — short build-env identifier. Cardinality is bounded
+        #             by the in-router LRU at 3 real values + "stale" roll-up
+        #             (see ADR-006 §9).
+        #
+        # ``client_errors_dropped_total`` labels:
+        #   reason  — fixed enum {rate_limited, oversized, invalid_schema}.
+        #             No other values are ever emitted by the router.
+        #
+        # ``client_error_reports_bytes`` records the post-parse request size
+        # so the operator can correlate payload size with reporter bugs.
+        # Buckets cover the expected range — most reports are <1 KB, the
+        # cap is 8 KB — plus a long tail for pre-scrub oversizes that got
+        # accepted anyway (they shouldn't, but we want the signal).
+        # ----------------------------------------------------------------
+        "client_errors_total": Counter(
+            "ecm_client_errors_total",
+            "Count of frontend error reports ingested by /api/client-errors, "
+            "labeled by kind (fixed enum) and release (bounded LRU).",
+            ["kind", "release"],
+            registry=registry,
+        ),
+        "client_errors_dropped_total": Counter(
+            "ecm_client_errors_dropped_total",
+            "Count of frontend error reports rejected before ingest. reason "
+            "∈ {rate_limited, oversized, invalid_schema}.",
+            ["reason"],
+            registry=registry,
+        ),
+        "client_error_reports_bytes": Histogram(
+            "ecm_client_error_reports_bytes",
+            "Size in bytes of accepted /api/client-errors request bodies, "
+            "post-parse. Buckets cover sub-kilobyte through the 8 KB cap.",
+            buckets=(128, 256, 512, 1024, 2048, 4096, 8192),
+            registry=registry,
+        ),
+        # ----------------------------------------------------------------
+        # Session lifecycle (bd-arp3o, spike bd-1tl01).
+        #
+        # ``session_starts_total`` is the SLO-6 denominator — number of
+        # unique frontend sessions that POSTed /api/session-start. The
+        # counter has NO labels (per ADR-006 §9 cardinality posture); the
+        # session_id itself never becomes a label and is never logged.
+        # The router maintains an in-memory dedup set keyed by session_id
+        # (TTL=24h) so a hard-refresh inside the same tab cannot
+        # double-count a single browser session.
+        #
+        # ``session_dedup_set_size`` exposes the dedup set's current
+        # cardinality so SRE can spot a leaking pruner — a slowly-growing
+        # gauge means the lazy reaper has regressed and the in-memory
+        # set is accumulating stale entries past their TTL.
+        # ----------------------------------------------------------------
+        "session_starts_total": Counter(
+            "ecm_session_starts_total",
+            "Count of unique frontend sessions observed via "
+            "POST /api/session-start. SLO-6 SLI denominator. "
+            "No labels — session_id is in-memory dedup state, never a label.",
+            registry=registry,
+        ),
+        "session_dedup_set_size": Gauge(
+            "ecm_session_dedup_set_size",
+            "Current size of the in-memory session-id dedup set. Steady "
+            "state ~= sessions seen in the last 24h. A monotonically "
+            "growing value indicates the lazy TTL reaper has regressed.",
+            registry=registry,
+        ),
     }
 
 
@@ -359,7 +458,42 @@ def install_metrics(registry: Optional[CollectorRegistry] = None) -> Dict[str, A
     if REGISTRY is None:
         REGISTRY = registry or CollectorRegistry()
         _METRICS = _build_metrics(REGISTRY)
+        _publish_app_info()
     return _METRICS
+
+
+def _publish_app_info() -> None:
+    """Stamp the build-identity labels onto ``ecm_app_info`` (bd-h0wfu).
+
+    Reads the same env vars that ``/api/health`` and ``/api/version`` echo
+    so operators see the same SHA in three places — Prometheus, the JSON
+    health probe, and the dedicated version endpoint. All three are
+    populated from Dockerfile build ARGs, so a fresh image build mints a
+    new (version, git_sha) time series and stale containers are
+    immediately distinguishable from the running ``origin/dev`` HEAD.
+
+    Defensive: never raises. If prometheus-client is missing or the env
+    vars are absent, the gauge is simply not stamped — better than taking
+    down app startup over an observability nicety.
+    """
+    if not _METRICS:
+        return
+    try:
+        gauge = _METRICS.get("app_info")
+        if gauge is None:
+            return
+        version = os.environ.get("ECM_VERSION", "unknown")
+        git_sha = os.environ.get("GIT_COMMIT", "unknown")
+        release_channel = os.environ.get("RELEASE_CHANNEL", "latest")
+        gauge.labels(
+            version=version,
+            git_sha=git_sha,
+            release_channel=release_channel,
+        ).set(1.0)
+    except Exception:  # pragma: no cover — observability must not break startup
+        logging.getLogger(__name__).debug(
+            "[OBSERVABILITY] Failed to publish ecm_app_info gauge", exc_info=True
+        )
 
 
 def get_metric(name: str) -> Any:

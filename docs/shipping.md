@@ -32,6 +32,8 @@ Re-run build to verify:
 cd frontend && npm run build
 ```
 
+The version-bump commit lands via PR like every other change to `dev` — the branch protection rule applies regardless of how trivial the diff is. This was surfaced by `bd-i6a1m`'s tag-stone bump (commit `c479b99a`, `0.16.0-0058 → 0.16.0-0059`), which was rejected on direct push and had to merge via [PR #175](https://github.com/MotWakorb/enhancedchannelmanager/pull/175). Tag-stone bumps follow the same §6 PR flow as feature work; there is no fast-path exemption.
+
 ### 4. Close the Bead
 
 ```bash
@@ -44,14 +46,43 @@ If the change adds, removes, or modifies a feature, update the documentation.
 
 Every user-facing change must also be recorded in [`CHANGELOG.md`](../CHANGELOG.md) under the `[Unreleased]` section, in the appropriate Keep-a-Changelog category (Added / Changed / Deprecated / Removed / Fixed / Security). When cutting a release, rename the `[Unreleased]` heading to the new version with the release date and start a fresh empty `[Unreleased]` section above it.
 
-### 6. Commit and Push
+### 6. Commit and Open the PR
+
+`dev` branch protection requires PRs with 5 passing status checks (`enforce_admins=true` — no one bypasses, including the PO). Direct push to `dev` is rejected. Branch from current `origin/dev`, push the branch, open a PR, wait for the required checks, then merge.
 
 ```bash
-git add frontend/package.json backend/main.py backend/routers/  # Add only changed files
+# Branch from current origin/dev
+git fetch origin
+git checkout -b <feature-or-chore-branch> origin/dev
+
+# Stage and commit only changed files
+git add frontend/package.json backend/main.py backend/routers/
 git commit -m "v0.x.x-xxxx: Brief description"
-git push origin dev
+
+# Push and open the PR
+git push -u origin <feature-or-chore-branch>
+gh pr create --base dev --head <feature-or-chore-branch> \
+  --title "v0.x.x-xxxx: Brief description" \
+  --body "Summary of the change and link to the bead."
+
+# Wait for the 5 required checks to pass:
+#   - Backend Tests
+#   - Frontend Tests
+#   - CodeQL Analysis (python)
+#   - CodeQL Analysis (javascript-typescript)
+#   - Semgrep Lint
+gh pr checks <#> --watch
+
+# Merge with a merge commit (NOT --squash, NOT --rebase) per ADR-004 —
+# preserves per-commit bisection/forensics into dev.
+gh pr merge <#> --merge --delete-branch
+
+# Verify
+git checkout dev && git pull
 git status  # MUST show "up to date with origin"
 ```
+
+The required check names above are pulled from `gh api /repos/MotWakorb/enhancedchannelmanager/branches/dev/protection | jq '.required_status_checks.contexts'` — if branch protection changes, update this list.
 
 ### 7. File Beads for Remaining Work
 
@@ -59,10 +90,10 @@ Create beads for anything that needs follow-up.
 
 ## Critical Shipping Rules
 
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing — that leaves work stranded locally
-- NEVER say "ready to push when you are" — YOU must push
-- If push fails, resolve and retry until it succeeds
+- Work is NOT complete until the PR merges into `dev`
+- NEVER stop before the PR is merged — an open PR is not a shipped change
+- NEVER say "ready to merge when you are" — YOU must drive the merge once the required checks are green
+- If a required check fails, fix the underlying issue and push to the same branch; do not bypass or skip checks
 - Always use `enhancedchannelmanager` as the repository name when creating beads
 - **NEVER chain `bd create` and `bd close` in one command** — the `bd list` output format doesn't work with shell parsing. Always run them as separate commands:
   ```bash
@@ -174,18 +205,29 @@ git push origin dev
 
 ### Pre-Cut Gate Checklist
 
-All seven items must pass before the release-cut PR can merge. Copy-paste this block into the release-cut PR description (step 5 above already includes it). G1a, G1b, G5, G6, G7 are author/reviewer-verified at Phase 1 and can be lifted to CI at Phase 2 (separate follow-on bead). G2, G3, G4 are mechanically enforced from day one.
+All seven items must pass before the release-cut PR can merge. Copy-paste this block into the release-cut PR description (step 5 above already includes it). **Phase 2 (`bd-3d0tv`) lifted G1a, G1b, G5, G6, G7 to mechanical CI enforcement** via `.github/workflows/release-cut-gate.yml` — the workflow runs on every PR opened against `main`, classifies release-cut PRs by title-regex (`^Release vX.Y.Z$`) AND head-branch-regex (`^release/vX.Y.Z$`), and fails the `Release Cut Gate` required check if any of the five mechanical gates fail. The PR-description checklist is now a redundant safety net (kept for the cut-authorizer to read; no longer the primary gate). G2, G3, G4 are mechanically enforced via existing required checks (`Backend Tests`, `Frontend Tests`, `CodeQL Analysis (python|javascript-typescript)`).
 
 | # | Gate | Enforcement | Cites |
 |---|---|---|---|
-| G1a | **Zero open P0/P1 bugs at the `dev` cut SHA** (beads board, all scopes) | Manual verification by cut-authorizer; checklist item in the release-cut PR description | `bd-vgm4l` root cause |
-| G1b | **Zero open HIGH/CRITICAL security findings not formally waived** (GitHub Security tab + active advisories) — distinct from G1a so a mis-triaged finding cannot slip through "the bug board is clean" | Manual verification at Phase 1 via `gh api .../code-scanning/alerts` + Security tab review; mechanical at Phase 2 | Complement to ADR-005 gate G4 |
+| G1a | **Zero open P0/P1 bugs at the `dev` cut SHA** (beads board, all scopes) | Mechanical: `Release Cut Gate` workflow runs `bd list --status open --priority 0/1` on the release branch's `.beads/issues.jsonl`. PR-description "G1a Justifications" parsing is not yet automated — open P0/P1s require manual override (close them, or escalate to the cut-authorizing reviewer) | `bd-vgm4l` root cause; `bd-3d0tv` automation |
+| G1b | **Zero open HIGH/CRITICAL security findings not formally waived** (GitHub Security tab + active advisories) — distinct from G1a so a mis-triaged finding cannot slip through "the bug board is clean" | Mechanical: `Release Cut Gate` workflow queries `code-scanning/alerts?state=open` and fails on any HIGH/CRITICAL. Dismissed-in-Security-tab alerts have `state=dismissed` and naturally pass. PR-description cross-reference (the second half of "formally waived" semantics) is human-verified | Complement to ADR-005 gate G4; `bd-3d0tv` automation |
 | G2 | `Backend Tests` green on the release branch | Branch protection required check | Existing `bd-8w33i` |
 | G3 | `Frontend Tests` green on the release branch | Branch protection required check | Existing `bd-8w33i` |
 | G4 | **CodeQL delta-zero vs. `main` base** (both matrix check-runs). The delta is computed between the release-cut PR head and `main`, **not** against the release-branch cut SHA — the release branch's own base is transparent to GitHub's merge protection rule, which compares the incoming head to the target branch. | Code Scanning merge protection rule + branch protection required checks | ADR-005 |
-| G5 | `CHANGELOG.md` `[Unreleased]` has been promoted to `[X.Y.Z]` with today's date and a fresh empty `[Unreleased]` above | Manual in PR review; Phase 2 CI check possible | `shipping.md` §CHANGELOG convention |
-| G6 | Version updated in `frontend/package.json` from the current `0.A.B-NNNN` dev build to the target release version `X.Y.Z`. The target is not necessarily `A.B` with the suffix stripped — a minor or patch bump is permitted (e.g., current dev tip `0.16.0-0041` → release `0.17.0`) — but must match the release-branch name (`release/vX.Y.Z`) | Manual in PR review; trivially automatable | `shipping.md` §Increment the Version |
-| G7 | **No other release-cut or hotfix PR targeting `main` is open at merge time.** If a hotfix PR and a release-cut PR contend simultaneously, the **hotfix has priority**: the release-cut PR rebases on the merged hotfix and re-runs the gate. Prevents live-lock during an incident. | Manual verification; one-line `gh pr list --base main --state open --json number,title` | PR #82 root cause |
+| G5 | `CHANGELOG.md` `[Unreleased]` has been promoted to `[X.Y.Z]` with today's date and a fresh empty `[Unreleased]` above | Mechanical: `Release Cut Gate` workflow asserts (a) `[Unreleased]` heading present, (b) `[X.Y.Z] — YYYY-MM-DD` heading present with today's UTC date, (c) `[Unreleased]` line-number is above `[X.Y.Z]` (Keep-a-Changelog ordering) | `shipping.md` §CHANGELOG convention; `bd-3d0tv` automation |
+| G6 | Version updated in `frontend/package.json` from the current `0.A.B-NNNN` dev build to the target release version `X.Y.Z`. The target is not necessarily `A.B` with the suffix stripped — a minor or patch bump is permitted (e.g., current dev tip `0.16.0-0041` → release `0.17.0`) — but must match the release-branch name (`release/vX.Y.Z`) | Mechanical: `Release Cut Gate` workflow extracts version from branch name and asserts `jq -r .version frontend/package.json` returns the same string | `shipping.md` §Increment the Version; `bd-3d0tv` automation |
+| G7 | **No other release-cut or hotfix PR targeting `main` is open at merge time.** If a hotfix PR and a release-cut PR contend simultaneously, the **hotfix has priority**: the release-cut PR rebases on the merged hotfix and re-runs the gate. Prevents live-lock during an incident. | Mechanical at PR-open/sync (steady-state catch): `Release Cut Gate` workflow lists open PRs against `main` and fails on any other release/hotfix branch. The merge-time race window between the last sync and the merge click is still author/reviewer-verified | PR #82 root cause; `bd-3d0tv` automation |
+
+#### `Release Cut Gate` workflow output
+
+The workflow lives at `.github/workflows/release-cut-gate.yml`. To inspect its output for a given release PR, check the "Release Cut Gate" check on the PR's checks tab, or:
+
+```bash
+gh run list --workflow=release-cut-gate.yml --branch release/vX.Y.Z --limit 1
+gh run view <run-id> --log
+```
+
+Per-gate pass/fail messages are prefixed with the gate name (`G1a PASS:`, `G5 FAIL: ...`) for grep-friendly inspection. Non-release PRs to `main` (hotfixes; accidental main-bound feature PRs) short-circuit to a pass — the workflow only enforces gates when both the title and head-branch regex match the release-cut shape.
 
 #### G1b "formally waived" semantics
 
@@ -221,7 +263,7 @@ Step-by-step hotfix commands follow the same shell pattern as the release cut ab
 
 `main` is protected (configured via bead `enhancedchannelmanager-8w33i`). Enforced rules:
 
-- **Required status checks** (strict, branch must be up-to-date): `Backend Tests`, `Frontend Tests` — both jobs defined in `.github/workflows/test.yml`.
+- **Required status checks** (strict, branch must be up-to-date): `Backend Tests`, `Frontend Tests` (both in `.github/workflows/test.yml`), `CodeQL Analysis (python)` and `CodeQL Analysis (javascript-typescript)` (matrix in `.github/workflows/build.yml`), and `Release Cut Gate` (mechanical G1a/G1b/G5/G6/G7 verification in `.github/workflows/release-cut-gate.yml` per `bd-3d0tv`).
 - **Force-pushes blocked** and **deletions blocked**.
 - **Required conversation resolution** on PRs.
 - **Admins are NOT enforced** — the PO can push hotfixes directly if a check outage would otherwise block a release. Use sparingly.

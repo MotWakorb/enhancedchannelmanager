@@ -3371,7 +3371,10 @@ export function ChannelsPane({
     setStreamGroupDragOver(false);
 
     // Determine drop target and suggested number
-    let targetGroupId: number | undefined;
+    // Note: targetGroupId is intentionally always undefined here -- user picks
+    // the group in the modal. Kept as a positional argument for clarity at the
+    // call sites below.
+    const targetGroupId: number | undefined = undefined;
     let suggestedStartingNumber: number | undefined;
 
     if (streamGroupDropTarget) {
@@ -3885,7 +3888,7 @@ export function ChannelsPane({
     if (isCrossGroupMove) {
       // Collect channels to move: if the dragged channel is part of multi-selection, move all selected
       // Otherwise, just move the single dragged channel
-      let channelsToMove: Channel[] = [];
+      let channelsToMove: Channel[];
       if (selectedChannelIds.has(activeChannel.id) && selectedChannelIds.size > 1) {
         // Multi-selection: collect ALL selected channels (from any group, not just the dragged channel's group)
         // Exclude channels that are already in the target group
