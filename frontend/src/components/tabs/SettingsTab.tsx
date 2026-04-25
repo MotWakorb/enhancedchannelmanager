@@ -15,6 +15,7 @@ import { useAuth } from '../../hooks/useAuth';
 import type { ChannelProfile, M3UDigestSettings, M3UDigestFrequency } from '../../types';
 import { logger } from '../../utils/logger';
 import { copyToClipboard } from '../../utils/clipboard';
+import { normalizeSmtpRecipientsPaste, parseSmtpRecipients } from '../../utils/smtpRecipients';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
 import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
 import { ScheduledTasksSection } from '../ScheduledTasksSection';
@@ -428,46 +429,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [smtpAlertRecipientsError, setSmtpAlertRecipientsError] = useState<string | null>(null);
   const [smtpAlertRecipientsLastSavedAt, setSmtpAlertRecipientsLastSavedAt] = useState<Date | null>(null);
   const [smtpAlertRecipientsFlashState, setSmtpAlertRecipientsFlashState] = useState<'success' | null>(null);
-  const smtpAlertRecipientsPersistedRef = useRef<{ methodId: number | null; recipients: string }>({
+  const [smtpAlertRecipientsPersisted, setSmtpAlertRecipientsPersisted] = useState<{
+    methodId: number | null;
+    recipients: string;
+  }>({
     methodId: null,
     recipients: '',
   });
-
-  const isValidHtml5EmailAddress = (value: string): boolean => {
-    // HTML Standard's "valid email address" (pragmatic RFC 5322 intent).
-    // See: WHATWG HTML - valid-email-address production.
-    const re =
-      /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
-    return re.test(value);
-  };
-
-  const parseSmtpRecipients = (raw: string): { recipients: string[]; normalized: string; invalid?: string; dedupedCount: number } => {
-    const parts = raw
-      .split(',')
-      .map(s => s.trim())
-      .filter(Boolean);
-
-    for (const token of parts) {
-      if (!isValidHtml5EmailAddress(token)) {
-        return { recipients: [], normalized: raw, invalid: token, dedupedCount: 0 };
-      }
-    }
-
-    const seen = new Set<string>();
-    const deduped: string[] = [];
-    let dedupedCount = 0;
-    for (const token of parts) {
-      const key = token.toLowerCase();
-      if (seen.has(key)) {
-        dedupedCount += 1;
-        continue;
-      }
-      seen.add(key);
-      deduped.push(token);
-    }
-
-    return { recipients: deduped, normalized: deduped.join(', '), dedupedCount };
-  };
 
   // Shared Discord settings
   const [discordWebhookUrl, setDiscordWebhookUrl] = useState('');
@@ -877,11 +845,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           const recipients = extractToEmails(smtpMethod.config);
           const persisted = recipients ?? '';
           setSmtpAlertRecipients(persisted);
-          smtpAlertRecipientsPersistedRef.current = { methodId: smtpMethod.id, recipients: persisted };
+          setSmtpAlertRecipientsPersisted({ methodId: smtpMethod.id, recipients: persisted });
         } else {
           setSmtpAlertMethodId(null);
           setSmtpAlertRecipients('');
-          smtpAlertRecipientsPersistedRef.current = { methodId: null, recipients: '' };
+          setSmtpAlertRecipientsPersisted({ methodId: null, recipients: '' });
         }
       } catch (err) {
         logger.warn('Failed to load alert methods (SMTP recipients)', err);
@@ -932,12 +900,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           notify_error: true,
         });
         setSmtpAlertMethodId(created.id);
-        smtpAlertRecipientsPersistedRef.current = { methodId: created.id, recipients: parsed.normalized };
+        setSmtpAlertRecipientsPersisted({ methodId: created.id, recipients: parsed.normalized });
       }
 
       setSmtpAlertRecipients(parsed.normalized);
       if (smtpAlertMethodId) {
-        smtpAlertRecipientsPersistedRef.current = { methodId: smtpAlertMethodId, recipients: parsed.normalized };
+        setSmtpAlertRecipientsPersisted({ methodId: smtpAlertMethodId, recipients: parsed.normalized });
       }
 
       if (parsed.dedupedCount > 0) {
@@ -2932,9 +2900,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           <span className="material-icons">alternate_email</span>
           <h3>Email Alert Recipients</h3>
           <span
-            className={`badge badge-sm ${(smtpAlertRecipientsPersistedRef.current.methodId && smtpAlertRecipientsPersistedRef.current.recipients.trim()) ? 'badge-success' : ''}`}
+            className={`badge badge-sm ${(smtpAlertRecipientsPersisted.methodId && smtpAlertRecipientsPersisted.recipients.trim()) ? 'badge-success' : ''}`}
           >
-            {(smtpAlertRecipientsPersistedRef.current.methodId && smtpAlertRecipientsPersistedRef.current.recipients.trim()) ? 'Configured' : 'Unconfigured'}
+            {(smtpAlertRecipientsPersisted.methodId && smtpAlertRecipientsPersisted.recipients.trim()) ? 'Configured' : 'Unconfigured'}
           </span>
           {smtpAlertRecipientsLastSavedAt && (
             <span className="settings-saved-at">
@@ -2945,7 +2913,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         <p className="section-description">
           Scheduled tasks use the Email alert channel to send notifications. Add one or more recipient email addresses here.
         </p>
-        {!smtpAlertRecipientsPersistedRef.current.methodId && !smtpAlertRecipientsPersistedRef.current.recipients.trim() && (
+        {!smtpAlertRecipientsPersisted.methodId && !smtpAlertRecipientsPersisted.recipients.trim() && (
           <p className="settings-empty-state">
             No recipients configured. Scheduled task email alerts won&apos;t be delivered until you add at least one recipient.
           </p>
@@ -2963,9 +2931,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               onBlur={handleBlurSmtpRecipients}
               onPaste={(e) => {
                 const text = e.clipboardData.getData('text');
-                if (/[;\n\r]/.test(text)) {
+                const { needsRewrite, normalized } = normalizeSmtpRecipientsPaste(text);
+                if (needsRewrite) {
                   e.preventDefault();
-                  const normalized = text.replace(/[;\n\r]+/g, ', ');
                   const el = e.currentTarget;
                   const start = el.selectionStart ?? el.value.length;
                   const end = el.selectionEnd ?? el.value.length;
