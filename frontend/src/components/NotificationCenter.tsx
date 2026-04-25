@@ -56,6 +56,10 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [restartingFromNotification, setRestartingFromNotification] = useState<number | null>(null);
+  // Ticking "now" timestamp used by hasActiveAutoCreation freshness check.
+  // Kept in state (not Date.now() in render) so the memo remains pure --
+  // satisfies react-hooks/purity. Updated on a 10s interval below.
+  const [now, setNow] = useState(() => Date.now());
   const panelRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const toasts = useNotifications();
@@ -122,10 +126,21 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
     const latest = autoCreationNotifs[0]; // sorted by newest first from API
     const isStarting = latest.title?.includes('Starting');
     if (!isStarting) return false;
-    // Only consider active if within last 2 minutes
-    const age = Date.now() - new Date(latest.created_at).getTime();
+    // Only consider active if within last 2 minutes. `now` is state that
+    // ticks every 10s (see effect below) so this stays fresh without
+    // calling Date.now() during render (react-hooks/purity).
+    const age = now - new Date(latest.created_at).getTime();
     return age < 120_000;
-  }, [notifications]);
+  }, [notifications, now]);
+
+  // Tick `now` every 10s so the 2-minute freshness window in
+  // hasActiveAutoCreation re-evaluates without violating render purity.
+  // 10s is well below the 2-minute window and the slowest poll interval,
+  // so no perceptible lag.
+  useEffect(() => {
+    const tick = setInterval(() => setNow(Date.now()), 10_000);
+    return () => clearInterval(tick);
+  }, []);
 
   // Load on mount and periodically - faster when probe or auto-creation is running
   useEffect(() => {
