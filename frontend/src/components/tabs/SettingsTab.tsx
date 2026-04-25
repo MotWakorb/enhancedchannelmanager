@@ -421,6 +421,53 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [smtpConfigured, setSmtpConfigured] = useState(false);
   const [smtpTestEmail, setSmtpTestEmail] = useState('');
   const [smtpTesting, setSmtpTesting] = useState(false);
+  const [smtpAlertMethodId, setSmtpAlertMethodId] = useState<number | null>(null);
+  const [smtpAlertRecipients, setSmtpAlertRecipients] = useState('');
+  const [smtpAlertRecipientsLoading, setSmtpAlertRecipientsLoading] = useState(false);
+  const [smtpAlertRecipientsSaving, setSmtpAlertRecipientsSaving] = useState(false);
+  const [smtpAlertRecipientsError, setSmtpAlertRecipientsError] = useState<string | null>(null);
+  const [smtpAlertRecipientsLastSavedAt, setSmtpAlertRecipientsLastSavedAt] = useState<Date | null>(null);
+  const [smtpAlertRecipientsFlashState, setSmtpAlertRecipientsFlashState] = useState<'success' | null>(null);
+  const smtpAlertRecipientsPersistedRef = useRef<{ methodId: number | null; recipients: string }>({
+    methodId: null,
+    recipients: '',
+  });
+
+  const isValidHtml5EmailAddress = (value: string): boolean => {
+    // HTML Standard's "valid email address" (pragmatic RFC 5322 intent).
+    // See: WHATWG HTML - valid-email-address production.
+    const re =
+      /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+    return re.test(value);
+  };
+
+  const parseSmtpRecipients = (raw: string): { recipients: string[]; normalized: string; invalid?: string; dedupedCount: number } => {
+    const parts = raw
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    for (const token of parts) {
+      if (!isValidHtml5EmailAddress(token)) {
+        return { recipients: [], normalized: raw, invalid: token, dedupedCount: 0 };
+      }
+    }
+
+    const seen = new Set<string>();
+    const deduped: string[] = [];
+    let dedupedCount = 0;
+    for (const token of parts) {
+      const key = token.toLowerCase();
+      if (seen.has(key)) {
+        dedupedCount += 1;
+        continue;
+      }
+      seen.add(key);
+      deduped.push(token);
+    }
+
+    return { recipients: deduped, normalized: deduped.join(', '), dedupedCount };
+  };
 
   // Shared Discord settings
   const [discordWebhookUrl, setDiscordWebhookUrl] = useState('');
@@ -809,9 +856,117 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setTelegramChatId(settings.telegram_chat_id ?? '');
       setTelegramConfigured(settings.telegram_configured ?? false);
       setNeedsRestart(false);
+
+      // Load SMTP alert recipients from Alert Methods (used by task email alerts).
+      setSmtpAlertRecipientsLoading(true);
+      try {
+        const extractToEmails = (config: Record<string, unknown>): string | null => {
+          const raw = config.to_emails;
+          if (Array.isArray(raw)) {
+            const parts = raw.filter((v): v is string => typeof v === 'string').map(s => s.trim()).filter(Boolean);
+            return parts.length ? parts.join(', ') : '';
+          }
+          if (typeof raw === 'string') return raw;
+          return null;
+        };
+
+        const methods = await api.listAlertMethods();
+        const smtpMethod = methods.find(m => m.method_type === 'smtp' && m.name === 'Email') ?? methods.find(m => m.method_type === 'smtp');
+        if (smtpMethod) {
+          setSmtpAlertMethodId(smtpMethod.id);
+          const recipients = extractToEmails(smtpMethod.config);
+          const persisted = recipients ?? '';
+          setSmtpAlertRecipients(persisted);
+          smtpAlertRecipientsPersistedRef.current = { methodId: smtpMethod.id, recipients: persisted };
+        } else {
+          setSmtpAlertMethodId(null);
+          setSmtpAlertRecipients('');
+          smtpAlertRecipientsPersistedRef.current = { methodId: null, recipients: '' };
+        }
+      } catch (err) {
+        logger.warn('Failed to load alert methods (SMTP recipients)', err);
+      } finally {
+        setSmtpAlertRecipientsLoading(false);
+      }
     } catch (err) {
       logger.error('Failed to load settings:', err);
     }
+  };
+
+  const handleSaveSmtpRecipients = async () => {
+    setSmtpAlertRecipientsSaving(true);
+    try {
+      setSmtpAlertRecipientsError(null);
+      const parsed = parseSmtpRecipients(smtpAlertRecipients);
+      if (parsed.invalid) {
+        const msg = `${parsed.invalid} is not a valid email address. Use a comma-separated list.`;
+        setSmtpAlertRecipientsError(msg);
+        notifications.error(msg, 'Email Alert Recipients');
+        return;
+      }
+
+      const recipients = parsed.recipients;
+
+      if (recipients.length === 0) {
+        const msg = 'Add at least one recipient email address';
+        setSmtpAlertRecipientsError(msg);
+        notifications.error(msg, 'Email Alert Recipients');
+        return;
+      }
+
+      const config = { to_emails: recipients.join(', ') };
+
+      if (smtpAlertMethodId) {
+        await api.updateAlertMethod(smtpAlertMethodId, {
+          config,
+        });
+      } else {
+        const created = await api.createAlertMethod({
+          name: 'Email',
+          method_type: 'smtp',
+          enabled: true,
+          config,
+          notify_info: false,
+          notify_success: true,
+          notify_warning: true,
+          notify_error: true,
+        });
+        setSmtpAlertMethodId(created.id);
+        smtpAlertRecipientsPersistedRef.current = { methodId: created.id, recipients: parsed.normalized };
+      }
+
+      setSmtpAlertRecipients(parsed.normalized);
+      if (smtpAlertMethodId) {
+        smtpAlertRecipientsPersistedRef.current = { methodId: smtpAlertMethodId, recipients: parsed.normalized };
+      }
+
+      if (parsed.dedupedCount > 0) {
+        notifications.warning(`Removed ${parsed.dedupedCount} duplicate ${parsed.dedupedCount === 1 ? 'recipient' : 'recipients'}`, 'Email Alert Recipients');
+      }
+
+      notifications.success('Email alert recipients saved', 'Email Alert Recipients');
+      setSmtpAlertRecipientsLastSavedAt(new Date());
+      setSmtpAlertRecipientsFlashState('success');
+      window.setTimeout(() => setSmtpAlertRecipientsFlashState(null), 1500);
+    } catch (err) {
+      logger.error('Failed to save SMTP alert recipients', err);
+      notifications.error(err instanceof Error ? err.message : 'Failed to save recipients', 'Email Alert Recipients');
+    } finally {
+      setSmtpAlertRecipientsSaving(false);
+    }
+  };
+
+  const handleBlurSmtpRecipients = () => {
+    if (!smtpAlertRecipients.trim()) {
+      setSmtpAlertRecipientsError(null);
+      return;
+    }
+    const parsed = parseSmtpRecipients(smtpAlertRecipients);
+    if (parsed.invalid) {
+      setSmtpAlertRecipientsError(`${parsed.invalid} is not a valid email address. Use a comma-separated list.`);
+      return;
+    }
+    setSmtpAlertRecipientsError(null);
   };
 
   // Handle theme change with immediate preview
@@ -2770,6 +2925,87 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </div>
         </div>
 
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">alternate_email</span>
+          <h3>Email Alert Recipients</h3>
+          <span
+            className={`badge badge-sm ${(smtpAlertRecipientsPersistedRef.current.methodId && smtpAlertRecipientsPersistedRef.current.recipients.trim()) ? 'badge-success' : ''}`}
+          >
+            {(smtpAlertRecipientsPersistedRef.current.methodId && smtpAlertRecipientsPersistedRef.current.recipients.trim()) ? 'Configured' : 'Unconfigured'}
+          </span>
+          {smtpAlertRecipientsLastSavedAt && (
+            <span className="settings-saved-at">
+              Saved at {smtpAlertRecipientsLastSavedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          )}
+        </div>
+        <p className="section-description">
+          Scheduled tasks use the Email alert channel to send notifications. Add one or more recipient email addresses here.
+        </p>
+        {!smtpAlertRecipientsPersistedRef.current.methodId && !smtpAlertRecipientsPersistedRef.current.recipients.trim() && (
+          <p className="settings-empty-state">
+            No recipients configured. Scheduled task email alerts won&apos;t be delivered until you add at least one recipient.
+          </p>
+        )}
+
+        <div className="form-group-vertical">
+          <label htmlFor="smtpAlertRecipients">Email alert recipients</label>
+          <div className="input-with-button">
+            <input
+              type="email"
+              multiple
+              id="smtpAlertRecipients"
+              value={smtpAlertRecipients}
+              onChange={(e) => setSmtpAlertRecipients(e.target.value)}
+              onBlur={handleBlurSmtpRecipients}
+              onPaste={(e) => {
+                const text = e.clipboardData.getData('text');
+                if (/[;\n\r]/.test(text)) {
+                  e.preventDefault();
+                  const normalized = text.replace(/[;\n\r]+/g, ', ');
+                  const el = e.currentTarget;
+                  const start = el.selectionStart ?? el.value.length;
+                  const end = el.selectionEnd ?? el.value.length;
+                  const next = el.value.slice(0, start) + normalized + el.value.slice(end);
+                  setSmtpAlertRecipients(next);
+                }
+              }}
+              placeholder={smtpAlertRecipientsLoading ? 'Loading recipients…' : 'you@example.com, another@example.com'}
+              disabled={smtpAlertRecipientsLoading}
+              aria-invalid={smtpAlertRecipientsError ? 'true' : 'false'}
+              className={`${smtpAlertRecipientsError ? 'is-error' : ''} ${smtpAlertRecipientsFlashState === 'success' ? 'is-success' : ''}`.trim()}
+            />
+            <button
+              className="btn-test"
+              onClick={handleSaveSmtpRecipients}
+              disabled={smtpAlertRecipientsSaving || smtpAlertRecipientsLoading}
+            >
+              {smtpAlertRecipientsSaving ? (
+                <>
+                  <span className="material-icons spinning">sync</span>
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <span className="material-icons">save</span>
+                  Save Recipients
+                </>
+              )}
+            </button>
+          </div>
+          {smtpAlertRecipientsError && (
+            <p className="field-error" role="alert">
+              {smtpAlertRecipientsError}
+            </p>
+          )}
+          <p className="field-hint">
+            Comma-separated list (`,`). Requires SMTP settings above to be configured.
+            {smtpAlertRecipientsLoading ? ' Loading recipients…' : ''}
+          </p>
+        </div>
       </div>
 
       <div className="settings-section">

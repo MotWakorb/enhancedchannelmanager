@@ -315,13 +315,16 @@ class TestDispatchToAlertChannels:
             from services.notification_service import _dispatch_to_alert_channels
 
             # Should not raise
-            await _dispatch_to_alert_channels(
+            results = await _dispatch_to_alert_channels(
                 title="Test",
                 message="Hello",
                 notification_type="info",
                 source="test",
                 metadata=None,
             )
+        assert results["email"] is None
+        assert results["discord"] is None
+        assert results["telegram"] is None
 
     @pytest.mark.asyncio
     async def test_dispatch_sends_to_discord(self):
@@ -348,7 +351,7 @@ class TestDispatchToAlertChannels:
              patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
             from services.notification_service import _dispatch_to_alert_channels
 
-            await _dispatch_to_alert_channels(
+            results = await _dispatch_to_alert_channels(
                 title="Test Alert",
                 message="Hello World",
                 notification_type="success",
@@ -360,6 +363,7 @@ class TestDispatchToAlertChannels:
         mock_aiohttp_session.post.assert_called_once()
         call_args = mock_aiohttp_session.post.call_args
         assert call_args[0][0] == "https://discord.com/api/webhooks/test"
+        assert results["discord"] is True
 
     @pytest.mark.asyncio
     async def test_dispatch_sends_to_telegram(self):
@@ -386,7 +390,7 @@ class TestDispatchToAlertChannels:
              patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
             from services.notification_service import _dispatch_to_alert_channels
 
-            await _dispatch_to_alert_channels(
+            results = await _dispatch_to_alert_channels(
                 title="Test",
                 message="Hello",
                 notification_type="info",
@@ -397,6 +401,7 @@ class TestDispatchToAlertChannels:
         mock_aiohttp_session.post.assert_called_once()
         call_args = mock_aiohttp_session.post.call_args
         assert "bot123" in call_args[0][0]
+        assert results["telegram"] is True
 
     @pytest.mark.asyncio
     async def test_dispatch_respects_channel_settings(self):
@@ -410,7 +415,7 @@ class TestDispatchToAlertChannels:
             from services.notification_service import _dispatch_to_alert_channels
 
             # Disable both discord and telegram via channel_settings
-            await _dispatch_to_alert_channels(
+            results = await _dispatch_to_alert_channels(
                 title="Test",
                 message="Hello",
                 notification_type="info",
@@ -424,6 +429,8 @@ class TestDispatchToAlertChannels:
 
         # Neither should have been called since channels are disabled
         # (no aiohttp.ClientSession should have been created)
+        assert results["discord"] is None
+        assert results["telegram"] is None
 
     @pytest.mark.asyncio
     async def test_dispatch_includes_metadata_in_message(self):
@@ -449,7 +456,7 @@ class TestDispatchToAlertChannels:
              patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
             from services.notification_service import _dispatch_to_alert_channels
 
-            await _dispatch_to_alert_channels(
+            results = await _dispatch_to_alert_channels(
                 title="Task Complete",
                 message="EPG refresh done",
                 notification_type="success",
@@ -461,3 +468,146 @@ class TestDispatchToAlertChannels:
         payload = call_args[1]["json"]
         assert "EPG Refresh" in payload["content"]
         assert "12.5" in payload["content"]
+        assert results["discord"] is True
+
+    @pytest.mark.asyncio
+    async def test_dispatch_queues_email_via_alert_methods_when_smtp_method_configured(self, test_session):
+        """Queues an SMTP alert method when email is enabled and SMTP is configured."""
+        # Shared SMTP is configured, but delivery uses Alert Methods for recipients.
+        mock_settings = MagicMock()
+        mock_settings.is_discord_configured.return_value = False
+        mock_settings.is_telegram_configured.return_value = False
+        mock_settings.is_smtp_configured.return_value = True
+
+        # Create an enabled SMTP alert method in the DB (recipients live in its config).
+        from models import AlertMethod
+        test_session.add(AlertMethod(
+            name="Email",
+            method_type="smtp",
+            enabled=True,
+            config=json.dumps({"to_emails": ["test@example.com"]}),
+            notify_info=True,
+            notify_success=True,
+            notify_warning=True,
+            notify_error=True,
+        ))
+        test_session.commit()
+
+        with patch("services.notification_service.get_settings", return_value=mock_settings), \
+             patch("services.notification_service.get_session", return_value=test_session), \
+             patch("alert_methods.send_alert", new_callable=AsyncMock) as mock_send_alert:
+            from services.notification_service import _dispatch_to_alert_channels
+
+            results = await _dispatch_to_alert_channels(
+                title="Test",
+                message="Hello",
+                notification_type="info",
+                source="test",
+                metadata=None,
+                channel_settings={"send_to_email": True},
+            )
+
+        mock_send_alert.assert_awaited_once()
+        mock_send_alert.assert_awaited_once_with(
+            title="Test",
+            message="Hello",
+            notification_type="info",
+            source="test",
+            metadata=None,
+            alert_category=None,
+            entity_id=None,
+            channel_settings={
+                "send_to_email": True,
+                "send_to_discord": False,
+                "send_to_telegram": False,
+            },
+        )
+        assert results["email"] is True
+
+    @pytest.mark.asyncio
+    async def test_dispatch_email_returns_false_when_smtp_not_configured(self):
+        """Email branch returns False when shared SMTP settings are not configured."""
+        mock_settings = MagicMock()
+        mock_settings.is_discord_configured.return_value = False
+        mock_settings.is_telegram_configured.return_value = False
+        mock_settings.is_smtp_configured.return_value = False
+
+        with patch("services.notification_service.get_settings", return_value=mock_settings), \
+             patch("alert_methods.send_alert", new_callable=AsyncMock) as mock_send_alert:
+            from services.notification_service import _dispatch_to_alert_channels
+
+            results = await _dispatch_to_alert_channels(
+                title="Test",
+                message="Hello",
+                notification_type="info",
+                source="test",
+                metadata=None,
+                channel_settings={"send_to_email": True},
+            )
+
+        mock_send_alert.assert_not_awaited()
+        assert results["email"] is False
+
+    @pytest.mark.asyncio
+    async def test_dispatch_email_returns_false_when_no_enabled_smtp_method(self, test_session):
+        """Email branch returns False when no enabled SMTP method exists."""
+        mock_settings = MagicMock()
+        mock_settings.is_discord_configured.return_value = False
+        mock_settings.is_telegram_configured.return_value = False
+        mock_settings.is_smtp_configured.return_value = True
+
+        with patch("services.notification_service.get_settings", return_value=mock_settings), \
+             patch("services.notification_service.get_session", return_value=test_session), \
+             patch("alert_methods.send_alert", new_callable=AsyncMock) as mock_send_alert:
+            from services.notification_service import _dispatch_to_alert_channels
+
+            results = await _dispatch_to_alert_channels(
+                title="Test",
+                message="Hello",
+                notification_type="info",
+                source="test",
+                metadata=None,
+                channel_settings={"send_to_email": True},
+            )
+
+        mock_send_alert.assert_not_awaited()
+        assert results["email"] is False
+
+    @pytest.mark.asyncio
+    async def test_dispatch_email_returns_false_when_send_alert_raises(self, test_session):
+        """Email branch returns False when alert-method dispatch raises."""
+        mock_settings = MagicMock()
+        mock_settings.is_discord_configured.return_value = False
+        mock_settings.is_telegram_configured.return_value = False
+        mock_settings.is_smtp_configured.return_value = True
+
+        from models import AlertMethod
+        test_session.add(AlertMethod(
+            name="Email",
+            method_type="smtp",
+            enabled=True,
+            config=json.dumps({"to_emails": ["test@example.com"]}),
+            notify_info=True,
+            notify_success=True,
+            notify_warning=True,
+            notify_error=True,
+        ))
+        test_session.commit()
+
+        failing_send = AsyncMock(side_effect=Exception("boom"))
+        with patch("services.notification_service.get_settings", return_value=mock_settings), \
+             patch("services.notification_service.get_session", return_value=test_session), \
+             patch("alert_methods.send_alert", failing_send):
+            from services.notification_service import _dispatch_to_alert_channels
+
+            results = await _dispatch_to_alert_channels(
+                title="Test",
+                message="Hello",
+                notification_type="info",
+                source="test",
+                metadata=None,
+                channel_settings={"send_to_email": True},
+            )
+
+        assert failing_send.await_count == 1
+        assert results["email"] is False
