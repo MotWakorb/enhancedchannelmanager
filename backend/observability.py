@@ -414,6 +414,36 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             buckets=(128, 256, 512, 1024, 2048, 4096, 8192),
             registry=registry,
         ),
+        # ----------------------------------------------------------------
+        # Session lifecycle (bd-arp3o, spike bd-1tl01).
+        #
+        # ``session_starts_total`` is the SLO-6 denominator — number of
+        # unique frontend sessions that POSTed /api/session-start. The
+        # counter has NO labels (per ADR-006 §9 cardinality posture); the
+        # session_id itself never becomes a label and is never logged.
+        # The router maintains an in-memory dedup set keyed by session_id
+        # (TTL=24h) so a hard-refresh inside the same tab cannot
+        # double-count a single browser session.
+        #
+        # ``session_dedup_set_size`` exposes the dedup set's current
+        # cardinality so SRE can spot a leaking pruner — a slowly-growing
+        # gauge means the lazy reaper has regressed and the in-memory
+        # set is accumulating stale entries past their TTL.
+        # ----------------------------------------------------------------
+        "session_starts_total": Counter(
+            "ecm_session_starts_total",
+            "Count of unique frontend sessions observed via "
+            "POST /api/session-start. SLO-6 SLI denominator. "
+            "No labels — session_id is in-memory dedup state, never a label.",
+            registry=registry,
+        ),
+        "session_dedup_set_size": Gauge(
+            "ecm_session_dedup_set_size",
+            "Current size of the in-memory session-id dedup set. Steady "
+            "state ~= sessions seen in the last 24h. A monotonically "
+            "growing value indicates the lazy TTL reaper has regressed.",
+            registry=registry,
+        ),
     }
 
 
