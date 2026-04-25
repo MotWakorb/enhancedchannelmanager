@@ -66,11 +66,13 @@ class TestRoutePrefixes:
         matching = [p for p in paths if p.startswith(prefix)]
         assert len(matching) > 0, f"No routes found with prefix {prefix}"
 
-    # Convenience redirects and observability endpoints that intentionally
-    # live outside /api/:
-    #   /swagger       — short alias that redirects to /api/docs
-    #   /metrics       — Prometheus scrape endpoint (unauthenticated by design)
-    NON_API_ROUTES = {"/swagger", "/metrics"}
+    # Convenience redirects, observability endpoints, and the SPA fallback
+    # that intentionally live outside /api/:
+    #   /swagger              — short alias that redirects to /api/docs
+    #   /metrics              — Prometheus scrape endpoint (unauthenticated by design)
+    #   /{full_path:path}     — SPA fallback (serve_spa), registered only when
+    #                           backend/static/ exists (container runtime, not CI).
+    NON_API_ROUTES = {"/swagger", "/metrics", "/{full_path:path}"}
 
     def test_all_routes_under_api(self):
         """All API routes should start with /api/ (except known redirects)."""

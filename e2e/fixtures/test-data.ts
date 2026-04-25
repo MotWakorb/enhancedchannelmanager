@@ -5,11 +5,6 @@
  */
 import { randomBytes } from 'crypto'
 
-let _testIdCounter = 0
-function nextTestId(): number {
-  return ++_testIdCounter
-}
-
 // =============================================================================
 // Test Credentials
 // =============================================================================

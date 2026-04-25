@@ -68,8 +68,13 @@ async def _check_database() -> dict:
             db.close()
         return {"status": "ok", "detail": "SELECT 1 succeeded"}
     except Exception as e:
-        logger.warning("[HEALTH] Database readiness check failed: %s", e)
-        return {"status": "fail", "detail": f"{type(e).__name__}: {e}"}
+        # CodeQL py/stack-trace-exposure (#1414): /api/health/ready is
+        # AUTH-EXEMPT (see backend/main.py:AUTH_EXEMPT_PATHS) — anything in the
+        # response is unauthenticated. Log the full exception for operators;
+        # return only the class name so DB credentials, internal paths, or
+        # connection strings embedded in DBAPIError messages cannot leak.
+        logger.exception("[HEALTH] Database readiness check failed")
+        return {"status": "fail", "detail": type(e).__name__}
 
 
 async def _ping_dispatcharr() -> dict:
@@ -106,7 +111,11 @@ async def _ping_dispatcharr() -> dict:
             "detail": f"timeout after {_DISPATCHARR_PING_TIMEOUT_SECONDS}s",
         }
     except Exception as e:
-        return {"status": "fail", "detail": f"{type(e).__name__}: {e}"}
+        # CodeQL py/stack-trace-exposure (#1414): /api/health/ready is
+        # AUTH-EXEMPT — return only the exception class so Dispatcharr URL
+        # connection error text does not echo back unauthenticated.
+        logger.exception("[HEALTH] Dispatcharr readiness ping failed")
+        return {"status": "fail", "detail": type(e).__name__}
 
 
 async def _check_dispatcharr() -> dict:

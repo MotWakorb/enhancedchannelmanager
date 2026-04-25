@@ -140,7 +140,7 @@ def register(mcp: FastMCP):
             if not payload:
                 return "No changes specified."
 
-            result = await client.patch(f"/api/epg/sources/{source_id}", json_data=payload)
+            await client.patch(f"/api/epg/sources/{source_id}", json_data=payload)
             return f"EPG source {source_id} updated."
         except Exception as e:
             logger.error("[MCP] update_epg_source failed: %s", e)
