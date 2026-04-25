@@ -282,15 +282,27 @@ in the **flagged-in-last-30-runs** list — those are known-flaky and the PR
 needs a clean re-run (or an explicit note that the flake is unrelated to the
 change).
 
-Until automation tracks the 30-run window directly (see follow-up bead), use
-this manual process:
+The `Flake List PR Comment` workflow
+(`.github/workflows/flake-pr-comment.yml`, bead xq19y) automates this: on PR
+open / sync it walks the last 30 `Tests` workflow runs on the PR's base
+branch, parses the `junit-backend` and `junit-frontend` artifacts, and posts
+or updates a single PR comment listing every test that failed in at least
+one of those runs. The comment is identified by a hidden marker and updated
+in place — no comment-storm on rebased branches. The comment is
+informational only; it does not gate merge.
 
-1. Pull the list of `flaky`-labelled open beads: `bd list --label flaky`.
-2. If the failing test is in that list → re-run once. If still fails →
-   investigate; probably unrelated to the PR but do not merge until the next
-   CI run is green.
-3. If the failing test is **not** in the flaky list → treat as deterministic
-   and block the merge until fixed.
+Reviewer workflow:
+
+1. Open the PR. Read the **Flake list (last 30 runs on base branch)** comment.
+2. If the failing test on this PR appears in that list → re-run once. If
+   still fails → investigate; probably unrelated to the PR but do not merge
+   until the next CI run is green.
+3. If the failing test is **not** in that list → treat as deterministic and
+   block the merge until fixed.
+
+Manual fallback (if the automation is offline): pull the list of
+`flaky`-labelled open beads with `bd list --label flaky` and apply the same
+rule.
 
 ### Known baseline flakes (as of 2026-04-20)
 
