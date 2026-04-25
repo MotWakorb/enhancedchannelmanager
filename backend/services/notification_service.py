@@ -354,3 +354,5 @@ async def _dispatch_to_alert_channels(
         logger.info("[NOTIFY-SVC] Alert dispatched to: %s", ', '.join(sent))
     if failed:
         logger.warning("[NOTIFY-SVC] Alert failed for: %s", ', '.join(failed))
+
+    return results

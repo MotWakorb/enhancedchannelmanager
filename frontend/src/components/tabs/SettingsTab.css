@@ -1018,6 +1018,33 @@
   flex-shrink: 0;
 }
 
+.input-with-button input.is-error {
+  border-color: var(--error-border, #ef4444);
+}
+
+.input-with-button input.is-success {
+  border-color: rgba(34, 197, 94, 0.6);
+}
+
+.field-error {
+  font-size: 0.75rem;
+  color: var(--error, #ef4444);
+  margin-top: 0.25rem;
+  line-height: 1.4;
+}
+
+.settings-empty-state {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin-bottom: 1rem;
+}
+
+.settings-saved-at {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-left: 0.75rem;
+}
+
 /* Test result messages */
 .test-result {
   display: flex;
