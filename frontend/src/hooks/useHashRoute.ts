@@ -67,13 +67,16 @@ export interface UseHashRouteReturn {
 export function useHashRoute(): UseHashRouteReturn {
   const [route, setRoute] = useState<HashRoute>(() => parseHash(window.location.hash));
 
-  // Update URL hash without triggering popstate
+  // Bail out when the route is unchanged so a caller that loops can't churn pushState + a fresh-object re-render. Uses pushState (not assign) to avoid a hashchange/popstate echo.
   const setHash = useCallback((tab: TabId, settingsPage?: SettingsPage | null) => {
-    const newHash = buildHash(tab, settingsPage);
-    const newRoute: HashRoute = { tab, settingsPage: settingsPage ?? null };
-    // Use pushState to avoid triggering hashchange/popstate
-    window.history.pushState(null, '', newHash);
-    setRoute(newRoute);
+    const nextSettingsPage = settingsPage ?? null;
+    setRoute((prev) => {
+      if (prev.tab === tab && prev.settingsPage === nextSettingsPage) {
+        return prev;
+      }
+      window.history.pushState(null, '', buildHash(tab, settingsPage));
+      return { tab, settingsPage: nextSettingsPage };
+    });
   }, []);
 
   // Update just the settings sub-page
