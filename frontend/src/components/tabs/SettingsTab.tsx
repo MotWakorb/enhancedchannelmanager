@@ -316,12 +316,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   }, [notifications]);
 
   // Mount-only: deps must stay [] — setActivePage triggers a route change, which re-renders, which would re-run this effect into an infinite loop.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const pending = sessionStorage.getItem('ecm:open-task-editor');
     if (pending) {
       setActivePage('scheduled-tasks');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Connection settings
