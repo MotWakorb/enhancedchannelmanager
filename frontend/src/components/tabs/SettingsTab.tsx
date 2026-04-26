@@ -315,13 +315,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     return () => window.removeEventListener('services-restarted', handleServicesRestarted);
   }, [notifications]);
 
-  // Check for pending task editor navigation (from NotificationCenter)
+  // Mount-only: deps must stay [] — setActivePage triggers a route change, which re-renders, which would re-run this effect into an infinite loop.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const pending = sessionStorage.getItem('ecm:open-task-editor');
     if (pending) {
       setActivePage('scheduled-tasks');
     }
-  });
+  }, []);
 
   // Connection settings
   const [url, setUrl] = useState('');
