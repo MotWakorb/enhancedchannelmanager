@@ -87,6 +87,10 @@ export function ChannelDetail({
     channel.channel_number?.toString() ?? ''
   );
   const [saving, setSaving] = useState(false);
+  // Reorder mode gates the DndContext mount. @dnd-kit's useRect() attaches a
+  // MutationObserver to document.body for every mounted DndContext; we only
+  // mount when the user is actively reordering streams (gh #207).
+  const [isReorderMode, setIsReorderMode] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -221,10 +225,25 @@ export function ChannelDetail({
       </div>
 
       <div className="detail-content">
-        <h4>
-          Assigned Streams ({streams.length})
-          <span className="hint">Drag to reorder priority</span>
-        </h4>
+        <div className="streams-section-header">
+          <h4>
+            Assigned Streams ({streams.length})
+            {isReorderMode && <span className="hint">Drag to reorder priority</span>}
+          </h4>
+          {streams.length > 1 && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setIsReorderMode((v) => !v)}
+              title={isReorderMode ? 'Exit reorder mode' : 'Reorder streams'}
+            >
+              <span className="material-icons">
+                {isReorderMode ? 'check' : 'reorder'}
+              </span>
+              {isReorderMode ? 'Done' : 'Reorder'}
+            </button>
+          )}
+        </div>
 
         {loading ? (
           <div className="loading">Loading streams...</div>
@@ -232,7 +251,7 @@ export function ChannelDetail({
           <div className="empty-state">
             No streams assigned. Drag streams from the right panel to add them.
           </div>
-        ) : (
+        ) : isReorderMode ? (
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -255,6 +274,18 @@ export function ChannelDetail({
               </div>
             </SortableContext>
           </DndContext>
+        ) : (
+          <div className="streams-list">
+            {streams.map((stream, index) => (
+              <div key={stream.id} className="stream-row">
+                <span className="priority-number">{index + 1}</span>
+                <SortableStreamItem
+                  stream={stream}
+                  onRemove={handleRemoveStream}
+                />
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </div>

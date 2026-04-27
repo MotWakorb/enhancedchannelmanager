@@ -182,30 +182,64 @@ export const SubstitutionPairsEditor = memo(function SubstitutionPairsEditor({ p
     onChange([...pairs, { find: '', replace: '', is_regex: false, enabled: true }]);
   }, [pairs, onChange]);
 
+  // Reorder mode gates the DndContext mount. @dnd-kit's useRect() attaches a
+  // MutationObserver to document.body for every mounted sortable; mounting the
+  // observers only while the user is actively reordering avoids retaining
+  // millions of MutationRecords on heavy notification-stream pages (gh #207).
+  const [isReorderMode, setIsReorderMode] = useState(false);
+
   return (
     <div className="sub-pairs-editor">
       {pairs.length > 0 ? (
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-          <SortableContext items={itemIds} strategy={verticalListSortingStrategy}>
-            {pairs.map((pair, index) => (
-              <SortablePairRow
-                key={itemIds[index] || index}
-                id={itemIds[index] || `sp-fallback-${index}`}
-                pair={pair}
-                index={index}
-                onUpdate={handleUpdate}
-                onDelete={handleDelete}
-              />
-            ))}
-          </SortableContext>
-        </DndContext>
+        isReorderMode ? (
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <SortableContext items={itemIds} strategy={verticalListSortingStrategy}>
+              {pairs.map((pair, index) => (
+                <SortablePairRow
+                  key={itemIds[index] || index}
+                  id={itemIds[index] || `sp-fallback-${index}`}
+                  pair={pair}
+                  index={index}
+                  onUpdate={handleUpdate}
+                  onDelete={handleDelete}
+                />
+              ))}
+            </SortableContext>
+          </DndContext>
+        ) : (
+          pairs.map((pair, index) => (
+            <SortablePairRow
+              key={itemIds[index] || index}
+              id={itemIds[index] || `sp-fallback-${index}`}
+              pair={pair}
+              index={index}
+              onUpdate={handleUpdate}
+              onDelete={handleDelete}
+            />
+          ))
+        )
       ) : (
         <p className="sub-pairs-empty">No substitution pairs. Add one to transform names before pattern matching.</p>
       )}
-      <button type="button" className="sub-pairs-add" onClick={handleAdd}>
-        <span className="material-icons">add</span>
-        Add Pair
-      </button>
+      <div className="sub-pairs-actions">
+        <button type="button" className="sub-pairs-add" onClick={handleAdd}>
+          <span className="material-icons">add</span>
+          Add Pair
+        </button>
+        {pairs.length > 1 && (
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => setIsReorderMode((v) => !v)}
+            title={isReorderMode ? 'Exit reorder mode' : 'Reorder pairs'}
+          >
+            <span className="material-icons">
+              {isReorderMode ? 'check' : 'reorder'}
+            </span>
+            {isReorderMode ? 'Done' : 'Reorder'}
+          </button>
+        )}
+      </div>
     </div>
   );
 });

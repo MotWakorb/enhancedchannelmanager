@@ -354,6 +354,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [failedStreamSortOrder, setFailedStreamSortOrder] = useState<FailedStreamCategory[]>(DEFAULT_FAILED_STREAM_ORDER);
   const [strikeThreshold, setStrikeThreshold] = useState(3);
 
+  // Reorder mode gates the Smart Sort Priority DndContexts. @dnd-kit's
+  // useRect() attaches a MutationObserver to document.body for every mounted
+  // DndContext; we only mount when the user is actively reordering (gh #207).
+  // One toggle gates both the streamSortPriority list and the
+  // failedStreamSortOrder list since they live in the same section.
+  const [isSortPriorityReorderMode, setIsSortPriorityReorderMode] = useState(false);
+
   // Appearance settings
   const [showStreamUrls, setShowStreamUrls] = useState(true);
   const [hideAutoSyncGroups, setHideAutoSyncGroups] = useState(false);
@@ -2263,33 +2270,58 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         <div className="settings-section-header">
           <span className="material-icons">sort</span>
           <h3>Smart Sort Priority</h3>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => setIsSortPriorityReorderMode((v) => !v)}
+            title={isSortPriorityReorderMode ? 'Exit reorder mode' : 'Reorder priority'}
+          >
+            <span className="material-icons">
+              {isSortPriorityReorderMode ? 'check' : 'reorder'}
+            </span>
+            {isSortPriorityReorderMode ? 'Done' : 'Reorder'}
+          </button>
         </div>
 
         <div className="form-group">
           <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
-            Configure which criteria are used for stream sorting. Check/uncheck to enable/disable,
-            drag to reorder priority. Enabled criteria appear in the sort dropdown and are used by Smart Sort.
+            Configure which criteria are used for stream sorting. Check/uncheck to enable/disable.
+            Click Reorder to change priority. Enabled criteria appear in the sort dropdown and are used by Smart Sort.
           </p>
 
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleSortPriorityDragEnd}
-          >
-            <SortableContext items={streamSortPriority} strategy={verticalListSortingStrategy}>
-              <div className="sort-priority-list">
-                {streamSortPriority.map((criterion, index) => (
-                  <SortablePriorityItem
-                    key={criterion}
-                    id={criterion}
-                    index={index}
-                    enabled={streamSortEnabled[criterion]}
-                    onToggleEnabled={(id) => setStreamSortEnabled(prev => ({ ...prev, [id]: !prev[id] }))}
-                  />
-                ))}
-              </div>
-            </SortableContext>
-          </DndContext>
+          {isSortPriorityReorderMode ? (
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleSortPriorityDragEnd}
+            >
+              <SortableContext items={streamSortPriority} strategy={verticalListSortingStrategy}>
+                <div className="sort-priority-list">
+                  {streamSortPriority.map((criterion, index) => (
+                    <SortablePriorityItem
+                      key={criterion}
+                      id={criterion}
+                      index={index}
+                      enabled={streamSortEnabled[criterion]}
+                      onToggleEnabled={(id) => setStreamSortEnabled(prev => ({ ...prev, [id]: !prev[id] }))}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+          ) : (
+            <div className="sort-priority-list">
+              {streamSortPriority.map((criterion, index) => (
+                <SortablePriorityItem
+                  key={criterion}
+                  id={criterion}
+                  index={index}
+                  enabled={streamSortEnabled[criterion]}
+                  onToggleEnabled={(id) => setStreamSortEnabled(prev => ({ ...prev, [id]: !prev[id] }))}
+                />
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="form-group">
@@ -2340,26 +2372,38 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           <div className="form-group">
             <label className="form-label">Failed Stream Ordering</label>
             <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
-              Drag to set the order of deprioritized streams. Streams in the first category sort higher (closer to working streams).
+              Click Reorder above to set the order of deprioritized streams. Streams in the first category sort higher (closer to working streams).
             </p>
 
-            <DndContext
-              sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragEnd={handleFailedOrderDragEnd}
-            >
-              <SortableContext items={failedStreamSortOrder} strategy={verticalListSortingStrategy}>
-                <div className="sort-priority-list">
-                  {failedStreamSortOrder.map((category, index) => (
-                    <SortableFailedCategoryItem
-                      key={category}
-                      id={category}
-                      index={index}
-                    />
-                  ))}
-                </div>
-              </SortableContext>
-            </DndContext>
+            {isSortPriorityReorderMode ? (
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleFailedOrderDragEnd}
+              >
+                <SortableContext items={failedStreamSortOrder} strategy={verticalListSortingStrategy}>
+                  <div className="sort-priority-list">
+                    {failedStreamSortOrder.map((category, index) => (
+                      <SortableFailedCategoryItem
+                        key={category}
+                        id={category}
+                        index={index}
+                      />
+                    ))}
+                  </div>
+                </SortableContext>
+              </DndContext>
+            ) : (
+              <div className="sort-priority-list">
+                {failedStreamSortOrder.map((category, index) => (
+                  <SortableFailedCategoryItem
+                    key={category}
+                    id={category}
+                    index={index}
+                  />
+                ))}
+              </div>
+            )}
           </div>
           </>
         )}
