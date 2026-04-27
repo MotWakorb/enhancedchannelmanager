@@ -150,6 +150,7 @@ export function createMockAutoCreationRule(overrides: Partial<MockAutoCreationRu
     stream_sort_field: overrides.stream_sort_field ?? null,
     stream_sort_order: overrides.stream_sort_order ?? 'asc',
     quality_tie_break_order: overrides.quality_tie_break_order ?? 'desc',
+    quality_m3u_tie_break_enabled: overrides.quality_m3u_tie_break_enabled ?? true,
     normalization_group_ids: overrides.normalization_group_ids ?? [],
     skip_struck_streams: overrides.skip_struck_streams ?? false,
     orphan_action: overrides.orphan_action ?? 'delete',
@@ -310,6 +311,7 @@ interface MockAutoCreationRule {
   stream_sort_field?: string | null
   stream_sort_order?: 'asc' | 'desc'
   quality_tie_break_order?: 'asc' | 'desc'
+  quality_m3u_tie_break_enabled?: boolean
   normalization_group_ids?: number[]
   skip_struck_streams?: boolean
   orphan_action?: 'delete' | 'move_uncategorized' | 'delete_and_cleanup_groups' | 'none'

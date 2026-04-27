@@ -47,6 +47,7 @@ export function BulkRuleSettingsModal({
   const [streamSortField, setStreamSortField] = useState('smart_sort');
   const [streamSortOrder, setStreamSortOrder] = useState<'asc' | 'desc'>('asc');
   const [streamQualityTieBreakOrder, setStreamQualityTieBreakOrder] = useState<'asc' | 'desc'>('desc');
+  const [streamQualityM3uTieBreakEnabled, setStreamQualityM3uTieBreakEnabled] = useState(true);
   const [streamProbeOnSort, setStreamProbeOnSort] = useState(false);
 
   const [applyOrphan, setApplyOrphan] = useState(false);
@@ -83,6 +84,7 @@ export function BulkRuleSettingsModal({
     setStreamSortField(sample.stream_sort_field || 'smart_sort');
     setStreamSortOrder((sample.stream_sort_order as 'asc' | 'desc') || 'asc');
     setStreamQualityTieBreakOrder((sample.quality_tie_break_order as 'asc' | 'desc') || 'desc');
+    setStreamQualityM3uTieBreakEnabled(sample.quality_m3u_tie_break_enabled ?? true);
     setStreamProbeOnSort(sample.probe_on_sort ?? false);
     setOrphanAction(sample.orphan_action || 'delete');
 
@@ -130,6 +132,7 @@ export function BulkRuleSettingsModal({
       patch.stream_sort_order = streamSortOrder;
       if (streamSortField === 'quality') {
         patch.quality_tie_break_order = streamQualityTieBreakOrder;
+        patch.quality_m3u_tie_break_enabled = streamQualityM3uTieBreakEnabled;
       }
     }
     if (applyOrphan) {
@@ -340,8 +343,16 @@ export function BulkRuleSettingsModal({
                 </div>
                 {streamSortField === 'quality' && (
                   <>
+                    <label className="checkbox-option" style={{ marginTop: '8px' }}>
+                      <input
+                        type="checkbox"
+                        checked={streamQualityM3uTieBreakEnabled}
+                        onChange={e => setStreamQualityM3uTieBreakEnabled(e.target.checked)}
+                      />
+                      <span>Break resolution ties using M3U priority</span>
+                    </label>
                     <div className="form-field" style={{ marginTop: '8px' }}>
-                      <label>Equal resolution — M3U tie-break</label>
+                      <label>Tie-break direction</label>
                       <div className="sort-config-row">
                         <CustomSelect
                           options={[
@@ -350,6 +361,7 @@ export function BulkRuleSettingsModal({
                           ]}
                           value={streamQualityTieBreakOrder}
                           onChange={v => setStreamQualityTieBreakOrder(v as 'asc' | 'desc')}
+                          disabled={!streamQualityM3uTieBreakEnabled}
                         />
                       </div>
                     </div>

@@ -1369,8 +1369,31 @@ class TestQualitySortDeprioritization:
             "Ch",
             stream_m3u_map=stream_m3u_map,
             quality_tie_break_order="desc",
+            quality_m3u_tie_break_enabled=True,
         )
         assert out == [202, 201]
+
+    def test_quality_sort_same_resolution_m3u_tie_break_disabled(self):
+        """Equal resolution with M3U tie-break off: order by stream id only."""
+        settings = MagicMock()
+        settings.deprioritize_failed_streams = False
+        settings.m3u_account_priorities = {"1": 10, "2": 5}
+        stats_cache = {
+            201: {"resolution": "1920x1080", "probe_status": "success"},
+            202: {"resolution": "1920x1080", "probe_status": "success"},
+        }
+        stream_m3u_map = {201: 2, 202: 1}
+        out = _sort_streams_by_resolution_height(
+            [202, 201],
+            stats_cache,
+            settings,
+            "desc",
+            "Ch",
+            stream_m3u_map=stream_m3u_map,
+            quality_tie_break_order="desc",
+            quality_m3u_tie_break_enabled=False,
+        )
+        assert out == [201, 202]
 
     def test_quality_sort_same_resolution_m3u_tie_break_asc(self):
         """Equal resolution: lower ECM M3U priority sorts first when tie-break is asc."""
@@ -1390,6 +1413,7 @@ class TestQualitySortDeprioritization:
             "Ch",
             stream_m3u_map=stream_m3u_map,
             quality_tie_break_order="asc",
+            quality_m3u_tie_break_enabled=True,
         )
         assert out == [201, 202]
 
@@ -1398,6 +1422,7 @@ class TestQualitySortDeprioritization:
         rule.stream_sort_field = "quality"
         rule.stream_sort_order = "desc"
         rule.quality_tie_break_order = "asc"
+        rule.quality_m3u_tie_break_enabled = True
         settings = MagicMock()
         settings.deprioritize_failed_streams = False
         settings.m3u_account_priorities = {"1": 10, "2": 5}
