@@ -1211,6 +1211,19 @@ async def export_auto_creation_rules_yaml():
             }
 
             for rule in rules:
+                _qto = getattr(rule, "quality_tie_break_order", None)
+                if isinstance(_qto, str) and _qto.strip():
+                    yaml_quality_tie = _qto.strip().lower()
+                    if yaml_quality_tie not in ("asc", "desc"):
+                        yaml_quality_tie = "desc"
+                else:
+                    yaml_quality_tie = "desc"
+
+                _qmte = getattr(rule, "quality_m3u_tie_break_enabled", True)
+                yaml_quality_m3u_enabled = (
+                    _qmte if isinstance(_qmte, bool) else True
+                )
+
                 rule_dict = {
                     "name": rule.name,
                     "description": rule.description,
@@ -1229,8 +1242,8 @@ async def export_auto_creation_rules_yaml():
                     "sort_regex": rule.sort_regex,
                     "stream_sort_field": rule.stream_sort_field,
                     "stream_sort_order": rule.stream_sort_order or "asc",
-                    "quality_tie_break_order": rule.quality_tie_break_order or "desc",
-                    "quality_m3u_tie_break_enabled": bool(rule.quality_m3u_tie_break_enabled),
+                    "quality_tie_break_order": yaml_quality_tie,
+                    "quality_m3u_tie_break_enabled": yaml_quality_m3u_enabled,
                     "normalization_group_ids": rule.get_normalization_group_ids(),
                     "skip_struck_streams": rule.skip_struck_streams or False,
                     "probe_on_sort": rule.probe_on_sort or False,
