@@ -64,6 +64,7 @@ class CreateAutoCreationRuleRequest(BaseModel):
     stream_sort_field: Optional[str] = None
     stream_sort_order: str = "asc"
     quality_tie_break_order: str = "desc"
+    quality_m3u_tie_break_enabled: bool = True
     normalization_group_ids: list[int] = []
     skip_struck_streams: bool = False
     orphan_action: str = "delete"
@@ -89,6 +90,7 @@ class UpdateAutoCreationRuleRequest(BaseModel):
     stream_sort_field: Optional[str] = None
     stream_sort_order: Optional[str] = None
     quality_tie_break_order: Optional[str] = None
+    quality_m3u_tie_break_enabled: Optional[bool] = None
     normalization_group_ids: Optional[list[int]] = None
     skip_struck_streams: Optional[bool] = None
     orphan_action: Optional[str] = None
@@ -193,6 +195,8 @@ def _apply_rule_scalar_updates(
         _set("stream_sort_order", request.stream_sort_order)
     if request.quality_tie_break_order is not None:
         _set("quality_tie_break_order", request.quality_tie_break_order)
+    if request.quality_m3u_tie_break_enabled is not None:
+        _set("quality_m3u_tie_break_enabled", request.quality_m3u_tie_break_enabled)
     if request.normalization_group_ids is not None:
         # NormalizationRuleGroup IDs go through a setter; diff by before/after
         # of the serialized value to keep comparison simple.
@@ -429,6 +433,7 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
                 stream_sort_field=request.stream_sort_field,
                 stream_sort_order=request.stream_sort_order,
                 quality_tie_break_order=request.quality_tie_break_order,
+                quality_m3u_tie_break_enabled=request.quality_m3u_tie_break_enabled,
                 normalization_group_ids=json.dumps(request.normalization_group_ids) if request.normalization_group_ids else None,
                 skip_struck_streams=request.skip_struck_streams,
                 orphan_action=request.orphan_action,
@@ -811,6 +816,7 @@ async def duplicate_auto_creation_rule(rule_id: int):
                 stream_sort_field=rule.stream_sort_field,
                 stream_sort_order=rule.stream_sort_order,
                 quality_tie_break_order=rule.quality_tie_break_order,
+                quality_m3u_tie_break_enabled=rule.quality_m3u_tie_break_enabled,
                 normalization_group_ids=rule.normalization_group_ids,
                 skip_struck_streams=rule.skip_struck_streams,
                 probe_on_sort=rule.probe_on_sort,
@@ -1224,6 +1230,7 @@ async def export_auto_creation_rules_yaml():
                     "stream_sort_field": rule.stream_sort_field,
                     "stream_sort_order": rule.stream_sort_order or "asc",
                     "quality_tie_break_order": rule.quality_tie_break_order or "desc",
+                    "quality_m3u_tie_break_enabled": bool(rule.quality_m3u_tie_break_enabled),
                     "normalization_group_ids": rule.get_normalization_group_ids(),
                     "skip_struck_streams": rule.skip_struck_streams or False,
                     "probe_on_sort": rule.probe_on_sort or False,
@@ -1390,6 +1397,10 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         existing.stream_sort_field = rule_data.get("stream_sort_field")
                         existing.stream_sort_order = rule_data.get("stream_sort_order", "asc")
                         existing.quality_tie_break_order = rule_data.get("quality_tie_break_order", "desc")
+                        if "quality_m3u_tie_break_enabled" in rule_data:
+                            existing.quality_m3u_tie_break_enabled = bool(
+                                rule_data.get("quality_m3u_tie_break_enabled")
+                            )
                         existing.normalization_group_ids = _resolve_normalization_group_ids(rule_data, session)
                         existing.skip_struck_streams = rule_data.get("skip_struck_streams", False)
                         existing.probe_on_sort = rule_data.get("probe_on_sort", False)
@@ -1423,6 +1434,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         stream_sort_field=rule_data.get("stream_sort_field"),
                         stream_sort_order=rule_data.get("stream_sort_order", "asc"),
                         quality_tie_break_order=rule_data.get("quality_tie_break_order", "desc"),
+                        quality_m3u_tie_break_enabled=bool(rule_data.get("quality_m3u_tie_break_enabled", True)),
                         normalization_group_ids=_resolve_normalization_group_ids(rule_data, session),
                         skip_struck_streams=rule_data.get("skip_struck_streams", False),
                         probe_on_sort=rule_data.get("probe_on_sort", False),

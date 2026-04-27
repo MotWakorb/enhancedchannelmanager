@@ -474,6 +474,8 @@ def _run_migrations(engine) -> None:
             # Add quality_tie_break_order for quality-sort M3U tie-break (per-rule)
             _add_auto_creation_rules_quality_tie_break_order_column(conn)
 
+            _add_auto_creation_rules_quality_m3u_tie_break_enabled_column(conn)
+
             # Migrate normalize_names -> normalization_group_ids (v0.16.0 - Per-rule normalization)
             _migrate_normalize_names_to_normalization_group_ids(conn)
 
@@ -1811,6 +1813,26 @@ def _add_auto_creation_rules_quality_tie_break_order_column(conn) -> None:
         ))
         conn.commit()
         logger.info("[DATABASE] Migration complete: added quality_tie_break_order column")
+
+
+def _add_auto_creation_rules_quality_m3u_tie_break_enabled_column(conn) -> None:
+    """Add quality_m3u_tie_break_enabled toggle (quality sort M3U tie-break on/off)."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_rules'"
+    ))
+    if not result.fetchone():
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
+    if "quality_m3u_tie_break_enabled" not in columns:
+        logger.info("[DATABASE] Adding quality_m3u_tie_break_enabled column to auto_creation_rules")
+        conn.execute(text(
+            "ALTER TABLE auto_creation_rules ADD COLUMN quality_m3u_tie_break_enabled BOOLEAN DEFAULT 1 NOT NULL"
+        ))
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: added quality_m3u_tie_break_enabled column")
 
 
 def _migrate_normalize_names_to_normalization_group_ids(conn) -> None:

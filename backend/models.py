@@ -1450,6 +1450,7 @@ class AutoCreationRule(Base):
     stream_sort_order = Column(String(4), default="asc")   # "asc" or "desc"
     # When stream_sort_field is quality: tie-break equal resolution using ECM M3U priorities
     quality_tie_break_order = Column(String(4), default="desc")  # "asc" or "desc"
+    quality_m3u_tie_break_enabled = Column(Boolean, default=True, nullable=False)
 
     # Normalization - JSON array of NormalizationRuleGroup IDs to apply, null/empty = disabled
     normalization_group_ids = Column(Text, nullable=True)
@@ -1574,6 +1575,7 @@ class AutoCreationRule(Base):
             "stream_sort_field": self.stream_sort_field,
             "stream_sort_order": self.stream_sort_order or "asc",
             "quality_tie_break_order": self.quality_tie_break_order or "desc",
+            "quality_m3u_tie_break_enabled": bool(self.quality_m3u_tie_break_enabled),
             "normalization_group_ids": self.get_normalization_group_ids(),
             "skip_struck_streams": self.skip_struck_streams or False,
             "orphan_action": self.orphan_action or "delete",
