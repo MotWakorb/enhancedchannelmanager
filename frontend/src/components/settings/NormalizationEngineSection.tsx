@@ -259,6 +259,13 @@ export function NormalizationEngineSection() {
 
   // UI state
   const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set());
+  // Reorder mode gates the DndContext mounts (outer group reorder + per-group
+  // rule reorder). @dnd-kit's useRect() attaches a MutationObserver to
+  // document.body for every mounted DndContext; we only mount when the user is
+  // actively reordering groups/rules. Without this, the Channel Normalization
+  // sub-page leaks ~2.4 MB/s of MutationRecords on Edge with a busy
+  // notification stream (gh #207).
+  const [isReorderMode, setIsReorderMode] = useState(false);
   const [selectedRule, setSelectedRule] = useState<NormalizationRule | null>(null);
 
   // Test panel state
@@ -1087,6 +1094,17 @@ export function NormalizationEngineSection() {
             Apply to existing channels
           </button>
           <button
+            className="norm-engine-btn"
+            onClick={() => setIsReorderMode((v) => !v)}
+            type="button"
+            title={isReorderMode ? 'Exit reorder mode' : 'Reorder groups and rules'}
+          >
+            <span className="material-icons">
+              {isReorderMode ? 'check' : 'reorder'}
+            </span>
+            {isReorderMode ? 'Done' : 'Reorder'}
+          </button>
+          <button
             className="norm-engine-btn norm-engine-btn-primary"
             onClick={openNewGroupEditor}
             type="button"
@@ -1200,6 +1218,7 @@ export function NormalizationEngineSection() {
 
       {/* Groups and Rules */}
       <div className="norm-engine-groups">
+        {isReorderMode ? (
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -1300,6 +1319,127 @@ export function NormalizationEngineSection() {
               ))}
             </SortableContext>
           </DndContext>
+        ) : (
+          groups.map((group) => (
+            <div
+              key={group.id}
+              className={`norm-engine-group ${!group.enabled ? 'disabled' : ''}`}
+            >
+              <div className="norm-engine-group-content">
+                <div className="norm-engine-group-header" onClick={() => toggleGroup(group.id)}>
+                  <span className={`material-icons norm-engine-expand ${expandedGroups.has(group.id) ? 'expanded' : ''}`}>
+                    chevron_right
+                  </span>
+                  <div className="norm-engine-group-info">
+                    <span className="norm-engine-group-name">{group.name}</span>
+                    {group.is_builtin && (
+                      <span className="norm-engine-badge builtin">Built-in</span>
+                    )}
+                    <span className="norm-engine-group-count">
+                      {group.rules?.length || 0} rules
+                    </span>
+                  </div>
+                  <div className="norm-engine-group-actions" onClick={(e) => e.stopPropagation()}>
+                    <label className="norm-engine-toggle">
+                      <input
+                        type="checkbox"
+                        checked={group.enabled}
+                        onChange={() => toggleGroupEnabled(group)}
+                      />
+                      <span className="norm-engine-toggle-slider"></span>
+                    </label>
+                    {!group.is_builtin && (
+                      <>
+                        <button
+                          className="norm-engine-btn-icon"
+                          onClick={() => openEditGroupEditor(group)}
+                          title="Edit group"
+                          type="button"
+                        >
+                          <span className="material-icons">edit</span>
+                        </button>
+                        <button
+                          className="norm-engine-btn-icon danger"
+                          onClick={() => deleteGroup(group)}
+                          title="Delete group"
+                          type="button"
+                        >
+                          <span className="material-icons">delete</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {expandedGroups.has(group.id) && (
+                  <div className="norm-engine-rules">
+                    {group.description && (
+                      <p className="norm-engine-group-description">{group.description}</p>
+                    )}
+
+                    {group.rules?.map((rule) => (
+                      <div
+                        key={rule.id}
+                        className={`norm-engine-rule ${!rule.enabled ? 'disabled' : ''} ${selectedRule?.id === rule.id ? 'selected' : ''}`}
+                        onClick={() => setSelectedRule(rule)}
+                      >
+                        <div className="norm-engine-rule-info">
+                          <span className="norm-engine-rule-name">{rule.name}</span>
+                          <span className="norm-engine-rule-pattern">
+                            {rule.condition_type === 'tag_group' ? (
+                              <>tag_group: {rule.tag_group_name || 'Unknown'} ({rule.tag_match_position})</>
+                            ) : (
+                              <>{rule.condition_type}: "{rule.condition_value}"</>
+                            )}
+                          </span>
+                        </div>
+                        <div className="norm-engine-rule-actions" onClick={(e) => e.stopPropagation()}>
+                          <label className="norm-engine-toggle small">
+                            <input
+                              type="checkbox"
+                              checked={rule.enabled}
+                              onChange={() => toggleRuleEnabled(rule)}
+                            />
+                            <span className="norm-engine-toggle-slider"></span>
+                          </label>
+                          {!rule.is_builtin && (
+                            <>
+                              <button
+                                className="norm-engine-btn-icon small"
+                                onClick={() => openEditRuleEditor(rule)}
+                                title="Edit rule"
+                                type="button"
+                              >
+                                <span className="material-icons">edit</span>
+                              </button>
+                              <button
+                                className="norm-engine-btn-icon small danger"
+                                onClick={() => deleteRule(rule)}
+                                title="Delete rule"
+                                type="button"
+                              >
+                                <span className="material-icons">delete</span>
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+
+                    <button
+                      className="norm-engine-add-rule"
+                      onClick={() => openNewRuleEditor(group.id)}
+                      type="button"
+                    >
+                      <span className="material-icons">add</span>
+                      Add Rule
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))
+        )}
 
           {groups.length === 0 && (
             <div className="empty-state">
