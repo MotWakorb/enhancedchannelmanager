@@ -41,6 +41,9 @@ export function RuleBuilder({
   const [sortRegex, setSortRegex] = useState(rule?.sort_regex || '');
   const [streamSortField, setStreamSortField] = useState(rule?.stream_sort_field ?? 'smart_sort');
   const [streamSortOrder, setStreamSortOrder] = useState(rule?.stream_sort_order || 'asc');
+  const [qualityTieBreakOrder, setQualityTieBreakOrder] = useState<'asc' | 'desc'>(
+    (rule?.quality_tie_break_order as 'asc' | 'desc') || 'desc'
+  );
   const [normalizationGroupIds, setNormalizationGroupIds] = useState<number[]>(rule?.normalization_group_ids ?? []);
   const [skipStruckStreams, setSkipStruckStreams] = useState(rule?.skip_struck_streams ?? false);
   const [orphanAction, setOrphanAction] = useState(rule?.orphan_action || 'delete');
@@ -170,6 +173,7 @@ export function RuleBuilder({
         sort_regex: sortRegex || '',
         stream_sort_field: streamSortField || '',
         stream_sort_order: streamSortOrder,
+        quality_tie_break_order: qualityTieBreakOrder,
         normalization_group_ids: normalizationGroupIds,
         skip_struck_streams: skipStruckStreams,
         orphan_action: orphanAction,
@@ -484,21 +488,40 @@ export function RuleBuilder({
               )}
             </div>
             {streamSortField === 'quality' && (
-              <div className="checkbox-group">
-                <label className="checkbox-option">
-                  <input
-                    type="checkbox"
-                    checked={probeOnSort}
-                    onChange={e => setProbeOnSort(e.target.checked)}
-                    disabled={isLoading}
-                    aria-label="Probe unprobed streams before sorting"
-                  />
-                  <span>Probe unprobed streams before sorting</span>
-                </label>
-                <p className="form-hint">
-                  Gathers resolution data for streams that haven't been probed. Adds time to execution.
-                </p>
-              </div>
+              <>
+                <div className="form-field" style={{ marginTop: '8px' }}>
+                  <label>Equal resolution — M3U priority tie-break</label>
+                  <div className="sort-config-row">
+                    <CustomSelect
+                      options={[
+                        { value: 'desc', label: 'Higher priority first' },
+                        { value: 'asc', label: 'Lower priority first' },
+                      ]}
+                      value={qualityTieBreakOrder}
+                      onChange={(val) => setQualityTieBreakOrder(val as 'asc' | 'desc')}
+                      disabled={isLoading}
+                    />
+                  </div>
+                  <p className="form-hint">
+                    When two streams match resolution, order by ECM M3U priorities (Save Priorities). Same meaning as Provider Order stream sort.
+                  </p>
+                </div>
+                <div className="checkbox-group">
+                  <label className="checkbox-option">
+                    <input
+                      type="checkbox"
+                      checked={probeOnSort}
+                      onChange={e => setProbeOnSort(e.target.checked)}
+                      disabled={isLoading}
+                      aria-label="Probe unprobed streams before sorting"
+                    />
+                    <span>Probe unprobed streams before sorting</span>
+                  </label>
+                  <p className="form-hint">
+                    Gathers resolution data for streams that haven't been probed. Adds time to execution.
+                  </p>
+                </div>
+              </>
             )}
             {streamSortField === 'provider_order' && (
               <p className="form-hint">

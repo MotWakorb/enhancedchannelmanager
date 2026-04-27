@@ -207,6 +207,8 @@ export interface AutoCreationRule {
   sort_regex?: string | null;
   stream_sort_field?: string | null;
   stream_sort_order?: 'asc' | 'desc';
+  /** When stream sort is Quality: tie-break equal resolution using M3U account priorities (same as Provider Order). */
+  quality_tie_break_order?: 'asc' | 'desc';
   normalization_group_ids?: number[];
   skip_struck_streams?: boolean;
   orphan_action?: 'delete' | 'move_uncategorized' | 'delete_and_cleanup_groups' | 'none';
@@ -241,6 +243,7 @@ export interface CreateRuleData {
   sort_regex?: string | null;
   stream_sort_field?: string | null;
   stream_sort_order?: string;
+  quality_tie_break_order?: string;
   normalization_group_ids?: number[];
   skip_struck_streams?: boolean;
   orphan_action?: string;

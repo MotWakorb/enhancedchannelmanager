@@ -471,6 +471,9 @@ def _run_migrations(engine) -> None:
             # Add stream_sort_field and stream_sort_order columns to auto_creation_rules (v0.15.0)
             _add_auto_creation_rules_stream_sort_columns(conn)
 
+            # Add quality_tie_break_order for quality-sort M3U tie-break (per-rule)
+            _add_auto_creation_rules_quality_tie_break_order_column(conn)
+
             # Migrate normalize_names -> normalization_group_ids (v0.16.0 - Per-rule normalization)
             _migrate_normalize_names_to_normalization_group_ids(conn)
 
@@ -1788,6 +1791,26 @@ def _add_auto_creation_rules_stream_sort_columns(conn) -> None:
         conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN stream_sort_order VARCHAR(4) DEFAULT 'asc'"))
         conn.commit()
         logger.info("[DATABASE] Migration complete: added stream_sort_order column")
+
+
+def _add_auto_creation_rules_quality_tie_break_order_column(conn) -> None:
+    """Add quality_tie_break_order column to auto_creation_rules (quality sort M3U tie-break)."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_rules'"
+    ))
+    if not result.fetchone():
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
+    if "quality_tie_break_order" not in columns:
+        logger.info("[DATABASE] Adding quality_tie_break_order column to auto_creation_rules")
+        conn.execute(text(
+            "ALTER TABLE auto_creation_rules ADD COLUMN quality_tie_break_order VARCHAR(4) DEFAULT 'desc'"
+        ))
+        conn.commit()
+        logger.info("[DATABASE] Migration complete: added quality_tie_break_order column")
 
 
 def _migrate_normalize_names_to_normalization_group_ids(conn) -> None:
