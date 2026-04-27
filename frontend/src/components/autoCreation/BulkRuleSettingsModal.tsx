@@ -46,6 +46,7 @@ export function BulkRuleSettingsModal({
   const [applyStreamSort, setApplyStreamSort] = useState(false);
   const [streamSortField, setStreamSortField] = useState('smart_sort');
   const [streamSortOrder, setStreamSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [streamQualityTieBreakOrder, setStreamQualityTieBreakOrder] = useState<'asc' | 'desc'>('desc');
   const [streamProbeOnSort, setStreamProbeOnSort] = useState(false);
 
   const [applyOrphan, setApplyOrphan] = useState(false);
@@ -81,6 +82,7 @@ export function BulkRuleSettingsModal({
     setSortRegex(sample.sort_regex || '');
     setStreamSortField(sample.stream_sort_field || 'smart_sort');
     setStreamSortOrder((sample.stream_sort_order as 'asc' | 'desc') || 'asc');
+    setStreamQualityTieBreakOrder((sample.quality_tie_break_order as 'asc' | 'desc') || 'desc');
     setStreamProbeOnSort(sample.probe_on_sort ?? false);
     setOrphanAction(sample.orphan_action || 'delete');
 
@@ -126,6 +128,9 @@ export function BulkRuleSettingsModal({
     if (applyStreamSort) {
       patch.stream_sort_field = streamSortField || null;
       patch.stream_sort_order = streamSortOrder;
+      if (streamSortField === 'quality') {
+        patch.quality_tie_break_order = streamQualityTieBreakOrder;
+      }
     }
     if (applyOrphan) {
       patch.orphan_action = orphanAction;
@@ -334,18 +339,33 @@ export function BulkRuleSettingsModal({
                   )}
                 </div>
                 {streamSortField === 'quality' && (
-                  <label className="checkbox-option">
-                    <input
-                      type="checkbox"
-                      checked={streamProbeOnSort}
-                      onChange={e => {
-                        const next = e.target.checked;
-                        setStreamProbeOnSort(next);
-                        if (applyChannelSort && sortField === 'quality') setProbeOnSort(next);
-                      }}
-                    />
-                    <span>Probe unprobed streams before sorting</span>
-                  </label>
+                  <>
+                    <div className="form-field" style={{ marginTop: '8px' }}>
+                      <label>Equal resolution — M3U tie-break</label>
+                      <div className="sort-config-row">
+                        <CustomSelect
+                          options={[
+                            { value: 'desc', label: 'Higher priority first' },
+                            { value: 'asc', label: 'Lower priority first' },
+                          ]}
+                          value={streamQualityTieBreakOrder}
+                          onChange={v => setStreamQualityTieBreakOrder(v as 'asc' | 'desc')}
+                        />
+                      </div>
+                    </div>
+                    <label className="checkbox-option">
+                      <input
+                        type="checkbox"
+                        checked={streamProbeOnSort}
+                        onChange={e => {
+                          const next = e.target.checked;
+                          setStreamProbeOnSort(next);
+                          if (applyChannelSort && sortField === 'quality') setProbeOnSort(next);
+                        }}
+                      />
+                      <span>Probe unprobed streams before sorting</span>
+                    </label>
+                  </>
                 )}
               </>
             )}

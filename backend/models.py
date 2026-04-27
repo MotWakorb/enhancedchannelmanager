@@ -1448,6 +1448,8 @@ class AutoCreationRule(Base):
     # Stream-level sorting - reorders streams within channels (Pass 3.5)
     stream_sort_field = Column(String(50), nullable=True)  # None = no stream reorder
     stream_sort_order = Column(String(4), default="asc")   # "asc" or "desc"
+    # When stream_sort_field is quality: tie-break equal resolution using ECM M3U priorities
+    quality_tie_break_order = Column(String(4), default="desc")  # "asc" or "desc"
 
     # Normalization - JSON array of NormalizationRuleGroup IDs to apply, null/empty = disabled
     normalization_group_ids = Column(Text, nullable=True)
@@ -1571,6 +1573,7 @@ class AutoCreationRule(Base):
             "sort_regex": self.sort_regex,
             "stream_sort_field": self.stream_sort_field,
             "stream_sort_order": self.stream_sort_order or "asc",
+            "quality_tie_break_order": self.quality_tie_break_order or "desc",
             "normalization_group_ids": self.get_normalization_group_ids(),
             "skip_struck_streams": self.skip_struck_streams or False,
             "orphan_action": self.orphan_action or "delete",
