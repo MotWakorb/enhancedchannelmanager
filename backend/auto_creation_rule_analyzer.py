@@ -25,12 +25,11 @@ Bead: bd-0gntx (Phase 1).
 from __future__ import annotations
 
 from dataclasses import dataclass, field as _dc_field
-from typing import Any, Iterable, Literal
+from typing import Iterable, Literal
 
 from regex_lint import (
     LintViolation,
     lint_conditions_json_advisory,
-    lint_pattern_advisory,
 )
 
 
