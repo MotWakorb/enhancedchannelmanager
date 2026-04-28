@@ -172,11 +172,26 @@ describe('installSessionTracker — fail-open behavior', () => {
 
   it('does not throw and does not POST when sessionStorage.setItem throws', async () => {
     // Simulate a strict-privacy / quota-exhausted browser.
-    const setItemSpy = vi
-      .spyOn(Storage.prototype, 'setItem')
-      .mockImplementation(() => {
+    // In this test environment, sessionStorage may be implemented via a
+    // getter that does not reliably share a stable instance/prototype,
+    // so stub the sessionStorage property itself.
+    const originalSessionStorage = window.sessionStorage;
+    const throwingStorage = {
+      getItem: vi.fn(() => null),
+      setItem: vi.fn(() => {
         throw new Error('SecurityError: storage disabled');
-      });
+      }),
+      removeItem: vi.fn(() => {}),
+      clear: vi.fn(() => {}),
+      key: vi.fn(() => null),
+      get length() {
+        return 0;
+      },
+    } as unknown as Storage;
+    Object.defineProperty(window, 'sessionStorage', {
+      configurable: true,
+      value: throwingStorage,
+    });
     Object.defineProperty(navigator, 'sendBeacon', {
       configurable: true,
       value: undefined,
@@ -193,7 +208,10 @@ describe('installSessionTracker — fail-open behavior', () => {
     }
     expect(threw).toBe(false);
     expect(fetchSpy).not.toHaveBeenCalled();
-    setItemSpy.mockRestore();
+    Object.defineProperty(window, 'sessionStorage', {
+      configurable: true,
+      value: originalSessionStorage,
+    });
   });
 
   it('does not POST when crypto.randomUUID is unavailable', async () => {
