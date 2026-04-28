@@ -253,7 +253,85 @@ export async function importAutoCreationRulesYAML(
   });
 }
 
-/** URL for the debug bundle download (used directly with fetch). */
-export function getDebugBundleUrl(): string {
-  return `${API_BASE}/auto-creation/debug-bundle`;
+// =============================================================================
+// Debug bundle (bd-cns7j: 202+poll, replaces the old single-shot GET that
+// timed out on large catalogs)
+// =============================================================================
+
+export interface DebugBundleEnqueuedResponse {
+  job_id: string;
+  status: 'running';
+  message?: string;
+}
+
+interface DebugBundleStatusJson {
+  job_id: string;
+  status: 'running' | 'failed';
+  error?: string;
+}
+
+/** Enqueue debug bundle generation; returns the job id. */
+export async function startDebugBundle(): Promise<DebugBundleEnqueuedResponse> {
+  return fetchJson<DebugBundleEnqueuedResponse>(`${API_BASE}/auto-creation/debug-bundle`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * Poll the debug-bundle job until the artifact is ready, then return it as a
+ * Blob. Throws on failed status, 404, or signal abort.
+ */
+export async function pollDebugBundle(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<{ blob: Blob; filename: string }> {
+  const POLL_INTERVAL_MS = 1000;
+  const MAX_POLL_DURATION_MS = 30 * 60 * 1000;
+  const startedAt = Date.now();
+  const url = `${API_BASE}/auto-creation/debug-bundle/${encodeURIComponent(jobId)}`;
+
+  while (true) {
+    if (signal?.aborted) throw new Error('Debug bundle download cancelled');
+
+    const response = await fetch(url, { credentials: 'include', signal });
+    if (response.status === 404) {
+      throw new Error('Debug bundle job not found (it may have expired)');
+    }
+    if (!response.ok) {
+      throw new Error(`Debug bundle poll failed (${response.status})`);
+    }
+
+    const contentType = response.headers.get('Content-Type') || '';
+    // Binary artifact → completed.
+    if (!contentType.includes('application/json')) {
+      const blob = await response.blob();
+      const disposition = response.headers.get('Content-Disposition');
+      const filename = disposition?.match(/filename="(.+)"/)?.[1] || 'ecm-debug-bundle.tar.gz';
+      return { blob, filename };
+    }
+
+    const status = (await response.json()) as DebugBundleStatusJson;
+    if (status.status === 'failed') {
+      throw new Error(status.error || 'Debug bundle generation failed');
+    }
+    // status === 'running' → wait then poll again.
+    if (Date.now() - startedAt > MAX_POLL_DURATION_MS) {
+      throw new Error('Debug bundle generation timed out');
+    }
+    await new Promise<void>((resolve) => {
+      const t = window.setTimeout(resolve, POLL_INTERVAL_MS);
+      signal?.addEventListener('abort', () => {
+        window.clearTimeout(t);
+        resolve();
+      }, { once: true });
+    });
+  }
+}
+
+/** Convenience: enqueue + poll + return the downloadable Blob. */
+export async function generateAndFetchDebugBundle(
+  signal?: AbortSignal,
+): Promise<{ blob: Blob; filename: string }> {
+  const enqueued = await startDebugBundle();
+  return pollDebugBundle(enqueued.job_id, signal);
 }
