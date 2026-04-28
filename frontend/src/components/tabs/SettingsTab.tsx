@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import * as api from '../../services/api';
+import * as autoCreationApi from '../../services/autoCreationApi';
 import { useNotifications } from '../../contexts/NotificationContext';
 import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, FailedStreamCategory, GracenoteConflictMode, StreamPreviewMode } from '../../services/api';
 import { NormalizationEngineSection } from '../settings/NormalizationEngineSection';
@@ -384,11 +385,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const handleDownloadDebugBundle = async () => {
     setDebugBundleLoading(true);
     try {
-      const response = await fetch('/api/auto-creation/debug-bundle', { credentials: 'include' });
-      if (!response.ok) throw new Error('Failed to generate debug bundle');
-      const blob = await response.blob();
-      const disposition = response.headers.get('Content-Disposition');
-      const filename = disposition?.match(/filename="(.+)"/)?.[1] || 'ecm-debug-bundle.tar.gz';
+      const { blob, filename } = await autoCreationApi.generateAndFetchDebugBundle();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
