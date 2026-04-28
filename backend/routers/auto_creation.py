@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import List, Optional
 
 import journal
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field, model_validator
 from starlette.responses import StreamingResponse
@@ -310,6 +310,158 @@ async def get_auto_creation_rules():
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to get auto-creation rules: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# =============================================================================
+# Rule analyzer (bd-0gntx Phase 1).
+#
+# Two endpoints:
+#   POST /rules/analyze            — analyze rules currently in the DB.
+#   POST /rules/analyze/from-bundle — analyze rules.yaml from an uploaded
+#                                     debug bundle tar.gz, plus any
+#                                     channel_groups_diagnostic.json.
+# Both are advisory: findings are warnings/info, never errors. Saves are
+# never blocked.
+#
+# Routes are declared BEFORE /rules/{rule_id} so the static "analyze"
+# segment isn't captured by the rule_id path parameter.
+# =============================================================================
+
+
+@router.post("/rules/analyze")
+async def analyze_auto_creation_rules():
+    """Analyze all rules currently in the DB; return advisory findings.
+
+    Response shape (see auto_creation_rule_analyzer.analyze_rules)::
+
+        {
+          "rules": [{"rule_id", "rule_name", "findings": [...]}],
+          "summary": {"error": int, "warning": int, "info": int}
+        }
+    """
+    logger.debug("[AUTO-CREATE] POST /rules/analyze")
+    try:
+        from auto_creation_rule_analyzer import analyze_rules
+        from models import AutoCreationRule
+        session = get_session()
+        try:
+            rules = session.query(AutoCreationRule).order_by(
+                AutoCreationRule.priority
+            ).all()
+            rule_dicts = [r.to_dict() for r in rules]
+            result = analyze_rules(rule_dicts)
+            logger.info(
+                "[AUTO-CREATE] Analyzed %s rules: %s findings",
+                len(rule_dicts),
+                sum(result["summary"].values()),
+            )
+            return result
+        finally:
+            session.close()
+    except Exception as e:
+        logger.exception("[AUTO-CREATE] Failed to analyze rules: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/rules/analyze/from-bundle")
+async def analyze_auto_creation_rules_from_bundle(
+    file: UploadFile = File(...),
+):
+    """Analyze rules.yaml inside an uploaded debug-bundle tar.gz.
+
+    The bundle is read entirely in-memory and never persisted. The
+    endpoint never touches the DB — you can paste in any user's bundle
+    without exposing this ECM's data.
+
+    Returns the same response shape as POST /rules/analyze. If the
+    bundle includes ``channel_groups_diagnostic.json`` the
+    ``MERGE_STREAMS_NO_TARGET_CHANNELS`` finding becomes available.
+    """
+    import yaml
+    from auto_creation_rule_analyzer import analyze_rules
+
+    logger.debug(
+        "[AUTO-CREATE] POST /rules/analyze/from-bundle filename=%s",
+        file.filename,
+    )
+
+    try:
+        content = await file.read()
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to read uploaded file: {e}"
+        )
+
+    try:
+        buf = io.BytesIO(content)
+        tf = tarfile.open(fileobj=buf, mode="r:gz")
+    except (tarfile.TarError, OSError) as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Uploaded file is not a valid tar.gz archive: {e}",
+        )
+
+    rules_yaml_text: str | None = None
+    diagnostic: dict | None = None
+    try:
+        with tf:
+            for member in tf.getmembers():
+                if not member.isfile():
+                    continue
+                # Match by basename so we tolerate bundles created with a
+                # leading directory (the production generator ships flat).
+                base = member.name.rsplit("/", 1)[-1]
+                if base == "rules.yaml":
+                    extracted = tf.extractfile(member)
+                    if extracted is not None:
+                        rules_yaml_text = extracted.read().decode("utf-8")
+                elif base == "channel_groups_diagnostic.json":
+                    extracted = tf.extractfile(member)
+                    if extracted is not None:
+                        try:
+                            diagnostic = json.loads(extracted.read())
+                        except (json.JSONDecodeError, UnicodeDecodeError):
+                            # Diagnostic is optional — corrupt one shouldn't
+                            # 400 the whole analysis. Just drop it.
+                            diagnostic = None
+    except tarfile.TarError as e:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to read archive: {e}"
+        )
+
+    if rules_yaml_text is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Bundle does not contain a rules.yaml at the root.",
+        )
+
+    try:
+        data = yaml.safe_load(rules_yaml_text)
+    except yaml.YAMLError as e:
+        raise HTTPException(
+            status_code=400, detail=f"rules.yaml is not valid YAML: {e}"
+        )
+
+    if isinstance(data, list):
+        rules_in = data
+    elif isinstance(data, dict):
+        rules_in = data.get("rules", [])
+    else:
+        rules_in = []
+
+    if not isinstance(rules_in, list):
+        raise HTTPException(
+            status_code=400,
+            detail="rules.yaml 'rules' must be a list.",
+        )
+
+    result = analyze_rules(rules_in, channel_groups_diagnostic=diagnostic)
+    logger.info(
+        "[AUTO-CREATE] Analyzed %s rules from bundle: %s findings",
+        len(rules_in),
+        sum(result["summary"].values()),
+    )
+    return result
 
 
 @router.get("/rules/{rule_id}")
