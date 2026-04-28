@@ -465,8 +465,10 @@ def register(mcp: FastMCP):
         The debug bundle is a tar.gz file that must be downloaded from the ECM UI.
         This tool describes what it contains and how to get it.
         """
-        return ("The debug bundle is available at: GET /api/auto-creation/debug-bundle\n"
-                "Download it from the ECM UI: Auto-Creation page > Debug Bundle button\n\n"
+        return ("Debug bundle endpoints (bd-cns7j 202+poll):\n"
+                "  POST /api/auto-creation/debug-bundle           -> 202 + {job_id}\n"
+                "  GET  /api/auto-creation/debug-bundle/{job_id}  -> JSON status, or tar.gz when ready\n"
+                "Or download it from the ECM UI: Auto-Creation page > Debug Bundle button.\n\n"
                 "Bundle contains (all data obfuscated for safe sharing):\n"
                 "  - channels.json — channel data with stream details and stats\n"
                 "  - rules.json — auto-creation rules configuration\n"
