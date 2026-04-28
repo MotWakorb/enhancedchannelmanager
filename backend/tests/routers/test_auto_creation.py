@@ -1568,3 +1568,105 @@ class TestDebugBundle:
 
         assert "old" not in router_module._DEBUG_BUNDLE_JOBS
         assert "fresh" in router_module._DEBUG_BUNDLE_JOBS
+
+    @pytest.mark.asyncio
+    async def test_bundle_includes_normalization_rules_yaml(self, async_client, test_session):
+        """bd-cns7j follow-up: normalization_rules.yaml is in the tarball with
+        the user's group + rule definitions so 'normalization isn't stripping
+        X' reports can be diagnosed from the bundle alone."""
+        import asyncio as _asyncio
+        import io as _io
+        import tarfile as _tarfile
+        import yaml as _yaml
+        from models import NormalizationRule, NormalizationRuleGroup
+
+        # Seed a representative group + rule pair (mirrors a typical "strip
+        # country prefix" rule the user would author).
+        group = NormalizationRuleGroup(
+            name="Country Prefixes",
+            description="Strip DE:/AT:/MG: leading prefixes",
+            enabled=True,
+            priority=0,
+            is_builtin=False,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        test_session.add(group)
+        test_session.commit()
+        test_session.refresh(group)
+
+        rule = NormalizationRule(
+            group_id=group.id,
+            name="Strip DE/AT/MG prefix",
+            description=None,
+            enabled=True,
+            priority=0,
+            condition_type="regex",
+            condition_value=r"^(DE|AT|MG)\s*:\s*",
+            case_sensitive=False,
+            condition_logic="AND",
+            action_type="remove",
+            action_value=None,
+            stop_processing=False,
+            is_builtin=False,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        test_session.add(rule)
+        test_session.commit()
+
+        # Mock the Dispatcharr client + heavy bundle dependencies so we can
+        # exercise the assembly end-to-end without standing up a fake server.
+        mock_client = AsyncMock()
+        mock_client.get_channels = AsyncMock(return_value={"results": [], "next": None, "count": 0})
+        mock_client.get_channel_groups = AsyncMock(return_value=[])
+        mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+        mock_client.get_m3u_accounts = AsyncMock(return_value=[])
+
+        with patch("routers.auto_creation.get_client", return_value=mock_client), \
+             patch("log_utils.get_recent_logs", return_value=[]):
+            enqueue = await async_client.post("/api/auto-creation/debug-bundle")
+            assert enqueue.status_code == 202
+            job_id = enqueue.json()["job_id"]
+            for _ in range(80):
+                await _asyncio.sleep(0)
+
+            response = await async_client.get(f"/api/auto-creation/debug-bundle/{job_id}")
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("application/gzip")
+
+        with _tarfile.open(fileobj=_io.BytesIO(response.content), mode="r:gz") as tf:
+            names = tf.getnames()
+            assert "normalization_rules.yaml" in names, names
+
+            extracted = tf.extractfile("normalization_rules.yaml")
+            assert extracted is not None
+            payload = _yaml.safe_load(extracted.read().decode("utf-8"))
+
+        assert payload["version"] == 1
+        assert "exported_at" in payload
+        assert len(payload["groups"]) == 1
+        g = payload["groups"][0]
+        assert g["id"] == group.id, "group id is preserved so rules.yaml's normalization_group_ids resolves"
+        assert g["name"] == "Country Prefixes"
+        assert g["enabled"] is True
+        assert g["rule_count"] == 1
+        assert len(g["rules"]) == 1
+        r = g["rules"][0]
+        assert r["name"] == "Strip DE/AT/MG prefix"
+        assert r["condition_type"] == "regex"
+        assert r["condition_value"] == r"^(DE|AT|MG)\s*:\s*"
+        assert r["action_type"] == "remove"
+        # Numeric ids and timestamps deliberately stripped from rule body —
+        # they aren't useful for diagnosis and add noise.
+        assert "id" not in r
+        assert "created_at" not in r
+        assert "updated_at" not in r
+
+        # Manifest reflects the new counts so reviewers don't have to grep the YAML.
+        manifest_bytes = None
+        with _tarfile.open(fileobj=_io.BytesIO(response.content), mode="r:gz") as tf:
+            manifest_bytes = tf.extractfile("manifest.json").read()
+        manifest = json.loads(manifest_bytes)
+        assert manifest["normalization_group_count"] == 1
+        assert manifest["normalization_rule_count"] == 1
