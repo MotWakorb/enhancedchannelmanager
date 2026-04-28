@@ -1670,3 +1670,231 @@ class TestDebugBundle:
         manifest = json.loads(manifest_bytes)
         assert manifest["normalization_group_count"] == 1
         assert manifest["normalization_rule_count"] == 1
+
+
+# =========================================================================
+# Rule analyzer endpoints (bd-0gntx).
+#
+# /api/auto-creation/rules/analyze            — analyze rules in DB
+# /api/auto-creation/rules/analyze/from-bundle — analyze rules.yaml from
+#                                                 an uploaded debug bundle
+# Both reuse auto_creation_rule_analyzer.analyze_rules; the router is a
+# thin adapter (DB→dict, or tar.gz→yaml→dict).
+# =========================================================================
+
+
+def _make_debug_bundle_bytes(
+    rules_yaml: str | None,
+    *,
+    diagnostic: dict | None = None,
+) -> bytes:
+    """Build a minimal in-memory debug bundle tar.gz for tests.
+
+    Mirrors the production bundle layout (rules.yaml at the root, plus
+    optional channel_groups_diagnostic.json). ``rules_yaml=None`` omits
+    the file so we can assert the 400 error path.
+    """
+    import io as _io
+    import json as _json
+    import tarfile as _tarfile
+
+    buf = _io.BytesIO()
+    with _tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        if rules_yaml is not None:
+            data = rules_yaml.encode("utf-8")
+            info = _tarfile.TarInfo(name="rules.yaml")
+            info.size = len(data)
+            tf.addfile(info, _io.BytesIO(data))
+        if diagnostic is not None:
+            data = _json.dumps(diagnostic).encode("utf-8")
+            info = _tarfile.TarInfo(name="channel_groups_diagnostic.json")
+            info.size = len(data)
+            tf.addfile(info, _io.BytesIO(data))
+    return buf.getvalue()
+
+
+# The 2026-04-28 user's broken Sports rule, as it lives in rules.yaml.
+_SPORTS_RULE_YAML = """
+version: 1
+rules:
+- name: Sports Networks - excl Fr and Es
+  enabled: true
+  priority: 1
+  conditions:
+  - type: normalized_name_in_group
+    value: 1464
+    connector: and
+  - type: stream_group_matches
+    value: UK|
+    connector: and
+  - type: stream_group_matches
+    value: US|
+    connector: or
+  - type: stream_group_contains
+    value: '^4K'
+    connector: or
+  actions:
+  - type: merge_streams
+    target: auto
+"""
+
+
+# A clean rule — must produce zero findings.
+_CLEAN_RULE_YAML = r"""
+version: 1
+rules:
+- name: Movie Networks - UK add
+  enabled: true
+  priority: 2
+  conditions:
+  - type: normalized_name_in_group
+    value: 1473
+    connector: and
+  - type: stream_group_matches
+    value: ^UK\|
+    connector: and
+  actions:
+  - type: merge_streams
+    target: auto
+"""
+
+
+class TestAnalyzeRulesLive:
+    """POST /api/auto-creation/rules/analyze — analyze rules in DB."""
+
+    @pytest.mark.asyncio
+    async def test_empty_db_returns_clean_summary(self, async_client):
+        response = await async_client.post(
+            "/api/auto-creation/rules/analyze"
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["rules"] == []
+        assert body["summary"] == {"error": 0, "warning": 0, "info": 0}
+
+    @pytest.mark.asyncio
+    async def test_broken_rule_surfaces_findings(self, async_client, test_session):
+        _create_rule(
+            test_session,
+            name="Sports Networks - excl Fr and Es",
+            conditions=json.dumps([
+                {"type": "normalized_name_in_group", "value": 1464, "connector": "and"},
+                {"type": "stream_group_matches", "value": "UK|", "connector": "and"},
+                {"type": "stream_group_matches", "value": "US|", "connector": "or"},
+                {"type": "stream_group_contains", "value": "^4K", "connector": "or"},
+            ]),
+            actions=json.dumps([{"type": "merge_streams", "target": "auto"}]),
+        )
+        response = await async_client.post(
+            "/api/auto-creation/rules/analyze"
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["summary"]["warning"] >= 1
+        codes = {f["code"] for r in body["rules"] for f in r["findings"]}
+        # All four finding categories surfaced by this rule:
+        assert "REGEX_TRIVIALLY_MATCHES_ALL" in codes
+        assert "OPERATOR_VALUE_LOOKS_LIKE_REGEX" in codes
+        assert "ANDOR_DROPS_GUARD" in codes
+
+    @pytest.mark.asyncio
+    async def test_clean_rule_produces_no_findings(self, async_client, test_session):
+        _create_rule(
+            test_session,
+            name="Movie Networks - UK add",
+            conditions=json.dumps([
+                {"type": "normalized_name_in_group", "value": 1473, "connector": "and"},
+                {"type": "stream_group_matches", "value": r"^UK\|", "connector": "and"},
+            ]),
+            actions=json.dumps([{"type": "merge_streams", "target": "auto"}]),
+        )
+        response = await async_client.post(
+            "/api/auto-creation/rules/analyze"
+        )
+        body = response.json()
+        assert body["summary"]["warning"] == 0
+        assert body["rules"][0]["findings"] == []
+
+
+class TestAnalyzeRulesFromBundle:
+    """POST /api/auto-creation/rules/analyze/from-bundle — analyze
+    rules.yaml from a debug-bundle tar.gz. The endpoint never touches
+    the DB.
+    """
+
+    @pytest.mark.asyncio
+    async def test_bundle_with_broken_rule(self, async_client):
+        bundle = _make_debug_bundle_bytes(_SPORTS_RULE_YAML)
+        response = await async_client.post(
+            "/api/auto-creation/rules/analyze/from-bundle",
+            files={"file": ("debug.tar.gz", bundle, "application/gzip")},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        codes = {f["code"] for r in body["rules"] for f in r["findings"]}
+        assert "REGEX_TRIVIALLY_MATCHES_ALL" in codes
+        assert "OPERATOR_VALUE_LOOKS_LIKE_REGEX" in codes
+        assert "ANDOR_DROPS_GUARD" in codes
+
+    @pytest.mark.asyncio
+    async def test_bundle_with_clean_rule(self, async_client):
+        bundle = _make_debug_bundle_bytes(_CLEAN_RULE_YAML)
+        response = await async_client.post(
+            "/api/auto-creation/rules/analyze/from-bundle",
+            files={"file": ("debug.tar.gz", bundle, "application/gzip")},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["summary"]["warning"] == 0
+
+    @pytest.mark.asyncio
+    async def test_bundle_with_diagnostic_flags_empty_target_group(
+        self, async_client,
+    ):
+        rules_yaml = """
+version: 1
+rules:
+- name: Empty target rule
+  conditions: []
+  actions:
+  - type: merge_streams
+    target: auto
+  target_group_id: 99
+"""
+        diagnostic = {"groups": [{"id": 99, "name": "Empty", "channel_count": 0}]}
+        bundle = _make_debug_bundle_bytes(rules_yaml, diagnostic=diagnostic)
+        response = await async_client.post(
+            "/api/auto-creation/rules/analyze/from-bundle",
+            files={"file": ("debug.tar.gz", bundle, "application/gzip")},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        codes = {f["code"] for r in body["rules"] for f in r["findings"]}
+        assert "MERGE_STREAMS_NO_TARGET_CHANNELS" in codes
+
+    @pytest.mark.asyncio
+    async def test_bundle_missing_rules_yaml_returns_400(self, async_client):
+        bundle = _make_debug_bundle_bytes(None)
+        response = await async_client.post(
+            "/api/auto-creation/rules/analyze/from-bundle",
+            files={"file": ("debug.tar.gz", bundle, "application/gzip")},
+        )
+        assert response.status_code == 400
+        assert "rules.yaml" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_non_targz_returns_400(self, async_client):
+        response = await async_client.post(
+            "/api/auto-creation/rules/analyze/from-bundle",
+            files={"file": ("not-a-bundle.txt", b"hello", "text/plain")},
+        )
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_invalid_yaml_returns_400(self, async_client):
+        bundle = _make_debug_bundle_bytes("not: valid: yaml: at: all: :")
+        response = await async_client.post(
+            "/api/auto-creation/rules/analyze/from-bundle",
+            files={"file": ("debug.tar.gz", bundle, "application/gzip")},
+        )
+        assert response.status_code == 400

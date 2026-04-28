@@ -267,3 +267,122 @@ class TestDeleteChannel:
         text = result[0][0].text
         assert "deleted" in text.lower()
         assert "42" in text
+
+
+class TestAnalyzeAutoCreationRules:
+    """Tests for analyze_auto_creation_rules MCP tool (bd-0gntx)."""
+
+    @pytest.mark.asyncio
+    async def test_live_mode_calls_analyze_endpoint(self):
+        """No bundle_path → POST /api/auto-creation/rules/analyze."""
+        from tools.auto_creation import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(post={
+            "rules": [{
+                "rule_id": 2,
+                "rule_name": "Sports Networks - excl Fr and Es",
+                "findings": [
+                    {
+                        "code": "REGEX_TRIVIALLY_MATCHES_ALL",
+                        "severity": "warning",
+                        "field": "conditions[1].value",
+                        "message": "Pattern 'UK|' contains an empty alternation...",
+                        "suggestion": "",
+                        "detail": {"reason": "empty-alternation"},
+                    },
+                ],
+            }],
+            "summary": {"error": 0, "warning": 1, "info": 0},
+        })
+
+        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("analyze_auto_creation_rules", {})
+
+        text = result[0][0].text
+        # Endpoint called.
+        mock_client.post.assert_awaited_once_with(
+            "/api/auto-creation/rules/analyze"
+        )
+        # Markdown surfaces the rule and the finding code.
+        assert "Sports Networks" in text
+        assert "REGEX_TRIVIALLY_MATCHES_ALL" in text
+        # Summary surfaces.
+        assert "warning" in text.lower()
+
+    @pytest.mark.asyncio
+    async def test_clean_rules_says_so(self):
+        """No findings → friendly all-clean message."""
+        from tools.auto_creation import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(post={
+            "rules": [{"rule_id": 1, "rule_name": "Clean", "findings": []}],
+            "summary": {"error": 0, "warning": 0, "info": 0},
+        })
+
+        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("analyze_auto_creation_rules", {})
+
+        text = result[0][0].text
+        assert "no findings" in text.lower() or "clean" in text.lower()
+
+    @pytest.mark.asyncio
+    async def test_bundle_mode_uploads_file(self, tmp_path):
+        """bundle_path set → POST /api/auto-creation/rules/analyze/from-bundle."""
+        from tools.auto_creation import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        bundle_file = tmp_path / "debug.tar.gz"
+        bundle_file.write_bytes(b"\x1f\x8b\x08\x00fake-gzip-content")
+
+        mock_client = _make_ecm_client_mock(post_multipart={
+            "rules": [],
+            "summary": {"error": 0, "warning": 0, "info": 0},
+        })
+
+        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+            await mcp.call_tool(
+                "analyze_auto_creation_rules",
+                {"bundle_path": str(bundle_file)},
+            )
+
+        mock_client.post_multipart.assert_awaited_once()
+        call = mock_client.post_multipart.call_args
+        assert call.args[0] == "/api/auto-creation/rules/analyze/from-bundle"
+        files = call.kwargs.get("files") or call.args[1]
+        assert "file" in files
+        # File payload is (filename, bytes, content_type) tuple.
+        filename, content_bytes, content_type = files["file"]
+        assert filename == "debug.tar.gz"
+        assert content_bytes == b"\x1f\x8b\x08\x00fake-gzip-content"
+
+    @pytest.mark.asyncio
+    async def test_bundle_path_does_not_exist(self):
+        """Missing file → friendly error, no upload attempt."""
+        from tools.auto_creation import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(post_multipart={})
+
+        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "analyze_auto_creation_rules",
+                {"bundle_path": "/no/such/path.tar.gz"},
+            )
+
+        text = result[0][0].text
+        assert "not found" in text.lower() or "does not exist" in text.lower()
+        mock_client.post_multipart.assert_not_awaited()
