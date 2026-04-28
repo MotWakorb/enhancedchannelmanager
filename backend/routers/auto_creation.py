@@ -1982,6 +1982,70 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
         sched_session.close()
     task_schedules_str = json.dumps(schedules_data, indent=2)
 
+    # -- 6b. normalization_rules.yaml — group + rule definitions ------
+    # The auto-creation rules above reference normalization_group_ids (e.g.
+    # [1,2,5,6,7,8]); without the group definitions we can't reason about
+    # what normalize() actually does to a stream name. Capture all groups
+    # with their rules nested in priority order. Strip ids/timestamps from
+    # the rule body — they aren't useful for diagnosis and add noise — but
+    # keep the group id so the cross-reference from rules.yaml resolves.
+    from models import NormalizationRule, NormalizationRuleGroup
+    norm_session = get_session()
+    try:
+        groups_q = norm_session.query(NormalizationRuleGroup).order_by(
+            NormalizationRuleGroup.priority, NormalizationRuleGroup.id
+        ).all()
+        rules_by_group: dict[int, list] = {}
+        for r in norm_session.query(NormalizationRule).order_by(
+            NormalizationRule.group_id, NormalizationRule.priority, NormalizationRule.id
+        ).all():
+            rules_by_group.setdefault(r.group_id, []).append(r)
+
+        norm_export = {
+            "version": 1,
+            "exported_at": datetime.utcnow().isoformat() + "Z",
+            "groups": [],
+        }
+        for g in groups_q:
+            group_rules = []
+            for r in rules_by_group.get(g.id, []):
+                rule_dict = {
+                    "name": r.name,
+                    "description": r.description,
+                    "enabled": r.enabled,
+                    "priority": r.priority,
+                    "condition_type": r.condition_type,
+                    "condition_value": r.condition_value,
+                    "case_sensitive": r.case_sensitive,
+                    "tag_group_id": r.tag_group_id,
+                    "tag_match_position": r.tag_match_position,
+                    "tag_group_name": r.tag_group.name if r.tag_group else None,
+                    "conditions": r.get_conditions(),
+                    "condition_logic": r.condition_logic,
+                    "action_type": r.action_type,
+                    "action_value": r.action_value,
+                    "else_action_type": r.else_action_type,
+                    "else_action_value": r.else_action_value,
+                    "stop_processing": r.stop_processing,
+                    "is_builtin": r.is_builtin,
+                }
+                group_rules.append(rule_dict)
+            norm_export["groups"].append({
+                "id": g.id,  # Kept so auto-creation rules' normalization_group_ids resolve.
+                "name": g.name,
+                "description": g.description,
+                "enabled": g.enabled,
+                "priority": g.priority,
+                "is_builtin": g.is_builtin,
+                "rule_count": len(group_rules),
+                "rules": group_rules,
+            })
+        norm_group_count = len(groups_q)
+        norm_rule_count = sum(len(v) for v in rules_by_group.values())
+    finally:
+        norm_session.close()
+    norm_yaml_content = yaml.dump(norm_export, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
     # -- 7. channel_groups_diagnostic.json — Channel Manager mismatch diagnosis
     # Run BEFORE logs.txt is captured so [GROUPS-DIAG] lines land in the log dump too.
     from routers.channel_groups import build_channel_groups_diagnostic
@@ -2011,6 +2075,8 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
         "rule_count": rule_count,
         "group_count": len(groups),
         "stream_count": total_streams,
+        "normalization_group_count": norm_group_count,
+        "normalization_rule_count": norm_rule_count,
         "stream_stats": {
             "probed_success": probed_success,
             "probed_failed": probed_failed,
@@ -2027,6 +2093,7 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
         _add_tar_entry(tf, "channels.json", channels_json_str)
         _add_tar_entry(tf, "channels.csv", csv_content)
         _add_tar_entry(tf, "rules.yaml", yaml_content)
+        _add_tar_entry(tf, "normalization_rules.yaml", norm_yaml_content)
         _add_tar_entry(tf, "settings.json", settings_json_str)
         _add_tar_entry(tf, "task_schedules.json", task_schedules_str)
         _add_tar_entry(tf, "channel_groups_diagnostic.json", cg_diagnostic_str)
