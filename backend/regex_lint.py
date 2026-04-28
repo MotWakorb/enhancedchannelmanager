@@ -91,23 +91,39 @@ ViolationCode = Literal[
     "REGEX_TOO_LONG",
     "REGEX_NESTED_QUANTIFIER",
     "REGEX_COMPILE_ERROR",
+    # Advisory codes (bd-0gntx) — surfaced via the analyze endpoint
+    # only, never from the strict :func:`lint_pattern` save-time path.
+    "REGEX_TRIVIALLY_MATCHES_ALL",
+    "REGEX_REDUNDANT_ESCAPE_CARET",
+    "OPERATOR_VALUE_LOOKS_LIKE_REGEX",
 ]
+
+Severity = Literal["error", "warning", "info"]
 
 
 @dataclass
 class LintViolation:
-    """One lint finding. See :func:`lint_pattern` for semantics."""
+    """One lint finding. See :func:`lint_pattern` for semantics.
+
+    ``severity`` defaults to ``"error"`` for back-compat with the
+    pre-bd-0gntx codes — those are wired to 422 rejections and must
+    not change behavior. Advisory codes set ``severity="warning"``;
+    the analyze endpoint emits them, the save-time path filters them
+    out.
+    """
 
     code: ViolationCode
     message: str
     field: str = "pattern"
     detail: dict = _dc_field(default_factory=dict)
+    severity: Severity = "error"
 
     def to_dict(self) -> dict:
         return {
             "field": self.field,
             "code": self.code,
             "message": self.message,
+            "severity": self.severity,
             "detail": dict(self.detail),
         }
 
@@ -227,6 +243,88 @@ def _detect_nested_quantifier(pattern: str) -> tuple[bool, str]:
 
     reason = walk(parsed, outer_suffix_has_killer=False)
     return (reason is not None, reason or "")
+
+
+# -------------------------------------------------------------------------
+# Advisory detectors (bd-0gntx) — never block save. Walk the AST that
+# was already produced by :func:`_detect_nested_quantifier`-style
+# parsing so we don't string-parse the pattern.
+# -------------------------------------------------------------------------
+
+
+def _detect_empty_alternation(parsed: Any) -> bool:
+    """Walk the parse tree; return True if any BRANCH has an empty arm.
+
+    ``UK|`` parses as a BRANCH with branches ``[[<UK>], []]`` — the
+    second arm is empty. Such a branch always matches the empty
+    string, which collapses the entire pattern into a guaranteed
+    match. Same logic for ``|UK``, ``(UK|)``, and ``(|UK)``.
+    """
+    for op, args in parsed:
+        if op is BRANCH:
+            _none, branches = args
+            for arm in branches:
+                if not list(arm):
+                    return True
+                if _detect_empty_alternation(arm):
+                    return True
+        elif op is SUBPATTERN:
+            _gid, _a, _b, subp = args
+            if _detect_empty_alternation(subp):
+                return True
+        elif op in (ASSERT, ASSERT_NOT):
+            _dir, subp = args
+            if _detect_empty_alternation(subp):
+                return True
+        elif op in _REPEAT_OPS:
+            _min, _max, body = args
+            if _detect_empty_alternation(body):
+                return True
+    return False
+
+
+# Pattern starts with ``^\^`` literally — anchor followed by escaped
+# caret. Almost always a double-escape typo (the user wrote ``^foo``
+# in a "matches" field, then re-escaped the ``^``).
+_REDUNDANT_ESCAPE_CARET_PREFIX = "^\\^"
+
+
+# Substring values where these substrings appear are very likely the
+# user typing regex syntax under a Contains operator. ``|`` is
+# intentionally NOT in this list — M3U groups commonly contain a
+# literal pipe (``UK| MOVIES``), so substring search for ``UK|`` is
+# legitimate.
+_REGEX_LIKE_SUBSTRINGS = (
+    ".*",
+    ".+",
+    "\\b",
+    "\\B",
+    "\\d",
+    "\\D",
+    "\\w",
+    "\\W",
+    "\\s",
+    "\\S",
+)
+
+
+def _value_looks_like_regex_for_contains(value: str) -> str | None:
+    """Return a short reason if ``value`` looks like the user intended
+    regex, ``None`` otherwise.
+
+    Heuristic — never authoritative. Used only for warning-severity
+    findings on Contains-operator conditions.
+    """
+    if not value:
+        return None
+    if value.startswith("^") and len(value) > 1:
+        return "starts-with-^"
+    if value.endswith("$") and len(value) > 1:
+        return "ends-with-$"
+    for token in _REGEX_LIKE_SUBSTRINGS:
+        if token in value:
+            return f"contains-{token}"
+    return None
 
 
 # -------------------------------------------------------------------------
@@ -389,6 +487,80 @@ def _extract_compile_error(exc: Exception) -> str:
 # -------------------------------------------------------------------------
 
 
+def lint_pattern_advisory(
+    pattern: str | None,
+    field: str = "pattern",
+) -> list[LintViolation]:
+    """Run advisory checks against ``pattern``; return warning-level findings.
+
+    Distinct from :func:`lint_pattern` — the strict path raises 422 on
+    every violation it returns; this advisory path is for the
+    /rules/analyze endpoint, which surfaces hints without blocking
+    saves. All findings have ``severity="warning"``.
+
+    Codes (bd-0gntx):
+
+    * ``REGEX_TRIVIALLY_MATCHES_ALL`` — empty alternation makes the
+      pattern equivalent to ".*" at position 0. ``UK|``, ``|UK``,
+      ``(UK|)``, ``(|UK)``.
+    * ``REGEX_REDUNDANT_ESCAPE_CARET`` — pattern starts with ``^\\^``,
+      almost always a double-escape typo.
+
+    Returns ``[]`` for ``None`` / empty / whitespace-only patterns and
+    for patterns that fail to compile (the strict lint surfaces
+    compile errors with the right severity; we don't double-report).
+    """
+    out: list[LintViolation] = []
+
+    if pattern is None or not isinstance(pattern, str) or not pattern.strip():
+        return out
+
+    # Parse once via the same helper the strict path uses. If it fails
+    # to parse, leave it to lint_pattern to flag — we don't double-up.
+    try:
+        converted = _js_to_python_named_groups(pattern)
+        parsed = _sre_parse.parse(converted)
+    except re.error:
+        return out
+
+    if _detect_empty_alternation(parsed):
+        out.append(
+            LintViolation(
+                code="REGEX_TRIVIALLY_MATCHES_ALL",
+                severity="warning",
+                message=(
+                    f"Pattern {pattern!r} contains an empty alternation "
+                    f"(e.g. ``UK|``) which matches every input — likely "
+                    f"a confusion between regex and substring matching. "
+                    f"If you meant a literal pipe, escape it (``UK\\|``) "
+                    f"or use the Begins With operator. "
+                    f"See {DOCS_URL} for guidance."
+                ),
+                field=field,
+                detail={"reason": "empty-alternation"},
+            )
+        )
+
+    if pattern.startswith(_REDUNDANT_ESCAPE_CARET_PREFIX):
+        out.append(
+            LintViolation(
+                code="REGEX_REDUNDANT_ESCAPE_CARET",
+                severity="warning",
+                message=(
+                    f"Pattern {pattern!r} starts with ``^\\^`` — anchor "
+                    f"followed by a literal caret. This is almost always "
+                    f"a double-escape typo. Did you mean ``^`` (anchor) "
+                    f"or ``\\^`` (literal caret) — not both? "
+                    f"See {DOCS_URL} for guidance."
+                ),
+                field=field,
+                detail={"reason": "anchor-then-literal-caret"},
+            )
+        )
+
+    return out
+
+
 def lint_pattern_fields(fields: Iterable[tuple[str, str | None]]) -> list[LintViolation]:
     """Lint several ``(field_name, pattern)`` pairs; aggregate violations.
 
@@ -442,6 +614,92 @@ def lint_conditions_json(conditions: list | None, prefix: str = "conditions") ->
         if ctype in regex_condition_types:
             value = cond.get("value")
             out.extend(lint_pattern(value, field=f"{prefix}[{idx}].value"))
+    return out
+
+
+_REGEX_CONDITION_TYPES = frozenset({
+    # Normalization
+    "regex",
+    # Auto-creation
+    "stream_name_matches",
+    "stream_group_matches",
+    "tvg_id_matches",
+    "channel_exists_matching",
+})
+
+
+_CONTAINS_CONDITION_TYPES = frozenset({
+    "stream_name_contains",
+    "stream_group_contains",
+})
+
+
+def lint_conditions_json_advisory(
+    conditions: list | None,
+    prefix: str = "conditions",
+) -> list[LintViolation]:
+    """Walk a list of condition objects; emit advisory warnings.
+
+    Counterpart to :func:`lint_conditions_json` but emits the
+    bd-0gntx warning codes:
+
+    * For ``*_matches`` regex types: runs :func:`lint_pattern_advisory`
+      on the value (catches ``UK|``, ``^\\^4k``, etc.).
+    * For ``*_contains`` substring types: emits
+      ``OPERATOR_VALUE_LOOKS_LIKE_REGEX`` when the value contains
+      substrings that suggest the user meant regex (``^foo``, ``foo$``,
+      ``.*``, ``\\b``, etc.). Bare ``|`` is intentionally NOT flagged —
+      M3U groups commonly contain a literal pipe.
+
+    All findings have ``severity="warning"``. The save-time path uses
+    :func:`lint_conditions_json` instead, which only surfaces errors.
+    """
+    if not conditions:
+        return []
+
+    out: list[LintViolation] = []
+    for idx, cond in enumerate(conditions):
+        if not isinstance(cond, dict):
+            continue
+        ctype = cond.get("type")
+        if ctype in ("and", "or", "not"):
+            sub = cond.get("conditions")
+            if isinstance(sub, list):
+                out.extend(
+                    lint_conditions_json_advisory(
+                        sub, prefix=f"{prefix}[{idx}].conditions"
+                    )
+                )
+            continue
+
+        if ctype in _REGEX_CONDITION_TYPES:
+            out.extend(
+                lint_pattern_advisory(
+                    cond.get("value"), field=f"{prefix}[{idx}].value"
+                )
+            )
+        elif ctype in _CONTAINS_CONDITION_TYPES:
+            value = cond.get("value")
+            if isinstance(value, str):
+                reason = _value_looks_like_regex_for_contains(value)
+                if reason:
+                    out.append(
+                        LintViolation(
+                            code="OPERATOR_VALUE_LOOKS_LIKE_REGEX",
+                            severity="warning",
+                            message=(
+                                f"Value {value!r} on a Contains operator "
+                                f"looks like regex syntax ({reason}). "
+                                f"Contains is a literal substring match — "
+                                f"the regex characters are matched as-is. "
+                                f"Switch the operator to Matches (Regex), "
+                                f"Begins With, or Ends With if you meant "
+                                f"regex. See {DOCS_URL} for guidance."
+                            ),
+                            field=f"{prefix}[{idx}].value",
+                            detail={"reason": reason, "value": value},
+                        )
+                    )
     return out
 
 
