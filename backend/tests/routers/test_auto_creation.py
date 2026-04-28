@@ -1398,3 +1398,275 @@ class TestGetTemplateVariables:
         names = [v["name"] for v in data["variables"]]
         assert "{stream_name}" in names
         assert "{quality}" in names
+
+
+class TestDebugBundle:
+    """Tests for POST /api/auto-creation/debug-bundle and GET /{job_id} (bd-cns7j 202+poll)."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_jobs(self):
+        # Each test starts with an empty job dict so state never leaks across
+        # tests (the dict is module-level by design so the in-memory job
+        # lookup survives between requests within a single process).
+        from routers import auto_creation as router_module
+
+        router_module._DEBUG_BUNDLE_JOBS.clear()
+        yield
+        router_module._DEBUG_BUNDLE_JOBS.clear()
+
+    @pytest.mark.asyncio
+    async def test_post_returns_202_and_job_id(self, async_client):
+        """POST /debug-bundle enqueues work and returns 202 + job_id immediately."""
+        import asyncio as _asyncio
+
+        gate = _asyncio.Event()
+
+        async def slow_build():
+            await gate.wait()
+            return ("ecm-debug-bundle.tar.gz", b"fake-tar-gz")
+
+        with patch("routers.auto_creation._build_debug_bundle", side_effect=slow_build):
+            response = await async_client.post("/api/auto-creation/debug-bundle")
+            assert response.status_code == 202, response.text
+            body = response.json()
+            assert "job_id" in body and body["job_id"]
+            assert body["status"] == "running"
+            job_id = body["job_id"]
+
+            # The job should already exist with status="running" before the build finishes.
+            from routers.auto_creation import _DEBUG_BUNDLE_JOBS
+            assert job_id in _DEBUG_BUNDLE_JOBS
+            assert _DEBUG_BUNDLE_JOBS[job_id].status == "running"
+
+            # Release the build and let it complete.
+            gate.set()
+            for _ in range(20):
+                await _asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_get_while_running_returns_status_json(self, async_client):
+        """GET /{job_id} returns JSON status while the build is still running."""
+        import asyncio as _asyncio
+
+        gate = _asyncio.Event()
+
+        async def slow_build():
+            await gate.wait()
+            return ("ecm-debug-bundle.tar.gz", b"fake")
+
+        try:
+            with patch("routers.auto_creation._build_debug_bundle", side_effect=slow_build):
+                enqueue = await async_client.post("/api/auto-creation/debug-bundle")
+                job_id = enqueue.json()["job_id"]
+
+                response = await async_client.get(f"/api/auto-creation/debug-bundle/{job_id}")
+                assert response.status_code == 200
+                assert response.headers.get("content-type", "").startswith("application/json")
+                body = response.json()
+                assert body["status"] == "running"
+                assert body["job_id"] == job_id
+        finally:
+            gate.set()
+            for _ in range(20):
+                await _asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_get_after_completion_returns_binary_and_evicts_job(self, async_client):
+        """Once complete, GET /{job_id} returns the tar.gz bytes and removes the job."""
+        import asyncio as _asyncio
+
+        async def fast_build():
+            return ("ecm-debug-bundle-test.tar.gz", b"\x1f\x8btar-bytes")
+
+        with patch("routers.auto_creation._build_debug_bundle", side_effect=fast_build):
+            enqueue = await async_client.post("/api/auto-creation/debug-bundle")
+            job_id = enqueue.json()["job_id"]
+
+            # Drain the background task so the job reaches "completed".
+            for _ in range(50):
+                await _asyncio.sleep(0)
+
+            response = await async_client.get(f"/api/auto-creation/debug-bundle/{job_id}")
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("application/gzip")
+            disposition = response.headers["content-disposition"]
+            assert "ecm-debug-bundle-test.tar.gz" in disposition
+            assert response.content == b"\x1f\x8btar-bytes"
+
+            # Single-shot read — job must be evicted so RAM is freed.
+            from routers.auto_creation import _DEBUG_BUNDLE_JOBS
+            assert job_id not in _DEBUG_BUNDLE_JOBS
+
+    @pytest.mark.asyncio
+    async def test_get_failed_job_returns_status_json(self, async_client):
+        """A build that raises is marked failed and exposed via GET status."""
+        import asyncio as _asyncio
+
+        async def boom():
+            raise RuntimeError("dispatcharr unreachable")
+
+        with patch("routers.auto_creation._build_debug_bundle", side_effect=boom):
+            enqueue = await async_client.post("/api/auto-creation/debug-bundle")
+            job_id = enqueue.json()["job_id"]
+
+            for _ in range(50):
+                await _asyncio.sleep(0)
+
+            response = await async_client.get(f"/api/auto-creation/debug-bundle/{job_id}")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["status"] == "failed"
+            assert "dispatcharr unreachable" in body["error"]
+            # Failed jobs stay in the dict until the TTL prune so the operator
+            # can re-poll and see the error message; eviction happens only on
+            # successful binary download.
+            from routers.auto_creation import _DEBUG_BUNDLE_JOBS
+            assert job_id in _DEBUG_BUNDLE_JOBS
+
+    @pytest.mark.asyncio
+    async def test_get_unknown_job_id_returns_404(self, async_client):
+        response = await async_client.get("/api/auto-creation/debug-bundle/does-not-exist")
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_post_returns_within_timeout_budget(self, async_client):
+        """The handler itself must return fast — the whole point of bd-cns7j is
+        to make /debug-bundle not synchronous on large catalogs."""
+        import asyncio as _asyncio
+        import time as _time
+
+        gate = _asyncio.Event()
+
+        async def slow_build():
+            await gate.wait()
+            return ("ecm-debug-bundle.tar.gz", b"")
+
+        try:
+            with patch("routers.auto_creation._build_debug_bundle", side_effect=slow_build):
+                start = _time.monotonic()
+                response = await async_client.post("/api/auto-creation/debug-bundle")
+                elapsed = _time.monotonic() - start
+
+            assert response.status_code == 202
+            assert elapsed < 5.0, f"enqueue took {elapsed:.2f}s — handler is not async-enqueuing"
+        finally:
+            gate.set()
+            for _ in range(20):
+                await _asyncio.sleep(0)
+
+    def test_prune_drops_expired_jobs(self):
+        """_prune_old_debug_bundle_jobs evicts jobs older than the TTL."""
+        from routers import auto_creation as router_module
+
+        old = router_module._DebugBundleJob()
+        old.created_at = router_module.time.time() - (router_module._DEBUG_BUNDLE_JOB_TTL_SECONDS + 60)
+        fresh = router_module._DebugBundleJob()
+        router_module._DEBUG_BUNDLE_JOBS["old"] = old
+        router_module._DEBUG_BUNDLE_JOBS["fresh"] = fresh
+
+        router_module._prune_old_debug_bundle_jobs()
+
+        assert "old" not in router_module._DEBUG_BUNDLE_JOBS
+        assert "fresh" in router_module._DEBUG_BUNDLE_JOBS
+
+    @pytest.mark.asyncio
+    async def test_bundle_includes_normalization_rules_yaml(self, async_client, test_session):
+        """bd-cns7j follow-up: normalization_rules.yaml is in the tarball with
+        the user's group + rule definitions so 'normalization isn't stripping
+        X' reports can be diagnosed from the bundle alone."""
+        import asyncio as _asyncio
+        import io as _io
+        import tarfile as _tarfile
+        import yaml as _yaml
+        from models import NormalizationRule, NormalizationRuleGroup
+
+        # Seed a representative group + rule pair (mirrors a typical "strip
+        # country prefix" rule the user would author).
+        group = NormalizationRuleGroup(
+            name="Country Prefixes",
+            description="Strip DE:/AT:/MG: leading prefixes",
+            enabled=True,
+            priority=0,
+            is_builtin=False,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        test_session.add(group)
+        test_session.commit()
+        test_session.refresh(group)
+
+        rule = NormalizationRule(
+            group_id=group.id,
+            name="Strip DE/AT/MG prefix",
+            description=None,
+            enabled=True,
+            priority=0,
+            condition_type="regex",
+            condition_value=r"^(DE|AT|MG)\s*:\s*",
+            case_sensitive=False,
+            condition_logic="AND",
+            action_type="remove",
+            action_value=None,
+            stop_processing=False,
+            is_builtin=False,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        test_session.add(rule)
+        test_session.commit()
+
+        # Mock the Dispatcharr client + heavy bundle dependencies so we can
+        # exercise the assembly end-to-end without standing up a fake server.
+        mock_client = AsyncMock()
+        mock_client.get_channels = AsyncMock(return_value={"results": [], "next": None, "count": 0})
+        mock_client.get_channel_groups = AsyncMock(return_value=[])
+        mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+        mock_client.get_m3u_accounts = AsyncMock(return_value=[])
+
+        with patch("routers.auto_creation.get_client", return_value=mock_client), \
+             patch("log_utils.get_recent_logs", return_value=[]):
+            enqueue = await async_client.post("/api/auto-creation/debug-bundle")
+            assert enqueue.status_code == 202
+            job_id = enqueue.json()["job_id"]
+            for _ in range(80):
+                await _asyncio.sleep(0)
+
+            response = await async_client.get(f"/api/auto-creation/debug-bundle/{job_id}")
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("application/gzip")
+
+        with _tarfile.open(fileobj=_io.BytesIO(response.content), mode="r:gz") as tf:
+            names = tf.getnames()
+            assert "normalization_rules.yaml" in names, names
+
+            extracted = tf.extractfile("normalization_rules.yaml")
+            assert extracted is not None
+            payload = _yaml.safe_load(extracted.read().decode("utf-8"))
+
+        assert payload["version"] == 1
+        assert "exported_at" in payload
+        assert len(payload["groups"]) == 1
+        g = payload["groups"][0]
+        assert g["id"] == group.id, "group id is preserved so rules.yaml's normalization_group_ids resolves"
+        assert g["name"] == "Country Prefixes"
+        assert g["enabled"] is True
+        assert g["rule_count"] == 1
+        assert len(g["rules"]) == 1
+        r = g["rules"][0]
+        assert r["name"] == "Strip DE/AT/MG prefix"
+        assert r["condition_type"] == "regex"
+        assert r["condition_value"] == r"^(DE|AT|MG)\s*:\s*"
+        assert r["action_type"] == "remove"
+        # Numeric ids and timestamps deliberately stripped from rule body —
+        # they aren't useful for diagnosis and add noise.
+        assert "id" not in r
+        assert "created_at" not in r
+        assert "updated_at" not in r
+
+        # Manifest reflects the new counts so reviewers don't have to grep the YAML.
+        manifest_bytes = None
+        with _tarfile.open(fileobj=_io.BytesIO(response.content), mode="r:gz") as tf:
+            manifest_bytes = tf.extractfile("manifest.json").read()
+        manifest = json.loads(manifest_bytes)
+        assert manifest["normalization_group_count"] == 1
+        assert manifest["normalization_rule_count"] == 1

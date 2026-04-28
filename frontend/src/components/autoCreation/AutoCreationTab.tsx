@@ -466,11 +466,7 @@ export function AutoCreationTab() {
   const handleDebugBundle = useCallback(async () => {
     setDebugBundleLoading(true);
     try {
-      const response = await fetch(autoCreationApi.getDebugBundleUrl(), { credentials: 'include' });
-      if (!response.ok) throw new Error('Failed to generate debug bundle');
-      const blob = await response.blob();
-      const disposition = response.headers.get('Content-Disposition');
-      const filename = disposition?.match(/filename="(.+)"/)?.[1] || 'ecm-debug-bundle.tar.gz';
+      const { blob, filename } = await autoCreationApi.generateAndFetchDebugBundle();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
