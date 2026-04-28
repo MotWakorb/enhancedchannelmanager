@@ -75,6 +75,30 @@ class ECMClient:
             logger.error("[ECM-CLIENT] POST %s failed: %s %s — %s", path, e.response.status_code, e.response.reason_phrase, body)
             raise
 
+    async def post_multipart(
+        self,
+        path: str,
+        files: dict,
+        timeout: float | None = None,
+    ) -> dict | list:
+        """POST a multipart/form-data request to ECM API.
+
+        ``files`` mirrors httpx's expected shape:
+        ``{"file": (filename, content_bytes, content_type)}``.
+        """
+        client = _get_client()
+        try:
+            r = await client.post(path, files=files, timeout=timeout)
+            r.raise_for_status()
+            return r.json()
+        except httpx.TimeoutException:
+            logger.error("[ECM-CLIENT] POST(multipart) %s timed out after %ss", path, timeout or DEFAULT_TIMEOUT)
+            raise TimeoutError(f"POST {path} timed out after {timeout or DEFAULT_TIMEOUT}s")
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500] if e.response else ""
+            logger.error("[ECM-CLIENT] POST(multipart) %s failed: %s %s — %s", path, e.response.status_code, e.response.reason_phrase, body)
+            raise
+
     async def patch(self, path: str, json_data: dict | None = None, timeout: float | None = None) -> dict | list:
         """PATCH request to ECM API."""
         client = _get_client()
