@@ -78,6 +78,7 @@ Exception — governance cadence rules from ADRs (e.g., ADR-005's monthly-then-q
 | DBAS Import Threat Model | `docs/security/threat_model_dbas_import.md` |
 | CodeQL Configuration | `docs/security/codeql-config.md` |
 | Normalization (user + dev guide) | `docs/normalization.md` |
+| Auto-Creation Rule Analyzer | `docs/auto_creation_rule_analyzer.md` |
 | Versioning Scheme | `docs/versioning.md` |
 | API Reference | `docs/api.md` |
 | SLOs | `docs/sre/slos.md` |
