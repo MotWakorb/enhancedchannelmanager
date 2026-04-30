@@ -1,0 +1,214 @@
+version: 1
+exported_at: '2026-04-28T21:06:40.537637Z'
+rules:
+- name: Priority auto sort
+  description: null
+  enabled: true
+  priority: 0
+  m3u_account_id: null
+  m3u_account_name: null
+  target_group_id: null
+  target_group_name: null
+  conditions:
+  - type: always
+    connector: and
+  actions:
+  - type: probe_streams
+  run_on_refresh: false
+  stop_on_first_match: false
+  sort_field: ''
+  sort_order: asc
+  sort_regex: ''
+  stream_sort_field: quality
+  stream_sort_order: asc
+  normalize_names: false
+  skip_struck_streams: false
+  probe_on_sort: true
+  orphan_action: delete
+- name: Sports Networks - excl Fr and Es
+  description: null
+  enabled: true
+  priority: 1
+  m3u_account_id: null
+  m3u_account_name: null
+  target_group_id: null
+  target_group_name: null
+  conditions:
+  - type: normalized_name_in_group
+    value: 1464
+    connector: and
+  - type: stream_group_matches
+    value: UK|
+    connector: and
+  - type: stream_group_matches
+    value: US|
+    connector: or
+  - type: stream_group_contains
+    value: ^4K
+    connector: or
+  actions:
+  - type: merge_streams
+    target: auto
+  run_on_refresh: false
+  stop_on_first_match: false
+  sort_field: null
+  sort_order: asc
+  sort_regex: null
+  stream_sort_field: smart_sort
+  stream_sort_order: asc
+  normalize_names: false
+  skip_struck_streams: false
+  probe_on_sort: false
+  orphan_action: delete
+- name: Movie Networks - UK add
+  description: null
+  enabled: true
+  priority: 2
+  m3u_account_id: null
+  m3u_account_name: null
+  target_group_id: null
+  target_group_name: null
+  conditions:
+  - type: normalized_name_in_group
+    value: 1473
+    connector: and
+  - type: stream_group_matches
+    value: ^UK\|
+    connector: and
+  actions:
+  - type: merge_streams
+    target: auto
+  run_on_refresh: false
+  stop_on_first_match: false
+  sort_field: null
+  sort_order: asc
+  sort_regex: null
+  stream_sort_field: smart_sort
+  stream_sort_order: asc
+  normalize_names: false
+  skip_struck_streams: false
+  probe_on_sort: false
+  orphan_action: delete
+- name: Movie Networks - US Add
+  description: null
+  enabled: true
+  priority: 3
+  m3u_account_id: null
+  m3u_account_name: null
+  target_group_id: null
+  target_group_name: null
+  conditions:
+  - type: normalized_name_in_group
+    value: 1473
+    connector: and
+  - type: stream_group_matches
+    value: US|
+    connector: and
+  actions:
+  - type: merge_streams
+    target: auto
+  run_on_refresh: false
+  stop_on_first_match: false
+  sort_field: null
+  sort_order: asc
+  sort_regex: null
+  stream_sort_field: smart_sort
+  stream_sort_order: asc
+  normalize_names: false
+  skip_struck_streams: false
+  probe_on_sort: false
+  orphan_action: delete
+- name: Movie Networks - 4K Add
+  description: null
+  enabled: true
+  priority: 4
+  m3u_account_id: null
+  m3u_account_name: null
+  target_group_id: null
+  target_group_name: null
+  conditions:
+  - type: normalized_name_in_group
+    value: 1473
+    connector: and
+  - type: stream_group_matches
+    value: ^\^4k
+    connector: or
+  actions:
+  - type: merge_streams
+    target: auto
+  run_on_refresh: false
+  stop_on_first_match: false
+  sort_field: null
+  sort_order: asc
+  sort_regex: null
+  stream_sort_field: smart_sort
+  stream_sort_order: asc
+  normalize_names: false
+  skip_struck_streams: false
+  probe_on_sort: false
+  orphan_action: delete
+- name: NBA League Pass - excl Fr and Es (Copy)
+  description: null
+  enabled: true
+  priority: 5
+  m3u_account_id: null
+  m3u_account_name: null
+  target_group_id: null
+  target_group_name: null
+  conditions:
+  - type: normalized_name_in_group
+    value: 1465
+    connector: and
+  - type: stream_group_matches
+    value: UK|
+    connector: and
+  - type: stream_group_matches
+    value: US|
+    connector: or
+  - type: stream_group_contains
+    value: ^4k
+    connector: or
+  actions:
+  - type: merge_streams
+    target: auto
+  run_on_refresh: false
+  stop_on_first_match: false
+  sort_field: null
+  sort_order: asc
+  sort_regex: null
+  stream_sort_field: smart_sort
+  stream_sort_order: asc
+  normalize_names: false
+  skip_struck_streams: false
+  probe_on_sort: false
+  orphan_action: delete
+- name: Kids Channels - excl Fr and Es (Copy) (Copy)
+  description: null
+  enabled: true
+  priority: 6
+  m3u_account_id: null
+  m3u_account_name: null
+  target_group_id: null
+  target_group_name: null
+  conditions:
+  - type: normalized_name_in_group
+    value: 1470
+    connector: and
+  - type: stream_group_matches
+    value: US|
+    connector: and
+  actions:
+  - type: merge_streams
+    target: auto
+    find_channel_by: name_exact
+  run_on_refresh: false
+  stop_on_first_match: false
+  sort_field: null
+  sort_order: asc
+  sort_regex: null
+  stream_sort_field: smart_sort
+  stream_sort_order: asc
+  normalize_names: false
+  skip_struck_streams: false
+  probe_on_sort: false
+  orphan_action: delete

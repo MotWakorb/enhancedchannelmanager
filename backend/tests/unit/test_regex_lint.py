@@ -22,7 +22,9 @@ from regex_lint import (
     LintViolation,
     lint_actions_json,
     lint_conditions_json,
+    lint_conditions_json_advisory,
     lint_pattern,
+    lint_pattern_advisory,
     lint_pattern_fields,
     lint_substitution_pairs,
     violations_to_http_detail,
@@ -448,6 +450,7 @@ class TestHttpEnvelope:
                         "field": "condition_value",
                         "code": "REGEX_TOO_LONG",
                         "message": "Pattern is too long (612 chars, max 500).",
+                        "severity": "error",
                         "detail": {"pattern_len": 612, "max_pattern_len": 500},
                     }
                 ],
@@ -494,3 +497,238 @@ class TestBenignSmokeSweep:
         assert viols == [], (
             f"benign sweep FP: {pattern!r} — {[v.code for v in viols]}"
         )
+
+
+# =========================================================================
+# Advisory lint codes (bd-0gntx) — never block save, surfaced via the
+# /rules/analyze endpoint instead. All severity="warning".
+# =========================================================================
+
+
+class TestRegexTriviallyMatchesAll:
+    """``UK|`` etc. — valid regex, but matches every string.
+
+    Real-world bug: users typing the literal "UK|" group prefix into a
+    "Matches (Regex)" field. The trailing empty alternation makes the
+    pattern equivalent to ``UK|`` = "match UK or match empty string" —
+    every input matches at position 0.
+    """
+
+    def test_trailing_empty_alternation_flagged(self):
+        viols = lint_pattern_advisory("UK|")
+        codes = {v.code for v in viols}
+        assert "REGEX_TRIVIALLY_MATCHES_ALL" in codes
+
+    def test_trailing_empty_alternation_severity_is_warning(self):
+        viols = lint_pattern_advisory("UK|")
+        for v in viols:
+            assert v.severity == "warning"
+
+    def test_leading_empty_alternation_flagged(self):
+        viols = lint_pattern_advisory("|UK")
+        codes = {v.code for v in viols}
+        assert "REGEX_TRIVIALLY_MATCHES_ALL" in codes
+
+    def test_parenthesized_trailing_empty_flagged(self):
+        viols = lint_pattern_advisory("(UK|)")
+        codes = {v.code for v in viols}
+        assert "REGEX_TRIVIALLY_MATCHES_ALL" in codes
+
+    def test_parenthesized_leading_empty_flagged(self):
+        viols = lint_pattern_advisory("(|UK)")
+        codes = {v.code for v in viols}
+        assert "REGEX_TRIVIALLY_MATCHES_ALL" in codes
+
+    def test_normal_alternation_not_flagged(self):
+        viols = lint_pattern_advisory("UK|US")
+        assert not any(v.code == "REGEX_TRIVIALLY_MATCHES_ALL" for v in viols)
+
+    def test_anchored_escaped_pipe_not_flagged(self):
+        # The user's "Movie Networks - UK add" rule — correct shape.
+        viols = lint_pattern_advisory(r"^UK\|")
+        assert not any(v.code == "REGEX_TRIVIALLY_MATCHES_ALL" for v in viols)
+
+    def test_three_branches_with_one_empty_flagged(self):
+        viols = lint_pattern_advisory("UK|US|")
+        codes = {v.code for v in viols}
+        assert "REGEX_TRIVIALLY_MATCHES_ALL" in codes
+
+    def test_regex_with_quantifier_alternative_not_flagged(self):
+        # ``a*|b`` — first branch matches empty, but it's intentional in
+        # most cases. We only flag literal-empty branches.
+        viols = lint_pattern_advisory("a*|b")
+        assert not any(v.code == "REGEX_TRIVIALLY_MATCHES_ALL" for v in viols)
+
+
+class TestRegexRedundantEscapeCaret:
+    r"""``^\^4k`` — anchor followed by literal caret. Almost always a
+    typo from double-escaping. The user's "Movie Networks - 4K Add"
+    rule has this exact shape.
+    """
+
+    def test_anchor_then_escaped_caret_flagged(self):
+        viols = lint_pattern_advisory(r"^\^4k")
+        codes = {v.code for v in viols}
+        assert "REGEX_REDUNDANT_ESCAPE_CARET" in codes
+
+    def test_severity_is_warning(self):
+        viols = lint_pattern_advisory(r"^\^4k")
+        for v in viols:
+            assert v.severity == "warning"
+
+    def test_normal_anchored_pattern_not_flagged(self):
+        viols = lint_pattern_advisory("^4K")
+        assert not any(v.code == "REGEX_REDUNDANT_ESCAPE_CARET" for v in viols)
+
+    def test_caret_in_char_class_not_flagged(self):
+        # ``[^x]`` is negation, not a literal caret.
+        viols = lint_pattern_advisory("[^x]+")
+        assert not any(v.code == "REGEX_REDUNDANT_ESCAPE_CARET" for v in viols)
+
+    def test_literal_caret_not_anchored_not_flagged(self):
+        # ``foo\^bar`` — user might genuinely want a caret in the middle.
+        # Only flag the typo shape (anchor + escaped caret at start).
+        viols = lint_pattern_advisory(r"foo\^bar")
+        assert not any(v.code == "REGEX_REDUNDANT_ESCAPE_CARET" for v in viols)
+
+
+class TestOperatorValueLooksLikeRegex:
+    """``^4K`` saved under "Contains" — Contains is substring match, so
+    the leading ``^`` is matched literally. The user's
+    "Sports Networks" rule has this exact shape and matches no groups.
+
+    Surfaced via :func:`lint_conditions_json_advisory` because the
+    check needs the operator (condition type) context — a bare pattern
+    can't tell us which operator the user picked.
+    """
+
+    def test_caret_in_contains_value_flagged(self):
+        viols = lint_conditions_json_advisory([
+            {"type": "stream_group_contains", "value": "^4K"},
+        ])
+        codes = {v.code for v in viols}
+        assert "OPERATOR_VALUE_LOOKS_LIKE_REGEX" in codes
+
+    def test_severity_is_warning(self):
+        viols = lint_conditions_json_advisory([
+            {"type": "stream_group_contains", "value": "^4K"},
+        ])
+        for v in viols:
+            assert v.severity == "warning"
+
+    def test_dollar_at_end_flagged(self):
+        viols = lint_conditions_json_advisory([
+            {"type": "stream_name_contains", "value": "4K$"},
+        ])
+        assert any(v.code == "OPERATOR_VALUE_LOOKS_LIKE_REGEX" for v in viols)
+
+    def test_dot_star_flagged(self):
+        viols = lint_conditions_json_advisory([
+            {"type": "stream_group_contains", "value": "UK.*"},
+        ])
+        assert any(v.code == "OPERATOR_VALUE_LOOKS_LIKE_REGEX" for v in viols)
+
+    def test_word_boundary_escape_flagged(self):
+        viols = lint_conditions_json_advisory([
+            {"type": "stream_group_contains", "value": r"\bHD\b"},
+        ])
+        assert any(v.code == "OPERATOR_VALUE_LOOKS_LIKE_REGEX" for v in viols)
+
+    def test_plain_substring_not_flagged(self):
+        viols = lint_conditions_json_advisory([
+            {"type": "stream_group_contains", "value": "UK"},
+        ])
+        assert not any(v.code == "OPERATOR_VALUE_LOOKS_LIKE_REGEX" for v in viols)
+
+    def test_literal_pipe_in_substring_not_flagged(self):
+        # ``UK|`` under Contains is a valid literal substring search —
+        # M3U groups commonly look like ``UK| MOVIES``. Don't flag.
+        viols = lint_conditions_json_advisory([
+            {"type": "stream_group_contains", "value": "UK|"},
+        ])
+        assert not any(v.code == "OPERATOR_VALUE_LOOKS_LIKE_REGEX" for v in viols)
+
+    def test_matches_operator_not_flagged_for_regex_chars(self):
+        # The check is operator-specific. ``^4K`` under *_matches is a
+        # legitimate regex (anchored "starts with 4K") — don't flag.
+        viols = lint_conditions_json_advisory([
+            {"type": "stream_group_matches", "value": "^4K"},
+        ])
+        assert not any(v.code == "OPERATOR_VALUE_LOOKS_LIKE_REGEX" for v in viols)
+
+
+class TestAdvisoryNeverBlocksStrictPath:
+    """The new warning codes must NOT come back from the strict
+    :func:`lint_pattern` / :func:`lint_conditions_json` calls — those
+    are wired to 422 rejections in the routers. Save flows must keep
+    accepting these patterns; warnings surface only via the analyze
+    endpoint.
+    """
+
+    @pytest.mark.parametrize("pattern", ["UK|", r"^\^4k", "(UK|)"])
+    def test_strict_lint_pattern_accepts_all(self, pattern):
+        viols = lint_pattern(pattern)
+        assert viols == [], (
+            f"strict path leaked advisory finding for {pattern!r}: "
+            f"{[v.code for v in viols]}"
+        )
+
+    def test_strict_conditions_lint_accepts_contains_with_caret(self):
+        viols = lint_conditions_json([
+            {"type": "stream_group_contains", "value": "^4K"},
+        ])
+        assert viols == []
+
+
+class TestAdvisoryConditionsTraversal:
+    """:func:`lint_conditions_json_advisory` walks compound logical
+    operators identically to its strict sibling. Path tracking in
+    ``field`` survives the recursion.
+    """
+
+    def test_recurses_into_and_or(self):
+        viols = lint_conditions_json_advisory([
+            {
+                "type": "and",
+                "conditions": [
+                    {"type": "stream_group_matches", "value": "UK|"},
+                ],
+            }
+        ])
+        assert len(viols) >= 1
+        # Path includes the ``conditions[0].conditions[0].value`` prefix.
+        assert any(
+            v.field.startswith("conditions[0].conditions[0]") for v in viols
+        )
+
+    def test_empty_conditions_returns_empty(self):
+        assert lint_conditions_json_advisory([]) == []
+        assert lint_conditions_json_advisory(None) == []
+
+    def test_no_findings_for_clean_rule(self):
+        # The user's working "Movie Networks - UK add" — must produce
+        # zero advisories.
+        viols = lint_conditions_json_advisory([
+            {"type": "normalized_name_in_group", "value": 1473},
+            {"type": "stream_group_matches", "value": r"^UK\|"},
+        ])
+        assert viols == []
+
+
+class TestLintViolationSeverity:
+    def test_default_severity_is_error(self):
+        v = LintViolation(code="REGEX_TOO_LONG", message="x")
+        assert v.severity == "error"
+
+    def test_to_dict_includes_severity(self):
+        v = LintViolation(code="REGEX_TOO_LONG", message="x", severity="warning")
+        assert v.to_dict()["severity"] == "warning"
+
+    def test_envelope_passes_severity_through(self):
+        v = LintViolation(
+            code="REGEX_TRIVIALLY_MATCHES_ALL",
+            message="m",
+            severity="warning",
+        )
+        envelope = violations_to_http_detail([v])
+        assert envelope["error"]["details"][0]["severity"] == "warning"

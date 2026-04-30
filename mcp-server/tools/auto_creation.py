@@ -8,6 +8,68 @@ from ecm_client import get_ecm_client
 logger = logging.getLogger(__name__)
 
 
+def _format_analyze_result(result: dict, source: str) -> str:
+    """Render a /rules/analyze response as a markdown report.
+
+    Output shape::
+
+        # Auto-creation rule analysis (<source>)
+
+        Summary: 0 errors, 3 warnings, 0 info.
+
+        ## <Rule name> (id=<n>)
+        | Code | Severity | Field | Message |
+        |---|---|---|---|
+        | REGEX_TRIVIALLY_MATCHES_ALL | warning | conditions[1].value | … |
+
+        ## <Next rule>
+        No findings.
+
+    The "no findings" branch is friendly — empty rule lists and
+    finding-free responses both surface as a clear all-clean message.
+    """
+    summary = result.get("summary") or {}
+    rules = result.get("rules") or []
+    total = sum(summary.values()) if summary else 0
+
+    lines = [f"# Auto-creation rule analysis ({source})", ""]
+    if total == 0:
+        lines.append(
+            f"No findings across {len(rules)} rule(s) — looks clean."
+        )
+        return "\n".join(lines)
+
+    lines.append(
+        f"Summary: {summary.get('error', 0)} errors, "
+        f"{summary.get('warning', 0)} warnings, "
+        f"{summary.get('info', 0)} info."
+    )
+    lines.append("")
+    for r in rules:
+        rid = r.get("rule_id")
+        name = r.get("rule_name") or "<unnamed>"
+        findings = r.get("findings") or []
+        header = f"## {name}"
+        if rid is not None:
+            header += f" (id={rid})"
+        lines.append(header)
+        if not findings:
+            lines.append("No findings.")
+            lines.append("")
+            continue
+        lines.append("| Code | Severity | Field | Message |")
+        lines.append("|---|---|---|---|")
+        for f in findings:
+            msg = (f.get("message") or "").replace("\n", " ").replace("|", "\\|")
+            field = (f.get("field") or "").replace("|", "\\|")
+            lines.append(
+                f"| {f.get('code', '?')} | {f.get('severity', '?')} | "
+                f"{field} | {msg} |"
+            )
+        lines.append("")
+    return "\n".join(lines)
+
+
 def register(mcp: FastMCP):
     @mcp.tool()
     async def list_auto_creation_rules() -> str:
@@ -457,6 +519,47 @@ def register(mcp: FastMCP):
         except Exception as e:
             logger.error("[MCP] rollback_auto_creation failed: %s", e)
             return f"Error rolling back execution {execution_id}: {e}"
+
+    @mcp.tool()
+    async def analyze_auto_creation_rules(bundle_path: str | None = None) -> str:
+        """Lint and structurally analyze auto-creation rules (bd-0gntx).
+
+        Returns a markdown report of advisory findings: regex shapes that
+        match everything by accident, operator/value mismatches, OR-arms
+        that drop a guard, and merge_streams targeting empty channel
+        groups. Findings are warnings — they never block rule saves.
+
+        Args:
+            bundle_path: Optional. If set, analyze rules.yaml from a
+                debug-bundle tar.gz at that filesystem path (the file
+                must exist on the MCP host). If unset, analyze the live
+                rules in the connected ECM instance.
+        """
+        import os
+
+        try:
+            client = get_ecm_client()
+            if bundle_path:
+                if not os.path.isfile(bundle_path):
+                    return f"Bundle file not found: {bundle_path}"
+                with open(bundle_path, "rb") as fh:
+                    content = fh.read()
+                filename = os.path.basename(bundle_path) or "debug.tar.gz"
+                result = await client.post_multipart(
+                    "/api/auto-creation/rules/analyze/from-bundle",
+                    files={"file": (filename, content, "application/gzip")},
+                )
+                source = f"bundle {filename}"
+            else:
+                result = await client.post(
+                    "/api/auto-creation/rules/analyze"
+                )
+                source = "live ECM"
+
+            return _format_analyze_result(result, source)
+        except Exception as e:
+            logger.error("[MCP] analyze_auto_creation_rules failed: %s", e)
+            return f"Error analyzing auto-creation rules: {e}"
 
     @mcp.tool()
     async def get_auto_creation_debug_bundle() -> str:
