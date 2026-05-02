@@ -409,10 +409,13 @@ function App() {
       });
     } else if (!isEditMode) {
       // Edit mode ended - clean up any temp group IDs (negative numbers)
-      setChannelFilters((prev) => ({
-        ...prev,
-        groupFilter: prev.groupFilter.filter(id => id >= 0)
-      }));
+      setChannelFilters((prev) => {
+        const nextGroupFilter = prev.groupFilter.filter(id => id >= 0);
+        if (nextGroupFilter.length === prev.groupFilter.length) {
+          return prev;
+        }
+        return { ...prev, groupFilter: nextGroupFilter };
+      });
     }
   }, [stagedGroups, isEditMode]);
 
