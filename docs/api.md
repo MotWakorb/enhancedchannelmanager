@@ -429,7 +429,7 @@ The frontend uses this to drive the "add alert method" form so new method types 
 ```
 
 - `rule_ids` (required) — `1..500` distinct rule IDs. Empty list, missing list, or duplicates return `400`.
-- Scalar fields accepted (any subset): `name`, `description`, `enabled`, `priority`, `m3u_account_id`, `target_group_id`, `run_on_refresh`, `stop_on_first_match`, `sort_field`, `sort_order`, `probe_on_sort`, `sort_regex`, `stream_sort_field`, `stream_sort_order`, `normalization_group_ids`, `skip_struck_streams`, `orphan_action`, `match_scope_target_group`.
+- Scalar fields accepted (any subset): `name`, `description`, `enabled`, `priority`, `m3u_account_id`, `target_group_id`, `run_on_refresh`, `stop_on_first_match`, `sort_field`, `sort_order`, `probe_on_sort`, `sort_regex`, `stream_sort_field`, `stream_sort_order`, `quality_tie_break_order`, `quality_m3u_tie_break_enabled`, `normalization_group_ids`, `skip_struck_streams`, `orphan_action`, `match_scope_target_group`.
 - `merge_streams_remove_non_matching` (bulk-only convenience field) — when set, every `merge_streams` action on every targeted rule is rewritten with this `remove_non_matching` flag. Rules with no `merge_streams` action are unaffected.
 - **Rejected fields (`422 Unprocessable Entity`):** `conditions`, `actions`. Per-rule logic edits must go through `PUT /api/auto-creation/rules/{id}` so silent payload drops can't lose intent at scale (bd-gjoe5). The error message names the offending field.
 - At least one mutating field is required alongside `rule_ids`; otherwise `400 "No fields to update"`.

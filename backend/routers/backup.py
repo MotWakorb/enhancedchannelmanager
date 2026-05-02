@@ -1152,6 +1152,8 @@ def _restore_auto_creation_rules(items: list) -> dict:
                 sort_regex=item.get("sort_regex"),
                 stream_sort_field=item.get("stream_sort_field"),
                 stream_sort_order=item.get("stream_sort_order", "asc"),
+                quality_tie_break_order=item.get("quality_tie_break_order", "desc"),
+                quality_m3u_tie_break_enabled=item.get("quality_m3u_tie_break_enabled", True),
                 normalization_group_ids=_resolve_backup_normalization_group_ids(item, session),
                 skip_struck_streams=item.get("skip_struck_streams", False),
                 orphan_action=item.get("orphan_action", "delete"),
