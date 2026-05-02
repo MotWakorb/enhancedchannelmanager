@@ -221,6 +221,11 @@ interface MockStream {
   logo_url: string | null
 }
 
+interface MockProvider {
+  id: number
+  name: string
+}
+
 interface MockScheduledTask {
   id: number
   task_id: string
@@ -490,6 +495,15 @@ export const handlers = [
       previous: page > 1 ? `${API_BASE}/channels?page=${page - 1}` : null,
       results: paginatedResults,
     })
+  }),
+
+  http.get(`${API_BASE}/providers`, () => {
+    // Auto-creation condition UI fetches provider list for dropdowns.
+    const providers: MockProvider[] = [
+      { id: 1, name: 'Test Provider 1' },
+      { id: 2, name: 'Test Provider 2' },
+    ]
+    return HttpResponse.json(providers)
   }),
 
   http.get(`${API_BASE}/channels/:id`, ({ params }) => {
