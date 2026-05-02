@@ -470,9 +470,11 @@ describe('withImportTelemetry (ADR-006 §6.5 dynamic-import chunk-load)', () => 
     // ErrorBoundary / Suspense still sees the failure.
     expect(rethrown).toBe(err);
 
-    // Allow the fire-and-forget report to settle.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(fetchSpy).toHaveBeenCalled();
+    // The fire-and-forget report chains await hashUserAgent (SubtleCrypto)
+    // → buildPayload → sendPayload → fetch. Under v8 coverage instrumentation
+    // on slow CI runners, those hops can spill past a single setTimeout(0)
+    // macrotask, so poll until fetch lands instead of relying on tick count.
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled());
     const [, init] = fetchSpy.mock.calls[0] as [unknown, RequestInit];
     expect(init.method).toBe('POST');
     const body = JSON.parse(init.body as string);
