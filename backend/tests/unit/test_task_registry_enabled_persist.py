@@ -1,7 +1,5 @@
 """TaskRegistry must persist `enabled` when saving an existing ScheduledTask row."""
 
-import pytest
-
 from task_registry import TaskRegistry
 from models import ScheduledTask
 from tasks.yaml_backup import YamlBackupTask
