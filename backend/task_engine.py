@@ -26,6 +26,76 @@ DEFAULT_CHECK_INTERVAL = 60  # Check for due tasks every 60 seconds
 MAX_CONCURRENT_TASKS = 3  # Maximum tasks running simultaneously
 
 
+def _task_execution_metadata_extra(task_id: str, result: TaskResult) -> dict:
+    """Counter-style fields for task alerts (email/Discord), aligned with each task's UI semantics."""
+    extra: dict = {}
+    if result.duration_seconds is not None:
+        extra["duration_seconds"] = result.duration_seconds
+
+    details = result.details if isinstance(result.details, dict) else {}
+
+    if task_id == "auto_creation" and details:
+        extra.update({
+            "streams_evaluated": details.get("streams_evaluated", result.total_items),
+            "streams_matched": details.get("streams_matched", 0),
+            "channels_created": details.get("channels_created", 0),
+            "channels_updated": details.get("channels_updated", 0),
+            "groups_created": details.get("groups_created", 0),
+            "conflict_streams": details.get("conflicts", 0),
+        })
+        if details.get("streams_merged", 0):
+            extra["streams_merged"] = details["streams_merged"]
+        if details.get("execution_id") is not None:
+            extra["execution_id"] = details["execution_id"]
+        if details.get("mode"):
+            extra["pipeline_mode"] = details["mode"]
+        return extra
+
+    if task_id == "stream_probe":
+        extra.update({
+            "streams_scheduled": result.total_items,
+            "streams_ok": result.success_count,
+            "streams_failed": result.failed_count,
+            "streams_skipped": result.skipped_count,
+            "black_screen_detections": details.get("black_screen_count", 0),
+            "low_fps_detections": details.get("low_fps_count", 0),
+        })
+        return extra
+
+    extra.update({
+        "total_items": result.total_items,
+        "success_count": result.success_count,
+        "failed_count": result.failed_count,
+        "skipped_count": result.skipped_count,
+    })
+    return extra
+
+
+def _success_task_completion_message(task_id: str, result: TaskResult) -> str:
+    """Human-readable full-success line for scheduled tasks (matches execution modal where applicable)."""
+    duration = result.duration_seconds
+    dur = f" in {duration:.1f}s" if duration is not None else ""
+    details = result.details if isinstance(result.details, dict) else {}
+
+    if task_id == "auto_creation" and details:
+        return f"{result.message}{dur}"
+
+    if task_id == "stream_probe":
+        total = result.total_items
+        ok = result.success_count
+        failed = result.failed_count
+        skipped = result.skipped_count
+        black = details.get("black_screen_count", 0)
+        low = details.get("low_fps_count", 0)
+        msg = f"Probed {total} stream(s){dur}: {ok} ok, {failed} failed, {skipped} skipped"
+        if black or low:
+            msg += f" ({black} black screen, {low} low FPS)"
+        return msg
+
+    skip_note = f", {result.skipped_count} skipped" if result.skipped_count else ""
+    return f"Successfully completed. {result.success_count} items processed{skip_note}{dur}"
+
+
 class TaskEngine:
     """
     Background execution engine for scheduled tasks.
@@ -240,13 +310,7 @@ class TaskEngine:
                 "task_name": task_name,
             }
             if result:
-                metadata.update({
-                    "duration_seconds": result.duration_seconds,
-                    "total_items": result.total_items,
-                    "success_count": result.success_count,
-                    "failed_count": result.failed_count,
-                    "skipped_count": result.skipped_count,
-                })
+                metadata.update(_task_execution_metadata_extra(task_id, result))
                 # Include failed item names if available in result details
                 if result.details and result.failed_count > 0:
                     failed_streams = result.details.get("failed_streams", [])
@@ -643,10 +707,19 @@ class TaskEngine:
                     task_id=task_id,
                     notification_type="warning",
                     title=f"Task Cancelled: {instance.task_name}",
-                    message=f"Task was cancelled. {result.success_count} items completed before cancellation"
+                    message=(
+                        f"Task was cancelled. {result.success_count} streams finished before cancellation"
+                        + (f", {result.failed_count} failed" if result.failed_count > 0 else "")
+                        + (f", {result.skipped_count} skipped" if result.skipped_count > 0 else "")
+                        + f" (of {result.total_items} scheduled)"
+                        if task_id == "stream_probe"
+                        else (
+                            f"Task was cancelled. {result.success_count} items completed before cancellation"
                             + (f", {result.failed_count} failed" if result.failed_count > 0 else "")
                             + (f", {result.skipped_count} skipped" if result.skipped_count > 0 else "")
-                            + f" (out of {result.total_items} total)",
+                            + f" (out of {result.total_items} total)"
+                        )
+                    ),
                     result=result,
                     alert_category=alert_category,
                 )
@@ -672,13 +745,22 @@ class TaskEngine:
                 # Send notification - warning if partial failure, success if all ok
                 if result.failed_count > 0:
                     # Partial success - some items failed
+                    if task_id == "stream_probe":
+                        warn_msg = (
+                            f"Completed with {result.failed_count} failures out of {result.total_items} streams. "
+                            f"({result.success_count} ok, {result.skipped_count} skipped)"
+                        )
+                    else:
+                        warn_msg = (
+                            f"Completed with {result.failed_count} failures out of {result.total_items} items. "
+                            f"({result.success_count} succeeded, {result.skipped_count} skipped)"
+                        )
                     await self._notify_task_result(
                         task_name=instance.task_name,
                         task_id=task_id,
                         notification_type="warning",
                         title=f"Task Completed with Warnings: {instance.task_name}",
-                        message=f"Completed with {result.failed_count} failures out of {result.total_items} items. "
-                                f"({result.success_count} succeeded, {result.skipped_count} skipped)",
+                        message=warn_msg,
                         result=result,
                         alert_category=alert_category,
                     )
@@ -689,9 +771,7 @@ class TaskEngine:
                         task_id=task_id,
                         notification_type="success",
                         title=f"Task Completed: {instance.task_name}",
-                        message=f"Successfully completed. {result.success_count} items processed"
-                                + (f", {result.skipped_count} skipped" if result.skipped_count else "")
-                                + f" in {result.duration_seconds:.1f}s",
+                        message=_success_task_completion_message(task_id, result),
                         result=result,
                         alert_category=alert_category,
                     )
