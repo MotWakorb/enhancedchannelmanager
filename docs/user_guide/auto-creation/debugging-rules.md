@@ -44,11 +44,12 @@ confirm the surviving rules produce the right channels.
 
 ---
 
-## The six finding codes
+## The seven finding codes
 
-Each finding has a severity (`warning`), a code, the field it points at, and a
-suggestion. All six current codes are `warning` severity — they are problems
-worth fixing, not fatal errors.
+Each finding has a severity, a code, the field it points at, and a suggestion.
+Six of the seven codes are `warning` severity — problems worth fixing, not fatal
+errors. The seventh, `MERGE_SCOPE_NOT_TARGET_GROUP`, is `info` — an advisory
+heads-up about a setting whose default changed, not a misconfiguration.
 
 ### `REGEX_TRIVIALLY_MATCHES_ALL`
 
@@ -225,6 +226,48 @@ produces zero channels.
 **Note:** This finding is only available when you run the analyzer via the
 **from-bundle** path and the bundle includes `channel_groups_diagnostic.json`.
 The live-mode endpoint does not fetch channel-group counts.
+
+---
+
+### `MERGE_SCOPE_NOT_TARGET_GROUP`
+
+**Severity:** `info` (an advisory heads-up, not a misconfiguration).
+
+**What it looks like in the rule editor:**
+A rule has a **Create Channel** action with **If channel exists → Merge**
+(or **Merge only**), and the rule's **Merge lookup scope** option —
+*"Scope merge lookups to this rule's target group"* — is **off**.
+
+**Why the analyzer flags it:**
+When **Merge lookup scope** is off, the "does a channel with this name already
+exist?" check searches **every channel group**, not just this rule's target
+group. If a channel with the same name already exists in *any* other group, the
+incoming stream merges into that channel — and **no channel is created in this
+rule's target group**. The rule's run report shows channels updated, but
+0 created, even though you pointed it at a fresh group.
+
+New rules now ship with this option **on** by default, which is almost always
+what you want for a Create-Channel-and-merge rule. This finding surfaces older
+rules that still have it **off** so you can decide whether that is intentional.
+
+**Worked example:**
+You have a "UK Sports" rule targeting group **UK | Sports**, with a Create
+Channel action set to *Merge* on existing. A "US Sports" rule already created
+a channel called **ESPN** in group **US | Sports**. Your UK rule runs, finds
+the existing **ESPN** in the US group (because the lookup is not scoped), and
+attaches the UK stream to it. Group **UK | Sports** never gets an **ESPN**
+channel. Turning on **Scope merge lookups to this rule's target group** makes
+the UK rule create its own **ESPN** in **UK | Sports**.
+
+**How to fix it:**
+
+- If you want this rule to create channels in its target group, turn on
+  **Scope merge lookups to this rule's target group** in the rule editor (or in
+  bulk edit). New same-name channels will then be created in the target group
+  instead of merging into a same-name channel elsewhere.
+- Leave it off if you *deliberately* want a same-name channel in another group
+  to absorb these streams — the original behavior. This is a deliberate-choice
+  finding, not an error.
 
 ---
 

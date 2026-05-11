@@ -251,6 +251,78 @@ def _check_merge_streams_no_target_channels(
     )]
 
 
+def _check_merge_scope_not_target_group(
+    rule_id: int | None,
+    rule_name: str,
+    actions: list,
+    match_scope_target_group: bool,
+) -> list[RuleFinding]:
+    """Advise when a merging create_channel action searches all groups.
+
+    Shape: a ``create_channel`` action with ``if_exists`` in
+    (``merge``, ``merge_only``) on a rule whose
+    ``match_scope_target_group`` is off. The existing-channel name
+    lookup then searches *every* channel group, so a same-name channel
+    in another group absorbs the stream and no channel is created in
+    this rule's target group (channels_updated++, target group
+    created=0). Advisory (``info``) — not a misconfiguration, but a
+    common footgun (GH #226, bd-p6ko9).
+
+    ``if_exists`` is a flat key on the action dict (``Action.to_dict``
+    spreads the action's params onto the top level), so we read
+    ``action.get("if_exists")`` directly.
+    """
+    if match_scope_target_group:
+        return []
+
+    merging_create = next(
+        (
+            a for a in (actions or [])
+            if (
+                (a.get("type") if isinstance(a, dict) else getattr(a, "type", None))
+                == "create_channel"
+            )
+            and (
+                (
+                    a.get("if_exists") if isinstance(a, dict)
+                    else getattr(a, "if_exists", None)
+                )
+                in ("merge", "merge_only")
+            )
+        ),
+        None,
+    )
+    if merging_create is None:
+        return []
+
+    if_exists_val = (
+        merging_create.get("if_exists") if isinstance(merging_create, dict)
+        else getattr(merging_create, "if_exists", None)
+    )
+    return [RuleFinding(
+        rule_id=rule_id,
+        rule_name=rule_name,
+        code="MERGE_SCOPE_NOT_TARGET_GROUP",
+        severity="info",
+        field="actions[create_channel].if_exists",
+        message=(
+            "This rule's Create Channel action merges into existing "
+            "channels by name (``if_exists="
+            f"{if_exists_val}``), but its merge lookup searches all "
+            "channel groups (``match_scope_target_group`` is off) — if "
+            "a channel with the same name already exists in another "
+            "group, the stream merges there and no channel is created "
+            "in this rule's target group."
+        ),
+        suggestion=(
+            "Enable 'scope merge lookups to this rule's target group' "
+            "on this rule if you want channels created in the target "
+            "group."
+        ),
+        detail={"if_exists": if_exists_val},
+    )]
+
+
 def _check_rule_has_no_hope_of_matching(
     rule_id: int | None, rule_name: str, conditions: list,
 ) -> list[RuleFinding]:
@@ -340,6 +412,9 @@ def analyze_rule(
     conditions = rule.get("conditions") if isinstance(rule, dict) else None
     actions = rule.get("actions") if isinstance(rule, dict) else None
     target_group_id = rule.get("target_group_id") if isinstance(rule, dict) else None
+    match_scope_target_group = bool(
+        rule.get("match_scope_target_group", False) if isinstance(rule, dict) else False
+    )
 
     out: list[RuleFinding] = []
     out.extend(_bubble_up_regex_advisories(rule_id, rule_name, conditions or []))
@@ -347,6 +422,9 @@ def analyze_rule(
     out.extend(_check_rule_has_no_hope_of_matching(rule_id, rule_name, conditions or []))
     out.extend(_check_merge_streams_no_target_channels(
         rule_id, rule_name, actions or [], target_group_id, channel_groups_diagnostic,
+    ))
+    out.extend(_check_merge_scope_not_target_group(
+        rule_id, rule_name, actions or [], match_scope_target_group,
     ))
     return out
 

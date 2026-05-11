@@ -273,6 +273,111 @@ class TestMergeStreamsNoTargetChannels:
 
 
 # =========================================================================
+# MERGE_SCOPE_NOT_TARGET_GROUP — create_channel with if_exists=merge /
+# merge_only on a rule whose match_scope_target_group is off. Advisory
+# (severity=info), not a misconfiguration (GH #226, bd-p6ko9).
+# =========================================================================
+
+
+def _codes(rule, **kwargs):
+    return {f.code for f in analyze_rule(rule, **kwargs)}
+
+
+class TestMergeScopeNotTargetGroup:
+    def test_merge_with_scope_off_flagged(self):
+        rule = {
+            "id": 1, "name": "x",
+            "match_scope_target_group": False,
+            "conditions": [],
+            "actions": [{"type": "create_channel", "name_template": "{stream_name}", "if_exists": "merge"}],
+        }
+        assert "MERGE_SCOPE_NOT_TARGET_GROUP" in _codes(rule)
+
+    def test_merge_only_with_scope_off_flagged(self):
+        rule = {
+            "id": 1, "name": "x",
+            "match_scope_target_group": False,
+            "conditions": [],
+            "actions": [{"type": "create_channel", "if_exists": "merge_only"}],
+        }
+        assert "MERGE_SCOPE_NOT_TARGET_GROUP" in _codes(rule)
+
+    def test_severity_is_info(self):
+        rule = {
+            "id": 1, "name": "x",
+            "match_scope_target_group": False,
+            "conditions": [],
+            "actions": [{"type": "create_channel", "if_exists": "merge"}],
+        }
+        findings = [f for f in analyze_rule(rule) if f.code == "MERGE_SCOPE_NOT_TARGET_GROUP"]
+        assert findings
+        for f in findings:
+            assert f.severity == "info"
+        # The finding records which if_exists value triggered it.
+        assert findings[0].detail.get("if_exists") == "merge"
+
+    def test_scope_on_not_flagged(self):
+        rule = {
+            "id": 1, "name": "x",
+            "match_scope_target_group": True,
+            "conditions": [],
+            "actions": [{"type": "create_channel", "if_exists": "merge"}],
+        }
+        assert "MERGE_SCOPE_NOT_TARGET_GROUP" not in _codes(rule)
+
+    def test_no_create_channel_action_not_flagged(self):
+        # merge_streams is a different action; this check is create_channel-only.
+        rule = {
+            "id": 1, "name": "x",
+            "match_scope_target_group": False,
+            "conditions": [],
+            "actions": [{"type": "merge_streams", "target": "auto"}],
+        }
+        assert "MERGE_SCOPE_NOT_TARGET_GROUP" not in _codes(rule)
+
+    def test_create_channel_if_exists_skip_not_flagged(self):
+        rule = {
+            "id": 1, "name": "x",
+            "match_scope_target_group": False,
+            "conditions": [],
+            "actions": [{"type": "create_channel", "if_exists": "skip"}],
+        }
+        assert "MERGE_SCOPE_NOT_TARGET_GROUP" not in _codes(rule)
+
+    def test_create_channel_if_exists_update_not_flagged(self):
+        rule = {
+            "id": 1, "name": "x",
+            "match_scope_target_group": False,
+            "conditions": [],
+            "actions": [{"type": "create_channel", "if_exists": "update"}],
+        }
+        assert "MERGE_SCOPE_NOT_TARGET_GROUP" not in _codes(rule)
+
+    def test_create_channel_if_exists_default_not_flagged(self):
+        # No if_exists key at all → defaults to "skip" → no finding.
+        rule = {
+            "id": 1, "name": "x",
+            "match_scope_target_group": False,
+            "conditions": [],
+            "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+        }
+        assert "MERGE_SCOPE_NOT_TARGET_GROUP" not in _codes(rule)
+
+    def test_empty_actions_not_flagged(self):
+        rule = {
+            "id": 1, "name": "x",
+            "match_scope_target_group": False,
+            "conditions": [],
+            "actions": [],
+        }
+        assert "MERGE_SCOPE_NOT_TARGET_GROUP" not in _codes(rule)
+
+    def test_missing_actions_key_not_flagged(self):
+        rule = {"id": 1, "name": "x", "match_scope_target_group": False, "conditions": []}
+        assert "MERGE_SCOPE_NOT_TARGET_GROUP" not in _codes(rule)
+
+
+# =========================================================================
 # RULE_HAS_NO_HOPE_OF_MATCHING — every OR-group contains ``never``.
 # =========================================================================
 
