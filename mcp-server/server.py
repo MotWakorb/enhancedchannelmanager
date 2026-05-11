@@ -1,20 +1,23 @@
 """ECM MCP Server — exposes Enhanced Channel Manager operations as MCP tools.
 
-Runs as a standalone SSE server that Claude Desktop/Code can connect to.
+Runs as a standalone Streamable HTTP server that Claude Desktop/Code can connect
+to (single ``/mcp`` endpoint, session carried via the ``Mcp-Session-Id`` header).
 Communicates with the ECM backend via HTTP API using an API key for auth.
 """
+import contextlib
 import logging
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
-from starlette.routing import Route, Mount
+from starlette.routing import Mount, Route
 
-from config import get_mcp_api_key, MCP_PORT
-from tools import register_all_tools
+from config import MCP_PORT, get_mcp_api_key
 from resources import register_all_resources
+from tools import register_all_tools
 
 # Configure logging
 logging.basicConfig(
@@ -23,7 +26,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Create MCP server using the high-level FastMCP API
+# Create MCP server using the high-level FastMCP API.
+#
+# DNS-rebinding protection (Host/Origin allowlisting) is disabled: ECM's MCP
+# sidecar is intended to be reached from another host by IP or hostname, and
+# FastMCP's default allowlist is localhost-only — which would 421 every remote
+# client. Access is gated by the static API key (APIKeyAuthMiddleware) instead.
 mcp = FastMCP(
     "ecm-mcp",
     instructions=(
@@ -32,6 +40,7 @@ mcp = FastMCP(
         "manage M3U accounts, EPG sources, run auto-creation pipelines, probe "
         "stream health, view statistics, and more."
     ),
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
 
 # Register tools and resources
@@ -40,18 +49,20 @@ register_all_resources(mcp)
 
 
 class APIKeyAuthMiddleware(BaseHTTPMiddleware):
-    """Validate API key on SSE and message endpoints.
+    """Validate the ECM MCP API key on every request except ``/health``.
 
-    Accepts the key via query param (?api_key=) or Authorization: Bearer header.
-    The /health endpoint is exempt so Docker healthchecks work without a key.
+    Accepts the key via query param (``?api_key=``) or ``Authorization: Bearer``
+    header. The ``/health`` endpoint is exempt so Docker healthchecks work
+    without a key. With the Streamable HTTP transport every request (POST and
+    the SSE GET stream) hits the single ``/mcp`` endpoint, so auth is checked on
+    each one — the key is static and re-read from disk per call.
     """
 
     async def dispatch(self, request, call_next):
         path = request.url.path
 
         # Health endpoint is always public
-        # Messages endpoint is session-bound (session_id from SSE handshake) — auth was checked on /sse
-        if path == "/health" or path.startswith("/messages/"):
+        if path == "/health":
             return await call_next(request)
 
         expected_key = get_mcp_api_key()
@@ -83,23 +94,35 @@ async def handle_health(request):
     response = {
         "status": "ok" if configured else "not_configured",
         "server": "ecm-mcp",
+        "transport": "streamable-http",
         "api_key_configured": configured,
-        "tools_available": 80,
-        "resources_available": 3,
+        "tools_available": len(mcp._tool_manager.list_tools()),
+        "resources_available": len(mcp._resource_manager.list_resources()),
     }
     if not configured:
         response["setup_hint"] = "Generate an MCP API key in ECM Settings > MCP Integration"
     return JSONResponse(response)
 
 
-# Build the Starlette app with API key auth middleware
-sse_app = mcp.sse_app()
+# The StreamableHTTP transport needs mcp.session_manager.run() active for the
+# lifetime of the app. streamable_http_app() wires that up via its own lifespan,
+# but Starlette does NOT propagate a Mounted sub-app's lifespan — so the outer
+# app must run the session manager itself.
+streamable_app = mcp.streamable_http_app()
+
+
+@contextlib.asynccontextmanager
+async def lifespan(app):
+    async with mcp.session_manager.run():
+        yield
+
 
 app = Starlette(
     routes=[
         Route("/health", endpoint=handle_health),
-        Mount("/", app=sse_app),
+        Mount("/", app=streamable_app),
     ],
+    lifespan=lifespan,
     middleware=[
         Middleware(APIKeyAuthMiddleware),
     ],

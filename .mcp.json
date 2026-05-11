@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "ecm": {
-      "type": "sse",
-      "url": "http://localhost:6101/sse?api_key=kuU7wQT0IoyXqjJJCdn7QD8XHEDdvxPXfAvCN4oBpwo"
+      "type": "http",
+      "url": "http://localhost:6101/mcp?api_key=kuU7wQT0IoyXqjJJCdn7QD8XHEDdvxPXfAvCN4oBpwo"
     }
   }
 }
