@@ -15,7 +15,7 @@ The legacy ``database._run_migrations`` path may have already added these
 columns on long-running installs; Alembic is the authoritative timeline for
 fresh upgrades and drift tests (``test_baseline_matches_metadata_no_drift``).
 
-Bead: enhancedchannelmanager-3j9su
+Bead: enhancedchannelmanager-3j9su (columns). Reliability follow-up: enhancedchannelmanager-m2k7p.
 """
 from typing import Sequence, Union
 
