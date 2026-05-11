@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "ecm": {
-      "type": "sse",
-      "url": "http://localhost:6101/sse?api_key=***REMOVED-SECRET***"
+      "type": "http",
+      "url": "http://localhost:6101/mcp?api_key=***REMOVED-SECRET***"
     }
   }
 }
