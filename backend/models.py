@@ -1474,8 +1474,12 @@ class AutoCreationRule(Base):
     # create_channel are restricted to the rule's target group, so two rules
     # targeting different groups can create separate channels with the same
     # name instead of merging into an existing channel in another group
-    # (GH-92, bd-r9mtd). Default False preserves the existing global lookup.
-    match_scope_target_group = Column(Boolean, default=False, nullable=False)
+    # (GH-92, bd-r9mtd). Code default is True for new rules (bd-p6ko9, GH #226):
+    # the all-groups lookup is a footgun for create_channel if_exists=merge.
+    # Existing rule rows keep their explicit stored value (Alembic 0002
+    # backfilled False into every pre-existing row) — flipping the code
+    # default does NOT migrate them; no Alembic revision is needed.
+    match_scope_target_group = Column(Boolean, default=True, nullable=False)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
