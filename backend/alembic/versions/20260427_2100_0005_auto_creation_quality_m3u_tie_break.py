@@ -33,10 +33,14 @@ __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 
 def upgrade() -> None:
     """Add quality tie-break columns to auto_creation_rules."""
+    # SQLite batch mode: adding both columns in one batch_alter_table can raise
+    # sqlalchemy.exc.CircularDependencyError in _adjust_self_columns_for_partial_reordering
+    # (quality_tie_break_order <-> quality_m3u_tie_break_enabled). One add per batch.
     with op.batch_alter_table("auto_creation_rules", schema=None) as batch_op:
         batch_op.add_column(
             sa.Column("quality_tie_break_order", sa.String(length=4), nullable=True)
         )
+    with op.batch_alter_table("auto_creation_rules", schema=None) as batch_op:
         batch_op.add_column(
             sa.Column(
                 "quality_m3u_tie_break_enabled",
@@ -58,4 +62,5 @@ def downgrade() -> None:
     """Remove quality tie-break columns."""
     with op.batch_alter_table("auto_creation_rules", schema=None) as batch_op:
         batch_op.drop_column("quality_m3u_tie_break_enabled")
+    with op.batch_alter_table("auto_creation_rules", schema=None) as batch_op:
         batch_op.drop_column("quality_tie_break_order")
