@@ -52,13 +52,16 @@ def _task_execution_metadata_extra(task_id: str, result: TaskResult) -> dict:
         return extra
 
     if task_id == "stream_probe":
+        failed = result.failed_count
         extra.update({
             "streams_scheduled": result.total_items,
             "streams_ok": result.success_count,
-            "streams_failed": result.failed_count,
+            "streams_failed": failed,
             "streams_skipped": result.skipped_count,
             "black_screen_detections": details.get("black_screen_count", 0),
             "low_fps_detections": details.get("low_fps_count", 0),
+            # Legacy key — alert_methods probe_failures min_failures threshold reads failed_count
+            "failed_count": failed,
         })
         return extra
 
@@ -77,8 +80,11 @@ def _success_task_completion_message(task_id: str, result: TaskResult) -> str:
     dur = f" in {duration:.1f}s" if duration is not None else ""
     details = result.details if isinstance(result.details, dict) else {}
 
-    if task_id == "auto_creation" and details:
-        return f"{result.message}{dur}"
+    if task_id == "auto_creation":
+        if details:
+            return f"{result.message}{dur}"
+        if result.message:
+            return f"{result.message}{dur}"
 
     if task_id == "stream_probe":
         total = result.total_items
@@ -702,24 +708,26 @@ class TaskEngine:
                 )
 
                 # Send warning notification for cancellation (warning type triggers alerts)
+                if task_id == "stream_probe":
+                    cancel_msg = (
+                        f"Task was cancelled. {result.success_count} streams finished before cancellation"
+                        + (f", {result.failed_count} failed" if result.failed_count > 0 else "")
+                        + (f", {result.skipped_count} skipped" if result.skipped_count > 0 else "")
+                        + f" (of {result.total_items} scheduled)"
+                    )
+                else:
+                    cancel_msg = (
+                        f"Task was cancelled. {result.success_count} items completed before cancellation"
+                        + (f", {result.failed_count} failed" if result.failed_count > 0 else "")
+                        + (f", {result.skipped_count} skipped" if result.skipped_count > 0 else "")
+                        + f" (out of {result.total_items} total)"
+                    )
                 await self._notify_task_result(
                     task_name=instance.task_name,
                     task_id=task_id,
                     notification_type="warning",
                     title=f"Task Cancelled: {instance.task_name}",
-                    message=(
-                        f"Task was cancelled. {result.success_count} streams finished before cancellation"
-                        + (f", {result.failed_count} failed" if result.failed_count > 0 else "")
-                        + (f", {result.skipped_count} skipped" if result.skipped_count > 0 else "")
-                        + f" (of {result.total_items} scheduled)"
-                        if task_id == "stream_probe"
-                        else (
-                            f"Task was cancelled. {result.success_count} items completed before cancellation"
-                            + (f", {result.failed_count} failed" if result.failed_count > 0 else "")
-                            + (f", {result.skipped_count} skipped" if result.skipped_count > 0 else "")
-                            + f" (out of {result.total_items} total)"
-                        )
-                    ),
+                    message=cancel_msg,
                     result=result,
                     alert_category=alert_category,
                 )

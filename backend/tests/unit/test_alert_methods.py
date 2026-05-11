@@ -3,7 +3,7 @@ Unit tests for the alert_methods module.
 """
 import json
 from datetime import datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -437,6 +437,118 @@ class TestAlertMethodManager:
         """_should_alert_for_source handles invalid JSON gracefully."""
         result = manager._should_alert_for_source("not valid json", "epg_refresh", 1)
         assert result is True  # Defaults to True
+
+    @pytest.mark.asyncio
+    async def test_send_alert_probe_failures_threshold_uses_streams_failed_metadata(self):
+        """Regression: min_failures must see failures when only streams_failed is set (stream_probe UI keys)."""
+        import alert_methods_smtp  # noqa: F401 — registers SMTPMethod
+
+        manager = AlertMethodManager(digest_window_seconds=3600)
+        probe_cfg = json.dumps({"probe_failures": {"enabled": True, "min_failures": 5}})
+        mock_model = MagicMock()
+        mock_model.id = 1
+        mock_model.method_type = "smtp"
+        mock_model.name = "Email"
+        mock_model.notify_warning = True
+        mock_model.notify_success = True
+        mock_model.notify_error = True
+        mock_model.notify_info = False
+        mock_model.alert_sources = probe_cfg
+
+        method = create_method("smtp", 1, "Test", {"to_emails": ["x@example.com"]})
+        assert method is not None
+        manager._methods[1] = method
+
+        mock_session = MagicMock()
+        chain = MagicMock()
+        mock_session.query.return_value = chain
+        chain.filter.return_value = chain
+        chain.first.return_value = mock_model
+
+        with patch("database.get_session", return_value=mock_session):
+            await manager.send_alert(
+                title="Stream Probe",
+                message="Complete",
+                notification_type="warning",
+                alert_category="probe_failures",
+                metadata={"streams_failed": 10},
+            )
+
+        assert 1 in manager._alert_buffer
+        assert len(manager._alert_buffer[1]) == 1
+
+    @pytest.mark.asyncio
+    async def test_send_alert_probe_failures_streams_failed_below_threshold_not_queued(self):
+        import alert_methods_smtp  # noqa: F401
+
+        manager = AlertMethodManager(digest_window_seconds=3600)
+        probe_cfg = json.dumps({"probe_failures": {"enabled": True, "min_failures": 5}})
+        mock_model = MagicMock()
+        mock_model.id = 1
+        mock_model.method_type = "smtp"
+        mock_model.name = "Email"
+        mock_model.notify_warning = True
+        mock_model.notify_success = True
+        mock_model.notify_error = True
+        mock_model.notify_info = False
+        mock_model.alert_sources = probe_cfg
+
+        method = create_method("smtp", 1, "Test", {"to_emails": ["x@example.com"]})
+        manager._methods[1] = method
+
+        mock_session = MagicMock()
+        chain = MagicMock()
+        mock_session.query.return_value = chain
+        chain.filter.return_value = chain
+        chain.first.return_value = mock_model
+
+        with patch("database.get_session", return_value=mock_session):
+            await manager.send_alert(
+                title="Stream Probe",
+                message="Complete",
+                notification_type="warning",
+                alert_category="probe_failures",
+                metadata={"streams_failed": 3},
+            )
+
+        assert 1 not in manager._alert_buffer
+
+    @pytest.mark.asyncio
+    async def test_send_alert_probe_failures_failed_count_precedence_over_streams_failed(self):
+        """When both keys exist, failed_count wins for threshold (additive metadata shape)."""
+        import alert_methods_smtp  # noqa: F401
+
+        manager = AlertMethodManager(digest_window_seconds=3600)
+        probe_cfg = json.dumps({"probe_failures": {"enabled": True, "min_failures": 5}})
+        mock_model = MagicMock()
+        mock_model.id = 1
+        mock_model.method_type = "smtp"
+        mock_model.name = "Email"
+        mock_model.notify_warning = True
+        mock_model.notify_success = True
+        mock_model.notify_error = True
+        mock_model.notify_info = False
+        mock_model.alert_sources = probe_cfg
+
+        method = create_method("smtp", 1, "Test", {"to_emails": ["x@example.com"]})
+        manager._methods[1] = method
+
+        mock_session = MagicMock()
+        chain = MagicMock()
+        mock_session.query.return_value = chain
+        chain.filter.return_value = chain
+        chain.first.return_value = mock_model
+
+        with patch("database.get_session", return_value=mock_session):
+            await manager.send_alert(
+                title="Stream Probe",
+                message="Complete",
+                notification_type="warning",
+                alert_category="probe_failures",
+                metadata={"failed_count": 3, "streams_failed": 99},
+            )
+
+        assert 1 not in manager._alert_buffer
 
 
 class TestSendAlertFunction:

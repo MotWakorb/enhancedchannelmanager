@@ -704,13 +704,16 @@ class StreamProber:
             # Dispatch to External Alerts (AlertManager) which respects notify_* type filters
             try:
                 from alert_methods import send_alert
+                failed = self._probe_progress_failed_count
                 alert_metadata = {
                     "streams_scheduled": self._probe_progress_total,
                     "streams_ok": self._probe_progress_success_count,
-                    "streams_failed": self._probe_progress_failed_count,
+                    "streams_failed": failed,
                     "streams_skipped": self._probe_progress_skipped_count,
                     "black_screen_detections": self._probe_progress_black_screen_count,
                     "low_fps_detections": self._probe_progress_low_fps_count,
+                    # Legacy key — alert_methods probe_failures min_failures threshold reads failed_count
+                    "failed_count": failed,
                 }
                 await send_alert(
                     title="Stream Probe",
