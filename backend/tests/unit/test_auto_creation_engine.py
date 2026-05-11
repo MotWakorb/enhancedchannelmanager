@@ -596,7 +596,16 @@ class TestAutoCreationEngineProcessStreams:
 
     @patch("auto_creation_engine.get_session")
     def test_process_streams_stop_processing(self, mock_get_session):
-        """Process streams stops on stop_processing action."""
+        """A stop_processing action does NOT halt Pass 2 for other streams.
+
+        Regression for bd-iqm50 / GH #225: the old ``if stop_processing: break``
+        at the end of the Pass 2 per-stream block exited the *entire*
+        sorted_entries loop, so the first stream whose winning rule had a
+        stop_processing action ended Pass 2 for all remaining streams. Pass 1
+        already resolves one winning rule per stream, so STOP_PROCESSING has no
+        remaining rules to stop here — it must be a no-op at the per-stream
+        level and all matched streams must still be processed.
+        """
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
 
@@ -622,10 +631,43 @@ class TestAutoCreationEngineProcessStreams:
             self.engine._process_streams(streams, [mock_rule], mock_execution, dry_run=True)
         )
 
-        # Both streams are evaluated in Pass 1, but stop_processing
-        # halts Pass 2 after the first match is actioned
+        # Both streams are evaluated in Pass 1 AND both actioned in Pass 2.
         assert result["streams_evaluated"] == 2
-        assert result["streams_matched"] == 1
+        assert result["streams_matched"] == 2
+
+    @patch("auto_creation_engine.get_session")
+    def test_process_streams_stop_processing_does_not_truncate_large_batch(self, mock_get_session):
+        """bd-iqm50 / GH #225: with many matching streams + a stop_processing
+        rule, ALL streams are processed in Pass 2 (not just the first one)."""
+        mock_session = MagicMock()
+        mock_get_session.return_value = mock_session
+
+        streams = [
+            StreamContext(stream_id=i, stream_name="ESPN %d" % i, m3u_account_id=1,
+                          m3u_account_name="Provider")
+            for i in range(1, 13)  # 12 matching streams
+        ]
+
+        mock_rule = MagicMock()
+        mock_rule.id = 1
+        mock_rule.name = "Stop Rule"
+        mock_rule.priority = 0
+        mock_rule.m3u_account_id = None
+        mock_rule.target_group_id = None
+        mock_rule.sort_field = None  # don't trigger the between-passes sort
+        mock_rule.get_conditions.return_value = [{"type": "always"}]
+        mock_rule.get_actions.return_value = [{"type": "stop_processing"}]
+        mock_rule.stop_on_first_match = True
+
+        mock_execution = MagicMock()
+        mock_execution.id = 1
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.engine._process_streams(streams, [mock_rule], mock_execution, dry_run=True)
+        )
+
+        assert result["streams_evaluated"] == 12
+        assert result["streams_matched"] == 12
 
 
 class TestPass3RenumberGating:
