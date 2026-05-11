@@ -386,3 +386,192 @@ class TestAnalyzeAutoCreationRules:
         text = result[0][0].text
         assert "not found" in text.lower() or "does not exist" in text.lower()
         mock_client.post_multipart.assert_not_awaited()
+
+
+class TestUpdateChannelGroupId:
+    """update_channel / create_channel send channel_group_id, not group_id (bd-7q9l3 / GH #221)."""
+
+    @pytest.mark.asyncio
+    async def test_update_channel_sends_channel_group_id(self):
+        """The group_id arg must be wired to the backend's channel_group_id field."""
+        from tools.channels import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(patch={"id": 1, "name": "ESPN"})
+
+        with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            await mcp.call_tool("update_channel", {"channel_id": 1, "group_id": 7})
+
+        mock_client.patch.assert_awaited_once()
+        call = mock_client.patch.call_args
+        assert call.args[0] == "/api/channels/1"
+        payload = call.kwargs.get("json_data") or call.args[1]
+        assert payload == {"channel_group_id": 7}
+        assert "group_id" not in payload  # the bare key would be silently dropped
+
+    @pytest.mark.asyncio
+    async def test_create_channel_sends_channel_group_id(self):
+        """create_channel's group_id arg must map to channel_group_id."""
+        from tools.channels import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(post={"id": 9, "channel_number": 5, "name": "New"})
+
+        with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            await mcp.call_tool("create_channel", {"name": "New", "group_id": 7})
+
+        mock_client.post.assert_awaited_once()
+        call = mock_client.post.call_args
+        assert call.args[0] == "/api/channels"
+        payload = call.kwargs.get("json_data") or call.args[1]
+        assert payload.get("channel_group_id") == 7
+        assert "group_id" not in payload
+
+
+class TestListAutoCreationRules:
+    """list_auto_creation_rules unwraps the {"rules": [...]} envelope (bd-pvw35 / GH #222)."""
+
+    @pytest.mark.asyncio
+    async def test_unwraps_rules_envelope(self):
+        """Backend returns {"rules": [...]}; the tool must iterate the list, not the dict keys."""
+        from tools.auto_creation import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(get={"rules": [
+            {"id": 1, "name": "Sports", "enabled": True, "priority": 10},
+            {"id": 2, "name": "News", "enabled": False, "priority": 20},
+        ]})
+
+        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("list_auto_creation_rules", {})
+
+        text = result[0][0].text
+        assert "2 auto-creation rules" in text
+        assert "Sports" in text
+        assert "News" in text
+        assert "id=1" in text
+        # No AttributeError leaked through as an error string.
+        assert "has no attribute" not in text
+
+    @pytest.mark.asyncio
+    async def test_empty_rules_envelope(self):
+        """{"rules": []} → friendly 'none configured' message."""
+        from tools.auto_creation import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(get={"rules": []})
+
+        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("list_auto_creation_rules", {})
+
+        assert "No auto-creation rules" in result[0][0].text
+
+
+class TestBulkAddStreamsToChannel:
+    """bulk_add_streams_to_channel uses the single-roundtrip backend endpoint (bd-02xjj / GH #223)."""
+
+    @pytest.mark.asyncio
+    async def test_calls_plural_add_streams_endpoint_once(self):
+        """One POST /api/channels/{id}/add-streams — not one request per stream."""
+        from tools.channels import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = _make_ecm_client_mock(post={
+            "channel": {"id": 1, "name": "ESPN"},
+            "added": [10, 11, 12],
+            "skipped": [],
+            "total_streams": 3,
+        })
+
+        with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "bulk_add_streams_to_channel",
+                {"channel_id": 1, "stream_ids": [10, 11, 12]},
+            )
+
+        mock_client.post.assert_awaited_once()
+        call = mock_client.post.call_args
+        assert call.args[0] == "/api/channels/1/add-streams"
+        payload = call.kwargs.get("json_data") or call.args[1]
+        assert payload == {"stream_ids": [10, 11, 12]}
+        # Generous per-call timeout passed for slow hardware.
+        assert call.kwargs.get("timeout", 0) >= 120.0
+        text = result[0][0].text
+        assert "Added 3 stream(s) to channel 1" in text
+
+
+class TestBulkCommitChannelsErrorDetail:
+    """bulk_commit_channels surfaces the 422 body's detail (bd-mjtxn / GH #224)."""
+
+    @pytest.mark.asyncio
+    async def test_surfaces_validation_detail(self):
+        """A RuntimeError from the client carrying the FastAPI detail must reach the tool output."""
+        from tools.channels import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = RuntimeError(
+            "POST /api/channels/bulk-commit -> HTTP 422 Unprocessable Entity: "
+            "[{'loc': ['body', 'operations', 0, 'channelId'], 'msg': 'field required', 'type': 'missing'}]"
+        )
+
+        with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "bulk_commit_channels",
+                {"operations": [{"type": "updateChannel"}]},
+            )
+
+        text = result[0][0].text
+        assert "422" in text
+        assert "operations" in text
+        assert "channelId" in text
+
+
+class TestECMClientHTTPErrorDetail:
+    """ECMClient.post surfaces the response body's detail on HTTPStatusError (bd-mjtxn / GH #224)."""
+
+    @pytest.mark.asyncio
+    async def test_post_422_includes_detail(self):
+        import httpx
+        from ecm_client import ECMClient
+
+        request = httpx.Request("POST", "http://ecm/api/channels/bulk-commit")
+        response = httpx.Response(
+            422,
+            request=request,
+            json={"detail": [{"loc": ["body", "operations", 0, "channelId"],
+                              "msg": "field required", "type": "missing"}]},
+        )
+
+        async def fake_post(path, json=None, timeout=None):
+            return response
+
+        client = ECMClient()
+        with patch("ecm_client._get_client") as get_client:
+            get_client.return_value.post = AsyncMock(side_effect=fake_post)
+            # httpx.Response.raise_for_status needs the request set (it is).
+            with pytest.raises(RuntimeError) as exc_info:
+                await client.post("/api/channels/bulk-commit", json_data={"operations": []})
+
+        msg = str(exc_info.value)
+        assert "422" in msg
+        assert "channelId" in msg
+        assert "/api/channels/bulk-commit" in msg

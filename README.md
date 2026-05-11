@@ -203,7 +203,7 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `bulk_commit_channels` | Commit a batch of channel operations atomically |
 | `build_channel_lineup` | Bulk-create channels and fuzzy-match streams |
 | `clear_auto_created` | Remove auto-created channels by group |
-| `bulk_add_streams_to_channel` | Add multiple streams to a channel at once |
+| `bulk_add_streams_to_channel` | Add multiple streams to a channel in one backend call (single Dispatcharr roundtrip) |
 | `bulk_assign_epg` | Assign EPG IDs (tvg_id) to multiple channels |
 | **Groups (8)** | |
 | `list_channel_groups` | List all groups with channel counts |

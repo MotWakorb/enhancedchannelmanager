@@ -19,6 +19,7 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `PATCH /api/channels/{id}` | Update channel |
 | `DELETE /api/channels/{id}` | Delete channel |
 | `POST /api/channels/{id}/add-stream` | Add stream to channel |
+| `POST /api/channels/{id}/add-streams` | Add multiple streams to a channel in one Dispatcharr roundtrip (dedup, order preserved) |
 | `POST /api/channels/{id}/remove-stream` | Remove stream from channel |
 | `POST /api/channels/{id}/reorder-streams` | Reorder channel streams |
 | `POST /api/channels/assign-numbers` | Bulk assign channel numbers |
@@ -29,6 +30,50 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `GET /api/channels/export-csv` | Export all channels to CSV |
 | `POST /api/channels/import-csv` | Import channels from CSV file |
 | `POST /api/channels/preview-csv` | Preview and validate CSV before import |
+
+### `POST /api/channels/{id}/add-streams`
+
+Bulk variant of `/add-stream`: fetches the channel once, appends every requested stream that isn't already on it (in request order), and PUTs once — one Dispatcharr roundtrip total, regardless of batch size. The MCP `bulk_add_streams_to_channel` tool calls this instead of looping the single-add endpoint, which timed out on slow hardware for batches of ~10 streams (bd-02xjj / GH #223).
+
+**Request body:**
+
+```json
+{ "stream_ids": [101, 102, 103] }
+```
+
+**Response: `200 OK`**
+
+```json
+{
+  "channel": { "id": 12, "name": "ESPN", "streams": [5, 101, 102, 103] },
+  "added": [101, 102, 103],
+  "skipped": [],
+  "total_streams": 4
+}
+```
+
+`added` are the IDs actually appended; `skipped` are IDs already present on the channel. When every requested stream was already present, `channel` is the unmodified channel, `added` is `[]`, and no Dispatcharr write is performed.
+
+### `POST /api/channels/bulk-commit` — operation schema
+
+`operations` is a list of discriminated objects; the `type` string selects the shape. Unknown types or missing/mistyped fields return `422 Unprocessable Entity` with FastAPI's standard `detail` list — each entry's `loc` is `["body", "operations", <index>, "<field>"]`, so the response pinpoints the bad operation and field (the MCP `bulk_commit_channels` tool now surfaces this `detail` rather than a bare "HTTP 422" — bd-mjtxn / GH #224).
+
+| `type` | Fields | Notes |
+|-|-|-|
+| `createChannel` | `tempId` (int, negative), `name` (str), `channelNumber` (float, opt), `groupId` (int, opt), `newGroupName` (str, opt), `logoId` (int, opt), `logoUrl` (str, opt), `tvgId` (str, opt), `tvcGuideStationId` (str, opt), `normalize` (bool, default `false`) | `tempId` is echoed back in `tempIdMap` → real id. Use `groupId` for an existing group or `newGroupName` to reference a group created in `groupsToCreate`. |
+| `updateChannel` | `channelId` (int), `data` (dict) | `data` is forwarded as-is to Dispatcharr (e.g. `{"name": ..., "channel_group_id": ..., "tvg_id": ...}`). |
+| `deleteChannel` | `channelId` (int) | |
+| `addStreamToChannel` | `channelId` (int), `streamId` (int) | |
+| `removeStreamFromChannel` | `channelId` (int), `streamId` (int) | |
+| `reorderChannelStreams` | `channelId` (int), `streamIds` (list[int]) | New stream order; first = highest priority. |
+| `bulkAssignChannelNumbers` | `channelIds` (list[int]), `startingNumber` (float, opt) | |
+| `createGroup` | `name` (str) | Group name → real id appears in `groupIdMap`. |
+| `deleteChannelGroup` | `groupId` (int) | |
+| `renameChannelGroup` | `groupId` (int), `newName` (str) | |
+
+Request-level fields: `operations` (required list), `groupsToCreate` (opt list of `{name, ...}` dicts to create before processing), `validateOnly` (bool, default `false` — return `validationIssues` without applying), `continueOnError` (bool, default `false`), `consolidate` (bool, default `false` — collapse redundant ops first).
+
+Response: `{ success, operationsApplied, operationsFailed, errors, tempIdMap, groupIdMap, validationIssues, validationPassed }`. Pre-validation (missing referenced channels/streams) surfaces in `validationIssues` on a `200` response — only schema-shape failures produce a `422`.
 
 ## Channel Groups
 

@@ -38,6 +38,35 @@ def _get_client() -> httpx.AsyncClient:
     return _client
 
 
+def _http_error(method: str, path: str, e: httpx.HTTPStatusError) -> RuntimeError:
+    """Build a descriptive RuntimeError from an httpx HTTPStatusError.
+
+    FastAPI's auto-validation 422s carry a structured ``detail`` list
+    (``[{loc: ["body", "operations", N, "<field>"], msg, type}, ...]``) that
+    pinpoints the bad operation/field; a custom ``HTTPException`` carries a
+    plain string. Either way, surface it instead of the bare status line so
+    callers (and the MCP tools that wrap them) see *why* the request failed
+    (bd-mjtxn / GH #224). Defensive: the body may not be JSON or may lack
+    ``detail``.
+    """
+    resp = e.response
+    status = resp.status_code if resp is not None else "?"
+    reason = resp.reason_phrase if resp is not None else ""
+    detail = None
+    if resp is not None:
+        try:
+            body = resp.json()
+            if isinstance(body, dict):
+                detail = body.get("detail", body)
+            else:
+                detail = body
+        except Exception:
+            text = (resp.text or "").strip()
+            detail = text[:500] if text else None
+    suffix = f": {detail}" if detail not in (None, "") else ""
+    return RuntimeError(f"{method} {path} -> HTTP {status} {reason}{suffix}".rstrip())
+
+
 class ECMClient:
     """Wrapper around httpx.AsyncClient for ECM API calls.
 
@@ -58,7 +87,7 @@ class ECMClient:
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500] if e.response else ""
             logger.error("[ECM-CLIENT] GET %s failed: %s %s — %s", path, e.response.status_code, e.response.reason_phrase, body)
-            raise
+            raise _http_error("GET", path, e) from e
 
     async def post(self, path: str, json_data: dict | None = None, timeout: float | None = None) -> dict | list:
         """POST request to ECM API."""
@@ -73,7 +102,7 @@ class ECMClient:
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500] if e.response else ""
             logger.error("[ECM-CLIENT] POST %s failed: %s %s — %s", path, e.response.status_code, e.response.reason_phrase, body)
-            raise
+            raise _http_error("POST", path, e) from e
 
     async def post_multipart(
         self,
@@ -97,7 +126,7 @@ class ECMClient:
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500] if e.response else ""
             logger.error("[ECM-CLIENT] POST(multipart) %s failed: %s %s — %s", path, e.response.status_code, e.response.reason_phrase, body)
-            raise
+            raise _http_error("POST", path, e) from e
 
     async def patch(self, path: str, json_data: dict | None = None, timeout: float | None = None) -> dict | list:
         """PATCH request to ECM API."""
@@ -112,7 +141,7 @@ class ECMClient:
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500] if e.response else ""
             logger.error("[ECM-CLIENT] PATCH %s failed: %s %s — %s", path, e.response.status_code, e.response.reason_phrase, body)
-            raise
+            raise _http_error("PATCH", path, e) from e
 
     async def put(self, path: str, json_data: dict | None = None, timeout: float | None = None) -> dict | list:
         """PUT request to ECM API."""
@@ -127,7 +156,7 @@ class ECMClient:
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500] if e.response else ""
             logger.error("[ECM-CLIENT] PUT %s failed: %s %s — %s", path, e.response.status_code, e.response.reason_phrase, body)
-            raise
+            raise _http_error("PUT", path, e) from e
 
     async def delete(self, path: str, json_data: dict | None = None, timeout: float | None = None) -> dict | None:
         """DELETE request to ECM API."""
@@ -144,7 +173,7 @@ class ECMClient:
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500] if e.response else ""
             logger.error("[ECM-CLIENT] DELETE %s failed: %s %s — %s", path, e.response.status_code, e.response.reason_phrase, body)
-            raise
+            raise _http_error("DELETE", path, e) from e
 
 
 def get_ecm_client() -> ECMClient:
