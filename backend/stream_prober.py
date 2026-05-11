@@ -666,19 +666,18 @@ class StreamProber:
                 notification_type = "success"
 
             # Build message
-            parts = []
-            if self._probe_progress_success_count > 0:
-                parts.append(f"{self._probe_progress_success_count} success")
-            if self._probe_progress_failed_count > 0:
-                parts.append(f"{self._probe_progress_failed_count} failed")
-            if self._probe_progress_black_screen_count > 0:
-                parts.append(f"{self._probe_progress_black_screen_count} black screen")
-            if self._probe_progress_low_fps_count > 0:
-                parts.append(f"{self._probe_progress_low_fps_count} low FPS")
-            if self._probe_progress_skipped_count > 0:
-                parts.append(f"{self._probe_progress_skipped_count} skipped")
+            total_streams = self._probe_progress_total
+            ok = self._probe_progress_success_count
+            failed = self._probe_progress_failed_count
+            skipped = self._probe_progress_skipped_count
+            black = self._probe_progress_black_screen_count
+            low = self._probe_progress_low_fps_count
 
-            message = f"Stream probe complete: {', '.join(parts)}" if parts else "Stream probe complete"
+            message = (
+                f"Stream probe complete: {total_streams} stream(s) — {ok} ok, {failed} failed, {skipped} skipped"
+            )
+            if black or low:
+                message += f" ({black} black screen, {low} low FPS)"
 
             metadata = {
                 "progress": {
@@ -706,12 +705,12 @@ class StreamProber:
             try:
                 from alert_methods import send_alert
                 alert_metadata = {
-                    "failed_count": self._probe_progress_failed_count,
-                    "success_count": self._probe_progress_success_count,
-                    "skipped_count": self._probe_progress_skipped_count,
-                    "black_screen_count": self._probe_progress_black_screen_count,
-                    "low_fps_count": self._probe_progress_low_fps_count,
-                    "total_count": self._probe_progress_total,
+                    "streams_scheduled": self._probe_progress_total,
+                    "streams_ok": self._probe_progress_success_count,
+                    "streams_failed": self._probe_progress_failed_count,
+                    "streams_skipped": self._probe_progress_skipped_count,
+                    "black_screen_detections": self._probe_progress_black_screen_count,
+                    "low_fps_detections": self._probe_progress_low_fps_count,
                 }
                 await send_alert(
                     title="Stream Probe",
