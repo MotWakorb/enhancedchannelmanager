@@ -1288,7 +1288,18 @@ class AutoCreationEngine:
                     action_entry["details"] = action_result.details
                 actions_log.append(action_entry)
 
-                # Check for stop_processing action
+                # Check for stop_processing action.
+                # NOTE: by the time we reach Pass 2, Pass 1 has already
+                # resolved exactly one winning rule per stream — there are no
+                # "further rules" left to stop here (the rule-level
+                # short-circuit is `rule.stop_on_first_match`, handled in
+                # Pass 1). So at the Pass 2 / per-stream level STOP_PROCESSING
+                # is effectively a no-op: it must NOT abort the remaining
+                # streams (bd-iqm50 / GH #225 — `break` here used to kill the
+                # entire sorted_entries loop after the first such stream), and
+                # it does NOT abort the current rule's remaining actions
+                # either (the action's own description is "stop processing
+                # further *rules*", not further actions of this rule).
                 if action.type == ActionType.STOP_PROCESSING.value:
                     stop_processing = True
 
@@ -1362,7 +1373,16 @@ class AutoCreationEngine:
                         rule_channel_order_streams[winning_rule.id].append(cid)
 
             if stop_processing:
-                break
+                # bd-iqm50 / GH #225: continue (NOT break) — STOP_PROCESSING
+                # has no remaining rules to stop in Pass 2, so it must not
+                # terminate the loop over the other matched streams.
+                logger.debug(
+                    "[AUTO-CREATE-ENGINE] Stream %r: STOP_PROCESSING action "
+                    "(no-op at Pass 2 level — one winning rule per stream); "
+                    "continuing to next stream",
+                    stream.stream_name,
+                )
+                continue
 
         # =====================================================================
         # Pass 2.5: Verify EPG assignments on newly created channels

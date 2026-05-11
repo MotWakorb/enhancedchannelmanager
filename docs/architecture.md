@@ -293,16 +293,16 @@ Why: the channel list spans 27k+ streams. Per-change network calls would be unus
 
 ## MCP Server
 
-A separate container (`mcp-server/`, default port 6101) exposes ECM operations to AI agents via the Model Context Protocol. Runs as a Starlette app with SSE transport; Claude Desktop/Code connect over SSE.
+A separate container (`mcp-server/`, default port 6101) exposes ECM operations to AI agents via the Model Context Protocol. Runs as a Starlette app with the Streamable HTTP transport — a single `/mcp` endpoint; Claude Desktop (via the `mcp-remote` bridge) and Claude Code connect over HTTP.
 
 ```mermaid
 graph LR
     Agent["AI Agent (Claude Desktop/Code)"]
 
     subgraph MCPContainer["MCP Container (:6101)"]
-        Transport["SSE / FastMCP / Starlette"]
+        Transport["Streamable HTTP (/mcp) / FastMCP / Starlette"]
         AuthMW["APIKeyAuthMiddleware"]
-        Tools["14 tool modules (~80 tools)"]
+        Tools["14 tool modules (~110 tools)"]
         Resources["3 resources (overview)"]
         Client["ECMClient (httpx.AsyncClient)"]
 
@@ -316,7 +316,7 @@ graph LR
     ECMBackend["ECM Backend (:6100)"]
     Settings["/config/settings.json (shared volume)"]
 
-    Agent -->|"SSE + API key"| Transport
+    Agent -->|"HTTP /mcp + API key"| Transport
     Client -->|"Bearer token"| ECMBackend
     AuthMW -.reads.-> Settings
     Client -.reads.-> Settings
@@ -328,7 +328,7 @@ graph LR
 
 **Auth model — two separate keys:**
 
-- **Inbound (MCP client → MCP server):** API key from `settings.json:mcp_api_key`. Accepts `?api_key=` query param or `Authorization: Bearer`. Re-read on every request (no restart for rotation). `/health` is public; `/messages/` is session-bound after the SSE handshake on `/sse`.
+- **Inbound (MCP client → MCP server):** API key from `settings.json:mcp_api_key`. Accepts `?api_key=` query param or `Authorization: Bearer`. Re-read on every request (no restart for rotation). The Streamable HTTP transport uses a single `/mcp` endpoint — both the client→server POST and the server→client event-stream GET hit `/mcp`, with the session carried via the `Mcp-Session-Id` header — so the API key is checked on every `/mcp` request. `/health` is public. (DNS-rebinding/Host-header protection in the SDK transport is disabled so the sidecar is reachable from any host by IP or hostname; the static API key is the access control.)
 - **Outbound (MCP server → ECM backend):** the same key is sent as `Authorization: Bearer` to ECM. `ECMClient` recreates the httpx client on key change.
 
 **Compound tools:** most tools wrap a single ECM endpoint, but some orchestrate multiple calls. Examples:

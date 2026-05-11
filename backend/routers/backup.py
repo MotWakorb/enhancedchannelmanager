@@ -1157,6 +1157,10 @@ def _restore_auto_creation_rules(items: list) -> dict:
                 normalization_group_ids=_resolve_backup_normalization_group_ids(item, session),
                 skip_struck_streams=item.get("skip_struck_streams", False),
                 orphan_action=item.get("orphan_action", "delete"),
+                # bd-p6ko9: restore the stored per-rule value; ECM-generated
+                # backups always include this field (via to_dict). An ancient
+                # backup that omits it inherits the new-rule default (True).
+                match_scope_target_group=item.get("match_scope_target_group", True),
             )
             session.add(rule)
         session.commit()

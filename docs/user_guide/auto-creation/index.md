@@ -2,7 +2,7 @@
 
 > **Audience:** Operator who wants ECM to create and update channels automatically as new streams appear in their M3U sources.
 >
-> **Status:** Stub — articles below are placeholders.
+> **Status:** Mostly stub — most articles below are placeholders. `debugging-rules.md` is complete.
 
 ## Section purpose
 
@@ -24,11 +24,13 @@ End users do not read this section.
 | `actions.md` | The action catalogue — create channel, update channel, assign to group, attach EPG, etc. — and what state changes each one produces. |
 | `test-a-rule.md` | The dry-run / preview workflow. What's safe to test against production data and what isn't. |
 | `bulk-operations.md` | Running rules across an entire source, the cost of a large run, and the bulk-amplification cautions an operator should know about. |
-| `debugging-rules.md` | "My rule didn't fire" — the diagnostic flow, where the engine logs decisions, common misconfigurations. Will eventually cross-link the `analyze-rules` skill output. |
+| [`debugging-rules.md`](debugging-rules.md) | "My rule didn't fire" — the diagnostic flow using the rule analyzer: the 7 finding codes in plain language with worked examples, how to run the analyzer (API direct call, debug-bundle upload, `/analyze-rules` agent command), and when to use the analyzer vs. the per-rule dry-run preview. |
 | `clone-and-reuse.md` | Duplicating a rule as a starting point, sharing a normalization group across rules. |
 
 ## Going deeper (for now)
 
 - [`docs/api.md`](../../api.md) — the `/auto-creation` router endpoints.
 - [`docs/normalization.md`](../../normalization.md) — auto-creation rules typically reference a normalization group; understand normalization before authoring complex rules.
-- The `analyze-rules` skill (in this repo's `.claude/` skills) — automated rule analysis when you have many rules to audit.
+- [`debugging-rules.md`](debugging-rules.md) — the rule analyzer: what it checks, the 7 finding codes, and how to run it.
+- [`docs/auto_creation_rule_analyzer.md`](../../auto_creation_rule_analyzer.md) — the full technical reference for the rule analyzer (finding-code trigger logic, response schema, implementation notes).
+- [`docs/commands/analyze-rules.md`](../../commands/analyze-rules.md) — the `/analyze-rules` agent command, for running the analyzer via an AI assistant.
