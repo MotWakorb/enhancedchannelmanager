@@ -441,10 +441,26 @@ class AlertMethodManager:
         results = {}
         session = get_session()
 
-        # Extract failed_count from metadata for probe_failures
+        # Extract failed_count from metadata for probe_failures (threshold in _should_alert_for_source).
+        # Stream-probe task alerts also emit streams_failed for readability; honor either key.
         failed_count = 0
-        if metadata and "failed_count" in metadata:
-            failed_count = metadata.get("failed_count", 0)
+        if metadata:
+
+            def _coerce_failure_count(key: str) -> int:
+                if key not in metadata:
+                    return 0
+                raw = metadata.get(key)
+                if raw is None:
+                    return 0
+                try:
+                    return int(raw)
+                except (TypeError, ValueError):
+                    return 0
+
+            if "failed_count" in metadata:
+                failed_count = _coerce_failure_count("failed_count")
+            elif "streams_failed" in metadata:
+                failed_count = _coerce_failure_count("streams_failed")
 
         # Map channel_settings keys to method_type values
         # send_to_email -> smtp, send_to_discord -> discord, send_to_telegram -> telegram

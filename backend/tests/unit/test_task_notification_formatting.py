@@ -41,6 +41,43 @@ def test_auto_creation_metadata_uses_pipeline_fields_not_generic_items():
     assert "45.0s" in msg
 
 
+def test_stream_probe_metadata_includes_failed_count_for_probe_failures_threshold():
+    """alert_methods.send_alert uses failed_count for min_failures; keep legacy key with streams_*."""
+    started = datetime(2026, 5, 10, 12, 0, 0)
+    completed = datetime(2026, 5, 10, 12, 0, 10)
+    result = TaskResult(
+        success=True,
+        message="legacy",
+        started_at=started,
+        completed_at=completed,
+        total_items=100,
+        success_count=90,
+        failed_count=7,
+        skipped_count=3,
+        details={"black_screen_count": 0, "low_fps_count": 0},
+    )
+    meta = _task_execution_metadata_extra("stream_probe", result)
+    assert meta["failed_count"] == 7
+    assert meta["streams_failed"] == 7
+
+
+def test_auto_creation_success_message_without_details_uses_result_message():
+    """Empty details must not fall back to generic 'N items processed' with misleading totals."""
+    started = datetime(2026, 5, 10, 12, 0, 0)
+    completed = datetime(2026, 5, 10, 12, 0, 1)
+    result = TaskResult(
+        success=True,
+        message="No enabled auto-creation rules to process",
+        started_at=started,
+        completed_at=completed,
+        total_items=0,
+        details={},
+    )
+    msg = _success_task_completion_message("auto_creation", result)
+    assert "No enabled auto-creation rules" in msg
+    assert "items processed" not in msg
+
+
 def test_stream_probe_success_message_includes_totals_and_quality_flags():
     started = datetime(2026, 5, 10, 12, 0, 0)
     completed = datetime(2026, 5, 10, 12, 0, 10)
