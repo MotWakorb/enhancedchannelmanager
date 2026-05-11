@@ -90,11 +90,20 @@ export function MCPSettingsSection({ isAdmin }: Props) {
   };
 
   const mcpPort = '6101';
+  const mcpEndpoint = `http://YOUR_ECM_HOST:${mcpPort}/mcp?api_key=YOUR_API_KEY`;
   const claudeDesktopConfig = JSON.stringify({
     mcpServers: {
       ecm: {
-        url: `http://YOUR_ECM_HOST:${mcpPort}/sse`,
-        env: {}
+        command: 'npx',
+        args: ['mcp-remote', mcpEndpoint, '--allow-http']
+      }
+    }
+  }, null, 2);
+  const claudeCodeConfig = JSON.stringify({
+    mcpServers: {
+      ecm: {
+        type: 'http',
+        url: mcpEndpoint
       }
     }
   }, null, 2);
@@ -235,15 +244,15 @@ export function MCPSettingsSection({ isAdmin }: Props) {
 
           <div className="form-group-vertical">
             <p className="form-description">
-              The MCP server runs on port <strong>{mcpPort}</strong> alongside ECM. Connect Claude Desktop or Claude Code using the SSE endpoint below.
+              The MCP server runs on port <strong>{mcpPort}</strong> alongside ECM, using the Streamable HTTP transport on a single <code>/mcp</code> endpoint. Connect Claude Desktop or Claude Code using the endpoint below.
             </p>
 
-            <label className="form-label">SSE Endpoint</label>
+            <label className="form-label">MCP Endpoint</label>
             <div className="mcp-key-display">
-              <code>http://YOUR_ECM_HOST:{mcpPort}/sse</code>
+              <code>http://YOUR_ECM_HOST:{mcpPort}/mcp?api_key=YOUR_API_KEY</code>
               <button
                 className="mcp-copy-btn"
-                onClick={() => handleCopy(`http://YOUR_ECM_HOST:${mcpPort}/sse`)}
+                onClick={() => handleCopy(mcpEndpoint)}
                 title="Copy URL"
               >
                 <span className="material-icons">content_copy</span>
@@ -252,13 +261,28 @@ export function MCPSettingsSection({ isAdmin }: Props) {
 
             <label className="form-label" style={{ marginTop: '1rem' }}>Claude Desktop Config</label>
             <p className="form-description">
-              Add this to your Claude Desktop settings. Replace <code>YOUR_ECM_HOST</code> with your server's IP or hostname.
+              Add this to your Claude Desktop settings. Replace <code>YOUR_ECM_HOST</code> with your server's IP or hostname and <code>YOUR_API_KEY</code> with the key above. (Claude Desktop reaches remote MCP servers through the <code>mcp-remote</code> bridge; <code>--allow-http</code> is needed for plain-HTTP endpoints.)
             </p>
             <div className="mcp-config-block">
               <pre>{claudeDesktopConfig}</pre>
               <button
                 className="mcp-copy-btn"
                 onClick={() => handleCopy(claudeDesktopConfig)}
+                title="Copy config"
+              >
+                <span className="material-icons">content_copy</span>
+              </button>
+            </div>
+
+            <label className="form-label" style={{ marginTop: '1rem' }}>Claude Code Config (.mcp.json)</label>
+            <p className="form-description">
+              Save this as <code>.mcp.json</code> in a project directory where you want ECM tools available.
+            </p>
+            <div className="mcp-config-block">
+              <pre>{claudeCodeConfig}</pre>
+              <button
+                className="mcp-copy-btn"
+                onClick={() => handleCopy(claudeCodeConfig)}
                 title="Copy config"
               >
                 <span className="material-icons">content_copy</span>
