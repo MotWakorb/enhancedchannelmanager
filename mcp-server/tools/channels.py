@@ -155,7 +155,9 @@ def register(mcp: FastMCP):
             if channel_number is not None:
                 payload["channel_number"] = channel_number
             if group_id is not None:
-                payload["group_id"] = group_id
+                # Backend POST /api/channels expects ``channel_group_id``;
+                # a bare ``group_id`` is silently dropped (bd-7q9l3 / GH #221).
+                payload["channel_group_id"] = group_id
 
             result = await client.post("/api/channels", json_data=payload)
             cid = result.get("id", "?")
@@ -187,7 +189,10 @@ def register(mcp: FastMCP):
             if channel_number is not None:
                 payload["channel_number"] = channel_number
             if group_id is not None:
-                payload["group_id"] = group_id
+                # Backend PATCH /api/channels/{id} forwards keys straight to
+                # Dispatcharr, whose channel field is ``channel_group_id``;
+                # a bare ``group_id`` is silently dropped (bd-7q9l3 / GH #221).
+                payload["channel_group_id"] = group_id
 
             if not payload:
                 return "No changes specified."
@@ -264,7 +269,13 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def bulk_add_streams_to_channel(channel_id: int, stream_ids: list[int]) -> str:
-        """Add multiple streams to a channel at once.
+        """Add multiple streams to a channel in a single backend call.
+
+        Uses POST /api/channels/{id}/add-streams, which fetches the channel
+        once and PUTs once (one Dispatcharr roundtrip total) — not one HTTP
+        request per stream — so batches of ~10 streams stay well under the
+        tool-call budget even on slow hardware (bd-02xjj / GH #223).
+        Streams already on the channel are skipped; order is preserved.
 
         Args:
             channel_id: The channel to add streams to
@@ -272,25 +283,19 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            added = 0
-            errors = []
-            for sid in stream_ids:
-                try:
-                    await client.post(
-                        f"/api/channels/{channel_id}/add-stream",
-                        json_data={"stream_id": sid},
-                    )
-                    added += 1
-                except Exception as e:
-                    errors.append(f"stream {sid}: {e}")
-
-            lines = [f"Added {added}/{len(stream_ids)} streams to channel {channel_id}."]
-            if errors:
-                lines.append(f"Errors ({len(errors)}):")
-                for err in errors[:10]:
-                    lines.append(f"  - {err}")
-                if len(errors) > 10:
-                    lines.append(f"  ... and {len(errors) - 10} more")
+            result = await client.post(
+                f"/api/channels/{channel_id}/add-streams",
+                json_data={"stream_ids": stream_ids},
+                timeout=120.0,
+            )
+            added = result.get("added", []) if isinstance(result, dict) else []
+            skipped = result.get("skipped", []) if isinstance(result, dict) else []
+            total = result.get("total_streams") if isinstance(result, dict) else None
+            lines = [f"Added {len(added)} stream(s) to channel {channel_id}"
+                     + (f" ({len(skipped)} already present)" if skipped else "")
+                     + (f"; channel now has {total} streams." if total is not None else ".")]
+            if added:
+                lines.append(f"  Added: {added[:20]}{'...' if len(added) > 20 else ''}")
             return "\n".join(lines)
         except Exception as e:
             logger.error("[MCP] bulk_add_streams_to_channel failed: %s", e)

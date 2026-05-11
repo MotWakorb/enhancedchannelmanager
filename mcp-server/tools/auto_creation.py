@@ -76,7 +76,11 @@ def register(mcp: FastMCP):
         """List all auto-creation rules that automatically create channels from streams."""
         try:
             client = get_ecm_client()
-            rules = await client.get("/api/auto-creation/rules")
+            resp = await client.get("/api/auto-creation/rules")
+            # The backend wraps the list as {"rules": [...]}; unwrap defensively
+            # (older code iterated the dict's keys -> str.get() AttributeError,
+            # bd-pvw35 / GH #222). The `analyze` tool below already does this.
+            rules = resp.get("rules", []) if isinstance(resp, dict) else (resp or [])
 
             if not rules:
                 return "No auto-creation rules configured."
