@@ -3,7 +3,7 @@ Unit tests for the alert_methods module.
 """
 import json
 from datetime import datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -17,6 +17,33 @@ from alert_methods import (
     send_alert,
     _method_registry,
 )
+
+# Type used by probe_failures threshold tests. Other tests call ``_method_registry.clear()``;
+# importing SMTP does not repopulate the registry, so these tests register their own stub.
+_PROBE_FAILURES_THRESHOLD_TEST_TYPE = "probe_failures_threshold_test"
+
+
+def _ensure_probe_failures_threshold_test_method_registered() -> str:
+    """Ensure a minimal AlertMethod type exists for probe_failures threshold unit tests."""
+    if _PROBE_FAILURES_THRESHOLD_TEST_TYPE in _method_registry:
+        return _PROBE_FAILURES_THRESHOLD_TEST_TYPE
+
+    mt = _PROBE_FAILURES_THRESHOLD_TEST_TYPE
+
+    @register_method
+    class ProbeFailuresThresholdTestMethod(AlertMethod):
+        method_type = mt
+        display_name = "Probe failures threshold test stub"
+        required_config_fields: list = []
+        optional_config_fields: dict = {}
+
+        async def send(self, message) -> bool:
+            return True
+
+        async def test_connection(self) -> tuple[bool, str]:
+            return True, "ok"
+
+    return _PROBE_FAILURES_THRESHOLD_TEST_TYPE
 
 
 class TestAlertMessage:
@@ -437,6 +464,118 @@ class TestAlertMethodManager:
         """_should_alert_for_source handles invalid JSON gracefully."""
         result = manager._should_alert_for_source("not valid json", "epg_refresh", 1)
         assert result is True  # Defaults to True
+
+    @pytest.mark.asyncio
+    async def test_send_alert_probe_failures_threshold_uses_streams_failed_metadata(self):
+        """Regression: min_failures must see failures when only streams_failed is set (stream_probe UI keys)."""
+        mt = _ensure_probe_failures_threshold_test_method_registered()
+
+        manager = AlertMethodManager(digest_window_seconds=3600)
+        probe_cfg = json.dumps({"probe_failures": {"enabled": True, "min_failures": 5}})
+        mock_model = MagicMock()
+        mock_model.id = 1
+        mock_model.method_type = mt
+        mock_model.name = "Email"
+        mock_model.notify_warning = True
+        mock_model.notify_success = True
+        mock_model.notify_error = True
+        mock_model.notify_info = False
+        mock_model.alert_sources = probe_cfg
+
+        method = create_method(mt, 1, "Test", {})
+        assert method is not None
+        manager._methods[1] = method
+
+        mock_session = MagicMock()
+        chain = MagicMock()
+        mock_session.query.return_value = chain
+        chain.filter.return_value = chain
+        chain.first.return_value = mock_model
+
+        with patch("database.get_session", return_value=mock_session):
+            await manager.send_alert(
+                title="Stream Probe",
+                message="Complete",
+                notification_type="warning",
+                alert_category="probe_failures",
+                metadata={"streams_failed": 10},
+            )
+
+        assert 1 in manager._alert_buffer
+        assert len(manager._alert_buffer[1]) == 1
+
+    @pytest.mark.asyncio
+    async def test_send_alert_probe_failures_streams_failed_below_threshold_not_queued(self):
+        mt = _ensure_probe_failures_threshold_test_method_registered()
+
+        manager = AlertMethodManager(digest_window_seconds=3600)
+        probe_cfg = json.dumps({"probe_failures": {"enabled": True, "min_failures": 5}})
+        mock_model = MagicMock()
+        mock_model.id = 1
+        mock_model.method_type = mt
+        mock_model.name = "Email"
+        mock_model.notify_warning = True
+        mock_model.notify_success = True
+        mock_model.notify_error = True
+        mock_model.notify_info = False
+        mock_model.alert_sources = probe_cfg
+
+        method = create_method(mt, 1, "Test", {})
+        manager._methods[1] = method
+
+        mock_session = MagicMock()
+        chain = MagicMock()
+        mock_session.query.return_value = chain
+        chain.filter.return_value = chain
+        chain.first.return_value = mock_model
+
+        with patch("database.get_session", return_value=mock_session):
+            await manager.send_alert(
+                title="Stream Probe",
+                message="Complete",
+                notification_type="warning",
+                alert_category="probe_failures",
+                metadata={"streams_failed": 3},
+            )
+
+        assert 1 not in manager._alert_buffer
+
+    @pytest.mark.asyncio
+    async def test_send_alert_probe_failures_failed_count_precedence_over_streams_failed(self):
+        """When both keys exist, failed_count wins for threshold (additive metadata shape)."""
+        mt = _ensure_probe_failures_threshold_test_method_registered()
+
+        manager = AlertMethodManager(digest_window_seconds=3600)
+        probe_cfg = json.dumps({"probe_failures": {"enabled": True, "min_failures": 5}})
+        mock_model = MagicMock()
+        mock_model.id = 1
+        mock_model.method_type = mt
+        mock_model.name = "Email"
+        mock_model.notify_warning = True
+        mock_model.notify_success = True
+        mock_model.notify_error = True
+        mock_model.notify_info = False
+        mock_model.alert_sources = probe_cfg
+
+        method = create_method(mt, 1, "Test", {})
+        manager._methods[1] = method
+
+        mock_session = MagicMock()
+        chain = MagicMock()
+        mock_session.query.return_value = chain
+        chain.filter.return_value = chain
+        chain.first.return_value = mock_model
+
+        with patch("database.get_session", return_value=mock_session):
+            await manager.send_alert(
+                title="Stream Probe",
+                message="Complete",
+                notification_type="warning",
+                alert_category="probe_failures",
+                metadata={"failed_count": 3, "streams_failed": 99},
+            )
+
+        assert 1 not in manager._alert_buffer
 
 
 class TestSendAlertFunction:

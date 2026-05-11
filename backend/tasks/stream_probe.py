@@ -230,8 +230,13 @@ class StreamProbeTask(TaskScheduler):
                 status="completed" if not self._cancel_requested else "cancelled",
             )
 
+            black_screen = self._prober._probe_progress_black_screen_count
+            low_fps = self._prober._probe_progress_low_fps_count
+
             # Build result details
             details = {
+                "black_screen_count": black_screen,
+                "low_fps_count": low_fps,
                 "success_streams": [
                     {"id": s.get("id"), "name": s.get("name")}
                     for s in self._prober._probe_success_streams[:50]  # Limit for storage
@@ -259,7 +264,10 @@ class StreamProbeTask(TaskScheduler):
             if failed_count > 0 and success_count == 0:
                 return TaskResult(
                     success=False,
-                    message=f"Stream probe completed: {failed_count} failed, {skipped_count} skipped",
+                    message=(
+                        f"Stream probe completed: {failed_count} failed, {skipped_count} skipped "
+                        f"(of {total} scheduled; {black_screen} black screen, {low_fps} low FPS)"
+                    ),
                     started_at=started_at,
                     completed_at=datetime.utcnow(),
                     total_items=total,
@@ -271,7 +279,14 @@ class StreamProbeTask(TaskScheduler):
 
             return TaskResult(
                 success=True,
-                message=f"Probed {success_count} streams successfully, {failed_count} failed, {skipped_count} skipped",
+                message=(
+                    f"Probed {total} stream(s): {success_count} ok, {failed_count} failed, {skipped_count} skipped"
+                    + (
+                        f" ({black_screen} black screen, {low_fps} low FPS)"
+                        if (black_screen or low_fps)
+                        else ""
+                    )
+                ),
                 started_at=started_at,
                 completed_at=datetime.utcnow(),
                 total_items=total,
