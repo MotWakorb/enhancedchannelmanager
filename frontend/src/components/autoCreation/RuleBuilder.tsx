@@ -50,7 +50,7 @@ export function RuleBuilder({
   const [normalizationGroupIds, setNormalizationGroupIds] = useState<number[]>(rule?.normalization_group_ids ?? []);
   const [skipStruckStreams, setSkipStruckStreams] = useState(rule?.skip_struck_streams ?? false);
   const [orphanAction, setOrphanAction] = useState(rule?.orphan_action || 'delete');
-  const [matchScopeTargetGroup, setMatchScopeTargetGroup] = useState(rule?.match_scope_target_group ?? false);
+  const [matchScopeTargetGroup, setMatchScopeTargetGroup] = useState(rule?.match_scope_target_group ?? true);
   const [conditions, setConditions] = useState<Condition[]>(rule?.conditions || []);
   const [actions, setActions] = useState<Action[]>(rule?.actions || []);
 
@@ -330,18 +330,26 @@ export function RuleBuilder({
                 />
                 <span>Skip struck-out streams</span>
               </label>
-              <label
-                className="checkbox-item"
-                title="When enabled, the duplicate-name check for create_channel is restricted to this rule's target group. Two rules targeting different groups can then create separate channels with the same name instead of merging into an existing channel in another group (GH-92)."
-              >
+            </div>
+          </div>
+
+          <div className="form-field">
+            <label>Merge lookup scope</label>
+            <span className="field-hint">
+              On (default): when a Create Channel action merges into an existing channel, only look within this rule&apos;s
+              target group — so the rule creates a new channel in the target group instead of merging into a same-name
+              channel in another group. Off: search all channel groups for a matching name (the original behavior).
+            </span>
+            <div className="checkbox-group">
+              <label className="checkbox-item">
                 <input
                   type="checkbox"
                   checked={matchScopeTargetGroup}
                   onChange={e => setMatchScopeTargetGroup(e.target.checked)}
                   disabled={isLoading}
-                  aria-label="Scope duplicate-name check to target group"
+                  aria-label="Scope merge lookups to this rule's target group"
                 />
-                <span>Scope duplicate-name check to target group</span>
+                <span>Scope merge lookups to this rule&apos;s target group</span>
               </label>
             </div>
           </div>

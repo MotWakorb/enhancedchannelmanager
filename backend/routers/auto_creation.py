@@ -68,7 +68,8 @@ class CreateAutoCreationRuleRequest(BaseModel):
     normalization_group_ids: list[int] = []
     skip_struck_streams: bool = False
     orphan_action: str = "delete"
-    match_scope_target_group: bool = False
+    # Default True for new rules (bd-p6ko9, GH #226) — see models.AutoCreationRule.
+    match_scope_target_group: bool = True
 
 
 class UpdateAutoCreationRuleRequest(BaseModel):
@@ -1570,7 +1571,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         existing.skip_struck_streams = rule_data.get("skip_struck_streams", False)
                         existing.probe_on_sort = rule_data.get("probe_on_sort", False)
                         existing.orphan_action = rule_data.get("orphan_action", "delete")
-                        existing.match_scope_target_group = rule_data.get("match_scope_target_group", False)
+                        existing.match_scope_target_group = rule_data.get("match_scope_target_group", True)
                         logger.debug("[AUTO-CREATE-YAML] Rule '%s': updated existing (id=%s), stored actions=%s", rule_name, existing.id, existing.actions)
                         imported.append({"name": existing.name, "action": "updated"})
                     else:
@@ -1604,7 +1605,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         skip_struck_streams=rule_data.get("skip_struck_streams", False),
                         probe_on_sort=rule_data.get("probe_on_sort", False),
                         orphan_action=rule_data.get("orphan_action", "delete"),
-                        match_scope_target_group=rule_data.get("match_scope_target_group", False)
+                        match_scope_target_group=rule_data.get("match_scope_target_group", True)
                     )
                     session.add(rule)
                     logger.debug("[AUTO-CREATE-YAML] Rule '%s': created new, stored actions=%s", rule_name, rule.actions)
