@@ -1,5 +1,6 @@
 services:
-  # MCP server — exposes ECM tools for Claude Desktop/Code
+  # MCP server — exposes ECM tools for Claude Desktop/Code over the
+  # Streamable HTTP transport (single /mcp endpoint on port 6101).
   ecm-mcp:
     build:
       context: ./mcp-server

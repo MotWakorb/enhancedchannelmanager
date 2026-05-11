@@ -1029,8 +1029,13 @@ class NormalizationEngine:
 
             results.append(matched)
 
-            # Store the first non-negated match as the primary match for action application
-            if i == 0 and match.matched and not cond_negate:
+            # Store the first *matching*, non-negated condition's span as the primary
+            # match for action application. Not pinned to i == 0: for an OR rule whose
+            # first condition mismatched but a later one matched, the old `i == 0` guard
+            # left primary_match=None, fell through to `match_end=len(text)` below, and a
+            # Strip Prefix / Remove / Replace action then wiped the whole name (gh #217).
+            # Also covers the AND case where condition 1 is a negated guard.
+            if primary_match is None and match.matched and not cond_negate:
                 primary_match = match
 
         # Combine results based on logic

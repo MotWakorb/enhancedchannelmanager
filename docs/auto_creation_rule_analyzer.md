@@ -54,8 +54,9 @@ The tool returns a markdown report with one section per rule.
 }
 ```
 
-`severity` is always one of `error`, `warning`, or `info`. Phase 1
-emits only `warning`-level findings.
+`severity` is always one of `error`, `warning`, or `info`. Most
+findings are `warning`-level; `MERGE_SCOPE_NOT_TARGET_GROUP` is `info`
+(advisory, not a misconfiguration).
 
 ## Finding codes
 
@@ -157,6 +158,36 @@ typically expected new channels to appear.
 This finding is only available in the `from-bundle` flow when the
 bundle includes `channel_groups_diagnostic.json`. The live-mode
 endpoint does not currently fetch channel-group counts.
+
+### `MERGE_SCOPE_NOT_TARGET_GROUP`
+
+**Severity.** `info` (advisory, not a misconfiguration error).
+
+**Trigger.** A rule with a `create_channel` action whose `if_exists`
+is `merge` or `merge_only`, on a rule whose `match_scope_target_group`
+is **off** (falsy). (`if_exists` is a flat key on the action JSON —
+`Action.to_dict()` spreads the action's params onto the top level.)
+
+**Why it matters.** With `match_scope_target_group` off, the
+existing-channel name lookup for `create_channel` searches **every**
+channel group, not just the rule's target group. If a channel with
+the same normalized name already exists in *any* other group, the
+stream merges into that channel — `channels_updated` increments and
+**no channel is created in this rule's target group** (the rule's
+"created" count stays 0). With the flag on, the lookup is restricted
+to the rule's target group, so the rule creates a new channel there
+even when a same-name channel exists elsewhere.
+
+New rules default `match_scope_target_group` to **on** (bd-p6ko9,
+GH #226); this finding flags pre-existing rules that still have it
+**off** so operators can decide whether the all-groups lookup is
+intentional.
+
+**Remediation.** Enable **"scope merge lookups to this rule's target
+group"** (the *Merge lookup scope* option in the rule builder) if you
+want channels created in the target group. Leave it off if you
+deliberately want a same-name channel in another group to absorb the
+streams (the original GH-92 behavior).
 
 ### `RULE_HAS_NO_HOPE_OF_MATCHING`
 

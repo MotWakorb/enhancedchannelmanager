@@ -202,6 +202,81 @@ class TestAddStream:
         mock_client.update_channel.assert_not_called()
 
 
+class TestAddStreams:
+    """Tests for POST /api/channels/{channel_id}/add-streams (bulk add, bd-02xjj / GH #223)."""
+
+    @pytest.mark.asyncio
+    async def test_adds_multiple_streams_in_one_roundtrip(self, async_client):
+        """Appends all new streams with a single get_channel + update_channel."""
+        mock_client = AsyncMock()
+        mock_client.get_channel.return_value = {"id": 1, "name": "ESPN", "streams": [5]}
+        mock_client.update_channel.return_value = {"id": 1, "name": "ESPN", "streams": [5, 10, 11, 12]}
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/1/add-streams", json={
+                "stream_ids": [10, 11, 12],
+            })
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["added"] == [10, 11, 12]
+        assert data["skipped"] == []
+        # Exactly one update_channel call regardless of batch size.
+        mock_client.update_channel.assert_called_once_with(1, {"streams": [5, 10, 11, 12]})
+        assert mock_client.get_channel.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_dedups_against_existing_streams(self, async_client):
+        """Streams already on the channel are skipped, order preserved."""
+        mock_client = AsyncMock()
+        mock_client.get_channel.return_value = {"id": 1, "name": "ESPN", "streams": [5, 10]}
+        mock_client.update_channel.return_value = {"id": 1, "name": "ESPN", "streams": [5, 10, 11]}
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/1/add-streams", json={
+                "stream_ids": [10, 11, 5],
+            })
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["added"] == [11]
+        assert sorted(data["skipped"]) == [5, 10]
+        mock_client.update_channel.assert_called_once_with(1, {"streams": [5, 10, 11]})
+
+    @pytest.mark.asyncio
+    async def test_noop_when_all_already_present(self, async_client):
+        """No update_channel call when every requested stream is already on the channel."""
+        mock_client = AsyncMock()
+        mock_client.get_channel.return_value = {"id": 1, "name": "ESPN", "streams": [5, 10]}
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/1/add-streams", json={
+                "stream_ids": [5, 10],
+            })
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["added"] == []
+        mock_client.update_channel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_client_error(self, async_client):
+        """Returns 500 on Dispatcharr client error."""
+        mock_client = AsyncMock()
+        mock_client.get_channel.side_effect = Exception("boom")
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/1/add-streams", json={
+                "stream_ids": [10],
+            })
+
+        assert response.status_code == 500
+
+
 class TestRemoveStream:
     """Tests for POST /api/channels/{channel_id}/remove-stream."""
 
