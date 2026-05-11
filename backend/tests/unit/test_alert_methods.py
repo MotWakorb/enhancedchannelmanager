@@ -18,6 +18,33 @@ from alert_methods import (
     _method_registry,
 )
 
+# Type used by probe_failures threshold tests. Other tests call ``_method_registry.clear()``;
+# importing SMTP does not repopulate the registry, so these tests register their own stub.
+_PROBE_FAILURES_THRESHOLD_TEST_TYPE = "probe_failures_threshold_test"
+
+
+def _ensure_probe_failures_threshold_test_method_registered() -> str:
+    """Ensure a minimal AlertMethod type exists for probe_failures threshold unit tests."""
+    if _PROBE_FAILURES_THRESHOLD_TEST_TYPE in _method_registry:
+        return _PROBE_FAILURES_THRESHOLD_TEST_TYPE
+
+    mt = _PROBE_FAILURES_THRESHOLD_TEST_TYPE
+
+    @register_method
+    class ProbeFailuresThresholdTestMethod(AlertMethod):
+        method_type = mt
+        display_name = "Probe failures threshold test stub"
+        required_config_fields: list = []
+        optional_config_fields: dict = {}
+
+        async def send(self, message) -> bool:
+            return True
+
+        async def test_connection(self) -> tuple[bool, str]:
+            return True, "ok"
+
+    return _PROBE_FAILURES_THRESHOLD_TEST_TYPE
+
 
 class TestAlertMessage:
     """Tests for AlertMessage class."""
@@ -441,13 +468,13 @@ class TestAlertMethodManager:
     @pytest.mark.asyncio
     async def test_send_alert_probe_failures_threshold_uses_streams_failed_metadata(self):
         """Regression: min_failures must see failures when only streams_failed is set (stream_probe UI keys)."""
-        import alert_methods_smtp  # noqa: F401 — registers SMTPMethod
+        mt = _ensure_probe_failures_threshold_test_method_registered()
 
         manager = AlertMethodManager(digest_window_seconds=3600)
         probe_cfg = json.dumps({"probe_failures": {"enabled": True, "min_failures": 5}})
         mock_model = MagicMock()
         mock_model.id = 1
-        mock_model.method_type = "smtp"
+        mock_model.method_type = mt
         mock_model.name = "Email"
         mock_model.notify_warning = True
         mock_model.notify_success = True
@@ -455,7 +482,7 @@ class TestAlertMethodManager:
         mock_model.notify_info = False
         mock_model.alert_sources = probe_cfg
 
-        method = create_method("smtp", 1, "Test", {"to_emails": ["x@example.com"]})
+        method = create_method(mt, 1, "Test", {})
         assert method is not None
         manager._methods[1] = method
 
@@ -479,13 +506,13 @@ class TestAlertMethodManager:
 
     @pytest.mark.asyncio
     async def test_send_alert_probe_failures_streams_failed_below_threshold_not_queued(self):
-        import alert_methods_smtp  # noqa: F401
+        mt = _ensure_probe_failures_threshold_test_method_registered()
 
         manager = AlertMethodManager(digest_window_seconds=3600)
         probe_cfg = json.dumps({"probe_failures": {"enabled": True, "min_failures": 5}})
         mock_model = MagicMock()
         mock_model.id = 1
-        mock_model.method_type = "smtp"
+        mock_model.method_type = mt
         mock_model.name = "Email"
         mock_model.notify_warning = True
         mock_model.notify_success = True
@@ -493,7 +520,7 @@ class TestAlertMethodManager:
         mock_model.notify_info = False
         mock_model.alert_sources = probe_cfg
 
-        method = create_method("smtp", 1, "Test", {"to_emails": ["x@example.com"]})
+        method = create_method(mt, 1, "Test", {})
         manager._methods[1] = method
 
         mock_session = MagicMock()
@@ -516,13 +543,13 @@ class TestAlertMethodManager:
     @pytest.mark.asyncio
     async def test_send_alert_probe_failures_failed_count_precedence_over_streams_failed(self):
         """When both keys exist, failed_count wins for threshold (additive metadata shape)."""
-        import alert_methods_smtp  # noqa: F401
+        mt = _ensure_probe_failures_threshold_test_method_registered()
 
         manager = AlertMethodManager(digest_window_seconds=3600)
         probe_cfg = json.dumps({"probe_failures": {"enabled": True, "min_failures": 5}})
         mock_model = MagicMock()
         mock_model.id = 1
-        mock_model.method_type = "smtp"
+        mock_model.method_type = mt
         mock_model.name = "Email"
         mock_model.notify_warning = True
         mock_model.notify_success = True
@@ -530,7 +557,7 @@ class TestAlertMethodManager:
         mock_model.notify_info = False
         mock_model.alert_sources = probe_cfg
 
-        method = create_method("smtp", 1, "Test", {"to_emails": ["x@example.com"]})
+        method = create_method(mt, 1, "Test", {})
         manager._methods[1] = method
 
         mock_session = MagicMock()
