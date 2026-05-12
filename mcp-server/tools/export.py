@@ -3,6 +3,7 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
+from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
 
 logger = logging.getLogger(__name__)
@@ -14,7 +15,7 @@ def register(mcp: FastMCP):
         """List all export profiles for generating M3U/XMLTV files."""
         try:
             client = get_ecm_client()
-            profiles = await client.get("/api/export/profiles")
+            profiles = await client.call_endpoint(ENDPOINTS["export_list_profiles"])
 
             if not profiles:
                 return "No export profiles configured."
@@ -23,8 +24,8 @@ def register(mcp: FastMCP):
             for p in profiles:
                 name = p.get("name", "Unknown")
                 pid = p.get("id", "?")
-                ptype = p.get("type", "unknown")
-                lines.append(f"  {name} (id={pid}) — type: {ptype}")
+                mode = p.get("selection_mode", p.get("type", "unknown"))
+                lines.append(f"  {name} (id={pid}) — selection: {mode}")
 
             return "\n".join(lines)
         except Exception as e:
@@ -40,8 +41,11 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(f"/api/export/profiles/{profile_id}/generate")
-            return f"Export generated for profile {profile_id}. {result.get('message', 'Check ECM for download links.')}"
+            result = await client.call_endpoint(
+                ENDPOINTS["export_generate_profile"], path_args={"profile_id": profile_id},
+            )
+            msg = result.get("message", "Check ECM for download links.") if isinstance(result, dict) else ""
+            return f"Export generated for profile {profile_id}. {msg}"
         except Exception as e:
             logger.error("[MCP] generate_export failed: %s", e)
             return f"Error generating export for profile {profile_id}: {e}"
@@ -55,9 +59,10 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post("/api/export/profiles", json_data={"name": name})
-            pid = result.get("id", "?")
-            return f"Export profile created: {name} (id={pid})"
+            result = await client.call_endpoint(ENDPOINTS["export_create_profile"], body={"name": name})
+            pid = result.get("id", "?") if isinstance(result, dict) else "?"
+            rname = result.get("name", name) if isinstance(result, dict) else name
+            return f"Export profile created: {rname} (id={pid})"
         except Exception as e:
             logger.error("[MCP] create_export_profile failed: %s", e)
             return f"Error creating export profile: {e}"
@@ -71,7 +76,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            await client.delete(f"/api/export/profiles/{profile_id}")
+            await client.call_endpoint(ENDPOINTS["export_delete_profile"], path_args={"profile_id": profile_id})
             return f"Export profile {profile_id} deleted."
         except Exception as e:
             logger.error("[MCP] delete_export_profile failed: %s", e)
@@ -82,7 +87,7 @@ def register(mcp: FastMCP):
         """List configured cloud storage targets for publishing exports."""
         try:
             client = get_ecm_client()
-            targets = await client.get("/api/export/cloud-targets")
+            targets = await client.call_endpoint(ENDPOINTS["export_list_cloud_targets"])
 
             if not targets:
                 return "No cloud targets configured."
@@ -108,8 +113,11 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(f"/api/export/publish-configs/{config_id}/publish")
-            return f"Publish started for config {config_id}. {result.get('message', '')}"
+            result = await client.call_endpoint(
+                ENDPOINTS["export_publish_config"], path_args={"config_id": config_id},
+            )
+            msg = result.get("message", "") if isinstance(result, dict) else ""
+            return f"Publish started for config {config_id}. {msg}"
         except Exception as e:
             logger.error("[MCP] publish_export failed: %s", e)
             return f"Error publishing export: {e}"

@@ -3,6 +3,7 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
+from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
 
 logger = logging.getLogger(__name__)
@@ -14,7 +15,9 @@ def register(mcp: FastMCP):
         """List all configured EPG data sources."""
         try:
             client = get_ecm_client()
-            sources = await client.get("/api/epg/sources")
+            sources = await client.call_endpoint(ENDPOINTS["epg_list_sources"])
+            if isinstance(sources, dict):
+                sources = sources.get("sources", sources.get("results", []))
 
             if not sources:
                 return "No EPG sources configured."
@@ -41,8 +44,11 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(f"/api/epg/sources/{source_id}/refresh", timeout=300.0)
-            return f"EPG source {source_id} refresh started. {result.get('message', '')}"
+            result = await client.call_endpoint(
+                ENDPOINTS["epg_refresh_source"], path_args={"source_id": source_id}, timeout=300.0,
+            )
+            msg = result.get("message", "") if isinstance(result, dict) else ""
+            return f"EPG source {source_id} refresh started. {msg}"
         except Exception as e:
             logger.error("[MCP] refresh_epg failed: %s", e)
             return f"Error refreshing EPG source {source_id}: {e}"
@@ -58,7 +64,7 @@ def register(mcp: FastMCP):
             client = get_ecm_client()
 
             if source_ids is None:
-                sources = await client.get("/api/epg/sources")
+                sources = await client.call_endpoint(ENDPOINTS["epg_list_sources"])
                 if isinstance(sources, dict):
                     sources = sources.get("sources", sources.get("results", []))
                 source_ids = [s.get("id") for s in sources if s.get("id")]
@@ -70,7 +76,9 @@ def register(mcp: FastMCP):
             errors = []
             for sid in source_ids:
                 try:
-                    await client.post(f"/api/epg/sources/{sid}/refresh", timeout=300.0)
+                    await client.call_endpoint(
+                        ENDPOINTS["epg_refresh_source"], path_args={"source_id": sid}, timeout=300.0,
+                    )
                     refreshed += 1
                 except Exception as e:
                     errors.append(f"source {sid}: {e}")
@@ -90,7 +98,7 @@ def register(mcp: FastMCP):
         """Auto-match channels to EPG data based on channel names."""
         try:
             client = get_ecm_client()
-            result = await client.post("/api/epg/match", timeout=300.0)
+            result = await client.call_endpoint(ENDPOINTS["epg_match"], timeout=300.0)
 
             matched = result.get("matched", 0)
             unmatched = result.get("unmatched", 0)
@@ -109,9 +117,10 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post("/api/epg/sources", json_data={"name": name, "url": url})
-            sid = result.get("id", "?")
-            return f"EPG source created: {name} (id={sid})"
+            result = await client.call_endpoint(ENDPOINTS["epg_create_source"], body={"name": name, "url": url})
+            sid = result.get("id", "?") if isinstance(result, dict) else "?"
+            rname = result.get("name", name) if isinstance(result, dict) else name
+            return f"EPG source created: {rname} (id={sid})"
         except Exception as e:
             logger.error("[MCP] create_epg_source failed: %s", e)
             return f"Error creating EPG source: {e}"
@@ -140,7 +149,13 @@ def register(mcp: FastMCP):
             if not payload:
                 return "No changes specified."
 
-            await client.patch(f"/api/epg/sources/{source_id}", json_data=payload)
+            result = await client.call_endpoint(
+                ENDPOINTS["epg_update_source"], path_args={"source_id": source_id}, body=payload,
+            )
+            if isinstance(result, dict):
+                rname = result.get("name", "?")
+                rurl = (result.get("url") or "")[:60]
+                return f"EPG source {source_id} updated: name='{rname}', url='{rurl}'"
             return f"EPG source {source_id} updated."
         except Exception as e:
             logger.error("[MCP] update_epg_source failed: %s", e)
@@ -155,7 +170,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            await client.delete(f"/api/epg/sources/{source_id}")
+            await client.call_endpoint(ENDPOINTS["epg_delete_source"], path_args={"source_id": source_id})
             return f"EPG source {source_id} deleted."
         except Exception as e:
             logger.error("[MCP] delete_epg_source failed: %s", e)
@@ -169,14 +184,24 @@ def register(mcp: FastMCP):
         """Get the EPG schedule grid — what's on TV now and upcoming.
 
         Args:
-            channel_id: Optional channel ID to filter for a specific channel
+            channel_id: Optional channel ID to filter for a specific channel (filtered client-side)
             limit: Maximum number of programs to return (default 20)
         """
         try:
             client = get_ecm_client()
-            result = await client.get("/api/epg/grid", channel_id=channel_id, limit=limit)
+            # Backend GET /api/epg/grid only accepts optional `start`/`end`
+            # datetime params — `channel_id`/`limit` are applied client-side
+            # below (sending them as query params was silently ignored: drift
+            # fixed in bd-vtghg Phase 2).
+            result = await client.call_endpoint(ENDPOINTS["epg_grid"])
 
             programs = result if isinstance(result, list) else result.get("programs", [])
+
+            if channel_id is not None:
+                programs = [
+                    p for p in programs
+                    if channel_id in (p.get("channel_id"), p.get("channel"))
+                ]
 
             if not programs:
                 return "No EPG schedule data available."
@@ -202,7 +227,9 @@ def register(mcp: FastMCP):
         """List all dummy EPG profiles used to generate placeholder guide data."""
         try:
             client = get_ecm_client()
-            profiles = await client.get("/api/dummy-epg/profiles")
+            profiles = await client.call_endpoint(ENDPOINTS["dummy_epg_list_profiles"])
+            if isinstance(profiles, dict):
+                profiles = profiles.get("profiles", profiles.get("results", []))
 
             if not profiles:
                 return "No dummy EPG profiles configured."
@@ -225,8 +252,8 @@ def register(mcp: FastMCP):
         """Force regeneration of all dummy EPG XMLTV data from enabled profiles."""
         try:
             client = get_ecm_client()
-            result = await client.post("/api/dummy-epg/generate", timeout=60.0)
-            count = result.get("profiles_generated", 0)
+            result = await client.call_endpoint(ENDPOINTS["dummy_epg_generate"], timeout=60.0)
+            count = result.get("profiles_generated", 0) if isinstance(result, dict) else 0
             return f"Dummy EPG regenerated for {count} enabled profiles."
         except Exception as e:
             logger.error("[MCP] generate_dummy_epg failed: %s", e)

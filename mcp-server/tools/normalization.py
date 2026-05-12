@@ -3,6 +3,7 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
+from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,7 @@ def register(mcp: FastMCP):
         try:
             client = get_ecm_client()
             texts = [t.strip() for t in text.split(",") if t.strip()]
-            result = await client.post("/api/normalization/test-batch", json_data={"texts": texts})
+            result = await client.call_endpoint(ENDPOINTS["normalization_test_batch"], body={"texts": texts})
 
             results = result.get("results", result) if isinstance(result, dict) else result
 
@@ -51,7 +52,7 @@ def register(mcp: FastMCP):
         """List all normalization rule groups and their rules."""
         try:
             client = get_ecm_client()
-            result = await client.get("/api/normalization/groups")
+            result = await client.call_endpoint(ENDPOINTS["normalization_list_groups"])
 
             groups = result.get("groups", []) if isinstance(result, dict) else result
 

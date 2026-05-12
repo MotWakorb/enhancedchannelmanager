@@ -122,7 +122,7 @@ class TestListM3UAccounts:
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(get=[
+        mock_client = _make_ecm_client_mock(call_endpoint=[
             {"id": 1, "name": "Provider A", "stream_count": 5000, "status": "success"},
             {"id": 2, "name": "Provider B", "stream_count": 3000, "status": "error"},
         ])
@@ -144,7 +144,7 @@ class TestListM3UAccounts:
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(get=[])
+        mock_client = _make_ecm_client_mock(call_endpoint=[])
 
         with patch("tools.m3u.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("list_m3u_accounts", {})
@@ -164,7 +164,7 @@ class TestGetSettings:
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(get={
+        mock_client = _make_ecm_client_mock(call_endpoint={
             "url": "http://dispatcharr:8000",
             "configured": True,
             "theme": "dark",
@@ -200,7 +200,7 @@ class TestGetStreamHealth:
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(get={
+        mock_client = _make_ecm_client_mock(call_endpoint={
             "total_streams": 500,
             "probed": 480,
             "healthy": 450,
@@ -223,7 +223,7 @@ class TestGetStreamHealth:
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(get={})
+        mock_client = _make_ecm_client_mock(call_endpoint={})
 
         with patch("tools.streams.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("get_stream_health", {})
@@ -646,3 +646,113 @@ class TestCallEndpoint:
             with pytest.raises(ContractError) as exc_info:
                 await client.call_endpoint(ENDPOINTS["channels_list"], query={"group_id": 3})
         assert "group_id" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: contract-registry migration of the other domains + verify-the-effect
+# ---------------------------------------------------------------------------
+
+
+class TestPhase2Migration:
+    """The other domains now route through call_endpoint(ENDPOINTS[...])."""
+
+    @pytest.mark.asyncio
+    async def test_list_channel_groups_uses_endpoint(self):
+        from tools.channel_groups import register
+        from mcp.server.fastmcp import FastMCP
+        from _endpoint_contracts import ENDPOINTS
+
+        mcp = FastMCP("test")
+        register(mcp)
+        mock_client = _make_ecm_client_mock(call_endpoint=[{"id": 1, "name": "Sports", "channel_count": 3}])
+        with patch("tools.channel_groups.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("list_channel_groups", {})
+        assert "Sports" in result[0][0].text
+        mock_client.call_endpoint.assert_awaited_once_with(ENDPOINTS["groups_list"])
+
+    @pytest.mark.asyncio
+    async def test_list_streams_sends_backend_query_names(self):
+        """group -> channel_group_name, provider_id -> m3u_account (drift fixed in bd-vtghg)."""
+        from tools.streams import register
+        from mcp.server.fastmcp import FastMCP
+        from _endpoint_contracts import ENDPOINTS
+
+        mcp = FastMCP("test")
+        register(mcp)
+        mock_client = _make_ecm_client_mock(call_endpoint={"count": 0, "results": []})
+        with patch("tools.streams.get_ecm_client", return_value=mock_client):
+            await mcp.call_tool("list_streams", {"group": "News", "provider_id": 4, "search": "cnn"})
+        call = mock_client.call_endpoint.call_args
+        assert call.args[0] is ENDPOINTS["streams_list"]
+        q = call.kwargs["query"]
+        assert q.get("channel_group_name") == "News"
+        assert q.get("m3u_account") == 4
+        assert q.get("search") == "cnn"
+        assert "group" not in q and "provider_id" not in q
+
+    @pytest.mark.asyncio
+    async def test_get_journal_sends_page_size_not_limit(self):
+        """Backend /api/journal paginates via page_size (drift fixed in bd-vtghg)."""
+        from tools.system import register
+        from mcp.server.fastmcp import FastMCP
+        from _endpoint_contracts import ENDPOINTS
+
+        mcp = FastMCP("test")
+        register(mcp)
+        mock_client = _make_ecm_client_mock(call_endpoint={"entries": []})
+        with patch("tools.system.get_ecm_client", return_value=mock_client):
+            await mcp.call_tool("get_journal", {"limit": 5, "category": "channels"})
+        call = mock_client.call_endpoint.call_args
+        assert call.args[0] is ENDPOINTS["journal_list"]
+        q = call.kwargs["query"]
+        assert q == {"page_size": 5, "category": "channels"}
+        assert "limit" not in q
+
+
+class TestVerifyTheEffect:
+    """Mutating tools report the resulting state from the response, not the request."""
+
+    @pytest.mark.asyncio
+    async def test_update_channel_reports_response_fields(self):
+        from tools.channels import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+        # Request asks for group 7, but the backend response says group 99 —
+        # the tool must surface what actually happened (99), not what we asked.
+        mock_client = _make_ecm_client_mock(
+            call_endpoint={"id": 1, "name": "ESPN HD", "channel_number": 42, "channel_group_id": 99}
+        )
+        with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("update_channel", {"channel_id": 1, "group_id": 7})
+        text = result[0][0].text
+        assert "ESPN HD" in text
+        assert "group_id=99" in text
+
+    @pytest.mark.asyncio
+    async def test_delete_channel_group_warns_when_still_present(self):
+        from tools.channel_groups import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+        mock_client = AsyncMock()
+        # delete returns nothing; the read-back still lists the group.
+        mock_client.call_endpoint.side_effect = [None, [{"id": 5, "name": "Stale"}]]
+        with patch("tools.channel_groups.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("delete_channel_group", {"group_id": 5})
+        assert "WARNING" in result[0][0].text
+
+    @pytest.mark.asyncio
+    async def test_delete_channel_group_confirms_when_gone(self):
+        from tools.channel_groups import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = [None, [{"id": 99, "name": "Other"}]]
+        with patch("tools.channel_groups.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool("delete_channel_group", {"group_id": 5})
+        assert "deleted" in result[0][0].text and "WARNING" not in result[0][0].text
