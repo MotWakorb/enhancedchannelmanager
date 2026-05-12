@@ -135,7 +135,37 @@ In-app notification bell with history, active task pinning, and external alert m
 
 ## MCP Server (Claude Integration)
 
-ECM includes an MCP (Model Context Protocol) server that lets Claude manage your channels through natural language. Ask Claude to list channels, refresh M3U accounts, probe stream health, run auto-creation pipelines, find and merge duplicate channels, view stats, and more — 124 tools across 14 domains.
+ECM includes an MCP (Model Context Protocol) server: an optional sidecar container that exposes ECM's functionality to Claude — **Claude Desktop**, **Claude Code**, or any MCP-capable client — so you can manage your install in plain language instead of clicking through the UI. **124 tools across 14 domains** (channels, channel groups, M3U accounts, EPG sources, streams, normalization, auto-creation, stats, scheduled tasks, profiles, export, journal, notifications, system), plus an `overview` resource that gives Claude a one-shot snapshot of your install.
+
+Everything Claude does runs against your live ECM through the API — it's the same operations the UI performs, just driven by conversation. Mutating actions report the resulting state back (e.g. the new channel's group and number) so you can confirm the change took effect.
+
+### What you can do with it
+
+Things you can ask Claude to do:
+
+**Channels & streams**
+- "List every channel in the Sports group that has fewer than 2 streams"
+- "Find duplicate channels and merge each set, keeping the one with the most streams"
+- "Add these 8 streams to channel 412 and put the 1080p ones first"
+- "Renumber the News group starting at 200"
+- "Build a channel lineup from this list of names and fuzzy-match streams to each"
+
+**Auto-creation**
+- "Run the auto-creation pipeline and tell me what it created"
+- "Analyze my auto-creation rules and flag anything misconfigured" — the Rule Analyzer catches regex/structural mistakes (`UK|` that matches everything, `^4K` typed under *Contains* that matches nothing, double-escape typos, OR-arms missing a group guard, merges into empty groups) without running the rule
+- "Create a rule that auto-creates channels for any stream whose name contains 'PPV', into the Events group"
+- "Why didn't the 4K Sports rule match anything?" — Claude can pull a debug bundle and analyze it
+- "Clear all the channels that auto-creation made in the Test group"
+
+**M3U & EPG**
+- "Refresh all my M3U accounts and report any failures"
+- "Which channels are missing an EPG ID?" → "assign tvg_ids to those"
+- "Probe every stream in the Movies group and list the dead ones"
+
+**Housekeeping & insight**
+- "Show me this week's watch stats" / "which channels has nobody watched in 30 days?"
+- "What scheduled tasks are enabled?" / "run the cleanup task"
+- "Back up my config" / "give me an overview of this ECM install"
 
 ### Setup
 
