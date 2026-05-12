@@ -666,19 +666,18 @@ class StreamProber:
                 notification_type = "success"
 
             # Build message
-            parts = []
-            if self._probe_progress_success_count > 0:
-                parts.append(f"{self._probe_progress_success_count} success")
-            if self._probe_progress_failed_count > 0:
-                parts.append(f"{self._probe_progress_failed_count} failed")
-            if self._probe_progress_black_screen_count > 0:
-                parts.append(f"{self._probe_progress_black_screen_count} black screen")
-            if self._probe_progress_low_fps_count > 0:
-                parts.append(f"{self._probe_progress_low_fps_count} low FPS")
-            if self._probe_progress_skipped_count > 0:
-                parts.append(f"{self._probe_progress_skipped_count} skipped")
+            total_streams = self._probe_progress_total
+            ok = self._probe_progress_success_count
+            failed = self._probe_progress_failed_count
+            skipped = self._probe_progress_skipped_count
+            black = self._probe_progress_black_screen_count
+            low = self._probe_progress_low_fps_count
 
-            message = f"Stream probe complete: {', '.join(parts)}" if parts else "Stream probe complete"
+            message = (
+                f"Stream probe complete: {total_streams} stream(s) — {ok} ok, {failed} failed, {skipped} skipped"
+            )
+            if black or low:
+                message += f" ({black} black screen, {low} low FPS)"
 
             metadata = {
                 "progress": {
@@ -705,13 +704,16 @@ class StreamProber:
             # Dispatch to External Alerts (AlertManager) which respects notify_* type filters
             try:
                 from alert_methods import send_alert
+                failed = self._probe_progress_failed_count
                 alert_metadata = {
-                    "failed_count": self._probe_progress_failed_count,
-                    "success_count": self._probe_progress_success_count,
-                    "skipped_count": self._probe_progress_skipped_count,
-                    "black_screen_count": self._probe_progress_black_screen_count,
-                    "low_fps_count": self._probe_progress_low_fps_count,
-                    "total_count": self._probe_progress_total,
+                    "streams_scheduled": self._probe_progress_total,
+                    "streams_ok": self._probe_progress_success_count,
+                    "streams_failed": failed,
+                    "streams_skipped": self._probe_progress_skipped_count,
+                    "black_screen_detections": self._probe_progress_black_screen_count,
+                    "low_fps_detections": self._probe_progress_low_fps_count,
+                    # Legacy key — alert_methods probe_failures min_failures threshold reads failed_count
+                    "failed_count": failed,
                 }
                 await send_alert(
                     title="Stream Probe",
@@ -1264,6 +1266,8 @@ class StreamProber:
                     mapped["width"] = int(w)
                     mapped["height"] = int(h)
                 except (ValueError, AttributeError):
+                    # Resolution string is malformed (e.g., "unknown"); skip width/height
+                    # but keep the raw resolution above so the operator still sees it.
                     pass
             if ecm_stats.get("video_codec") is not None:
                 mapped["video_codec"] = ecm_stats["video_codec"]
@@ -1281,6 +1285,8 @@ class StreamProber:
                 try:
                     mapped["source_fps"] = float(ecm_stats["fps"])
                 except (ValueError, TypeError):
+                    # fps was non-numeric (e.g., "30/1" already failed to parse upstream);
+                    # omit source_fps so we don't push a bogus value to Dispatcharr.
                     pass
             if ecm_stats.get("stream_type") is not None:
                 mapped["stream_type"] = ecm_stats["stream_type"]

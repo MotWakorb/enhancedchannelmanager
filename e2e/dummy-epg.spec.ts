@@ -4,7 +4,7 @@
  * Tests the full flow: create profile -> configure patterns/substitutions ->
  * assign channels -> preview pipeline -> verify XMLTV output.
  */
-import { test, expect, navigateToTab, waitForToast } from './fixtures/base';
+import { test, expect, navigateToTab } from './fixtures/base';
 import { generateTestId } from './fixtures/test-data';
 
 const PROFILE_NAME = `E2E Test Profile ${generateTestId()}`;

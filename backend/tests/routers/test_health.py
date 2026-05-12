@@ -48,6 +48,53 @@ class TestHealthCheck:
             assert data["git_commit"] == "abc123"
 
 
+class TestVersionEndpoint:
+    """Tests for GET /api/version (bd-h0wfu).
+
+    The endpoint is the canonical "what SHA is this container running?"
+    probe used by operators to detect drift between ``ecm-ecm-1`` and
+    ``origin/dev`` before triaging fake test-failure beads.
+    """
+
+    @pytest.mark.asyncio
+    async def test_version_returns_200(self, async_client):
+        """GET /api/version returns 200 with build identity fields."""
+        response = await async_client.get("/api/version")
+        assert response.status_code == 200
+        data = response.json()
+        assert "version" in data
+        assert "git_commit" in data
+        assert "release_channel" in data
+
+    @pytest.mark.asyncio
+    async def test_version_reads_env_vars(self, async_client):
+        """GET /api/version surfaces ECM_VERSION / GIT_COMMIT / RELEASE_CHANNEL."""
+        with patch.dict("os.environ", {
+            "ECM_VERSION": "9.9.9",
+            "RELEASE_CHANNEL": "edge",
+            "GIT_COMMIT": "deadbeef",
+        }):
+            response = await async_client.get("/api/version")
+            data = response.json()
+            assert data["version"] == "9.9.9"
+            assert data["git_commit"] == "deadbeef"
+            assert data["release_channel"] == "edge"
+
+    @pytest.mark.asyncio
+    async def test_version_falls_back_to_unknown(self, async_client):
+        """Missing env vars produce 'unknown' / 'latest' defaults, never 500."""
+        # Wipe the relevant env vars so the defaults take effect.
+        with patch.dict("os.environ", {}, clear=False) as _env:
+            for key in ("ECM_VERSION", "GIT_COMMIT", "RELEASE_CHANNEL"):
+                _env.pop(key, None)
+            response = await async_client.get("/api/version")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["version"] == "unknown"
+            assert data["git_commit"] == "unknown"
+            assert data["release_channel"] == "latest"
+
+
 class TestSchemaVersionEndpoint:
     """Tests for GET /api/health/schema (bd-c5wf5)."""
 
@@ -216,11 +263,19 @@ class TestReadiness:
 
     @pytest.mark.asyncio
     async def test_ready_returns_503_when_db_fails(self, async_client):
-        """Ready endpoint returns 503 when the DB check fails."""
+        """Ready endpoint returns 503 when the DB check fails.
+
+        CodeQL py/stack-trace-exposure (#1414): /api/health/ready is
+        AUTH-EXEMPT, so the response body is unauthenticated. The detail
+        field MUST be the exception class only — not the message body, which
+        on real DBAPI errors can include connection strings, file paths, or
+        credentials embedded in driver-formatted text.
+        """
         mock_settings = MagicMock()
         mock_settings.url = ""  # dispatcharr skipped
         mock_session = MagicMock()
-        mock_session.execute.side_effect = RuntimeError("database is locked")
+        secret_message = "database is locked /var/secret/path/to/db.sqlite"
+        mock_session.execute.side_effect = RuntimeError(secret_message)
 
         with patch("routers.health.get_session", return_value=mock_session), \
              patch("routers.health.get_settings", return_value=mock_settings), \
@@ -231,7 +286,11 @@ class TestReadiness:
         data = response.json()
         assert data["status"] == "not_ready"
         assert data["checks"]["database"]["status"] == "fail"
-        assert "database is locked" in data["checks"]["database"]["detail"]
+        # Sanitization assertion: detail is the exception class name only.
+        assert data["checks"]["database"]["detail"] == "RuntimeError"
+        # Negative assertion: no part of the original error message leaks.
+        assert "database is locked" not in data["checks"]["database"]["detail"]
+        assert "/var/secret" not in data["checks"]["database"]["detail"]
 
     @pytest.mark.asyncio
     async def test_ready_returns_503_when_dispatcharr_times_out(self, async_client):

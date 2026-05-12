@@ -1288,7 +1288,18 @@ class AutoCreationEngine:
                     action_entry["details"] = action_result.details
                 actions_log.append(action_entry)
 
-                # Check for stop_processing action
+                # Check for stop_processing action.
+                # NOTE: by the time we reach Pass 2, Pass 1 has already
+                # resolved exactly one winning rule per stream — there are no
+                # "further rules" left to stop here (the rule-level
+                # short-circuit is `rule.stop_on_first_match`, handled in
+                # Pass 1). So at the Pass 2 / per-stream level STOP_PROCESSING
+                # is effectively a no-op: it must NOT abort the remaining
+                # streams (bd-iqm50 / GH #225 — `break` here used to kill the
+                # entire sorted_entries loop after the first such stream), and
+                # it does NOT abort the current rule's remaining actions
+                # either (the action's own description is "stop processing
+                # further *rules*", not further actions of this rule).
                 if action.type == ActionType.STOP_PROCESSING.value:
                     stop_processing = True
 
@@ -1362,7 +1373,16 @@ class AutoCreationEngine:
                         rule_channel_order_streams[winning_rule.id].append(cid)
 
             if stop_processing:
-                break
+                # bd-iqm50 / GH #225: continue (NOT break) — STOP_PROCESSING
+                # has no remaining rules to stop in Pass 2, so it must not
+                # terminate the loop over the other matched streams.
+                logger.debug(
+                    "[AUTO-CREATE-ENGINE] Stream %r: STOP_PROCESSING action "
+                    "(no-op at Pass 2 level — one winning rule per stream); "
+                    "continuing to next stream",
+                    stream.stream_name,
+                )
+                continue
 
         # =====================================================================
         # Pass 2.5: Verify EPG assignments on newly created channels
@@ -1764,7 +1784,6 @@ class AutoCreationEngine:
         for src_id in dummy_source_ids:
             src = source_by_id.get(src_id)
             source_name = src.get("name", f"Source {src_id}") if src else f"Source {src_id}"
-            source_url = src.get("url", "") if src else ""
 
             if dry_run:
                 results["dry_run_results"].append({
@@ -2502,6 +2521,19 @@ def _stream_sort_rule_label(stream_sort_field: str | None) -> str:
     }.get(f, f"stream sort ({f})" if f else "stream sort")
 
 
+def _m3u_account_priority_value(
+    sid: int,
+    stream_m3u_map: dict | None,
+    settings,
+) -> int:
+    """Numeric ECM M3U priority for *sid* (0 when unknown)."""
+    pri_map = getattr(settings, "m3u_account_priorities", None) or {} if settings is not None else {}
+    aid = (stream_m3u_map or {}).get(sid)
+    if aid is None:
+        return 0
+    return pri_map.get(str(aid), 0)
+
+
 def _sort_streams_by_m3u_account_priority(
     stream_ids: list[int],
     stream_m3u_map: dict,
@@ -2514,11 +2546,8 @@ def _sort_streams_by_m3u_account_priority(
     Does not require probe stats. *order*: "desc" = highest priority first (recommended),
     "asc" = lowest priority first.
     """
-    pri_map = getattr(settings, "m3u_account_priorities", None) or {}
-
     def sort_key(sid: int):
-        aid = stream_m3u_map.get(sid)
-        pri = pri_map.get(str(aid), 0) if aid is not None else 0
+        pri = _m3u_account_priority_value(sid, stream_m3u_map, settings)
         if order == "desc":
             return (-pri, sid)
         return (pri, sid)
@@ -2549,12 +2578,23 @@ def _sort_streams_by_resolution_height(
     settings,
     order: str,
     channel_name: str,
+    stream_m3u_map: dict | None = None,
+    quality_tie_break_order: str = "desc",
+    quality_m3u_tie_break_enabled: bool = True,
 ) -> list[int]:
     """Sort by probed resolution height; missing stats count as 0.
 
     When Settings enable deprioritization, push failed/black-screen/low-FPS
     streams to the bottom (same categories as smart sort).
+
+    When *quality_m3u_tie_break_enabled* is True, equal resolutions are ordered by ECM M3U
+    account priority (*quality_tie_break_order*: same semantics as Provider Order —
+    ``desc`` = higher priority value first). When False, ties use stream id only (stable).
     """
+
+    tb = (quality_tie_break_order or "desc").lower()
+    if tb not in ("asc", "desc"):
+        tb = "desc"
 
     deprioritize_failed = getattr(settings, "deprioritize_failed_streams", True) if settings is not None else True
     fail_order = getattr(settings, "failed_stream_sort_order", None) if settings is not None else None
@@ -2572,25 +2612,49 @@ def _sort_streams_by_resolution_height(
             if status in ("failed", "timeout"):
                 bucket = "failed"
                 rank = failed_rank.get(bucket, len(failed_rank))
-                # Within deprioritized bucket: still order by resolution (desc/asc)
-                return (1, rank, -h if order == "desc" else h, sid)
+                hk = -h if order == "desc" else h
+                if quality_m3u_tie_break_enabled:
+                    pri = _m3u_account_priority_value(sid, stream_m3u_map, settings)
+                    tb_key = -pri if tb == "desc" else pri
+                    return (1, rank, hk, tb_key, sid)
+                return (1, rank, hk, sid)
             if isinstance(stats, dict) and stats.get("is_black_screen"):
                 bucket = "black_screen"
                 rank = failed_rank.get(bucket, len(failed_rank))
-                return (1, rank, -h if order == "desc" else h, sid)
+                hk = -h if order == "desc" else h
+                if quality_m3u_tie_break_enabled:
+                    pri = _m3u_account_priority_value(sid, stream_m3u_map, settings)
+                    tb_key = -pri if tb == "desc" else pri
+                    return (1, rank, hk, tb_key, sid)
+                return (1, rank, hk, sid)
             if isinstance(stats, dict) and stats.get("is_low_fps"):
                 bucket = "low_fps"
                 rank = failed_rank.get(bucket, len(failed_rank))
-                return (1, rank, -h if order == "desc" else h, sid)
+                hk = -h if order == "desc" else h
+                if quality_m3u_tie_break_enabled:
+                    pri = _m3u_account_priority_value(sid, stream_m3u_map, settings)
+                    tb_key = -pri if tb == "desc" else pri
+                    return (1, rank, hk, tb_key, sid)
+                return (1, rank, hk, sid)
 
-        # Good stream bucket.
-        return (0, 0, -h if order == "desc" else h, sid)
+        hk = -h if order == "desc" else h
+        if quality_m3u_tie_break_enabled:
+            pri = _m3u_account_priority_value(sid, stream_m3u_map, settings)
+            tb_key = -pri if tb == "desc" else pri
+            return (0, 0, hk, tb_key, sid)
+        return (0, 0, hk, sid)
 
     sorted_ids = sorted(stream_ids, key=sort_key)
-    logger.info(
-        "[AUTO-CREATE-ENGINE] Channel '%s': quality sort (%s) -> %s",
-        channel_name, order, sorted_ids,
-    )
+    if quality_m3u_tie_break_enabled:
+        logger.info(
+            "[AUTO-CREATE-ENGINE] Channel '%s': quality sort (%s), equal-quality M3U tie-break (%s) -> %s",
+            channel_name, order, tb, sorted_ids,
+        )
+    else:
+        logger.info(
+            "[AUTO-CREATE-ENGINE] Channel '%s': quality sort (%s), M3U tie-break off -> %s",
+            channel_name, order, sorted_ids,
+        )
     return sorted_ids
 
 
@@ -2641,6 +2705,20 @@ def _reorder_streams_for_rule(
     if order not in ("asc", "desc"):
         order = "asc"
 
+    _tb_raw = getattr(rule, "quality_tie_break_order", None)
+    if isinstance(_tb_raw, str):
+        quality_tie_break_order = _tb_raw.lower().strip()
+    else:
+        quality_tie_break_order = "desc"
+    if quality_tie_break_order not in ("asc", "desc"):
+        quality_tie_break_order = "desc"
+
+    _tie_en_raw = getattr(rule, "quality_m3u_tie_break_enabled", None)
+    if isinstance(_tie_en_raw, bool):
+        quality_m3u_tie_break_enabled = _tie_en_raw
+    else:
+        quality_m3u_tie_break_enabled = True
+
     if not field or field == "smart_sort":
         return _smart_sort_streams(
             stream_ids, stats_cache, stream_m3u_map, channel_name, settings
@@ -2653,7 +2731,14 @@ def _reorder_streams_for_rule(
 
     if field == "quality":
         return _sort_streams_by_resolution_height(
-            stream_ids, stats_cache, settings, order, channel_name
+            stream_ids,
+            stats_cache,
+            settings,
+            order,
+            channel_name,
+            stream_m3u_map=stream_m3u_map,
+            quality_tie_break_order=quality_tie_break_order,
+            quality_m3u_tie_break_enabled=quality_m3u_tie_break_enabled,
         )
 
     if field == "stream_name":

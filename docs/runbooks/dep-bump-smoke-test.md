@@ -1,6 +1,14 @@
 # Runbook: Dep-Bump Fresh-Image Smoke Test (ADR-001)
 
 > Local fresh-image smoke check for dependency-upgrade PRs. Run this before opening any `bd-6rrl5` child PR (or any future major dep bump) to confirm the image still builds and the FastAPI app still serves the wired endpoints.
+>
+> **For backend ASGI-triplet bumps** (`fastapi`, `starlette`, `uvicorn`) this
+> runbook is necessary but **not sufficient**. Additionally run the pre-merge
+> dry-run gate in
+> [Dep-Bump Backend ASGI Regression](./dep-bump-backend-asgi-regression.md#pre-merge-dry-run-gate-pr-170-and-any-future-asgi-triplet-bump),
+> which exercises the rollback path before merge and verifies all four
+> `ecm_*` SLI families emit under synthetic traffic — the silent-SLI-
+> degradation class of regression the smoke matrix does not cover.
 
 - **Severity**: Pre-merge gate (no paging) — workflow tool, not an incident runbook
 - **Owner**: Project Engineer (run during dep-bump work); SRE (owns the underlying contract via ADR-001)

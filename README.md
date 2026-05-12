@@ -143,24 +143,30 @@ ECM includes an MCP (Model Context Protocol) server that lets Claude manage your
 2. **Start the MCP container** — add the `ecm-mcp` service to your compose file (see [With MCP Server](#with-mcp-server-claude-ai-integration)) and start it on port 6101
 3. **Connect Claude** using one of the methods below (replace `YOUR_ECM_HOST` and `YOUR_API_KEY`):
 
-**Claude Desktop** — add to your Claude Desktop config:
+**Claude Desktop** — Claude Desktop talks to remote MCP servers through the `mcp-remote` bridge, so add this to your `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
     "ecm": {
-      "url": "http://YOUR_ECM_HOST:6101/sse?api_key=YOUR_API_KEY"
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_API_KEY",
+        "--allow-http"
+      ]
     }
   }
 }
 ```
+(`--allow-http` is needed because the endpoint is plain HTTP. If your Claude Desktop build supports a direct remote URL, `{ "mcpServers": { "ecm": { "url": "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_API_KEY" } } }` also works — the `mcp-remote` form is the most broadly compatible.)
 
 **Claude Code** — create a `.mcp.json` file in any project directory where you want ECM tools available:
 ```json
 {
   "mcpServers": {
     "ecm": {
-      "type": "sse",
-      "url": "http://YOUR_ECM_HOST:6101/sse?api_key=YOUR_API_KEY"
+      "type": "http",
+      "url": "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_API_KEY"
     }
   }
 }
@@ -173,6 +179,8 @@ To connect:
 4. Ask Claude to manage your channels — e.g. "list my channels", "create an auto-creation rule for sports", "probe all streams"
 
 If running ECM locally, use `localhost` as your host. If the MCP container is on the same Docker network as Claude Code, use the container name (`ecm-mcp`).
+
+**Upgrading from an earlier version:** the MCP server moved from the deprecated SSE transport (`/sse` + `/messages/`) to the modern Streamable HTTP transport on a single `/mcp` endpoint. If you have an existing config pointing at `http://YOUR_ECM_HOST:6101/sse?api_key=...` (or `"type": "sse"` in a `.mcp.json`), change the path to `/mcp` (and `"type": "http"` for Claude Code). The `/sse` endpoint was removed in this version. API-key auth is unchanged.
 
 ### Available Tools (124)
 
@@ -195,7 +203,7 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `bulk_commit_channels` | Commit a batch of channel operations atomically |
 | `build_channel_lineup` | Bulk-create channels and fuzzy-match streams |
 | `clear_auto_created` | Remove auto-created channels by group |
-| `bulk_add_streams_to_channel` | Add multiple streams to a channel at once |
+| `bulk_add_streams_to_channel` | Add multiple streams to a channel in one backend call (single Dispatcharr roundtrip) |
 | `bulk_assign_epg` | Assign EPG IDs (tvg_id) to multiple channels |
 | **Groups (8)** | |
 | `list_channel_groups` | List all groups with channel counts |
@@ -286,7 +294,7 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `cancel_task` | Cancel a running task |
 | `get_task_history` | View task execution history |
 | `list_task_schedules` | List schedules for a task |
-| `create_task_schedule` | Create a cron schedule |
+| `create_task_schedule` | Create a schedule for a task (interval / daily / weekly / biweekly / monthly) |
 | `delete_task_schedule` | Delete a schedule |
 | **Stats (7)** | |
 | `get_channel_stats` | Channel viewing stats and active viewers |
@@ -346,7 +354,7 @@ docker exec enhancedchannelmanager python /app/reset_password.py -u admin -p 'si
 |-|-|
 | Frontend | React 18, TypeScript, Vite, @dnd-kit |
 | Backend | Python, FastAPI, 20+ modular API routers |
-| MCP Server | Python, FastMCP, SSE transport, 124 tools |
+| MCP Server | Python, FastMCP, Streamable HTTP transport, 124 tools |
 | Deployment | Docker Compose, two containers (ECM + MCP) |
 
 ## API Reference
@@ -363,7 +371,7 @@ Interactive API docs are available at `/api/docs` (Swagger UI) and `/api/redoc`.
 - **v0.13.0** — Backend modularization (20+ routers), auth system, task engine
 
 ### v0.16.0 — MCP Server & Claude Integration (Current)
-MCP server for natural language channel management via Claude. 124 tools across 14 domains, SSE transport with API key auth, separate Docker container, frontend settings UI with connection status. Per-rule normalization group selection, video codec as smart sort criterion, configurable deprioritized stream ordering, diagnostic debug bundles, user identification in watch history and stats, and settings persistence hardening.
+MCP server for natural language channel management via Claude. 124 tools across 14 domains, Streamable HTTP transport with API key auth, separate Docker container, frontend settings UI with connection status. Per-rule normalization group selection, video codec as smart sort criterion, configurable deprioritized stream ordering, diagnostic debug bundles, user identification in watch history and stats, and settings persistence hardening.
 
 ### v0.17.0 — Dashboard & Analytics
 Enhanced dashboard with real-time stream monitoring, historical analytics, and customizable widgets.

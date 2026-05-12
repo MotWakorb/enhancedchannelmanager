@@ -3,7 +3,6 @@ Export manager — orchestrates M3U/XMLTV generation for a playlist profile.
 Fetches channel/stream/EPG data from Dispatcharr, generates files,
 and writes them to /config/exports/<profile_id>/.
 """
-import json
 import logging
 import os
 import tempfile
@@ -19,12 +18,58 @@ logger = logging.getLogger(__name__)
 EXPORTS_DIR = CONFIG_DIR / "exports"
 
 
+class ExportPathError(ValueError):
+    """Raised when a requested export path escapes the EXPORTS_DIR root.
+
+    Mirrors the canonicalize-and-verify pattern in routers/backup.py
+    (download_saved_backup) for path-injection defense in depth.
+    Closes the contract gap CodeQL py/path-injection (CWE-22/23/36/73/99)
+    flagged at alerts 1354-1359.
+    """
+
+
+def _safe_export_path(profile_id: int, *parts: str) -> Path:
+    """Resolve EXPORTS_DIR / str(profile_id) [/ parts...] and verify containment.
+
+    Defense-in-depth path containment for the export directory. Even though
+    upstream validators (FastAPI int path-param + Pydantic FILENAME_RE) make
+    traversal in profile_id and prefix unreachable in the current call graph,
+    this canonicalize-and-verify wrapper guarantees the property at the sink
+    rather than relying on caller hygiene. Mirrors backup.py:1170-1175 (commit
+    a591105c, bd-0a1pr).
+
+    Args:
+        profile_id: int — coerced to str for the path component.
+        *parts: optional additional path components (e.g., 'playlist.m3u').
+
+    Returns:
+        The canonicalized Path under EXPORTS_DIR.
+
+    Raises:
+        ExportPathError: if the resolved path escapes EXPORTS_DIR.
+    """
+    safe_root = EXPORTS_DIR.resolve()
+    candidate = (EXPORTS_DIR / str(profile_id)).joinpath(*parts).resolve()
+    try:
+        candidate.relative_to(safe_root)
+    except ValueError as e:
+        raise ExportPathError(
+            "Resolved export path escapes EXPORTS_DIR: %s" % candidate
+        ) from e
+    return candidate
+
+
 class ExportManager:
     """Orchestrates export generation for playlist profiles."""
 
     def get_export_path(self, profile_id: int) -> Path:
-        """Get the export directory for a profile."""
-        return EXPORTS_DIR / str(profile_id)
+        """Get the export directory for a profile.
+
+        Returns a canonicalized path verified to be under EXPORTS_DIR.
+        Raises ExportPathError on containment violation (defense-in-depth
+        for CodeQL py/path-injection alerts 1354-1359).
+        """
+        return _safe_export_path(profile_id)
 
     async def generate(self, profile: dict) -> dict:
         """Generate M3U and XMLTV files for a profile.
@@ -82,8 +127,18 @@ class ExportManager:
         return result
 
     def cleanup(self, profile_id: int) -> None:
-        """Remove export files for a profile."""
-        export_dir = self.get_export_path(profile_id)
+        """Remove export files for a profile.
+
+        Uses canonicalize-and-verify (`_safe_export_path`) so the rmtree
+        sink (CodeQL alert 1355) operates only on a path proven to be
+        under EXPORTS_DIR. If containment fails, logs and returns without
+        deleting — never propagates an attacker-controlled path to rmtree.
+        """
+        try:
+            export_dir = _safe_export_path(profile_id)
+        except ExportPathError as e:
+            logger.warning("[EXPORT] cleanup refused — path escapes EXPORTS_DIR: %s", e)
+            return
         if export_dir.exists():
             import shutil
             shutil.rmtree(export_dir)
@@ -193,5 +248,8 @@ class ExportManager:
             try:
                 os.unlink(tmp_path)
             except OSError:
+                # Temp file may already be gone (race with rename, or never
+                # created); the original write failure below is the real error
+                # we want to propagate, so suppress this cleanup error.
                 pass
             raise

@@ -3,9 +3,72 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
+from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
 
 logger = logging.getLogger(__name__)
+
+
+def _format_analyze_result(result: dict, source: str) -> str:
+    """Render a /rules/analyze response as a markdown report.
+
+    Output shape::
+
+        # Auto-creation rule analysis (<source>)
+
+        Summary: 0 errors, 3 warnings, 0 info.
+
+        ## <Rule name> (id=<n>)
+        | Code | Severity | Field | Message |
+        |---|---|---|---|
+        | REGEX_TRIVIALLY_MATCHES_ALL | warning | conditions[1].value | … |
+
+        ## <Next rule>
+        No findings.
+
+    The "no findings" branch is friendly — empty rule lists and
+    finding-free responses both surface as a clear all-clean message.
+    """
+    summary = result.get("summary") or {}
+    rules = result.get("rules") or []
+    total = sum(summary.values()) if summary else 0
+
+    lines = [f"# Auto-creation rule analysis ({source})", ""]
+    if total == 0:
+        lines.append(
+            f"No findings across {len(rules)} rule(s) — looks clean."
+        )
+        return "\n".join(lines)
+
+    lines.append(
+        f"Summary: {summary.get('error', 0)} errors, "
+        f"{summary.get('warning', 0)} warnings, "
+        f"{summary.get('info', 0)} info."
+    )
+    lines.append("")
+    for r in rules:
+        rid = r.get("rule_id")
+        name = r.get("rule_name") or "<unnamed>"
+        findings = r.get("findings") or []
+        header = f"## {name}"
+        if rid is not None:
+            header += f" (id={rid})"
+        lines.append(header)
+        if not findings:
+            lines.append("No findings.")
+            lines.append("")
+            continue
+        lines.append("| Code | Severity | Field | Message |")
+        lines.append("|---|---|---|---|")
+        for f in findings:
+            msg = (f.get("message") or "").replace("\n", " ").replace("|", "\\|")
+            field = (f.get("field") or "").replace("|", "\\|")
+            lines.append(
+                f"| {f.get('code', '?')} | {f.get('severity', '?')} | "
+                f"{field} | {msg} |"
+            )
+        lines.append("")
+    return "\n".join(lines)
 
 
 def register(mcp: FastMCP):
@@ -14,7 +77,11 @@ def register(mcp: FastMCP):
         """List all auto-creation rules that automatically create channels from streams."""
         try:
             client = get_ecm_client()
-            rules = await client.get("/api/auto-creation/rules")
+            resp = await client.call_endpoint(ENDPOINTS["ac_list_rules"])
+            # The backend wraps the list as {"rules": [...]}; unwrap defensively
+            # (older code iterated the dict's keys -> str.get() AttributeError,
+            # bd-pvw35 / GH #222). The `analyze` tool below already does this.
+            rules = resp.get("rules", []) if isinstance(resp, dict) else (resp or [])
 
             if not rules:
                 return "No auto-creation rules configured."
@@ -42,7 +109,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post("/api/auto-creation/run", json_data={"dry_run": dry_run}, timeout=300.0)
+            result = await client.call_endpoint(ENDPOINTS["ac_run"], body={"dry_run": dry_run}, timeout=300.0)
 
             mode = "Dry run" if dry_run else "Execution"
             lines = [f"Auto-creation {mode} complete:"]
@@ -85,7 +152,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            r = await client.get(f"/api/auto-creation/rules/{rule_id}")
+            r = await client.call_endpoint(ENDPOINTS["ac_get_rule"], path_args={"rule_id": rule_id})
 
             lines = [
                 f"Rule: {r.get('name', 'Unnamed')}",
@@ -143,7 +210,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(f"/api/auto-creation/rules/{rule_id}/toggle")
+            result = await client.call_endpoint(ENDPOINTS["ac_toggle_rule"], path_args={"rule_id": rule_id})
             enabled = result.get("enabled", "unknown")
             return f"Rule {rule_id} is now {'enabled' if enabled else 'disabled'}."
         except Exception as e:
@@ -163,7 +230,7 @@ def register(mcp: FastMCP):
             errors = []
             for rid in rule_ids:
                 try:
-                    result = await client.post(f"/api/auto-creation/rules/{rid}/toggle")
+                    result = await client.call_endpoint(ENDPOINTS["ac_toggle_rule"], path_args={"rule_id": rid})
                     enabled = result.get("enabled", "unknown")
                     state = "enabled" if enabled else "disabled"
                     results.append(f"Rule {rid}: {state}")
@@ -191,7 +258,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(f"/api/auto-creation/rules/{rule_id}/duplicate")
+            result = await client.call_endpoint(ENDPOINTS["ac_duplicate_rule"], path_args={"rule_id": rule_id})
             new_id = result.get("id", "?")
             return f"Rule {rule_id} duplicated. New rule ID: {new_id}"
         except Exception as e:
@@ -207,7 +274,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            await client.delete(f"/api/auto-creation/rules/{rule_id}")
+            await client.call_endpoint(ENDPOINTS["ac_delete_rule"], path_args={"rule_id": rule_id})
             return f"Rule {rule_id} deleted."
         except Exception as e:
             logger.error("[MCP] delete_auto_creation_rule failed: %s", e)
@@ -328,7 +395,7 @@ def register(mcp: FastMCP):
             if normalization_group_ids is not None:
                 payload["normalization_group_ids"] = normalization_group_ids
 
-            result = await client.post("/api/auto-creation/rules", json_data=payload)
+            result = await client.call_endpoint(ENDPOINTS["ac_create_rule"], body=payload)
 
             rule = result.get("rule", result)
             new_id = rule.get("id", "?")
@@ -405,7 +472,9 @@ def register(mcp: FastMCP):
             if not payload:
                 return "No fields to update."
 
-            result = await client.put(f"/api/auto-creation/rules/{rule_id}", json_data=payload)
+            result = await client.call_endpoint(
+                ENDPOINTS["ac_update_rule"], path_args={"rule_id": rule_id}, body=payload,
+            )
             rule = result.get("rule", result)
             return f"Updated rule '{rule.get('name', rule_id)}' (id={rule_id}). Changed: {', '.join(payload.keys())}"
         except Exception as e:
@@ -421,7 +490,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.get("/api/auto-creation/executions", limit=limit)
+            result = await client.call_endpoint(ENDPOINTS["ac_list_executions"], query={"limit": limit})
 
             executions = result.get("executions", []) if isinstance(result, dict) else result
 
@@ -451,12 +520,55 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(f"/api/auto-creation/executions/{execution_id}/rollback", timeout=300.0)
+            result = await client.call_endpoint(
+                ENDPOINTS["ac_rollback"], path_args={"execution_id": execution_id}, timeout=300.0,
+            )
             deleted = result.get("deleted", result.get("channels_deleted", 0))
             return f"Execution {execution_id} rolled back. {deleted} channels deleted."
         except Exception as e:
             logger.error("[MCP] rollback_auto_creation failed: %s", e)
             return f"Error rolling back execution {execution_id}: {e}"
+
+    @mcp.tool()
+    async def analyze_auto_creation_rules(bundle_path: str | None = None) -> str:
+        """Lint and structurally analyze auto-creation rules (bd-0gntx).
+
+        Returns a markdown report of advisory findings: regex shapes that
+        match everything by accident, operator/value mismatches, OR-arms
+        that drop a guard, and merge_streams targeting empty channel
+        groups. Findings are warnings — they never block rule saves.
+
+        Args:
+            bundle_path: Optional. If set, analyze rules.yaml from a
+                debug-bundle tar.gz at that filesystem path (the file
+                must exist on the MCP host). If unset, analyze the live
+                rules in the connected ECM instance.
+        """
+        import os
+
+        try:
+            client = get_ecm_client()
+            if bundle_path:
+                if not os.path.isfile(bundle_path):
+                    return f"Bundle file not found: {bundle_path}"
+                with open(bundle_path, "rb") as fh:
+                    content = fh.read()
+                filename = os.path.basename(bundle_path) or "debug.tar.gz"
+                # contract-exempt: multipart/form-data upload, not a JSON body —
+                # call_endpoint only models JSON-body endpoints.
+                result = await client.post_multipart(
+                    "/api/auto-creation/rules/analyze/from-bundle",
+                    files={"file": (filename, content, "application/gzip")},
+                )
+                source = f"bundle {filename}"
+            else:
+                result = await client.call_endpoint(ENDPOINTS["ac_analyze_rules"])
+                source = "live ECM"
+
+            return _format_analyze_result(result, source)
+        except Exception as e:
+            logger.error("[MCP] analyze_auto_creation_rules failed: %s", e)
+            return f"Error analyzing auto-creation rules: {e}"
 
     @mcp.tool()
     async def get_auto_creation_debug_bundle() -> str:
@@ -465,13 +577,17 @@ def register(mcp: FastMCP):
         The debug bundle is a tar.gz file that must be downloaded from the ECM UI.
         This tool describes what it contains and how to get it.
         """
-        return ("The debug bundle is available at: GET /api/auto-creation/debug-bundle\n"
-                "Download it from the ECM UI: Auto-Creation page > Debug Bundle button\n\n"
+        return ("Debug bundle endpoints (bd-cns7j 202+poll):\n"
+                "  POST /api/auto-creation/debug-bundle           -> 202 + {job_id}\n"
+                "  GET  /api/auto-creation/debug-bundle/{job_id}  -> JSON status, or tar.gz when ready\n"
+                "Or download it from the ECM UI: Auto-Creation page > Debug Bundle button.\n\n"
                 "Bundle contains (all data obfuscated for safe sharing):\n"
                 "  - channels.json — channel data with stream details and stats\n"
-                "  - rules.json — auto-creation rules configuration\n"
-                "  - streams.csv — all streams with metadata\n"
-                "  - stream_stats.json — probe results and health data\n"
+                "  - rules.yaml — auto-creation rules configuration\n"
+                "  - normalization_rules.yaml — normalization rule groups + rules (cross-references rules.yaml's normalization_group_ids)\n"
+                "  - channels.csv — all streams with metadata\n"
                 "  - settings.json — app settings (credentials redacted)\n"
                 "  - task_schedules.json — scheduled task configuration\n"
-                "  - logs.txt — recent application logs")
+                "  - channel_groups_diagnostic.json — Channel Manager group/membership diagnostic\n"
+                "  - logs.txt — recent application logs\n"
+                "  - manifest.json — bundle metadata + counts")

@@ -266,8 +266,13 @@ class TestJournalIndexMigration:
         assert "idx_journal_entity" in names
 
     def test_downgrade_drops_indexes(self, tmp_path):
-        """Round-trip safety: ``alembic downgrade -1`` must remove both
-        indexes so a re-upgrade is idempotent."""
+        """Round-trip safety: reverting revision ``0004`` must drop both indexes.
+
+        Do not use ``downgrade -1``: newer heads (e.g. ``0005`` auto-creation
+        columns) sit above ``0004``, so a single step only peels the latest
+        revision and leaves ``idx_journal_*`` in place. Target ``0003``
+        explicitly — the revision *before* ``0004`` — so journal indexes are
+        always removed regardless of how many migrations follow ``0004``."""
         from alembic import command
 
         db_file = tmp_path / "rt.db"
@@ -284,7 +289,7 @@ class TestJournalIndexMigration:
         assert "idx_journal_batch_id" in after_up
         assert "idx_journal_entity" in after_up
 
-        command.downgrade(cfg, "-1")
+        command.downgrade(cfg, "0003")
 
         engine = create_engine(db_url)
         try:

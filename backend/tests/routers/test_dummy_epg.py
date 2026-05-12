@@ -4,7 +4,6 @@ Unit tests for Dummy EPG router endpoints.
 Tests: Profile CRUD (with group-based channel assignment), preview, and XMLTV output.
 Mocks: _fetch_all_channels, get_client, preview_pipeline, generate_xmltv, cache.
 """
-import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -559,7 +558,8 @@ class TestGetXmltvAll:
     @pytest.mark.asyncio
     async def test_returns_xml_content_type(self, async_client, test_session):
         """Returns response with application/xml content type."""
-        profile = _create_profile(test_session, name="XMLTV Test")
+        # Profile is created so the endpoint has a row to render (side effect on test_session).
+        _create_profile(test_session, name="XMLTV Test")
         xml_output = '<?xml version="1.0"?><tv></tv>'
 
         mock_cache = MagicMock()

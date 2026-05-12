@@ -30,6 +30,10 @@ import {
   // YAML Import/Export
   exportAutoCreationRulesYAML,
   importAutoCreationRulesYAML,
+  // Debug bundle
+  startDebugBundle,
+  pollDebugBundle,
+  generateAndFetchDebugBundle,
 } from './autoCreationApi';
 
 // Start/stop the mock server for these tests
@@ -556,6 +560,134 @@ rules:
 
       expect(result.success).toBe(false);
       expect(result.errors).toHaveLength(1);
+    });
+  });
+
+  // ===========================================================================
+  // Debug bundle (bd-cns7j 202+poll)
+  // ===========================================================================
+
+  describe('debug bundle', () => {
+    it('startDebugBundle POSTs and returns the job_id', async () => {
+      server.use(
+        http.post('/api/auto-creation/debug-bundle', () => {
+          return HttpResponse.json(
+            { job_id: 'job-abc', status: 'running' },
+            { status: 202 }
+          );
+        })
+      );
+
+      const result = await startDebugBundle();
+      expect(result.job_id).toBe('job-abc');
+      expect(result.status).toBe('running');
+    });
+
+    it('pollDebugBundle returns Blob + filename when the artifact is ready', async () => {
+      const tarBytes = new Uint8Array([0x1f, 0x8b, 0x08, 0x00]);
+      server.use(
+        http.get('/api/auto-creation/debug-bundle/job-ready', () => {
+          return new HttpResponse(tarBytes, {
+            status: 200,
+            headers: {
+              'Content-Type': 'application/gzip',
+              'Content-Disposition': 'attachment; filename="ecm-debug-bundle-test.tar.gz"',
+            },
+          });
+        })
+      );
+
+      const { blob, filename } = await pollDebugBundle('job-ready');
+      expect(filename).toBe('ecm-debug-bundle-test.tar.gz');
+      expect(blob.size).toBe(tarBytes.length);
+    });
+
+    it('pollDebugBundle surfaces the backend error message on failed status', async () => {
+      server.use(
+        http.get('/api/auto-creation/debug-bundle/job-failed', () => {
+          return HttpResponse.json({
+            job_id: 'job-failed',
+            status: 'failed',
+            error: 'RuntimeError: dispatcharr unreachable',
+          });
+        })
+      );
+
+      await expect(pollDebugBundle('job-failed')).rejects.toThrow(
+        'dispatcharr unreachable'
+      );
+    });
+
+    it('pollDebugBundle throws on 404 unknown job id', async () => {
+      server.use(
+        http.get('/api/auto-creation/debug-bundle/missing', () => {
+          return HttpResponse.json({ detail: 'not found' }, { status: 404 });
+        })
+      );
+
+      await expect(pollDebugBundle('missing')).rejects.toThrow(/not found/i);
+    });
+
+    it('pollDebugBundle polls "running" then resolves on the next ready response', async () => {
+      let calls = 0;
+      server.use(
+        http.get('/api/auto-creation/debug-bundle/job-flip', () => {
+          calls++;
+          if (calls === 1) {
+            return HttpResponse.json({ job_id: 'job-flip', status: 'running' });
+          }
+          return new HttpResponse(new Uint8Array([1, 2, 3]), {
+            status: 200,
+            headers: {
+              'Content-Type': 'application/gzip',
+              'Content-Disposition': 'attachment; filename="bundle.tar.gz"',
+            },
+          });
+        })
+      );
+
+      // Speed up the inter-poll sleep so the test doesn't wait a full second.
+      const realSetTimeout = window.setTimeout;
+      const stubSetTimeout: typeof window.setTimeout = ((fn: (...args: unknown[]) => void) => {
+        return realSetTimeout(fn, 0);
+      }) as typeof window.setTimeout;
+      const restore = window.setTimeout;
+      window.setTimeout = stubSetTimeout;
+      try {
+        const { blob, filename } = await pollDebugBundle('job-flip');
+        expect(filename).toBe('bundle.tar.gz');
+        expect(blob.size).toBe(3);
+        expect(calls).toBe(2);
+      } finally {
+        window.setTimeout = restore;
+      }
+    });
+
+    it('generateAndFetchDebugBundle wires enqueue → poll → download', async () => {
+      let postCount = 0;
+      server.use(
+        http.post('/api/auto-creation/debug-bundle', () => {
+          postCount++;
+          return HttpResponse.json(
+            { job_id: 'job-flow', status: 'running' },
+            { status: 202 }
+          );
+        }),
+        http.get('/api/auto-creation/debug-bundle/job-flow', () => {
+          return new HttpResponse(new Uint8Array([0xff]), {
+            status: 200,
+            headers: {
+              'Content-Type': 'application/gzip',
+              'Content-Disposition': 'attachment; filename="ecm-debug-bundle.tar.gz"',
+            },
+          });
+        })
+      );
+
+      const { blob, filename } = await generateAndFetchDebugBundle();
+      expect(postCount).toBe(1);
+      expect(filename).toBe('ecm-debug-bundle.tar.gz');
+      expect(blob.size).toBe(1);
     });
   });
 });

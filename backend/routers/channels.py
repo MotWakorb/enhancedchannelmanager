@@ -50,6 +50,10 @@ class AddStreamRequest(BaseModel):
     stream_id: int
 
 
+class AddStreamsRequest(BaseModel):
+    stream_ids: list[int]
+
+
 class RemoveStreamRequest(BaseModel):
     stream_id: int
 
@@ -1955,8 +1959,6 @@ async def merge_channels(request: "MergeChannelsRequest"):
                     all_streams.append(sid)
                     seen_streams.add(sid)
 
-        source_names = [ch.get("name", "Unknown") for ch in source_channels]
-
         # 2. Create the new merged channel
         create_data = {"name": request.target_name}
         if request.target_channel_number is not None:
@@ -2098,6 +2100,62 @@ async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
         return channel
     except Exception as e:
         logger.exception("[CHANNELS] Failed to add stream %s to channel %s: %s", request.stream_id, channel_id, e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/{channel_id}/add-streams")
+async def add_streams_to_channel(channel_id: int, request: AddStreamsRequest):
+    """Add multiple streams to a channel in a single Dispatcharr roundtrip.
+
+    Mirrors the single-add semantics (dedup against streams already on the
+    channel, append in request order) but fetches the channel once and PUTs
+    once instead of once per stream — the MCP ``bulk_add_streams_to_channel``
+    tool used to loop the single-add endpoint, which times out on slow
+    hardware for batches of ~10 streams (bd-02xjj / GH #223).
+    """
+    logger.debug("[CHANNELS] POST /channels/%s/add-streams - %d stream_ids", channel_id, len(request.stream_ids))
+    client = get_client()
+    try:
+        start = time.time()
+        channel = await client.get_channel(channel_id)
+        channel_name = channel.get("name", "Unknown")
+        current_streams = list(channel.get("streams", []))
+        before_streams = list(current_streams)
+        existing = set(current_streams)
+
+        added: list[int] = []
+        skipped: list[int] = []
+        for sid in request.stream_ids:
+            if sid in existing:
+                skipped.append(sid)
+            else:
+                current_streams.append(sid)
+                existing.add(sid)
+                added.append(sid)
+
+        if not added:
+            logger.debug("[CHANNELS] No new streams to add to channel %s (all %d already present)",
+                         channel_id, len(request.stream_ids))
+            return {"channel": channel, "added": [], "skipped": skipped, "total_streams": len(current_streams)}
+
+        result = await client.update_channel(channel_id, {"streams": current_streams})
+        elapsed_ms = (time.time() - start) * 1000
+        logger.info("[CHANNELS] Added %d stream(s) to channel id=%s name=%s (%d skipped) in %.1fms",
+                    len(added), channel_id, channel_name, len(skipped), elapsed_ms)
+
+        journal.log_entry(
+            category="channel",
+            action_type="stream_add",
+            entity_id=channel_id,
+            entity_name=channel_name,
+            description=f"Added {len(added)} stream(s) to channel '{channel_name}'",
+            before_value={"streams": before_streams},
+            after_value={"streams": current_streams},
+        )
+
+        return {"channel": result, "added": added, "skipped": skipped, "total_streams": len(current_streams)}
+    except Exception as e:
+        logger.exception("[CHANNELS] Failed to add streams to channel %s: %s", channel_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -2336,12 +2394,18 @@ async def bulk_merge_channels(request: BulkMergeRequest):
 
         except Exception as e:
             failed_count += 1
-            logger.warning("[CHANNELS] bulk-merge: group failed (target=%s): %s",
-                          item.target_channel_id, e)
+            # CodeQL py/stack-trace-exposure (#1413): log full exception (with
+            # trace) but only return the exception type to the client. ADR-005
+            # disallows "won't fix" dismissal, so we replace str(e) with
+            # type(e).__name__ — operators correlate via X-Request-ID.
+            logger.exception(
+                "[CHANNELS] bulk-merge: group failed (target=%s)",
+                item.target_channel_id,
+            )
             results.append({
                 "target_channel_id": item.target_channel_id,
                 "success": False,
-                "error": str(e),
+                "error": type(e).__name__,
             })
 
     logger.info("[CHANNELS] bulk-merge complete: %d merged, %d failed", merged_count, failed_count)

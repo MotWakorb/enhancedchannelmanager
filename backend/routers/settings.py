@@ -122,6 +122,10 @@ class SettingsRequest(BaseModel):
     auto_creation_excluded_terms: list[str] = []
     auto_creation_excluded_groups: list[str] = []
     auto_creation_exclude_auto_sync_groups: bool = False
+    # Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m).
+    # Default ON; honored by both the backend /api/client-errors endpoint
+    # and the frontend clientErrorReporter.
+    telemetry_client_errors_enabled: bool = True
 
 
 class SettingsResponse(BaseModel):
@@ -206,6 +210,8 @@ class SettingsResponse(BaseModel):
     auto_creation_exclude_auto_sync_groups: bool
     # MCP integration
     mcp_api_key_configured: bool  # Whether an MCP API key has been generated
+    # Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m)
+    telemetry_client_errors_enabled: bool
 
 
 class TestConnectionRequest(BaseModel):
@@ -343,6 +349,7 @@ async def get_current_settings():
         auto_creation_excluded_groups=settings.auto_creation_excluded_groups,
         auto_creation_exclude_auto_sync_groups=settings.auto_creation_exclude_auto_sync_groups,
         mcp_api_key_configured=bool(settings.mcp_api_key),
+        telemetry_client_errors_enabled=settings.telemetry_client_errors_enabled,
     )
 
 
@@ -359,6 +366,11 @@ async def update_settings(request: SettingsRequest):
 
     # Same for SMTP password - preserve existing if not provided
     smtp_password = request.smtp_password if request.smtp_password else current_settings.smtp_password
+
+    # MCP API key is never accepted on this endpoint (it has dedicated
+    # generate/revoke endpoints) — always preserve the stored value so a
+    # partial POST cannot silently revoke it (bd-vj8n9).
+    mcp_api_key = current_settings.mcp_api_key
 
     if request.auth_method not in ("password", "api_key"):
         raise HTTPException(
@@ -480,6 +492,10 @@ async def update_settings(request: SettingsRequest):
         auto_creation_excluded_terms=request.auto_creation_excluded_terms,
         auto_creation_excluded_groups=request.auto_creation_excluded_groups,
         auto_creation_exclude_auto_sync_groups=request.auto_creation_exclude_auto_sync_groups,
+        # MCP API key is preserved from current settings — see comment above
+        # where mcp_api_key is captured (bd-vj8n9).
+        mcp_api_key=mcp_api_key,
+        telemetry_client_errors_enabled=request.telemetry_client_errors_enabled,
     )
     save_settings(new_settings)
     clear_settings_cache()
@@ -1052,7 +1068,11 @@ async def get_mcp_status():
             r = await client.get(mcp_url)
             r.raise_for_status()
             return {"reachable": True, **r.json()}
-    except Exception as e:
-        logger.debug("[SETTINGS] MCP health check failed: %s", e)
-        return {"reachable": False, "error": str(e)}
-    return {"status": "revoked"}
+    except Exception as e:  # noqa: F841 — exception class accessed via type(e)
+        # CodeQL py/stack-trace-exposure (#1415, bd-m8i9q): log the full
+        # exception for operator diagnosis but only return the exception
+        # class to the client. ADR-005 disallows "won't fix" dismissal.
+        # Trailing "return {'status': 'revoked'}" was unreachable and
+        # removed (bd-kdsn3 py/unreachable-statement at original L1058).
+        logger.exception("[SETTINGS] MCP health check failed")
+        return {"reachable": False, "error": type(e).__name__}

@@ -79,9 +79,14 @@ jobs:
           # Pytest exits non-zero if coverage drops below the threshold, so
           # this step enforces the ratchet automatically.
           # See docs/testing.md § "Coverage ratchet cadence".
+          #
+          # --junitxml emits a JUnit-format report consumed by the
+          # flake-pr-comment workflow (bead xq19y) to surface
+          # flagged-in-last-30-runs flakes on every PR.
           python -m pytest \
             --ignore=tests/e2e \
-            -m "not slow" --tb=short --no-header -p no:warnings
+            -m "not slow" --tb=short --no-header -p no:warnings \
+            --junitxml=junit.xml
 
       - name: Upload backend coverage artifact
         if: always()
@@ -93,6 +98,20 @@ jobs:
             backend/coverage.xml
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Upload backend JUnit artifact (flake tracking — bead xq19y)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # NOTE: the `junit-backend` artifact name is consumed by
+          # .github/workflows/flake-pr-comment.yml — do not rename without
+          # updating the consumer.
+          name: junit-backend
+          path: backend/junit.xml
+          if-no-files-found: ignore
+          # 30-day retention matches the 30-run rolling window used by the
+          # flake-pr-comment aggregator.
+          retention-days: 30
 
   # ─── Frontend lint / typecheck / unit tests ───────────────────────────
   frontend:
@@ -137,7 +156,16 @@ jobs:
           # Vitest exits non-zero if coverage drops below any threshold, so
           # this step enforces the ratchet automatically.
           # See docs/testing.md § "Coverage ratchet cadence".
-          npm run test:coverage
+          #
+          # --reporter=junit + --outputFile emits a JUnit-format report
+          # consumed by the flake-pr-comment workflow (bead xq19y) to
+          # surface flagged-in-last-30-runs flakes on every PR. The
+          # `default` reporter is preserved so the human-readable test
+          # output still streams to the job log.
+          npm run test:coverage -- \
+            --reporter=default \
+            --reporter=junit \
+            --outputFile.junit=./junit.xml
 
       - name: Upload coverage artifact
         if: always()
@@ -147,6 +175,20 @@ jobs:
           path: frontend/coverage/
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Upload frontend JUnit artifact (flake tracking — bead xq19y)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # NOTE: the `junit-frontend` artifact name is consumed by
+          # .github/workflows/flake-pr-comment.yml — do not rename without
+          # updating the consumer.
+          name: junit-frontend
+          path: frontend/junit.xml
+          if-no-files-found: ignore
+          # 30-day retention matches the 30-run rolling window used by the
+          # flake-pr-comment aggregator.
+          retention-days: 30
 
   # ─── Semgrep lint (ReDoS / safe_regex guard — bd-eio04.8) ──────────────
   # Enforces the `no-bare-re-on-dynamic-pattern` rule in .semgrep.yml so

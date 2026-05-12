@@ -3,6 +3,7 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
+from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
 
 logger = logging.getLogger(__name__)
@@ -37,9 +38,10 @@ def register(mcp: FastMCP):
                 all_channels = []
                 page = 1
                 while True:
-                    result = await client.get(
-                        "/api/channels", group_id=group_id, search=search,
-                        page=page, page_size=500,
+                    result = await client.call_endpoint(
+                        ENDPOINTS["channels_list"],
+                        query={"channel_group": group_id, "search": search,
+                               "page": page, "page_size": 500},
                     )
                     if isinstance(result, dict):
                         batch = result.get("results", result.get("channels", []))
@@ -63,8 +65,9 @@ def register(mcp: FastMCP):
                 channels = filtered
                 total = len(channels)
             else:
-                result = await client.get(
-                    "/api/channels", group_id=group_id, search=search, page_size=limit,
+                result = await client.call_endpoint(
+                    ENDPOINTS["channels_list"],
+                    query={"channel_group": group_id, "search": search, "page_size": limit},
                 )
                 if isinstance(result, dict):
                     channels = result.get("results", result.get("channels", []))
@@ -117,7 +120,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            c = await client.get(f"/api/channels/{channel_id}")
+            c = await client.call_endpoint(ENDPOINTS["channels_get"], path_args={"channel_id": channel_id})
 
             stream_ids = c.get("streams", [])
             lines = [
@@ -155,11 +158,19 @@ def register(mcp: FastMCP):
             if channel_number is not None:
                 payload["channel_number"] = channel_number
             if group_id is not None:
-                payload["group_id"] = group_id
+                # Backend POST /api/channels expects ``channel_group_id``;
+                # a bare ``group_id`` is silently dropped (bd-7q9l3 / GH #221).
+                payload["channel_group_id"] = group_id
 
-            result = await client.post("/api/channels", json_data=payload)
+            result = await client.call_endpoint(ENDPOINTS["channels_create"], body=payload)
+            # Report the resulting object (not the request) so the caller can
+            # see what actually got created.
             cid = result.get("id", "?")
-            return f"Channel created: #{result.get('channel_number', '?')}: {name} (id={cid})"
+            rname = result.get("name", name)
+            rnum = result.get("channel_number", "?")
+            rgrp = result.get("channel_group_id")
+            grp_info = f", group_id={rgrp}" if rgrp is not None else ""
+            return f"Channel created: #{rnum}: {rname} (id={cid}{grp_info})"
         except Exception as e:
             logger.error("[MCP] create_channel failed: %s", e)
             return f"Error creating channel: {e}"
@@ -187,13 +198,25 @@ def register(mcp: FastMCP):
             if channel_number is not None:
                 payload["channel_number"] = channel_number
             if group_id is not None:
-                payload["group_id"] = group_id
+                # Backend PATCH /api/channels/{id} forwards keys straight to
+                # Dispatcharr, whose channel field is ``channel_group_id``;
+                # a bare ``group_id`` is silently dropped (bd-7q9l3 / GH #221).
+                payload["channel_group_id"] = group_id
 
             if not payload:
                 return "No changes specified."
 
-            result = await client.patch(f"/api/channels/{channel_id}", json_data=payload)
-            return f"Channel {channel_id} updated: {result.get('name', 'OK')}"
+            result = await client.call_endpoint(
+                ENDPOINTS["channels_update"], path_args={"channel_id": channel_id}, body=payload,
+            )
+            # Report the *resulting* state from the response, not the request —
+            # so a 200-with-no-effect can't fool the caller (the #221 failure mode).
+            if isinstance(result, dict):
+                rname = result.get("name", "?")
+                rnum = result.get("channel_number", "?")
+                rgrp = result.get("channel_group_id")
+                return f"Channel {channel_id} updated: name='{rname}', channel_number={rnum}, group_id={rgrp}"
+            return f"Channel {channel_id} updated."
         except Exception as e:
             logger.error("[MCP] update_channel failed: %s", e)
             return f"Error updating channel {channel_id}: {e}"
@@ -207,7 +230,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            await client.delete(f"/api/channels/{channel_id}")
+            await client.call_endpoint(ENDPOINTS["channels_delete"], path_args={"channel_id": channel_id})
             return f"Channel {channel_id} deleted."
         except Exception as e:
             logger.error("[MCP] delete_channel failed: %s", e)
@@ -227,7 +250,7 @@ def register(mcp: FastMCP):
             error_details = []
             for cid in channel_ids:
                 try:
-                    await client.delete(f"/api/channels/{cid}")
+                    await client.call_endpoint(ENDPOINTS["channels_delete"], path_args={"channel_id": cid})
                     deleted += 1
                 except Exception as e:
                     errors += 1
@@ -253,9 +276,10 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(
-                f"/api/channels/{channel_id}/add-stream",
-                json_data={"stream_id": stream_id},
+            await client.call_endpoint(
+                ENDPOINTS["channels_add_stream"],
+                path_args={"channel_id": channel_id},
+                body={"stream_id": stream_id},
             )
             return f"Stream {stream_id} added to channel {channel_id}."
         except Exception as e:
@@ -264,7 +288,13 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def bulk_add_streams_to_channel(channel_id: int, stream_ids: list[int]) -> str:
-        """Add multiple streams to a channel at once.
+        """Add multiple streams to a channel in a single backend call.
+
+        Uses POST /api/channels/{id}/add-streams, which fetches the channel
+        once and PUTs once (one Dispatcharr roundtrip total) — not one HTTP
+        request per stream — so batches of ~10 streams stay well under the
+        tool-call budget even on slow hardware (bd-02xjj / GH #223).
+        Streams already on the channel are skipped; order is preserved.
 
         Args:
             channel_id: The channel to add streams to
@@ -272,25 +302,20 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            added = 0
-            errors = []
-            for sid in stream_ids:
-                try:
-                    await client.post(
-                        f"/api/channels/{channel_id}/add-stream",
-                        json_data={"stream_id": sid},
-                    )
-                    added += 1
-                except Exception as e:
-                    errors.append(f"stream {sid}: {e}")
-
-            lines = [f"Added {added}/{len(stream_ids)} streams to channel {channel_id}."]
-            if errors:
-                lines.append(f"Errors ({len(errors)}):")
-                for err in errors[:10]:
-                    lines.append(f"  - {err}")
-                if len(errors) > 10:
-                    lines.append(f"  ... and {len(errors) - 10} more")
+            result = await client.call_endpoint(
+                ENDPOINTS["channels_add_streams"],
+                path_args={"channel_id": channel_id},
+                body={"stream_ids": stream_ids},
+                timeout=120.0,
+            )
+            added = result.get("added", []) if isinstance(result, dict) else []
+            skipped = result.get("skipped", []) if isinstance(result, dict) else []
+            total = result.get("total_streams") if isinstance(result, dict) else None
+            lines = [f"Added {len(added)} stream(s) to channel {channel_id}"
+                     + (f" ({len(skipped)} already present)" if skipped else "")
+                     + (f"; channel now has {total} streams." if total is not None else ".")]
+            if added:
+                lines.append(f"  Added: {added[:20]}{'...' if len(added) > 20 else ''}")
             return "\n".join(lines)
         except Exception as e:
             logger.error("[MCP] bulk_add_streams_to_channel failed: %s", e)
@@ -316,7 +341,9 @@ def register(mcp: FastMCP):
                     errors.append("missing channel_id in mapping")
                     continue
                 try:
-                    await client.patch(f"/api/channels/{cid}", json_data={"tvg_id": tvg})
+                    await client.call_endpoint(
+                        ENDPOINTS["channels_update"], path_args={"channel_id": cid}, body={"tvg_id": tvg},
+                    )
                     updated += 1
                 except Exception as e:
                     errors.append(f"channel {cid}: {e}")
@@ -341,9 +368,10 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(
-                f"/api/channels/{channel_id}/remove-stream",
-                json_data={"stream_id": stream_id},
+            await client.call_endpoint(
+                ENDPOINTS["channels_remove_stream"],
+                path_args={"channel_id": channel_id},
+                body={"stream_id": stream_id},
             )
             return f"Stream {stream_id} removed from channel {channel_id}."
         except Exception as e:
@@ -360,9 +388,10 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(
-                f"/api/channels/{channel_id}/reorder-streams",
-                json_data={"stream_ids": stream_ids},
+            await client.call_endpoint(
+                ENDPOINTS["channels_reorder_streams"],
+                path_args={"channel_id": channel_id},
+                body={"stream_ids": stream_ids},
             )
             return f"Streams reordered for channel {channel_id}. New order: {stream_ids}"
         except Exception as e:
@@ -385,7 +414,7 @@ def register(mcp: FastMCP):
             payload = {"channel_ids": channel_ids}
             if starting_number is not None:
                 payload["starting_number"] = starting_number
-            result = await client.post("/api/channels/assign-numbers", json_data=payload)
+            await client.call_endpoint(ENDPOINTS["channels_assign_numbers"], body=payload)
             return f"Assigned numbers to {len(channel_ids)} channels starting from {starting_number or 'auto'}."
         except Exception as e:
             logger.error("[MCP] assign_channel_numbers failed: %s", e)
@@ -404,10 +433,20 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post("/api/channels/merge", json_data={
-                "target_channel_id": target_channel_id,
-                "source_channel_ids": source_channel_ids,
-            })
+            # Routes through POST /api/channels/bulk-merge with a single merge
+            # item — the backend's POST /api/channels/merge endpoint creates a
+            # *new* channel from a `target_name` and never accepted
+            # `target_channel_id` (the old payload here was silently 422'd —
+            # contract drift fixed in bd-vtghg Phase 1). bulk-merge has the
+            # "keep target channel, absorb sources" semantics this tool wants.
+            await client.call_endpoint(
+                ENDPOINTS["channels_bulk_merge"],
+                body={"merges": [{
+                    "target_channel_id": target_channel_id,
+                    "source_channel_ids": source_channel_ids,
+                }]},
+                timeout=300.0,
+            )
             merged = len(source_channel_ids)
             return f"Merged {merged} channels into channel {target_channel_id}."
         except Exception as e:
@@ -427,7 +466,7 @@ def register(mcp: FastMCP):
             payload = {}
             if group_ids is not None:
                 payload["group_ids"] = group_ids
-            result = await client.post("/api/channels/clear-auto-created", json_data=payload)
+            result = await client.call_endpoint(ENDPOINTS["channels_clear_auto_created"], body=payload)
             deleted = result.get("deleted", result.get("count", 0))
             scope = f"in {len(group_ids)} groups" if group_ids else "across all groups"
             return f"Cleared {deleted} auto-created channels {scope}."
@@ -444,7 +483,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post("/api/channels/find-duplicates", timeout=120.0)
+            result = await client.call_endpoint(ENDPOINTS["channels_find_duplicates"], timeout=120.0)
             groups = result.get("groups", [])
 
             if not groups:
@@ -487,9 +526,9 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(
-                "/api/channels/bulk-merge",
-                json_data={"merges": merges},
+            result = await client.call_endpoint(
+                ENDPOINTS["channels_bulk_merge"],
+                body={"merges": merges},
                 timeout=300.0,
             )
             merged = result.get("merged", 0)
@@ -531,11 +570,16 @@ def register(mcp: FastMCP):
                 "validateOnly": validate_only,
                 "continueOnError": continue_on_error,
             }
-            result = await client.post("/api/channels/bulk-commit", json_data=payload)
+            result = await client.call_endpoint(ENDPOINTS["channels_bulk_commit"], body=payload)
             success = result.get("success", False)
-            results = result.get("results", [])
-            id_mappings = result.get("idMappings", {})
-            issues = result.get("validationIssues", [])
+            # Per-operation result list is available at result["errors"] but not
+            # surfaced in the response below — the operator gets aggregate status,
+            # the temp-id → real-id map, and validation issues only.
+            # (Backend BulkCommitResponse exposes `tempIdMap`/`groupIdMap`, not
+            # `idMappings` — the old key here always read empty: contract drift
+            # fixed in bd-vtghg Phase 1.)
+            id_mappings = {**(result.get("tempIdMap") or {}), **(result.get("groupIdMap") or {})}
+            issues = result.get("validationIssues") or []
 
             lines = []
             status = "SUCCESS" if success else "FAILED"
@@ -575,15 +619,18 @@ def register(mcp: FastMCP):
             errors: list[str] = []
             logo_cache: dict[str, int] = {}
 
+            # contract-exempt: composes per-channel reads + an epg-domain read
+            # (/api/epg/data/{id}) + a logo create + a channel PATCH — a
+            # multi-call/cross-domain flow that doesn't reduce to one Endpoint.
             for cid in channel_ids:
                 try:
-                    channel = await client.get(f"/api/channels/{cid}")
+                    channel = await client.get(f"/api/channels/{cid}")  # contract-exempt: see above
                     epg_data_id = channel.get("epg_data_id")
                     if not epg_data_id:
                         skipped_no_epg += 1
                         continue
 
-                    epg_entry = await client.get(f"/api/epg/data/{epg_data_id}")
+                    epg_entry = await client.get(f"/api/epg/data/{epg_data_id}")  # contract-exempt: part of set_logo_from_epg cross-domain flow (no MCP tool hits /api/epg/data directly)
                     icon_url = epg_entry.get("icon_url") or epg_entry.get("icon")
                     if not icon_url:
                         skipped_no_icon += 1
@@ -592,7 +639,7 @@ def register(mcp: FastMCP):
                     if icon_url in logo_cache:
                         logo_id = logo_cache[icon_url]
                     else:
-                        logo = await client.post(
+                        logo = await client.post(  # contract-exempt: see above
                             "/api/channels/logos",
                             json_data={"name": channel.get("name") or f"channel-{cid}", "url": icon_url},
                         )
@@ -602,7 +649,7 @@ def register(mcp: FastMCP):
                             continue
                         logo_cache[icon_url] = logo_id
 
-                    await client.patch(f"/api/channels/{cid}", json_data={"logo_id": logo_id})
+                    await client.patch(f"/api/channels/{cid}", json_data={"logo_id": logo_id})  # contract-exempt: see above
                     assigned += 1
                 except Exception as e:
                     errors.append(f"channel {cid}: {e}")
@@ -640,6 +687,9 @@ def register(mcp: FastMCP):
         try:
             client = get_ecm_client()
 
+            # contract-exempt: orchestrates bulk-commit + paginated channel
+            # reads + streams-domain search + per-channel add-stream — a
+            # multi-step/cross-domain flow that doesn't reduce to one Endpoint.
             # Step 1: Bulk-create all channels
             operations = []
             for i, ch in enumerate(channels):
@@ -650,7 +700,7 @@ def register(mcp: FastMCP):
                     "channelNumber": ch["number"],
                     "groupId": group_id,
                 })
-            bulk_result = await client.post("/api/channels/bulk-commit", json_data={
+            bulk_result = await client.post("/api/channels/bulk-commit", json_data={  # contract-exempt: see above
                 "operations": operations,
                 "continueOnError": True,
             })
@@ -662,8 +712,8 @@ def register(mcp: FastMCP):
             created_channels = []
             page = 1
             while True:
-                result = await client.get(
-                    "/api/channels", group_id=group_id, page=page, page_size=500,
+                result = await client.get(  # contract-exempt: see above
+                    "/api/channels", channel_group=group_id, page=page, page_size=500,
                 )
                 if isinstance(result, dict):
                     batch = result.get("results", result.get("channels", []))
@@ -699,9 +749,11 @@ def register(mcp: FastMCP):
                 for variant in variants:
                     params = {"search": variant, "page_size": 10}
                     if provider_id is not None:
-                        params["provider_id"] = provider_id
+                        # Backend GET /api/streams filters by ``m3u_account``
+                        # (a bare ``provider_id`` was silently ignored — bd-vtghg).
+                        params["m3u_account"] = provider_id
                     try:
-                        sr = await client.get("/api/streams", **params)
+                        sr = await client.get("/api/streams", **params)  # contract-exempt: part of build_channel_lineup multi-step/cross-domain flow
                         if isinstance(sr, dict):
                             stream_list = sr.get("results", sr.get("streams", []))
                         else:
@@ -729,7 +781,7 @@ def register(mcp: FastMCP):
             assign_errors = 0
             for ch, stream, _score in matches:
                 try:
-                    await client.post(
+                    await client.post(  # contract-exempt: see above
                         f"/api/channels/{ch['id']}/add-stream",
                         json_data={"stream_id": stream["id"]},
                     )

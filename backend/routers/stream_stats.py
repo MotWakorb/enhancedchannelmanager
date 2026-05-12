@@ -15,7 +15,7 @@ from config import get_settings
 from database import get_session
 import journal
 from dispatcharr_client import get_client
-from stream_prober import StreamProber, get_prober, ensure_prober
+from stream_prober import StreamProber, ensure_prober
 
 logger = logging.getLogger(__name__)
 

@@ -1,11 +1,15 @@
 """
 Abstract base class and data types for cloud storage adapters.
+
+Split out from the historical ``cloud_storage.base`` module so concrete
+adapters can depend on the ABC + dataclasses without forming an import
+cycle with the factory (which imports the concrete adapters). See bead
+wlvxh for context.
 """
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -70,33 +74,3 @@ class CloudStorageAdapter(ABC):
         Returns:
             List of file names/paths.
         """
-
-
-def get_adapter(provider_type: str, credentials: dict) -> CloudStorageAdapter:
-    """Factory function to create the appropriate cloud storage adapter.
-
-    Args:
-        provider_type: One of "s3", "gdrive", "onedrive", "dropbox".
-        credentials: Provider-specific configuration dict.
-
-    Returns:
-        An instance of the appropriate CloudStorageAdapter subclass.
-
-    Raises:
-        ValueError: If the provider type is unknown.
-        ImportError: If required dependencies are not installed.
-    """
-    if provider_type == "s3":
-        from cloud_storage.s3_adapter import S3Adapter
-        return S3Adapter(credentials)
-    elif provider_type == "gdrive":
-        from cloud_storage.gdrive_adapter import GDriveAdapter
-        return GDriveAdapter(credentials)
-    elif provider_type == "onedrive":
-        from cloud_storage.onedrive_adapter import OneDriveAdapter
-        return OneDriveAdapter(credentials)
-    elif provider_type == "dropbox":
-        from cloud_storage.dropbox_adapter import DropboxAdapter
-        return DropboxAdapter(credentials)
-    else:
-        raise ValueError(f"Unknown cloud storage provider: {provider_type}")

@@ -180,13 +180,28 @@ class TestRequestTimeoutMiddleware:
 
         monkeypatch.setattr(main_module, "_REQUEST_TIMEOUT_SECONDS", 0.2)
 
-        # Register a deliberately slow route on the app for this test
+        # Register a deliberately slow route on the app for this test.
+        # When backend/static/ exists (container) main.py registers an
+        # /api/{full_path:path} 404 catch-all and a /{full_path:path} SPA
+        # handler. Appending via @app.get puts the stall route AFTER those
+        # catch-alls, so starlette matches the catch-all first and the
+        # stall handler never runs. Prepending via
+        # app.router.routes.insert(0, ...) keeps this test deterministic
+        # regardless of static-dir presence.
         from main import app
+        from fastapi.routing import APIRoute
 
-        @app.get("/api/_test_stall_for_timeout", include_in_schema=False)
         async def _stall_route():
             await asyncio.sleep(1.0)
             return {"unreachable": True}
+
+        stall_route = APIRoute(
+            "/api/_test_stall_for_timeout",
+            _stall_route,
+            methods=["GET"],
+            include_in_schema=False,
+        )
+        app.router.routes.insert(0, stall_route)
 
         try:
             response = await async_client.get("/api/_test_stall_for_timeout")
@@ -195,8 +210,8 @@ class TestRequestTimeoutMiddleware:
             assert body["detail"] == "Gateway Timeout"
         finally:
             # Remove the test route so it doesn't leak to other tests
-            app.routes[:] = [
-                r for r in app.routes
+            app.router.routes[:] = [
+                r for r in app.router.routes
                 if getattr(r, "path", None) != "/api/_test_stall_for_timeout"
             ]
 
@@ -220,11 +235,22 @@ class TestRequestTimeoutMiddleware:
         monkeypatch.setattr(main_module, "_REQUEST_TIMEOUT_SECONDS", 0.2)
 
         from main import app
+        from fastapi.routing import APIRoute
 
-        @app.get("/api/auto-creation/_test_stall_enfsy", include_in_schema=False)
         async def _stall_route():
             await asyncio.sleep(1.0)
             return {"unreachable": True}
+
+        # Prepend so the stall route wins over the /api/{full_path:path}
+        # 404 catch-all and the SPA catch-all that main.py registers when
+        # backend/static/ exists.
+        stall_route = APIRoute(
+            "/api/auto-creation/_test_stall_enfsy",
+            _stall_route,
+            methods=["GET"],
+            include_in_schema=False,
+        )
+        app.router.routes.insert(0, stall_route)
 
         try:
             response = await async_client.get("/api/auto-creation/_test_stall_enfsy")
@@ -233,7 +259,7 @@ class TestRequestTimeoutMiddleware:
                 "timeout middleware (bd-enfsy removed the exempt prefix)."
             )
         finally:
-            app.routes[:] = [
-                r for r in app.routes
+            app.router.routes[:] = [
+                r for r in app.router.routes
                 if getattr(r, "path", None) != "/api/auto-creation/_test_stall_enfsy"
             ]

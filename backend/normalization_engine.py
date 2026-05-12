@@ -36,6 +36,17 @@ ECM_NORMALIZATION_UNIFIED_POLICY (default: "true")
     carve-outs, no NFC, no Cf-stripping) without re-deploying. Intended
     as a one-pull-request rollback switch; remove once the new policy
     has soaked in production.
+
+ECM_NORMALIZATION_CONFUSABLES_FOLD (default: "false", bd-sc5s4)
+    Opt-in. When "true" (or "1"/"yes"/"on"), the policy applies a
+    Unicode-TR39-style confusables fold AFTER NFC + Cf-stripping +
+    superscript conversion. Cyrillic/Greek/math/fullwidth look-alikes
+    fold to their Latin/ASCII visual equivalents, which makes
+    homoglyph-disguised inputs (e.g. Cyrillic 'а' U+0430 vs Latin 'a'
+    U+0061) compare equal. Off by default because the fold is
+    aggressive and can collapse characters that some operators want
+    distinct (Greek 'Ω' Ohm sign vs Latin 'O', math italics, etc.).
+    Filed under the homoglyph attack threat — see docs/normalization.md.
 """
 import os
 import re
@@ -74,6 +85,12 @@ def _unified_policy_enabled() -> bool:
     """Parse ECM_NORMALIZATION_UNIFIED_POLICY. Default-on."""
     raw = os.environ.get("ECM_NORMALIZATION_UNIFIED_POLICY", "true")
     return raw.strip().lower() not in {"false", "0", "no", "off"}
+
+
+def _confusables_fold_enabled() -> bool:
+    """Parse ECM_NORMALIZATION_CONFUSABLES_FOLD. Default-OFF (opt-in, bd-sc5s4)."""
+    raw = os.environ.get("ECM_NORMALIZATION_CONFUSABLES_FOLD", "false")
+    return raw.strip().lower() in {"true", "1", "yes", "on"}
 
 
 # Cf code points stripped by the unified policy. Intentionally narrow: we
@@ -185,6 +202,144 @@ NUMERIC_SUPERSCRIPTS = {
 SUPERSCRIPT_MAP = {**LETTER_SUPERSCRIPTS, **NUMERIC_SUPERSCRIPTS}
 
 
+# -----------------------------------------------------------------------------
+# Confusables fold (bd-sc5s4) — Unicode TR39 skeleton-style mapping for the
+# most common homoglyph attack pairs. NOT the full TR39 confusables.txt
+# table (~6000 entries); a curated subset covering the realistic threat:
+#
+#   * Cyrillic letters that share a glyph with Latin (А/а/В/Е/е/К/М/...).
+#   * Greek capitals that share a glyph with Latin (Α/Β/Ε/Ζ/Η/Ι/Κ/Μ/Ν/Ο/...).
+#   * Mathematical alphanumeric symbols (𝐀-𝐳, 𝟎-𝟗, etc.) — bulk-folded
+#     by NFKC, but fullwidth/halfwidth Latin (Ａ-ｚ, ０-９) is kept here
+#     explicitly so we don't have to invoke NFKC and lose the
+#     ligature/Roman-numeral preservation that the unified policy
+#     intentionally guards via NFC-not-NFKC.
+#   * Common digit/letter look-alikes are NOT folded by default (O/0,
+#     I/1/l) — those collisions cause more false positives than they
+#     prevent attacks, and the bead description flags them as
+#     speculative. Operators who want them can layer a normalization
+#     rule of their own.
+#
+# Sources cross-referenced:
+#   * Unicode TR39 confusables.txt (Latin-target rows).
+#   * unicode-security.org/confusables.html.
+# Curated for IPTV channel name surfaces — covers the alphabets most
+# likely to appear in M3U feeds (Cyrillic, Greek, fullwidth CJK forms).
+# -----------------------------------------------------------------------------
+
+CONFUSABLES_MAP: dict[str, str] = {
+    # Cyrillic uppercase that look like Latin uppercase
+    'А': 'A',  # А CYRILLIC CAPITAL A
+    'В': 'B',  # В CYRILLIC CAPITAL VE
+    'С': 'C',  # С CYRILLIC CAPITAL ES
+    'Е': 'E',  # Е CYRILLIC CAPITAL IE
+    'Н': 'H',  # Н CYRILLIC CAPITAL EN
+    'І': 'I',  # І CYRILLIC CAPITAL BYELORUSSIAN-UKRAINIAN I
+    'Ј': 'J',  # Ј CYRILLIC CAPITAL JE
+    'К': 'K',  # К CYRILLIC CAPITAL KA
+    'М': 'M',  # М CYRILLIC CAPITAL EM
+    'О': 'O',  # О CYRILLIC CAPITAL O
+    'Р': 'P',  # Р CYRILLIC CAPITAL ER
+    'Ѕ': 'S',  # Ѕ CYRILLIC CAPITAL DZE
+    'Т': 'T',  # Т CYRILLIC CAPITAL TE
+    'Х': 'X',  # Х CYRILLIC CAPITAL HA
+    'У': 'Y',  # У CYRILLIC CAPITAL U (looks like Latin Y)
+    # Cyrillic lowercase that look like Latin lowercase
+    'а': 'a',  # а CYRILLIC SMALL A
+    'с': 'c',  # с CYRILLIC SMALL ES
+    'е': 'e',  # е CYRILLIC SMALL IE
+    'һ': 'h',  # һ CYRILLIC SMALL SHHA
+    'і': 'i',  # і CYRILLIC SMALL BYELORUSSIAN-UKRAINIAN I
+    'ј': 'j',  # ј CYRILLIC SMALL JE
+    'о': 'o',  # о CYRILLIC SMALL O
+    'р': 'p',  # р CYRILLIC SMALL ER
+    'ѕ': 's',  # ѕ CYRILLIC SMALL DZE
+    'х': 'x',  # х CYRILLIC SMALL HA
+    'у': 'y',  # у CYRILLIC SMALL U (looks like Latin y)
+    # Greek capitals that look like Latin capitals
+    'Α': 'A',  # Α GREEK CAPITAL ALPHA
+    'Β': 'B',  # Β GREEK CAPITAL BETA
+    'Ε': 'E',  # Ε GREEK CAPITAL EPSILON
+    'Ζ': 'Z',  # Ζ GREEK CAPITAL ZETA
+    'Η': 'H',  # Η GREEK CAPITAL ETA
+    'Ι': 'I',  # Ι GREEK CAPITAL IOTA
+    'Κ': 'K',  # Κ GREEK CAPITAL KAPPA
+    'Μ': 'M',  # Μ GREEK CAPITAL MU
+    'Ν': 'N',  # Ν GREEK CAPITAL NU
+    'Ο': 'O',  # Ο GREEK CAPITAL OMICRON
+    'Ρ': 'P',  # Ρ GREEK CAPITAL RHO
+    'Τ': 'T',  # Τ GREEK CAPITAL TAU
+    'Υ': 'Y',  # Υ GREEK CAPITAL UPSILON
+    'Χ': 'X',  # Χ GREEK CAPITAL CHI
+    # Greek lowercase that resemble Latin lowercase (common subset)
+    'ο': 'o',  # ο GREEK SMALL OMICRON
+    'ρ': 'p',  # ρ GREEK SMALL RHO (descender, but commonly substituted)
+    'υ': 'u',  # υ GREEK SMALL UPSILON
+    # Math italic / sans-serif Latin (Mathematical Alphanumeric Symbols block).
+    # NFKC would do this in bulk but also collapses ligatures/fullwidth which
+    # the unified policy intentionally preserves. Listed individually below
+    # for the math-italic block (U+1D400 - U+1D7FF) range so we can be
+    # surgical. Programmatic build: each block is 26 letters, then the next
+    # block starts. We hand-roll the most common attack-relevant ones.
+    '\U0001d400': 'A', '\U0001d401': 'B', '\U0001d402': 'C', '\U0001d403': 'D',
+    '\U0001d404': 'E', '\U0001d405': 'F', '\U0001d406': 'G', '\U0001d407': 'H',
+    '\U0001d408': 'I', '\U0001d409': 'J', '\U0001d40a': 'K', '\U0001d40b': 'L',
+    '\U0001d40c': 'M', '\U0001d40d': 'N', '\U0001d40e': 'O', '\U0001d40f': 'P',
+    '\U0001d410': 'Q', '\U0001d411': 'R', '\U0001d412': 'S', '\U0001d413': 'T',
+    '\U0001d414': 'U', '\U0001d415': 'V', '\U0001d416': 'W', '\U0001d417': 'X',
+    '\U0001d418': 'Y', '\U0001d419': 'Z',
+    # Math italic lowercase (U+1D44E onward — note U+1D455 is reserved)
+    '\U0001d44e': 'a', '\U0001d44f': 'b', '\U0001d450': 'c', '\U0001d451': 'd',
+    '\U0001d452': 'e', '\U0001d453': 'f', '\U0001d454': 'g',
+    '\U0001d456': 'i', '\U0001d457': 'j', '\U0001d458': 'k', '\U0001d459': 'l',
+    '\U0001d45a': 'm', '\U0001d45b': 'n', '\U0001d45c': 'o', '\U0001d45d': 'p',
+    '\U0001d45e': 'q', '\U0001d45f': 'r', '\U0001d460': 's', '\U0001d461': 't',
+    '\U0001d462': 'u', '\U0001d463': 'v', '\U0001d464': 'w', '\U0001d465': 'x',
+    '\U0001d466': 'y', '\U0001d467': 'z',
+    # Math digits 0-9 (Mathematical Bold Digits block U+1D7CE-U+1D7D7)
+    '\U0001d7ce': '0', '\U0001d7cf': '1', '\U0001d7d0': '2', '\U0001d7d1': '3',
+    '\U0001d7d2': '4', '\U0001d7d3': '5', '\U0001d7d4': '6', '\U0001d7d5': '7',
+    '\U0001d7d6': '8', '\U0001d7d7': '9',
+    # Fullwidth Latin (NFKC would also fold these, but doing it explicitly
+    # lets us keep NFC and only fold the fullwidth letters/digits, not
+    # ligatures / Roman numerals / squared-character compatibility forms).
+    'Ａ': 'A', 'Ｂ': 'B', 'Ｃ': 'C', 'Ｄ': 'D', 'Ｅ': 'E',
+    'Ｆ': 'F', 'Ｇ': 'G', 'Ｈ': 'H', 'Ｉ': 'I', 'Ｊ': 'J',
+    'Ｋ': 'K', 'Ｌ': 'L', 'Ｍ': 'M', 'Ｎ': 'N', 'Ｏ': 'O',
+    'Ｐ': 'P', 'Ｑ': 'Q', 'Ｒ': 'R', 'Ｓ': 'S', 'Ｔ': 'T',
+    'Ｕ': 'U', 'Ｖ': 'V', 'Ｗ': 'W', 'Ｘ': 'X', 'Ｙ': 'Y',
+    'Ｚ': 'Z',
+    'ａ': 'a', 'ｂ': 'b', 'ｃ': 'c', 'ｄ': 'd', 'ｅ': 'e',
+    'ｆ': 'f', 'ｇ': 'g', 'ｈ': 'h', 'ｉ': 'i', 'ｊ': 'j',
+    'ｋ': 'k', 'ｌ': 'l', 'ｍ': 'm', 'ｎ': 'n', 'ｏ': 'o',
+    'ｐ': 'p', 'ｑ': 'q', 'ｒ': 'r', 'ｓ': 's', 'ｔ': 't',
+    'ｕ': 'u', 'ｖ': 'v', 'ｗ': 'w', 'ｘ': 'x', 'ｙ': 'y',
+    'ｚ': 'z',
+    '０': '0', '１': '1', '２': '2', '３': '3', '４': '4',
+    '５': '5', '６': '6', '７': '7', '８': '8', '９': '9',
+}
+
+
+def fold_confusables(text: str) -> str:
+    """
+    Map Unicode confusables (homoglyphs) to their canonical Latin/ASCII form.
+
+    Subset of Unicode TR39 confusables.txt focused on the realistic
+    homoglyph-attack surface for IPTV channel names: Cyrillic, Greek,
+    math italic, fullwidth. Pure ASCII strings are returned unchanged
+    (fast-path bail-out), preserving the regression contract for ASCII
+    callers.
+
+    bd-sc5s4. Opt-in via ECM_NORMALIZATION_CONFUSABLES_FOLD; not invoked
+    by the default policy.
+    """
+    if not text:
+        return text
+    if text.isascii():
+        return text
+    return ''.join(CONFUSABLES_MAP.get(ch, ch) for ch in text)
+
+
 def convert_superscripts(text: str) -> str:
     """
     Convert Unicode superscript characters to their ASCII equivalents.
@@ -236,9 +391,19 @@ class NormalizationPolicy:
             entry point. When False, fall back to the pre-bd-eio04.1
             behavior (superscript conversion only, no NFC, no
             Cf-stripping) so operators have a rollback switch.
+        confusables_fold: When True (opt-in, gated by
+            ECM_NORMALIZATION_CONFUSABLES_FOLD env var, bd-sc5s4),
+            apply a curated Unicode-TR39-style homoglyph fold AFTER
+            NFC + Cf-stripping + superscripts. Folds Cyrillic/Greek/
+            math-italic/fullwidth look-alikes to Latin/ASCII so
+            disguised inputs (Cyrillic 'а' vs Latin 'a') compare equal.
+            Off by default — aggressive, can collapse intentionally
+            distinct characters. Has no effect when unified_enabled is
+            False (the legacy rollback path is byte-for-byte preserved).
     """
 
     unified_enabled: bool = True
+    confusables_fold: bool = False
 
     def apply_to_text(self, text: str) -> str:
         """
@@ -248,10 +413,13 @@ class NormalizationPolicy:
             1. NFC canonicalize.
             2. Strip whitelisted Cf code points (ZWSP/ZWNJ/ZWJ/BOM).
             3. Convert superscripts to ASCII (letters AND numerics).
+            4. (opt-in, bd-sc5s4) Fold confusables to Latin/ASCII.
 
         Under unified_enabled=False, only step (3) runs, via the legacy
         preserve_numeric=False path — this matches pre-bd-eio04.1
-        default behavior.
+        default behavior. The confusables fold is intentionally
+        suppressed on the legacy path so the rollback switch retains
+        its byte-for-byte semantic.
         """
         if not text:
             return text
@@ -261,17 +429,24 @@ class NormalizationPolicy:
                 text = ''.join(
                     ch for ch in text if ch not in _STRIPPED_CF_CODEPOINTS
                 )
-            return ''.join(SUPERSCRIPT_MAP.get(ch, ch) for ch in text)
+            text = ''.join(SUPERSCRIPT_MAP.get(ch, ch) for ch in text)
+            if self.confusables_fold:
+                text = fold_confusables(text)
+            return text
         # Legacy fallback path — behavior prior to bd-eio04.1. Keeps
         # superscript conversion (bd-yui1k behavior with
-        # preserve_numeric=False) but NO NFC, NO Cf-stripping.
+        # preserve_numeric=False) but NO NFC, NO Cf-stripping, and NO
+        # confusables fold (rollback switch preserves prior bytes).
         return ''.join(SUPERSCRIPT_MAP.get(ch, ch) for ch in text)
 
 
 # Process-wide canonical policy instance. Both code paths read this. The
 # instance is created at module load so the env-var feature flag is
 # latched once; to change, restart the container.
-_DEFAULT_POLICY = NormalizationPolicy(unified_enabled=_unified_policy_enabled())
+_DEFAULT_POLICY = NormalizationPolicy(
+    unified_enabled=_unified_policy_enabled(),
+    confusables_fold=_confusables_fold_enabled(),
+)
 
 
 def get_default_policy() -> NormalizationPolicy:
@@ -280,12 +455,16 @@ def get_default_policy() -> NormalizationPolicy:
 
 
 def _reset_default_policy_for_tests() -> NormalizationPolicy:
-    """Re-read the ECM_NORMALIZATION_UNIFIED_POLICY env var and refresh the
-    singleton. ONLY for tests — production toggles the flag via container
-    restart, not at runtime.
+    """Re-read the ECM_NORMALIZATION_UNIFIED_POLICY and
+    ECM_NORMALIZATION_CONFUSABLES_FOLD env vars and refresh the singleton.
+    ONLY for tests — production toggles the flags via container restart,
+    not at runtime.
     """
     global _DEFAULT_POLICY
-    _DEFAULT_POLICY = NormalizationPolicy(unified_enabled=_unified_policy_enabled())
+    _DEFAULT_POLICY = NormalizationPolicy(
+        unified_enabled=_unified_policy_enabled(),
+        confusables_fold=_confusables_fold_enabled(),
+    )
     return _DEFAULT_POLICY
 
 
@@ -850,8 +1029,13 @@ class NormalizationEngine:
 
             results.append(matched)
 
-            # Store the first non-negated match as the primary match for action application
-            if i == 0 and match.matched and not cond_negate:
+            # Store the first *matching*, non-negated condition's span as the primary
+            # match for action application. Not pinned to i == 0: for an OR rule whose
+            # first condition mismatched but a later one matched, the old `i == 0` guard
+            # left primary_match=None, fell through to `match_end=len(text)` below, and a
+            # Strip Prefix / Remove / Replace action then wiped the whole name (gh #217).
+            # Also covers the AND case where condition 1 is a negated guard.
+            if primary_match is None and match.matched and not cond_negate:
                 primary_match = match
 
         # Combine results based on logic

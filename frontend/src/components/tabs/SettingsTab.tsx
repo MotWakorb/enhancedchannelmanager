@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import * as api from '../../services/api';
+import * as autoCreationApi from '../../services/autoCreationApi';
 import { useNotifications } from '../../contexts/NotificationContext';
 import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, FailedStreamCategory, GracenoteConflictMode, StreamPreviewMode } from '../../services/api';
 import { NormalizationEngineSection } from '../settings/NormalizationEngineSection';
@@ -15,6 +16,7 @@ import { useAuth } from '../../hooks/useAuth';
 import type { ChannelProfile, M3UDigestSettings, M3UDigestFrequency } from '../../types';
 import { logger } from '../../utils/logger';
 import { copyToClipboard } from '../../utils/clipboard';
+import { normalizeSmtpRecipientsPaste, parseSmtpRecipients } from '../../utils/smtpRecipients';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
 import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
 import { ScheduledTasksSection } from '../ScheduledTasksSection';
@@ -314,13 +316,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     return () => window.removeEventListener('services-restarted', handleServicesRestarted);
   }, [notifications]);
 
-  // Check for pending task editor navigation (from NotificationCenter)
+  // Mount-only: deps must stay [] — setActivePage triggers a route change, which re-renders, which would re-run this effect into an infinite loop.
   useEffect(() => {
     const pending = sessionStorage.getItem('ecm:open-task-editor');
     if (pending) {
       setActivePage('scheduled-tasks');
     }
-  });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Connection settings
   const [url, setUrl] = useState('');
@@ -352,6 +355,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [failedStreamSortOrder, setFailedStreamSortOrder] = useState<FailedStreamCategory[]>(DEFAULT_FAILED_STREAM_ORDER);
   const [strikeThreshold, setStrikeThreshold] = useState(3);
 
+  // Reorder mode gates the Smart Sort Priority DndContexts. @dnd-kit's
+  // useRect() attaches a MutationObserver to document.body for every mounted
+  // DndContext; we only mount when the user is actively reordering (gh #207).
+  // One toggle gates both the streamSortPriority list and the
+  // failedStreamSortOrder list since they live in the same section.
+  const [isSortPriorityReorderMode, setIsSortPriorityReorderMode] = useState(false);
+
   // Appearance settings
   const [showStreamUrls, setShowStreamUrls] = useState(true);
   const [hideAutoSyncGroups, setHideAutoSyncGroups] = useState(false);
@@ -375,11 +385,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const handleDownloadDebugBundle = async () => {
     setDebugBundleLoading(true);
     try {
-      const response = await fetch('/api/auto-creation/debug-bundle', { credentials: 'include' });
-      if (!response.ok) throw new Error('Failed to generate debug bundle');
-      const blob = await response.blob();
-      const disposition = response.headers.get('Content-Disposition');
-      const filename = disposition?.match(/filename="(.+)"/)?.[1] || 'ecm-debug-bundle.tar.gz';
+      const { blob, filename } = await autoCreationApi.generateAndFetchDebugBundle();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -421,6 +427,20 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [smtpConfigured, setSmtpConfigured] = useState(false);
   const [smtpTestEmail, setSmtpTestEmail] = useState('');
   const [smtpTesting, setSmtpTesting] = useState(false);
+  const [smtpAlertMethodId, setSmtpAlertMethodId] = useState<number | null>(null);
+  const [smtpAlertRecipients, setSmtpAlertRecipients] = useState('');
+  const [smtpAlertRecipientsLoading, setSmtpAlertRecipientsLoading] = useState(false);
+  const [smtpAlertRecipientsSaving, setSmtpAlertRecipientsSaving] = useState(false);
+  const [smtpAlertRecipientsError, setSmtpAlertRecipientsError] = useState<string | null>(null);
+  const [smtpAlertRecipientsLastSavedAt, setSmtpAlertRecipientsLastSavedAt] = useState<Date | null>(null);
+  const [smtpAlertRecipientsFlashState, setSmtpAlertRecipientsFlashState] = useState<'success' | null>(null);
+  const [smtpAlertRecipientsPersisted, setSmtpAlertRecipientsPersisted] = useState<{
+    methodId: number | null;
+    recipients: string;
+  }>({
+    methodId: null,
+    recipients: '',
+  });
 
   // Shared Discord settings
   const [discordWebhookUrl, setDiscordWebhookUrl] = useState('');
@@ -809,9 +829,117 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setTelegramChatId(settings.telegram_chat_id ?? '');
       setTelegramConfigured(settings.telegram_configured ?? false);
       setNeedsRestart(false);
+
+      // Load SMTP alert recipients from Alert Methods (used by task email alerts).
+      setSmtpAlertRecipientsLoading(true);
+      try {
+        const extractToEmails = (config: Record<string, unknown>): string | null => {
+          const raw = config.to_emails;
+          if (Array.isArray(raw)) {
+            const parts = raw.filter((v): v is string => typeof v === 'string').map(s => s.trim()).filter(Boolean);
+            return parts.length ? parts.join(', ') : '';
+          }
+          if (typeof raw === 'string') return raw;
+          return null;
+        };
+
+        const methods = await api.listAlertMethods();
+        const smtpMethod = methods.find(m => m.method_type === 'smtp' && m.name === 'Email') ?? methods.find(m => m.method_type === 'smtp');
+        if (smtpMethod) {
+          setSmtpAlertMethodId(smtpMethod.id);
+          const recipients = extractToEmails(smtpMethod.config);
+          const persisted = recipients ?? '';
+          setSmtpAlertRecipients(persisted);
+          setSmtpAlertRecipientsPersisted({ methodId: smtpMethod.id, recipients: persisted });
+        } else {
+          setSmtpAlertMethodId(null);
+          setSmtpAlertRecipients('');
+          setSmtpAlertRecipientsPersisted({ methodId: null, recipients: '' });
+        }
+      } catch (err) {
+        logger.warn('Failed to load alert methods (SMTP recipients)', err);
+      } finally {
+        setSmtpAlertRecipientsLoading(false);
+      }
     } catch (err) {
       logger.error('Failed to load settings:', err);
     }
+  };
+
+  const handleSaveSmtpRecipients = async () => {
+    setSmtpAlertRecipientsSaving(true);
+    try {
+      setSmtpAlertRecipientsError(null);
+      const parsed = parseSmtpRecipients(smtpAlertRecipients);
+      if (parsed.invalid) {
+        const msg = `${parsed.invalid} is not a valid email address. Use a comma-separated list.`;
+        setSmtpAlertRecipientsError(msg);
+        notifications.error(msg, 'Email Alert Recipients');
+        return;
+      }
+
+      const recipients = parsed.recipients;
+
+      if (recipients.length === 0) {
+        const msg = 'Add at least one recipient email address';
+        setSmtpAlertRecipientsError(msg);
+        notifications.error(msg, 'Email Alert Recipients');
+        return;
+      }
+
+      const config = { to_emails: recipients.join(', ') };
+
+      if (smtpAlertMethodId) {
+        await api.updateAlertMethod(smtpAlertMethodId, {
+          config,
+        });
+      } else {
+        const created = await api.createAlertMethod({
+          name: 'Email',
+          method_type: 'smtp',
+          enabled: true,
+          config,
+          notify_info: false,
+          notify_success: true,
+          notify_warning: true,
+          notify_error: true,
+        });
+        setSmtpAlertMethodId(created.id);
+        setSmtpAlertRecipientsPersisted({ methodId: created.id, recipients: parsed.normalized });
+      }
+
+      setSmtpAlertRecipients(parsed.normalized);
+      if (smtpAlertMethodId) {
+        setSmtpAlertRecipientsPersisted({ methodId: smtpAlertMethodId, recipients: parsed.normalized });
+      }
+
+      if (parsed.dedupedCount > 0) {
+        notifications.warning(`Removed ${parsed.dedupedCount} duplicate ${parsed.dedupedCount === 1 ? 'recipient' : 'recipients'}`, 'Email Alert Recipients');
+      }
+
+      notifications.success('Email alert recipients saved', 'Email Alert Recipients');
+      setSmtpAlertRecipientsLastSavedAt(new Date());
+      setSmtpAlertRecipientsFlashState('success');
+      window.setTimeout(() => setSmtpAlertRecipientsFlashState(null), 1500);
+    } catch (err) {
+      logger.error('Failed to save SMTP alert recipients', err);
+      notifications.error(err instanceof Error ? err.message : 'Failed to save recipients', 'Email Alert Recipients');
+    } finally {
+      setSmtpAlertRecipientsSaving(false);
+    }
+  };
+
+  const handleBlurSmtpRecipients = () => {
+    if (!smtpAlertRecipients.trim()) {
+      setSmtpAlertRecipientsError(null);
+      return;
+    }
+    const parsed = parseSmtpRecipients(smtpAlertRecipients);
+    if (parsed.invalid) {
+      setSmtpAlertRecipientsError(`${parsed.invalid} is not a valid email address. Use a comma-separated list.`);
+      return;
+    }
+    setSmtpAlertRecipientsError(null);
   };
 
   // Handle theme change with immediate preview
@@ -2139,33 +2267,58 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         <div className="settings-section-header">
           <span className="material-icons">sort</span>
           <h3>Smart Sort Priority</h3>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => setIsSortPriorityReorderMode((v) => !v)}
+            title={isSortPriorityReorderMode ? 'Exit reorder mode' : 'Reorder priority'}
+          >
+            <span className="material-icons">
+              {isSortPriorityReorderMode ? 'check' : 'reorder'}
+            </span>
+            {isSortPriorityReorderMode ? 'Done' : 'Reorder'}
+          </button>
         </div>
 
         <div className="form-group">
           <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
-            Configure which criteria are used for stream sorting. Check/uncheck to enable/disable,
-            drag to reorder priority. Enabled criteria appear in the sort dropdown and are used by Smart Sort.
+            Configure which criteria are used for stream sorting. Check/uncheck to enable/disable.
+            Click Reorder to change priority. Enabled criteria appear in the sort dropdown and are used by Smart Sort.
           </p>
 
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleSortPriorityDragEnd}
-          >
-            <SortableContext items={streamSortPriority} strategy={verticalListSortingStrategy}>
-              <div className="sort-priority-list">
-                {streamSortPriority.map((criterion, index) => (
-                  <SortablePriorityItem
-                    key={criterion}
-                    id={criterion}
-                    index={index}
-                    enabled={streamSortEnabled[criterion]}
-                    onToggleEnabled={(id) => setStreamSortEnabled(prev => ({ ...prev, [id]: !prev[id] }))}
-                  />
-                ))}
-              </div>
-            </SortableContext>
-          </DndContext>
+          {isSortPriorityReorderMode ? (
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleSortPriorityDragEnd}
+            >
+              <SortableContext items={streamSortPriority} strategy={verticalListSortingStrategy}>
+                <div className="sort-priority-list">
+                  {streamSortPriority.map((criterion, index) => (
+                    <SortablePriorityItem
+                      key={criterion}
+                      id={criterion}
+                      index={index}
+                      enabled={streamSortEnabled[criterion]}
+                      onToggleEnabled={(id) => setStreamSortEnabled(prev => ({ ...prev, [id]: !prev[id] }))}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+          ) : (
+            <div className="sort-priority-list">
+              {streamSortPriority.map((criterion, index) => (
+                <SortablePriorityItem
+                  key={criterion}
+                  id={criterion}
+                  index={index}
+                  enabled={streamSortEnabled[criterion]}
+                  onToggleEnabled={(id) => setStreamSortEnabled(prev => ({ ...prev, [id]: !prev[id] }))}
+                />
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="form-group">
@@ -2216,26 +2369,38 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           <div className="form-group">
             <label className="form-label">Failed Stream Ordering</label>
             <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
-              Drag to set the order of deprioritized streams. Streams in the first category sort higher (closer to working streams).
+              Click Reorder above to set the order of deprioritized streams. Streams in the first category sort higher (closer to working streams).
             </p>
 
-            <DndContext
-              sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragEnd={handleFailedOrderDragEnd}
-            >
-              <SortableContext items={failedStreamSortOrder} strategy={verticalListSortingStrategy}>
-                <div className="sort-priority-list">
-                  {failedStreamSortOrder.map((category, index) => (
-                    <SortableFailedCategoryItem
-                      key={category}
-                      id={category}
-                      index={index}
-                    />
-                  ))}
-                </div>
-              </SortableContext>
-            </DndContext>
+            {isSortPriorityReorderMode ? (
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleFailedOrderDragEnd}
+              >
+                <SortableContext items={failedStreamSortOrder} strategy={verticalListSortingStrategy}>
+                  <div className="sort-priority-list">
+                    {failedStreamSortOrder.map((category, index) => (
+                      <SortableFailedCategoryItem
+                        key={category}
+                        id={category}
+                        index={index}
+                      />
+                    ))}
+                  </div>
+                </SortableContext>
+              </DndContext>
+            ) : (
+              <div className="sort-priority-list">
+                {failedStreamSortOrder.map((category, index) => (
+                  <SortableFailedCategoryItem
+                    key={category}
+                    id={category}
+                    index={index}
+                  />
+                ))}
+              </div>
+            )}
           </div>
           </>
         )}
@@ -2770,6 +2935,87 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </div>
         </div>
 
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">alternate_email</span>
+          <h3>Email Alert Recipients</h3>
+          <span
+            className={`badge badge-sm ${(smtpAlertRecipientsPersisted.methodId && smtpAlertRecipientsPersisted.recipients.trim()) ? 'badge-success' : ''}`}
+          >
+            {(smtpAlertRecipientsPersisted.methodId && smtpAlertRecipientsPersisted.recipients.trim()) ? 'Configured' : 'Unconfigured'}
+          </span>
+          {smtpAlertRecipientsLastSavedAt && (
+            <span className="settings-saved-at">
+              Saved at {smtpAlertRecipientsLastSavedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          )}
+        </div>
+        <p className="section-description">
+          Scheduled tasks use the Email alert channel to send notifications. Add one or more recipient email addresses here.
+        </p>
+        {!smtpAlertRecipientsPersisted.methodId && !smtpAlertRecipientsPersisted.recipients.trim() && (
+          <p className="settings-empty-state">
+            No recipients configured. Scheduled task email alerts won&apos;t be delivered until you add at least one recipient.
+          </p>
+        )}
+
+        <div className="form-group-vertical">
+          <label htmlFor="smtpAlertRecipients">Email alert recipients</label>
+          <div className="input-with-button">
+            <input
+              type="email"
+              multiple
+              id="smtpAlertRecipients"
+              value={smtpAlertRecipients}
+              onChange={(e) => setSmtpAlertRecipients(e.target.value)}
+              onBlur={handleBlurSmtpRecipients}
+              onPaste={(e) => {
+                const text = e.clipboardData.getData('text');
+                const { needsRewrite, normalized } = normalizeSmtpRecipientsPaste(text);
+                if (needsRewrite) {
+                  e.preventDefault();
+                  const el = e.currentTarget;
+                  const start = el.selectionStart ?? el.value.length;
+                  const end = el.selectionEnd ?? el.value.length;
+                  const next = el.value.slice(0, start) + normalized + el.value.slice(end);
+                  setSmtpAlertRecipients(next);
+                }
+              }}
+              placeholder={smtpAlertRecipientsLoading ? 'Loading recipients…' : 'you@example.com, another@example.com'}
+              disabled={smtpAlertRecipientsLoading}
+              aria-invalid={smtpAlertRecipientsError ? 'true' : 'false'}
+              className={`${smtpAlertRecipientsError ? 'is-error' : ''} ${smtpAlertRecipientsFlashState === 'success' ? 'is-success' : ''}`.trim()}
+            />
+            <button
+              className="btn-test"
+              onClick={handleSaveSmtpRecipients}
+              disabled={smtpAlertRecipientsSaving || smtpAlertRecipientsLoading}
+            >
+              {smtpAlertRecipientsSaving ? (
+                <>
+                  <span className="material-icons spinning">sync</span>
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <span className="material-icons">save</span>
+                  Save Recipients
+                </>
+              )}
+            </button>
+          </div>
+          {smtpAlertRecipientsError && (
+            <p className="field-error" role="alert">
+              {smtpAlertRecipientsError}
+            </p>
+          )}
+          <p className="field-hint">
+            Comma-separated list (`,`). Requires SMTP settings above to be configured.
+            {smtpAlertRecipientsLoading ? ' Loading recipients…' : ''}
+          </p>
+        </div>
       </div>
 
       <div className="settings-section">
