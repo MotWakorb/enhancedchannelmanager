@@ -3,6 +3,7 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
+from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.get("/api/notifications", page_size=limit)
+            result = await client.call_endpoint(ENDPOINTS["notifications_list"], query={"page_size": limit})
 
             notifications = result.get("notifications", []) if isinstance(result, dict) else result
             total = result.get("total", len(notifications)) if isinstance(result, dict) else len(notifications)
@@ -46,7 +47,15 @@ def register(mcp: FastMCP):
         """Mark all notifications as read."""
         try:
             client = get_ecm_client()
-            await client.patch("/api/notifications/mark-all-read")
+            await client.call_endpoint(ENDPOINTS["notifications_mark_all_read"])
+            # Read-back: confirm there are no unread notifications left.
+            try:
+                result = await client.call_endpoint(ENDPOINTS["notifications_list"], query={"page_size": 1})
+                unread = result.get("unread_count", 0) if isinstance(result, dict) else 0
+            except Exception:
+                unread = None
+            if unread:
+                return f"WARNING: marked all read but {unread} notification(s) still show as unread."
             return "All notifications marked as read."
         except Exception as e:
             logger.error("[MCP] mark_notifications_read failed: %s", e)
@@ -57,7 +66,15 @@ def register(mcp: FastMCP):
         """Delete all notifications."""
         try:
             client = get_ecm_client()
-            await client.delete("/api/notifications")
+            await client.call_endpoint(ENDPOINTS["notifications_delete_all"])
+            # Read-back: confirm the notification list is empty.
+            try:
+                result = await client.call_endpoint(ENDPOINTS["notifications_list"], query={"page_size": 1})
+                remaining = result.get("total", 0) if isinstance(result, dict) else len(result or [])
+            except Exception:
+                remaining = None
+            if remaining:
+                return f"WARNING: requested delete-all but {remaining} notification(s) remain."
             return "All notifications deleted."
         except Exception as e:
             logger.error("[MCP] delete_all_notifications failed: %s", e)
@@ -68,7 +85,7 @@ def register(mcp: FastMCP):
         """List all configured alert methods (Discord, Telegram, email)."""
         try:
             client = get_ecm_client()
-            methods = await client.get("/api/alert-methods")
+            methods = await client.call_endpoint(ENDPOINTS["alert_methods_list"])
 
             if not methods:
                 return "No alert methods configured."
@@ -105,13 +122,12 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(f"/api/alert-methods/{method_id}/test")
-            success = result.get("success", False)
-            message = result.get("message", "")
+            result = await client.call_endpoint(ENDPOINTS["alert_methods_test"], path_args={"method_id": method_id})
+            success = result.get("success", False) if isinstance(result, dict) else False
+            message = result.get("message", "") if isinstance(result, dict) else ""
             if success:
                 return f"Test alert sent successfully. {message}"
-            else:
-                return f"Test alert failed: {message}"
+            return f"Test alert failed: {message}"
         except Exception as e:
             logger.error("[MCP] test_alert_method failed: %s", e)
             return f"Error testing alert method {method_id}: {e}"
