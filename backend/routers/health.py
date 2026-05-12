@@ -68,8 +68,13 @@ async def _check_database() -> dict:
             db.close()
         return {"status": "ok", "detail": "SELECT 1 succeeded"}
     except Exception as e:
-        logger.warning("[HEALTH] Database readiness check failed: %s", e)
-        return {"status": "fail", "detail": f"{type(e).__name__}: {e}"}
+        # CodeQL py/stack-trace-exposure (#1414): /api/health/ready is
+        # AUTH-EXEMPT (see backend/main.py:AUTH_EXEMPT_PATHS) — anything in the
+        # response is unauthenticated. Log the full exception for operators;
+        # return only the class name so DB credentials, internal paths, or
+        # connection strings embedded in DBAPIError messages cannot leak.
+        logger.exception("[HEALTH] Database readiness check failed")
+        return {"status": "fail", "detail": type(e).__name__}
 
 
 async def _ping_dispatcharr() -> dict:
@@ -106,7 +111,11 @@ async def _ping_dispatcharr() -> dict:
             "detail": f"timeout after {_DISPATCHARR_PING_TIMEOUT_SECONDS}s",
         }
     except Exception as e:
-        return {"status": "fail", "detail": f"{type(e).__name__}: {e}"}
+        # CodeQL py/stack-trace-exposure (#1414): /api/health/ready is
+        # AUTH-EXEMPT — return only the exception class so Dispatcharr URL
+        # connection error text does not echo back unauthenticated.
+        logger.exception("[HEALTH] Dispatcharr readiness ping failed")
+        return {"status": "fail", "detail": type(e).__name__}
 
 
 async def _check_dispatcharr() -> dict:
@@ -211,6 +220,35 @@ async def health_check():
         "version": version,
         "release_channel": release_channel,
         "git_commit": git_commit,
+    }
+
+
+@router.get("/api/version")
+async def version_endpoint() -> dict:
+    """Report the build identity of the running container (bd-h0wfu).
+
+    Dedicated, ultra-cheap endpoint whose ONLY job is to answer "what
+    SHA is this container running?". Same fields as ``/api/health`` but
+    without the ``status``/``service`` envelope, so operators can pipe
+    it through ``jq -r .git_commit`` and compare against
+    ``git rev-parse origin/dev`` to detect deploy drift in a one-liner::
+
+        curl -s http://localhost:6100/api/version | jq -r .git_commit
+
+    Why a separate endpoint instead of just reusing /api/health? The
+    health endpoint is the Dockerfile HEALTHCHECK target — its
+    semantics are "am I alive?" and downstream tooling parses its
+    response shape. Adding a dedicated /api/version keeps the
+    drift-check path discoverable by name and lets us evolve the
+    health response independently if we ever need to.
+
+    Public endpoint (see ``main.AUTH_EXEMPT_PATHS``): no auth, no rate
+    limit, no subsystem probing. Three env-var reads — that's it.
+    """
+    return {
+        "version": os.environ.get("ECM_VERSION", "unknown"),
+        "git_commit": os.environ.get("GIT_COMMIT", "unknown"),
+        "release_channel": os.environ.get("RELEASE_CHANNEL", "latest"),
     }
 
 

@@ -202,6 +202,81 @@ class TestAddStream:
         mock_client.update_channel.assert_not_called()
 
 
+class TestAddStreams:
+    """Tests for POST /api/channels/{channel_id}/add-streams (bulk add, bd-02xjj / GH #223)."""
+
+    @pytest.mark.asyncio
+    async def test_adds_multiple_streams_in_one_roundtrip(self, async_client):
+        """Appends all new streams with a single get_channel + update_channel."""
+        mock_client = AsyncMock()
+        mock_client.get_channel.return_value = {"id": 1, "name": "ESPN", "streams": [5]}
+        mock_client.update_channel.return_value = {"id": 1, "name": "ESPN", "streams": [5, 10, 11, 12]}
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/1/add-streams", json={
+                "stream_ids": [10, 11, 12],
+            })
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["added"] == [10, 11, 12]
+        assert data["skipped"] == []
+        # Exactly one update_channel call regardless of batch size.
+        mock_client.update_channel.assert_called_once_with(1, {"streams": [5, 10, 11, 12]})
+        assert mock_client.get_channel.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_dedups_against_existing_streams(self, async_client):
+        """Streams already on the channel are skipped, order preserved."""
+        mock_client = AsyncMock()
+        mock_client.get_channel.return_value = {"id": 1, "name": "ESPN", "streams": [5, 10]}
+        mock_client.update_channel.return_value = {"id": 1, "name": "ESPN", "streams": [5, 10, 11]}
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/1/add-streams", json={
+                "stream_ids": [10, 11, 5],
+            })
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["added"] == [11]
+        assert sorted(data["skipped"]) == [5, 10]
+        mock_client.update_channel.assert_called_once_with(1, {"streams": [5, 10, 11]})
+
+    @pytest.mark.asyncio
+    async def test_noop_when_all_already_present(self, async_client):
+        """No update_channel call when every requested stream is already on the channel."""
+        mock_client = AsyncMock()
+        mock_client.get_channel.return_value = {"id": 1, "name": "ESPN", "streams": [5, 10]}
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/1/add-streams", json={
+                "stream_ids": [5, 10],
+            })
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["added"] == []
+        mock_client.update_channel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_client_error(self, async_client):
+        """Returns 500 on Dispatcharr client error."""
+        mock_client = AsyncMock()
+        mock_client.get_channel.side_effect = Exception("boom")
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/1/add-streams", json={
+                "stream_ids": [10],
+            })
+
+        assert response.status_code == 500
+
+
 class TestRemoveStream:
     """Tests for POST /api/channels/{channel_id}/remove-stream."""
 
@@ -558,3 +633,51 @@ class TestClearAutoCreated:
         assert response.status_code == 200
         data = response.json()
         assert data["updated_count"] == 0
+
+
+class TestBulkMergeSanitization:
+    """Tests for POST /api/channels/bulk-merge response sanitization.
+
+    CodeQL py/stack-trace-exposure (#1413): per-group failures MUST not echo
+    str(e) — Dispatcharr client errors can include backend URLs, internal
+    IDs, and JSON fragments. The "error" field is replaced by the exception
+    class name; full detail goes to the structured log under the request's
+    trace id.
+    """
+
+    @pytest.mark.asyncio
+    async def test_bulk_merge_failure_returns_exception_class_only(
+        self, async_client
+    ):
+        """Failed merge group returns exception class, not str(e)."""
+        secret = (
+            "ConnectionError: 502 Bad Gateway from "
+            "http://internal-dispatcharr.svc.cluster.local:9191/api/channels/42"
+        )
+        mock_client = AsyncMock()
+        mock_client.get_channel.side_effect = RuntimeError(secret)
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post(
+                "/api/channels/bulk-merge",
+                json={
+                    "merges": [
+                        {
+                            "target_channel_id": 1,
+                            "source_channel_ids": [2, 3],
+                        }
+                    ]
+                },
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["failed"] == 1
+        assert data["merged"] == 0
+        result = data["results"][0]
+        assert result["success"] is False
+        # Sanitization contract: only class name leaks.
+        assert result["error"] == "RuntimeError"
+        assert "internal-dispatcharr" not in result["error"]
+        assert "Bad Gateway" not in result["error"]

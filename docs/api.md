@@ -19,6 +19,7 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `PATCH /api/channels/{id}` | Update channel |
 | `DELETE /api/channels/{id}` | Delete channel |
 | `POST /api/channels/{id}/add-stream` | Add stream to channel |
+| `POST /api/channels/{id}/add-streams` | Add multiple streams to a channel in one Dispatcharr roundtrip (dedup, order preserved) |
 | `POST /api/channels/{id}/remove-stream` | Remove stream from channel |
 | `POST /api/channels/{id}/reorder-streams` | Reorder channel streams |
 | `POST /api/channels/assign-numbers` | Bulk assign channel numbers |
@@ -29,6 +30,50 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `GET /api/channels/export-csv` | Export all channels to CSV |
 | `POST /api/channels/import-csv` | Import channels from CSV file |
 | `POST /api/channels/preview-csv` | Preview and validate CSV before import |
+
+### `POST /api/channels/{id}/add-streams`
+
+Bulk variant of `/add-stream`: fetches the channel once, appends every requested stream that isn't already on it (in request order), and PUTs once — one Dispatcharr roundtrip total, regardless of batch size. The MCP `bulk_add_streams_to_channel` tool calls this instead of looping the single-add endpoint, which timed out on slow hardware for batches of ~10 streams (bd-02xjj / GH #223).
+
+**Request body:**
+
+```json
+{ "stream_ids": [101, 102, 103] }
+```
+
+**Response: `200 OK`**
+
+```json
+{
+  "channel": { "id": 12, "name": "ESPN", "streams": [5, 101, 102, 103] },
+  "added": [101, 102, 103],
+  "skipped": [],
+  "total_streams": 4
+}
+```
+
+`added` are the IDs actually appended; `skipped` are IDs already present on the channel. When every requested stream was already present, `channel` is the unmodified channel, `added` is `[]`, and no Dispatcharr write is performed.
+
+### `POST /api/channels/bulk-commit` — operation schema
+
+`operations` is a list of discriminated objects; the `type` string selects the shape. Unknown types or missing/mistyped fields return `422 Unprocessable Entity` with FastAPI's standard `detail` list — each entry's `loc` is `["body", "operations", <index>, "<field>"]`, so the response pinpoints the bad operation and field (the MCP `bulk_commit_channels` tool now surfaces this `detail` rather than a bare "HTTP 422" — bd-mjtxn / GH #224).
+
+| `type` | Fields | Notes |
+|-|-|-|
+| `createChannel` | `tempId` (int, negative), `name` (str), `channelNumber` (float, opt), `groupId` (int, opt), `newGroupName` (str, opt), `logoId` (int, opt), `logoUrl` (str, opt), `tvgId` (str, opt), `tvcGuideStationId` (str, opt), `normalize` (bool, default `false`) | `tempId` is echoed back in `tempIdMap` → real id. Use `groupId` for an existing group or `newGroupName` to reference a group created in `groupsToCreate`. |
+| `updateChannel` | `channelId` (int), `data` (dict) | `data` is forwarded as-is to Dispatcharr (e.g. `{"name": ..., "channel_group_id": ..., "tvg_id": ...}`). |
+| `deleteChannel` | `channelId` (int) | |
+| `addStreamToChannel` | `channelId` (int), `streamId` (int) | |
+| `removeStreamFromChannel` | `channelId` (int), `streamId` (int) | |
+| `reorderChannelStreams` | `channelId` (int), `streamIds` (list[int]) | New stream order; first = highest priority. |
+| `bulkAssignChannelNumbers` | `channelIds` (list[int]), `startingNumber` (float, opt) | |
+| `createGroup` | `name` (str) | Group name → real id appears in `groupIdMap`. |
+| `deleteChannelGroup` | `groupId` (int) | |
+| `renameChannelGroup` | `groupId` (int), `newName` (str) | |
+
+Request-level fields: `operations` (required list), `groupsToCreate` (opt list of `{name, ...}` dicts to create before processing), `validateOnly` (bool, default `false` — return `validationIssues` without applying), `continueOnError` (bool, default `false`), `consolidate` (bool, default `false` — collapse redundant ops first).
+
+Response: `{ success, operationsApplied, operationsFailed, errors, tempIdMap, groupIdMap, validationIssues, validationPassed }`. Pre-validation (missing referenced channels/streams) surfaces in `validationIssues` on a `200` response — only schema-shape failures produce a `422`.
 
 ## Channel Groups
 
@@ -303,6 +348,72 @@ See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#
 | `DELETE /api/alert-methods/{id}` | Delete alert method |
 | `POST /api/alert-methods/{id}/test` | Send test notification |
 
+An **alert method** is one configured channel (Discord webhook, Telegram bot, SMTP recipient list) that ECM uses to notify operators about scheduled-task results, probe failures, M3U/EPG refresh outcomes, and other system events. Each method carries its own per-type `config` blob, four per-severity opt-in flags (`notify_info`, `notify_success`, `notify_warning`, `notify_error`), and an optional granular `alert_sources` filter for per-EPG-source / per-M3U-account routing. **`method_type` uniqueness is NOT enforced** — multiple SMTP methods (or multiple Discord webhooks) can coexist, each with its own recipient set, severity opt-ins, and source filter; this is intentional so operators can route different alert categories to different recipients without collapsing them onto one row.
+
+`GET /api/alert-methods` returns an array of alert-method records. Each record carries:
+
+```json
+{
+  "id": 7,
+  "name": "Ops Email",
+  "method_type": "smtp",
+  "enabled": true,
+  "config": { "to_emails": ["alice@example.com", "bob@example.com"] },
+  "notify_info": false,
+  "notify_success": true,
+  "notify_warning": true,
+  "notify_error": true,
+  "alert_sources": null,
+  "last_sent_at": "2026-04-25T14:30:12Z",
+  "created_at": "2026-04-01T10:00:00Z"
+}
+```
+
+`config` shape varies by `method_type`:
+- **`discord`** — `{ "webhook_url": "https://discord.com/api/webhooks/..." }`
+- **`telegram`** — `{ "bot_token": "...", "chat_id": "..." }`
+- **`smtp`** — `{ "to_emails": ["alice@example.com", "bob@example.com"] }` (recipient list only — shared SMTP server settings live under `/api/settings`, see `smtp_*` fields)
+
+`alert_sources` is either `null` (send for every event) or a structured filter object documented under the per-section keys `epg_refresh`, `m3u_refresh`, and `probe_failures` (each with `enabled`, `filter_mode` ∈ `{all, only_selected, all_except}`, and a per-section ID list or `min_failures` threshold).
+
+`POST /api/alert-methods` accepts:
+
+```json
+{
+  "name": "Ops Email",
+  "method_type": "smtp",
+  "config": { "to_emails": ["alice@example.com", "bob@example.com"] },
+  "enabled": true,
+  "notify_info": false,
+  "notify_success": true,
+  "notify_warning": true,
+  "notify_error": true,
+  "alert_sources": null
+}
+```
+
+`name`, `method_type`, and `config` are required; the four `notify_*` flags and `enabled` default per the table above; `alert_sources` defaults to `null` (send everything). The handler rejects unknown `method_type` values with `400`. Per-type `config` is run through that type's `validate_config()` — for SMTP, every entry in `to_emails` must pass an HTML5-style email regex and is rejected if it contains any of `\r \n < > :` (defense-in-depth against header injection at the SMTP sink, bd-6e8gv). The response is the abbreviated form `{ id, name, method_type, enabled }`; round-trip via `GET /api/alert-methods/{id}` for the full record.
+
+**SMTP `to_emails` shape (bd-9vz32):** the canonical write shape is `list[str]`. The route accepts either `list[str]` or a legacy comma-joined `str` on POST/PATCH and normalizes string input to a list **before** persistence — so reads from rows written after bd-9vz32 always return `list[str]`. This is a **write-strict / read-tolerant** contract: pre-bd-9vz32 rows that were stored as a `str` continue to load (the SMTP runtime path coerces both shapes via `_coerce_to_emails_to_list`), so no Alembic migration is needed for the JSON-blob field. Writers should send `list[str]`; readers should expect `list[str]` for any row created or last-updated after bd-9vz32 and tolerate `str` for older rows.
+
+`PATCH /api/alert-methods/{id}` is a partial update — every field on the body is `Optional`, and only fields present on the wire are touched. The common shape since PR #163 is **config-only** (e.g. `{"config": {"to_emails": [...]}}`), used by the Settings → Email Alerts panel to push recipient changes without re-sending the unchanged severity flags. The handler validates the same per-type `validate_config()` and applies the same SMTP `to_emails` canonicalization on PATCH as on POST. `404` if the method doesn't exist; `200` with `{"success": true}` on success.
+
+`DELETE /api/alert-methods/{id}` removes the row and unloads the method from the in-memory `AlertMethodManager`. `404` if the method doesn't exist; `200` with `{"success": true}` on success. Deletion is unconditional — alerts in flight at deletion time are not buffered or re-routed.
+
+`POST /api/alert-methods/{id}/test` invokes the method's `test_connection()` (Discord: posts a test webhook payload; Telegram: sends a test message to the configured chat; SMTP: sends a test email through the shared SMTP settings to the configured `to_emails`). Returns `{"success": <bool>, "message": <str>}` describing the outcome. `404` if the method doesn't exist; `200` with `success: false` if the method exists but the test failed (network error, bad credentials, SMTP not configured, etc.) — failed tests are **not** modeled as `5xx`.
+
+`GET /api/alert-methods/types` returns the registry of available method types with their required and optional config fields:
+
+```json
+[
+  { "type": "discord", "display_name": "Discord", "required_fields": ["webhook_url"], "optional_fields": {} },
+  { "type": "telegram", "display_name": "Telegram", "required_fields": ["bot_token", "chat_id"], "optional_fields": {} },
+  { "type": "smtp", "display_name": "Email", "required_fields": ["to_emails"], "optional_fields": {} }
+]
+```
+
+The frontend uses this to drive the "add alert method" form so new method types appear automatically once registered server-side.
+
 ## Scheduled Tasks
 
 | Endpoint | Description |
@@ -347,7 +458,10 @@ See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#
 | `GET /api/auto-creation/schema/actions` | Get available action types |
 | `GET /api/auto-creation/schema/template-variables` | Get available template variables |
 | `GET /api/auto-creation/lint-findings` | Read-only view of saved auto-creation rules that fail the current write-time linter (bd-eio04.7) |
-| `GET /api/auto-creation/debug-bundle` | Download diagnostic bundle (obfuscated channels, rules, streams, probe stats, settings, task schedules, logs) |
+| `POST /api/auto-creation/rules/analyze` | Run the advisory rule analyzer over the rules currently in the DB; returns warnings only (saves are never blocked) |
+| `POST /api/auto-creation/rules/analyze/from-bundle` | Run the analyzer over `rules.yaml` inside an uploaded debug-bundle `tar.gz`; never touches the DB, so it is safe for support diagnosis of any user's bundle. See `docs/auto_creation_rule_analyzer.md` |
+| `POST /api/auto-creation/debug-bundle` | Start a diagnostic-bundle build; returns `{job_id, status: "running"}` immediately and dispatches a supervised background task |
+| `GET /api/auto-creation/debug-bundle/{job_id}` | Poll a bundle build: JSON status while running, JSON `{status: "failed", error}` on failure, or the `tar.gz` (`application/gzip`) attachment when ready (obfuscated channels, rules, normalization rules, streams, probe stats, settings, task schedules, logs). Job is evicted on successful read; abandoned jobs pruned after 30 min |
 
 `POST /api/auto-creation/rules/bulk-update` applies the same partial update to every rule in `rule_ids` in a single transaction. Send only the fields you want to change; omitted fields are left as-is per rule.
 
@@ -363,7 +477,7 @@ See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#
 ```
 
 - `rule_ids` (required) — `1..500` distinct rule IDs. Empty list, missing list, or duplicates return `400`.
-- Scalar fields accepted (any subset): `name`, `description`, `enabled`, `priority`, `m3u_account_id`, `target_group_id`, `run_on_refresh`, `stop_on_first_match`, `sort_field`, `sort_order`, `probe_on_sort`, `sort_regex`, `stream_sort_field`, `stream_sort_order`, `normalization_group_ids`, `skip_struck_streams`, `orphan_action`, `match_scope_target_group`.
+- Scalar fields accepted (any subset): `name`, `description`, `enabled`, `priority`, `m3u_account_id`, `target_group_id`, `run_on_refresh`, `stop_on_first_match`, `sort_field`, `sort_order`, `probe_on_sort`, `sort_regex`, `stream_sort_field`, `stream_sort_order`, `quality_tie_break_order`, `quality_m3u_tie_break_enabled`, `normalization_group_ids`, `skip_struck_streams`, `orphan_action`, `match_scope_target_group`.
 - `merge_streams_remove_non_matching` (bulk-only convenience field) — when set, every `merge_streams` action on every targeted rule is rewritten with this `remove_non_matching` flag. Rules with no `merge_streams` action are unaffected.
 - **Rejected fields (`422 Unprocessable Entity`):** `conditions`, `actions`. Per-rule logic edits must go through `PUT /api/auto-creation/rules/{id}` so silent payload drops can't lose intent at scale (bd-gjoe5). The error message names the offending field.
 - At least one mutating field is required alongside `rule_ids`; otherwise `400 "No fields to update"`.

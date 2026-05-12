@@ -29,6 +29,10 @@ import {
   deleteLookupTable,
   // Dummy EPG preview
   previewDummyEPG,
+  // Alert methods
+  listAlertMethods,
+  createAlertMethod,
+  updateAlertMethod,
 } from './api';
 
 // Start/stop the mock server for these tests
@@ -254,6 +258,81 @@ describe('API Service', () => {
       );
 
       await expect(getChannels()).rejects.toThrow();
+    });
+  });
+
+  // ===========================================================================
+  // Alert Methods API Tests
+  // ===========================================================================
+
+  describe('alert methods', () => {
+    it('lists alert methods', async () => {
+      server.use(
+        http.get('/api/alert-methods', () => {
+          return HttpResponse.json([
+            {
+              id: 1,
+              name: 'Email',
+              method_type: 'smtp',
+              enabled: true,
+              config: { to_emails: 'a@example.com' },
+              notify_info: false,
+              notify_success: true,
+              notify_warning: true,
+              notify_error: true,
+            },
+          ]);
+        }),
+      );
+
+      const result = await listAlertMethods();
+      expect(Array.isArray(result)).toBe(true);
+      expect(result[0]?.method_type).toBe('smtp');
+    });
+
+    it('creates an alert method', async () => {
+      let requestBody: unknown;
+      server.use(
+        http.post('/api/alert-methods', async ({ request }) => {
+          requestBody = await request.json();
+          return HttpResponse.json(
+            { id: 10, name: 'Email', method_type: 'smtp', enabled: true },
+            { status: 201 },
+          );
+        }),
+      );
+
+      const created = await createAlertMethod({
+        name: 'Email',
+        method_type: 'smtp',
+        enabled: true,
+        config: { to_emails: 'a@example.com' },
+        notify_info: false,
+        notify_success: true,
+        notify_warning: true,
+        notify_error: true,
+      });
+
+      expect(requestBody).toMatchObject({
+        name: 'Email',
+        method_type: 'smtp',
+        enabled: true,
+      });
+      expect(created.id).toBe(10);
+    });
+
+    it('updates an alert method', async () => {
+      let requestBody: unknown;
+      server.use(
+        http.patch('/api/alert-methods/10', async ({ request }) => {
+          requestBody = await request.json();
+          return HttpResponse.json({ success: true });
+        }),
+      );
+
+      const result = await updateAlertMethod(10, { enabled: true, config: { to_emails: 'b@example.com' } });
+      expect(result.success).toBe(true);
+      expect(requestBody).toMatchObject({ enabled: true });
     });
   });
 

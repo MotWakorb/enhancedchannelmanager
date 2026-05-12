@@ -19,7 +19,7 @@
 
 **No required resequencing of the epic's child beads.** The epic's recommended order (`v28b8` → `in620` → `hlcgj` → `5x6n7` → `lx1gf` → `zqmv1`) is **almost** correct; one optimization detailed in §"Sequencing recommendations" below: run jsdom (`lx1gf`) FIRST as the canary per ADR-001 §"Open Questions, item 4" — which the bd-6rrl5 epic order contradicts but ADR-001 already overrides.
 
-**No blocking gotchas where two bumps must land in the same PR**, with one exception: **ESLint 10 + react-hooks plugin 7.1+** must batch (covered in #5 above; small enough not to violate the "one major per PR" cadence rule from ADR-001).
+**No blocking gotchas where two bumps must land in the same PR**, with one exception: **ESLint 10 + react-hooks plugin 7.1+** must batch (covered in #5 above; small enough not to violate the "one major per PR" grouping rule from ADR-001).
 
 ---
 
@@ -148,7 +148,7 @@ The bd-zqmv1 → bd-lx1gf dependency edge in beads is currently inverted vs. thi
 
 ## Cadence implication for ADR-001
 
-ADR-001 caps merges at **one major bump per 7-day window**. With 6 frontend bumps + 3 backend bumps in `bd-6rrl5`, that's a **~9-week minimum** wall-clock for the epic at the cadence rule's tip. The PO may wish to re-confirm this cadence is acceptable for v0.16.0's release window, or carve out a documented exception (e.g. "consecutive low-blast bumps may merge in successive days if the prior CI gate is fully green").
+**No throttle.** ADR-001's per-week cadence rule was removed on 2026-04-25 (see ADR-001 Revision History). The one-major-bump-per-PR grouping rule still applies, but there is no wall-clock spacing requirement between merged dep-bump PRs — merges are bounded only by branch-protection serialization and CI gate latency.
 
 ## Required acceptance-criteria additions for child beads
 

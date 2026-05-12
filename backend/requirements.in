@@ -1,6 +1,10 @@
-fastapi>=0.115.0
-starlette<1.0  # Pin to 0.x series until we explicitly upgrade
-uvicorn[standard]>=0.32.0
+# ASGI triplet — backend request path (bead enhancedchannelmanager-j9xrz + -6rrl5.1 + -6rrl5.2).
+# Bundled because starlette 1.0 is the stable 1.x line and fastapi 0.136.1 already permits it
+# (`starlette>=0.46.0`, no upper bound). Keep this pin set aligned; a fastapi/starlette break
+# must bump both at once per ADR-001 pin-chain guidance.
+fastapi==0.136.1
+starlette==1.0.0
+uvicorn[standard]==0.46.0
 httpx>=0.28.0
 pydantic>=2.10.0
 email-validator>=2.1.0

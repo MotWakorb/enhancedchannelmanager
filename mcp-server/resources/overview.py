@@ -3,6 +3,7 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
+from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
 
 logger = logging.getLogger(__name__)
@@ -14,7 +15,7 @@ def register(mcp: FastMCP):
         """Current system overview: active channels, stream health, viewer count."""
         try:
             client = get_ecm_client()
-            stats = await client.get("/api/stats/channels")
+            stats = await client.call_endpoint(ENDPOINTS["stats_channels"])
 
             channels = stats if isinstance(stats, list) else stats.get("channels", [])
             active = sum(1 for c in channels if c.get("active_connections", 0) > 0)
@@ -34,7 +35,7 @@ def register(mcp: FastMCP):
         """Channel count by group."""
         try:
             client = get_ecm_client()
-            groups = await client.get("/api/channel-groups")
+            groups = await client.call_endpoint(ENDPOINTS["groups_list"])
 
             if not groups:
                 return "No channel groups."
@@ -56,7 +57,7 @@ def register(mcp: FastMCP):
         """All tasks with schedule and last run info."""
         try:
             client = get_ecm_client()
-            tasks = await client.get("/api/tasks")
+            tasks = await client.call_endpoint(ENDPOINTS["tasks_list"])
 
             if not tasks:
                 return "No tasks configured."

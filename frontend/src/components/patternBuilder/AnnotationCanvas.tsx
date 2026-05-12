@@ -267,7 +267,6 @@ export const AnnotationCanvas = memo(function AnnotationCanvas({
               useLayoutEffect above, and only when positions actually change
               (with a change guard + forceUpdate). State would cause re-render
               loops here. */}
-          {/* eslint-disable-next-line react-hooks/refs -- intentional ref read for measured layout, see useLayoutEffect above */}
           {wrappers.map(ann => {
             const color = getVariableColor(ann.variableName);
             const pos = wrapperPositionsRef.current[ann.variableName];

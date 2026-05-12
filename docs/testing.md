@@ -197,6 +197,63 @@ Do **not** lower the threshold in the config.
 - **Frontend tests**: MANDATORY for any frontend code changes
 - **E2E tests**: Run on merge to main only (CI/CD pipeline)
 
+## Container Freshness Check
+
+**Before triaging any "test failure" bead that reports failures from
+`ecm-ecm-1`, verify the container is actually running current `dev`
+HEAD.** This pattern (engineer files a "tests failing on dev" bead;
+investigation reveals tests pass locally and the container is stale)
+recurred enough times — beads `5dug8`, `0gcu9`, others — that it
+deserves its own check (bd-h0wfu).
+
+The container reports its source SHA in two places, populated from
+Docker build args at image-build time (`Dockerfile`: `ARG GIT_COMMIT`):
+
+```bash
+# Method A — JSON endpoint (no auth required, /api/version is exempt)
+curl -s http://localhost:6100/api/version | jq -r .git_commit
+
+# Method B — Prometheus metric label
+curl -s http://localhost:6100/metrics | grep ecm_app_info
+# ecm_app_info{git_sha="<sha>",release_channel="latest",version="<ver>"} 1.0
+```
+
+Compare against `origin/dev`:
+
+```bash
+git fetch origin dev
+git rev-parse origin/dev
+```
+
+**If the SHAs match**, the container is current — investigate the test
+failure as real. **If they don't match**, the container is stale; redeploy
+current dev HEAD before triaging:
+
+```bash
+# Backend
+docker cp backend/main.py ecm-ecm-1:/app/main.py
+docker cp backend/routers/. ecm-ecm-1:/app/routers/
+docker restart ecm-ecm-1
+
+# Frontend
+cd frontend && npm run build
+docker exec ecm-ecm-1 sh -c 'rm -rf /app/static/assets/*'
+docker cp dist/. ecm-ecm-1:/app/static/
+```
+
+Re-run the failing tests. If they now pass, the bead was deploy drift,
+not a code defect — close it without filing a code bead. The
+container-first development workflow (per `CLAUDE.md`) means agents
+`docker cp` specific files when iterating, so the shared `ecm-ecm-1`
+container can lag origin/dev when nobody re-deploys after a merge to
+`dev`. The freshness check above is a one-line cure for the entire
+class of fake test-failure beads.
+
+The same SHA labels also drive container-drift dashboards in Grafana —
+`max by (git_sha) (ecm_app_info)` shows the running build identity, and
+an alert can fire when it diverges from the `origin/dev` SHA published by
+the build pipeline.
+
 ## Quality Gate Commands
 
 ```bash
@@ -282,15 +339,27 @@ in the **flagged-in-last-30-runs** list — those are known-flaky and the PR
 needs a clean re-run (or an explicit note that the flake is unrelated to the
 change).
 
-Until automation tracks the 30-run window directly (see follow-up bead), use
-this manual process:
+The `Flake List PR Comment` workflow
+(`.github/workflows/flake-pr-comment.yml`, bead xq19y) automates this: on PR
+open / sync it walks the last 30 `Tests` workflow runs on the PR's base
+branch, parses the `junit-backend` and `junit-frontend` artifacts, and posts
+or updates a single PR comment listing every test that failed in at least
+one of those runs. The comment is identified by a hidden marker and updated
+in place — no comment-storm on rebased branches. The comment is
+informational only; it does not gate merge.
 
-1. Pull the list of `flaky`-labelled open beads: `bd list --label flaky`.
-2. If the failing test is in that list → re-run once. If still fails →
-   investigate; probably unrelated to the PR but do not merge until the next
-   CI run is green.
-3. If the failing test is **not** in the flaky list → treat as deterministic
-   and block the merge until fixed.
+Reviewer workflow:
+
+1. Open the PR. Read the **Flake list (last 30 runs on base branch)** comment.
+2. If the failing test on this PR appears in that list → re-run once. If
+   still fails → investigate; probably unrelated to the PR but do not merge
+   until the next CI run is green.
+3. If the failing test is **not** in that list → treat as deterministic and
+   block the merge until fixed.
+
+Manual fallback (if the automation is offline): pull the list of
+`flaky`-labelled open beads with `bd list --label flaky` and apply the same
+rule.
 
 ### Known baseline flakes (as of 2026-04-20)
 
@@ -307,20 +376,25 @@ Both pass in isolation and fail when run after the second half of
 an integration test into the observability middleware's capture fixture.
 Tracked in bead **enhancedchannelmanager-hhsz0** (`flaky` label, P1).
 
-**Not flakes, but deterministic environment drift (three BE tests):**
-- `tests/integration/test_api_tasks.py::TestRunTaskWithSchedule::test_run_task_with_schedule_id`
-  — references a POST route that was removed from `routers/tasks.py`.
-- `tests/integration/test_router_registration.py::TestRoutePrefixes::test_all_routes_under_api`
-  — fails because the SPA fallback route `/{full_path:path}` registers only
-    when `backend/static/` exists (present in prod image, absent on CI).
-- `tests/unit/test_ffmpeg_execution.py::TestExecutionSafety::test_validates_output_path_writable`
-  — the code under test never implements the output-writability check its
-    docstring promises.
+**Not flakes, but deterministic environment drift (cleared in bead 0gcu9):**
 
-These pass on CI (`backend/` workdir, no `static/`, stubbed ffmpeg mocks) but
-fail in `ecm-ecm-1`. Tracked in bead **enhancedchannelmanager-0gcu9** as
-test-authorship repair. Until that bead lands, the container-side 3-run
-cadence uses `--deselect` for these three tests.
+The original three BE tests covered by `enhancedchannelmanager-0gcu9` were:
+- `tests/integration/test_api_tasks.py::TestRunTaskWithSchedule::test_run_task_with_schedule_id`
+  — referenced a POST route that was removed from `routers/tasks.py`. **Test
+    deleted.**
+- `tests/integration/test_router_registration.py::TestRoutePrefixes::test_all_routes_under_api`
+  — failed because the SPA fallback route `/{full_path:path}` registers only
+    when `backend/static/` exists (present in prod image, absent on CI). **Fixed
+    by adding the SPA fallback path to `NON_API_ROUTES`.**
+- `tests/unit/test_ffmpeg_execution.py::TestExecutionSafety::test_validates_output_path_writable`
+  — the code under test promised an output-writability check its docstring
+    described. **Resolved by deleting `ffmpeg_builder/execution.py` and the
+    whole `test_ffmpeg_execution.py` file — the module was dead code (zero live
+    callers; ECM builds ffmpeg command configs but never executes ffmpeg).**
+
+None of these tests need deselection any longer; the 3-run cadence command
+below still references the two `test_observability_middleware` flakes tracked
+under `enhancedchannelmanager-hhsz0`.
 
 ### Full-suite 3-run cadence command
 
@@ -329,9 +403,6 @@ The exact command used for the `tp681` baseline and the quarterly sweep:
 ```bash
 # BE — from inside ecm-ecm-1
 python -m pytest tests/ --ignore=tests/e2e \
-  --deselect tests/integration/test_api_tasks.py::TestRunTaskWithSchedule::test_run_task_with_schedule_id \
-  --deselect tests/integration/test_router_registration.py::TestRoutePrefixes::test_all_routes_under_api \
-  --deselect tests/unit/test_ffmpeg_execution.py::TestExecutionSafety::test_validates_output_path_writable \
   --deselect tests/routers/test_observability_middleware.py::TestTraceIdMiddleware::test_trace_id_appears_in_log_line \
   --deselect tests/routers/test_observability_middleware.py::TestTraceIdMiddleware::test_generated_trace_id_matches_uuidv4_format_in_logs \
   -p no:cacheprovider --tb=line -q

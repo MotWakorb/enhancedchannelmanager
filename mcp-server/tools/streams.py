@@ -4,6 +4,7 @@ import re
 
 from mcp.server.fastmcp import FastMCP
 
+from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
 
 logger = logging.getLogger(__name__)
@@ -250,6 +251,23 @@ _fuzzy_helpers = {
 }
 
 
+def _stream_query(*, search=None, m3u_account=None, channel_group_name=None, page=None, page_size=None):
+    """Build a query dict for ENDPOINTS["streams_list"], dropping None values.
+
+    Note the param names match the backend (``m3u_account``, ``channel_group_name``)
+    — the MCP tools used to send ``provider_id`` / ``group`` here, which the
+    backend silently ignored (drift fixed in bd-vtghg Phase 2).
+    """
+    q = {
+        "search": search,
+        "m3u_account": m3u_account,
+        "channel_group_name": channel_group_name,
+        "page": page,
+        "page_size": page_size,
+    }
+    return {k: v for k, v in q.items() if v is not None}
+
+
 def register(mcp: FastMCP):
     @mcp.tool()
     async def list_streams(
@@ -270,13 +288,12 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.get(
-                "/api/streams",
-                group=group,
-                provider_id=provider_id,
-                search=search,
-                page=page,
-                page_size=min(page_size, 100),
+            result = await client.call_endpoint(
+                ENDPOINTS["streams_list"],
+                query=_stream_query(
+                    search=search, m3u_account=provider_id, channel_group_name=group,
+                    page=page, page_size=min(page_size, 100),
+                ),
             )
 
             if isinstance(result, dict):
@@ -309,7 +326,7 @@ def register(mcp: FastMCP):
         """Get an overview of stream health from the most recent probe results."""
         try:
             client = get_ecm_client()
-            summary = await client.get("/api/stream-stats/summary")
+            summary = await client.call_endpoint(ENDPOINTS["stream_stats_summary"])
 
             if not summary:
                 return "No stream health data available. Run a probe first."
@@ -329,8 +346,9 @@ def register(mcp: FastMCP):
         """Start probing all streams to check their health. This runs in the background and may take a while."""
         try:
             client = get_ecm_client()
-            result = await client.post("/api/stream-stats/probe/all", timeout=300.0)
-            return f"Stream probe started. {result.get('message', 'Check progress in ECM.')}"
+            result = await client.call_endpoint(ENDPOINTS["stream_stats_probe_all"], timeout=300.0)
+            msg = result.get("message", "Check progress in ECM.") if isinstance(result, dict) else ""
+            return f"Stream probe started. {msg}"
         except Exception as e:
             logger.error("[MCP] probe_streams failed: %s", e)
             return f"Error starting stream probe: {e}"
@@ -340,7 +358,7 @@ def register(mcp: FastMCP):
         """Check the progress of an ongoing stream probe."""
         try:
             client = get_ecm_client()
-            p = await client.get("/api/stream-stats/probe/progress")
+            p = await client.call_endpoint(ENDPOINTS["stream_stats_probe_progress"])
 
             if not p.get("in_progress"):
                 return "No probe is currently running."
@@ -372,8 +390,10 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(f"/api/stream-stats/probe/{stream_id}")
-            status = result.get("status", result.get("probe_status", "unknown"))
+            result = await client.call_endpoint(
+                ENDPOINTS["stream_stats_probe_one"], path_args={"stream_id": stream_id},
+            )
+            status = result.get("status", result.get("probe_status", "unknown")) if isinstance(result, dict) else "unknown"
             return f"Stream {stream_id} probe complete. Status: {status}"
         except Exception as e:
             logger.error("[MCP] probe_single_stream failed: %s", e)
@@ -385,7 +405,7 @@ def register(mcp: FastMCP):
         Includes channel associations for each stream."""
         try:
             client = get_ecm_client()
-            result = await client.get("/api/stream-stats/struck-out")
+            result = await client.call_endpoint(ENDPOINTS["stream_stats_struck_out"])
 
             streams = result.get("streams", []) if isinstance(result, dict) else result
             threshold = result.get("threshold", "?") if isinstance(result, dict) else "?"
@@ -437,7 +457,7 @@ def register(mcp: FastMCP):
             client = get_ecm_client()
 
             # Get struck-out streams with channel associations
-            struck_result = await client.get("/api/stream-stats/struck-out")
+            struck_result = await client.call_endpoint(ENDPOINTS["stream_stats_struck_out"])
             streams = struck_result.get("streams", []) if isinstance(struck_result, dict) else struck_result
             threshold = struck_result.get("threshold", "?") if isinstance(struck_result, dict) else "?"
 
@@ -453,7 +473,7 @@ def register(mcp: FastMCP):
                     stream_names[sid] = s.get("stream_name", s.get("name", "Unknown"))
 
             # Build map of channels that will be affected
-            affected_channels = {}  # ch_id -> {name, stream_ids_in_channel, struck_ids}
+            affected_channels = {}  # ch_id -> {name, struck_ids}
             for s in streams:
                 for ch in s.get("channels", []):
                     ch_id = ch.get("id")
@@ -467,11 +487,10 @@ def register(mcp: FastMCP):
                         affected_channels[ch_id]["struck_ids"].add(sid)
 
             # Remove struck-out streams from channels
-            remove_result = await client.post(
-                "/api/stream-stats/struck-out/remove",
-                json_data={"stream_ids": stream_ids},
+            remove_result = await client.call_endpoint(
+                ENDPOINTS["stream_stats_struck_out_remove"], body={"stream_ids": stream_ids},
             )
-            removed_count = remove_result.get("removed_from_channels", 0)
+            removed_count = remove_result.get("removed_from_channels", 0) if isinstance(remove_result, dict) else 0
 
             lines = [
                 f"Cleaned up {len(stream_ids)} struck-out streams (threshold: {threshold}):",
@@ -483,10 +502,10 @@ def register(mcp: FastMCP):
             if delete_empty_channels and affected_channels:
                 for ch_id, info in affected_channels.items():
                     try:
-                        ch_data = await client.get(f"/api/channels/{ch_id}")
+                        ch_data = await client.call_endpoint(ENDPOINTS["channels_get"], path_args={"channel_id": ch_id})
                         remaining = len(ch_data.get("streams", []))
                         if remaining == 0:
-                            await client.delete(f"/api/channels/{ch_id}")
+                            await client.call_endpoint(ENDPOINTS["channels_delete"], path_args={"channel_id": ch_id})
                             deleted_channels.append(f"{info['name']} (id={ch_id})")
                     except Exception:
                         pass  # Channel may already be gone
@@ -518,7 +537,7 @@ def register(mcp: FastMCP):
         try:
             client = get_ecm_client()
             # Get current channel streams
-            ch = await client.get(f"/api/channels/{channel_id}")
+            ch = await client.call_endpoint(ENDPOINTS["channels_get"], path_args={"channel_id": channel_id})
             current_streams = ch.get("streams", [])
 
             remove_set = set(stream_ids)
@@ -528,10 +547,14 @@ def register(mcp: FastMCP):
             if actually_removed == 0:
                 return f"None of the specified streams were in channel {channel_id}."
 
-            await client.patch(f"/api/channels/{channel_id}", json_data={"streams": filtered})
+            updated = await client.call_endpoint(
+                ENDPOINTS["channels_update"], path_args={"channel_id": channel_id}, body={"streams": filtered},
+            )
+            # Report the resulting stream count from the response, not the request.
+            now_count = len(updated.get("streams", filtered)) if isinstance(updated, dict) else len(filtered)
             return (
                 f"Removed {actually_removed} streams from channel {channel_id}. "
-                f"Remaining: {len(filtered)} streams."
+                f"Remaining: {now_count} streams."
             )
         except Exception as e:
             logger.error("[MCP] bulk_remove_streams failed: %s", e)
@@ -542,8 +565,9 @@ def register(mcp: FastMCP):
         """Cancel the currently running stream probe."""
         try:
             client = get_ecm_client()
-            result = await client.post("/api/stream-stats/probe/cancel")
-            return f"Probe cancelled. {result.get('message', '')}"
+            result = await client.call_endpoint(ENDPOINTS["stream_stats_probe_cancel"])
+            msg = result.get("message", "") if isinstance(result, dict) else ""
+            return f"Probe cancelled. {msg}".rstrip()
         except Exception as e:
             logger.error("[MCP] cancel_probe failed: %s", e)
             return f"Error cancelling probe: {e}"
@@ -553,7 +577,7 @@ def register(mcp: FastMCP):
         """Get results from the most recent completed probe run."""
         try:
             client = get_ecm_client()
-            result = await client.get("/api/stream-stats/probe/results")
+            result = await client.call_endpoint(ENDPOINTS["stream_stats_probe_results"])
 
             if not result:
                 return "No probe results available."
@@ -584,7 +608,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.get(f"/api/channels/{channel_id}/streams")
+            result = await client.call_endpoint(ENDPOINTS["channels_streams"], path_args={"channel_id": channel_id})
 
             streams = result if isinstance(result, list) else result.get("streams", result.get("results", []))
 
@@ -621,11 +645,9 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.get(
-                "/api/streams",
-                search=query,
-                provider_id=provider_id,
-                page_size=min(limit, 100),
+            result = await client.call_endpoint(
+                ENDPOINTS["streams_list"],
+                query=_stream_query(search=query, m3u_account=provider_id, page_size=min(limit, 100)),
             )
 
             if isinstance(result, dict):
@@ -665,10 +687,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(
-                "/api/streams/by-ids",
-                json_data={"stream_ids": stream_ids},
-            )
+            result = await client.call_endpoint(ENDPOINTS["streams_by_ids"], body={"stream_ids": stream_ids})
 
             streams = result if isinstance(result, list) else result.get("streams", result.get("results", []))
 
@@ -699,10 +718,8 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(
-                "/api/stream-stats/probe/bulk",
-                json_data={"stream_ids": stream_ids},
-                timeout=300.0,
+            result = await client.call_endpoint(
+                ENDPOINTS["stream_stats_probe_bulk"], body={"stream_ids": stream_ids}, timeout=300.0,
             )
 
             if isinstance(result, dict):
@@ -745,10 +762,10 @@ def register(mcp: FastMCP):
         all_results = []
         for variant in variants:
             try:
-                params = {"search": variant, "page_size": 10}
-                if provider_id is not None:
-                    params["provider_id"] = provider_id
-                result = await client.get("/api/streams", **params)
+                result = await client.call_endpoint(
+                    ENDPOINTS["streams_list"],
+                    query=_stream_query(search=variant, m3u_account=provider_id, page_size=10),
+                )
                 streams = result.get("results", result.get("streams", [])) if isinstance(result, dict) else result
                 for s in streams:
                     sid = s.get("id")
@@ -795,10 +812,10 @@ def register(mcp: FastMCP):
             client = get_ecm_client()
             lines = []
             for query in queries:
-                params = {"search": query, "page_size": min(limit_per_query, 100)}
-                if provider_id is not None:
-                    params["provider_id"] = provider_id
-                result = await client.get("/api/streams", **params)
+                result = await client.call_endpoint(
+                    ENDPOINTS["streams_list"],
+                    query=_stream_query(search=query, m3u_account=provider_id, page_size=min(limit_per_query, 100)),
+                )
                 streams = result.get("results", result.get("streams", [])) if isinstance(result, dict) else result
 
                 if not streams:
@@ -877,15 +894,14 @@ def register(mcp: FastMCP):
         try:
             client = get_ecm_client()
 
-            # Paginate through all channels in the group
+            # Paginate through all channels in the group. Backend GET /api/channels
+            # filters by ``channel_group`` (NOT a bare ``group_id`` — GH #221).
             all_channels = []
             page = 1
             while True:
-                result = await client.get(
-                    "/api/channels",
-                    group_id=group_id,
-                    page=page,
-                    page_size=500,
+                result = await client.call_endpoint(
+                    ENDPOINTS["channels_list"],
+                    query={"channel_group": group_id, "page": page, "page_size": 500},
                 )
                 if isinstance(result, dict):
                     channels = result.get("results", [])
@@ -922,9 +938,10 @@ def register(mcp: FastMCP):
                     stream_id = best.get("id")
                     stream_name = best.get("name", "Unknown")
                     try:
-                        await client.post(
-                            f"/api/channels/{ch_id}/add-stream",
-                            json_data={"stream_id": stream_id},
+                        await client.call_endpoint(
+                            ENDPOINTS["channels_add_stream"],
+                            path_args={"channel_id": ch_id},
+                            body={"stream_id": stream_id},
                         )
                         matched.append((ch_num, ch_name, stream_name, stream_id))
                     except Exception as assign_err:

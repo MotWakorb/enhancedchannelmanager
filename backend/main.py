@@ -100,6 +100,7 @@ tags_metadata = [
     {"name": "FFMPEG Profiles", "description": "Save and load FFMPEG Builder profiles"},
     {"name": "Backup", "description": "Backup and restore ECM configuration"},
     {"name": "Lookup Tables", "description": "Named key→value tables used by the dummy EPG template engine"},
+    {"name": "Observability", "description": "Telemetry endpoints — frontend runtime error reporting (ADR-006)"},
 ]
 
 app = FastAPI(
@@ -395,6 +396,23 @@ AUTH_EXEMPT_PATHS = {
     "/api/health/ready",
     # Schema version — public so DBAS restore/sync can gate on revision
     "/api/health/schema",
+    # Build identity — public so operators can detect container drift from
+    # origin/dev (bd-h0wfu) without authenticating. Echoes the same env
+    # vars baked into the image at Docker build time. No subsystem access.
+    "/api/version",
+    # SLO-6 denominator counter ingest — public by design (bd-m3vej,
+    # follow-up to bd-arp3o) so pre-auth sessions count in the denominator.
+    # Without this, the SLO-6 SLI is structurally biased: the numerator
+    # (/api/client-errors) stays JWT-required, so pre-auth bootstrap
+    # failures (login-page chunk-load errors, pre-mount crashes) cannot
+    # be observed at all, while pre-auth sessions WERE invisible to the
+    # denominator. Opening only this endpoint reduces the asymmetry —
+    # pre-auth sessions are now counted, accepting that pre-auth errors
+    # remain uncounted (PO option B). The endpoint accepts a single
+    # opaque UUIDv4 (no PII, never logged, never persisted). Documented
+    # as a known measurement bias in docs/sre/slos.md (SLO-6) and
+    # ADR-006 §1.
+    "/api/session-start",
     # Auth flow (must be public by definition)
     "/api/auth/login",
     "/api/auth/refresh",
@@ -1018,10 +1036,49 @@ async def shutdown_event():
 
 
 # Serve static files in production
+#
+# Cache-Control defaults (bd-hl603):
+#   /assets/*  -> "public, max-age=31536000, immutable"
+#       Vite emits content-hashed filenames in frontend/dist/assets/* (see
+#       frontend/vite.config.ts). The bytes at /assets/index-<hash>.js never
+#       change for that hash — a new build produces a new filename. They are
+#       eternal-cache-safe.
+#   /          -> "no-cache, must-revalidate"
+#   /index.html (served via the SPA fallback)
+#       The entry-point HTML references the hashed bundles by name. It MUST
+#       be revalidated on every load so a fresh deploy's bundle URLs are
+#       picked up. Without this, browsers / proxies that apply heuristic
+#       caching to HTML hand users a stale index.html pointing at a
+#       /assets/index-<old-hash>.js that has been removed from disk —
+#       producing 404s and the kind:"chunk_load" client-error spike that
+#       docs/runbooks/frontend_error_rate.md alerts on.
+#
+# Operator-facing cache-invalidation procedure:
+#   docs/runbooks/infra-cache-invalidation.md (companion runbook, covers
+#   reverse proxies and CDNs that may override or mask these defaults).
+ASSETS_CACHE_CONTROL = "public, max-age=31536000, immutable"
+INDEX_CACHE_CONTROL = "no-cache, must-revalidate"
+
+
+class ImmutableStaticFiles(StaticFiles):
+    """StaticFiles variant that stamps Cache-Control: immutable on every response.
+
+    Used for /assets/*, where Vite's content-hashed filenames make the bytes
+    at any given path immutable for the lifetime of that hash.
+    """
+
+    def file_response(self, *args, **kwargs):  # type: ignore[override]
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = ASSETS_CACHE_CONTROL
+        return response
+
+
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(static_dir):
     app.mount(
-        "/assets", StaticFiles(directory=os.path.join(static_dir, "assets")), name="assets"
+        "/assets",
+        ImmutableStaticFiles(directory=os.path.join(static_dir, "assets")),
+        name="assets",
     )
     # Serve downloadable scripts (VLC protocol handlers, etc.)
     scripts_dir = os.path.join(static_dir, "scripts")
@@ -1036,12 +1093,34 @@ if os.path.exists(static_dir):
             "/docs", StaticFiles(directory=docs_dir, html=True), name="docs"
         )
 
+    # Any /api/* path not claimed by a registered router returns JSON 404.
+    # Without this the SPA catch-all below would serve index.html for GET
+    # /api/<unknown> (200) and 405 for other methods, masking proper API
+    # error semantics and breaking path-injection tests where URL-encoded
+    # slashes decode into multi-segment paths that the typed {filename}
+    # param cannot match. Registered before the SPA so real routers
+    # (registered earlier via include_router) still win by match order.
+    @app.api_route(
+        "/api/{full_path:path}",
+        methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+        include_in_schema=False,
+    )
+    async def api_not_found(full_path: str):
+        raise HTTPException(status_code=404, detail="Not Found")
+
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        # Serve index.html for all non-API routes (SPA routing)
+        # Serve index.html for all non-API routes (SPA routing).
+        # Cache-Control: no-cache, must-revalidate ensures the browser always
+        # re-validates the entry-point HTML so it picks up the latest bundle
+        # hashes after a deploy. See bd-hl603 and the comment block above the
+        # static-file mounts.
         index_path = os.path.join(static_dir, "index.html")
         if os.path.exists(index_path):
-            return FileResponse(index_path)
+            return FileResponse(
+                index_path,
+                headers={"Cache-Control": INDEX_CACHE_CONTROL},
+            )
         return {"detail": "Frontend not built"}
 
 

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import httpx
 
-from cloud_storage.base import CloudStorageAdapter, UploadResult, ConnectionTestResult
+from cloud_storage.types import CloudStorageAdapter, UploadResult, ConnectionTestResult
 
 logger = logging.getLogger(__name__)
 

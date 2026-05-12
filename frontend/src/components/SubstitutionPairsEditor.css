@@ -171,6 +171,16 @@
   font-size: 16px;
 }
 
+.sub-pairs-actions {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+
+.sub-pairs-actions .sub-pairs-add {
+  flex: 1;
+}
+
 .sub-pairs-add {
   display: flex;
   align-items: center;

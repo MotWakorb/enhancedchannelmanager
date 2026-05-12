@@ -3371,7 +3371,10 @@ export function ChannelsPane({
     setStreamGroupDragOver(false);
 
     // Determine drop target and suggested number
-    let targetGroupId: number | undefined;
+    // Note: targetGroupId is intentionally always undefined here -- user picks
+    // the group in the modal. Kept as a positional argument for clarity at the
+    // call sites below.
+    const targetGroupId: number | undefined = undefined;
     let suggestedStartingNumber: number | undefined;
 
     if (streamGroupDropTarget) {
@@ -3885,7 +3888,7 @@ export function ChannelsPane({
     if (isCrossGroupMove) {
       // Collect channels to move: if the dragged channel is part of multi-selection, move all selected
       // Otherwise, just move the single dragged channel
-      let channelsToMove: Channel[] = [];
+      let channelsToMove: Channel[];
       if (selectedChannelIds.has(activeChannel.id) && selectedChannelIds.size > 1) {
         // Multi-selection: collect ALL selected channels (from any group, not just the dragged channel's group)
         // Exclude channels that are already in the target group
@@ -5378,36 +5381,62 @@ export function ChannelsPane({
                                 />
                               </div>
                             )}
-                            <DndContext
-                              sensors={streamSensors}
-                              collisionDetection={closestCenter}
-                              onDragEnd={handleStreamDragEnd}
-                            >
-                              <SortableContext
-                                items={channelStreams.map((s) => s.id)}
-                                strategy={verticalListSortingStrategy}
+                            {/* Gate DndContext mount on edit mode — every mounted
+                                @dnd-kit DndContext attaches MutationObservers to
+                                document.body via useRect(), which leaks under busy
+                                notification streams (gh #207). */}
+                            {isEditMode ? (
+                              <DndContext
+                                sensors={streamSensors}
+                                collisionDetection={closestCenter}
+                                onDragEnd={handleStreamDragEnd}
                               >
-                                <div className="inline-streams-list">
-                                  {channelStreams.map((stream, index) => (
-                                    <div key={stream.id} className="inline-stream-row">
-                                      <span className="stream-priority">{index + 1}</span>
-                                      <StreamListItem
-                                        stream={stream}
-                                        providerName={providers.find((p) => p.id === stream.m3u_account)?.name ?? null}
-                                        isEditMode={isEditMode}
-                                        onRemove={handleRemoveStream}
-                                        onCopyUrl={stream.url ? () => handleCopyStreamUrl(stream.url!, stream.name) : undefined}
-                                        onClearStats={handleClearStreamStats}
-                                        onPreview={stream.url ? (s) => handlePreviewStream(s, channel.name) : undefined}
-                                        showStreamUrls={showStreamUrls}
-                                        streamStats={streamStatsMap.get(stream.id) ?? null}
-                                        strikeThreshold={strikeThreshold}
-                                      />
-                                    </div>
-                                  ))}
-                                </div>
-                              </SortableContext>
-                            </DndContext>
+                                <SortableContext
+                                  items={channelStreams.map((s) => s.id)}
+                                  strategy={verticalListSortingStrategy}
+                                >
+                                  <div className="inline-streams-list">
+                                    {channelStreams.map((stream, index) => (
+                                      <div key={stream.id} className="inline-stream-row">
+                                        <span className="stream-priority">{index + 1}</span>
+                                        <StreamListItem
+                                          stream={stream}
+                                          providerName={providers.find((p) => p.id === stream.m3u_account)?.name ?? null}
+                                          isEditMode={isEditMode}
+                                          onRemove={handleRemoveStream}
+                                          onCopyUrl={stream.url ? () => handleCopyStreamUrl(stream.url!, stream.name) : undefined}
+                                          onClearStats={handleClearStreamStats}
+                                          onPreview={stream.url ? (s) => handlePreviewStream(s, channel.name) : undefined}
+                                          showStreamUrls={showStreamUrls}
+                                          streamStats={streamStatsMap.get(stream.id) ?? null}
+                                          strikeThreshold={strikeThreshold}
+                                        />
+                                      </div>
+                                    ))}
+                                  </div>
+                                </SortableContext>
+                              </DndContext>
+                            ) : (
+                              <div className="inline-streams-list">
+                                {channelStreams.map((stream, index) => (
+                                  <div key={stream.id} className="inline-stream-row">
+                                    <span className="stream-priority">{index + 1}</span>
+                                    <StreamListItem
+                                      stream={stream}
+                                      providerName={providers.find((p) => p.id === stream.m3u_account)?.name ?? null}
+                                      isEditMode={isEditMode}
+                                      onRemove={handleRemoveStream}
+                                      onCopyUrl={stream.url ? () => handleCopyStreamUrl(stream.url!, stream.name) : undefined}
+                                      onClearStats={handleClearStreamStats}
+                                      onPreview={stream.url ? (s) => handlePreviewStream(s, channel.name) : undefined}
+                                      showStreamUrls={showStreamUrls}
+                                      streamStats={streamStatsMap.get(stream.id) ?? null}
+                                      strikeThreshold={strikeThreshold}
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </>
                         )}
                       </div>
@@ -7142,6 +7171,13 @@ export function ChannelsPane({
         {loading ? (
           <div className="loading">Loading channels...</div>
         ) : (
+          // Gate DndContext mount on edit mode — every mounted @dnd-kit
+          // DndContext attaches MutationObservers to document.body via
+          // useRect(), which leaks under busy notification streams (gh #207).
+          // When not in edit mode, drag handles are no-ops anyway (useSortable
+          // is disabled and drop zones are gated on isEditMode), so skipping
+          // the wrapper is purely a memory optimization.
+          isEditMode ? (
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -7278,6 +7314,45 @@ export function ChannelsPane({
               })()}
             </DragOverlay>
           </DndContext>
+          ) : (
+            <>
+              {/* Read-only render path: no DndContext, no MutationObservers.
+                  Drop zones and DragOverlay are gated on isEditMode upstream
+                  so they would no-op anyway. */}
+              {renderGroup(
+                'ungrouped',
+                'Uncategorized',
+                channelsByGroup.ungrouped || [],
+                (channelsByGroup.ungrouped?.length ?? 0) === 0
+              )}
+              {filteredChannelGroups.map((group) => (
+                <React.Fragment key={group.id}>
+                  {renderGroup(group.id, renamedGroupNames.get(group.id) || group.name, channelsByGroup[group.id] || [])}
+                </React.Fragment>
+              ))}
+              {selectedGroups
+                .filter((groupId) => {
+                  const isEmpty = !channelsByGroup[groupId] || channelsByGroup[groupId].length === 0;
+                  return isEmpty && shouldShowGroup(groupId);
+                })
+                .map((groupId) => {
+                  const group = channelGroups.find((g) => g.id === groupId);
+                  return group ? renderGroup(group.id, renamedGroupNames.get(group.id) || group.name, [], true) : null;
+                })
+              }
+              {Array.from(newlyCreatedGroupIds)
+                .filter((groupId) => {
+                  const isEmpty = !channelsByGroup[groupId] || channelsByGroup[groupId].length === 0;
+                  const notAlreadyRendered = !filteredChannelGroups.some((g) => g.id === groupId) && !selectedGroups.includes(groupId);
+                  return isEmpty && notAlreadyRendered && shouldShowGroup(groupId);
+                })
+                .map((groupId) => {
+                  const group = channelGroups.find((g) => g.id === groupId);
+                  return group ? renderGroup(group.id, renamedGroupNames.get(group.id) || group.name, [], true) : null;
+                })
+              }
+            </>
+          )
         )}
 
         {/* Context menu */}

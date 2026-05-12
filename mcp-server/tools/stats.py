@@ -3,6 +3,7 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
+from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
 
 logger = logging.getLogger(__name__)
@@ -14,7 +15,7 @@ def register(mcp: FastMCP):
         """Get channel viewing statistics including active viewers and stream status."""
         try:
             client = get_ecm_client()
-            stats = await client.get("/api/stats/channels")
+            stats = await client.call_endpoint(ENDPOINTS["stats_channels"])
 
             if not stats:
                 return "No channel statistics available."
@@ -49,7 +50,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.get("/api/stats/top-watched", limit=limit)
+            result = await client.call_endpoint(ENDPOINTS["stats_top_watched"], query={"limit": limit})
 
             items = result if isinstance(result, list) else result.get("channels", [])
 
@@ -74,7 +75,7 @@ def register(mcp: FastMCP):
         """Get current bandwidth usage statistics across all channels."""
         try:
             client = get_ecm_client()
-            b = await client.get("/api/stats/bandwidth")
+            b = await client.call_endpoint(ENDPOINTS["stats_bandwidth"])
 
             def fmt(bytes_val):
                 if not bytes_val:
@@ -112,7 +113,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.get("/api/stats/popularity/rankings", limit=limit)
+            result = await client.call_endpoint(ENDPOINTS["stats_popularity_rankings"], query={"limit": limit})
 
             rankings = result.get("rankings", []) if isinstance(result, dict) else result
             total = result.get("total", len(rankings)) if isinstance(result, dict) else len(rankings)
@@ -150,14 +151,14 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            params = {"page_size": limit}
+            query = {"page_size": limit}
             if channel_id:
-                params["channel_id"] = channel_id
+                query["channel_id"] = channel_id
             if ip_address:
-                params["ip_address"] = ip_address
+                query["ip_address"] = ip_address
             if days:
-                params["days"] = days
-            result = await client.get("/api/stats/watch-history", **params)
+                query["days"] = days
+            result = await client.call_endpoint(ENDPOINTS["stats_watch_history"], query=query)
 
             entries = result.get("history", []) if isinstance(result, dict) else result
             total = result.get("total", len(entries)) if isinstance(result, dict) else len(entries)
@@ -193,7 +194,7 @@ def register(mcp: FastMCP):
         """Get unique viewer counts and connection statistics."""
         try:
             client = get_ecm_client()
-            d = await client.get("/api/stats/unique-viewers")
+            d = await client.call_endpoint(ENDPOINTS["stats_unique_viewers"])
 
             lines = [
                 "Unique Viewers:",
@@ -208,15 +209,20 @@ def register(mcp: FastMCP):
 
             # Per-channel breakdown if available
             try:
-                by_channel = await client.get("/api/stats/unique-viewers-by-channel")
+                by_channel = await client.call_endpoint(ENDPOINTS["stats_unique_viewers_by_channel"])
                 if by_channel and isinstance(by_channel, list):
-                    lines.append(f"\nTop channels by unique viewers:")
+                    lines.append("\nTop channels by unique viewers:")
                     for c in by_channel[:10]:
                         name = c.get("channel_name", c.get("name", "Unknown"))
                         count = c.get("unique_viewers", c.get("viewer_count", 0))
                         lines.append(f"  {name}: {count} viewers")
-            except Exception:
-                pass
+            except Exception as channel_breakdown_err:
+                # Per-channel breakdown is supplementary detail; if Dispatcharr lacks the
+                # /unique-viewers-by-channel endpoint we still return the totals above.
+                logger.debug(
+                    "[MCP] get_unique_viewers: per-channel breakdown unavailable: %s",
+                    channel_breakdown_err,
+                )
 
             return "\n".join(lines)
         except Exception as e:
@@ -241,10 +247,11 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post("/api/stream-stats/compute-sort", json_data={
-                "channels": channels,
-                "mode": mode,
-            }, timeout=60.0)
+            result = await client.call_endpoint(
+                ENDPOINTS["stream_stats_compute_sort"],
+                body={"channels": channels, "mode": mode},
+                timeout=60.0,
+            )
 
             results = result.get("results", []) if isinstance(result, dict) else result
 

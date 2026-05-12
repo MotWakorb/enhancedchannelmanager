@@ -255,3 +255,89 @@ groups:
             ffprobe readiness sub-check is slow. Typically indicates
             disk I/O issues on the host or ffprobe binary degradation.
           runbook_url: docs/runbooks/readiness_subcheck_latency.md
+
+  # =====================================================================
+  # SLO-6: Frontend Error-free Session Rate (ADR-006, bd-i6a1m, bd-arp3o)
+  # =====================================================================
+  # Shipped alongside ADR-006 Phase 1 frontend error telemetry. The alert
+  # inherits the operator-provisioned posture from bd-5uxwh — defined in
+  # YAML, consumed by an operator's own Prometheus+Alertmanager, not shipped
+  # as a running service.
+  #
+  # Ratio-based as of bd-arp3o (spike bd-1tl01): the SLI denominator
+  # `ecm_session_starts_total` exists, so the alerts now match the SLO-6
+  # statement ("error-free *session rate*", not "absolute error rate").
+  # The previous absolute-rate alerts fired on traffic spikes even when
+  # the per-session error ratio was flat — replaced here with the same
+  # ratio expression that drives the SLO calculation.
+  #
+  # Thresholds are first-pass defaults:
+  #   - Elevated at >0.5% boundary errors per session (5m ratio) sustained
+  #     for 10m.
+  #   - Critical at >5% boundary errors per session (5m ratio) sustained
+  #     for 5m — roughly the rate at which a chunk-load or bundle-regression
+  #     incident on a small LAN instance becomes operator-visible.
+  # The "and rate(...) > 0" guards the ratio against div-by-zero during
+  # idle periods (no sessions started in the window).
+  # Expect one round of tuning after 30 days of real traffic.
+  - name: ecm_client_error_rate
+    interval: 30s
+    rules:
+      - record: ecm:client_errors:rate5m
+        expr: sum by (kind, release) (rate(ecm_client_errors_total[5m]))
+
+      - record: ecm:client_error_session_ratio:5m
+        # SLO-6 SLI numerator over denominator on a 5m window. The SLO
+        # statement uses 28d for budget calculation; this 5m ratio is
+        # the burn signal the alert rules consume.
+        expr: |
+          sum(rate(ecm_client_errors_total{kind="boundary"}[5m]))
+          /
+          sum(rate(ecm_session_starts_total[5m]))
+
+      - alert: ECMClientErrorRatioElevated
+        # Sustained low-but-nontrivial boundary-error ratio. Likely a
+        # bad deploy ("release" label spikes on one value of
+        # ecm:client_errors:rate5m) or an API contract drift triggering
+        # many React-tree boundary catches.
+        expr: |
+          ecm:client_error_session_ratio:5m > 0.005
+          and
+          sum(rate(ecm_session_starts_total[5m])) > 0
+        for: 10m
+        labels:
+          severity: ticket
+          slo: client_error_rate
+          service: ecm
+        annotations:
+          summary: "ECM frontend boundary-error ratio {{ $value | humanizePercentage }} > 0.5% for 10m+"
+          description: |
+            Frontend boundary-error ratio per session has exceeded 0.5%
+            sustained. Check /metrics for the breakdown by `kind` and
+            `release` labels on `ecm:client_errors:rate5m`; a spike on
+            one `release` != current points to a stale-bundle
+            chunk-load incident (operator should bust browser cache),
+            while a spike on the current release points to a regression
+            in the just-deployed bundle.
+          runbook_url: docs/runbooks/frontend_error_rate.md
+
+      - alert: ECMClientErrorRatioCritical
+        # Outage-scale boundary-error storm. Something in the latest
+        # bundle is broken for a significant fraction of active sessions.
+        expr: |
+          ecm:client_error_session_ratio:5m > 0.05
+          and
+          sum(rate(ecm_session_starts_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: page
+          slo: client_error_rate
+          service: ecm
+        annotations:
+          summary: "ECM frontend boundary-error ratio {{ $value | humanizePercentage }} > 5% — critical"
+          description: |
+            Frontend boundary-error ratio per session has exceeded 5%
+            for 5 minutes. Treat as an incident. Begin runbook, page
+            on-call, identify the offending `release` label from
+            /metrics and consider rolling back the last deploy.
+          runbook_url: docs/runbooks/frontend_error_rate.md

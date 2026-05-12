@@ -904,6 +904,9 @@ export interface SettingsResponse {
   auto_creation_exclude_auto_sync_groups: boolean;
   // MCP integration
   mcp_api_key_configured: boolean;
+  // Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m).
+  // Default ON; operator can flip via /api/settings to disable reporting.
+  telemetry_client_errors_enabled: boolean;
 }
 
 // Stream preview mode for browser playback
@@ -993,6 +996,8 @@ export async function saveSettings(settings: {
   auto_creation_excluded_terms?: string[];
   auto_creation_excluded_groups?: string[];
   auto_creation_exclude_auto_sync_groups?: boolean;
+  // Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m)
+  telemetry_client_errors_enabled?: boolean;
 }): Promise<{ status: string; configured: boolean; server_changed: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
@@ -3207,6 +3212,61 @@ export async function updateServiceAlertRule(
 
 export async function deleteServiceAlertRule(ruleId: number): Promise<void> {
   return fetchJson(`${API_BASE}/services/alert-rules/${ruleId}`, { method: 'DELETE' });
+}
+
+// ── Alert Methods API ───────────────────────────────────────────────
+
+export interface AlertMethod {
+  id: number;
+  name: string;
+  method_type: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  notify_info: boolean;
+  notify_success: boolean;
+  notify_warning: boolean;
+  notify_error: boolean;
+}
+
+export interface AlertMethodCreateRequest {
+  name: string;
+  method_type: string;
+  config: Record<string, unknown>;
+  enabled?: boolean;
+  notify_info?: boolean;
+  notify_success?: boolean;
+  notify_warning?: boolean;
+  notify_error?: boolean;
+  alert_sources?: Record<string, unknown> | null;
+}
+
+export interface AlertMethodUpdateRequest {
+  name?: string;
+  config?: Record<string, unknown>;
+  enabled?: boolean;
+  notify_info?: boolean;
+  notify_success?: boolean;
+  notify_warning?: boolean;
+  notify_error?: boolean;
+  alert_sources?: Record<string, unknown> | null;
+}
+
+export async function listAlertMethods(): Promise<AlertMethod[]> {
+  return fetchJson(`${API_BASE}/alert-methods`);
+}
+
+export async function createAlertMethod(data: AlertMethodCreateRequest): Promise<{ id: number; name: string; method_type: string; enabled: boolean }> {
+  return fetchJson(`${API_BASE}/alert-methods`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateAlertMethod(methodId: number, data: AlertMethodUpdateRequest): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/alert-methods/${methodId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
 }
 
 // ---------------------------------------------------------------------------

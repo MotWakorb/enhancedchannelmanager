@@ -3,6 +3,7 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
+from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
 
 logger = logging.getLogger(__name__)
@@ -14,7 +15,7 @@ def register(mcp: FastMCP):
         """List all channel profiles (configuration presets for channels)."""
         try:
             client = get_ecm_client()
-            profiles = await client.get("/api/channel-profiles")
+            profiles = await client.call_endpoint(ENDPOINTS["channel_profiles_list"])
 
             if not profiles:
                 return "No channel profiles configured."
@@ -36,7 +37,7 @@ def register(mcp: FastMCP):
         """List all stream profiles (FFmpeg/transcoding presets for streams)."""
         try:
             client = get_ecm_client()
-            profiles = await client.get("/api/stream-profiles")
+            profiles = await client.call_endpoint(ENDPOINTS["stream_profiles_list"])
 
             if not profiles:
                 return "No stream profiles configured."
@@ -67,11 +68,23 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.patch(
-                f"/api/channel-profiles/{profile_id}/channels/bulk-update",
-                json_data={"channel_ids": channel_ids},
+            await client.call_endpoint(
+                ENDPOINTS["channel_profiles_bulk_update"],
+                path_args={"profile_id": profile_id},
+                body={"channel_ids": channel_ids},
             )
-            return f"Profile {profile_id} applied to {len(channel_ids)} channels."
+            # Read-back: confirm the profile now lists the requested channels.
+            try:
+                profiles = await client.call_endpoint(ENDPOINTS["channel_profiles_list"])
+                prof = next(
+                    (p for p in (profiles or []) if isinstance(p, dict) and p.get("id") == profile_id),
+                    None,
+                )
+                now_count = len(prof.get("channels", [])) if prof else None
+            except Exception:
+                now_count = None
+            suffix = f" Profile now has {now_count} channels." if now_count is not None else ""
+            return f"Profile {profile_id} applied to {len(channel_ids)} channels.{suffix}"
         except Exception as e:
             logger.error("[MCP] apply_profile_to_channels failed: %s", e)
             return f"Error applying profile: {e}"

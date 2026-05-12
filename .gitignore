@@ -40,5 +40,10 @@ backend/.coverage
 backend/coverage.xml
 backend/htmlcov/
 
+# JUnit XML reports — emitted in CI for the flake-pr-comment workflow
+# (bead xq19y) and locally when running pytest/vitest with --junitxml.
+backend/junit.xml
+frontend/junit.xml
+
 # User guide screenshots (may contain PII)
 docs/images/

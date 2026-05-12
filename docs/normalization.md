@@ -61,8 +61,37 @@ Before any user-authored rule runs, a **policy** preprocesses the input. The pol
 1. **NFC canonicalization.** NFD-decomposed input (`e` + U+0301) collapses to pre-composed form (`é` = U+00E9). NFC, *not* NFKC — ligatures (`ﬁ`), fullwidth digits (`１`), and Roman-numeral compatibility forms are preserved because users who typed them intended them.
 2. **Cf-whitelist stripping.** `U+200B` ZWSP, `U+200C` ZWNJ, `U+200D` ZWJ, and `U+FEFF` BOM are removed. RTL/LTR bidi marks (`U+200F`, `U+202E`) are **preserved** — some right-to-left channel names need them.
 3. **Full superscript conversion.** Letter-superscripts (`ᴴᴰ` → `HD`, `ᴿᴬᵂ` → `RAW`) and numeric-superscripts (`²` → `2`, `⁶⁰` → `60`) both convert to ASCII. Both, always.
+4. **(Opt-in)** **Confusables fold** — see [Confusables fold](#confusables-fold-opt-in-bd-sc5s4) below. Off by default; enable when homoglyph attacks are part of your threat model.
 
 The policy is a [frozen dataclass](#developer-reference) applied at the same call site by Test Rules, Auto Create, and Re-normalize Existing Channels. It is not extensible from rule configuration — if you need a different Unicode preprocessing step, file a bead.
+
+### Confusables fold (opt-in, bd-sc5s4)
+
+Unicode contains many characters that render identically across scripts but occupy distinct code points — for example, Cyrillic `а` (U+0430) and Latin `a` (U+0061) look the same on screen but are byte-distinct. An attacker can register a stream named `chаnnel` (with a Cyrillic `а`) that visually matches a legitimate `channel`, defeating dedup, rule matching, and auto-creation collision detection.
+
+ECM ships with an opt-in **confusables fold** that maps a curated subset of Unicode TR39 confusables to Latin/ASCII *after* NFC + Cf-strip + superscript conversion. The fold is **off by default** because it is aggressive — it collapses characters that some operators want kept distinct (e.g. Greek alphabet channels, math-italic letters used as branding).
+
+**Enable it** by setting `ECM_NORMALIZATION_CONFUSABLES_FOLD=true` and restarting the container. Once on, the fold applies uniformly to Test Rules, Auto Create, and Re-normalize Existing Channels — the parity contract is preserved.
+
+**What gets folded** (curated subset, not the full ~6000-entry TR39 table):
+
+| Class | Example input | After fold |
+|-|-|-|
+| Cyrillic look-alikes | `chаnnel` (а=U+0430) | `channel` |
+| Greek capitals | `ΑBC` (Α=U+0391) | `ABC` |
+| Math italic letters | `\U0001D44E` MATHEMATICAL ITALIC SMALL A | `a` |
+| Math bold digits | `\U0001D7CE` MATHEMATICAL BOLD DIGIT ZERO | `0` |
+| Fullwidth Latin | `ＡＢＣ１` | `ABC1` |
+
+**What does NOT fold** (intentionally):
+
+- Accented Latin letters (`é`, `ñ`, `ü`) — these are content, not confusables.
+- Digit/letter look-alikes O/0, I/1/l — these collide more often than they prevent attacks.
+- The full TR39 6000-entry table — operators who need broader coverage should layer their own normalization rules or file a bead.
+
+**Rollback semantic**: with `ECM_NORMALIZATION_UNIFIED_POLICY=false` (legacy rollback path), the confusables fold is suppressed unconditionally — the rollback switch retains its byte-for-byte semantic. To use the fold, the unified policy must also be enabled (which is the default).
+
+**When to enable**: enable only if (a) you have evidence of homoglyph-based collisions in your feed, or (b) you operate a multi-tenant deployment where stream names come from untrusted sources. For single-operator / trusted-feed deployments the default-off behavior is correct — the false-positive risk (collapsing a legitimate Cyrillic channel name into Latin) outweighs the attack surface.
 
 ### Letter vs numeric superscripts — both now strip
 
@@ -183,7 +212,7 @@ The execute call takes an `actions[]` array keyed by `channel_id`. Only the chan
 Work this checklist in order:
 
 1. **NFC mismatch.** Is the input NFD-decomposed and your pattern composed (or vice versa)? The policy NFCs the input before rules run, but if your *pattern* was typed with composed characters and an older input had NFD, they now match; if your pattern has NFD and the input is now NFC (post-policy), they no longer match. Recompose the pattern.
-2. **Homoglyph.** Cyrillic `А` (U+0410) and Latin `A` (U+0041) render identically. The policy does not normalize homoglyphs. Copy the exact bytes from the raw input into your pattern.
+2. **Homoglyph.** Cyrillic `А` (U+0410) and Latin `A` (U+0041) render identically. The default policy does NOT normalize homoglyphs — copy the exact bytes from the raw input into your pattern, OR enable the [confusables fold](#confusables-fold-opt-in-bd-sc5s4) (`ECM_NORMALIZATION_CONFUSABLES_FOLD=true`) so Cyrillic / Greek / math / fullwidth look-alikes collapse to Latin/ASCII before matching.
 3. **Cf code point you didn't see.** `​` (ZWSP) is invisible. If the policy strips it, your pattern against `RTL HD` won't see the `​` that was in the raw input — which is correct behavior — but if you're testing against a pre-policy byte stream, the pattern will miss. Always use Test Rules (which applies the policy) for debugging, not raw-byte regex checks.
 4. **Rule ordering.** Does an earlier rule in the pipeline already transform the input away from what your pattern expects? The Test Rules trace drawer shows the intermediate values; read it top-down.
 5. **Regex timeout.** Check logs for `[SAFE_REGEX]` WARN mentioning your rule_id. If present, the pattern is timing out on this input — rewrite per style guide.
@@ -226,14 +255,17 @@ Dashboard metrics to watch during a normalization incident:
 ```python
 @dataclass(frozen=True)
 class NormalizationPolicy:
-    unified_enabled: bool = True   # latched at module load from ECM_NORMALIZATION_UNIFIED_POLICY
+    unified_enabled: bool = True       # latched from ECM_NORMALIZATION_UNIFIED_POLICY
+    confusables_fold: bool = False     # latched from ECM_NORMALIZATION_CONFUSABLES_FOLD (bd-sc5s4)
 
     def apply_to_text(self, text: str) -> str:
         # Under unified_enabled=True:
         #   1. NFC canonicalize
         #   2. strip whitelisted Cf code points
         #   3. convert superscripts (letters + numerics)
+        #   4. (opt-in) confusables fold (Cyrillic/Greek/math/fullwidth -> ASCII)
         # Under unified_enabled=False: only step 3 (legacy behavior)
+        # The confusables fold is suppressed under legacy regardless of the flag.
 ```
 
 The instance is process-global. Read it via `get_default_policy()`; mutate it via the env var + container restart. There is no per-request override.

@@ -417,6 +417,11 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
   const [dummyModalOpen, setDummyModalOpen] = useState(false);
   const [editingDummySource, setEditingDummySource] = useState<EPGSource | null>(null);
 
+  // Reorder mode gates the DndContext mount. @dnd-kit's useRect() attaches a
+  // MutationObserver to document.body for every mounted DndContext; we only
+  // mount when the user is actively reordering EPG source priorities (gh #207).
+  const [isReorderMode, setIsReorderMode] = useState(false);
+
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, {
@@ -670,10 +675,22 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
         <div className="header-title">
           <h2>EPG Sources</h2>
           <p className="header-description">
-            Manage your Electronic Program Guide sources. Drag to reorder priority.
+            Manage your Electronic Program Guide sources. Click Reorder to change priority.
           </p>
         </div>
         <div className="header-actions">
+          {sources.length > 1 && (
+            <button
+              className="btn-secondary"
+              onClick={() => setIsReorderMode((v) => !v)}
+              title={isReorderMode ? 'Exit reorder mode' : 'Reorder priority'}
+            >
+              <span className="material-icons">
+                {isReorderMode ? 'check' : 'reorder'}
+              </span>
+              {isReorderMode ? 'Done' : 'Reorder'}
+            </button>
+          )}
           <button className="btn-secondary" onClick={handleRefreshAll} disabled={refreshingAll}>
             <span className={`material-icons ${refreshingAll ? 'spinning' : ''}`}>sync</span>
             {refreshingAll ? 'Refreshing...' : 'Refresh All'}
@@ -707,28 +724,42 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
             <span className="col-actions">Actions</span>
           </div>
 
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
-          >
-            <SortableContext
-              items={sources.map((s) => s.id)}
-              strategy={verticalListSortingStrategy}
+          {isReorderMode ? (
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
             >
-              {sources.map((source) => (
-                <SortableEPGSourceRow
-                  key={source.id}
-                  source={source}
-                  onEdit={handleEditSource}
-                  onDelete={handleDeleteSource}
-                  onRefresh={handleRefreshSource}
-                  onToggleActive={handleToggleActive}
-                  hideEpgUrls={hideEpgUrls}
-                />
-              ))}
-            </SortableContext>
-          </DndContext>
+              <SortableContext
+                items={sources.map((s) => s.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                {sources.map((source) => (
+                  <SortableEPGSourceRow
+                    key={source.id}
+                    source={source}
+                    onEdit={handleEditSource}
+                    onDelete={handleDeleteSource}
+                    onRefresh={handleRefreshSource}
+                    onToggleActive={handleToggleActive}
+                    hideEpgUrls={hideEpgUrls}
+                  />
+                ))}
+              </SortableContext>
+            </DndContext>
+          ) : (
+            sources.map((source) => (
+              <SortableEPGSourceRow
+                key={source.id}
+                source={source}
+                onEdit={handleEditSource}
+                onDelete={handleDeleteSource}
+                onRefresh={handleRefreshSource}
+                onToggleActive={handleToggleActive}
+                hideEpgUrls={hideEpgUrls}
+              />
+            ))
+          )}
         </div>
       )}
 
