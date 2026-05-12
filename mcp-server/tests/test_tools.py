@@ -7,7 +7,14 @@ from unittest.mock import AsyncMock, patch
 
 
 def _make_ecm_client_mock(**method_returns):
-    """Create a mock ECMClient with configurable return values."""
+    """Create a mock ECMClient with configurable return values.
+
+    Tools migrated to the endpoint-contract registry (bd-vtghg Phase 1) call
+    ``client.call_endpoint(ENDPOINTS["..."], ...)`` instead of
+    ``client.get/post/...`` — pass ``call_endpoint=<return value>`` for those.
+    The legacy ``get=``/``post=``/etc. kwargs still work for tools that haven't
+    been migrated and for the raw-verb fallbacks.
+    """
     mock = AsyncMock()
     for method, return_value in method_returns.items():
         getattr(mock, method).return_value = return_value
@@ -26,7 +33,7 @@ class TestListChannels:
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(get={"count": 2, "results": [
+        mock_client = _make_ecm_client_mock(call_endpoint={"count": 2, "results": [
             {"id": 1, "channel_number": 100, "name": "ESPN", "streams": [10, 20]},
             {"id": 2, "channel_number": 101, "name": "CNN", "streams": [30]},
         ]})
@@ -49,7 +56,7 @@ class TestListChannels:
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(get={"count": 0, "results": []})
+        mock_client = _make_ecm_client_mock(call_endpoint={"count": 0, "results": []})
 
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("list_channels", {})
@@ -66,7 +73,7 @@ class TestListChannels:
         register(mcp)
 
         mock_client = AsyncMock()
-        mock_client.get.side_effect = Exception("Connection refused")
+        mock_client.call_endpoint.side_effect = Exception("Connection refused")
 
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("list_channels", {})
@@ -87,7 +94,7 @@ class TestGetChannel:
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(get={
+        mock_client = _make_ecm_client_mock(call_endpoint={
             "id": 1, "name": "ESPN", "channel_number": 100,
             "channel_group_id": 5, "tvg_id": "espn.us",
             "logo_id": 42, "streams": [10, 20, 30],
@@ -236,7 +243,7 @@ class TestCreateChannel:
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(post={"id": 99, "channel_number": 500, "name": "New Channel"})
+        mock_client = _make_ecm_client_mock(call_endpoint={"id": 99, "channel_number": 500, "name": "New Channel"})
 
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("create_channel", {"name": "New Channel", "channel_number": 500})
@@ -259,7 +266,7 @@ class TestDeleteChannel:
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(delete=None)
+        mock_client = _make_ecm_client_mock(call_endpoint=None)
 
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("delete_channel", {"channel_id": 42})
@@ -281,7 +288,7 @@ class TestAnalyzeAutoCreationRules:
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(post={
+        mock_client = _make_ecm_client_mock(call_endpoint={
             "rules": [{
                 "rule_id": 2,
                 "rule_name": "Sports Networks - excl Fr and Es",
@@ -303,10 +310,9 @@ class TestAnalyzeAutoCreationRules:
             result = await mcp.call_tool("analyze_auto_creation_rules", {})
 
         text = result[0][0].text
-        # Endpoint called.
-        mock_client.post.assert_awaited_once_with(
-            "/api/auto-creation/rules/analyze"
-        )
+        # Endpoint called via the contract registry.
+        from _endpoint_contracts import ENDPOINTS
+        mock_client.call_endpoint.assert_awaited_once_with(ENDPOINTS["ac_analyze_rules"])
         # Markdown surfaces the rule and the finding code.
         assert "Sports Networks" in text
         assert "REGEX_TRIVIALLY_MATCHES_ALL" in text
@@ -322,7 +328,7 @@ class TestAnalyzeAutoCreationRules:
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(post={
+        mock_client = _make_ecm_client_mock(call_endpoint={
             "rules": [{"rule_id": 1, "rule_name": "Clean", "findings": []}],
             "summary": {"error": 0, "warning": 0, "info": 0},
         })
@@ -400,15 +406,17 @@ class TestUpdateChannelGroupId:
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(patch={"id": 1, "name": "ESPN"})
+        mock_client = _make_ecm_client_mock(call_endpoint={"id": 1, "name": "ESPN"})
 
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             await mcp.call_tool("update_channel", {"channel_id": 1, "group_id": 7})
 
-        mock_client.patch.assert_awaited_once()
-        call = mock_client.patch.call_args
-        assert call.args[0] == "/api/channels/1"
-        payload = call.kwargs.get("json_data") or call.args[1]
+        from _endpoint_contracts import ENDPOINTS
+        mock_client.call_endpoint.assert_awaited_once()
+        call = mock_client.call_endpoint.call_args
+        assert call.args[0] is ENDPOINTS["channels_update"]
+        assert call.kwargs["path_args"] == {"channel_id": 1}
+        payload = call.kwargs["body"]
         assert payload == {"channel_group_id": 7}
         assert "group_id" not in payload  # the bare key would be silently dropped
 
@@ -421,15 +429,16 @@ class TestUpdateChannelGroupId:
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(post={"id": 9, "channel_number": 5, "name": "New"})
+        mock_client = _make_ecm_client_mock(call_endpoint={"id": 9, "channel_number": 5, "name": "New"})
 
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             await mcp.call_tool("create_channel", {"name": "New", "group_id": 7})
 
-        mock_client.post.assert_awaited_once()
-        call = mock_client.post.call_args
-        assert call.args[0] == "/api/channels"
-        payload = call.kwargs.get("json_data") or call.args[1]
+        from _endpoint_contracts import ENDPOINTS
+        mock_client.call_endpoint.assert_awaited_once()
+        call = mock_client.call_endpoint.call_args
+        assert call.args[0] is ENDPOINTS["channels_create"]
+        payload = call.kwargs["body"]
         assert payload.get("channel_group_id") == 7
         assert "group_id" not in payload
 
@@ -446,7 +455,7 @@ class TestListAutoCreationRules:
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(get={"rules": [
+        mock_client = _make_ecm_client_mock(call_endpoint={"rules": [
             {"id": 1, "name": "Sports", "enabled": True, "priority": 10},
             {"id": 2, "name": "News", "enabled": False, "priority": 20},
         ]})
@@ -471,7 +480,7 @@ class TestListAutoCreationRules:
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(get={"rules": []})
+        mock_client = _make_ecm_client_mock(call_endpoint={"rules": []})
 
         with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("list_auto_creation_rules", {})
@@ -491,7 +500,7 @@ class TestBulkAddStreamsToChannel:
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(post={
+        mock_client = _make_ecm_client_mock(call_endpoint={
             "channel": {"id": 1, "name": "ESPN"},
             "added": [10, 11, 12],
             "skipped": [],
@@ -504,11 +513,12 @@ class TestBulkAddStreamsToChannel:
                 {"channel_id": 1, "stream_ids": [10, 11, 12]},
             )
 
-        mock_client.post.assert_awaited_once()
-        call = mock_client.post.call_args
-        assert call.args[0] == "/api/channels/1/add-streams"
-        payload = call.kwargs.get("json_data") or call.args[1]
-        assert payload == {"stream_ids": [10, 11, 12]}
+        from _endpoint_contracts import ENDPOINTS
+        mock_client.call_endpoint.assert_awaited_once()
+        call = mock_client.call_endpoint.call_args
+        assert call.args[0] is ENDPOINTS["channels_add_streams"]
+        assert call.kwargs["path_args"] == {"channel_id": 1}
+        assert call.kwargs["body"] == {"stream_ids": [10, 11, 12]}
         # Generous per-call timeout passed for slow hardware.
         assert call.kwargs.get("timeout", 0) >= 120.0
         text = result[0][0].text
@@ -528,7 +538,7 @@ class TestBulkCommitChannelsErrorDetail:
         register(mcp)
 
         mock_client = AsyncMock()
-        mock_client.post.side_effect = RuntimeError(
+        mock_client.call_endpoint.side_effect = RuntimeError(
             "POST /api/channels/bulk-commit -> HTTP 422 Unprocessable Entity: "
             "[{'loc': ['body', 'operations', 0, 'channelId'], 'msg': 'field required', 'type': 'missing'}]"
         )
@@ -575,3 +585,64 @@ class TestECMClientHTTPErrorDetail:
         assert "422" in msg
         assert "channelId" in msg
         assert "/api/channels/bulk-commit" in msg
+
+
+class TestCallEndpoint:
+    """ECMClient.call_endpoint — contract enforcement + path formatting (bd-vtghg Phase 1)."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_out_of_contract_body_key(self):
+        """A body key not in the endpoint's request_fields raises ContractError before any HTTP call."""
+        from ecm_client import ECMClient, ContractError
+        from _endpoint_contracts import ENDPOINTS
+
+        client = ECMClient()
+        with patch("ecm_client._get_client") as get_client:
+            get_client.return_value.post = AsyncMock()
+            with pytest.raises(ContractError) as exc_info:
+                # channels_create accepts channel_group_id, not group_id (GH #221).
+                await client.call_endpoint(ENDPOINTS["channels_create"], body={"name": "X", "group_id": 7})
+            get_client.return_value.post.assert_not_awaited()
+        msg = str(exc_info.value)
+        assert "group_id" in msg
+        assert "channels_create" in msg
+
+    @pytest.mark.asyncio
+    async def test_rejects_missing_path_arg(self):
+        """An unfilled {placeholder} raises ContractError naming the missing arg."""
+        from ecm_client import ECMClient, ContractError
+        from _endpoint_contracts import ENDPOINTS
+
+        client = ECMClient()
+        with patch("ecm_client._get_client"):
+            with pytest.raises(ContractError) as exc_info:
+                await client.call_endpoint(ENDPOINTS["channels_get"])  # missing channel_id
+        assert "channel_id" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_formats_path_and_delegates_to_verb(self):
+        """A valid call formats the path and delegates to the matching verb method."""
+        from ecm_client import ECMClient
+        from _endpoint_contracts import ENDPOINTS
+
+        client = ECMClient()
+        with patch.object(ECMClient, "post", new=AsyncMock(return_value={"ok": True})) as post_mock:
+            result = await client.call_endpoint(
+                ENDPOINTS["channels_add_stream"],
+                path_args={"channel_id": 42},
+                body={"stream_id": 7},
+            )
+        assert result == {"ok": True}
+        post_mock.assert_awaited_once_with("/api/channels/42/add-stream", json_data={"stream_id": 7}, timeout=None)
+
+    @pytest.mark.asyncio
+    async def test_rejects_out_of_contract_query_key(self):
+        """A query key not in query_params raises ContractError (GH #221 — group_id vs channel_group)."""
+        from ecm_client import ECMClient, ContractError
+        from _endpoint_contracts import ENDPOINTS
+
+        client = ECMClient()
+        with patch("ecm_client._get_client"):
+            with pytest.raises(ContractError) as exc_info:
+                await client.call_endpoint(ENDPOINTS["channels_list"], query={"group_id": 3})
+        assert "group_id" in str(exc_info.value)

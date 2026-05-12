@@ -3,6 +3,7 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
+from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,7 @@ def register(mcp: FastMCP):
         """List all auto-creation rules that automatically create channels from streams."""
         try:
             client = get_ecm_client()
-            resp = await client.get("/api/auto-creation/rules")
+            resp = await client.call_endpoint(ENDPOINTS["ac_list_rules"])
             # The backend wraps the list as {"rules": [...]}; unwrap defensively
             # (older code iterated the dict's keys -> str.get() AttributeError,
             # bd-pvw35 / GH #222). The `analyze` tool below already does this.
@@ -108,7 +109,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post("/api/auto-creation/run", json_data={"dry_run": dry_run}, timeout=300.0)
+            result = await client.call_endpoint(ENDPOINTS["ac_run"], body={"dry_run": dry_run}, timeout=300.0)
 
             mode = "Dry run" if dry_run else "Execution"
             lines = [f"Auto-creation {mode} complete:"]
@@ -151,7 +152,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            r = await client.get(f"/api/auto-creation/rules/{rule_id}")
+            r = await client.call_endpoint(ENDPOINTS["ac_get_rule"], path_args={"rule_id": rule_id})
 
             lines = [
                 f"Rule: {r.get('name', 'Unnamed')}",
@@ -209,7 +210,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(f"/api/auto-creation/rules/{rule_id}/toggle")
+            result = await client.call_endpoint(ENDPOINTS["ac_toggle_rule"], path_args={"rule_id": rule_id})
             enabled = result.get("enabled", "unknown")
             return f"Rule {rule_id} is now {'enabled' if enabled else 'disabled'}."
         except Exception as e:
@@ -229,7 +230,7 @@ def register(mcp: FastMCP):
             errors = []
             for rid in rule_ids:
                 try:
-                    result = await client.post(f"/api/auto-creation/rules/{rid}/toggle")
+                    result = await client.call_endpoint(ENDPOINTS["ac_toggle_rule"], path_args={"rule_id": rid})
                     enabled = result.get("enabled", "unknown")
                     state = "enabled" if enabled else "disabled"
                     results.append(f"Rule {rid}: {state}")
@@ -257,7 +258,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(f"/api/auto-creation/rules/{rule_id}/duplicate")
+            result = await client.call_endpoint(ENDPOINTS["ac_duplicate_rule"], path_args={"rule_id": rule_id})
             new_id = result.get("id", "?")
             return f"Rule {rule_id} duplicated. New rule ID: {new_id}"
         except Exception as e:
@@ -273,7 +274,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            await client.delete(f"/api/auto-creation/rules/{rule_id}")
+            await client.call_endpoint(ENDPOINTS["ac_delete_rule"], path_args={"rule_id": rule_id})
             return f"Rule {rule_id} deleted."
         except Exception as e:
             logger.error("[MCP] delete_auto_creation_rule failed: %s", e)
@@ -394,7 +395,7 @@ def register(mcp: FastMCP):
             if normalization_group_ids is not None:
                 payload["normalization_group_ids"] = normalization_group_ids
 
-            result = await client.post("/api/auto-creation/rules", json_data=payload)
+            result = await client.call_endpoint(ENDPOINTS["ac_create_rule"], body=payload)
 
             rule = result.get("rule", result)
             new_id = rule.get("id", "?")
@@ -471,7 +472,9 @@ def register(mcp: FastMCP):
             if not payload:
                 return "No fields to update."
 
-            result = await client.put(f"/api/auto-creation/rules/{rule_id}", json_data=payload)
+            result = await client.call_endpoint(
+                ENDPOINTS["ac_update_rule"], path_args={"rule_id": rule_id}, body=payload,
+            )
             rule = result.get("rule", result)
             return f"Updated rule '{rule.get('name', rule_id)}' (id={rule_id}). Changed: {', '.join(payload.keys())}"
         except Exception as e:
@@ -487,7 +490,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.get("/api/auto-creation/executions", limit=limit)
+            result = await client.call_endpoint(ENDPOINTS["ac_list_executions"], query={"limit": limit})
 
             executions = result.get("executions", []) if isinstance(result, dict) else result
 
@@ -517,7 +520,9 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(f"/api/auto-creation/executions/{execution_id}/rollback", timeout=300.0)
+            result = await client.call_endpoint(
+                ENDPOINTS["ac_rollback"], path_args={"execution_id": execution_id}, timeout=300.0,
+            )
             deleted = result.get("deleted", result.get("channels_deleted", 0))
             return f"Execution {execution_id} rolled back. {deleted} channels deleted."
         except Exception as e:
@@ -549,15 +554,15 @@ def register(mcp: FastMCP):
                 with open(bundle_path, "rb") as fh:
                     content = fh.read()
                 filename = os.path.basename(bundle_path) or "debug.tar.gz"
+                # contract-exempt: multipart/form-data upload, not a JSON body —
+                # call_endpoint only models JSON-body endpoints.
                 result = await client.post_multipart(
                     "/api/auto-creation/rules/analyze/from-bundle",
                     files={"file": (filename, content, "application/gzip")},
                 )
                 source = f"bundle {filename}"
             else:
-                result = await client.post(
-                    "/api/auto-creation/rules/analyze"
-                )
+                result = await client.call_endpoint(ENDPOINTS["ac_analyze_rules"])
                 source = "live ECM"
 
             return _format_analyze_result(result, source)
