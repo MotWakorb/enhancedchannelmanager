@@ -270,7 +270,10 @@ jobs:
           # Skip CKV2_GHA_1 - CodeQL requires security-events:write permission
           # Skip CKV_DOCKER_3 - We use gosu in entrypoint to drop to non-root user after fixing volume permissions
           # Skip CKV_DOCKER_8 - Same reason, entrypoint starts as root then switches to appuser
-          skip_check: CKV2_GHA_1,CKV_DOCKER_3,CKV_DOCKER_8
+          # Skip CKV_GHA_7 - flake-pr-comment.yml's workflow_dispatch.inputs.pr_number is an
+          #   intentional manual-run knob (which PR to re-post the flake comment on); it doesn't
+          #   influence build output, only which PR a read-then-comment job targets.
+          skip_check: CKV2_GHA_1,CKV_DOCKER_3,CKV_DOCKER_8,CKV_GHA_7
 
   # DAST - Dynamic Application Security Testing (loads image from build-amd64 cache)
   dast-scan:
