@@ -1,4 +1,4 @@
-"""MCP-tool ↔ backend-API contract test (bd-vtghg Phase 1).
+"""MCP-tool ↔ backend-API contract test (bd-vtghg, full surface as of Phase 2).
 
 Cross-checks the declarative endpoint registry the MCP tools call through
 (``mcp-server/_endpoint_contracts.py :: ENDPOINTS``) against the backend's
@@ -14,11 +14,11 @@ What this catches (the recent GH #221-225 drift class):
     / ``response_is_list`` checked against the 2xx response schema.
   * a tool calling a path/method that doesn't exist on the backend.
 
-It also scans the migrated tool source (``mcp-server/tools/channels.py`` +
-``auto_creation.py``) for any ``client.<verb>("/api/...")`` literal that hasn't
-been migrated to ``call_endpoint`` and lacks a ``# contract-exempt:`` comment —
-that's a FAIL in Phase 1. For the *other* tool domains it only collects and
-reports the unmigrated literals (Phase 2's inventory).
+It also scans *all* MCP source (``mcp-server/tools/*.py`` +
+``mcp-server/resources/*.py``) for any ``client.<verb>("/api/...")`` literal
+that hasn't been migrated to ``call_endpoint`` and lacks a
+``# contract-exempt:`` comment — that's a FAIL (Phase 2 flipped this from
+WARN to FAIL across the whole surface).
 
 The ``_endpoint_contracts`` module is pure stdlib + ``dataclasses``, so it
 imports fine in the backend venv.
@@ -203,14 +203,12 @@ def test_endpoint_matches_backend_openapi(openapi_spec, ep: Endpoint):
     # --- request body fields (the GH #221 catcher) ---
     if ep.request_fields:
         body_schema = _request_body_schema(openapi_spec, operation)
-        assert body_schema is not None, (
-            f"Endpoint {ep.name!r} declares request_fields {sorted(ep.request_fields)} "
-            f"but {ep.method} {ep.path} has no JSON request body in the OpenAPI spec."
-        )
-        if _is_free_object_schema(openapi_spec, body_schema):
-            # Backend body is a free-form dict (e.g. FastAPI `data: dict`) — it
-            # accepts anything, so there's nothing to cross-check. The call-time
-            # subset guard in call_endpoint still constrains the tools.
+        if body_schema is None or _is_free_object_schema(openapi_spec, body_schema):
+            # Either the backend declares its body via a raw ``request: Request``
+            # param (no OpenAPI body schema at all) or via a free-form ``dict``
+            # (e.g. FastAPI `data: dict`) — both accept arbitrary keys, so there's
+            # nothing to cross-check here. The call-time subset guard in
+            # call_endpoint still constrains the tools to ep.request_fields.
             pass
         else:
             declared = _schema_property_names(openapi_spec, body_schema)
@@ -263,10 +261,14 @@ def test_endpoint_matches_backend_openapi(openapi_spec, ep: Endpoint):
 # ---------------------------------------------------------------------------
 
 _TOOLS_DIR = _MCP_DIR / "tools"
+_RESOURCES_DIR = _MCP_DIR / "resources"
 
-# Files migrated in Phase 1 — any unmigrated raw `client.<verb>("/api/...")`
-# literal in these without a `# contract-exempt:` marker is a FAIL.
-_PHASE1_FILES = {"channels.py", "auto_creation.py"}
+
+def _source_files() -> list[Path]:
+    """All MCP source files the guard scans: tools/*.py + resources/*.py."""
+    files = sorted(_TOOLS_DIR.glob("*.py")) + sorted(_RESOURCES_DIR.glob("*.py"))
+    return [f for f in files if f.name != "__init__.py"]
+
 
 # `client.post("/api/...")`, `client.get("/api/...")`, etc. — the path arg may
 # be a literal "/api/..." or an f-string f"/api/...".
@@ -277,7 +279,7 @@ _CALL_ENDPOINT_RE = re.compile(r'call_endpoint\(\s*ENDPOINTS\[\s*["\']([^"\']+)[
 
 
 def _scan_tool_file(path: Path):
-    """Return (raw_calls, endpoint_refs) for a tools/*.py file.
+    """Return (raw_calls, endpoint_refs) for an MCP source file.
 
     ``raw_calls`` is a list of (lineno, verb, api_path, is_exempt) tuples;
     ``endpoint_refs`` is a list of ENDPOINTS keys referenced via call_endpoint.
@@ -293,30 +295,33 @@ def _scan_tool_file(path: Path):
     return raw_calls, endpoint_refs
 
 
-def test_migrated_tool_files_have_no_unmarked_raw_api_calls():
-    """channels.py + auto_creation.py: every `client.<verb>("/api/...")` literal
-    must either have been migrated to `call_endpoint` or carry a
-    `# contract-exempt:` comment on the call line.
+def test_no_unmarked_raw_api_calls_in_mcp_sources():
+    """FAIL-mode (bd-vtghg Phase 2): every `client.<verb>("/api/...")` literal
+    in any ``mcp-server/tools/*.py`` or ``mcp-server/resources/*.py`` must
+    either route through ``call_endpoint(ENDPOINTS[...])`` or carry a
+    ``# contract-exempt: <reason>`` comment on the call line. After Phase 2
+    there should be zero un-exempt raw `/api/...` calls.
     """
     offenders: list[str] = []
-    for fname in sorted(_PHASE1_FILES):
-        path = _TOOLS_DIR / fname
+    for path in _source_files():
         raw_calls, _ = _scan_tool_file(path)
         for lineno, verb, api_path, is_exempt in raw_calls:
             if not is_exempt:
-                offenders.append(f"{fname}:{lineno}  client.{verb}({api_path!r})")
+                offenders.append(f"{path.name}:{lineno}  client.{verb}({api_path!r})")
     assert not offenders, (
-        "Migrated Phase-1 tool files still have un-migrated raw /api/ calls "
-        "without a `# contract-exempt:` marker:\n  " + "\n  ".join(offenders)
+        "MCP tool/resource source still has un-migrated raw /api/ calls "
+        "without a `# contract-exempt:` marker (route them through "
+        "call_endpoint(ENDPOINTS[...]) or add the marker):\n  "
+        + "\n  ".join(offenders)
     )
 
 
 def test_call_endpoint_refs_exist_in_registry():
-    """Every `call_endpoint(ENDPOINTS["X"])` reference (any tools/*.py) must
-    name a key that exists in ENDPOINTS.
+    """Every `call_endpoint(ENDPOINTS["X"])` reference (any MCP source file)
+    must name a key that exists in ENDPOINTS.
     """
     bad: list[str] = []
-    for path in sorted(_TOOLS_DIR.glob("*.py")):
+    for path in _source_files():
         _, endpoint_refs = _scan_tool_file(path)
         for key in endpoint_refs:
             if key not in ENDPOINTS:
@@ -324,25 +329,23 @@ def test_call_endpoint_refs_exist_in_registry():
     assert not bad, "Unknown endpoint ids referenced:\n  " + "\n  ".join(bad)
 
 
-def test_phase2_inventory_of_unmigrated_raw_api_calls(capsys):
-    """Not a failure — prints the inventory of raw `client.<verb>("/api/...")`
-    literals still present in the *unmigrated* tool domains, so Phase 2 has the
-    list. Always passes.
+def test_contract_exempt_inventory(capsys):
+    """Visibility (always passes): prints the inventory of the few raw
+    `client.<verb>("/api/...")` calls that remain — all of which must be
+    `# contract-exempt:` (the FAIL-mode guard above enforces that). Lets a
+    reviewer see at a glance which tools intentionally bypass the registry.
     """
     inventory: list[str] = []
-    for path in sorted(_TOOLS_DIR.glob("*.py")):
-        if path.name in _PHASE1_FILES:
-            continue
+    for path in _source_files():
         raw_calls, _ = _scan_tool_file(path)
         for lineno, verb, api_path, is_exempt in raw_calls:
-            tag = "  (contract-exempt)" if is_exempt else ""
+            tag = "" if is_exempt else "  <<< NOT EXEMPT — this is a bug"
             inventory.append(f"{path.name}:{lineno}  {verb.upper()} {api_path}{tag}")
     with capsys.disabled():
         if inventory:
-            print("\n[bd-vtghg Phase 2 inventory] unmigrated raw /api/ calls "
-                  f"in other tool domains ({len(inventory)}):")
+            print(f"\n[bd-vtghg] contract-exempt raw /api/ calls ({len(inventory)}):")
             for entry in inventory:
                 print("  " + entry)
         else:
-            print("\n[bd-vtghg Phase 2 inventory] none — all tool domains migrated.")
+            print("\n[bd-vtghg] no raw /api/ calls remain — every tool routes through the registry.")
     assert True
