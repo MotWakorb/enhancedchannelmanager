@@ -1,11 +1,25 @@
 """Async HTTP client for calling the ECM backend API."""
 import logging
+import string
 
 import httpx
 
+from _endpoint_contracts import Endpoint
 from config import ECM_URL, get_mcp_api_key
 
 logger = logging.getLogger(__name__)
+
+
+class ContractError(RuntimeError):
+    """A tool sent a request that violates its declared endpoint contract.
+
+    Raised by :meth:`ECMClient.call_endpoint` before any HTTP call when the
+    body/query keys aren't a subset of the registered ``request_fields`` /
+    ``query_params``, or when a path placeholder is unfilled / unknown. This is
+    the loud-at-call-time guard — a tool that has drifted from
+    ``_endpoint_contracts.ENDPOINTS`` fails here, not silently at the backend
+    (the GH #221 ``group_id`` vs ``channel_group_id`` class of bug).
+    """
 
 # Module-level client instance (lazy-initialized)
 _client: httpx.AsyncClient | None = None
@@ -174,6 +188,91 @@ class ECMClient:
             body = e.response.text[:500] if e.response else ""
             logger.error("[ECM-CLIENT] DELETE %s failed: %s %s — %s", path, e.response.status_code, e.response.reason_phrase, body)
             raise _http_error("DELETE", path, e) from e
+
+    async def call_endpoint(
+        self,
+        ep: Endpoint,
+        *,
+        path_args: dict | None = None,
+        body: dict | None = None,
+        query: dict | None = None,
+        timeout: float | None = None,
+    ) -> dict | list | None:
+        """Call a backend endpoint declared in ``_endpoint_contracts.ENDPOINTS``.
+
+        Enforces the contract *before* the request goes out:
+
+        * ``ep.path`` is formatted from ``path_args`` — :class:`ContractError`
+          if a ``{placeholder}`` is unfilled or an unknown key is passed.
+        * ``set(body) <= ep.request_fields`` and ``set(query) <= ep.query_params``
+          — :class:`ContractError` naming the offending keys, the endpoint, and
+          the allowed set. Always on (cheap subset check).
+
+        Dispatch delegates to the existing :meth:`get` / :meth:`post` /
+        :meth:`patch` / :meth:`put` / :meth:`delete` methods, so it inherits
+        their timeout handling and their 4xx/5xx → ``detail``-surfacing error
+        behaviour (``_http_error``) — and so existing test mocks of those
+        methods keep working. Response *shape* is intentionally not validated
+        at runtime (the backend may omit optional fields); that's the contract
+        test's job.
+        """
+        path_args = dict(path_args or {})
+        body = dict(body) if body is not None else None
+        query = dict(query) if query is not None else None
+
+        # Format the path from path_args (clear errors for missing/unknown).
+        expected_placeholders = {
+            fname for _, fname, _, _ in string.Formatter().parse(ep.path) if fname
+        }
+        missing = expected_placeholders - set(path_args)
+        if missing:
+            raise ContractError(
+                f"call_endpoint({ep.name!r}): missing path argument(s) "
+                f"{sorted(missing)} for path {ep.path!r}"
+            )
+        unknown_path = set(path_args) - expected_placeholders
+        if unknown_path:
+            raise ContractError(
+                f"call_endpoint({ep.name!r}): unknown path argument(s) "
+                f"{sorted(unknown_path)} for path {ep.path!r} "
+                f"(expected {sorted(expected_placeholders)})"
+            )
+        formatted_path = ep.path.format(**path_args)
+
+        # Subset checks against the declared contract.
+        if body:
+            extra = set(body) - set(ep.request_fields)
+            if extra:
+                raise ContractError(
+                    f"call_endpoint({ep.name!r}): body key(s) {sorted(extra)} "
+                    f"not in this endpoint's request_fields "
+                    f"{sorted(ep.request_fields)} ({ep.method} {ep.path}). "
+                    "Update mcp-server/_endpoint_contracts.py if the backend "
+                    "really accepts these, or fix the tool."
+                )
+        if query:
+            extra = set(query) - set(ep.query_params)
+            if extra:
+                raise ContractError(
+                    f"call_endpoint({ep.name!r}): query key(s) {sorted(extra)} "
+                    f"not in this endpoint's query_params "
+                    f"{sorted(ep.query_params)} ({ep.method} {ep.path})."
+                )
+
+        method = ep.method.upper()
+        if method == "GET":
+            return await self.get(formatted_path, timeout=timeout, **(query or {}))
+        if method == "POST":
+            return await self.post(formatted_path, json_data=body, timeout=timeout)
+        if method == "PATCH":
+            return await self.patch(formatted_path, json_data=body, timeout=timeout)
+        if method == "PUT":
+            return await self.put(formatted_path, json_data=body, timeout=timeout)
+        if method == "DELETE":
+            return await self.delete(formatted_path, json_data=body, timeout=timeout)
+        raise ContractError(
+            f"call_endpoint({ep.name!r}): unsupported method {ep.method!r}"
+        )
 
 
 def get_ecm_client() -> ECMClient:
