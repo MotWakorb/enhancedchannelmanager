@@ -294,7 +294,7 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `cancel_task` | Cancel a running task |
 | `get_task_history` | View task execution history |
 | `list_task_schedules` | List schedules for a task |
-| `create_task_schedule` | Create a cron schedule |
+| `create_task_schedule` | Create a schedule for a task (interval / daily / weekly / biweekly / monthly) |
 | `delete_task_schedule` | Delete a schedule |
 | **Stats (7)** | |
 | `get_channel_stats` | Channel viewing stats and active viewers |
