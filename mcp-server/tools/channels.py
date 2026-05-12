@@ -163,8 +163,14 @@ def register(mcp: FastMCP):
                 payload["channel_group_id"] = group_id
 
             result = await client.call_endpoint(ENDPOINTS["channels_create"], body=payload)
+            # Report the resulting object (not the request) so the caller can
+            # see what actually got created.
             cid = result.get("id", "?")
-            return f"Channel created: #{result.get('channel_number', '?')}: {name} (id={cid})"
+            rname = result.get("name", name)
+            rnum = result.get("channel_number", "?")
+            rgrp = result.get("channel_group_id")
+            grp_info = f", group_id={rgrp}" if rgrp is not None else ""
+            return f"Channel created: #{rnum}: {rname} (id={cid}{grp_info})"
         except Exception as e:
             logger.error("[MCP] create_channel failed: %s", e)
             return f"Error creating channel: {e}"
@@ -203,7 +209,14 @@ def register(mcp: FastMCP):
             result = await client.call_endpoint(
                 ENDPOINTS["channels_update"], path_args={"channel_id": channel_id}, body=payload,
             )
-            return f"Channel {channel_id} updated: {result.get('name', 'OK')}"
+            # Report the *resulting* state from the response, not the request —
+            # so a 200-with-no-effect can't fool the caller (the #221 failure mode).
+            if isinstance(result, dict):
+                rname = result.get("name", "?")
+                rnum = result.get("channel_number", "?")
+                rgrp = result.get("channel_group_id")
+                return f"Channel {channel_id} updated: name='{rname}', channel_number={rnum}, group_id={rgrp}"
+            return f"Channel {channel_id} updated."
         except Exception as e:
             logger.error("[MCP] update_channel failed: %s", e)
             return f"Error updating channel {channel_id}: {e}"
@@ -617,7 +630,7 @@ def register(mcp: FastMCP):
                         skipped_no_epg += 1
                         continue
 
-                    epg_entry = await client.get(f"/api/epg/data/{epg_data_id}")  # contract-exempt: epg domain (Phase 2)
+                    epg_entry = await client.get(f"/api/epg/data/{epg_data_id}")  # contract-exempt: part of set_logo_from_epg cross-domain flow (no MCP tool hits /api/epg/data directly)
                     icon_url = epg_entry.get("icon_url") or epg_entry.get("icon")
                     if not icon_url:
                         skipped_no_icon += 1
@@ -736,9 +749,11 @@ def register(mcp: FastMCP):
                 for variant in variants:
                     params = {"search": variant, "page_size": 10}
                     if provider_id is not None:
-                        params["provider_id"] = provider_id
+                        # Backend GET /api/streams filters by ``m3u_account``
+                        # (a bare ``provider_id`` was silently ignored — bd-vtghg).
+                        params["m3u_account"] = provider_id
                     try:
-                        sr = await client.get("/api/streams", **params)  # contract-exempt: streams domain (Phase 2)
+                        sr = await client.get("/api/streams", **params)  # contract-exempt: part of build_channel_lineup multi-step/cross-domain flow
                         if isinstance(sr, dict):
                             stream_list = sr.get("results", sr.get("streams", []))
                         else:

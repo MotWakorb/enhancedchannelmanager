@@ -3,6 +3,7 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
+from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
 
 logger = logging.getLogger(__name__)
@@ -14,7 +15,7 @@ def register(mcp: FastMCP):
         """List all configured M3U provider accounts."""
         try:
             client = get_ecm_client()
-            providers = await client.get("/api/providers")
+            providers = await client.call_endpoint(ENDPOINTS["m3u_list_providers"])
 
             if not providers:
                 return "No M3U accounts configured."
@@ -41,8 +42,11 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post(f"/api/m3u/refresh/{account_id}", timeout=300.0)
-            return f"M3U account {account_id} refresh started. {result.get('message', '')}"
+            result = await client.call_endpoint(
+                ENDPOINTS["m3u_refresh_account"], path_args={"account_id": account_id}, timeout=300.0,
+            )
+            msg = result.get("message", "") if isinstance(result, dict) else ""
+            return f"M3U account {account_id} refresh started. {msg}"
         except Exception as e:
             logger.error("[MCP] refresh_m3u failed: %s", e)
             return f"Error refreshing M3U account {account_id}: {e}"
@@ -52,8 +56,9 @@ def register(mcp: FastMCP):
         """Refresh all M3U accounts to fetch the latest stream lists."""
         try:
             client = get_ecm_client()
-            result = await client.post("/api/m3u/refresh", timeout=300.0)
-            return f"M3U refresh started for all accounts. {result.get('message', '')}"
+            result = await client.call_endpoint(ENDPOINTS["m3u_refresh_all"], timeout=300.0)
+            msg = result.get("message", "") if isinstance(result, dict) else ""
+            return f"M3U refresh started for all accounts. {msg}"
         except Exception as e:
             logger.error("[MCP] refresh_all_m3u failed: %s", e)
             return f"Error refreshing M3U accounts: {e}"
@@ -67,7 +72,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            a = await client.get(f"/api/m3u/accounts/{account_id}")
+            a = await client.call_endpoint(ENDPOINTS["m3u_get_account"], path_args={"account_id": account_id})
 
             lines = [
                 f"M3U Account: {a.get('name', 'Unknown')}",
@@ -99,13 +104,13 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post("/api/m3u/accounts", json_data={
-                "name": name,
-                "url": url,
-                "server_type": server_type,
-            })
-            aid = result.get("id", "?")
-            return f"M3U account created: {name} (id={aid})"
+            result = await client.call_endpoint(
+                ENDPOINTS["m3u_create_account"],
+                body={"name": name, "url": url, "server_type": server_type},
+            )
+            aid = result.get("id", "?") if isinstance(result, dict) else "?"
+            rname = result.get("name", name) if isinstance(result, dict) else name
+            return f"M3U account created: {rname} (id={aid})"
         except Exception as e:
             logger.error("[MCP] create_m3u_account failed: %s", e)
             return f"Error creating M3U account: {e}"
@@ -134,7 +139,13 @@ def register(mcp: FastMCP):
             if not payload:
                 return "No changes specified."
 
-            await client.patch(f"/api/m3u/accounts/{account_id}", json_data=payload)
+            result = await client.call_endpoint(
+                ENDPOINTS["m3u_update_account"], path_args={"account_id": account_id}, body=payload,
+            )
+            if isinstance(result, dict):
+                rname = result.get("name", "?")
+                rurl = (result.get("url") or "")[:60]
+                return f"M3U account {account_id} updated: name='{rname}', url='{rurl}'"
             return f"M3U account {account_id} updated."
         except Exception as e:
             logger.error("[MCP] update_m3u_account failed: %s", e)
@@ -149,7 +160,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            await client.delete(f"/api/m3u/accounts/{account_id}")
+            await client.call_endpoint(ENDPOINTS["m3u_delete_account"], path_args={"account_id": account_id})
             return f"M3U account {account_id} deleted."
         except Exception as e:
             logger.error("[MCP] delete_m3u_account failed: %s", e)
@@ -170,10 +181,10 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            await client.patch(
-                f"/api/m3u/accounts/{account_id}/group-settings",
-                json_data={group_name: enabled},
-            )
+            # PATCH /api/m3u/accounts/{id}/group-settings takes a body keyed by
+            # arbitrary group names — it can't be expressed as one Endpoint with
+            # a fixed request_fields set, so it stays on raw client.patch.
+            await client.patch(f"/api/m3u/accounts/{account_id}/group-settings", json_data={group_name: enabled})  # contract-exempt: dynamic-key body (group names)
             state = "enabled" if enabled else "disabled"
             return f"Group '{group_name}' {state} on M3U account {account_id}."
         except Exception as e:
@@ -193,10 +204,8 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            await client.patch(
-                f"/api/m3u/accounts/{account_id}/group-settings",
-                json_data=groups,
-            )
+            # Dynamic-key body (group names) — see update_m3u_group_settings.
+            await client.patch(f"/api/m3u/accounts/{account_id}/group-settings", json_data=groups)  # contract-exempt: dynamic-key body (group names)
             changes = [f"{'enabled' if v else 'disabled'} '{k}'" for k, v in groups.items()]
             return f"Updated {len(groups)} groups on M3U account {account_id}:\n  " + "\n  ".join(changes)
         except Exception as e:

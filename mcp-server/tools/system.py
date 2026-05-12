@@ -3,6 +3,7 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
+from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
 
 logger = logging.getLogger(__name__)
@@ -14,7 +15,7 @@ def register(mcp: FastMCP):
         """Get current ECM settings (connection status, preferences, probe configuration)."""
         try:
             client = get_ecm_client()
-            s = await client.get("/api/settings")
+            s = await client.call_endpoint(ENDPOINTS["settings_get"])
 
             lines = [
                 "ECM Settings:",
@@ -47,7 +48,7 @@ def register(mcp: FastMCP):
             client = get_ecm_client()
             # The backup endpoint returns a file download — we just trigger it
             # and report success. The actual download happens through the ECM UI.
-            await client.get("/api/backup/create")
+            await client.call_endpoint(ENDPOINTS["backup_create"])
             return "Backup created successfully. Download it from the ECM Settings page."
         except Exception as e:
             logger.error("[MCP] create_backup failed: %s", e)
@@ -58,7 +59,7 @@ def register(mcp: FastMCP):
         """List available YAML export sections (for selective backup)."""
         try:
             client = get_ecm_client()
-            sections = await client.get("/api/backup/export-sections")
+            sections = await client.call_endpoint(ENDPOINTS["backup_export_sections"])
             if not sections:
                 return "No export sections available."
             lines = ["Available export sections:"]
@@ -74,7 +75,7 @@ def register(mcp: FastMCP):
         """List saved YAML backup files on the server (created by scheduled backup task)."""
         try:
             client = get_ecm_client()
-            backups = await client.get("/api/backup/saved")
+            backups = await client.call_endpoint(ENDPOINTS["backup_list_saved"])
             if not backups:
                 return "No saved backups."
             lines = [f"Saved backups ({len(backups)}):"]
@@ -95,7 +96,17 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            await client.delete(f"/api/backup/saved/{filename}")
+            await client.call_endpoint(ENDPOINTS["backup_delete_saved"], path_args={"filename": filename})
+            # Read-back: confirm the file no longer appears in the saved list.
+            try:
+                backups = await client.call_endpoint(ENDPOINTS["backup_list_saved"])
+                still_present = any(
+                    isinstance(b, dict) and b.get("filename") == filename for b in (backups or [])
+                )
+            except Exception:
+                still_present = None
+            if still_present is True:
+                return f"WARNING: requested deletion of {filename} but it still appears in the saved-backups list."
             return f"Deleted backup: {filename}"
         except Exception as e:
             logger.error("[MCP] delete_saved_backup failed: %s", e)
@@ -114,7 +125,13 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            entries = await client.get("/api/journal", limit=limit, category=category)
+            # Backend GET /api/journal paginates via ``page_size`` (a bare
+            # ``limit`` query param was silently ignored: drift fixed in
+            # bd-vtghg Phase 2).
+            query = {"page_size": limit}
+            if category:
+                query["category"] = category
+            entries = await client.call_endpoint(ENDPOINTS["journal_list"], query=query)
 
             items = entries if isinstance(entries, list) else entries.get("entries", [])
 

@@ -3,6 +3,7 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
+from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
 
 logger = logging.getLogger(__name__)
@@ -14,7 +15,7 @@ def register(mcp: FastMCP):
         """List all channel groups with their channel counts."""
         try:
             client = get_ecm_client()
-            groups = await client.get("/api/channel-groups")
+            groups = await client.call_endpoint(ENDPOINTS["groups_list"])
 
             if not groups:
                 return "No channel groups found."
@@ -40,8 +41,12 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            result = await client.post("/api/channel-groups", json_data={"name": name})
-            return f"Channel group created: {name} (id={result.get('id', '?')})"
+            result = await client.call_endpoint(ENDPOINTS["groups_create"], body={"name": name})
+            # Report the resulting object, not the request — the backend dedupes
+            # by name (returns the existing group if one already had this name).
+            gid = result.get("id", "?") if isinstance(result, dict) else "?"
+            rname = result.get("name", name) if isinstance(result, dict) else name
+            return f"Channel group ready: {rname} (id={gid})"
         except Exception as e:
             logger.error("[MCP] create_channel_group failed: %s", e)
             return f"Error creating channel group: {e}"
@@ -51,7 +56,7 @@ def register(mcp: FastMCP):
         """List channel groups that exist in Dispatcharr but have no channels assigned in ECM."""
         try:
             client = get_ecm_client()
-            groups = await client.get("/api/channel-groups/orphaned")
+            groups = await client.call_endpoint(ENDPOINTS["groups_orphaned"])
 
             if not groups:
                 return "No orphaned channel groups found."
@@ -81,12 +86,15 @@ def register(mcp: FastMCP):
             deleted_count = 0
 
             if delete_channels:
-                # Paginate through all channels in the group and delete them
+                # Paginate through all channels in the group and delete them.
+                # Backend GET /api/channels filters by ``channel_group`` (NOT a
+                # bare ``group_id`` — that's the GH #221 drift class).
                 all_channel_ids = []
                 page = 1
                 while True:
-                    result = await client.get(
-                        "/api/channels", group_id=group_id, page=page, page_size=500,
+                    result = await client.call_endpoint(
+                        ENDPOINTS["channels_list"],
+                        query={"channel_group": group_id, "page": page, "page_size": 500},
                     )
                     if isinstance(result, dict):
                         channels = result.get("results", result.get("channels", []))
@@ -102,7 +110,7 @@ def register(mcp: FastMCP):
                 # Delete channels in batches
                 for cid in all_channel_ids:
                     try:
-                        await client.delete(f"/api/channels/{cid}")
+                        await client.call_endpoint(ENDPOINTS["channels_delete"], path_args={"channel_id": cid})
                         deleted_count += 1
                     except Exception as channel_delete_err:
                         # Best-effort: continue with the remaining channels and let
@@ -114,8 +122,22 @@ def register(mcp: FastMCP):
                             channel_delete_err,
                         )
 
-            await client.delete(f"/api/channel-groups/{group_id}")
+            await client.call_endpoint(ENDPOINTS["groups_delete"], path_args={"group_id": group_id})
 
+            # Read-back: confirm the group is actually gone.
+            try:
+                remaining = await client.call_endpoint(ENDPOINTS["groups_list"])
+                still_present = any(
+                    isinstance(g, dict) and g.get("id") == group_id for g in (remaining or [])
+                )
+            except Exception:
+                still_present = None
+
+            if still_present is True:
+                return (
+                    f"WARNING: requested deletion of channel group {group_id} but it "
+                    f"still appears in the channel-group list (delete may not have applied)."
+                )
             if delete_channels:
                 return f"Channel group {group_id} deleted with {deleted_count} channels."
             return f"Channel group {group_id} deleted."
@@ -128,7 +150,7 @@ def register(mcp: FastMCP):
         """List channel groups that are hidden from the UI."""
         try:
             client = get_ecm_client()
-            groups = await client.get("/api/channel-groups/hidden")
+            groups = await client.call_endpoint(ENDPOINTS["groups_hidden"])
 
             if not groups:
                 return "No hidden channel groups."
@@ -147,7 +169,7 @@ def register(mcp: FastMCP):
         """List channel groups that were created by the auto-creation pipeline."""
         try:
             client = get_ecm_client()
-            groups = await client.get("/api/channel-groups/auto-created")
+            groups = await client.call_endpoint(ENDPOINTS["groups_auto_created"])
 
             if not groups:
                 return "No auto-created channel groups."
@@ -173,13 +195,8 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
-            if group_ids:
-                result = await client.delete(
-                    "/api/channel-groups/orphaned",
-                    json_data={"group_ids": group_ids},
-                )
-            else:
-                result = await client.delete("/api/channel-groups/orphaned")
+            body = {"group_ids": group_ids} if group_ids else None
+            result = await client.call_endpoint(ENDPOINTS["groups_delete_orphaned"], body=body)
 
             if result is None:
                 return "No orphaned groups were deleted."
@@ -204,7 +221,7 @@ def register(mcp: FastMCP):
         """List channel groups with their stream count information."""
         try:
             client = get_ecm_client()
-            groups = await client.get("/api/channel-groups/with-streams")
+            groups = await client.call_endpoint(ENDPOINTS["groups_with_streams"])
 
             if not groups:
                 return "No channel groups found."
