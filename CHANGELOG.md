@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-05-12
+
+_This is the shipping 0.16.0. An earlier 0.16.0 build was cut on 2026-04-20 and rolled back before any consumer pulled it (see `[0.16.0-yanked]` below); everything from that attempt is included here, with the blocking bugs fixed._
+
 ### Added
 - Auto-creation **Stream sort → Quality (resolution)** breaks ties at equal resolution using ECM **M3U account priorities** (same values as M3U Manager Save Priorities / Provider Order). Per-rule **`quality_tie_break_order`** (`desc` = higher priority first, default). Per-rule **`quality_m3u_tie_break_enabled`** (default on) disables that tie-break so equal-resolution ordering falls back to stream-id order only; Rule Builder and bulk-edit expose a checkbox and gate the direction dropdown. Alembic revision **`0005`** adds `quality_tie_break_order` and `quality_m3u_tie_break_enabled` on `auto_creation_rules` (legacy `database._run_migrations` remains for installs predating Alembic); YAML export/import, backup restore, and duplicate carry the fields (`enhancedchannelmanager-3j9su`).
 - Auto-creation rule analyzer — advisory linter for auto-creation rules. Surfaces structural and regex-style configuration bugs (`UK|` regex matches everything; `^4K` typed under "Contains" matches nothing; `^\^4k` double-escape typo; OR-arms that drop a `normalized_name_in_group` guard; `merge_streams` targeting a channel group with zero channels) without running the rule. Two endpoints: `POST /api/auto-creation/rules/analyze` analyzes the live DB; `POST /api/auto-creation/rules/analyze/from-bundle` accepts a debug-bundle tar.gz upload and never touches the DB so it's safe for support diagnosis of any user's bundle. New MCP tool `analyze_auto_creation_rules(bundle_path=None)` exposes both. All findings are warnings; rule saves are never blocked. Three new advisory codes added to `backend/regex_lint.py` (`REGEX_TRIVIALLY_MATCHES_ALL`, `OPERATOR_VALUE_LOOKS_LIKE_REGEX`, `REGEX_REDUNDANT_ESCAPE_CARET`) on top of the strict bd-eio04.7 codes; new `severity` field on `LintViolation` defaults to `error` for back-compat. Documented in `docs/auto_creation_rule_analyzer.md` (`bd-0gntx`).
@@ -78,9 +82,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Documentation
 - `docs/api.md` — `POST /api/auto-creation/rules/bulk-update` now documents three previously-undocumented behaviors that shipped in earlier merges: the rejected-fields contract (`conditions` and `actions` return 422 per bd-gjoe5), the single-fetch response shape `{rules, updated_count}` (bd-bh1hh), and the `batch_id` correlation primitive — every bulk operation writes N per-entity journal rows sharing one 8-char `batch_id` (bd-91mcq), retrievable today via direct `journal_entries.batch_id` lookup against `idx_journal_batch_id` (bd-dmu8w; a `?batch_id=` query param on `GET /api/journal` is tracked as bd-s4sph for a future release). Also adds a Journal-section paragraph documenting the actual `GET /api/journal` filter set. Surfaces two write-time validation gaps as separate beads (bd-s4sph + bd-i75ax). Style matches existing inline-narrative blocks (PR #139, bd-pf82j).
 
-## [0.16.0] — Yanked 2026-04-20
+## [0.16.0-yanked] — 2026-04-20 (rolled back)
 
-**This release was rolled back** before any external consumer pulled the tag. The GitHub Release, git tag, and GHCR image for `0.16.0` were deleted; `:latest` was retagged back to the `v0.15.2` multi-arch index. Rollback executed per `bd-vgm4l`; see `docs/runbooks/v0.16.0-rollback.md` for the procedure. The PO chose rollback over a forward hotfix because open P0/P1 bugs needed to clear before a release could ship. Work originally tagged `0.16.0` will re-ship in a later version once blockers are cleared.
+**This build was rolled back** before any external consumer pulled the tag. The GitHub Release, git tag, and GHCR image for `0.16.0` were deleted; `:latest` was retagged back to the `v0.15.2` multi-arch index. Rollback executed per `bd-vgm4l`; see `docs/runbooks/v0.16.0-rollback.md` for the procedure. The PO chose rollback over a forward hotfix because open P0/P1 bugs needed to clear before a release could ship. The work originally cut here re-ships in the **[0.16.0] — 2026-05-12** release above, with the blocking bugs fixed.
 
 ## [0.15.2] — 2026-04-16
 
