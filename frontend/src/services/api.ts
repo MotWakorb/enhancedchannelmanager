@@ -1540,6 +1540,48 @@ export async function getWatchHistory(options: {
 }
 
 // =============================================================================
+// Watch-Time by User (v0.17.0 — GH-62, bd-skqln.5/.6)
+// =============================================================================
+//
+// Admin-only endpoints. Non-admin callers receive 403 — callers must surface
+// that gracefully (see UserStatsPanel).
+
+/**
+ * Get watch-time totals across all users (admin-only).
+ *
+ * When `groupBy="total"` the row shape is per-user totals; when `groupBy="day"`
+ * the rows are (user, day) pairs. `from`/`to` are ISO-8601 UTC strings.
+ */
+export async function getWatchTimeByUser(options: {
+  from?: string;
+  to?: string;
+  userId?: number;
+  groupBy?: 'total' | 'day';
+} = {}): Promise<import('../types').WatchTimeTotalsResponse | import('../types').WatchTimeDailyResponse> {
+  const params = new URLSearchParams();
+  if (options.from) params.set('from', options.from);
+  if (options.to) params.set('to', options.to);
+  if (options.userId !== undefined) params.set('user_id', String(options.userId));
+  if (options.groupBy) params.set('group_by', options.groupBy);
+  const queryString = params.toString();
+  return fetchJson(`${API_BASE}/stats/watch-time${queryString ? `?${queryString}` : ''}`);
+}
+
+/**
+ * Get per-user watch-time breakdown by channel (admin-only).
+ */
+export async function getWatchTimeForUser(
+  userId: number,
+  options: { from?: string; to?: string } = {},
+): Promise<import('../types').WatchTimeChannelBreakdownResponse> {
+  const params = new URLSearchParams();
+  if (options.from) params.set('from', options.from);
+  if (options.to) params.set('to', options.to);
+  const queryString = params.toString();
+  return fetchJson(`${API_BASE}/stats/watch-time/${userId}${queryString ? `?${queryString}` : ''}`);
+}
+
+// =============================================================================
 // Stream Stats / Probing
 // =============================================================================
 
