@@ -14,6 +14,7 @@ writes are gone.
 """
 import asyncio
 import logging
+import os
 import time
 from collections import OrderedDict
 from datetime import datetime, date, timedelta, timezone
@@ -31,6 +32,37 @@ from models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _telemetry_opt_out_enabled() -> bool:
+    """Parse ``ECM_STATS_TELEMETRY_OPT_OUT``. Default-OFF (writes happen).
+
+    Operator-facing opt-out for the Stats v2 data path
+    (bead ``enhancedchannelmanager-tp1pd``). When the env var is set to
+    a truthy value, ``_collect_stats`` short-circuits AFTER the legacy
+    sibling writes (``ChannelBandwidth``, ``BandwidthDaily``,
+    ``UniqueClientConnection``) and BEFORE the Stats v2 path
+    (``_resolve_provider_ids`` + ``_collect_buffer_events`` +
+    ``_write_session_telemetry``). Net effect:
+
+    * Zero rows land in ``session_telemetry``.
+    * No Dispatcharr ``get_streams_by_ids`` round-trip per poll.
+    * No Dispatcharr ``get_system_events`` round-trip per poll.
+    * Legacy stats (existing since v0.11.0) continue to record.
+
+    Read per-poll (not cached at import) so an operator who flips the
+    env var at runtime (export + container restart) sees the new value
+    on the next poll cycle without code awareness of when the flip
+    happened. The string-compare cost is microseconds; the latency-
+    sensitive surface is the network round-trip the flag elides.
+
+    Truthy-value enum mirrors ``_confusables_fold_enabled`` in
+    ``normalization_engine.py`` — ``true``, ``1``, ``yes``, ``on``
+    (case-insensitive, whitespace-tolerant). Everything else (including
+    empty string and unset) is OFF.
+    """
+    raw = os.environ.get("ECM_STATS_TELEMETRY_OPT_OUT", "false")
+    return raw.strip().lower() in {"true", "1", "yes", "on"}
 
 
 def get_user_timezone() -> timezone:
@@ -105,6 +137,19 @@ class BandwidthTracker:
 
         # Clean up stale connections from previous runs
         self._cleanup_stale_connections()
+
+        # Operator-facing Stats v2 opt-out (bd-tp1pd). When the env var
+        # is set at process start, announce it ONCE — operators reading
+        # ``docker logs`` need a visible signal that Stats v2 is
+        # silenced. Per-poll re-emission would be log spam (one line
+        # every ``poll_interval`` seconds). Read at start() time
+        # because the start log is the operator's single-pane-of-glass
+        # check; ``_collect_stats`` rechecks per-poll so a runtime flip
+        # still takes effect.
+        if _telemetry_opt_out_enabled():
+            logger.info(
+                "[STATS_V2] telemetry opt-out is ENABLED — no session_telemetry data will be collected"
+            )
 
         self._running = True
         self._task = asyncio.create_task(self._poll_loop())
@@ -509,12 +554,32 @@ class BandwidthTracker:
         if stopped_channels:
             logger.info("[BANDWIDTH] %s channel(s) stopped streaming", len(stopped_channels))
 
+        # Operator-facing Stats v2 telemetry opt-out (bd-tp1pd). When the
+        # ``ECM_STATS_TELEMETRY_OPT_OUT`` env var is truthy, the entire
+        # Stats v2 path is short-circuited: the provider resolver is not
+        # called (skips the Dispatcharr ``get_streams_by_ids`` round-trip),
+        # the buffer-event ingest is not called (skips the
+        # ``get_system_events`` round-trip), and no ``session_telemetry``
+        # rows are written. The legacy sibling writes above
+        # (``ChannelBandwidth``, ``BandwidthDaily``,
+        # ``UniqueClientConnection``) are NOT affected — they pre-date
+        # Stats v2 and are not part of the opt-out surface.
+        #
+        # The env var is read per-poll so a runtime flip takes effect on
+        # the next cycle. Cost: one os.environ lookup + string compare
+        # per poll (microseconds). The latency-sensitive surface is the
+        # network round-trips this flag elides, not the parse itself.
+        if _telemetry_opt_out_enabled():
+            return
+
         # Stats v2 write (bd-skqln.3 step (d)). Runs LAST and is wrapped in
         # a defensive try/except inside the helper so a failure in this
         # path cannot disturb the legacy sibling writes above. Step (d)
         # made this unconditional — the ECM_SESSION_TELEMETRY_WRITE_ENABLED
         # kill-switch was retired along with the legacy
         # ``ChannelWatchStats`` writes that the gate used to protect.
+        # (bd-tp1pd re-introduces an env var, but as an operator-facing
+        # opt-out, not a transition gate — see the short-circuit above.)
         #
         # Provider resolution (bd-skqln.14): the snapshot already carries
         # the ``stream_id`` Dispatcharr surfaced per-channel. The resolver
