@@ -729,3 +729,102 @@ class TestMigration0005:
             )
         finally:
             engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Migration 0008 — channel_watch_stats_v view up/down (bd-skqln.3 step (b))
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestMigration0008:
+    """Up/down round-trip for the ``channel_watch_stats_v`` SQL view.
+
+    The view itself has no row data — it is a saved query over
+    ``session_telemetry``. The semantic-equivalence regression test
+    (matched-data view-vs-legacy comparison) lives in
+    ``test_channel_watch_stats_view.py``; this class is the smoke test
+    that the view exists at head, vanishes at the prior revision, and
+    survives a round-trip with identical DDL.
+
+    Bead: ``enhancedchannelmanager-skqln.3`` step (b).
+    """
+
+    VIEW_NAME = "channel_watch_stats_v"
+
+    def _view_sql(self, engine) -> str | None:
+        """Return the stored ``CREATE VIEW`` text for the view, or None."""
+        with engine.connect() as conn:
+            return conn.execute(text(
+                "SELECT sql FROM sqlite_master "
+                f"WHERE type='view' AND name='{self.VIEW_NAME}'"
+            )).scalar()
+
+    def test_view_exists_at_head(self, tmp_path):
+        """``alembic upgrade head`` creates the view."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0008_head.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert self._view_sql(engine) is not None, (
+                f"View {self.VIEW_NAME} missing after upgrade head — "
+                "migration 0008 did not run correctly."
+            )
+        finally:
+            engine.dispose()
+
+    def test_view_gone_at_prior_revision(self, tmp_path):
+        """Downgrading to 0007 drops the view."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0008_down.db'}"
+        cfg = _make_alembic_config(db_url)
+
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, "0007")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert self._view_sql(engine) is None, (
+                f"View {self.VIEW_NAME} still present after downgrade to 0007 — "
+                "migration 0008's downgrade() did not drop it."
+            )
+        finally:
+            engine.dispose()
+
+    def test_view_round_trip_ddl_is_stable(self, tmp_path):
+        """Down → up cycle produces byte-identical ``CREATE VIEW`` SQL.
+
+        SQLite preserves the exact CREATE statement in ``sqlite_master.sql``
+        — if the migration recreates the view with semantically-identical
+        but textually-different DDL, this test catches that drift.
+        """
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0008_roundtrip.db'}"
+        cfg = _make_alembic_config(db_url)
+
+        command.upgrade(cfg, "head")
+        engine = create_engine(db_url, future=True)
+        try:
+            pre_sql = self._view_sql(engine)
+            assert pre_sql is not None
+        finally:
+            engine.dispose()
+
+        command.downgrade(cfg, "0007")
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            post_sql = self._view_sql(engine)
+            assert post_sql == pre_sql, (
+                "channel_watch_stats_v DDL changed across down/up cycle:\n"
+                f"  before: {pre_sql!r}\n  after:  {post_sql!r}"
+            )
+        finally:
+            engine.dispose()
