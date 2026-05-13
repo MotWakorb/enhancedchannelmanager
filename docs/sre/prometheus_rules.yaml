@@ -341,3 +341,265 @@ groups:
             on-call, identify the offending `release` label from
             /metrics and consider rolling back the last deploy.
           runbook_url: docs/runbooks/frontend_error_rate.md
+
+  # =====================================================================
+  # SLO-7: Stats v2 Telemetry Write Success Rate (bd-skqln.11)
+  # =====================================================================
+  # Consumes the `ecm_session_telemetry_writes_total{result}` counter
+  # shipped in skqln.12. The tracker wraps `_write_session_telemetry` in
+  # try/except so the writer survives transient failures — those
+  # swallowed failures increment `result="failure"` and feed this alert.
+  #
+  # Thresholds intentionally simpler than MWMBR for the scaffold (we
+  # don't yet have recording rules to encode multi-window burn-rate
+  # expressions cleanly):
+  #   - >5% failure rate over 5m for 30m → ticket
+  #   - >5% failure rate over 5m for 30m AND sustained → page (handled by
+  #     the same alert; severity escalates on long `for:`).
+  # The "and rate(...) > 0" guard avoids div-by-zero during idle periods
+  # (BandwidthTracker polls every 60s, so steady-state rate is ~0.017
+  # writes/s; the 0.001 floor accepts even one write/minute as enough
+  # signal to evaluate).
+  - name: ecm_stats_v2_write
+    interval: 30s
+    rules:
+      - record: ecm:stats_v2_write_failure_ratio:5m
+        # SLO-7 SLI inverted (failure ratio) on a 5m window. The SLO
+        # statement uses 30d for budget calculation; this 5m ratio is
+        # the burn signal the alert rules consume.
+        expr: |
+          sum(rate(ecm_session_telemetry_writes_total{result="failure"}[5m]))
+          /
+          sum(rate(ecm_session_telemetry_writes_total[5m]))
+
+      - alert: ECMStatsTelemetryWriteFailing
+        # >5% failure rate sustained for 30m → page. The 30m `for:` is
+        # what promotes this from warn to page: a brief blip during a
+        # Dispatcharr restart or SQLite checkpoint won't fire it, but a
+        # sustained 30m failure storm wakes someone up.
+        expr: |
+          ecm:stats_v2_write_failure_ratio:5m > 0.05
+          and
+          sum(rate(ecm_session_telemetry_writes_total[5m])) > 0.001
+        for: 30m
+        labels:
+          severity: page
+          slo: stats_v2_write
+          service: ecm
+        annotations:
+          summary: "ECM Stats v2 write failure ratio {{ $value | humanizePercentage }} > 5% sustained 30m"
+          description: |
+            session_telemetry write failure ratio has exceeded 5% for at
+            least 30 minutes. Likely causes (in order of frequency):
+            SQLite WAL contention from bulk auto-creation, database file
+            locked by a long transaction, disk full on /config, or a
+            migration mismatch after a botched upgrade. Search the logs
+            for `[STATS_V2]` error lines:
+              docker logs ecm-ecm-1 --since 30m | grep '\[STATS_V2\]'
+          runbook_url: docs/runbooks/stats-v2-write-failures.md
+
+      - alert: ECMStatsTelemetryWriteFailingWarn
+        # >5% failure rate sustained for 5m → ticket. Earlier signal so
+        # on-call sees the burn before the 30m page fires.
+        expr: |
+          ecm:stats_v2_write_failure_ratio:5m > 0.05
+          and
+          sum(rate(ecm_session_telemetry_writes_total[5m])) > 0.001
+        for: 5m
+        labels:
+          severity: ticket
+          slo: stats_v2_write
+          service: ecm
+        annotations:
+          summary: "ECM Stats v2 write failure ratio {{ $value | humanizePercentage }} > 5% for 5m"
+          description: |
+            session_telemetry write failure ratio has exceeded 5% over
+            the last 5 minutes. Begin runbook triage now; if sustained
+            30m the page-tier alert fires.
+          runbook_url: docs/runbooks/stats-v2-write-failures.md
+
+  # =====================================================================
+  # SLO-8: Provider Attribution Rate (bd-skqln.11)
+  # =====================================================================
+  # Consumes the `ecm_provider_resolution_total{result}` counter shipped
+  # in skqln.12. The resolver increments this once per channel per poll
+  # cycle. An "unresolved" outcome means the channel's active stream
+  # could not be mapped to an M3U provider — this is CORRECT BEHAVIOR
+  # (the row is still written with provider_id=NULL and surfaces as
+  # "Unknown" on the Providers panel), not a fault. Hence: warn-only.
+  # Paging on this is alert fatigue.
+  #
+  # The 1h evaluation window matches the SLO statement's "24h steady
+  # state" semantics at a finer granularity — a sustained 1h drop is
+  # the alert-actionable signal; the SLO's 24h window is the budget
+  # math, not the alert math.
+  - name: ecm_stats_v2_provider_resolution
+    interval: 1m
+    rules:
+      - record: ecm:provider_resolution_ratio:1h
+        # SLO-8 SLI on a 1h window.
+        expr: |
+          sum(rate(ecm_provider_resolution_total{result="resolved"}[1h]))
+          /
+          sum(rate(ecm_provider_resolution_total[1h]))
+
+      - alert: ECMStatsProviderResolutionDegraded
+        # Resolution rate < 80% over 1h. Threshold deliberately well
+        # below the 95% SLO target — alerting at 95% would fire every
+        # time a single provider blip pushed us slightly below floor.
+        # 80% means a meaningful fraction of channel-polls are landing
+        # in the "Unknown" bucket, which is the operator-visible signal
+        # the Providers panel is becoming uninterpretable.
+        expr: |
+          ecm:provider_resolution_ratio:1h < 0.80
+          and
+          sum(rate(ecm_provider_resolution_total[1h])) > 0.001
+        for: 1h
+        labels:
+          severity: warning
+          slo: stats_v2_provider_resolution
+          service: ecm
+        annotations:
+          summary: "ECM provider resolution ratio {{ $value | humanizePercentage }} < 80% for 1h"
+          description: |
+            Provider attribution is degraded — more than 20% of channel-
+            poll resolutions are landing in the "Unknown" bucket on the
+            Providers panel. NOT user-facing outage; the Channels and
+            Users panels and watch-time math are unaffected. Triage at
+            next business hour. Grep logs for the breakdown by reason:
+              docker logs ecm-ecm-1 --since 1h \
+                | grep '\[STATS_V2\] provider_resolution_failed' \
+                | sed 's/.*reason=\([^ ]*\).*/\1/' | sort | uniq -c
+            Common reasons: lookup_raised (network blip), no_stream_id
+            (Dispatcharr API quirk), no_match (M3U source rotated URLs).
+          runbook_url: docs/runbooks/stats-v2-provider-resolution-degraded.md
+
+  # =====================================================================
+  # SLO-9: Stats v2 Query Latency (bd-skqln.11)
+  # =====================================================================
+  # Consumes the `ecm_stats_query_duration_seconds_bucket` histogram
+  # shipped in skqln.12. The middleware filters on /api/stats/* paths
+  # and labels each observation with the parameterized route pattern
+  # (endpoint) and the group_by query param (granularity). The bucket
+  # layout matches `ecm_http_request_duration_seconds`, so the SLO-2
+  # interpolation behavior applies here too.
+  #
+  # Warn-only — Stats v2 is an admin tool. Slow stats panels are
+  # annoying, not user-facing outages. Paging on this is alert fatigue;
+  # the runbook covers triage at next business hour.
+  - name: ecm_stats_v2_query_latency
+    interval: 30s
+    rules:
+      - alert: ECMStatsQueryLatencyHigh
+        # p95 > 800ms across all stats endpoints, sustained 15m.
+        # Aggregated across `endpoint` so we catch a regression in any
+        # one panel; the runbook tells the responder how to group_by
+        # endpoint when triaging.
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(ecm_stats_query_duration_seconds_bucket[5m])
+            )
+          ) > 0.8
+        for: 15m
+        labels:
+          severity: warning
+          slo: stats_v2_query_latency
+          service: ecm
+        annotations:
+          summary: "ECM Stats v2 p95 query latency {{ $value | humanizeDuration }} > 800ms for 15m"
+          description: |
+            95th percentile Stats v2 query latency has exceeded 800ms
+            for 15+ minutes. Likely causes: session_telemetry table
+            growth past index-friendly size (rollup tables in bd-7i2vv
+            will address this structurally), a new aggregate endpoint
+            shipped without a perf-benchmark gate, or SQLite WAL
+            checkpoint stalling a long stats query. Group by endpoint
+            to identify the offender:
+              histogram_quantile(0.95,
+                sum by (le, endpoint) (
+                  rate(ecm_stats_query_duration_seconds_bucket[5m])))
+          runbook_url: docs/runbooks/stats-v2-write-failures.md
+
+      - alert: ECMStatsQueryLatencyP99High
+        # p99 > 2s — the "one query just blew the budget" signal. Same
+        # warn severity; the p99 alert exists so the responder sees
+        # tail-latency regressions even when p95 is healthy.
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (
+              rate(ecm_stats_query_duration_seconds_bucket[5m])
+            )
+          ) > 2.0
+        for: 15m
+        labels:
+          severity: warning
+          slo: stats_v2_query_latency
+          service: ecm
+        annotations:
+          summary: "ECM Stats v2 p99 query latency {{ $value | humanizeDuration }} > 2s for 15m"
+          description: |
+            99th percentile Stats v2 query latency has exceeded 2s for
+            15+ minutes. Tail-latency regression — usually a single
+            slow endpoint dragging the p99 even when p95 is healthy.
+            Group by endpoint as in ECMStatsQueryLatencyHigh runbook.
+          runbook_url: docs/runbooks/stats-v2-write-failures.md
+
+  # =====================================================================
+  # Stats v2 Storage Growth (bd-skqln.11)
+  # =====================================================================
+  # NOT tied to a numbered SLO — this is a capacity-planning alert.
+  # Consumes the `ecm_session_telemetry_row_count` gauge shipped in
+  # skqln.12: the gauge value is the number of rows written in the most
+  # recent BandwidthTracker poll cycle, NOT the total table size. A
+  # sustained high value combined with the table's retention policy
+  # gives a leading indicator of disk pressure.
+  #
+  # The rollup tables in bd-7i2vv, when shipped, will compress the raw
+  # row count. Until then this alert remains useful and tunable. After
+  # bd-7i2vv lands the rollup tables should be observed via a separate
+  # gauge that captures the *table-total* row count; the per-cycle
+  # gauge alone is insufficient for steady-state capacity planning.
+  - name: ecm_stats_v2_storage
+    interval: 5m
+    rules:
+      - record: ecm:session_telemetry_row_count:avg7d
+        # 7-day rolling average of per-cycle row count. Baseline for
+        # the anomaly detector.
+        expr: avg_over_time(ecm_session_telemetry_row_count[7d])
+
+      - alert: ECMStatsRowCountGrowthAnomaly
+        # Sustained per-cycle row count > 2x the 7-day rolling average
+        # over 24h. Catches "we suddenly added 50 more active channels"
+        # and "the writer is double-emitting" — both worth a ticket.
+        # The 2x ratio is a starting point; expect tuning after 30d of
+        # baseline data and after bd-7i2vv rollup tables ship.
+        expr: |
+          (
+            avg_over_time(ecm_session_telemetry_row_count[24h])
+            /
+            ignoring() group_left
+            ecm:session_telemetry_row_count:avg7d
+          ) > 2.0
+          and
+          ecm:session_telemetry_row_count:avg7d > 0
+        for: 24h
+        labels:
+          severity: warning
+          slo: stats_v2_storage
+          service: ecm
+        annotations:
+          summary: "ECM session_telemetry per-cycle row count growing >2x 7d baseline for 24h"
+          description: |
+            session_telemetry per-cycle row count over the last 24h is
+            more than 2x the 7-day rolling average. Storage growth
+            ahead of schedule — investigate before disk pressure
+            becomes user-visible. Common causes: legitimate growth in
+            active channels (capacity planning needed), writer
+            regression double-emitting rows, retention policy not
+            running. After bd-7i2vv ships the rollup tables, this
+            alert's threshold should be re-tuned against the smaller
+            steady-state baseline.
+          runbook_url: docs/runbooks/stats-v2-row-growth.md
