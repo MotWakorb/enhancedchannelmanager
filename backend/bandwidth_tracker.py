@@ -1,6 +1,16 @@
 """
 Background bandwidth tracking service.
 Polls Dispatcharr stats periodically and accumulates bandwidth data.
+
+v0.17.0 Stats v2 (bd-skqln.3 step (d)):
+``_collect_stats`` writes one row per active viewing connection into
+``session_telemetry`` unconditionally. The legacy ``channel_watch_stats``
+write inside this module is gone — its readers (popularity calculator,
+top-watched API) now derive their inputs from ``session_telemetry`` and
+``unique_client_connections``. The transitional
+``ECM_SESSION_TELEMETRY_WRITE_ENABLED`` kill-switch is retired; its job
+was the (a)→(d) transition gate and there is no off-state once legacy
+writes are gone.
 """
 import asyncio
 import logging
@@ -9,8 +19,15 @@ from datetime import datetime, date, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import distinct, func
+
 from database import get_session
-from models import BandwidthDaily, ChannelWatchStats, UniqueClientConnection, ChannelBandwidth
+from models import (
+    BandwidthDaily,
+    ChannelBandwidth,
+    SessionTelemetry,
+    UniqueClientConnection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +294,13 @@ class BandwidthTracker:
             logger.warning("[BANDWIDTH] Failed to fetch stats from Dispatcharr: %s", e)
             return
 
+        # Stamp the moment we observed this poll. Used by the Stats v2
+        # session_telemetry write (skqln.3 step (a)). Held outside the
+        # feature-flag check so the value is identical whether or not the
+        # additive write is enabled — keeps observed_at semantics stable
+        # if/when the flag flips at runtime mid-cycle.
+        observed_at_ms = int(time.time() * 1000)
+
         channels = stats.get("channels", [])
         logger.debug("[BANDWIDTH] Collected stats for %s active channels", len(channels))
 
@@ -296,6 +320,9 @@ class BandwidthTracker:
         still_active_channels: list[dict] = []
         # Per-channel bandwidth tracking (v0.11.0)
         channel_bandwidth_updates: list[dict] = []
+        # Per-channel snapshot for the Stats v2 session_telemetry helper
+        # (skqln.3 step (a)). One entry per active channel this poll.
+        telemetry_channel_snapshot: list[dict] = []
 
         for channel in channels:
             channel_id = str(channel.get("channel_id", ""))
@@ -393,6 +420,18 @@ class BandwidthTracker:
                         "client_count": client_count,
                     })
 
+                # Capture the snapshot the Stats v2 session_telemetry helper
+                # needs (skqln.3 step (a)). Built unconditionally so the data
+                # shape is stable; the helper is a no-op when the feature
+                # flag is OFF.
+                telemetry_channel_snapshot.append({
+                    "channel_uuid": channel_id,
+                    "channel_number": channel_number,
+                    "client_ips": list(client_ips),
+                    "client_user_map": dict(client_user_map),
+                    "channel_bytes_delta": channel_bytes_delta,
+                })
+
         # Check for channels that stopped being watched
         stopped_channels = self._last_active_channels - current_active_channels
         if stopped_channels:
@@ -453,6 +492,14 @@ class BandwidthTracker:
         # Log stopped channels
         if stopped_channels:
             logger.info("[BANDWIDTH] %s channel(s) stopped streaming", len(stopped_channels))
+
+        # Stats v2 write (bd-skqln.3 step (d)). Runs LAST and is wrapped in
+        # a defensive try/except inside the helper so a failure in this
+        # path cannot disturb the legacy sibling writes above. Step (d)
+        # made this unconditional — the ECM_SESSION_TELEMETRY_WRITE_ENABLED
+        # kill-switch was retired along with the legacy
+        # ``ChannelWatchStats`` writes that the gate used to protect.
+        self._write_session_telemetry(telemetry_channel_snapshot, observed_at_ms)
 
     def _update_daily_record(
         self,
@@ -548,7 +595,14 @@ class BandwidthTracker:
             session.close()
 
     def _update_watch_counts(self, channels: list[dict]):
-        """Update watch counts for channels that just became active and log journal events."""
+        """Record newly active channels: create UniqueClientConnection rows,
+        bump per-channel connection_count, and emit the journal start event.
+
+        bd-skqln.3 step (d): the legacy ``ChannelWatchStats`` write that
+        used to live in this method is gone — the popularity calculator
+        and the top-watched API now derive their inputs from
+        ``session_telemetry`` and ``unique_client_connections``.
+        """
         from journal import log_entry
 
         session = get_session()
@@ -561,25 +615,6 @@ class BandwidthTracker:
                 client_ips = ch.get("client_ips", [])
                 client_user_map = ch.get("client_user_map", {})
                 client_username_map = ch.get("client_username_map", {})
-                # Get or create watch stats record
-                record = session.query(ChannelWatchStats).filter(
-                    ChannelWatchStats.channel_id == channel_id
-                ).first()
-
-                if record is None:
-                    record = ChannelWatchStats(
-                        channel_id=channel_id,
-                        channel_name=channel_name,
-                        watch_count=0,
-                        total_watch_seconds=0,
-                    )
-                    session.add(record)
-
-                # Update record
-                record.watch_count += 1
-                record.last_watched = now
-                # Update channel name in case it changed
-                record.channel_name = channel_name
 
                 # Create UniqueClientConnection records for each client (v0.11.0)
                 for ip in client_ips:
@@ -619,7 +654,6 @@ class BandwidthTracker:
                     user_initiated=False,
                     after_value={
                         "channel_id": channel_id,
-                        "watch_count": record.watch_count,
                         "client_ips": client_ips,
                     },
                 )
@@ -633,7 +667,15 @@ class BandwidthTracker:
             session.close()
 
     def _update_watch_time(self, channels: list[dict]):
-        """Accumulate watch time for channels that are still active."""
+        """Accumulate watch time for channels that are still active.
+
+        bd-skqln.3 step (d): the legacy ``ChannelWatchStats`` write that
+        used to live in this method is gone — watch time is now derived
+        from ``session_telemetry`` (one row per poll per client) on read.
+        The per-client ``UniqueClientConnection.watch_seconds`` write
+        below stays — it's a per-connection accumulator, not the
+        per-channel aggregate that was retired.
+        """
         session = get_session()
         today = get_current_date()
         try:
@@ -645,15 +687,6 @@ class BandwidthTracker:
                 continuing_clients = ch.get("continuing_clients", [])
                 client_user_map = ch.get("client_user_map", {})
                 client_username_map = ch.get("client_username_map", {})
-                record = session.query(ChannelWatchStats).filter(
-                    ChannelWatchStats.channel_id == channel_id
-                ).first()
-
-                if record:
-                    # Add poll interval seconds to watch time
-                    record.total_watch_seconds += self.poll_interval
-                    record.last_watched = now
-                    record.channel_name = channel_name
 
                 # Handle new clients that joined mid-stream (v0.11.0)
                 for ip in new_clients:
@@ -712,29 +745,48 @@ class BandwidthTracker:
             session.close()
 
     def _log_watch_stop_events(self, channel_ids: set[str]):
-        """Log journal entries when channels stop being watched."""
+        """Log journal entries when channels stop being watched.
+
+        bd-skqln.3 step (d): the channel-name fallback no longer reads
+        from ``ChannelWatchStats`` (which is no longer written) — it
+        falls through to a UUID-derived placeholder if neither the ECM
+        channel map nor the in-memory cache has a name. The
+        ``total_watch_seconds`` figure that was previously fetched from
+        ``ChannelWatchStats`` is replaced by a session_telemetry
+        aggregate using the same DISTINCT-by-(channel, observed_at)
+        collapse the view (migration 0008) and popularity calculator
+        use, so per-channel watch-time semantics stay consistent
+        across surfaces.
+        """
         from journal import log_entry
 
         session = get_session()
         try:
             for channel_id in channel_ids:
-                # Get channel name - prefer ECM map, then cache, then database
+                # Get channel name - prefer ECM map, then cache, then placeholder.
                 channel_name = (
                     self._ecm_channel_map.get(channel_id)
                     or self._channel_names.get(channel_id)
+                    or f"Channel {channel_id[:8]}..."
                 )
-                if not channel_name:
-                    record = session.query(ChannelWatchStats).filter(
-                        ChannelWatchStats.channel_id == channel_id
-                    ).first()
-                    channel_name = record.channel_name if record else f"Channel {channel_id[:8]}..."
 
-                # Get current stats for the log
-                record = session.query(ChannelWatchStats).filter(
-                    ChannelWatchStats.channel_id == channel_id
-                ).first()
-
-                watch_time = record.total_watch_seconds if record else 0
+                # Derive lifetime watch_seconds for this channel from
+                # session_telemetry. Same DISTINCT-by-(channel,
+                # observed_at) collapse as the channel_watch_stats_v
+                # view: a channel with N concurrent clients in one poll
+                # contributes one interval, not N.
+                per_poll = session.query(
+                    SessionTelemetry.observed_at.label("observed_at"),
+                    func.max(SessionTelemetry.poll_interval_ms).label("poll_interval_ms"),
+                ).filter(
+                    SessionTelemetry.channel_id == channel_id,
+                ).group_by(
+                    SessionTelemetry.observed_at,
+                ).subquery()
+                total_ms = session.query(
+                    func.coalesce(func.sum(per_poll.c.poll_interval_ms), 0)
+                ).scalar() or 0
+                watch_time = int(total_ms) // 1000
 
                 # Log journal entry for watch stop
                 log_entry(
@@ -786,6 +838,112 @@ class BandwidthTracker:
             session.rollback()
         finally:
             session.close()
+
+    def _write_session_telemetry(
+        self,
+        channel_snapshot: list[dict],
+        observed_at_ms: int,
+    ) -> None:
+        """Write one row per active viewing connection into ``session_telemetry``.
+
+        Stats v2 additive write path — bead ``enhancedchannelmanager-skqln.3``
+        step (a). Called from ``_collect_stats`` AFTER the four legacy writes
+        and ONLY when ``ECM_SESSION_TELEMETRY_WRITE_ENABLED`` is on. No
+        consumers of ``session_telemetry`` exist yet, so this is observation-
+        only — the row shape is what later beads (skqln.5 read API, skqln.14
+        provider resolver, skqln.15 buffer ingest) will populate further.
+
+        Row population (step (a), conservative):
+
+        * ``session_id`` — synthesized from the active-connection id we track
+          in ``self._active_connections``; namespaced ``conn-<id>`` so it does
+          not collide with future session-id sources. Stable for the life of
+          the connection.
+        * ``observed_at`` — ms since epoch stamped at the start of the poll
+          (passed in so all rows in this cycle share the same value).
+        * ``user_id`` — from the per-channel ``client_user_map`` if present;
+          NULL when Dispatcharr did not surface a user id for that ip.
+        * ``provider_id`` — always NULL. Provider tagging lands in skqln.14.
+        * ``channel_id`` — Dispatcharr channel UUID (``String(64)``). Same
+          shape the snapshot loop in ``_collect_stats`` already keys on, and
+          matches every other channel-keyed table in the schema
+          (``channel_watch_stats`` etc.). Migration 0007 corrected the
+          column type from INTEGER to VARCHAR(64) NOT NULL after the
+          step-(a) commit was first drafted with NULL writes; see the
+          bead body for the schema-mismatch correction.
+        * ``bytes_delta`` — per-channel byte delta divided equally across
+          active clients (integer floor; remainder dropped). Acceptable for
+          observation-only; refined when consumers exist.
+        * ``buffer_event_count`` — always 0. Buffer-event ingest is skqln.15.
+        * ``poll_interval_ms`` — ``self.poll_interval`` (seconds) × 1000.
+
+        The write is wrapped in a defensive try/except so any failure here
+        cannot disturb the legacy writes that already committed. This is
+        the keystone of "single-write refactor that can't break what
+        already works" — step (a) is dual-write under a flag, but ONLY for
+        the duration needed to prove the new path; legacy-write removal is
+        step (d) in this bead, behind a separate commit and PR.
+        """
+        try:
+            poll_interval_ms = max(int(self.poll_interval * 1000), 0)
+            session = get_session()
+            try:
+                rows_written = 0
+                for entry in channel_snapshot:
+                    channel_uuid = entry["channel_uuid"]
+                    client_ips = entry["client_ips"]
+                    client_user_map = entry["client_user_map"]
+                    channel_bytes_delta = max(int(entry["channel_bytes_delta"]), 0)
+
+                    # No active clients on this channel this poll → nothing
+                    # to attribute to a session.
+                    if not client_ips:
+                        continue
+
+                    per_client_bytes = channel_bytes_delta // len(client_ips)
+
+                    for ip in client_ips:
+                        conn_key = (channel_uuid, ip)
+                        conn_id = self._active_connections.get(conn_key)
+                        # Tracker has not yet recorded a connection row for
+                        # this (channel, ip) — happens on the first poll of
+                        # a brand-new viewer because _update_watch_counts
+                        # has already run by the time we reach here, so this
+                        # should be rare. Skip rather than synthesize a
+                        # session id we cannot correlate later.
+                        if conn_id is None:
+                            continue
+
+                        session.add(
+                            SessionTelemetry(
+                                session_id=f"conn-{conn_id}",
+                                observed_at=observed_at_ms,
+                                user_id=client_user_map.get(ip),
+                                provider_id=None,
+                                channel_id=channel_uuid,
+                                bytes_delta=per_client_bytes,
+                                buffer_event_count=0,
+                                poll_interval_ms=poll_interval_ms,
+                            )
+                        )
+                        rows_written += 1
+
+                if rows_written:
+                    session.commit()
+                    logger.debug(
+                        "[STATS_V2] Wrote %s session_telemetry row(s) (observed_at=%s)",
+                        rows_written,
+                        observed_at_ms,
+                    )
+                else:
+                    # Nothing to write; release the (empty) transaction.
+                    session.rollback()
+            finally:
+                session.close()
+        except Exception as e:
+            # Observation-only path — failures must never propagate. The
+            # legacy writes already committed before we got here.
+            logger.exception("[STATS_V2] session_telemetry write failed: %s", e)
 
     @staticmethod
     def get_bandwidth_summary() -> dict:
@@ -911,20 +1069,100 @@ class BandwidthTracker:
             sort_by: "views" for watch count, "time" for total watch time (default "views")
 
         Returns:
-            List of channel watch stats dicts, ordered by selected metric desc
+            List of channel watch stats dicts (channel_id, channel_name,
+            watch_count, total_watch_seconds, last_watched), ordered by
+            selected metric desc.
+
+        bd-skqln.3 step (d): reads from ``session_telemetry`` (DISTINCT
+        session_id and DISTINCT-by-observed_at poll-interval sum) and
+        side-loads channel_name from ``UniqueClientConnection``. Returns
+        the same dict shape the legacy ``ChannelWatchStats.to_dict()``
+        produced, so API consumers don't need to change.
         """
         session = get_session()
         try:
-            if sort_by == "time":
-                records = session.query(ChannelWatchStats).order_by(
-                    ChannelWatchStats.total_watch_seconds.desc()
-                ).limit(limit).all()
-            else:
-                records = session.query(ChannelWatchStats).order_by(
-                    ChannelWatchStats.watch_count.desc()
-                ).limit(limit).all()
+            # DISTINCT-by-(channel_id, observed_at) collapse so concurrent
+            # clients in one poll contribute one interval each — matches
+            # the channel_watch_stats_v view + popularity calculator.
+            per_poll = session.query(
+                SessionTelemetry.channel_id.label("channel_id"),
+                SessionTelemetry.observed_at.label("observed_at"),
+                func.max(SessionTelemetry.poll_interval_ms).label("poll_interval_ms"),
+            ).group_by(
+                SessionTelemetry.channel_id,
+                SessionTelemetry.observed_at,
+            ).subquery()
 
-            return [record.to_dict() for record in records]
+            per_channel = session.query(
+                per_poll.c.channel_id.label("channel_id"),
+                func.coalesce(
+                    func.sum(per_poll.c.poll_interval_ms) / 1000, 0
+                ).label("total_watch_seconds"),
+                func.max(per_poll.c.observed_at).label("last_observed_at_ms"),
+            ).group_by(per_poll.c.channel_id).subquery()
+
+            session_counts = session.query(
+                SessionTelemetry.channel_id.label("channel_id"),
+                func.count(distinct(SessionTelemetry.session_id)).label("watch_count"),
+            ).group_by(SessionTelemetry.channel_id).subquery()
+
+            query = session.query(
+                per_channel.c.channel_id,
+                per_channel.c.total_watch_seconds,
+                per_channel.c.last_observed_at_ms,
+                func.coalesce(session_counts.c.watch_count, 0).label("watch_count"),
+            ).outerjoin(
+                session_counts,
+                session_counts.c.channel_id == per_channel.c.channel_id,
+            )
+
+            if sort_by == "time":
+                query = query.order_by(per_channel.c.total_watch_seconds.desc())
+            else:
+                query = query.order_by(func.coalesce(session_counts.c.watch_count, 0).desc())
+
+            rows = query.limit(limit).all()
+            if not rows:
+                return []
+
+            # Side-load channel_name from UniqueClientConnection. One
+            # round-trip for the candidate channel set rather than per-row.
+            channel_ids = [r.channel_id for r in rows]
+            name_rows = session.query(
+                UniqueClientConnection.channel_id,
+                UniqueClientConnection.channel_name,
+            ).filter(
+                UniqueClientConnection.channel_id.in_(channel_ids),
+            ).all()
+            name_lookup: dict[str, str] = {}
+            for cn_row in name_rows:
+                # Take the first non-empty name we see per channel; the
+                # writer keeps names consistent across rows on the same
+                # channel but a stale row may still exist.
+                if cn_row.channel_id not in name_lookup and cn_row.channel_name:
+                    name_lookup[cn_row.channel_id] = cn_row.channel_name
+
+            results = []
+            for row in rows:
+                last_watched_dt = (
+                    datetime.utcfromtimestamp(row.last_observed_at_ms / 1000.0)
+                    if row.last_observed_at_ms is not None
+                    else None
+                )
+                results.append({
+                    "channel_id": row.channel_id,
+                    "channel_name": name_lookup.get(
+                        row.channel_id, f"Channel {row.channel_id[:8]}..."
+                    ),
+                    "watch_count": int(row.watch_count or 0),
+                    "total_watch_seconds": int(row.total_watch_seconds or 0),
+                    "last_watched": (
+                        last_watched_dt.isoformat() + "Z"
+                        if last_watched_dt is not None
+                        else None
+                    ),
+                })
+            return results
         finally:
             session.close()
 
