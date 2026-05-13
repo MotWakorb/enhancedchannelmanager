@@ -118,9 +118,16 @@ def _channel_payload(
     client_user_ids: dict[str, int] | None = None,
     avg_bitrate_kbps: int = 1000,
     name: str = "Test Channel",
+    stream_id: int | None = None,
 ) -> dict:
     """Build a single ``channels[]`` entry as Dispatcharr's stats endpoint
-    surfaces it. Defaults match a single-viewer stream."""
+    surfaces it. Defaults match a single-viewer stream.
+
+    ``stream_id`` mirrors the per-channel ``stream_id`` field Dispatcharr's
+    ``/proxy/ts/status`` payload surfaces — the integer ID of the stream
+    currently being served. This is the input the provider resolver (bead
+    skqln.14) uses to map the active stream back to its ``m3u_account_id``.
+    """
     if client_ips is None:
         client_ips = ["10.0.0.1"]
     if client_user_ids is None:
@@ -129,7 +136,7 @@ def _channel_payload(
         {"ip_address": ip, "user_id": client_user_ids.get(ip)}
         for ip in client_ips
     ]
-    return {
+    payload = {
         "channel_id": channel_uuid,
         "channel_number": channel_number,
         "channel_name": name,
@@ -138,6 +145,9 @@ def _channel_payload(
         "avg_bitrate_kbps": avg_bitrate_kbps,
         "clients": clients,
     }
+    if stream_id is not None:
+        payload["stream_id"] = stream_id
+    return payload
 
 
 async def _drive_two_polls(tracker, mock_client, first_payload, second_payload):
@@ -397,3 +407,641 @@ async def test_helper_internal_failure_is_swallowed(
         assert len(telemetry_rows) == 1
     finally:
         session.close()
+
+
+# ---------------------------------------------------------------------------
+# Provider resolver tests (bd-skqln.14)
+# ---------------------------------------------------------------------------
+#
+# Step (a)–(d) of skqln.3 left ``provider_id`` permanently NULL because the
+# active-stream → provider mapping did not exist. skqln.14 wires that in:
+#
+# * Dispatcharr's ``/proxy/ts/status`` payload surfaces ``stream_id`` per
+#   channel (the integer ID of the stream currently being served — the
+#   ``StatsTab`` frontend already renders this from the same payload).
+# * ``DispatcharrClient.get_streams_by_ids`` returns each stream's
+#   ``m3u_account`` (either a bare int or ``{"id": N, ...}`` —
+#   ``stream_prober.extract_m3u_account_id`` normalizes both shapes).
+# * The resolver fetches the (stream_id → m3u_account_id) map ONCE per
+#   poll (batched single API call, not N-per-channel) and caches it for
+#   the duration of one ``_collect_stats`` invocation. The cache is
+#   intentionally scoped to a single poll so a stream's provider can
+#   change between polls without staleness.
+#
+# Failure modes are non-fatal: a row missing ``stream_id`` (Dispatcharr
+# didn't surface it), a 404/exception on ``get_streams_by_ids``, or a
+# stream whose ``m3u_account`` is None — all produce ``provider_id=NULL``
+# plus a structured ``[STATS_V2] provider_resolution_failed`` log so
+# skqln.12 can derive a Prometheus metric later. The
+# ``session_telemetry`` row is still written; the column is just NULL.
+
+
+@pytest.mark.asyncio
+async def test_resolver_attaches_provider_id_for_single_stream_channel(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """Happy path — channel surfaces a ``stream_id``; resolver fetches the
+    stream's ``m3u_account`` and writes it as ``provider_id``."""
+    stream_id = 555
+    provider_id = 7
+    mock_client.get_streams_by_ids = AsyncMock(
+        return_value=[{"id": stream_id, "m3u_account": provider_id}]
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=stream_id,
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=stream_id,
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).order_by(SessionTelemetry.id).all()
+    finally:
+        session.close()
+    assert len(rows) == 2
+    assert all(r.provider_id == provider_id for r in rows), [
+        (r.id, r.provider_id) for r in rows
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resolver_handles_failover_active_stream(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """Channel with multiple failover streams reports only the active one
+    in ``stream_id``. The resolver picks up that stream's provider — NOT
+    the failover-list head — proving it keys on what Dispatcharr says is
+    live, not the channel's stream-priority list.
+
+    Three streams, three providers. Poll 1 reports stream_id=200 (provider
+    2). Poll 2 reports stream_id=300 (provider 3 — failover hopped). The
+    two rows must carry the providers that were active at observation
+    time, not a single static value.
+    """
+    mock_client.get_streams_by_ids = AsyncMock(
+        return_value=[
+            {"id": 100, "m3u_account": 1},
+            {"id": 200, "m3u_account": 2},
+            {"id": 300, "m3u_account": 3},
+        ]
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=200,
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=300,
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).order_by(SessionTelemetry.id).all()
+    finally:
+        session.close()
+    assert len(rows) == 2
+    assert rows[0].provider_id == 2
+    assert rows[1].provider_id == 3
+
+
+@pytest.mark.asyncio
+async def test_resolver_nested_m3u_account_object(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """Dispatcharr historically returns ``m3u_account`` as either a bare
+    int or a nested ``{"id": N, "name": ...}`` object — the canonical
+    ``extract_m3u_account_id`` helper at ``stream_prober.py`` already
+    normalizes both. The resolver must use that helper (not re-parse the
+    field locally) so the schema-shape contract is owned in exactly one
+    place.
+    """
+    stream_id = 555
+    mock_client.get_streams_by_ids = AsyncMock(
+        return_value=[
+            {
+                "id": stream_id,
+                "m3u_account": {"id": 9, "name": "Provider Nine"},
+            }
+        ]
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=stream_id,
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=stream_id,
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows and all(r.provider_id == 9 for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_resolver_returns_null_when_no_stream_id(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+    caplog,
+):
+    """No ``stream_id`` on the channel payload — resolver cannot identify
+    an active stream. Row is still written with ``provider_id=NULL`` and
+    a structured ``[STATS_V2] provider_resolution_failed`` log is emitted.
+    """
+    import logging as _logging
+
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+
+    caplog.clear()
+    with caplog.at_level(_logging.WARNING, logger="bandwidth_tracker"):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows, "session_telemetry rows must still be written"
+    assert all(r.provider_id is None for r in rows)
+    assert any(
+        "[STATS_V2] provider_resolution_failed" in record.message
+        for record in caplog.records
+    ), [r.message for r in caplog.records]
+
+
+@pytest.mark.asyncio
+async def test_resolver_returns_null_when_stream_lookup_returns_empty(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+    caplog,
+):
+    """``get_streams_by_ids`` returns an empty list (Dispatcharr 404'd or
+    the stream was deleted). Resolver returns NULL for every channel; the
+    row is still written and ``[STATS_V2] provider_resolution_failed``
+    fires once per unresolved channel."""
+    import logging as _logging
+
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=555,
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=555,
+    )
+
+    caplog.clear()
+    with caplog.at_level(_logging.WARNING, logger="bandwidth_tracker"):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows and all(r.provider_id is None for r in rows)
+    assert any(
+        "[STATS_V2] provider_resolution_failed" in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolver_returns_null_when_lookup_raises(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+    caplog,
+):
+    """The Dispatcharr round-trip raises (timeout, 5xx, network error).
+    Resolver falls back to NULL and the polling cycle continues; rows
+    are still written.
+    """
+    import logging as _logging
+
+    mock_client.get_streams_by_ids = AsyncMock(side_effect=RuntimeError("boom"))
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=555,
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=555,
+    )
+
+    caplog.clear()
+    with caplog.at_level(_logging.WARNING, logger="bandwidth_tracker"):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows and all(r.provider_id is None for r in rows)
+    assert any(
+        "[STATS_V2] provider_resolution_failed" in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolver_batches_lookup_once_per_poll(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """Multiple channels in one poll share a single ``get_streams_by_ids``
+    call — cheap path. Two channels, two streams, two providers: still
+    one API call per poll. The bead's per-poll performance constraint
+    rejects N-channels-times-N-Dispatcharr-calls.
+    """
+    mock_client.get_streams_by_ids = AsyncMock(
+        return_value=[
+            {"id": 100, "m3u_account": 1},
+            {"id": 200, "m3u_account": 2},
+        ]
+    )
+    ch_a_first = _channel_payload(
+        channel_uuid="ch-a",
+        channel_number=101,
+        total_bytes=1_000_000,
+        client_ips=["10.0.0.1"],
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=100,
+    )
+    ch_b_first = _channel_payload(
+        channel_uuid="ch-b",
+        channel_number=102,
+        total_bytes=1_000_000,
+        client_ips=["10.0.0.2"],
+        stream_id=200,
+    )
+    ch_a_second = _channel_payload(
+        channel_uuid="ch-a",
+        channel_number=101,
+        total_bytes=2_000_000,
+        client_ips=["10.0.0.1"],
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=100,
+    )
+    ch_b_second = _channel_payload(
+        channel_uuid="ch-b",
+        channel_number=102,
+        total_bytes=2_000_000,
+        client_ips=["10.0.0.2"],
+        stream_id=200,
+    )
+
+    mock_client.get_channel_stats.return_value = {
+        "channels": [ch_a_first, ch_b_first]
+    }
+    await tracker._collect_stats()
+    # Capture call count after the first poll, then drive a second poll.
+    call_count_after_first = mock_client.get_streams_by_ids.call_count
+    mock_client.get_channel_stats.return_value = {
+        "channels": [ch_a_second, ch_b_second]
+    }
+    await tracker._collect_stats()
+    call_count_after_second = mock_client.get_streams_by_ids.call_count
+
+    # First poll: one fetch even with two channels (the writes happen on
+    # both polls because step (a) writes the connection-open row too, so
+    # the fetch happens on the first poll for both channels).
+    assert call_count_after_first == 1
+    # Second poll: one additional fetch (cache resets per poll).
+    assert call_count_after_second == 2
+
+    session = patched_session_local()
+    try:
+        rows = (
+            session.query(SessionTelemetry)
+            .order_by(SessionTelemetry.id)
+            .all()
+        )
+    finally:
+        session.close()
+    provider_by_channel = {(r.channel_id, r.provider_id) for r in rows}
+    assert ("ch-a", 1) in provider_by_channel
+    assert ("ch-b", 2) in provider_by_channel
+
+
+@pytest.mark.asyncio
+async def test_resolver_cache_does_not_leak_across_polls(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """Cache is scoped to a single ``_collect_stats`` invocation. A
+    stream that newly hops providers between polls picks up the new
+    mapping immediately — the previous-poll cache is not consulted.
+    """
+    # Poll 1 + Poll 2 — both look up stream_id=555. The stream's provider
+    # changes between polls (provider 1 → provider 2). Without a per-poll
+    # cache reset, the second poll would still report provider 1.
+    poll1_response = [{"id": 555, "m3u_account": 1}]
+    poll2_response = [{"id": 555, "m3u_account": 2}]
+    mock_client.get_streams_by_ids = AsyncMock(
+        side_effect=[poll1_response, poll2_response]
+    )
+
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=555,
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=555,
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = (
+            session.query(SessionTelemetry)
+            .order_by(SessionTelemetry.id)
+            .all()
+        )
+    finally:
+        session.close()
+    assert len(rows) == 2
+    assert rows[0].provider_id == 1
+    assert rows[1].provider_id == 2
+
+
+@pytest.mark.asyncio
+async def test_resolver_emits_data_consistency_sli_log(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+    caplog,
+):
+    """Per-poll structured log line surfaces ``(resolved_count,
+    unresolved_count)`` so skqln.12 can derive a Prometheus
+    ``stats_v2_provider_resolution_total{result=...}`` metric without
+    plumbing a new code path through. The log prefix is
+    ``[STATS_V2] provider_resolution`` — distinct from the failure
+    log so it does not collide on a substring search.
+
+    Two channels, one resolvable, one unresolvable (missing ``stream_id``):
+    expect a single SLI line with resolved=1 unresolved=1.
+    """
+    import logging as _logging
+
+    mock_client.get_streams_by_ids = AsyncMock(
+        return_value=[{"id": 555, "m3u_account": 7}]
+    )
+    ch_a = _channel_payload(
+        channel_uuid="ch-a",
+        channel_number=101,
+        total_bytes=1_000_000,
+        client_ips=["10.0.0.1"],
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=555,
+    )
+    ch_b = _channel_payload(
+        channel_uuid="ch-b",
+        channel_number=102,
+        total_bytes=1_000_000,
+        client_ips=["10.0.0.2"],
+        # No stream_id — unresolvable.
+    )
+    ch_a_second = _channel_payload(
+        channel_uuid="ch-a",
+        channel_number=101,
+        total_bytes=2_000_000,
+        client_ips=["10.0.0.1"],
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=555,
+    )
+    ch_b_second = _channel_payload(
+        channel_uuid="ch-b",
+        channel_number=102,
+        total_bytes=2_000_000,
+        client_ips=["10.0.0.2"],
+    )
+
+    mock_client.get_channel_stats.return_value = {"channels": [ch_a, ch_b]}
+    await tracker._collect_stats()
+    caplog.clear()
+    mock_client.get_channel_stats.return_value = {
+        "channels": [ch_a_second, ch_b_second]
+    }
+    with caplog.at_level(_logging.INFO, logger="bandwidth_tracker"):
+        await tracker._collect_stats()
+
+    # SLI line carries both counts; assert the substring shape so the
+    # metric-extractor (skqln.12) has a stable contract.
+    sli_lines = [
+        r.message
+        for r in caplog.records
+        if "[STATS_V2] provider_resolution " in r.message
+    ]
+    assert sli_lines, (
+        "expected at least one [STATS_V2] provider_resolution SLI log line; "
+        f"got: {[r.message for r in caplog.records]}"
+    )
+    # The exact line shape: "[STATS_V2] provider_resolution resolved=N unresolved=M"
+    assert any(
+        "resolved=1" in m and "unresolved=1" in m for m in sli_lines
+    ), sli_lines
+
+
+@pytest.mark.asyncio
+async def test_resolver_skips_lookup_when_no_resolvable_streams(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """If no channel in the poll surfaced a ``stream_id``, the resolver
+    must not issue a ``get_streams_by_ids`` call — saves a round-trip
+    on degraded-stats payloads."""
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    assert mock_client.get_streams_by_ids.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_resolver_handles_null_m3u_account_on_stream(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+    caplog,
+):
+    """Stream exists in Dispatcharr but ``m3u_account`` is None (orphaned
+    stream — provider was deleted). ``provider_id`` stays NULL, failure
+    log fires.
+    """
+    import logging as _logging
+
+    mock_client.get_streams_by_ids = AsyncMock(
+        return_value=[{"id": 555, "m3u_account": None}]
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=555,
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=555,
+    )
+
+    caplog.clear()
+    with caplog.at_level(_logging.WARNING, logger="bandwidth_tracker"):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows and all(r.provider_id is None for r in rows)
+    assert any(
+        "[STATS_V2] provider_resolution_failed" in r.message
+        for r in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolver_integration_three_providers_distribution(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """End-to-end: three channels mapping to three different providers in
+    one poll cycle produce session_telemetry rows whose provider_id
+    distribution matches the seeded stream→provider mapping.
+    """
+    mock_client.get_streams_by_ids = AsyncMock(
+        return_value=[
+            {"id": 11, "m3u_account": 1},
+            {"id": 22, "m3u_account": 2},
+            {"id": 33, "m3u_account": 3},
+        ]
+    )
+    ch_a = _channel_payload(
+        channel_uuid="ch-a",
+        channel_number=101,
+        total_bytes=1_000_000,
+        client_ips=["10.0.0.1"],
+        stream_id=11,
+    )
+    ch_b = _channel_payload(
+        channel_uuid="ch-b",
+        channel_number=102,
+        total_bytes=1_000_000,
+        client_ips=["10.0.0.2"],
+        stream_id=22,
+    )
+    ch_c = _channel_payload(
+        channel_uuid="ch-c",
+        channel_number=103,
+        total_bytes=1_000_000,
+        client_ips=["10.0.0.3"],
+        stream_id=33,
+    )
+    ch_a_2 = _channel_payload(
+        channel_uuid="ch-a",
+        channel_number=101,
+        total_bytes=2_000_000,
+        client_ips=["10.0.0.1"],
+        stream_id=11,
+    )
+    ch_b_2 = _channel_payload(
+        channel_uuid="ch-b",
+        channel_number=102,
+        total_bytes=2_000_000,
+        client_ips=["10.0.0.2"],
+        stream_id=22,
+    )
+    ch_c_2 = _channel_payload(
+        channel_uuid="ch-c",
+        channel_number=103,
+        total_bytes=2_000_000,
+        client_ips=["10.0.0.3"],
+        stream_id=33,
+    )
+
+    mock_client.get_channel_stats.return_value = {
+        "channels": [ch_a, ch_b, ch_c]
+    }
+    await tracker._collect_stats()
+    mock_client.get_channel_stats.return_value = {
+        "channels": [ch_a_2, ch_b_2, ch_c_2]
+    }
+    await tracker._collect_stats()
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+        # 3 channels × 2 polls = 6 rows. Distribution: 2 rows per provider.
+        from collections import Counter
+        distribution = Counter(r.provider_id for r in rows)
+    finally:
+        session.close()
+    assert distribution == Counter({1: 2, 2: 2, 3: 2}), distribution
