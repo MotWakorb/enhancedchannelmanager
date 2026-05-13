@@ -115,9 +115,27 @@ class BandwidthDaily(Base):
 
 class ChannelWatchStats(Base):
     """
-    Tracks watch counts and time per channel.
-    Each time a channel is seen active in stats, we increment its watch count.
-    Watch time accumulates while a channel remains active.
+    Legacy per-channel watch-stats aggregate (pre-v0.17.0).
+
+    Tracks watch counts and time per channel. Each time a channel was
+    seen active in stats, we used to increment its watch count, and
+    watch time accumulated while a channel remained active.
+
+    v0.17.0 (bd-skqln.3 step (d)): this table is **no longer written
+    from BandwidthTracker._collect_stats**. The popularity calculator
+    and the ``/api/stats/top-watched`` endpoint derive their inputs
+    from ``session_telemetry`` (per-poll grain) and
+    ``unique_client_connections`` (channel name side-load) instead.
+    See ``docs/database_migrations.md`` → "Backfill policy for
+    session_telemetry" for the cutover-day reasoning.
+
+    The schema is intentionally **kept** at v0.17.0 — pre-cutover rows
+    are still here. The settings reset paths still delete from it.
+    Dropping the table is a separate decision tracked as a follow-up
+    cleanup bead once we are confident nothing in the post-cutover code
+    paths reads it. Until then, ``channel_watch_stats_v`` (migration
+    0008) is the read-compat view over ``session_telemetry`` for the
+    columns that faithfully map across the grain change.
     """
     __tablename__ = "channel_watch_stats"
 

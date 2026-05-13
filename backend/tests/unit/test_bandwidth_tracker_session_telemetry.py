@@ -1,27 +1,32 @@
-"""Unit tests for the additive ``session_telemetry`` write inside
-``BandwidthTracker`` (bead ``enhancedchannelmanager-skqln.3`` step (a)).
+"""Unit tests for the unconditional ``session_telemetry`` write inside
+``BandwidthTracker`` (bead ``enhancedchannelmanager-skqln.3`` step (d)).
 
-Step (a) goals (mirrored by the test names below):
+Step (d) flipped the additive-write into the only-write: the legacy
+``ChannelWatchStats`` write inside ``_collect_stats`` is gone, and the
+``ECM_SESSION_TELEMETRY_WRITE_ENABLED`` feature flag has been retired.
+The kill-switch's only purpose was the (a)→(d) transition; once legacy
+writes are removed there is no off-state to gate.
 
-* Flag OFF: no row is written to ``session_telemetry`` — the feature is
-  default-OFF in production. This is the no-op-in-prod guarantee.
-* Flag ON: rows appear with the documented column shape (one per active
-  client connection per poll, session_id namespaced ``conn-<id>``, etc.).
-* Flag ON: the legacy ``ChannelWatchStats`` write still happens — no
-  regression in the 4 pre-existing writes (the keystone of "single-write
-  refactor that can't break what already works").
-* Flag ON, helper raises: the legacy writes have already committed, and
-  the new write's exception is swallowed inside ``_write_session_telemetry``
-  so it never escapes ``_collect_stats``.
+Step (d) goals (mirrored by the test names below):
+
+* ``session_telemetry`` rows are written unconditionally — no env-var
+  guard, no fallback path. Every poll with active viewing connections
+  produces one row per connection.
+* The legacy ``ChannelWatchStats`` write inside ``_collect_stats`` is
+  gone. No row is created in that table by a polling cycle.
+* The helper still wraps its own work in try/except so an internal
+  failure (constructor raise, schema mismatch, etc.) cannot propagate
+  out of ``_collect_stats``. The legacy ``UniqueClientConnection`` /
+  ``ChannelBandwidth`` writes that ran *before* the helper survive.
 
 The tests drive ``_collect_stats`` end-to-end through a stubbed
 ``DispatcharrClient`` so the BandwidthTracker's own per-channel rollup
-code paths are exercised (the helper is fed the snapshot the real
-production path builds, not a hand-rolled fixture). The session_telemetry
-schema (`models.SessionTelemetry`) is created from `Base.metadata` in the
-existing in-memory `test_engine` fixture from `tests/conftest.py`.
+code paths are exercised. The session_telemetry schema
+(``models.SessionTelemetry``) is created from ``Base.metadata`` in the
+existing in-memory ``test_engine`` fixture from ``tests/conftest.py``.
 
-Synthetic identities only — `docs/security/threat_model_stats_v2.md` §7.7.
+Synthetic identities only — ``docs/security/threat_model_stats_v2.md``
+§7.7.
 """
 from __future__ import annotations
 
@@ -31,7 +36,7 @@ import pytest
 
 import database
 from bandwidth_tracker import BandwidthTracker
-from models import ChannelWatchStats, SessionTelemetry, User
+from models import ChannelWatchStats, SessionTelemetry, UniqueClientConnection, User
 
 
 # ---------------------------------------------------------------------------
@@ -138,8 +143,8 @@ def _channel_payload(
 async def _drive_two_polls(tracker, mock_client, first_payload, second_payload):
     """Run ``_collect_stats`` twice so the second poll has a per-channel
     byte delta and the ``_active_connections`` map is populated (the first
-    poll opens connections via ``_update_watch_counts``, the second poll
-    counts as ``still_active`` and is what the telemetry helper observes).
+    poll opens connections, the second poll counts as ``still_active`` and
+    is what the telemetry helper observes).
     """
     mock_client.get_channel_stats.return_value = {"channels": [first_payload]}
     await tracker._collect_stats()
@@ -152,41 +157,51 @@ async def _drive_two_polls(tracker, mock_client, first_payload, second_payload):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_flag_off_writes_no_session_telemetry_rows(
-    patched_session_local,
-    tracker,
-    mock_client,
-    monkeypatch,
-):
-    """Flag OFF (default): zero rows in session_telemetry after a poll cycle.
-
-    This is the no-op-in-prod guarantee — the first PR for step (a) must
-    not change observable behavior.
-    """
-    monkeypatch.delenv("ECM_SESSION_TELEMETRY_WRITE_ENABLED", raising=False)
-    first = _channel_payload(total_bytes=1_000_000)
-    second = _channel_payload(total_bytes=2_000_000)
-
-    await _drive_two_polls(tracker, mock_client, first, second)
-
-    session = patched_session_local()
-    try:
-        count = session.query(SessionTelemetry).count()
-    finally:
-        session.close()
-    assert count == 0
-
-
-@pytest.mark.asyncio
-async def test_flag_on_writes_session_telemetry_row_per_connection(
+async def test_writes_session_telemetry_unconditionally_no_flag(
     patched_session_local,
     seed_synthetic_user,
     tracker,
     mock_client,
     monkeypatch,
 ):
-    """Flag ON: one row per active client connection per poll, populated
-    with the documented step-(a) column shape.
+    """Step (d): no env-var gate. Writes happen on every poll cycle.
+
+    Sets the legacy flag env-var to ``false`` (the historical "off"
+    value). The retirement means that setting has no effect — rows are
+    still written. The test deliberately sets the var rather than
+    unsetting it to prove the absence of any vestigial gate.
+    """
+    monkeypatch.setenv("ECM_SESSION_TELEMETRY_WRITE_ENABLED", "false")
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    # Poll 1 opens the connection and writes one row; poll 2 writes the
+    # second row. Both polls produce rows regardless of any env-var state.
+    assert len(rows) == 2
+
+
+@pytest.mark.asyncio
+async def test_writes_session_telemetry_row_per_connection(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """One row per active client connection per poll, with the documented
+    step-(a) column shape preserved.
 
     Two polls drive the tracker. Poll 1 opens the connection and records
     a presence row (``bytes_delta=0`` — no prior cumulative-bytes value
@@ -194,7 +209,6 @@ async def test_flag_on_writes_session_telemetry_row_per_connection(
     the actual transferred bytes_delta. Both rows attribute to the same
     ``session_id`` (the connection lives across polls).
     """
-    monkeypatch.setenv("ECM_SESSION_TELEMETRY_WRITE_ENABLED", "true")
     first = _channel_payload(
         total_bytes=1_000_000,
         client_ips=["10.0.0.1"],
@@ -226,10 +240,7 @@ async def test_flag_on_writes_session_telemetry_row_per_connection(
             assert row.observed_at > 0
             assert row.poll_interval_ms == 10_000  # 10s poll × 1000
             assert row.user_id == seed_synthetic_user
-            # Dispatcharr channel UUID (String(64)) — schema corrected by
-            # migration 0007. See the bead body for the step-(a) correction.
             assert row.channel_id == "ch-uuid-1"
-            # provider_id remains NULL until skqln.14 lands the resolver.
             assert row.provider_id is None
             assert row.buffer_event_count == 0
 
@@ -242,17 +253,15 @@ async def test_flag_on_writes_session_telemetry_row_per_connection(
 
 
 @pytest.mark.asyncio
-async def test_flag_on_splits_bytes_delta_equally_across_clients(
+async def test_splits_bytes_delta_equally_across_clients(
     patched_session_local,
     seed_synthetic_user,
     tracker,
     mock_client,
-    monkeypatch,
 ):
-    """Flag ON: a single channel with two concurrent clients yields one
+    """A single channel with two concurrent clients yields one
     session_telemetry row per client per poll; the channel byte delta is
     split equally (integer floor)."""
-    monkeypatch.setenv("ECM_SESSION_TELEMETRY_WRITE_ENABLED", "true")
     # Two synthetic clients on one channel. user_id mapping intentionally
     # left empty so the rows write with user_id=NULL — keeps the test
     # focused on the per-client byte-split contract without depending on
@@ -284,9 +293,6 @@ async def test_flag_on_splits_bytes_delta_equally_across_clients(
         # Each row carries the same observed_at as its poll-mates.
         observed_set = {r.observed_at for r in rows}
         assert len(observed_set) == 2  # one timestamp per poll
-        # Every row carries the Dispatcharr channel UUID — migration 0007
-        # made channel_id a NOT NULL String(64). All four rows share the
-        # same channel.
         channel_ids = {r.channel_id for r in rows}
         assert channel_ids == {"ch-uuid-1"}
     finally:
@@ -294,18 +300,22 @@ async def test_flag_on_splits_bytes_delta_equally_across_clients(
 
 
 @pytest.mark.asyncio
-async def test_flag_on_does_not_regress_legacy_channel_watch_stats_write(
+async def test_legacy_channel_watch_stats_is_not_written(
     patched_session_local,
     tracker,
     mock_client,
-    monkeypatch,
 ):
-    """Flag ON: the legacy ``ChannelWatchStats`` row is still written.
+    """Step (d) removed the ``ChannelWatchStats`` write inside ``_collect_stats``.
 
-    Guards the "single-write refactor that can't break what already works"
-    keystone — step (a) is additive only, the legacy path stays intact.
+    A polling cycle that *would have* created a legacy row in step (a)/(c)
+    must now leave that table empty. The non-aggregate sibling tables
+    (``UniqueClientConnection``) are still written — only the lifetime
+    aggregate is gone.
+
+    This is the keystone "legacy write retired" regression: if a later
+    change re-introduces the legacy write (defensively, or via revert),
+    this test catches it.
     """
-    monkeypatch.setenv("ECM_SESSION_TELEMETRY_WRITE_ENABLED", "true")
     first = _channel_payload(total_bytes=1_000_000)
     second = _channel_payload(total_bytes=1_500_000)
 
@@ -313,40 +323,42 @@ async def test_flag_on_does_not_regress_legacy_channel_watch_stats_write(
 
     session = patched_session_local()
     try:
-        watch_stats = session.query(ChannelWatchStats).all()
-        assert len(watch_stats) == 1
-        assert watch_stats[0].watch_count >= 1
-        assert watch_stats[0].total_watch_seconds > 0
+        legacy_rows = session.query(ChannelWatchStats).all()
+        assert legacy_rows == [], (
+            "ChannelWatchStats must not be written from _collect_stats "
+            "after bd-skqln.3 step (d). Got: "
+            f"{[(r.channel_id, r.watch_count, r.total_watch_seconds) for r in legacy_rows]}"
+        )
+        # Sanity: the non-legacy sibling writes still happen.
+        connections = session.query(UniqueClientConnection).all()
+        telemetry = session.query(SessionTelemetry).all()
+        assert connections, "UniqueClientConnection must still be written"
+        assert telemetry, "session_telemetry must still be written"
     finally:
         session.close()
 
 
 @pytest.mark.asyncio
-async def test_flag_on_helper_internal_failure_is_swallowed(
+async def test_helper_internal_failure_is_swallowed(
     patched_session_local,
     tracker,
     mock_client,
-    monkeypatch,
     caplog,
 ):
-    """Flag ON: when the helper's internal write path raises, the in-helper
-    try/except logs the failure and prevents the exception from escaping
-    ``_collect_stats``. The legacy writes (which ran before the helper)
-    must still be committed.
+    """Helper's internal try/except: an exception inside the
+    session_telemetry write path must not propagate out of
+    ``_collect_stats``. The sibling writes that ran *before* the helper
+    (UniqueClientConnection) survive.
 
     Sabotage point: patch the ``bandwidth_tracker.SessionTelemetry``
     module-level reference so constructing a row inside the helper raises.
-    This proves the helper's internal try/except — the keystone of "the
-    refactor cannot break what already works" — actually fires.
     """
     import logging as _logging
 
-    monkeypatch.setenv("ECM_SESSION_TELEMETRY_WRITE_ENABLED", "true")
     first = _channel_payload(total_bytes=1_000_000)
     second = _channel_payload(total_bytes=1_500_000)
 
-    # Poll 1 runs cleanly (we want the helper to also attempt and fail on
-    # this poll so we exercise the rollback path on the very first row).
+    # Poll 1 runs cleanly.
     mock_client.get_channel_stats.return_value = {"channels": [first]}
     await tracker._collect_stats()
 
@@ -370,17 +382,17 @@ async def test_flag_on_helper_internal_failure_is_swallowed(
             for record in caplog.records
         )
 
-    # Legacy ChannelWatchStats survived both polls.
+    # Sibling writes survived both polls.
     session = patched_session_local()
     try:
-        watch_stats = session.query(ChannelWatchStats).all()
-        assert len(watch_stats) == 1
-        assert watch_stats[0].total_watch_seconds > 0
+        connections = session.query(UniqueClientConnection).all()
+        assert connections, (
+            "UniqueClientConnection must survive a session_telemetry helper "
+            "failure — sibling writes commit before the helper runs."
+        )
         # Poll 1 (before the patch) wrote one session_telemetry row.
         # Poll 2 (under the patch) raised inside the helper and was
-        # swallowed — no second row was committed. So the table reflects
-        # only what poll 1 wrote, proving the failure on poll 2 was
-        # contained without disturbing earlier durable writes.
+        # swallowed — no second row was committed.
         telemetry_rows = session.query(SessionTelemetry).all()
         assert len(telemetry_rows) == 1
     finally:
