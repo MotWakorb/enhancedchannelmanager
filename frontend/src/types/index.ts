@@ -1177,6 +1177,71 @@ export type WatchTimeDailyResponse = WatchTimeEnvelope<WatchTimeUserDayRow>;
 export type WatchTimeChannelBreakdownResponse = WatchTimeEnvelope<WatchTimeChannelRow>;
 
 // =============================================================================
+// Per-Provider Stats (v0.17.0 — GH-59, bd-skqln.16/.18)
+// =============================================================================
+//
+// Backend endpoints (all admin-only — non-admin callers receive 403):
+//   GET /api/stats/providers/buffering        ?window=7d|30d|90d&bucket=hour|day
+//   GET /api/stats/providers/watch-time       ?window=7d|30d|90d
+//   GET /api/stats/providers/channel-heatmap  ?window=7d|30d|90d&top_n=1..500
+//   GET /api/stats/providers/bitrate          ?window=7d|30d|90d&bucket=hour|day
+//
+// All four return the standard {data, meta, pagination: null} envelope.
+// ``provider_id`` may be ``null`` — that's the "Unknown" attribution-gap
+// bucket the operator must see explicitly (UX directive 2026-05-13).
+
+export type ProviderStatsWindow = '7d' | '30d' | '90d';
+export type ProviderStatsBucket = 'hour' | 'day';
+
+// Row shape for /providers/buffering
+export interface ProviderBufferingRow {
+  provider_id: number | null;
+  time_bucket: string;  // ISO-8601 with trailing Z, floored to hour or day
+  buffer_event_count: number;
+}
+
+// Row shape for /providers/watch-time
+export interface ProviderWatchTimeRow {
+  provider_id: number | null;
+  total_watch_seconds: number;
+}
+
+// Row shape for /providers/channel-heatmap — one cell of the 2D grid
+export interface ProviderHeatmapRow {
+  provider_id: number | null;
+  channel_id: string;
+  channel_name: string;
+  bytes: number;
+}
+
+// Row shape for /providers/bitrate
+export interface ProviderBitrateRow {
+  provider_id: number | null;
+  time_bucket: string;
+  bitrate_bps: number;
+}
+
+export interface ProviderStatsMeta {
+  from_iso: string | null;
+  to_iso: string | null;
+  total_rows: number;
+  window?: ProviderStatsWindow;
+  bucket?: ProviderStatsBucket;
+  top_n?: number;
+}
+
+export interface ProviderStatsEnvelope<TRow> {
+  data: TRow[];
+  meta: ProviderStatsMeta;
+  pagination: null;
+}
+
+export type ProviderBufferingResponse = ProviderStatsEnvelope<ProviderBufferingRow>;
+export type ProviderWatchTimeResponse = ProviderStatsEnvelope<ProviderWatchTimeRow>;
+export type ProviderHeatmapResponse = ProviderStatsEnvelope<ProviderHeatmapRow>;
+export type ProviderBitrateResponse = ProviderStatsEnvelope<ProviderBitrateRow>;
+
+// =============================================================================
 // Authentication Types
 // =============================================================================
 
