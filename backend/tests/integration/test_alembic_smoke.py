@@ -1,4 +1,27 @@
-"""Alembic baseline up/down round-trip smoke test (bd-mcnj0).
+"""Alembic baseline up/down round-trip smoke test (bd-mcnj0 / bd-z7bfj).
+
+Migration 0005 batch_alter_table + idempotency regression tests (bd-z7bfj)
+---------------------------------------------------------------------------
+PR #229 / bead m2k7p fixed two bugs in migration 0005
+(``auto_creation_quality_m3u_tie_break``):
+
+1. ``CircularDependencyError`` raised by ``batch_alter_table`` when both
+   ``quality_tie_break_order`` and ``quality_m3u_tie_break_enabled`` were added
+   in a single batch context.  The fix splits the adds into separate
+   ``batch_alter_table`` calls.
+
+2. Idempotency bug: long-running installs where ``database._run_migrations``
+   (``create_all()`` fallback) had already added those columns while
+   ``alembic_version`` stayed at ``0004``.  Alembic would then attempt to add
+   them again and fail.  The fix inspects existing columns before each batch
+   add and skips columns that are already present.
+
+CI did not catch either because the in-memory SQLite test setup uses
+``Base.metadata.create_all()`` + ``alembic stamp`` instead of running
+``alembic upgrade``, so ``batch_alter_table`` on ``auto_creation_rules`` is
+never exercised.  The tests in ``TestMigration0005`` close that gap.
+
+---
 
 Purpose
 -------
@@ -484,5 +507,225 @@ class TestAlembicRoundTrip:
                 )
             finally:
                 session.close()
+        finally:
+            engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Migration 0005 — batch_alter_table + idempotency regression tests (bd-z7bfj)
+# ---------------------------------------------------------------------------
+
+def _column_names(engine, table_name: str) -> set[str]:
+    """Return the set of column names for *table_name* using the given engine."""
+    inspector = inspect(engine)
+    return {c["name"] for c in inspector.get_columns(table_name)}
+
+
+@pytest.mark.integration
+class TestMigration0005:
+    """Regression lock for PR #229 / bead m2k7p fixes in migration 0005.
+
+    Two paths are exercised:
+
+    1. **Fresh SQLite** — ``alembic upgrade head`` on a brand-new empty database
+       must complete without raising ``CircularDependencyError`` from SQLite's
+       ``batch_alter_table``.  The fix splits the two ``add_column`` calls into
+       separate ``batch_alter_table`` contexts; one context per column prevents
+       the circular-dependency in SQLAlchemy's column-reordering logic.
+
+    2. **Drifted SQLite** — simulates a long-running install where
+       ``database._run_migrations`` (the ``create_all()`` fallback path) had
+       already added ``quality_tie_break_order`` and
+       ``quality_m3u_tie_break_enabled`` to ``auto_creation_rules`` while
+       ``alembic_version`` was still stamped at ``0004``.  ``alembic upgrade
+       head`` must be idempotent — it must NOT raise a "duplicate column" error,
+       and must stamp ``0005`` (and continue to head if 0005 is not yet head).
+    """
+
+    def test_fresh_sqlite_upgrade_head_completes(self, tmp_path):
+        """Fresh empty DB: ``alembic upgrade head`` must reach 0005 without error.
+
+        Specifically guards against ``CircularDependencyError`` in
+        ``_adjust_self_columns_for_partial_reordering`` when both
+        ``quality_tie_break_order`` and ``quality_m3u_tie_break_enabled`` are
+        added inside a single ``batch_alter_table`` context (the pre-fix state).
+        """
+        from alembic import command
+
+        db_file = tmp_path / "migration0005_fresh.db"
+        db_url = f"sqlite:///{db_file}"
+        cfg = _make_alembic_config(db_url)
+
+        # Upgrade must complete without any exception.  If the CircularDependency
+        # bug is present this will raise before reaching 0005.
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            # Both columns must exist in auto_creation_rules after 0005.
+            col_names = _column_names(engine, "auto_creation_rules")
+            assert "quality_tie_break_order" in col_names, (
+                "quality_tie_break_order missing from auto_creation_rules after "
+                "upgrade head — migration 0005 did not run correctly."
+            )
+            assert "quality_m3u_tie_break_enabled" in col_names, (
+                "quality_m3u_tie_break_enabled missing from auto_creation_rules after "
+                "upgrade head — migration 0005 did not run correctly."
+            )
+
+            # alembic_version must be at head.
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None, "alembic_version row missing after upgrade head"
+            assert row[0] == database.get_alembic_head_revision(), (
+                f"Expected head revision {database.get_alembic_head_revision()!r}, "
+                f"got {row[0]!r}"
+            )
+        finally:
+            engine.dispose()
+
+    def test_drifted_sqlite_upgrade_is_idempotent(self, tmp_path):
+        """Drifted DB: upgrade head is idempotent when 0005 columns already exist.
+
+        Reproduces the scenario where ``database._run_migrations`` (the
+        ``create_all()`` / pre-Alembic fallback) had already added the two
+        tie-break columns to ``auto_creation_rules`` while ``alembic_version``
+        remained at ``0004``.
+
+        Setup:
+          - Run ``alembic upgrade 0004`` to populate the schema through
+            revision 0004 (all real tables, all columns up to but not including
+            those added by 0005).
+          - Manually ``ALTER TABLE auto_creation_rules ADD COLUMN ...`` to inject
+            the two 0005 columns — exactly as ``_run_migrations`` would have done
+            via direct SQL (``VARCHAR(4) DEFAULT 'desc'`` and
+            ``BOOLEAN DEFAULT 1 NOT NULL``).
+          - Leave ``alembic_version`` at ``0004`` (do NOT stamp).
+
+        Assertion:
+          - ``alembic upgrade head`` must complete without raising
+            ``OperationalError: duplicate column name``.
+          - After upgrade, ``alembic_version`` must be at head (0005 was applied
+            idempotently — it detected the columns were already present and
+            skipped the adds).
+          - The columns must have been present throughout (not dropped and
+            re-added), validated by checking their values survive the upgrade.
+        """
+        from alembic import command
+
+        db_file = tmp_path / "migration0005_drifted.db"
+        db_url = f"sqlite:///{db_file}"
+        cfg = _make_alembic_config(db_url)
+
+        # ---- 1. Bring the schema up through revision 0004 ----
+        command.upgrade(cfg, "0004")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            # Sanity: 0005 columns must NOT exist yet (they come in 0005).
+            col_names = _column_names(engine, "auto_creation_rules")
+            assert "quality_tie_break_order" not in col_names, (
+                "quality_tie_break_order already present after 0004 — "
+                "test setup assumption is wrong."
+            )
+            assert "quality_m3u_tie_break_enabled" not in col_names, (
+                "quality_m3u_tie_break_enabled already present after 0004 — "
+                "test setup assumption is wrong."
+            )
+
+            # ---- 2. Simulate create_all() drift: inject the columns via raw
+            # SQL exactly as database._run_migrations would have done. ----
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_rules "
+                    "ADD COLUMN quality_tie_break_order VARCHAR(4) DEFAULT 'desc'"
+                ))
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_rules "
+                    "ADD COLUMN quality_m3u_tie_break_enabled BOOLEAN DEFAULT 1 NOT NULL"
+                ))
+
+                # Insert a minimal valid row to prove the column values survive
+                # the upgrade unmodified.  All NOT NULL columns without
+                # server defaults must be supplied; see baseline migration 0001
+                # for the full constraint list.
+                conn.execute(text(
+                    "INSERT INTO auto_creation_rules "
+                    "(name, enabled, priority, conditions, actions, "
+                    " run_on_refresh, stop_on_first_match, probe_on_sort, "
+                    " skip_struck_streams, orphan_action, created_at, "
+                    " updated_at, match_scope_target_group, "
+                    " quality_tie_break_order, quality_m3u_tie_break_enabled) "
+                    "VALUES ('drift-test-rule', 1, 0, '[]', '[]', "
+                    "        0, 0, 0, 0, 'orphan', "
+                    "        '2026-01-01T00:00:00', '2026-01-01T00:00:00', 0, "
+                    "        'asc', 0)"
+                ))
+
+            # Verify alembic_version is still at 0004 (not yet 0005).
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == "0004", (
+                f"Expected alembic_version=0004 after drift setup, got {row}"
+            )
+
+        finally:
+            engine.dispose()
+
+        # ---- 3. Upgrade to head — must be idempotent (no OperationalError) ----
+        # If the idempotency fix is missing, SQLite raises:
+        #   sqlalchemy.exc.OperationalError: (sqlite3.OperationalError)
+        #   duplicate column name: quality_tie_break_order
+        command.upgrade(cfg, "head")
+
+        # ---- 4. Assert 0005 was stamped and columns are still present ----
+        engine = create_engine(db_url, future=True)
+        try:
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None, "alembic_version row missing after upgrade head"
+            assert row[0] == database.get_alembic_head_revision(), (
+                f"Expected head revision {database.get_alembic_head_revision()!r} "
+                f"after idempotent upgrade, got {row[0]!r}"
+            )
+
+            col_names = _column_names(engine, "auto_creation_rules")
+            assert "quality_tie_break_order" in col_names, (
+                "quality_tie_break_order missing after idempotent upgrade — "
+                "migration 0005 may have dropped and failed to re-add the column."
+            )
+            assert "quality_m3u_tie_break_enabled" in col_names, (
+                "quality_m3u_tie_break_enabled missing after idempotent upgrade — "
+                "migration 0005 may have dropped and failed to re-add the column."
+            )
+
+            # The pre-existing row's values must be preserved: the upgrade must
+            # not wipe data by dropping and re-adding the column.
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text(
+                        "SELECT quality_tie_break_order, quality_m3u_tie_break_enabled "
+                        "FROM auto_creation_rules WHERE name='drift-test-rule'"
+                    )
+                ).fetchone()
+            assert row is not None, (
+                "drift-test-rule row missing after upgrade — "
+                "migration 0005 may have dropped the table or truncated data."
+            )
+            assert row[0] == "asc", (
+                f"quality_tie_break_order changed across idempotent upgrade: "
+                f"expected 'asc', got {row[0]!r}"
+            )
+            # SQLite stores BOOLEAN as integer; 0 == False.
+            assert int(row[1]) == 0, (
+                f"quality_m3u_tie_break_enabled changed across idempotent upgrade: "
+                f"expected 0, got {row[1]!r}"
+            )
         finally:
             engine.dispose()
