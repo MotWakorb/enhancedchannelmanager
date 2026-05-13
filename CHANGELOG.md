@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- Stats v2 foundation: new `session_telemetry` table and Alembic migration `0006` — per-session bandwidth/buffer-event telemetry; the data source for the upcoming Users panel. Internal schema only, no UI yet. ([bd-skqln.2])
+
 ## [0.16.0] — 2026-05-12
 
 _This is the shipping 0.16.0. An earlier 0.16.0 build was cut on 2026-04-20 and rolled back before any consumer pulled it (see `[0.16.0-yanked]` below); everything from that attempt is included here, with the blocking bugs fixed._
