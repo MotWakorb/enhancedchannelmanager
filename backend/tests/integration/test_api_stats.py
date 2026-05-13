@@ -10,13 +10,71 @@ Note: Bandwidth/unique-viewer endpoints require BandwidthTracker which is
 initialized at module load time. Those are better tested via E2E tests.
 """
 import pytest
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from unittest.mock import patch
 
 from models import (
-    ChannelWatchStats,
     ChannelPopularityScore,
+    ChannelWatchStats,
+    SessionTelemetry,
+    UniqueClientConnection,
 )
+
+
+def _seed_telemetry_for_channel(
+    test_session,
+    *,
+    channel_id: str,
+    channel_name: str,
+    poll_count: int = 10,
+    distinct_sessions: int = 1,
+    poll_interval_ms: int = 10_000,
+    base_observed_at_ms: int | None = None,
+):
+    """Seed ``session_telemetry`` and a ``UniqueClientConnection`` row.
+
+    Matches the production write shape post bd-skqln.3 step (d): the
+    popularity calculator reads from session_telemetry and side-loads
+    channel_name from UniqueClientConnection.
+    """
+    if base_observed_at_ms is None:
+        base_observed_at_ms = int(
+            (datetime.utcnow() - timedelta(days=1)).timestamp() * 1000
+        )
+    polls_per_session = poll_count // distinct_sessions
+    extra = poll_count - polls_per_session * distinct_sessions
+    poll_index = 0
+    for s in range(distinct_sessions):
+        n = polls_per_session + (1 if s < extra else 0)
+        for _ in range(n):
+            test_session.add(
+                SessionTelemetry(
+                    session_id=f"conn-{channel_id}-{s}",
+                    observed_at=base_observed_at_ms + poll_index * poll_interval_ms,
+                    user_id=None,
+                    provider_id=None,
+                    channel_id=channel_id,
+                    bytes_delta=1000,
+                    buffer_event_count=0,
+                    poll_interval_ms=poll_interval_ms,
+                )
+            )
+            poll_index += 1
+    last_dt = datetime.utcfromtimestamp(
+        (base_observed_at_ms + (poll_count - 1) * poll_interval_ms) / 1000.0
+    )
+    test_session.add(
+        UniqueClientConnection(
+            ip_address=f"10.0.0.{abs(hash(channel_id)) % 200 + 1}",
+            channel_id=channel_id,
+            channel_name=channel_name,
+            user_id=None,
+            username=None,
+            date=last_dt.date(),
+            connected_at=last_dt,
+            watch_seconds=poll_count * (poll_interval_ms // 1000),
+        )
+    )
 
 
 class TestPopularityRankings:
@@ -264,17 +322,14 @@ class TestCalculatePopularity:
     async def test_calculate_popularity_with_data(self, async_client, test_session):
         """POST /api/stats/popularity/calculate calculates scores."""
         today = date.today()
-        now = datetime.utcnow()
 
-        # Create some watch stats
-        stats = ChannelWatchStats(
+        # Seed session_telemetry data (post bd-skqln.3 step (d) source).
+        _seed_telemetry_for_channel(
+            test_session,
             channel_id="test-channel",
             channel_name="Test Channel",
-            watch_count=100,
-            total_watch_seconds=3600,
-            last_watched=now,
+            poll_count=10,
         )
-        test_session.add(stats)
         test_session.commit()
 
         with patch("popularity_calculator.get_session", return_value=test_session):
