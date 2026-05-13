@@ -5,17 +5,154 @@ Extracted from main.py (Phase 3 of v0.13.0 backend refactor).
 """
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import func
+from sqlalchemy.orm import Session
 
+from auth.dependencies import get_current_user
+from auth.settings import get_auth_settings
 from bandwidth_tracker import BandwidthTracker
 from database import get_session
 from dispatcharr_client import get_client
+from models import SessionTelemetry, UniqueClientConnection, User
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/stats", tags=["Stats"])
+
+
+# =============================================================================
+# GH-62 watch-time read API (bd-skqln.5) — module-level helpers
+# =============================================================================
+
+
+async def get_watch_time_caller(
+    request: Request,
+    session: Session = Depends(get_session),
+) -> Optional[User]:
+    """Resolve the calling user for watch-time endpoints.
+
+    Returns the authenticated ``User`` when global auth is enabled, ``None``
+    when auth is disabled (the global auth middleware has already let the
+    request through in that posture). The watch-time handlers use this to
+    enforce the "non-admin can only query own user_id" rule per bd-skqln.5
+    acceptance.
+
+    Defined as a module-level function (rather than reusing
+    ``auth.RequireAuthIfEnabled``) so tests can override it via
+    ``app.dependency_overrides[get_watch_time_caller]`` — the standard
+    FastAPI test seam.
+    """
+    settings = get_auth_settings()
+    if not settings.require_auth or not settings.setup_complete:
+        return None
+    return await get_current_user(request, session)
+
+
+def _parse_iso_utc(value: str, *, param: str) -> int:
+    """Parse an ISO-8601 UTC string into unix-epoch milliseconds.
+
+    Accepts both ``...Z`` and ``...+00:00`` forms. Rejects anything else with
+    HTTP 400 so timezone-naive inputs cannot silently slip through and be
+    interpreted as local time.
+    """
+    raw = value.strip()
+    # Python's fromisoformat doesn't accept the 'Z' suffix until 3.11; accept
+    # either form by normalising 'Z' -> '+00:00'.
+    normalised = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        dt = datetime.fromisoformat(normalised)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{param} must be an ISO-8601 UTC timestamp (got {value!r})",
+        )
+    if dt.tzinfo is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{param} must include a timezone (Z or +00:00)",
+        )
+    return int(dt.astimezone(timezone.utc).timestamp() * 1000)
+
+
+def _ms_to_iso_z(ms: Optional[int]) -> Optional[str]:
+    """Convert ms-since-epoch -> ISO-8601 UTC string with trailing Z."""
+    if ms is None:
+        return None
+    return (
+        datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
+
+
+def _distinct_poll_subquery(session: Session):
+    """DISTINCT (user_id, channel_id, observed_at) collapse subquery.
+
+    Returns one row per (user, channel, poll-tick) tuple with the poll
+    interval. Collapses multi-client overcount: a user with N concurrent
+    sessions on the same channel in one poll contributes ONE poll interval,
+    not N. Mirrors the ``channel_watch_stats_v`` view's collapse pattern
+    (migration 0008) but adds ``user_id`` to the DISTINCT key so per-user
+    aggregations get the same guarantee.
+
+    ``MAX(poll_interval_ms)`` inside the GROUP BY is defensive: in the rare
+    case where two clients report different poll intervals for the same
+    (user, channel, observed_at) tuple, take the longer one — never
+    overcount.
+    """
+    return (
+        session.query(
+            SessionTelemetry.user_id.label("user_id"),
+            SessionTelemetry.channel_id.label("channel_id"),
+            SessionTelemetry.observed_at.label("observed_at"),
+            func.max(SessionTelemetry.poll_interval_ms).label("poll_interval_ms"),
+        )
+        .group_by(
+            SessionTelemetry.user_id,
+            SessionTelemetry.channel_id,
+            SessionTelemetry.observed_at,
+        )
+        .subquery()
+    )
+
+
+def _build_envelope(data, *, from_ms, to_ms, group_by):
+    """Standard response envelope for watch-time endpoints.
+
+    Shape: ``{data: [...], meta: {...}, pagination: null}``. The pagination
+    slot is reserved for a future page-cursor extension (bd-skqln.10 perf
+    work may add it); for now both endpoints return all rows in-range and
+    leave the slot ``null`` so clients can be coded against the full shape
+    upfront.
+    """
+    return {
+        "data": data,
+        "meta": {
+            "from_iso": _ms_to_iso_z(from_ms),
+            "to_iso": _ms_to_iso_z(to_ms),
+            "group_by": group_by,
+            "total_rows": len(data),
+        },
+        "pagination": None,
+    }
+
+
+def _channel_name_or_fallback(channel_id: str, name_map: dict) -> str:
+    """Look up channel name from UniqueClientConnection map, else synth fallback.
+
+    Matches the skqln.3 step (d) precedent for popularity_calculator:
+    side-load from ``UniqueClientConnection.channel_name``, fall back to
+    ``"Channel <first-8-chars>..."`` when the connection table has no row
+    yet (e.g., a brand-new channel observed only by ``session_telemetry``).
+    """
+    name = name_map.get(channel_id)
+    if name:
+        return name
+    return f"Channel {channel_id[:8]}..."
 
 
 # =============================================================================
@@ -370,3 +507,300 @@ async def calculate_popularity_scores(
     except Exception as e:
         logger.exception("[STATS] Failed to calculate popularity")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# =============================================================================
+# GH-62 watch-time read API (bd-skqln.5)
+# =============================================================================
+#
+# Both endpoints read directly from ``session_telemetry`` (the per-poll fact
+# table from bd-skqln.2 / .3). The ``channel_watch_stats_v`` view from
+# bd-skqln.3 step (b) aggregates per-channel only and does NOT expose
+# ``user_id``, so it cannot satisfy these per-user queries — using
+# ``session_telemetry`` directly with a DISTINCT-by-(user, channel,
+# observed_at) subquery is the honest fit.
+#
+# Performance: relies on the ``idx_session_telemetry_user_observed``
+# composite index (migration 0006) for range scans by user_id, and the
+# bare ``idx_session_telemetry_observed_at`` index when ``user_id`` is not
+# filtered. p95 < 800ms / p99 < 2s at 3-6 months of data per
+# bd-skqln.5 acceptance — pytest-benchmark gate lands separately in
+# bd-skqln.10.
+
+
+_VALID_GROUP_BY = {"total", "day"}
+
+
+@router.get("/watch-time")
+async def get_watch_time_by_user(
+    db: Session = Depends(get_session),
+    caller: Optional[User] = Depends(get_watch_time_caller),
+    from_: Optional[str] = Query(None, alias="from"),
+    to: Optional[str] = None,
+    user_id: Optional[int] = None,
+    group_by: str = "total",
+):
+    """List per-user watch-time totals (GH-62).
+
+    Query parameters (all snake_case in the URL):
+
+    * ``from`` — ISO-8601 UTC range start (inclusive). Optional.
+    * ``to`` — ISO-8601 UTC range end (exclusive). Optional.
+    * ``user_id`` — filter to a single user. Optional. **Admin-only
+      endpoint**: non-admin callers receive 403.
+    * ``group_by`` — ``total`` (default) or ``day``. ``total`` returns one
+      row per user. ``day`` returns one row per (user, UTC-day) pair.
+
+    Response envelope (per bd-skqln.5):
+        ``{data: [...], meta: {from_iso, to_iso, group_by, total_rows},
+           pagination: null}``
+
+    Row shape for ``group_by=total``:
+        ``{user_id, username, total_watch_seconds, last_watched}``
+
+    Row shape for ``group_by=day``:
+        ``{user_id, username, day, watch_seconds}``
+    """
+    logger.debug(
+        "[STATS] GET /api/stats/watch-time from=%s to=%s user_id=%s group_by=%s",
+        from_, to, user_id, group_by,
+    )
+    if group_by not in _VALID_GROUP_BY:
+        raise HTTPException(
+            status_code=400,
+            detail=f"group_by must be one of {sorted(_VALID_GROUP_BY)}",
+        )
+
+    # Auth enforcement: watch-time stats are admin-only. Non-admin callers
+    # are blocked regardless of which user_id they query (or whether they
+    # omit the filter). PO directive 2026-05-13: non-admins do not see stats.
+    # (caller is None when global auth is disabled — auth-disabled mode is
+    # the test-default posture and operator-only deployments; treat as
+    # admin-equivalent there.)
+    if caller is not None and not caller.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Watch-time stats are admin-only",
+        )
+
+    from_ms = _parse_iso_utc(from_, param="from") if from_ else None
+    to_ms = _parse_iso_utc(to, param="to") if to else None
+
+    # Empty-range short-circuit: if from == to, the inclusive/exclusive
+    # convention makes the window empty. Skip the DB round-trip.
+    if from_ms is not None and to_ms is not None and from_ms >= to_ms:
+        return _build_envelope([], from_ms=from_ms, to_ms=to_ms, group_by=group_by)
+
+    try:
+        distinct = _distinct_poll_subquery(db)
+        # Only count rows whose user_id is non-NULL: NULL user_id == anonymous
+        # poll (no logged-in user). Watch-time-by-user has no meaningful row
+        # for the anonymous bucket — drop them rather than emit a NULL-user
+        # row.
+        base_q = db.query(distinct).filter(distinct.c.user_id.isnot(None))
+        if from_ms is not None:
+            base_q = base_q.filter(distinct.c.observed_at >= from_ms)
+        if to_ms is not None:
+            base_q = base_q.filter(distinct.c.observed_at < to_ms)
+        if user_id is not None:
+            base_q = base_q.filter(distinct.c.user_id == user_id)
+        inner = base_q.subquery()
+
+        if group_by == "total":
+            rows = (
+                db.query(
+                    inner.c.user_id,
+                    func.sum(inner.c.poll_interval_ms).label("total_ms"),
+                    func.max(inner.c.observed_at).label("last_observed_at"),
+                )
+                .group_by(inner.c.user_id)
+                .all()
+            )
+            user_ids = [r.user_id for r in rows]
+            usernames = _load_usernames(db, user_ids)
+            data = [
+                {
+                    "user_id": r.user_id,
+                    "username": usernames.get(r.user_id),
+                    "total_watch_seconds": int((r.total_ms or 0) // 1000),
+                    "last_watched": _ms_to_iso_z(r.last_observed_at),
+                }
+                for r in rows
+            ]
+            # Stable ordering: highest total first, then user_id ASC.
+            data.sort(key=lambda d: (-d["total_watch_seconds"], d["user_id"]))
+        else:  # group_by == "day"
+            # SQLite ``date()`` accepts unixepoch seconds — divide ms by 1000.
+            day_expr = func.date(inner.c.observed_at / 1000, "unixepoch").label("day")
+            rows = (
+                db.query(
+                    inner.c.user_id,
+                    day_expr,
+                    func.sum(inner.c.poll_interval_ms).label("total_ms"),
+                )
+                .group_by(inner.c.user_id, day_expr)
+                .all()
+            )
+            user_ids = [r.user_id for r in rows]
+            usernames = _load_usernames(db, user_ids)
+            data = [
+                {
+                    "user_id": r.user_id,
+                    "username": usernames.get(r.user_id),
+                    "day": r.day,
+                    "watch_seconds": int((r.total_ms or 0) // 1000),
+                }
+                for r in rows
+            ]
+            data.sort(key=lambda d: (d["user_id"], d["day"]))
+
+        return _build_envelope(data, from_ms=from_ms, to_ms=to_ms, group_by=group_by)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("[STATS] Failed to get watch-time totals")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/watch-time/{user_id}")
+async def get_watch_time_for_user(
+    user_id: int,
+    db: Session = Depends(get_session),
+    caller: Optional[User] = Depends(get_watch_time_caller),
+    from_: Optional[str] = Query(None, alias="from"),
+    to: Optional[str] = None,
+):
+    """Per-user breakdown of watch time by channel (GH-62).
+
+    Query parameters:
+
+    * ``from`` — ISO-8601 UTC range start (inclusive). Optional.
+    * ``to`` — ISO-8601 UTC range end (exclusive). Optional.
+
+    Response envelope (per bd-skqln.5):
+        ``{data: [...], meta: {from_iso, to_iso, group_by, total_rows},
+           pagination: null}``
+
+    Row shape:
+        ``{channel_id, channel_name, total_watch_seconds, session_count,
+           last_watched}``
+
+    ``channel_name`` is side-loaded from
+    ``UniqueClientConnection.channel_name`` (the skqln.3 step (d)
+    precedent) — falls back to ``"Channel <first-8-chars-of-uuid>..."``
+    when no connection row carries the name yet (brand-new channels first
+    observed only via ``session_telemetry``).
+    """
+    logger.debug(
+        "[STATS] GET /api/stats/watch-time/%s from=%s to=%s",
+        user_id, from_, to,
+    )
+
+    # Auth enforcement: watch-time stats are admin-only. PO directive
+    # 2026-05-13: non-admins do not see stats — including their own.
+    if caller is not None and not caller.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Watch-time stats are admin-only",
+        )
+
+    from_ms = _parse_iso_utc(from_, param="from") if from_ else None
+    to_ms = _parse_iso_utc(to, param="to") if to else None
+    if from_ms is not None and to_ms is not None and from_ms >= to_ms:
+        return _build_envelope([], from_ms=from_ms, to_ms=to_ms, group_by="channel")
+
+    try:
+        distinct = _distinct_poll_subquery(db)
+        base_q = db.query(distinct).filter(distinct.c.user_id == user_id)
+        if from_ms is not None:
+            base_q = base_q.filter(distinct.c.observed_at >= from_ms)
+        if to_ms is not None:
+            base_q = base_q.filter(distinct.c.observed_at < to_ms)
+        inner = base_q.subquery()
+
+        # session_count: count distinct session_ids per channel (informational
+        # only — not the legacy ``watch_count`` state-transition counter,
+        # which is not derivable from per-poll rows; see migration 0008
+        # docstring).
+        sess_q = (
+            db.query(
+                SessionTelemetry.channel_id.label("channel_id"),
+                func.count(func.distinct(SessionTelemetry.session_id)).label(
+                    "session_count"
+                ),
+            )
+            .filter(SessionTelemetry.user_id == user_id)
+        )
+        if from_ms is not None:
+            sess_q = sess_q.filter(SessionTelemetry.observed_at >= from_ms)
+        if to_ms is not None:
+            sess_q = sess_q.filter(SessionTelemetry.observed_at < to_ms)
+        sess_q = sess_q.group_by(SessionTelemetry.channel_id)
+        session_counts = {r.channel_id: int(r.session_count) for r in sess_q.all()}
+
+        agg_rows = (
+            db.query(
+                inner.c.channel_id,
+                func.sum(inner.c.poll_interval_ms).label("total_ms"),
+                func.max(inner.c.observed_at).label("last_observed_at"),
+            )
+            .group_by(inner.c.channel_id)
+            .all()
+        )
+
+        # Side-load channel names from UniqueClientConnection. One query per
+        # request — the in-range channel_id set is bounded by the user's
+        # viewing footprint (typically O(10) channels), so an IN-list lookup
+        # is fine without a join.
+        channel_ids = [r.channel_id for r in agg_rows]
+        name_map = _load_channel_names(db, channel_ids)
+
+        data = [
+            {
+                "channel_id": r.channel_id,
+                "channel_name": _channel_name_or_fallback(r.channel_id, name_map),
+                "total_watch_seconds": int((r.total_ms or 0) // 1000),
+                "session_count": session_counts.get(r.channel_id, 0),
+                "last_watched": _ms_to_iso_z(r.last_observed_at),
+            }
+            for r in agg_rows
+        ]
+        # Stable ordering: highest total first, then channel_id ASC.
+        data.sort(key=lambda d: (-d["total_watch_seconds"], d["channel_id"]))
+        return _build_envelope(data, from_ms=from_ms, to_ms=to_ms, group_by="channel")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("[STATS] Failed to get per-user watch-time breakdown")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+def _load_usernames(db: Session, user_ids):
+    """Bulk-resolve ``user_id -> username`` for the given ids. NULL-safe."""
+    ids = [uid for uid in user_ids if uid is not None]
+    if not ids:
+        return {}
+    rows = db.query(User.id, User.username).filter(User.id.in_(ids)).all()
+    return {r.id: r.username for r in rows}
+
+
+def _load_channel_names(db: Session, channel_ids):
+    """Bulk-resolve ``channel_id -> channel_name`` via UniqueClientConnection.
+
+    Picks an arbitrary name per channel — the connection table stores one
+    row per (ip, channel) viewing session and ECM keeps the channel name
+    cached in every row, so they all agree under normal operation. ``MAX``
+    is the cheap, stable picker.
+    """
+    if not channel_ids:
+        return {}
+    rows = (
+        db.query(
+            UniqueClientConnection.channel_id,
+            func.max(UniqueClientConnection.channel_name).label("channel_name"),
+        )
+        .filter(UniqueClientConnection.channel_id.in_(channel_ids))
+        .group_by(UniqueClientConnection.channel_id)
+        .all()
+    )
+    return {r.channel_id: r.channel_name for r in rows}
