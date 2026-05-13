@@ -169,6 +169,37 @@ Some tables are append-mostly fact tables that grow with time and need an explic
 
 General rule: if a new table accumulates rows per unit time (telemetry, events, audit logs), it needs a retention/rollup ADR *before* its first write, not after.
 
+## Backfill policy for `session_telemetry`
+
+`session_telemetry` (migration `0006`; `0007` corrected the `channel_id`
+column type; `0008` added the `channel_watch_stats_v` read-compat view)
+is the per-poll observation stream that backs Stats v2. It starts
+recording the day v0.17.0 deploys — **there is no historical backfill
+for periods before that.** This is a deliberate DBA-standup decision
+(2026-05-13, bead `bd-skqln.3` step (c)):
+
+- **Option (a) — synthesize `observed_at` / `poll_interval_ms` from the
+  legacy `channel_watch_stats` lifetime aggregates:** rejected. The
+  legacy table does not carry the per-poll grain `session_telemetry`
+  is defined on, so any synthesized rows would be fabricated telemetry —
+  worse than no data, because downstream readers (the popularity
+  formula, GH-62 watch-time-by-user, GH-59 buffer / provider stats)
+  cannot distinguish synthesized rows from real observations.
+- **Option (b) — UNION transition window in the read path:** rejected.
+  Reading both the legacy aggregate shape and the new per-poll shape on
+  every query doubles read cost for as long as the window stays open,
+  and the window has no natural close.
+- **Option (c) — accept the gap:** chosen. v0.17.0 is when this metric
+  began. No pre-v0.17.0 history is recoverable from
+  `channel_watch_stats`, because its grain (lifetime aggregate, one
+  row per channel) is incompatible with `session_telemetry`'s grain
+  (one row per poll per client per channel). The legacy
+  `channel_watch_stats` rows are not deleted by the v0.17.0 cutover —
+  they remain alongside `session_telemetry` until a separate cleanup
+  bead retires the table.
+
+Operator-facing note: [`docs/user_guide/stats/stats-v2-history-cutover.md`](user_guide/stats/stats-v2-history-cutover.md).
+
 ## What bead `bd-c5wf5` did NOT do
 
 - No retroactive per-column migrations for historical schema changes. The 30+ ad-hoc `_add_*` functions in `database.py` predate Alembic; they continue to run after `_bootstrap_alembic()` for installs that already crossed those versions. **New columns should land as Alembic revisions**, not new helpers in `database.py`.
