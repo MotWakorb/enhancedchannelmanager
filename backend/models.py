@@ -1238,11 +1238,19 @@ class SessionTelemetry(Base):
     ``docs/security/threat_model_stats_v2.md`` §2.1, §7. ``user_id`` is the only
     real FK (``ON DELETE SET NULL`` — deleting a ``users`` row scrubs the
     behavioral trail; the rollup-table extension of that scrub is
-    ``enhancedchannelmanager-7i2vv``'s responsibility). ``channel_id`` and
-    ``provider_id`` are plain nullable indexed integers, NOT foreign keys —
-    ``channels``/``providers`` are upstream Dispatcharr entities, not ECM
-    tables (same house pattern as ``channel_watch_stats`` / ``channel_bandwidth``
-    / ``channel_popularity_scores``).
+    ``enhancedchannelmanager-7i2vv``'s responsibility). ``channel_id`` is a
+    plain indexed ``String(64)`` Dispatcharr UUID — NOT a foreign key
+    (``channels`` is not an ECM table) and matches every other channel-keyed
+    table in this schema (``channel_watch_stats`` / ``channel_bandwidth`` /
+    ``channel_popularity_scores`` / ``unique_client_connections``).
+    ``provider_id`` is a plain nullable indexed integer (provider tagging,
+    skqln.14, is still pending).
+
+    NOTE: migration 0006 originally declared ``channel_id INTEGER NULL`` —
+    that was inconsistent with the rest of the schema and the writer (which
+    keys channels by Dispatcharr UUID string). Migration 0007 corrects it
+    in-place: ``channel_watch_stats_v`` (skqln.3 step (b)) builds on top of
+    this column and needs the UUID shape to GROUP BY a channel meaningfully.
 
     ``bitrate_bps`` is deliberately NOT stored — it is derivable from
     ``bytes_delta / poll_interval_ms`` and storing a derived value invites
@@ -1269,9 +1277,12 @@ class SessionTelemetry(Base):
     # (providers is not an ECM table). Nullable — provider tagging (GH-59)
     # lands separately (skqln.14).
     provider_id = Column(Integer, nullable=True)
-    # Upstream Dispatcharr channel. Plain indexed column, NOT a FK
-    # (channels is not an ECM table).
-    channel_id = Column(Integer, nullable=True)
+    # Upstream Dispatcharr channel UUID. Plain indexed column, NOT a FK
+    # (channels is not an ECM table). String(64) matches every other
+    # channel-keyed table in this schema. NOT NULL — every writer of a
+    # session_telemetry row (BandwidthTracker today; future buffer-event
+    # ingest in skqln.15) is tied to an active channel by definition.
+    channel_id = Column(String(64), nullable=False)
 
     # Per-poll bytes delta (NOT cumulative). Named CHECK so the constraint
     # name is stable across SQLite versions (docs/database_migrations.md).
