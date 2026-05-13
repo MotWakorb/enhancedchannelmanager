@@ -4,7 +4,7 @@ SQLAlchemy ORM models for the Journal and Bandwidth tracking features.
 import json
 import logging
 from datetime import datetime, date
-from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, Date, Float, Index, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, Date, Float, Index, ForeignKey, UniqueConstraint, CheckConstraint
 from sqlalchemy.orm import relationship
 from db_base import Base
 
@@ -1218,6 +1218,102 @@ class ChannelPopularityScore(Base):
 
     def __repr__(self):
         return f"<ChannelPopularityScore(id={self.id}, channel={self.channel_name}, score={self.score}, rank={self.rank})>"
+
+
+# =============================================================================
+# Stats v2 — session_telemetry fact table (v0.17.0)
+# =============================================================================
+
+class SessionTelemetry(Base):
+    """Unified per-poll stream-telemetry fact table (Stats v2).
+
+    One row is written per ``BandwidthTracker`` poll cycle for each active
+    viewing session. Append-mostly: rows are pruned by ``observed_at`` per the
+    retention policy in ``docs/adr/ADR-007-session-telemetry-retention.md``
+    (raw rows pruned at 30 days; the daily rollup tables, the
+    ``telemetry_rollup_state`` marker, and the nightly prune job are out of
+    scope here — they live in bead ``enhancedchannelmanager-7i2vv``).
+
+    Privacy classification + redaction rules:
+    ``docs/security/threat_model_stats_v2.md`` §2.1, §7. ``user_id`` is the only
+    real FK (``ON DELETE SET NULL`` — deleting a ``users`` row scrubs the
+    behavioral trail; the rollup-table extension of that scrub is
+    ``enhancedchannelmanager-7i2vv``'s responsibility). ``channel_id`` and
+    ``provider_id`` are plain nullable indexed integers, NOT foreign keys —
+    ``channels``/``providers`` are upstream Dispatcharr entities, not ECM
+    tables (same house pattern as ``channel_watch_stats`` / ``channel_bandwidth``
+    / ``channel_popularity_scores``).
+
+    ``bitrate_bps`` is deliberately NOT stored — it is derivable from
+    ``bytes_delta / poll_interval_ms`` and storing a derived value invites
+    disagreement (DBA, team-plan).
+
+    Bead: ``enhancedchannelmanager-skqln.2``.
+    """
+    __tablename__ = "session_telemetry"
+
+    # Synthetic PK — matches the house pattern for these fact tables
+    # (channel_bandwidth, channel_popularity_scores). SQLite needs a PK; the
+    # query/access keys are the composite indexes below.
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # UUID string correlating all rows of one viewing session.
+    session_id = Column(Text, nullable=False)
+    # Unix-epoch milliseconds. Mandatory index — retention sweeps and all
+    # time-range queries key off this.
+    observed_at = Column(Integer, nullable=False)
+
+    # The only real FK. ON DELETE SET NULL: account deletion scrubs the trail.
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # Upstream Dispatcharr M3U provider. Plain indexed column, NOT a FK
+    # (providers is not an ECM table). Nullable — provider tagging (GH-59)
+    # lands separately (skqln.14).
+    provider_id = Column(Integer, nullable=True)
+    # Upstream Dispatcharr channel. Plain indexed column, NOT a FK
+    # (channels is not an ECM table).
+    channel_id = Column(Integer, nullable=True)
+
+    # Per-poll bytes delta (NOT cumulative). Named CHECK so the constraint
+    # name is stable across SQLite versions (docs/database_migrations.md).
+    bytes_delta = Column(BigInteger, nullable=False)
+    # Count of buffer/stall events observed during this poll window.
+    buffer_event_count = Column(Integer, nullable=False, server_default="0", default=0)
+    # Poll cadence in ms — avoids baking in a fixed-interval assumption and
+    # makes bitrate derivable.
+    poll_interval_ms = Column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "bytes_delta >= 0",
+            name="ck_session_telemetry_bytes_delta_non_negative",
+        ),
+        # Retention sweeps + bare time-range scans.
+        Index("idx_session_telemetry_observed_at", observed_at),
+        # GH-62 "watch time by user" — index-range scan per user.
+        Index("idx_session_telemetry_user_observed", user_id, observed_at),
+        # GH-59 per-provider performance (forward-looking).
+        Index("idx_session_telemetry_provider_observed", provider_id, observed_at),
+        # Session reconstruction.
+        Index("idx_session_telemetry_session_id", session_id),
+        # GH-59 channels-by-provider heatmap (skqln.16). Trailing bytes_delta
+        # makes it a covering index for that aggregate. Plain composite — the
+        # Postgres ``INCLUDE`` form is not valid in SQLite; an ``INCLUDE``
+        # variant is a Postgres-migration future enhancement (ADR D7).
+        Index(
+            "idx_session_telemetry_provider_channel_observed_bytes",
+            provider_id,
+            channel_id,
+            observed_at,
+            bytes_delta,
+        ),
+    )
+
+    def __repr__(self):
+        return (
+            f"<SessionTelemetry(id={self.id}, session={self.session_id}, "
+            f"observed_at={self.observed_at}, user_id={self.user_id}, "
+            f"provider_id={self.provider_id}, channel_id={self.channel_id})>"
+        )
 
 
 # =============================================================================
