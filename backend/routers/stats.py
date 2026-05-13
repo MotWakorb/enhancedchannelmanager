@@ -5,7 +5,7 @@ Extracted from main.py (Phase 3 of v0.13.0 backend refactor).
 """
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -804,3 +804,438 @@ def _load_channel_names(db: Session, channel_ids):
         .all()
     )
     return {r.channel_id: r.channel_name for r in rows}
+
+
+# =============================================================================
+# GH-59 per-provider stats read API (bd-skqln.16)
+# =============================================================================
+#
+# Four endpoints that aggregate ``session_telemetry`` per provider for the
+# Stats v2 Providers panel (skqln.18). All four reuse skqln.5's auth seam
+# (``get_watch_time_caller``) and {data, meta, pagination} envelope; the
+# panel is admin-only (PO directive 2026-05-13).
+#
+# Indexes used (skqln.2 / migration 0006 + the trailing-bytes index
+# co-located with skqln.2):
+#   - idx_session_telemetry_provider_observed     (queries 1, 2, 4)
+#   - idx_session_telemetry_provider_channel_observed_bytes  (query 3)
+#
+# Multi-client overcount guard: queries 2 (watch-time) and 4 (bitrate)
+# aggregate quantities that must be counted once per (channel, observed_at)
+# tuple — concurrent clients on the same channel-poll-tick double-count
+# otherwise. Both use the ``_distinct_provider_poll_subquery`` collapse;
+# query 1 (buffering) sums an inherently per-poll quantity and does not
+# need the collapse; query 3 (heatmap) sums per-poll bytes_delta similarly.
+
+
+_VALID_WINDOW = {"7d": 7, "30d": 30, "90d": 90}
+_VALID_BUCKET = {"hour", "day"}
+_HEATMAP_DEFAULT_TOP_N = 50
+_HEATMAP_MAX_TOP_N = 500  # absolute cap regardless of caller param
+
+
+def _check_admin(caller: Optional[User]) -> None:
+    """Reject non-admin callers with 403. PO directive 2026-05-13:
+    per-provider stats are admin-only.
+
+    Mirrors the inline check in ``get_watch_time_by_user`` — extracted so
+    the four provider-stats handlers don't duplicate it. ``caller`` is
+    ``None`` when global auth is disabled (test-default + operator-only
+    deployments); treat that as admin-equivalent.
+    """
+    if caller is not None and not caller.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Provider stats are admin-only",
+        )
+
+
+def _resolve_window_ms(window: str) -> tuple[int, int]:
+    """Resolve a ``window`` literal to (from_ms, to_ms).
+
+    ``to`` is the current wall time (anchor); ``from`` is N days back. Both
+    are unix-epoch milliseconds for direct comparison with
+    ``session_telemetry.observed_at``.
+    """
+    if window not in _VALID_WINDOW:
+        raise HTTPException(
+            status_code=400,
+            detail=f"window must be one of {sorted(_VALID_WINDOW)}",
+        )
+    days = _VALID_WINDOW[window]
+    to_dt = datetime.now(timezone.utc)
+    from_dt = to_dt - timedelta(days=days)
+    return int(from_dt.timestamp() * 1000), int(to_dt.timestamp() * 1000)
+
+
+def _bucket_expr(bucket: str, observed_at_col):
+    """Return a SQLAlchemy expression that floors ``observed_at`` (ms-epoch)
+    to the start of its hour or UTC-day bucket, in ISO-8601 with trailing Z.
+
+    Uses SQLite's ``strftime`` over ``unixepoch``: ``observed_at_col / 1000``
+    converts ms → seconds, then ``strftime('%Y-%m-%dT%H:00:00Z', ..., 'unixepoch')``
+    yields the floor as a string. Day bucket uses ``T00:00:00Z`` suffix.
+    """
+    if bucket == "hour":
+        fmt = "%Y-%m-%dT%H:00:00Z"
+    else:  # day
+        fmt = "%Y-%m-%dT00:00:00Z"
+    return func.strftime(fmt, observed_at_col / 1000, "unixepoch")
+
+
+def _build_provider_envelope(data, *, from_ms, to_ms, **meta_extras):
+    """Provider-stats response envelope. Same {data, meta, pagination}
+    shape as skqln.5 with ``meta`` extended for window/bucket/top_n etc.
+    """
+    meta = {
+        "from_iso": _ms_to_iso_z(from_ms),
+        "to_iso": _ms_to_iso_z(to_ms),
+        "total_rows": len(data),
+    }
+    meta.update(meta_extras)
+    return {"data": data, "meta": meta, "pagination": None}
+
+
+def _distinct_provider_poll_subquery(db: Session, from_ms: int, to_ms: int):
+    """DISTINCT (provider_id, channel_id, observed_at) collapse subquery.
+
+    Returns one row per (provider, channel, poll-tick) tuple with the poll
+    interval and bytes. Collapses multi-client overcount in per-provider
+    aggregations the same way ``_distinct_poll_subquery`` does for
+    per-user aggregations (skqln.5).
+
+    ``MAX(poll_interval_ms)`` / ``MAX(bytes_delta)`` are defensive: in the
+    rare case where two clients report different values for the same
+    (provider, channel, observed_at), take the larger one — never
+    overcount, but don't undercount either. Under normal operation all
+    concurrent clients report the same values from the same upstream poll.
+
+    NOTE: SQLite's ``GROUP BY`` treats ``NULL`` values as a single group,
+    so rows with ``provider_id = NULL`` aggregate into one "Unknown" bucket
+    correctly with no special handling.
+    """
+    return (
+        db.query(
+            SessionTelemetry.provider_id.label("provider_id"),
+            SessionTelemetry.channel_id.label("channel_id"),
+            SessionTelemetry.observed_at.label("observed_at"),
+            func.max(SessionTelemetry.poll_interval_ms).label("poll_interval_ms"),
+            func.max(SessionTelemetry.bytes_delta).label("bytes_delta"),
+        )
+        .filter(SessionTelemetry.observed_at >= from_ms)
+        .filter(SessionTelemetry.observed_at < to_ms)
+        .group_by(
+            SessionTelemetry.provider_id,
+            SessionTelemetry.channel_id,
+            SessionTelemetry.observed_at,
+        )
+        .subquery()
+    )
+
+
+@router.get("/providers/buffering")
+async def get_providers_buffering(
+    db: Session = Depends(get_session),
+    caller: Optional[User] = Depends(get_watch_time_caller),
+    window: str = "7d",
+    bucket: str = "hour",
+):
+    """Per-provider buffer-event time-series (bd-skqln.16, GH-59).
+
+    Query params:
+
+    * ``window`` — one of ``7d`` / ``30d`` / ``90d``. Default ``7d``.
+    * ``bucket`` — ``hour`` or ``day``. Default ``hour``.
+
+    Response row shape:
+        ``{provider_id, time_bucket, buffer_event_count}``
+
+    ``buffer_event_count`` is inherently per-poll (one column per row), so
+    no DISTINCT-collapse is needed — the value already represents the
+    per-poll observation. ``NULL`` ``provider_id`` surfaces as a row with
+    ``provider_id: null`` (operators need the attribution gap visible).
+    """
+    _check_admin(caller)
+    if bucket not in _VALID_BUCKET:
+        raise HTTPException(
+            status_code=400,
+            detail=f"bucket must be one of {sorted(_VALID_BUCKET)}",
+        )
+    from_ms, to_ms = _resolve_window_ms(window)
+
+    try:
+        bucket_col = _bucket_expr(bucket, SessionTelemetry.observed_at).label(
+            "time_bucket"
+        )
+        rows = (
+            db.query(
+                SessionTelemetry.provider_id.label("provider_id"),
+                bucket_col,
+                func.sum(SessionTelemetry.buffer_event_count).label("count"),
+            )
+            .filter(SessionTelemetry.observed_at >= from_ms)
+            .filter(SessionTelemetry.observed_at < to_ms)
+            .group_by(SessionTelemetry.provider_id, bucket_col)
+            .all()
+        )
+        data = [
+            {
+                "provider_id": r.provider_id,
+                "time_bucket": r.time_bucket,
+                "buffer_event_count": int(r.count or 0),
+            }
+            for r in rows
+        ]
+        # Stable ordering: provider_id NULLS LAST, then bucket ASC.
+        data.sort(
+            key=lambda d: (
+                d["provider_id"] is None,
+                d["provider_id"] or 0,
+                d["time_bucket"],
+            )
+        )
+        return _build_provider_envelope(
+            data, from_ms=from_ms, to_ms=to_ms, window=window, bucket=bucket
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("[STATS] Failed to get provider buffering stats")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/providers/watch-time")
+async def get_providers_watch_time(
+    db: Session = Depends(get_session),
+    caller: Optional[User] = Depends(get_watch_time_caller),
+    window: str = "7d",
+):
+    """Total watch time per provider (bd-skqln.16, GH-59).
+
+    Query params:
+
+    * ``window`` — one of ``7d`` / ``30d`` / ``90d``. Default ``7d``.
+
+    Response row shape:
+        ``{provider_id, total_watch_seconds}``
+
+    Aggregates ``SUM(poll_interval_ms)`` per provider_id, with the
+    DISTINCT-(provider_id, channel_id, observed_at) collapse to prevent
+    multi-client overcount. ``NULL`` ``provider_id`` surfaces as its own
+    row (``provider_id: null``).
+    """
+    _check_admin(caller)
+    from_ms, to_ms = _resolve_window_ms(window)
+
+    try:
+        distinct = _distinct_provider_poll_subquery(db, from_ms, to_ms)
+        rows = (
+            db.query(
+                distinct.c.provider_id,
+                func.sum(distinct.c.poll_interval_ms).label("total_ms"),
+            )
+            .group_by(distinct.c.provider_id)
+            .all()
+        )
+        data = [
+            {
+                "provider_id": r.provider_id,
+                "total_watch_seconds": int((r.total_ms or 0) // 1000),
+            }
+            for r in rows
+        ]
+        # Stable ordering: highest watch-time first, then provider_id ASC
+        # (NULL last).
+        data.sort(
+            key=lambda d: (
+                -d["total_watch_seconds"],
+                d["provider_id"] is None,
+                d["provider_id"] or 0,
+            )
+        )
+        return _build_provider_envelope(
+            data, from_ms=from_ms, to_ms=to_ms, window=window
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("[STATS] Failed to get provider watch-time stats")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/providers/channel-heatmap")
+async def get_providers_channel_heatmap(
+    db: Session = Depends(get_session),
+    caller: Optional[User] = Depends(get_watch_time_caller),
+    window: str = "7d",
+    top_n: int = _HEATMAP_DEFAULT_TOP_N,
+):
+    """Provider × channel byte heatmap (bd-skqln.16, GH-59).
+
+    Query params:
+
+    * ``window`` — one of ``7d`` / ``30d`` / ``90d``. Default ``7d``.
+    * ``top_n`` — cap the response at the top-N channels by total bytes
+      across all providers. Default 50; absolute max 500 (defensive).
+
+    Response row shape:
+        ``{provider_id, channel_id, channel_name, bytes}``
+
+    Each row is one cell of the 2D grid (rows=providers, cols=channels).
+    Cells with zero bytes are omitted. ``channel_name`` is side-loaded from
+    ``UniqueClientConnection`` (skqln.3 step (d) precedent) with the same
+    ``"Channel <first-8-chars>..."`` fallback the per-user breakdown uses.
+
+    The DBA-flagged covering index ``idx_session_telemetry_provider_channel_observed_bytes``
+    (model: ``__table_args__`` of ``SessionTelemetry``) backs this query.
+    """
+    _check_admin(caller)
+    if top_n < 1:
+        raise HTTPException(status_code=400, detail="top_n must be >= 1")
+    top_n = min(top_n, _HEATMAP_MAX_TOP_N)
+    from_ms, to_ms = _resolve_window_ms(window)
+
+    try:
+        # First pass: total bytes per channel across all providers — pick the
+        # top-N channel_ids by that total.
+        channel_totals = (
+            db.query(
+                SessionTelemetry.channel_id.label("channel_id"),
+                func.sum(SessionTelemetry.bytes_delta).label("total"),
+            )
+            .filter(SessionTelemetry.observed_at >= from_ms)
+            .filter(SessionTelemetry.observed_at < to_ms)
+            .group_by(SessionTelemetry.channel_id)
+            .order_by(func.sum(SessionTelemetry.bytes_delta).desc())
+            .limit(top_n)
+            .all()
+        )
+        top_channel_ids = [r.channel_id for r in channel_totals]
+        if not top_channel_ids:
+            return _build_provider_envelope(
+                [], from_ms=from_ms, to_ms=to_ms, window=window, top_n=top_n
+            )
+
+        # Second pass: per-(provider, channel) bytes_delta sum, restricted to
+        # the top-N channels.
+        cells = (
+            db.query(
+                SessionTelemetry.provider_id.label("provider_id"),
+                SessionTelemetry.channel_id.label("channel_id"),
+                func.sum(SessionTelemetry.bytes_delta).label("bytes"),
+            )
+            .filter(SessionTelemetry.observed_at >= from_ms)
+            .filter(SessionTelemetry.observed_at < to_ms)
+            .filter(SessionTelemetry.channel_id.in_(top_channel_ids))
+            .group_by(SessionTelemetry.provider_id, SessionTelemetry.channel_id)
+            .all()
+        )
+        name_map = _load_channel_names(db, top_channel_ids)
+        data = [
+            {
+                "provider_id": c.provider_id,
+                "channel_id": c.channel_id,
+                "channel_name": _channel_name_or_fallback(c.channel_id, name_map),
+                "bytes": int(c.bytes or 0),
+            }
+            for c in cells
+        ]
+        # Stable ordering: by bytes DESC, then (provider, channel).
+        data.sort(
+            key=lambda d: (
+                -d["bytes"],
+                d["provider_id"] is None,
+                d["provider_id"] or 0,
+                d["channel_id"],
+            )
+        )
+        return _build_provider_envelope(
+            data, from_ms=from_ms, to_ms=to_ms, window=window, top_n=top_n
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("[STATS] Failed to get provider channel-heatmap")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/providers/bitrate")
+async def get_providers_bitrate(
+    db: Session = Depends(get_session),
+    caller: Optional[User] = Depends(get_watch_time_caller),
+    window: str = "7d",
+    bucket: str = "hour",
+):
+    """Per-provider derived bitrate time-series (bd-skqln.16, GH-59).
+
+    Query params:
+
+    * ``window`` — one of ``7d`` / ``30d`` / ``90d``. Default ``7d``.
+    * ``bucket`` — ``hour`` or ``day``. Default ``hour``.
+
+    Response row shape:
+        ``{provider_id, time_bucket, bitrate_bps}``
+
+    Computes ``bitrate_bps = SUM(bytes_delta) * 8 * 1000 / SUM(poll_interval_ms)``
+    per (provider_id, time_bucket) — the *1000 converts the denominator
+    from ms to s so the result is bits/second. Uses the DISTINCT-(provider,
+    channel, observed_at) collapse so multi-client polls don't multiply
+    the denominator.
+
+    Buckets with ``SUM(poll_interval_ms) == 0`` are skipped (defensive —
+    shouldn't happen in practice since poll_interval_ms is a NOT-NULL
+    field with check constraint > 0 in the writer).
+    """
+    _check_admin(caller)
+    if bucket not in _VALID_BUCKET:
+        raise HTTPException(
+            status_code=400,
+            detail=f"bucket must be one of {sorted(_VALID_BUCKET)}",
+        )
+    from_ms, to_ms = _resolve_window_ms(window)
+
+    try:
+        distinct = _distinct_provider_poll_subquery(db, from_ms, to_ms)
+        bucket_col = _bucket_expr(bucket, distinct.c.observed_at).label("time_bucket")
+        rows = (
+            db.query(
+                distinct.c.provider_id,
+                bucket_col,
+                func.sum(distinct.c.bytes_delta).label("total_bytes"),
+                func.sum(distinct.c.poll_interval_ms).label("total_ms"),
+            )
+            .group_by(distinct.c.provider_id, bucket_col)
+            .all()
+        )
+        data = []
+        for r in rows:
+            total_ms = int(r.total_ms or 0)
+            if total_ms <= 0:
+                continue
+            # bytes * 8 / seconds = bits/second. seconds = total_ms / 1000,
+            # so bps = total_bytes * 8 * 1000 / total_ms. Integer-truncated
+            # — fractional bps is noise at the scales we operate on.
+            bps = int((int(r.total_bytes or 0) * 8 * 1000) // total_ms)
+            data.append(
+                {
+                    "provider_id": r.provider_id,
+                    "time_bucket": r.time_bucket,
+                    "bitrate_bps": bps,
+                }
+            )
+        # Stable ordering: provider_id (NULLS LAST), then time_bucket ASC.
+        data.sort(
+            key=lambda d: (
+                d["provider_id"] is None,
+                d["provider_id"] or 0,
+                d["time_bucket"],
+            )
+        )
+        return _build_provider_envelope(
+            data, from_ms=from_ms, to_ms=to_ms, window=window, bucket=bucket
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("[STATS] Failed to get provider bitrate stats")
+        raise HTTPException(status_code=500, detail="Internal server error")
