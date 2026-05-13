@@ -1013,18 +1013,43 @@ class BandwidthTracker:
         resolved_count: int,
         unresolved_count: int,
     ) -> None:
-        """Emit the per-poll provider-resolution SLI line.
+        """Emit the per-poll provider-resolution SLI line + metric.
 
-        Format: ``[STATS_V2] provider_resolution resolved=X unresolved=Y``.
-        Stable substring shape — skqln.12 extracts the two counts to feed
-        ``stats_v2_provider_resolution_total{result=...}`` without
-        introducing a coupled metric library here.
+        Format of the log line: ``[STATS_V2] provider_resolution
+        resolved=X unresolved=Y``. Stable substring shape — kept for
+        backwards-compat with operator log greps even though bd-skqln.12
+        now also increments a Prometheus counter inline (see below).
+
+        bd-skqln.12: the resolved-rate is the modernized data-consistency
+        SLI for Stats v2 — the original dual-write divergence is no
+        longer measurable after skqln.3 step (d) removed the legacy
+        writer, so the resolver's success-rate is the surviving SLI.
+        Target ≥95% steady state per skqln.14 acceptance.
+
+        Cardinality: increments ``ecm_provider_resolution_total`` with
+        the bounded ``result`` label (resolved/unresolved) by the
+        per-poll counts. NO provider_id label here — that's a follow-up
+        bead's decision (provider_id is allowed but would change the
+        SLI's aggregation shape).
         """
         logger.info(
             "[STATS_V2] provider_resolution resolved=%s unresolved=%s",
             resolved_count,
             unresolved_count,
         )
+        try:
+            from observability import get_metric
+
+            counter = get_metric("provider_resolution_total")
+            if resolved_count:
+                counter.labels(result="resolved").inc(int(resolved_count))
+            if unresolved_count:
+                counter.labels(result="unresolved").inc(int(unresolved_count))
+        except Exception:  # pragma: no cover — never break the resolver
+            logger.debug(
+                "[STATS_V2] failed to emit provider_resolution_total metric",
+                exc_info=True,
+            )
 
     async def _collect_buffer_events(
         self,
@@ -1183,6 +1208,40 @@ class BandwidthTracker:
             attributed,
         )
 
+    def _record_session_telemetry_metrics(
+        self,
+        *,
+        result: str,
+        duration_seconds: float,
+        rows_written: int,
+    ) -> None:
+        """Emit the Stats v2 session_telemetry write metrics (bd-skqln.12).
+
+        Wrapped so a metric-side failure (registry not installed in some
+        edge-case test, prometheus-client missing) can never propagate into
+        the observation path it is instrumenting. The exception swallow
+        is deliberate — observability must not break the writer.
+        """
+        try:
+            from observability import get_metric
+
+            get_metric("session_telemetry_writes_total").labels(
+                result=result
+            ).inc()
+            get_metric("session_telemetry_write_duration_seconds").observe(
+                max(0.0, float(duration_seconds))
+            )
+            if result == "success":
+                # Gauge reflects the most recent successful batch's size —
+                # on failure the previous value remains, which is the
+                # behavior SRE wants for storage-growth alerting.
+                get_metric("session_telemetry_row_count").set(int(rows_written))
+        except Exception:  # pragma: no cover — never break the writer
+            logger.debug(
+                "[STATS_V2] failed to emit session_telemetry write metrics",
+                exc_info=True,
+            )
+
     def _write_session_telemetry(
         self,
         channel_snapshot: list[dict],
@@ -1244,11 +1303,17 @@ class BandwidthTracker:
             provider_by_channel = {}
         if buffer_events_by_channel is None:
             buffer_events_by_channel = {}
+        # bd-skqln.12: time the entire write attempt and record success /
+        # failure on the way out. ``rows_written`` is hoisted here so it is
+        # visible to the metric-emission block in the ``finally`` (it is 0
+        # if the helper raises before the inner counter increments).
+        write_start = time.perf_counter()
+        rows_written = 0
+        write_result = "failure"
         try:
             poll_interval_ms = max(int(self.poll_interval * 1000), 0)
             session = get_session()
             try:
-                rows_written = 0
                 # Track which channels have already received their buffer-
                 # event-count attribution this poll. Channel-level counts
                 # land on the FIRST emitted row per channel (sorted by
@@ -1334,12 +1399,42 @@ class BandwidthTracker:
                 else:
                     # Nothing to write; release the (empty) transaction.
                     session.rollback()
+                # Reaching this line means the write attempt completed
+                # without raising (rows_written may be 0). Record success
+                # so the bd-skqln.12 metric reflects "the helper did what
+                # it was asked to do" rather than overstating failures
+                # whenever a poll had no active connections.
+                write_result = "success"
             finally:
                 session.close()
         except Exception as e:
             # Observation-only path — failures must never propagate. The
             # legacy writes already committed before we got here.
-            logger.exception("[STATS_V2] session_telemetry write failed: %s", e)
+            #
+            # bd-skqln.12: WARN-level log carries trace_id (via the
+            # observability filter) + observed_at (poll-scoped correlator)
+            # + the count of channels we attempted, so SRE can correlate
+            # this failure with the poll that produced it. Privacy 11a:
+            # we deliberately do NOT enumerate per-row user_id+channel_id
+            # pairs — those are aggregated away by the time we get here.
+            logger.warning(
+                "[STATS_V2] session_telemetry write failed observed_at=%s channels_attempted=%s error=%s",
+                observed_at_ms,
+                len(channel_snapshot),
+                e,
+                exc_info=True,
+            )
+        finally:
+            # Always emit the write-health metrics — success or failure
+            # paths both observe duration and increment the result-keyed
+            # counter. Wrapped helper so a metric-emission failure cannot
+            # propagate out of the observation-only writer.
+            duration = time.perf_counter() - write_start
+            self._record_session_telemetry_metrics(
+                result=write_result,
+                duration_seconds=duration,
+                rows_written=rows_written,
+            )
 
     @staticmethod
     def get_bandwidth_summary() -> dict:
