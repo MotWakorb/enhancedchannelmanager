@@ -18,6 +18,7 @@ from tasks.dummy_epg_refresh import DummyEPGRefreshTask
 from tasks.black_screen_scan import BlackScreenScanTask
 from tasks.export_publish import ExportPublishTask
 from tasks.yaml_backup import YamlBackupTask
+from tasks.stats_v2_rollup import StatsV2RollupTask
 
 __all__ = [
     "EPGRefreshTask",
@@ -33,4 +34,5 @@ __all__ = [
     "BlackScreenScanTask",
     "ExportPublishTask",
     "YamlBackupTask",
+    "StatsV2RollupTask",
 ]
