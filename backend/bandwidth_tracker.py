@@ -423,13 +423,19 @@ class BandwidthTracker:
                 # Capture the snapshot the Stats v2 session_telemetry helper
                 # needs (skqln.3 step (a)). Built unconditionally so the data
                 # shape is stable; the helper is a no-op when the feature
-                # flag is OFF.
+                # flag is OFF. ``stream_id`` is the Dispatcharr integer ID
+                # of the stream currently being served — surfaced by
+                # ``/proxy/ts/status``, consumed by the provider resolver
+                # in ``_resolve_provider_ids`` (bd-skqln.14). May be missing
+                # if Dispatcharr serves a degraded stats payload; the
+                # resolver tolerates that and returns NULL.
                 telemetry_channel_snapshot.append({
                     "channel_uuid": channel_id,
                     "channel_number": channel_number,
                     "client_ips": list(client_ips),
                     "client_user_map": dict(client_user_map),
                     "channel_bytes_delta": channel_bytes_delta,
+                    "stream_id": channel.get("stream_id"),
                 })
 
         # Check for channels that stopped being watched
@@ -499,7 +505,23 @@ class BandwidthTracker:
         # made this unconditional — the ECM_SESSION_TELEMETRY_WRITE_ENABLED
         # kill-switch was retired along with the legacy
         # ``ChannelWatchStats`` writes that the gate used to protect.
-        self._write_session_telemetry(telemetry_channel_snapshot, observed_at_ms)
+        #
+        # Provider resolution (bd-skqln.14): the snapshot already carries
+        # the ``stream_id`` Dispatcharr surfaced per-channel. The resolver
+        # batches those stream IDs into ONE ``get_streams_by_ids`` call
+        # per poll and returns a ``{channel_uuid: provider_id}`` map. The
+        # cache lives only for the duration of this invocation — next
+        # poll re-resolves so a stream's failover hop is picked up
+        # immediately. NULL on failure (network, missing stream, deleted
+        # provider); the row still gets written.
+        provider_by_channel = await self._resolve_provider_ids(
+            telemetry_channel_snapshot
+        )
+        self._write_session_telemetry(
+            telemetry_channel_snapshot,
+            observed_at_ms,
+            provider_by_channel,
+        )
 
     def _update_daily_record(
         self,
@@ -839,10 +861,156 @@ class BandwidthTracker:
         finally:
             session.close()
 
+    async def _resolve_provider_ids(
+        self,
+        channel_snapshot: list[dict],
+    ) -> dict[str, Optional[int]]:
+        """Resolve each channel's active-stream → provider mapping for one poll.
+
+        Bead: ``enhancedchannelmanager-skqln.14``.
+
+        Returns a ``{channel_uuid: provider_id_or_None}`` map. The mapping
+        is built from a SINGLE batched ``DispatcharrClient.get_streams_by_ids``
+        call covering every unique ``stream_id`` the snapshot surfaced —
+        not N calls per-channel. The cache lives only for the duration of
+        the call (the function builds it locally each invocation); a
+        stream's failover hop between polls is picked up on the next
+        ``_collect_stats`` cycle without staleness.
+
+        Failure modes — every one returns ``None`` for the affected
+        channel, emits a structured ``[STATS_V2] provider_resolution_failed``
+        log line, and lets the ``session_telemetry`` row write with
+        ``provider_id=NULL``:
+
+        * Channel reports no ``stream_id`` (degraded Dispatcharr payload).
+        * ``get_streams_by_ids`` raises (network error, 5xx, timeout).
+        * Returned stream list omits an expected ``stream_id``
+          (Dispatcharr 404 for one of the IDs).
+        * Stream record has ``m3u_account=None`` (orphaned — the
+          provider was deleted).
+
+        A per-poll SLI line is emitted at INFO: ``[STATS_V2]
+        provider_resolution resolved=X unresolved=Y``. skqln.12 derives a
+        Prometheus ``stats_v2_provider_resolution_total{result=...}``
+        counter from this without plumbing a new code path.
+
+        Performance: ONE additional Dispatcharr round-trip per poll cycle,
+        skipped entirely when no channel surfaced a ``stream_id``. The
+        bead's "no p95 regression on _collect_stats" constraint is met
+        because the cost scales as O(1) calls, not O(channels).
+        """
+        # Local import keeps the resolver self-contained — the helper at
+        # ``stream_prober.extract_m3u_account_id`` normalizes Dispatcharr's
+        # two historical shapes for the ``m3u_account`` field (bare int
+        # vs. nested object) and is the single owner of that contract.
+        from stream_prober import extract_m3u_account_id
+
+        provider_by_channel: dict[str, Optional[int]] = {}
+        # Channels that surfaced no stream_id at all — directly unresolvable.
+        unresolvable_channels: list[str] = []
+        # {channel_uuid: stream_id} for channels we'll attempt to resolve.
+        stream_id_by_channel: dict[str, int] = {}
+        for entry in channel_snapshot:
+            channel_uuid = entry["channel_uuid"]
+            stream_id = entry.get("stream_id")
+            if stream_id is None:
+                unresolvable_channels.append(channel_uuid)
+                provider_by_channel[channel_uuid] = None
+                logger.warning(
+                    "[STATS_V2] provider_resolution_failed channel=%s reason=no_stream_id",
+                    channel_uuid,
+                )
+                continue
+            stream_id_by_channel[channel_uuid] = int(stream_id)
+
+        # Skip the Dispatcharr round-trip entirely when nothing is resolvable.
+        if not stream_id_by_channel:
+            self._log_provider_resolution_sli(0, len(unresolvable_channels))
+            return provider_by_channel
+
+        unique_stream_ids = sorted(set(stream_id_by_channel.values()))
+        try:
+            streams = await self.client.get_streams_by_ids(unique_stream_ids)
+        except Exception as e:
+            # Whole batch failed — every attempted channel falls back to
+            # NULL with one log per channel so skqln.12's metric can
+            # still attribute the failure.
+            logger.warning(
+                "[STATS_V2] provider_resolution_failed reason=lookup_raised error=%s",
+                e,
+            )
+            for channel_uuid in stream_id_by_channel:
+                provider_by_channel[channel_uuid] = None
+                logger.warning(
+                    "[STATS_V2] provider_resolution_failed channel=%s stream=%s reason=lookup_raised",
+                    channel_uuid,
+                    stream_id_by_channel[channel_uuid],
+                )
+            self._log_provider_resolution_sli(
+                0, len(unresolvable_channels) + len(stream_id_by_channel)
+            )
+            return provider_by_channel
+
+        # Build {stream_id: provider_id} from the batch response.
+        provider_by_stream: dict[int, Optional[int]] = {}
+        for stream in streams:
+            sid = stream.get("id", stream.get("stream_id"))
+            if sid is None:
+                continue
+            provider_by_stream[int(sid)] = extract_m3u_account_id(
+                stream.get("m3u_account")
+            )
+
+        resolved_count = 0
+        unresolved_count = len(unresolvable_channels)
+        for channel_uuid, stream_id in stream_id_by_channel.items():
+            provider_id = provider_by_stream.get(stream_id)
+            if provider_id is None:
+                # Either the stream was not in the batch response (404)
+                # or its m3u_account was None. Both surface as NULL.
+                provider_by_channel[channel_uuid] = None
+                unresolved_count += 1
+                reason = (
+                    "stream_not_found"
+                    if stream_id not in provider_by_stream
+                    else "stream_has_no_provider"
+                )
+                logger.warning(
+                    "[STATS_V2] provider_resolution_failed channel=%s stream=%s reason=%s",
+                    channel_uuid,
+                    stream_id,
+                    reason,
+                )
+            else:
+                provider_by_channel[channel_uuid] = provider_id
+                resolved_count += 1
+
+        self._log_provider_resolution_sli(resolved_count, unresolved_count)
+        return provider_by_channel
+
+    def _log_provider_resolution_sli(
+        self,
+        resolved_count: int,
+        unresolved_count: int,
+    ) -> None:
+        """Emit the per-poll provider-resolution SLI line.
+
+        Format: ``[STATS_V2] provider_resolution resolved=X unresolved=Y``.
+        Stable substring shape — skqln.12 extracts the two counts to feed
+        ``stats_v2_provider_resolution_total{result=...}`` without
+        introducing a coupled metric library here.
+        """
+        logger.info(
+            "[STATS_V2] provider_resolution resolved=%s unresolved=%s",
+            resolved_count,
+            unresolved_count,
+        )
+
     def _write_session_telemetry(
         self,
         channel_snapshot: list[dict],
         observed_at_ms: int,
+        provider_by_channel: Optional[dict[str, Optional[int]]] = None,
     ) -> None:
         """Write one row per active viewing connection into ``session_telemetry``.
 
@@ -863,7 +1031,9 @@ class BandwidthTracker:
           (passed in so all rows in this cycle share the same value).
         * ``user_id`` — from the per-channel ``client_user_map`` if present;
           NULL when Dispatcharr did not surface a user id for that ip.
-        * ``provider_id`` — always NULL. Provider tagging lands in skqln.14.
+        * ``provider_id`` — populated from ``provider_by_channel`` (built
+          upstream by ``_resolve_provider_ids``, bd-skqln.14). NULL when the
+          resolver couldn't map the active stream to an M3U account.
         * ``channel_id`` — Dispatcharr channel UUID (``String(64)``). Same
           shape the snapshot loop in ``_collect_stats`` already keys on, and
           matches every other channel-keyed table in the schema
@@ -884,6 +1054,8 @@ class BandwidthTracker:
         the duration needed to prove the new path; legacy-write removal is
         step (d) in this bead, behind a separate commit and PR.
         """
+        if provider_by_channel is None:
+            provider_by_channel = {}
         try:
             poll_interval_ms = max(int(self.poll_interval * 1000), 0)
             session = get_session()
@@ -894,6 +1066,7 @@ class BandwidthTracker:
                     client_ips = entry["client_ips"]
                     client_user_map = entry["client_user_map"]
                     channel_bytes_delta = max(int(entry["channel_bytes_delta"]), 0)
+                    provider_id = provider_by_channel.get(channel_uuid)
 
                     # No active clients on this channel this poll → nothing
                     # to attribute to a session.
@@ -919,7 +1092,7 @@ class BandwidthTracker:
                                 session_id=f"conn-{conn_id}",
                                 observed_at=observed_at_ms,
                                 user_id=client_user_map.get(ip),
-                                provider_id=None,
+                                provider_id=provider_id,
                                 channel_id=channel_uuid,
                                 bytes_delta=per_client_bytes,
                                 buffer_event_count=0,
