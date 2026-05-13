@@ -1,0 +1,155 @@
+name: Perf Benchmarks
+
+# Stats v2 hot-query regression gate (bd-skqln.10).
+#
+# How it works
+# ------------
+# The bead acceptance is "fail CI if p95 regresses by >20% vs. baseline".
+# Comparing absolute timings across machines is unreliable — GitHub
+# free-tier runners vary by ~2x between jobs. The solution: in the same
+# workflow run on the same runner, benchmark the PR's base branch first
+# (the "baseline"), then benchmark the PR's HEAD (the "candidate"), and
+# fail if the candidate's median regresses by more than 20% against that
+# baseline. This compares apples-to-apples on the same hardware.
+#
+# On push to dev/main (no PR), only the candidate run is recorded so the
+# log captures the absolute number for the merged commit; no gate fires.
+#
+# Why median (not p95 verbatim)
+# -----------------------------
+# pytest-benchmark's ``--benchmark-compare-fail`` accepts ``mean``,
+# ``median``, ``stddev``, ``min``, ``max``. We use ``median`` because the
+# default 10-round sample size makes p95 (== the worst-of-10) noisy. The
+# bead's spirit — "catch a 20% regression in the hot path" — is preserved.
+
+on:
+  pull_request:
+    branches:
+      - main
+      - dev
+    paths:
+      - 'backend/**'
+      - '.github/workflows/perf-benchmarks.yml'
+  push:
+    branches:
+      - main
+      - dev
+    paths:
+      - 'backend/**'
+      - '.github/workflows/perf-benchmarks.yml'
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    name: Stats v2 Hot-Query Benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository (PR HEAD)
+        uses: actions/checkout@v6
+        with:
+          # Need both branches' history so we can check out the base
+          # branch later for the baseline run.
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Belt-and-suspenders: requirements.txt already includes
+          # pytest-benchmark (bd-skqln.10), but pin the explicit install
+          # so the CI command is self-documenting.
+          pip install pytest pytest-benchmark
+
+      # ───────────────────────────────────────────────────────────────────
+      # Baseline pass — only on pull_request. For pushes to main/dev, we
+      # skip the baseline run and just record the candidate's absolute
+      # timing for future reference.
+      # ───────────────────────────────────────────────────────────────────
+      - name: Checkout base branch for baseline (PR only)
+        if: github.event_name == 'pull_request'
+        run: |
+          # Stash the PR's tests/performance/ tree before checking out
+          # base — the base branch may not yet have these files (skqln.10
+          # is the bead that introduces them).
+          mkdir -p /tmp/pr-perf
+          cp -r backend/tests/performance /tmp/pr-perf/performance
+          cp -r backend/tests/fixtures /tmp/pr-perf/fixtures || true
+          git checkout origin/${{ github.base_ref }} -- backend/ || true
+          # Restore the perf tests on top of base — we always run the
+          # benchmark from skqln.10's test file; what we're measuring is
+          # whether the candidate's code path is slower than base's.
+          rm -rf backend/tests/performance
+          cp -r /tmp/pr-perf/performance backend/tests/performance
+          # Same for the volume fixture (it's shared infra, and base may
+          # not have the exact file we depend on).
+          cp -r /tmp/pr-perf/fixtures/session_telemetry_volume.py \
+            backend/tests/fixtures/session_telemetry_volume.py || true
+
+      - name: Run baseline benchmark (PR only)
+        if: github.event_name == 'pull_request'
+        working-directory: backend
+        env:
+          CONFIG_DIR: /tmp/ecm_test_config
+          RATE_LIMIT_ENABLED: '0'
+        run: |
+          mkdir -p /tmp/ecm_test_config
+          python -m pytest tests/performance/ \
+            --benchmark-only --no-cov \
+            --benchmark-min-rounds=10 \
+            --benchmark-save=baseline \
+            --benchmark-storage=file:///tmp/perf-bench
+
+      # ───────────────────────────────────────────────────────────────────
+      # Candidate pass — always runs. Restores the PR HEAD checkout so we
+      # benchmark the PR's actual code (not base's).
+      # ───────────────────────────────────────────────────────────────────
+      - name: Restore PR HEAD for candidate run
+        if: github.event_name == 'pull_request'
+        run: |
+          # Reset to the PR's HEAD commit (the workflow checked it out
+          # initially, then we mutated backend/ for the baseline run).
+          git checkout HEAD -- backend/
+
+      - name: Run candidate benchmark
+        working-directory: backend
+        env:
+          CONFIG_DIR: /tmp/ecm_test_config
+          RATE_LIMIT_ENABLED: '0'
+        run: |
+          mkdir -p /tmp/ecm_test_config
+          # On a PR, --benchmark-compare-fail compares this run's median
+          # against the baseline run and fails if regression > 20%. On a
+          # push to main/dev, the baseline run was skipped so we just
+          # record the absolute number.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python -m pytest tests/performance/ \
+              --benchmark-only --no-cov \
+              --benchmark-min-rounds=10 \
+              --benchmark-storage=file:///tmp/perf-bench \
+              --benchmark-compare=0001 \
+              --benchmark-compare-fail=median:20%
+          else
+            python -m pytest tests/performance/ \
+              --benchmark-only --no-cov \
+              --benchmark-min-rounds=10 \
+              --benchmark-storage=file:///tmp/perf-bench \
+              --benchmark-save=candidate
+          fi
+
+      - name: Upload benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-benchmarks
+          path: /tmp/perf-bench/
+          if-no-files-found: ignore
+          retention-days: 30

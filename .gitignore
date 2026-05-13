@@ -45,5 +45,10 @@ backend/htmlcov/
 backend/junit.xml
 frontend/junit.xml
 
+# pytest-benchmark local result store (bd-skqln.10). CI uses --benchmark-storage
+# under /tmp; this guard catches local runs that default to ./.benchmarks/.
+backend/.benchmarks/
+backend/tests/performance/.benchmarks/
+
 # User guide screenshots (may contain PII)
 docs/images/
