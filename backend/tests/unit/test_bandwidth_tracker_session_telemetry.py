@@ -66,11 +66,26 @@ def patched_session_local(test_engine, monkeypatch):
 
 @pytest.fixture
 def mock_client():
-    """Stub the Dispatcharr client surface BandwidthTracker calls."""
+    """Stub the Dispatcharr client surface BandwidthTracker calls.
+
+    Default returns are picked so the tracker's per-poll fetches all
+    no-op when individual tests don't override them — system_events
+    returns an empty events payload (bd-skqln.15) so the buffer ingest
+    path is a clean no-op by default.
+    """
     client = AsyncMock()
     client.get_channel_stats = AsyncMock(return_value={"channels": []})
     client.get_channels = AsyncMock(return_value={"results": [], "next": None})
     client.get_users = AsyncMock(return_value=[])
+    client.get_system_events = AsyncMock(
+        return_value={
+            "events": [],
+            "count": 0,
+            "total": 0,
+            "offset": 0,
+            "limit": 1000,
+        }
+    )
     return client
 
 
