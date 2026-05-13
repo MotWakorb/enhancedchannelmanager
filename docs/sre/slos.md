@@ -69,6 +69,9 @@ Everything downstream of that — severity routing, on-call rotations, Slack/ema
 | SLO-3: HTTP Error Rate | `prometheus_rules.yaml` group `ecm_http_error_rate` | Prometheus window-based | Operator-provisioned |
 | SLO-4: Readiness Sub-check Latency | `prometheus_rules.yaml` group `ecm_readiness_subcheck_latency` | Prometheus window-based (warning only) | Operator-provisioned |
 | SLO-5: Normalization Correctness | Nightly CI canary workflow (`.github/workflows/normalization-canary.yml`) + `ecm_normalization_canary_divergence_total` counter | **Not Prometheus-primary.** A divergent canary run is detected by the CI job itself and surfaces as a workflow failure; the metric exists for operators who *do* run Prometheus to alert on replayed local canary runs, but the source of truth for SLO-5 breach is the GitHub Actions job. | Maintained by ECM CI; operator Prometheus alerting is optional / supplementary |
+| SLO-7: Stats v2 Telemetry Write Success Rate | `prometheus_rules.yaml` group `ecm_stats_v2_write` | Prometheus window-based (5m failure-ratio threshold, promotes to page if sustained 30m) | Operator-provisioned |
+| SLO-8: Provider Attribution Rate | `prometheus_rules.yaml` group `ecm_stats_v2_provider_resolution` | Prometheus window-based (1h ratio threshold) | Operator-provisioned, **warn-only** |
+| SLO-9: Stats v2 Query Latency | `prometheus_rules.yaml` group `ecm_stats_v2_query_latency` | Prometheus window-based (p95 over 15m) | Operator-provisioned, **warn-only** |
 
 This keeps the SLO *targets* credible regardless of what infrastructure the operator runs — the metrics are emitted, the rules are authored, the runbooks exist. Whether an alert actually wakes someone up at 3 AM depends on a scraper that ECM does not ship.
 
@@ -278,6 +281,125 @@ The numerator filters on `kind="boundary"` because React-tree boundary errors ar
 
 ---
 
+## SLO-7: Stats v2 Telemetry Write Success Rate
+
+**SLI:** Ratio of successful `session_telemetry` write attempts to total write attempts. One write attempt corresponds to one `_write_session_telemetry` call per BandwidthTracker poll cycle; the tracker's try/except wraps the call so that swallowed failures still increment the `result="failure"` series rather than crashing the poll loop.
+
+**Prometheus expression (SLI numerator over denominator):**
+```promql
+sum(rate(ecm_session_telemetry_writes_total{result="success"}[30d]))
+/
+sum(rate(ecm_session_telemetry_writes_total[30d]))
+```
+
+**SLO target:** **99.5%** over a rolling 30-day window.
+
+**Error budget:** 0.5% = ~0.5 of every 100 write cycles is allowed to fail. At a 60-second BandwidthTracker poll cadence (~43,200 cycles/30d), the budget is ~216 failed cycles per 30d — a wide-but-not-infinite buffer for transient SQLite contention or Dispatcharr blips.
+
+**Why this target (initial):** 99.5% is conservative for a write path that lives entirely inside the same container as the database it writes to. There are only three failure-mode classes ECM can introduce on its own (SQLite lock contention, schema drift after a botched migration, disk full); everything else is upstream (Dispatcharr unreachable while the resolver is mid-call, host crash). 99.5% leaves room for those upstream-attributable failures without making the SLI noisy on every Dispatcharr restart. Re-tune after 30 days of production data — if we sustain 99.9% comfortably, tighten to 99.9%.
+
+**Why this is not a correctness invariant:** Unlike SLO-5 (normalization correctness), where the two paths share a policy by construction and divergence is a structural bug, write failures here can legitimately occur from infrastructure events outside ECM's control. A budget-based SLO is correct; a zero-tolerance SLO would page on every Dispatcharr restart, which is not actionable.
+
+**Burn-rate alert thresholds (multi-window):**
+
+| Window | Burn rate (vs 30d budget) | Alert | Severity |
+|-|-|-|-|
+| 1h | 5% of budget consumed in 1h (≈36x burn) | `ECMStatsTelemetryWriteFailing` page tier | page |
+| 6h | 2% of budget consumed in 6h (≈2.4x burn) | `ECMStatsTelemetryWriteFailing` warn tier | warning |
+
+The single alert in `prometheus_rules.yaml` uses the simpler form "failure rate > 5% over 5m, sustained" because we don't yet have recording rules to encode burn-rate expressions cleanly; promotes to page if sustained 30m. Follow-up bead can wire MWMBR alerts once a Prometheus target is provisioned.
+
+**What breaks this SLO:**
+
+- SQLite WAL contention from concurrent writes (auto-creation bulk operations during a poll cycle).
+- Migration mismatch (a poll runs against a database schema that doesn't yet have the columns the writer expects).
+- Disk full (`/config/journal.db` partition).
+- Dispatcharr unreachable mid-resolver call — the resolver returns unresolved and the writer still completes, so this does NOT increment `result="failure"`; it shows up in SLO-8 instead.
+
+**Cardinality discipline:** The `result` label is bounded to two values (`success`, `failure`). No per-channel, per-user, or per-stream labels — those would explode cardinality. Per-channel attribution belongs in logs (`[STATS_V2] session_telemetry_write_failed channel=...`), not metrics. The cardinality veto on the parent bead (skqln.11) is reaffirmed here: write-path metrics never carry `channel_id` or `user_id` labels.
+
+**Runbook:** [`docs/runbooks/stats-v2-write-failures.md`](../runbooks/stats-v2-write-failures.md)
+
+---
+
+## SLO-8: Provider Attribution Rate
+
+**SLI:** Ratio of `resolved` provider-resolution outcomes to total resolution outcomes (`resolved` + `unresolved`). Incremented once per channel per BandwidthTracker poll cycle by the active-stream → provider resolver shipped in skqln.14. An "unresolved" outcome means the channel's active stream could not be mapped to an M3U provider — the `session_telemetry` row is still written with `provider_id=NULL`, which surfaces in the Providers panel as the "Unknown" bucket.
+
+**Prometheus expression (SLI numerator over denominator):**
+```promql
+sum(rate(ecm_provider_resolution_total{result="resolved"}[24h]))
+/
+sum(rate(ecm_provider_resolution_total[24h]))
+```
+
+**SLO target:** **95.0%** over a rolling 24-hour window, steady state.
+
+**Error budget:** 5% = up to 1 in 20 channel-polls may be unresolved without breaching the target. On a deployment with 50 active channels polled every 60s (~72,000 channel-polls/day), the budget is ~3,600 unresolved channel-polls/day before SLO-8 is breached.
+
+**Why this target (initial):** Provider attribution is "useful, not load-bearing." A `NULL` provider_id is **correct behavior** when ECM genuinely cannot map a stream to a provider — for example, the very first poll after a Dispatcharr stream-ID change, or a stream the operator added manually without an M3U source. The 95% floor exists so the Providers panel remains *interpretable* (the "Unknown" bucket is a minority slice, not the dominant one); below 95% the panel becomes meaningless. Re-tune once 90 days of session_telemetry history exists and operators have feedback on what fraction of "Unknown" they consider acceptable.
+
+**Why this is warn-only, never page:** Degraded provider resolution surfaces to the user as a larger "Unknown" bucket on the Providers panel. The panel still renders, the watch-time numbers are still correct, the channels and users panels are unaffected. There is no user-facing outage. Paging on this is alert fatigue. The runbook covers triage so on-call has context the *next* business hour, not at 3 AM.
+
+**What breaks this SLO:**
+
+- Dispatcharr stream-API quirk (the stream-ID lookup endpoint changes shape or returns a different envelope).
+- Network blip between ECM and Dispatcharr (resolver lookup raises; logged as `reason=lookup_raised`).
+- Mid-failover storm (operator is migrating providers; many streams temporarily have no upstream M3U row).
+- An M3U source that just rotated upstream URLs and ECM hasn't re-synced yet.
+
+**Cardinality discipline:** The `result` label is bounded to two values (`resolved`, `unresolved`). No per-channel or per-stream labels — `channel_id` is logged in the `[STATS_V2] provider_resolution_failed channel=...` structured log when an individual channel needs triage; the metric is aggregate-only.
+
+**Runbook:** [`docs/runbooks/stats-v2-provider-resolution-degraded.md`](../runbooks/stats-v2-provider-resolution-degraded.md)
+
+---
+
+## SLO-9: Stats v2 Query Latency
+
+**SLI:** 95th and 99th percentile latency of Stats v2 HTTP queries, measured over the `ecm_stats_query_duration_seconds` histogram emitted by the observability middleware on `/api/stats/*` paths. The `endpoint` label carries the FastAPI route pattern (e.g. `/api/stats/watch-time/{user_id}`), and the `granularity` label carries the `group_by` query parameter (`total`, `day`, or `none`).
+
+**Prometheus expression:**
+```promql
+# p95 across all stats endpoints, 5m windows.
+histogram_quantile(
+  0.95,
+  sum by (le, endpoint) (
+    rate(ecm_stats_query_duration_seconds_bucket[5m])
+  )
+)
+
+# p99 across all stats endpoints, 5m windows.
+histogram_quantile(
+  0.99,
+  sum by (le, endpoint) (
+    rate(ecm_stats_query_duration_seconds_bucket[5m])
+  )
+)
+```
+
+**SLO target:** **p95 < 800ms** and **p99 < 2s** on `/api/stats/*` paths, sustained over a rolling 7-day window. Both thresholds must hold concurrently — a p99 breach with a healthy p95 still indicates pathological tail latency worth investigating.
+
+**Error budget:** 1% of 7d * 5m windows = ~20 minutes of windows where p95 ≥ 800ms per 7d. The p99 budget is the same structurally — ~20 minutes of windows where p99 ≥ 2s per 7d.
+
+**Why these targets (initial):** The stats query histogram inherits the `_HTTP_LATENCY_BUCKETS` bucket layout (same as `ecm_http_request_duration_seconds`), so the `histogram_quantile` interpolation is well-defined at both 800ms and 2s. The 800ms p95 target leaves visible headroom on top of skqln.10's perf-benchmark gate (which sets a tighter regression-gate floor on local CI runs); a production breach of 800ms therefore means the in-CI floor has shifted upward in real workloads. The 2s p99 target catches the "one query just blew the budget" failure mode — a single 10s query on a panel load is operator-visible even if 95% of queries are fast.
+
+Tighten to p95 < 400ms once 30 days of production data shows we comfortably beat 800ms — the in-CI benchmark already constrains the median down by an order of magnitude.
+
+**Why this is warn-only:** Stats v2 is an admin tool. Slow stats panels are annoying, not user-facing outages. The runbook covers triage; paging on this is alert fatigue.
+
+**What breaks this SLO:**
+
+- `session_telemetry` table growth past where the existing indexes serve the query (the rollup tables in bd-7i2vv address this structurally; until they ship, large queries may scan more rows than budgeted).
+- SQLite WAL checkpoint stalling a long-running stats query.
+- A new aggregate endpoint shipped without a perf-benchmark gate (skqln.10's regression-gate is the structural defense; alert-time discovery means the gate was bypassed or the bench is wrong).
+- N+1 query pattern in a Stats panel frontend (often the real culprit — same as SLO-2 but scoped to stats endpoints).
+
+**Cardinality discipline:** The `endpoint` label is bounded to ~5 stats endpoints; `granularity` is bounded to 3 values (`total`, `day`, `none`). Combined ceiling is ~15 series per bucket × ~15 buckets = ~225 series. No `user_id` label on the metric (the URL path `{user_id}` is the *parameterized* route pattern, not the resolved value — see observability.py for the route-template logic).
+
+**Runbook:** [`docs/runbooks/stats-v2-write-failures.md`](../runbooks/stats-v2-write-failures.md) for write-side root causes that cascade into query slowness; new stats-v2-query-specific runbook may follow in a future bead once we see real query-side incidents.
+
+---
+
 ## SLO-4: Readiness Sub-check Latency (informational)
 
 **SLI:** 95th percentile duration of readiness sub-checks, per `check` label (`database`, `dispatcharr`, `ffprobe`).
@@ -341,6 +463,8 @@ For the scaffold we ship simpler single-window thresholds for SLO-2/3 (p95 laten
 - **No SLO for long-running tasks.** Task success rate matters (restore jobs, auto-creation runs) but has no metric today. Separate bead.
 
 ## Changelog
+
+- **2026-05-13 (bd-skqln.11):** Added **SLO-7 (Stats v2 telemetry write success rate, 99.5% / 30d)**, **SLO-8 (provider attribution rate, 95% / 24h, warn-only)**, and **SLO-9 (Stats v2 query latency, p95<800ms / p99<2s / 7d, warn-only)**. All three resolve against metrics shipped in skqln.12 (`ecm_session_telemetry_writes_total`, `ecm_session_telemetry_row_count`, `ecm_provider_resolution_total`, `ecm_stats_query_duration_seconds`). Companion alert rules shipped in `prometheus_rules.yaml` groups `ecm_stats_v2_write`, `ecm_stats_v2_provider_resolution`, `ecm_stats_v2_query_latency`, `ecm_stats_v2_storage`. New runbooks: `stats-v2-write-failures.md`, `stats-v2-provider-resolution-degraded.md`, `stats-v2-row-growth.md`, `stats-v2-deployment-safety.md`. The bead's original "dual-write divergence SLI" was obsoleted by skqln.3 step (d), which retired the legacy `ChannelWatchStats` writer — the data-consistency SLI is now the resolver success rate (SLO-8), not a divergence gauge.
 
 - **2026-04-24 (bd-m3vej, follow-up to bd-arp3o):** SLO-6 entry gained
   a **Known measurement bias** section. `POST /api/session-start` was
