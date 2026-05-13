@@ -261,6 +261,23 @@ async def observability_middleware(request: Request, call_next):
                 get_metric("http_request_duration_seconds").labels(
                     method=method, path=path_label
                 ).observe(duration)
+                # bd-skqln.12: emit the Stats v2 query histogram alongside
+                # the generic HTTP histogram so the SLI surface has a
+                # clean handle distinct from background traffic. Filter
+                # by the matched route pattern (``path_label``), not the
+                # raw URL — the matched pattern is what keeps cardinality
+                # bounded. ``granularity`` is sourced from the
+                # ``group_by`` query param when present (``total`` /
+                # ``day`` for the current endpoints, with future
+                # additions in skqln.16); ``"none"`` is the bounded
+                # sentinel for endpoints that don't accept a group-by
+                # axis. The combined ceiling sits at ~5 endpoints × 3
+                # granularities per the bead's SRE-approved envelope.
+                if path_label.startswith("/api/stats/") or path_label == "/api/stats":
+                    granularity = _stats_granularity_label(request)
+                    get_metric("stats_query_duration_seconds").labels(
+                        endpoint=path_label, granularity=granularity
+                    ).observe(duration)
             except Exception as metric_exc:  # pragma: no cover — never block requests
                 logger.warning("[OBSERVABILITY] Metric emit failed: %s", metric_exc)
             # Emit one structured line per request while the trace id is
@@ -307,6 +324,37 @@ def _metric_path_label(request: Request) -> str:
     # but this is defensive for any caller that reconstructs a URL.
     raw = request.url.path or "/"
     return raw
+
+
+# Bounded enum of granularity values the Stats v2 endpoints accept today
+# via the ``group_by`` query parameter. Unknown / absent values collapse
+# to ``"none"`` so the Prometheus label cardinality stays bounded
+# regardless of what query string a misbehaving client sends. bd-skqln.16
+# may extend this enum (e.g. ``hour``, ``week``); update here when a new
+# value is intentionally added — every addition is an SRE cardinality
+# decision.
+_STATS_GRANULARITY_ALLOWED = frozenset({"total", "day"})
+
+
+def _stats_granularity_label(request: Request) -> str:
+    """Return the bounded ``granularity`` label for a Stats v2 query.
+
+    Sources the value from the ``group_by`` query parameter. Unknown
+    values collapse to ``"none"`` so a malicious or buggy client cannot
+    inflate the metric's label cardinality by sending arbitrary
+    ``group_by`` values. The ``request.query_params`` accessor is the
+    pre-parsed Starlette view — no manual URL parsing required.
+    """
+    try:
+        raw = request.query_params.get("group_by")
+    except Exception:  # pragma: no cover — never break the request
+        return "none"
+    if not raw:
+        return "none"
+    value = str(raw).strip().lower()
+    if value in _STATS_GRANULARITY_ALLOWED:
+        return value
+    return "none"
 
 
 # ``/metrics`` — Prometheus scrape endpoint. Intentionally open (no auth).
