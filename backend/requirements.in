@@ -40,3 +40,8 @@ pytest-cov>=4.1.0
 respx>=0.21.0
 # Property-based tests (bd-eio04.15 — safe_regex call-site equivalence)
 hypothesis>=6.100.0
+
+# Performance benchmarks (bd-skqln.10 — Stats v2 hot-query regression gate).
+# Runs only against backend/tests/performance/ via the perf-benchmarks
+# CI workflow; the default unit/integration suite ignores tests/performance/.
+pytest-benchmark>=5.0.0
