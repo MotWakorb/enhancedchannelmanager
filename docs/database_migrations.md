@@ -163,6 +163,12 @@ docker exec ecm-ecm-1 sh -c "cd /app && alembic stamp <known-good-rev>"
 - **Foreign keys are per-connection.** They are only enforced when `PRAGMA foreign_keys=ON`. The app-wide connect listener in `database.py` handles this everywhere SQLAlchemy opens a connection (including Alembic via `env.py`), but if you run raw `sqlite3` in a shell for debugging, you must set the PRAGMA yourself. Raw `sqlite3.connect()` calls bypass the listener.
 - **WAL journal mode is per-connection too.** The listener sets it on every connect, but direct `sqlite3` CLI sessions will use `delete` mode. This is expected and harmless — both modes see the same committed state.
 
+## Data-lifecycle / retention policy
+
+Some tables are append-mostly fact tables that grow with time and need an explicit retention + rollup policy, not just a schema. The first of these is `session_telemetry` (Stats v2, v0.17.0): its retention window, the daily rollup tables (`watch_time_by_user_daily`, `provider_performance_daily`), the `telemetry_rollup_state` marker, the nightly rollup/prune job, and the Postgres-migration trigger are all specified in **[`docs/adr/ADR-007-session-telemetry-retention.md`](adr/ADR-007-session-telemetry-retention.md)**. When you author the migration that creates one of those tables (`bd-skqln.2`), follow the ADR for the table shapes, indexes, and PKs — and add the new tables to the drift test like any other schema object.
+
+General rule: if a new table accumulates rows per unit time (telemetry, events, audit logs), it needs a retention/rollup ADR *before* its first write, not after.
+
 ## What bead `bd-c5wf5` did NOT do
 
 - No retroactive per-column migrations for historical schema changes. The 30+ ad-hoc `_add_*` functions in `database.py` predate Alembic; they continue to run after `_bootstrap_alembic()` for installs that already crossed those versions. **New columns should land as Alembic revisions**, not new helpers in `database.py`.
