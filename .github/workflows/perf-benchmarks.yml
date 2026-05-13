@@ -106,7 +106,7 @@ jobs:
             --benchmark-only --no-cov \
             --benchmark-min-rounds=10 \
             --benchmark-save=baseline \
-            --benchmark-storage=file:///tmp/perf-bench
+            --benchmark-storage=file://./.benchmarks
 
       # ───────────────────────────────────────────────────────────────────
       # Candidate pass — always runs. Restores the PR HEAD checkout so we
@@ -134,14 +134,14 @@ jobs:
             python -m pytest tests/performance/ \
               --benchmark-only --no-cov \
               --benchmark-min-rounds=10 \
-              --benchmark-storage=file:///tmp/perf-bench \
+              --benchmark-storage=file://./.benchmarks \
               --benchmark-compare=0001 \
               --benchmark-compare-fail=median:20%
           else
             python -m pytest tests/performance/ \
               --benchmark-only --no-cov \
               --benchmark-min-rounds=10 \
-              --benchmark-storage=file:///tmp/perf-bench \
+              --benchmark-storage=file://./.benchmarks \
               --benchmark-save=candidate
           fi
 
@@ -150,6 +150,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: perf-benchmarks
-          path: /tmp/perf-bench/
+          path: backend/.benchmarks/
           if-no-files-found: ignore
           retention-days: 30
