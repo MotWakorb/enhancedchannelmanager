@@ -110,10 +110,16 @@ def _row_batches(shape: VolumeShape) -> Iterator[list[tuple]]:
                 provider_id = None
             else:
                 provider_id = _zipfish_provider(rng, shape.provider_count)
-            channel_id = rng.randint(1, shape.channel_count)
+            # channel_id is a Dispatcharr UUID string (String(64), NOT NULL)
+            # — migration 0007 corrected the column type from INTEGER. We
+            # synthesise a stable namespaced "ch-uuid-NNNN" form so the
+            # cardinality is the same as the previous integer fixture and
+            # the index distribution is unchanged.
+            channel_idx = rng.randint(1, shape.channel_count)
+            channel_id = f"ch-uuid-{channel_idx:04d}"
             bytes_delta = rng.randint(0, 12_000_000)  # >= 0 — respects the CHECK
             buffer_event_count = 0 if rng.random() < 0.95 else rng.randint(1, 4)
-            session_id = f"sess-{user_id:03d}-{channel_id:04d}-{i // 30}"
+            session_id = f"sess-{user_id:03d}-{channel_idx:04d}-{i // 30}"
             batch.append(
                 (
                     session_id,

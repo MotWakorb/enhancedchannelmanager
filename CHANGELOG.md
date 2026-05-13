@@ -7,7 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Added
+- Stats v2 keystone: BandwidthTracker now writes per-poll viewing telemetry to `session_telemetry` (the foundation for the Users/Providers panels and per-provider stats). Alembic migration `0007` corrects `session_telemetry.channel_id` from `Integer` to `String(64)` UUID for consistency with every other channel-keyed table and with ADR-007's rollup schemas. Alembic migration `0008` adds the `channel_watch_stats_v` SQL view — a read-compat aggregation over `session_telemetry` that exposes `channel_id`, `total_watch_seconds`, and `last_watched` (the columns that faithfully derive from per-poll observation). Migration 0008 uses a `DISTINCT (channel_id, observed_at)` subquery so multi-client concurrent viewing does not silently inflate watch time. ([bd-skqln.3])
+- `docs/user_guide/stats-v2-history-cutover.md` — operator-facing note explaining that Stats v2 metrics begin on the day v0.17.0 deploys and prior watch-time history is not reconstructable. The `accept-the-gap` backfill policy is documented in `docs/database_migrations.md`. ([bd-skqln.3])
 - Stats v2 foundation: new `session_telemetry` table and Alembic migration `0006` — per-session bandwidth/buffer-event telemetry; the data source for the upcoming Users panel. Internal schema only, no UI yet. ([bd-skqln.2])
+
+### Changed
+- BandwidthTracker no longer writes to `ChannelWatchStats` — that aggregate table is now served by the `channel_watch_stats_v` view over `session_telemetry`. The legacy `ChannelWatchStats` table schema is retained for pre-cutover rows; no production code reads it post-skqln.3. Readers repointed in this release: `popularity_calculator._gather_metrics`, `BandwidthTracker.get_top_watched_channels` (the `/api/stats/top-watched` endpoint), and `BandwidthTracker._log_watch_stop_events`. `ChannelBandwidth` and `BandwidthDaily` writes are unchanged — they have independent live readers (per-day breakdown charts, bandwidth summaries). ([bd-skqln.3])
+- Channel popularity formula's `watch_count` axis now uses `COUNT(DISTINCT session_id)` (distinct viewing sessions per channel) instead of the legacy state-transition counter. Operators may notice channel rankings shift visibly on the first calculator run after upgrade — a one-time event documented in `stats-v2-history-cutover.md`. The other three axes (`watch_time`, `viewers`, `bandwidth`) and the default weights are unchanged. ([bd-skqln.3])
+- `ECM_SESSION_TELEMETRY_WRITE_ENABLED` environment-variable kill-switch retired. The flag's job ended when legacy writes were removed; `BandwidthTracker._write_session_telemetry` now runs unconditionally. Operators who set the env var manually can remove it from their compose / .env — it is silently ignored. ([bd-skqln.3])
 
 ## [0.16.0] — 2026-05-12
 

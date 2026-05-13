@@ -511,27 +511,31 @@ async def update_settings(request: SettingsRequest):
         # Also clear all data tied to the old server
         from models import (
             M3UChangeLog, M3USnapshot, ChannelWatchStats, HiddenChannelGroup,
-            ChannelBandwidth, ChannelPopularityScore, UniqueClientConnection
+            ChannelBandwidth, ChannelPopularityScore, UniqueClientConnection,
+            SessionTelemetry,
         )
         with get_session() as db:
             changes_deleted = db.query(M3UChangeLog).delete()
             snapshots_deleted = db.query(M3USnapshot).delete()
+            # Legacy aggregate (no longer written post bd-skqln.3 step (d))
+            # — kept here so reset semantics still purge any pre-cutover rows.
             watch_stats_deleted = db.query(ChannelWatchStats).delete()
             hidden_groups_deleted = db.query(HiddenChannelGroup).delete()
             bandwidth_deleted = db.query(ChannelBandwidth).delete()
             popularity_deleted = db.query(ChannelPopularityScore).delete()
             connections_deleted = db.query(UniqueClientConnection).delete()
+            telemetry_deleted = db.query(SessionTelemetry).delete()
             db.commit()
             logger.info(
                 "[SETTINGS] Dispatcharr URL changed - cleared all server-specific data: "
                 "%s M3U changes, %s snapshots, "
                 "%s watch stats, %s hidden groups, "
                 "%s bandwidth records, %s popularity scores, "
-                "%s client connections",
+                "%s client connections, %s session_telemetry rows",
                 changes_deleted, snapshots_deleted,
                 watch_stats_deleted, hidden_groups_deleted,
                 bandwidth_deleted, popularity_deleted,
-                connections_deleted
+                connections_deleted, telemetry_deleted
             )
 
     # Apply backend log level immediately
@@ -998,19 +1002,37 @@ async def restart_services():
 async def reset_stats():
     """Reset all channel/stream statistics. Use when switching Dispatcharr servers."""
     logger.debug("[SETTINGS] POST /api/settings/reset-stats")
-    from models import HiddenChannelGroup, ChannelWatchStats, ChannelBandwidth, StreamStats, ChannelPopularityScore
+    from models import (
+        HiddenChannelGroup,
+        ChannelWatchStats,
+        ChannelBandwidth,
+        StreamStats,
+        ChannelPopularityScore,
+        SessionTelemetry,
+        UniqueClientConnection,
+    )
 
     try:
         with get_session() as db:
             hidden = db.query(HiddenChannelGroup).delete()
+            # Legacy aggregate (no longer written post bd-skqln.3 step (d))
+            # — still purged so any pre-cutover rows leave with the reset.
             watch = db.query(ChannelWatchStats).delete()
             bandwidth = db.query(ChannelBandwidth).delete()
             streams = db.query(StreamStats).delete()
             popularity = db.query(ChannelPopularityScore).delete()
+            connections = db.query(UniqueClientConnection).delete()
+            telemetry = db.query(SessionTelemetry).delete()
             db.commit()
 
-            total = hidden + watch + bandwidth + streams + popularity
-            logger.info("[SETTINGS] Reset stats: %s hidden groups, %s watch stats, %s bandwidth, %s stream stats, %s popularity", hidden, watch, bandwidth, streams, popularity)
+            total = hidden + watch + bandwidth + streams + popularity + connections + telemetry
+            logger.info(
+                "[SETTINGS] Reset stats: %s hidden groups, %s watch stats, "
+                "%s bandwidth, %s stream stats, %s popularity, "
+                "%s client connections, %s session_telemetry rows",
+                hidden, watch, bandwidth, streams, popularity,
+                connections, telemetry,
+            )
 
             return {
                 "success": True,
@@ -1020,7 +1042,9 @@ async def reset_stats():
                     "watch_stats": watch,
                     "bandwidth_records": bandwidth,
                     "stream_stats": streams,
-                    "popularity_scores": popularity
+                    "popularity_scores": popularity,
+                    "client_connections": connections,
+                    "session_telemetry": telemetry,
                 }
             }
     except Exception as e:
