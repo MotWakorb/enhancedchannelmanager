@@ -1582,6 +1582,70 @@ export async function getWatchTimeForUser(
 }
 
 // =============================================================================
+// Per-Provider Stats (v0.17.0 — GH-59, bd-skqln.16/.18)
+// =============================================================================
+//
+// Admin-only endpoints. Non-admin callers receive 403 — callers must surface
+// that gracefully (see ProvidersPanel).
+
+/**
+ * Per-provider buffer-event time-series.
+ * Default window=7d, bucket=hour.
+ */
+export async function getProvidersBuffering(options: {
+  window?: import('../types').ProviderStatsWindow;
+  bucket?: import('../types').ProviderStatsBucket;
+} = {}): Promise<import('../types').ProviderBufferingResponse> {
+  const params = new URLSearchParams();
+  if (options.window) params.set('window', options.window);
+  if (options.bucket) params.set('bucket', options.bucket);
+  const qs = params.toString();
+  return fetchJson(`${API_BASE}/stats/providers/buffering${qs ? `?${qs}` : ''}`);
+}
+
+/**
+ * Total watch time per provider over a window.
+ */
+export async function getProvidersWatchTime(options: {
+  window?: import('../types').ProviderStatsWindow;
+} = {}): Promise<import('../types').ProviderWatchTimeResponse> {
+  const params = new URLSearchParams();
+  if (options.window) params.set('window', options.window);
+  const qs = params.toString();
+  return fetchJson(`${API_BASE}/stats/providers/watch-time${qs ? `?${qs}` : ''}`);
+}
+
+/**
+ * Provider × top-N channel byte heatmap.
+ * Default window=7d, top_n=50 (backend caps at 500).
+ */
+export async function getProvidersChannelHeatmap(options: {
+  window?: import('../types').ProviderStatsWindow;
+  topN?: number;
+} = {}): Promise<import('../types').ProviderHeatmapResponse> {
+  const params = new URLSearchParams();
+  if (options.window) params.set('window', options.window);
+  if (options.topN !== undefined) params.set('top_n', String(options.topN));
+  const qs = params.toString();
+  return fetchJson(`${API_BASE}/stats/providers/channel-heatmap${qs ? `?${qs}` : ''}`);
+}
+
+/**
+ * Per-provider derived bitrate time-series.
+ * Default window=7d, bucket=hour.
+ */
+export async function getProvidersBitrate(options: {
+  window?: import('../types').ProviderStatsWindow;
+  bucket?: import('../types').ProviderStatsBucket;
+} = {}): Promise<import('../types').ProviderBitrateResponse> {
+  const params = new URLSearchParams();
+  if (options.window) params.set('window', options.window);
+  if (options.bucket) params.set('bucket', options.bucket);
+  const qs = params.toString();
+  return fetchJson(`${API_BASE}/stats/providers/bitrate${qs ? `?${qs}` : ''}`);
+}
+
+// =============================================================================
 // Stream Stats / Probing
 // =============================================================================
 

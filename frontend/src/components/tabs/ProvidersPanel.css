@@ -1,0 +1,194 @@
+/* ProvidersPanel — GH-59 / bd-skqln.18 (v0.17.0).
+ *
+ * Visual conventions inherited from UserStatsPanel.css (skqln.6) so the
+ * Stats tab panels share a coherent visual language. Theme tokens carry
+ * the WCAG AA 4.5:1 contrast already audited at index.css level. Focus
+ * rings are explicit so keyboard users always see where focus is.
+ */
+
+.providers-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 16px;
+  color: var(--text-primary);
+}
+
+.providers-panel .panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.providers-panel .section-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.providers-panel .panel-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.providers-panel .range-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.providers-panel .range-label {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.providers-panel .range-select {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 13px;
+  min-width: 140px;
+}
+
+.providers-panel .range-select:focus-visible,
+.providers-panel .chart-data-toggle:focus-visible {
+  outline: 2px solid var(--success);
+  outline-offset: 2px;
+}
+
+/* Chart section ----------------------------------------------------------- */
+
+.providers-panel .chart-section {
+  margin-bottom: 16px;
+}
+
+.providers-panel .chart-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.providers-panel .chart-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.providers-panel .chart-data-toggle {
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.providers-panel .chart-data-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.providers-panel .chart-container {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+/* Data-table fallback for each chart -------------------------------------- */
+
+.providers-panel .chart-data-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.providers-panel .chart-data-table th,
+.providers-panel .chart-data-table td {
+  padding: 6px 10px;
+  border: 1px solid var(--border-primary);
+  text-align: left;
+}
+
+.providers-panel .chart-data-table th {
+  background: var(--bg-tertiary);
+}
+
+.providers-panel .chart-data-table caption {
+  caption-side: top;
+  text-align: left;
+  padding: 4px 0;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.providers-panel .unknown-tooltip {
+  color: var(--text-muted);
+  cursor: help;
+  font-size: 11px;
+}
+
+/* WCAG-compliant visually-hidden utility — visible to screen readers,
+ * removed from visual flow. Mirrors the recipe in UserStatsPanel.css. */
+.providers-panel .visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+/* States ------------------------------------------------------------------ */
+
+.providers-panel .loading-state,
+.providers-panel .empty-state,
+.providers-panel .admin-only-state {
+  padding: 12px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  text-align: center;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+}
+
+.providers-panel .error-state {
+  padding: 12px;
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-text);
+  border-radius: 6px;
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+
+/* Responsive: at narrow viewports stack the controls and let the heatmap
+ * scroll horizontally (its own .heatmap container already does this). */
+@media (max-width: 1023px) {
+  .providers-panel .panel-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .providers-panel .panel-controls {
+    width: 100%;
+  }
+}
