@@ -538,6 +538,85 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             buckets=_HTTP_LATENCY_BUCKETS,
             registry=registry,
         ),
+        # ----------------------------------------------------------------
+        # Stats v2 — nightly rollup/prune job (ADR-007 D6, bd-7i2vv).
+        #
+        # Five metrics emitted by ``tasks.stats_v2_rollup.StatsV2RollupTask``
+        # after each nightly run. SRE owns operational behavior (skqln.11
+        # alert rules wire on these); this module just publishes them.
+        #
+        # Cardinality posture:
+        #   * No user_id, channel_id, or session_id in labels (SRE veto).
+        #   * No provider_id in labels here either — the rollup job
+        #     aggregates over providers per run, so the per-run metrics
+        #     are label-free. (Future per-provider rollup latency, if it
+        #     ever lands, gets its own bead and explicit SRE sign-off.)
+        #   * ``rollup_name`` is a bounded enum {user_daily,
+        #     provider_daily} — explicit allowlist; new rollups need to
+        #     extend the enum in tasks/stats_v2_rollup.py.
+        # ----------------------------------------------------------------
+        "telemetry_rollup_last_success_timestamp": Gauge(
+            "ecm_telemetry_rollup_last_success_timestamp",
+            "Unix-epoch seconds of the most recent SUCCESSFUL nightly "
+            "rollup run for each named rollup. SRE's staleness alert "
+            "wires on (time() - this_gauge): >36h warn (failure mode 1), "
+            ">25d page (failure mode 2, raw rows approaching the 30d "
+            "prune horizon before being rolled up). Updated by the "
+            "rollup task only after the prune step also completed; a "
+            "failure during rollup or a guard-fired prune-skip does NOT "
+            "advance this gauge. Per-rollup so SRE can distinguish a "
+            "stuck user_daily from a stuck provider_daily.",
+            ["rollup_name"],
+            registry=registry,
+        ),
+        "telemetry_rollup_duration_seconds": Histogram(
+            "ecm_telemetry_rollup_duration_seconds",
+            "Wall time of one rollup run for each named rollup, in "
+            "seconds. Buckets cover the sub-second case (the rollup "
+            "writes <few-thousand rows per day) up to the long tail "
+            "where the catch-up budget kicks in and the job is rolling "
+            "up many days at once after extended downtime.",
+            ["rollup_name"],
+            buckets=_HTTP_LATENCY_BUCKETS,
+            registry=registry,
+        ),
+        "telemetry_rollup_days_processed": Gauge(
+            "ecm_telemetry_rollup_days_processed",
+            "Number of UTC calendar days processed by the most recent "
+            "rollup run for each named rollup. Normally 1 (the previous "
+            "complete day); higher values indicate a catch-up run after "
+            "downtime, which is the leading indicator for failure mode "
+            "2 (>25 days uncovered → page).",
+            ["rollup_name"],
+            registry=registry,
+        ),
+        "telemetry_raw_rows_pruned": Counter(
+            "ecm_telemetry_raw_rows_pruned",
+            "Cumulative count of raw session_telemetry rows deleted by "
+            "the nightly prune step (ADR-007 D3 step 3). Always-monotonic; "
+            "deltas over the alerting window are the rate of pruning. A "
+            "sustained zero rate combined with a growing "
+            "ecm_session_telemetry_row_count is failure mode 3 (prune "
+            "failing silently). The prune step runs only after rollup "
+            "succeeded — so a zero rate when rollup is failing is "
+            "expected (fail-safe).",
+            registry=registry,
+        ),
+        "telemetry_rollup_errors_total": Counter(
+            "ecm_telemetry_rollup_errors_total",
+            "Cumulative count of rollup-job error conditions, labeled by "
+            "phase. phase ∈ {rollup, prune, marker, sanity_check}. "
+            "'sanity_check' increments when a day had source rows but "
+            "produced zero rollup rows (failure mode 5 — never prune "
+            "what you couldn't roll up). 'rollup' covers SQL/IO failures "
+            "during the aggregate INSERT. 'prune' covers DELETE failures. "
+            "'marker' covers failures persisting telemetry_rollup_state. "
+            "A non-zero rate is the SRE signal that the job has begun "
+            "drifting; failure modes 1-2 ride on (time-since-success) "
+            "in the gauge above, this counter ride on (rate-of-errors).",
+            ["phase"],
+            registry=registry,
+        ),
     }
 
 
