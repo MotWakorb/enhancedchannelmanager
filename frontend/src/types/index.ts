@@ -1126,6 +1126,57 @@ export interface WatchHistoryResponse {
 }
 
 // =============================================================================
+// Watch-Time by User (v0.17.0 — GH-62, bd-skqln.5/.6)
+// =============================================================================
+//
+// Backend endpoints: GET /api/stats/watch-time and
+// GET /api/stats/watch-time/{user_id}. Both return the envelope
+// { data, meta: { from_iso, to_iso, group_by, total_rows }, pagination: null }.
+// Both are admin-only — non-admin callers receive 403.
+
+// Row shape for /watch-time with group_by=total
+export interface WatchTimeUserTotalRow {
+  user_id: number;
+  username: string | null;
+  total_watch_seconds: number;
+  last_watched: string | null;  // ISO-8601 UTC, e.g. "2026-05-13T12:34:56Z"
+}
+
+// Row shape for /watch-time with group_by=day
+export interface WatchTimeUserDayRow {
+  user_id: number;
+  username: string | null;
+  day: string;  // "YYYY-MM-DD" (UTC)
+  watch_seconds: number;
+}
+
+// Row shape for /watch-time/{user_id}
+export interface WatchTimeChannelRow {
+  channel_id: string;
+  channel_name: string;
+  total_watch_seconds: number;
+  session_count: number;
+  last_watched: string | null;
+}
+
+export interface WatchTimeMeta {
+  from_iso: string | null;
+  to_iso: string | null;
+  group_by: string;  // "total" | "day" | "channel"
+  total_rows: number;
+}
+
+export interface WatchTimeEnvelope<TRow> {
+  data: TRow[];
+  meta: WatchTimeMeta;
+  pagination: null;
+}
+
+export type WatchTimeTotalsResponse = WatchTimeEnvelope<WatchTimeUserTotalRow>;
+export type WatchTimeDailyResponse = WatchTimeEnvelope<WatchTimeUserDayRow>;
+export type WatchTimeChannelBreakdownResponse = WatchTimeEnvelope<WatchTimeChannelRow>;
+
+// =============================================================================
 // Authentication Types
 // =============================================================================
 

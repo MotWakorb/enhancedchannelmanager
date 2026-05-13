@@ -20,6 +20,7 @@ import { EnhancedStatsPanel } from './EnhancedStatsPanel';
 import { PopularityPanel } from './PopularityPanel';
 import { WatchHistoryPanel } from './WatchHistoryPanel';
 import { BandwidthPanel } from './BandwidthPanel';
+import { UserStatsPanel } from './UserStatsPanel';
 import './StatsTab.css';
 
 // Historical data point for charts
@@ -1264,6 +1265,9 @@ export function StatsTab() {
 
         {/* Watch History Log (v0.11.0) */}
         <WatchHistoryPanel />
+
+        {/* User Watch Time (v0.17.0 — GH-62, bd-skqln.6) */}
+        <UserStatsPanel />
       </div>
     </div>
   );
