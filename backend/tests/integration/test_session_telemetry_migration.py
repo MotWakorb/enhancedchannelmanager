@@ -147,7 +147,14 @@ class TestSessionTelemetryMigration:
             assert cols["observed_at"]["nullable"] is False
             assert cols["user_id"]["nullable"] is True
             assert cols["provider_id"]["nullable"] is True
-            assert cols["channel_id"]["nullable"] is True
+            # channel_id was Integer NULL in migration 0006; migration 0007
+            # corrected it to VARCHAR(64) NOT NULL to match every other
+            # channel-keyed table in the schema (bd-skqln.3 step (a)).
+            assert cols["channel_id"]["nullable"] is False
+            assert "VARCHAR" in str(cols["channel_id"]["type"]).upper(), (
+                f"channel_id should be VARCHAR after migration 0007, "
+                f"got {cols['channel_id']['type']!r}"
+            )
             assert cols["bytes_delta"]["nullable"] is False
             assert cols["buffer_event_count"]["nullable"] is False
             assert cols["poll_interval_ms"]["nullable"] is False
@@ -231,19 +238,22 @@ class TestSessionTelemetryMigration:
         try:
             with engine.begin() as conn:
                 # Valid row — bytes_delta >= 0 — must succeed.
+                # channel_id is NOT NULL post-migration-0007: supply a
+                # synthetic UUID string for both valid and CHECK-violation
+                # inserts so the only thing being exercised is the CHECK.
                 conn.execute(text(
                     "INSERT INTO session_telemetry "
-                    "(session_id, observed_at, bytes_delta, buffer_event_count, "
-                    " poll_interval_ms) "
-                    "VALUES ('sess-ok', 1000, 0, 0, 10000)"
+                    "(session_id, observed_at, channel_id, bytes_delta, "
+                    " buffer_event_count, poll_interval_ms) "
+                    "VALUES ('sess-ok', 1000, 'ch-uuid-check', 0, 0, 10000)"
                 ))
             with pytest.raises(IntegrityError):
                 with engine.begin() as conn:
                     conn.execute(text(
                         "INSERT INTO session_telemetry "
-                        "(session_id, observed_at, bytes_delta, buffer_event_count, "
-                        " poll_interval_ms) "
-                        "VALUES ('sess-bad', 2000, -1, 0, 10000)"
+                        "(session_id, observed_at, channel_id, bytes_delta, "
+                        " buffer_event_count, poll_interval_ms) "
+                        "VALUES ('sess-bad', 2000, 'ch-uuid-check', -1, 0, 10000)"
                     ))
         finally:
             engine.dispose()
@@ -291,13 +301,14 @@ class TestSessionTelemetryAccountDeletionScrub:
                 uid = user.id
                 assert uid is not None
 
+                # channel_id is String(64) NOT NULL after migration 0007.
                 session.add_all([
                     models.SessionTelemetry(
                         session_id=f"sess-scrub-{n}",
                         observed_at=1_700_000_000_000 + n * 10_000,
                         user_id=uid,
                         provider_id=1,
-                        channel_id=42,
+                        channel_id="ch-uuid-scrub-42",
                         bytes_delta=1_000 * (n + 1),
                         buffer_event_count=0,
                         poll_interval_ms=10_000,
@@ -310,7 +321,7 @@ class TestSessionTelemetryAccountDeletionScrub:
                     observed_at=1_700_000_000_000,
                     user_id=None,
                     provider_id=None,
-                    channel_id=7,
+                    channel_id="ch-uuid-scrub-7",
                     bytes_delta=500,
                     buffer_event_count=0,
                     poll_interval_ms=10_000,

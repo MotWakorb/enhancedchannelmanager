@@ -4,15 +4,46 @@ Polls Dispatcharr stats periodically and accumulates bandwidth data.
 """
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime, date, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
 from database import get_session
-from models import BandwidthDaily, ChannelWatchStats, UniqueClientConnection, ChannelBandwidth
+from models import (
+    BandwidthDaily,
+    ChannelBandwidth,
+    ChannelWatchStats,
+    SessionTelemetry,
+    UniqueClientConnection,
+)
 
 logger = logging.getLogger(__name__)
+
+
+# -----------------------------------------------------------------------------
+# Stats v2 — feature flag for the additive ``session_telemetry`` write path
+# (bead enhancedchannelmanager-skqln.3 step (a)).
+#
+# Evaluated per poll so operators can flip the flag in the running env (the
+# container reads ``os.environ`` at call time). Default OFF — the first PR
+# must be a no-op in production. When ON, ``_collect_stats`` writes the
+# legacy tables AS BEFORE and ALSO writes one row per active viewing
+# connection into ``session_telemetry``; the new write is wrapped in
+# try/except so a failure cannot disturb the legacy path.
+#
+# Naming follows the existing ``ECM_NORMALIZATION_UNIFIED_POLICY`` /
+# ``ECM_NORMALIZATION_CONFUSABLES_FOLD`` env-var convention. The
+# user-facing operator opt-out toggle is a separate bead (bd-tp1pd) that
+# fast-follows this work — that is a Pydantic setting, this is an
+# engineering refactor gate.
+# -----------------------------------------------------------------------------
+
+def _session_telemetry_write_enabled() -> bool:
+    """Parse ECM_SESSION_TELEMETRY_WRITE_ENABLED. Default-OFF (opt-in)."""
+    raw = os.environ.get("ECM_SESSION_TELEMETRY_WRITE_ENABLED", "false")
+    return raw.strip().lower() in {"true", "1", "yes", "on"}
 
 
 def get_user_timezone() -> timezone:
@@ -277,6 +308,13 @@ class BandwidthTracker:
             logger.warning("[BANDWIDTH] Failed to fetch stats from Dispatcharr: %s", e)
             return
 
+        # Stamp the moment we observed this poll. Used by the Stats v2
+        # session_telemetry write (skqln.3 step (a)). Held outside the
+        # feature-flag check so the value is identical whether or not the
+        # additive write is enabled — keeps observed_at semantics stable
+        # if/when the flag flips at runtime mid-cycle.
+        observed_at_ms = int(time.time() * 1000)
+
         channels = stats.get("channels", [])
         logger.debug("[BANDWIDTH] Collected stats for %s active channels", len(channels))
 
@@ -296,6 +334,9 @@ class BandwidthTracker:
         still_active_channels: list[dict] = []
         # Per-channel bandwidth tracking (v0.11.0)
         channel_bandwidth_updates: list[dict] = []
+        # Per-channel snapshot for the Stats v2 session_telemetry helper
+        # (skqln.3 step (a)). One entry per active channel this poll.
+        telemetry_channel_snapshot: list[dict] = []
 
         for channel in channels:
             channel_id = str(channel.get("channel_id", ""))
@@ -393,6 +434,18 @@ class BandwidthTracker:
                         "client_count": client_count,
                     })
 
+                # Capture the snapshot the Stats v2 session_telemetry helper
+                # needs (skqln.3 step (a)). Built unconditionally so the data
+                # shape is stable; the helper is a no-op when the feature
+                # flag is OFF.
+                telemetry_channel_snapshot.append({
+                    "channel_uuid": channel_id,
+                    "channel_number": channel_number,
+                    "client_ips": list(client_ips),
+                    "client_user_map": dict(client_user_map),
+                    "channel_bytes_delta": channel_bytes_delta,
+                })
+
         # Check for channels that stopped being watched
         stopped_channels = self._last_active_channels - current_active_channels
         if stopped_channels:
@@ -453,6 +506,13 @@ class BandwidthTracker:
         # Log stopped channels
         if stopped_channels:
             logger.info("[BANDWIDTH] %s channel(s) stopped streaming", len(stopped_channels))
+
+        # Stats v2 additive write (skqln.3 step (a)). Runs LAST and is
+        # wrapped in a defensive try/except inside the helper so a failure
+        # in the new path cannot disturb the legacy writes above. No-op
+        # when ECM_SESSION_TELEMETRY_WRITE_ENABLED is unset/false.
+        if _session_telemetry_write_enabled():
+            self._write_session_telemetry(telemetry_channel_snapshot, observed_at_ms)
 
     def _update_daily_record(
         self,
@@ -786,6 +846,112 @@ class BandwidthTracker:
             session.rollback()
         finally:
             session.close()
+
+    def _write_session_telemetry(
+        self,
+        channel_snapshot: list[dict],
+        observed_at_ms: int,
+    ) -> None:
+        """Write one row per active viewing connection into ``session_telemetry``.
+
+        Stats v2 additive write path — bead ``enhancedchannelmanager-skqln.3``
+        step (a). Called from ``_collect_stats`` AFTER the four legacy writes
+        and ONLY when ``ECM_SESSION_TELEMETRY_WRITE_ENABLED`` is on. No
+        consumers of ``session_telemetry`` exist yet, so this is observation-
+        only — the row shape is what later beads (skqln.5 read API, skqln.14
+        provider resolver, skqln.15 buffer ingest) will populate further.
+
+        Row population (step (a), conservative):
+
+        * ``session_id`` — synthesized from the active-connection id we track
+          in ``self._active_connections``; namespaced ``conn-<id>`` so it does
+          not collide with future session-id sources. Stable for the life of
+          the connection.
+        * ``observed_at`` — ms since epoch stamped at the start of the poll
+          (passed in so all rows in this cycle share the same value).
+        * ``user_id`` — from the per-channel ``client_user_map`` if present;
+          NULL when Dispatcharr did not surface a user id for that ip.
+        * ``provider_id`` — always NULL. Provider tagging lands in skqln.14.
+        * ``channel_id`` — Dispatcharr channel UUID (``String(64)``). Same
+          shape the snapshot loop in ``_collect_stats`` already keys on, and
+          matches every other channel-keyed table in the schema
+          (``channel_watch_stats`` etc.). Migration 0007 corrected the
+          column type from INTEGER to VARCHAR(64) NOT NULL after the
+          step-(a) commit was first drafted with NULL writes; see the
+          bead body for the schema-mismatch correction.
+        * ``bytes_delta`` — per-channel byte delta divided equally across
+          active clients (integer floor; remainder dropped). Acceptable for
+          observation-only; refined when consumers exist.
+        * ``buffer_event_count`` — always 0. Buffer-event ingest is skqln.15.
+        * ``poll_interval_ms`` — ``self.poll_interval`` (seconds) × 1000.
+
+        The write is wrapped in a defensive try/except so any failure here
+        cannot disturb the legacy writes that already committed. This is
+        the keystone of "single-write refactor that can't break what
+        already works" — step (a) is dual-write under a flag, but ONLY for
+        the duration needed to prove the new path; legacy-write removal is
+        step (d) in this bead, behind a separate commit and PR.
+        """
+        try:
+            poll_interval_ms = max(int(self.poll_interval * 1000), 0)
+            session = get_session()
+            try:
+                rows_written = 0
+                for entry in channel_snapshot:
+                    channel_uuid = entry["channel_uuid"]
+                    client_ips = entry["client_ips"]
+                    client_user_map = entry["client_user_map"]
+                    channel_bytes_delta = max(int(entry["channel_bytes_delta"]), 0)
+
+                    # No active clients on this channel this poll → nothing
+                    # to attribute to a session.
+                    if not client_ips:
+                        continue
+
+                    per_client_bytes = channel_bytes_delta // len(client_ips)
+
+                    for ip in client_ips:
+                        conn_key = (channel_uuid, ip)
+                        conn_id = self._active_connections.get(conn_key)
+                        # Tracker has not yet recorded a connection row for
+                        # this (channel, ip) — happens on the first poll of
+                        # a brand-new viewer because _update_watch_counts
+                        # has already run by the time we reach here, so this
+                        # should be rare. Skip rather than synthesize a
+                        # session id we cannot correlate later.
+                        if conn_id is None:
+                            continue
+
+                        session.add(
+                            SessionTelemetry(
+                                session_id=f"conn-{conn_id}",
+                                observed_at=observed_at_ms,
+                                user_id=client_user_map.get(ip),
+                                provider_id=None,
+                                channel_id=channel_uuid,
+                                bytes_delta=per_client_bytes,
+                                buffer_event_count=0,
+                                poll_interval_ms=poll_interval_ms,
+                            )
+                        )
+                        rows_written += 1
+
+                if rows_written:
+                    session.commit()
+                    logger.debug(
+                        "[STATS_V2] Wrote %s session_telemetry row(s) (observed_at=%s)",
+                        rows_written,
+                        observed_at_ms,
+                    )
+                else:
+                    # Nothing to write; release the (empty) transaction.
+                    session.rollback()
+            finally:
+                session.close()
+        except Exception as e:
+            # Observation-only path — failures must never propagate. The
+            # legacy writes already committed before we got here.
+            logger.exception("[STATS_V2] session_telemetry write failed: %s", e)
 
     @staticmethod
     def get_bandwidth_summary() -> dict:
