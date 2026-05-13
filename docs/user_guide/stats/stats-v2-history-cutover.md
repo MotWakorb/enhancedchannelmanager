@@ -51,7 +51,73 @@ The legacy `channel_watch_stats` rows are not deleted at the cutover
 — they remain in the database alongside `session_telemetry` until a
 later v0.17.x cleanup retires the table.
 
+## How to opt out of Stats v2 entirely
+
+Stats v2 collects per-poll observations (one row per active viewer per
+channel per poll, default every 10 seconds) so the new Stats panels —
+top-watched, popularity ranking, watch-time-by-user, buffering events
+by provider — have real data to render. If you are running ECM in a
+household where this level of viewing-history detail is undesirable, or
+your security posture forbids retaining per-session metadata at all,
+you can disable the entire Stats v2 data path with one environment
+variable.
+
+**Set `ECM_STATS_TELEMETRY_OPT_OUT=true` on the ECM container.** Any of
+the values `true`, `1`, `yes`, `on` (case-insensitive) enables the
+opt-out; anything else (including unset, the default) leaves Stats v2
+recording normally.
+
+```yaml
+# docker-compose.yml — example
+services:
+  ecm:
+    image: enhancedchannelmanager:latest
+    environment:
+      ECM_STATS_TELEMETRY_OPT_OUT: "true"
+```
+
+When the opt-out is enabled:
+
+- Zero rows land in `session_telemetry`. The table stays empty (or
+  retains only pre-opt-out rows if you flip the flag mid-run).
+- The provider resolver does **not** call Dispatcharr's streams
+  endpoint each poll — one Dispatcharr API round-trip saved.
+- The buffer-event ingest does **not** call Dispatcharr's
+  system-events endpoint each poll — one more round-trip saved.
+- On startup, ECM logs one line so you can confirm the flag is live:
+  `[STATS_V2] telemetry opt-out is ENABLED — no session_telemetry
+  data will be collected`. Grep for that string in `docker logs
+  ecm-ecm-1` if you're not sure whether the flag was picked up.
+
+What still happens with the opt-out on:
+
+- All **legacy** stats keep recording — bandwidth totals
+  (`BandwidthDaily`), per-channel bandwidth (`ChannelBandwidth`),
+  unique-client connections (`UniqueClientConnection`). These pre-date
+  Stats v2 and are not part of the opt-out surface. The original
+  Stats tab panels (bandwidth chart, total clients, peak bitrate) keep
+  working.
+- The Stats tab's v2 panels — top-watched, popularity ranking,
+  watch-time-by-user, buffering events by provider — show no data
+  because there is no data to show. The panels render an empty state
+  rather than erroring.
+- The frontend error-telemetry opt-out
+  (`telemetry_client_errors_enabled` in Settings, documented in
+  [Error Telemetry & Opt-out](../error-telemetry-opt-out.md)) is
+  independent — flipping one does not affect the other.
+
+The flag is read on every poll cycle, so flipping it at runtime takes
+effect within one poll interval (default 10 seconds) without a
+container restart. If you want the opt-out to survive container
+restarts, set the env var in your compose/run command so it persists
+across restarts.
+
+> **Tracking:** bead `bd-tp1pd` (operator-global telemetry opt-out
+> toggle). The Stats v2 epic is `bd-skqln`.
+
 ## Tracking
 
 - Bead `bd-skqln.3` (single-write refactor + read repointing).
+- Bead `bd-tp1pd` (operator-facing Stats v2 telemetry opt-out — the
+  `ECM_STATS_TELEMETRY_OPT_OUT` env var documented above).
 - ADR-007 (retention policy for `session_telemetry`).
