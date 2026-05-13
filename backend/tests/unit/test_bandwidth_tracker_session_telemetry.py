@@ -66,11 +66,26 @@ def patched_session_local(test_engine, monkeypatch):
 
 @pytest.fixture
 def mock_client():
-    """Stub the Dispatcharr client surface BandwidthTracker calls."""
+    """Stub the Dispatcharr client surface BandwidthTracker calls.
+
+    Default returns are picked so the tracker's per-poll fetches all
+    no-op when individual tests don't override them — system_events
+    returns an empty events payload (bd-skqln.15) so the buffer ingest
+    path is a clean no-op by default.
+    """
     client = AsyncMock()
     client.get_channel_stats = AsyncMock(return_value={"channels": []})
     client.get_channels = AsyncMock(return_value={"results": [], "next": None})
     client.get_users = AsyncMock(return_value=[])
+    client.get_system_events = AsyncMock(
+        return_value={
+            "events": [],
+            "count": 0,
+            "total": 0,
+            "offset": 0,
+            "limit": 1000,
+        }
+    )
     return client
 
 
@@ -1045,3 +1060,471 @@ async def test_resolver_integration_three_providers_distribution(
     finally:
         session.close()
     assert distribution == Counter({1: 2, 2: 2, 3: 2}), distribution
+
+
+# ---------------------------------------------------------------------------
+# Buffer-event ingest tests (bd-skqln.15)
+# ---------------------------------------------------------------------------
+#
+# skqln.3/.14 wrote ``buffer_event_count = 0`` on every session_telemetry row
+# because the buffer-event source was not wired in. skqln.15 wires it: every
+# poll fetches Dispatcharr's ``/api/core/system-events/?event_type=buffering``
+# feed, de-duplicates the surfaced events by their integer ``event.id`` against
+# a bounded LRU that persists across polls, and attributes each surviving
+# event to the channel's session_telemetry rows for the current poll.
+#
+# Attribution model (the GH-59 chart sums ``buffer_event_count`` per
+# ``(provider_id, time_bucket)``):
+# * Each surviving buffer event applies to a single channel.
+# * Per channel, the deduplicated event count is written to the FIRST
+#   session_telemetry row emitted for that channel this poll (sorted by
+#   client_ip for determinism). Other rows for the same channel poll write
+#   ``buffer_event_count = 0``. ``SUM(buffer_event_count) GROUP BY provider,
+#   time_bucket`` then returns the correct count without per-client double-
+#   counting.
+# * Channel with buffer events but NO active client rows this poll: count is
+#   dropped (logged at WARNING). Rare — between client disconnect and channel
+#   stop. Acceptable per acceptance criteria.
+#
+# Provider attribution at event time:
+# * Each poll re-runs the resolver. The buffer-event count for poll N
+#   attributes to whatever provider is active in poll N's resolver result.
+# * Cross-poll failover: poll N+1 re-resolves to the NEW provider, so events
+#   that arrived in poll N+1 attribute to the new provider. This is the
+#   per-poll guarantee documented in the bead.
+
+
+def _system_event(
+    *,
+    event_id: int,
+    channel_id: str | int = "ch-uuid-1",
+    event_type: str = "buffering",
+    ip_address: str | None = None,
+    timestamp: str = "2026-05-13T15:00:00Z",
+) -> dict:
+    """Build a single system-event payload as Dispatcharr's
+    ``/api/core/system-events/`` endpoint surfaces it.
+
+    ``event_id`` is the dedup key — Dispatcharr assigns a monotonically
+    increasing integer ``id`` to every event. ``channel_id`` is normalized
+    to string at the ingest site so both Dispatcharr's numeric-id channels
+    and ECM's UUID-string channels are matched.
+    """
+    payload: dict = {
+        "id": event_id,
+        "event_type": event_type,
+        "channel_id": channel_id,
+        "timestamp": timestamp,
+    }
+    if ip_address is not None:
+        payload["ip_address"] = ip_address
+    return payload
+
+
+@pytest.mark.asyncio
+async def test_buffer_event_count_attributes_to_session_telemetry_row(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """Happy path: one channel, one client, one buffer event delivered in
+    poll 2 → the session_telemetry row for that poll carries
+    ``buffer_event_count == 1``. Poll 1's row carries ``buffer_event_count
+    == 0`` because no buffer event was reported on that cycle.
+    """
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    # Poll 1: no system events.
+    # Poll 2: one buffering event for our channel.
+    mock_client.get_system_events = AsyncMock(
+        side_effect=[
+            {"events": [], "count": 0, "total": 0, "offset": 0, "limit": 1000},
+            {
+                "events": [
+                    _system_event(event_id=1001, channel_id="ch-uuid-1"),
+                ],
+                "count": 1,
+                "total": 1,
+                "offset": 0,
+                "limit": 1000,
+            },
+        ]
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = (
+            session.query(SessionTelemetry)
+            .order_by(SessionTelemetry.id)
+            .all()
+        )
+    finally:
+        session.close()
+    assert len(rows) == 2
+    assert rows[0].buffer_event_count == 0
+    assert rows[1].buffer_event_count == 1
+
+
+@pytest.mark.asyncio
+async def test_buffer_event_dedup_across_polls(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """The system-events feed re-delivers events that haven't yet aged out
+    of Dispatcharr's window. The same ``event.id`` returned in two
+    successive polls counts ONCE — the dedup LRU persists across polls.
+
+    Two polls. Poll 1 surfaces event_id=2001 (counted). Poll 2 surfaces the
+    SAME event_id=2001 (re-delivered) plus event_id=2002 (new). The total
+    across rows for this channel is 2, not 3.
+    """
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    redelivered = _system_event(event_id=2001, channel_id="ch-uuid-1")
+    new_event = _system_event(event_id=2002, channel_id="ch-uuid-1")
+    mock_client.get_system_events = AsyncMock(
+        side_effect=[
+            {"events": [redelivered], "count": 1, "total": 1, "offset": 0, "limit": 1000},
+            {
+                "events": [new_event, redelivered],
+                "count": 2,
+                "total": 2,
+                "offset": 0,
+                "limit": 1000,
+            },
+        ]
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    total = sum(r.buffer_event_count for r in rows)
+    assert total == 2, (
+        f"Expected 2 distinct events counted across rows; got {total} "
+        f"(rows={[(r.observed_at, r.buffer_event_count) for r in rows]})"
+    )
+
+
+@pytest.mark.asyncio
+async def test_buffer_event_attributes_to_active_provider_at_event_time(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """A channel hops providers between polls. Buffer events delivered in
+    poll N carry the provider_id resolved in poll N's resolver pass.
+
+    Poll 1: channel served by stream_id=100 → provider 1. Buffer event
+    arrives → its row carries ``provider_id=1``.
+    Poll 2: channel hopped to stream_id=200 → provider 2. New buffer event
+    arrives → its row carries ``provider_id=2``.
+    """
+    mock_client.get_streams_by_ids = AsyncMock(
+        side_effect=[
+            [{"id": 100, "m3u_account": 1}],
+            [{"id": 200, "m3u_account": 2}],
+        ]
+    )
+    mock_client.get_system_events = AsyncMock(
+        side_effect=[
+            {
+                "events": [_system_event(event_id=3001, channel_id="ch-uuid-1")],
+                "count": 1, "total": 1, "offset": 0, "limit": 1000,
+            },
+            {
+                "events": [_system_event(event_id=3002, channel_id="ch-uuid-1")],
+                "count": 1, "total": 1, "offset": 0, "limit": 1000,
+            },
+        ]
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=100,
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=200,
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = (
+            session.query(SessionTelemetry)
+            .order_by(SessionTelemetry.id)
+            .all()
+        )
+    finally:
+        session.close()
+    assert len(rows) == 2
+    # Poll-1 buffer event → provider 1.
+    assert rows[0].provider_id == 1
+    assert rows[0].buffer_event_count == 1
+    # Poll-2 buffer event → provider 2 (new active stream).
+    assert rows[1].provider_id == 2
+    assert rows[1].buffer_event_count == 1
+
+
+@pytest.mark.asyncio
+async def test_buffer_event_for_unresolved_channel_writes_with_null_provider(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """Channel with no resolvable stream (resolver returns NULL for
+    provider). Buffer event still attributes to a row; the row's
+    ``provider_id`` is NULL — the count is preserved, the attribution gap
+    is honest.
+    """
+    # No stream_id on channel → resolver returns None.
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    mock_client.get_system_events = AsyncMock(
+        side_effect=[
+            {"events": [], "count": 0, "total": 0, "offset": 0, "limit": 1000},
+            {
+                "events": [_system_event(event_id=4001, channel_id="ch-uuid-1")],
+                "count": 1, "total": 1, "offset": 0, "limit": 1000,
+            },
+        ]
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = (
+            session.query(SessionTelemetry)
+            .order_by(SessionTelemetry.id)
+            .all()
+        )
+    finally:
+        session.close()
+    assert len(rows) == 2
+    assert rows[1].provider_id is None
+    assert rows[1].buffer_event_count == 1
+
+
+@pytest.mark.asyncio
+async def test_no_buffer_events_writes_zero_count(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """A poll with zero buffer events writes the usual session_telemetry
+    rows with ``buffer_event_count = 0`` — no buffer-only row is
+    synthesized when there's nothing to attribute.
+    """
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    mock_client.get_system_events = AsyncMock(
+        return_value={"events": [], "count": 0, "total": 0, "offset": 0, "limit": 1000}
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows
+    assert all(r.buffer_event_count == 0 for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_buffer_event_count_split_across_multi_client_channel(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """Channel with multiple clients: buffer events are channel-level, so
+    the count attributes to exactly ONE row per (channel, poll) — the
+    first-emitted row (sorted by client_ip for determinism). Sibling rows
+    carry ``buffer_event_count = 0``.
+
+    Acceptance criterion: ``SUM(buffer_event_count)`` GROUP BY (channel,
+    poll) equals the number of distinct events seen for that channel this
+    poll. With per-client double-counting suppressed this way, GH-59's
+    "buffering events by provider" SUM works without further per-row
+    arithmetic.
+    """
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    mock_client.get_system_events = AsyncMock(
+        side_effect=[
+            {"events": [], "count": 0, "total": 0, "offset": 0, "limit": 1000},
+            {
+                "events": [
+                    _system_event(event_id=5001, channel_id="ch-uuid-1"),
+                    _system_event(event_id=5002, channel_id="ch-uuid-1"),
+                ],
+                "count": 2, "total": 2, "offset": 0, "limit": 1000,
+            },
+        ]
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_count=2,
+        client_ips=["10.0.0.2", "10.0.0.1"],
+    )
+    second = _channel_payload(
+        total_bytes=3_000_000,
+        client_count=2,
+        client_ips=["10.0.0.2", "10.0.0.1"],
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = (
+            session.query(SessionTelemetry)
+            .order_by(SessionTelemetry.id)
+            .all()
+        )
+    finally:
+        session.close()
+    # 2 clients × 2 polls = 4 rows.
+    assert len(rows) == 4
+    # The two poll-2 rows together count exactly 2 events for the channel.
+    poll2_observed = max(r.observed_at for r in rows)
+    poll2_rows = [r for r in rows if r.observed_at == poll2_observed]
+    assert sum(r.buffer_event_count for r in poll2_rows) == 2
+    # Exactly one row carries the count; the other(s) are zero.
+    nonzero_counts = [r.buffer_event_count for r in poll2_rows if r.buffer_event_count > 0]
+    assert len(nonzero_counts) == 1
+    assert nonzero_counts[0] == 2
+
+
+@pytest.mark.asyncio
+async def test_resolver_called_once_per_poll_with_buffer_ingest(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """The provider resolver shares its result between the session_telemetry
+    write path (skqln.14) and the buffer-event attribution (this bead).
+    ``get_streams_by_ids`` is invoked at most ONCE per poll cycle — never
+    re-called by the buffer ingest. Regression-guards against duplicated
+    Dispatcharr round-trips.
+    """
+    mock_client.get_streams_by_ids = AsyncMock(
+        return_value=[{"id": 100, "m3u_account": 1}]
+    )
+    mock_client.get_system_events = AsyncMock(
+        return_value={
+            "events": [_system_event(event_id=6001, channel_id="ch-uuid-1")],
+            "count": 1, "total": 1, "offset": 0, "limit": 1000,
+        }
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=100,
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=100,
+    )
+
+    mock_client.get_channel_stats.return_value = {"channels": [first]}
+    await tracker._collect_stats()
+    after_first = mock_client.get_streams_by_ids.await_count
+    mock_client.get_channel_stats.return_value = {"channels": [second]}
+    await tracker._collect_stats()
+    after_second = mock_client.get_streams_by_ids.await_count
+
+    # Two polls → exactly two resolver calls, no extras from buffer ingest.
+    assert after_first == 1
+    assert after_second == 2
+
+
+@pytest.mark.asyncio
+async def test_system_events_fetch_failure_does_not_propagate(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+    caplog,
+):
+    """Dispatcharr's system-events endpoint raises (timeout, 5xx). The
+    polling cycle continues; session_telemetry rows are still written with
+    ``buffer_event_count = 0``. Failure is logged with the
+    ``[STATS_V2]`` prefix so skqln.12 can derive a Prometheus counter.
+    """
+    import logging as _logging
+
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    mock_client.get_system_events = AsyncMock(
+        side_effect=RuntimeError("simulated 503 from Dispatcharr")
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+
+    caplog.clear()
+    with caplog.at_level(_logging.WARNING, logger="bandwidth_tracker"):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows, "polling cycle must continue even when system-events fetch fails"
+    assert all(r.buffer_event_count == 0 for r in rows)
+    assert any(
+        "[STATS_V2]" in r.message and "buffer_event" in r.message
+        for r in caplog.records
+    ), [r.message for r in caplog.records]
