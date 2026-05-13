@@ -31,6 +31,7 @@ End users do not read this section.
 
 ## Going deeper (for now)
 
+- [`stats-v2-history-cutover.md`](stats-v2-history-cutover.md) — what happens to historical watch-stats data at the v0.17.0 cutover. Short version: Stats v2 metrics begin on the day v0.17.0 deploys; prior history is not reconstructable into the new view.
 - [`docs/sre/slos.md`](../../sre/slos.md) — the SLO definitions ECM is measured against. Today this is the closest thing to an operator-facing reliability reference.
 - The `/stats` and `/stream-stats` API routes (see [`docs/api.md`](../../api.md)) — what the Stats tab consumes under the hood.
 
