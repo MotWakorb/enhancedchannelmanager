@@ -393,7 +393,12 @@ async def test_helper_internal_failure_is_swallowed(
     ):
         mock_client.get_channel_stats.return_value = {"channels": [second]}
         caplog.clear()
-        with caplog.at_level(_logging.ERROR, logger="bandwidth_tracker"):
+        # bd-skqln.12 downgraded this log line from ERROR (exception) to
+        # WARN — the helper still swallows the failure, but the bead's
+        # observability spec calls for WARN-with-trace_id so SRE's
+        # alerting rules differentiate "swallowed observation failure"
+        # from "unrecoverable error". Capture at WARN to see it.
+        with caplog.at_level(_logging.WARNING, logger="bandwidth_tracker"):
             try:
                 await tracker._collect_stats()
             except Exception:  # pragma: no cover — defensive only
@@ -401,7 +406,7 @@ async def test_helper_internal_failure_is_swallowed(
                     "_collect_stats must not propagate exceptions from "
                     "_write_session_telemetry"
                 )
-        # The failure was logged at ERROR level with the [STATS_V2] prefix.
+        # The failure was logged at WARN level with the [STATS_V2] prefix.
         assert any(
             "[STATS_V2]" in record.message and "session_telemetry write failed" in record.message
             for record in caplog.records
