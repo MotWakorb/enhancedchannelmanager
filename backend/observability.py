@@ -444,6 +444,100 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             "growing value indicates the lazy TTL reaper has regressed.",
             registry=registry,
         ),
+        # ----------------------------------------------------------------
+        # Stats v2 observability (bd-skqln.12).
+        #
+        # The metric set below covers the four observability surfaces the
+        # Stats v2 epic requires:
+        #
+        #   1. session_telemetry write health (success/failure counter,
+        #      duration histogram, last-batch row-count gauge)
+        #   2. Per-poll provider resolution success rate (the modernized
+        #      replacement for the dual-write divergence SLI that the
+        #      epic originally specified; skqln.3 step (d) removed the
+        #      legacy writer, so the divergence is no longer measurable
+        #      — the resolver's resolved-rate is the surviving SLI)
+        #   3. Stats v2 HTTP query latency (emitted by the existing
+        #      observability middleware in main.py with a filter on
+        #      ``/api/stats/*`` paths; gives the SLI surface a clean
+        #      handle distinct from generic HTTP traffic)
+        #
+        # Cardinality posture (SRE veto on user_id / channel_id):
+        #
+        # * No metric below carries user_id, channel_id, session_id,
+        #   target_id, or client_ip as a label. Those identifiers belong
+        #   in logs (correlated by trace_id), never in the metric label
+        #   space. Even though session_telemetry rows DO record user_id
+        #   and channel_id, the metrics aggregate over them.
+        # * provider_id IS allowed by SRE pre-clearance (<20 providers
+        #   bounded), but NO stats v2 metric below uses it as a label in
+        #   this bead. Future provider-keyed metrics belong to follow-up
+        #   beads with explicit SRE sign-off.
+        # * ``result`` labels are fixed enums: success/failure for write
+        #   health, resolved/unresolved for provider resolution. No other
+        #   values are ever emitted.
+        # * ``endpoint`` uses the FastAPI matched route PATTERN
+        #   (``/api/stats/watch-time/{user_id}``), NEVER the resolved
+        #   path. ``granularity`` is sourced from the ``group_by`` query
+        #   parameter when present (currently ``total`` / ``day``);
+        #   defaults to ``"none"`` for endpoints that don't accept a
+        #   group-by axis. Combined ceiling is ~5 endpoints × 3
+        #   granularities = ~15 series.
+        # ----------------------------------------------------------------
+        "session_telemetry_writes_total": Counter(
+            "ecm_session_telemetry_writes_total",
+            "Count of session_telemetry write attempts (one per "
+            "BandwidthTracker poll cycle), labeled by outcome. "
+            "result ∈ {success, failure}. Failures are wrapped by the "
+            "tracker's try/except so the legacy sibling writes that ran "
+            "before the helper survive — this counter exposes the "
+            "swallowed failure rate so SRE can alert on it.",
+            ["result"],
+            registry=registry,
+        ),
+        "session_telemetry_write_duration_seconds": Histogram(
+            "ecm_session_telemetry_write_duration_seconds",
+            "Wall time of one _write_session_telemetry call, in seconds. "
+            "Buckets cover the sub-millisecond regime typical for a "
+            "small batch of inserts into a SQLite WAL store, with a long "
+            "tail for the pathological 'something is wrong with the "
+            "database' case.",
+            buckets=_NORMALIZATION_LATENCY_BUCKETS,
+            registry=registry,
+        ),
+        "session_telemetry_row_count": Gauge(
+            "ecm_session_telemetry_row_count",
+            "Number of session_telemetry rows written in the most recent "
+            "BandwidthTracker poll cycle. Used by SRE storage-growth "
+            "alerts: a sustained high value combined with the table's "
+            "retention policy gives a leading indicator of disk pressure.",
+            registry=registry,
+        ),
+        "provider_resolution_total": Counter(
+            "ecm_provider_resolution_total",
+            "Count of channel-poll provider-resolution outcomes, "
+            "labeled by outcome. result ∈ {resolved, unresolved}. The "
+            "ratio resolved / (resolved + unresolved) is the bd-skqln.14 "
+            "data-consistency SLI — target ≥95% steady state. Increments "
+            "ONCE PER CHANNEL per poll cycle, so the rate scales with "
+            "active channels, not active sessions.",
+            ["result"],
+            registry=registry,
+        ),
+        "stats_query_duration_seconds": Histogram(
+            "ecm_stats_query_duration_seconds",
+            "Latency of Stats v2 HTTP queries, in seconds. Labels: "
+            "endpoint (FastAPI route pattern, e.g. "
+            "'/api/stats/watch-time/{user_id}') and granularity "
+            "(value of the 'group_by' query param, or 'none' if absent). "
+            "Bounded label set: ~5 stats endpoints × 3 granularities. "
+            "Emitted by the observability middleware in main.py with a "
+            "filter on /api/stats/* paths; non-stats traffic continues "
+            "to use the generic ecm_http_request_duration_seconds.",
+            ["endpoint", "granularity"],
+            buckets=_HTTP_LATENCY_BUCKETS,
+            registry=registry,
+        ),
     }
 
 
