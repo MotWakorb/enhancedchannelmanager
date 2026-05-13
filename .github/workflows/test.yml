@@ -83,8 +83,12 @@ jobs:
           # --junitxml emits a JUnit-format report consumed by the
           # flake-pr-comment workflow (bead xq19y) to surface
           # flagged-in-last-30-runs flakes on every PR.
+          # tests/performance/ runs in the dedicated perf-benchmarks
+          # workflow (bd-skqln.10) — exclude it here so the unit/integration
+          # suite isn't burdened with the 250k-row seed.
           python -m pytest \
             --ignore=tests/e2e \
+            --ignore=tests/performance \
             -m "not slow" --tb=short --no-header -p no:warnings \
             --junitxml=junit.xml
 
