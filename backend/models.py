@@ -1346,6 +1346,184 @@ class SessionTelemetry(Base):
 
 
 # =============================================================================
+# Stats v2 — daily rollup tables + once-per-day marker (ADR-007 D3/D4/D5)
+# =============================================================================
+
+class SessionTelemetryUserDaily(Base):
+    """Per-user, per-channel, per-UTC-day watch rollup (ADR-007 D4).
+
+    Materialised daily by the ``stats_v2_rollup`` nightly task (see
+    ``backend/tasks/stats_v2_rollup.py``). Reads: the Users panel watch-time
+    selector (``SUM(watch_seconds) GROUP BY user_id WHERE day >= ?``) and
+    the per-channel breakdown (``GROUP BY channel_id WHERE user_id = ?``).
+
+    Why a rollup *table*, not a view: ADR-007 D2 — a view over
+    ``session_telemetry`` re-scans up to 26M raw rows on every panel load;
+    the daily-rollup table is on the order of thousands of rows.
+
+    NULL ``user_id`` handling: raw ``session_telemetry.user_id`` is
+    nullable (anonymous/system traffic with no behavioral subject to
+    attribute). The rollup intentionally **excludes** NULL ``user_id``
+    rows — there is no user to attribute the watch time to, so no row is
+    written for them. This is the per-user analog of the per-provider
+    ``'unknown'`` bucket; the per-user case drops rather than buckets
+    because a fabricated ``user_id = -1`` (or similar) would pollute the
+    ``users`` namespace and surface in the Users panel as a non-existent
+    user. The per-provider rollup uses a literal ``'unknown'`` string
+    bucket because TEXT ``provider_id`` allows it without colliding with
+    real provider IDs.
+
+    Bead: ``enhancedchannelmanager-7i2vv``.
+    """
+    __tablename__ = "session_telemetry_user_daily"
+
+    # Composite PK matching the access pattern (Users panel queries).
+    # Dispatcharr user id from the FK in session_telemetry; INTEGER NOT NULL
+    # — NULL raw rows are excluded at rollup time (no behavioral subject).
+    user_id = Column(Integer, primary_key=True, nullable=False)
+    # Dispatcharr channel UUID; String(64) matching session_telemetry.channel_id
+    # (after migration 0007) and every other channel-keyed table in the schema.
+    channel_id = Column(String(64), primary_key=True, nullable=False)
+    # UTC calendar day.
+    day = Column(Date, primary_key=True, nullable=False)
+
+    # Sum of distinct (channel_id, observed_at) poll intervals for the
+    # (user, channel, day) grouping, in seconds. Same DISTINCT-(channel_id,
+    # observed_at) collapse the channel_watch_stats_v view uses (skqln.3
+    # step (b)) so per-poll-per-client multiplicity doesn't inflate the
+    # number.
+    watch_seconds = Column(Integer, nullable=False)
+    # Distinct session_ids contributing to this (user, channel, day).
+    # Approximates "distinct viewing sessions"; feeds the panel's
+    # "times watched" column.
+    session_count = Column(Integer, nullable=False)
+
+    __table_args__ = (
+        Index("idx_session_telemetry_user_daily_day", "day"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<SessionTelemetryUserDaily(user_id={self.user_id}, "
+            f"channel_id={self.channel_id}, day={self.day}, "
+            f"watch_seconds={self.watch_seconds})>"
+        )
+
+
+class SessionTelemetryProviderDaily(Base):
+    """Per-provider, per-channel, per-UTC-day performance rollup (ADR-007 D5).
+
+    Materialised daily by the ``stats_v2_rollup`` nightly task. Reads:
+    every visualisation on the Providers panel — buffering-by-provider
+    time series, time-per-provider stacked area, channels-by-provider
+    heatmap, and bitrate-by-provider (derived from
+    ``bytes_delta_sum * 8 / watch_seconds``).
+
+    NULL ``provider_id`` handling: raw ``session_telemetry.provider_id`` is
+    nullable INTEGER — the resolver (skqln.14) is best-effort and a miss
+    leaves provider unset. ADR-007 §line 109 requires that those rows
+    **surface as an ``'unknown'`` bucket, not silently drop**. The rollup
+    job coalesces raw NULLs to the literal string ``'unknown'`` at rollup
+    time and writes them under that PK; this column is therefore TEXT NOT
+    NULL even though the source column is INTEGER nullable. The cost is
+    one CAST in the rollup INSERT; the gain is that the GH-59 "silently
+    lies" DBA pushback never materialises.
+
+    Bead: ``enhancedchannelmanager-7i2vv``.
+    """
+    __tablename__ = "session_telemetry_provider_daily"
+
+    # TEXT (not INTEGER) so the 'unknown' sentinel from ADR-007 §line 109
+    # can live in the PK as a literal string without colliding with real
+    # provider IDs. The rollup job is responsible for the CAST at write
+    # time.
+    provider_id = Column(Text, primary_key=True, nullable=False)
+    # Dispatcharr channel UUID; String(64) matches session_telemetry.
+    channel_id = Column(String(64), primary_key=True, nullable=False)
+    # UTC calendar day.
+    day = Column(Date, primary_key=True, nullable=False)
+
+    # Total watch time for the (provider, channel, day) — same DISTINCT-
+    # (channel_id, observed_at) collapse used in channel_watch_stats_v
+    # (skqln.3) and the per-user rollup. Feeds the stacked-area
+    # "time per provider" visualisation.
+    watch_seconds = Column(Integer, nullable=False)
+    # Summed bytes for the day; bitrate is derivable as
+    # bytes_delta_sum * 8 / watch_seconds (epic decision — store the
+    # numerator, not the derived rate).
+    bytes_delta_sum = Column(BigInteger, nullable=False)
+    # Count of buffer/stall events ingested for this provider that day
+    # (skqln.15). Feeds the "buffering by provider" time-series.
+    buffer_event_count = Column(Integer, nullable=False)
+
+    __table_args__ = (
+        Index(
+            "idx_session_telemetry_provider_daily_provider_day",
+            "provider_id",
+            "day",
+        ),
+        Index("idx_session_telemetry_provider_daily_day", "day"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<SessionTelemetryProviderDaily(provider_id={self.provider_id}, "
+            f"channel_id={self.channel_id}, day={self.day}, "
+            f"watch_seconds={self.watch_seconds}, "
+            f"bytes_delta_sum={self.bytes_delta_sum})>"
+        )
+
+
+class TelemetryRollupState(Base):
+    """Once-per-calendar-day marker for each named rollup (ADR-007 D3).
+
+    One row per named rollup (``user_daily``, ``provider_daily``). The
+    ``stats_v2_rollup`` nightly task reads ``last_completed_day`` to
+    decide which days still need rolling up (catch-up budget = D1 retention
+    window minus margin), and writes ``last_run_at_ms`` /
+    ``last_run_status`` / ``last_run_error`` after each pass so SRE can
+    alert on staleness (failure modes 1+2: >36h warn, >25d page) and the
+    Providers panel can read "last updated" from a single source of truth.
+
+    Why this is a separate table rather than a settings key: the marker
+    is rollup-name keyed (two named rollups today, more later) and carries
+    structured columns the settings KV would have to JSON-encode. A
+    bespoke 5-column table is cheaper to read, easier to alert on, and
+    survives a settings reset (which a routine support flow can perform).
+
+    Bead: ``enhancedchannelmanager-7i2vv``.
+    """
+    __tablename__ = "telemetry_rollup_state"
+
+    # 'user_daily' | 'provider_daily' — see ROLLUP_NAME_USER_DAILY /
+    # ROLLUP_NAME_PROVIDER_DAILY in tasks/stats_v2_rollup.py for the
+    # canonical string constants used by the writer + the staleness alert.
+    rollup_name = Column(Text, primary_key=True, nullable=False)
+    # Most recent UTC day this rollup has durably aggregated. Nullable for
+    # the first-run case (no day has yet been rolled up).
+    last_completed_day = Column(Date, nullable=True)
+    # Wall-clock ms-since-epoch of the most recent run (success OR failure).
+    # SRE's staleness alert reads this — "no successful run in >36h" is
+    # encoded as ``(now_ms - last_run_at_ms) > 36*3600*1000 AND
+    # last_run_status != 'success'`` plus the symmetric "no run at all".
+    last_run_at_ms = Column(BigInteger, nullable=True)
+    # 'success' | 'failure' | 'partial' (a multi-rollup run where one
+    # rollup succeeded and another failed records 'partial').
+    last_run_status = Column(Text, nullable=True)
+    # Error detail on failure, NULL on success. Held as free-form text
+    # rather than a structured exception class so the runbook can quote
+    # the message verbatim during triage.
+    last_run_error = Column(Text, nullable=True)
+
+    def __repr__(self):
+        return (
+            f"<TelemetryRollupState(rollup_name={self.rollup_name!r}, "
+            f"last_completed_day={self.last_completed_day}, "
+            f"last_run_status={self.last_run_status!r})>"
+        )
+
+
+# =============================================================================
 # Authentication Models (v0.11.5)
 # =============================================================================
 
