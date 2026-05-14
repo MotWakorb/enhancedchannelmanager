@@ -41,6 +41,21 @@
   border: 1px solid rgba(168, 168, 184, 0.2);
 }
 
+/* Server-reachable-but-unconfigured: warning state for self-diagnosing /health
+   (bd-ix1g6). Amber so it sits visually between online and offline. */
+.mcp-status-warning {
+  background: rgba(234, 179, 8, 0.1);
+  color: var(--warning, #eab308);
+  border: 1px solid rgba(234, 179, 8, 0.25);
+}
+
+.mcp-status-warning code {
+  background: rgba(234, 179, 8, 0.15);
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+  font-size: 0.85em;
+}
+
 .mcp-status-row .btn-sm {
   padding: 0.35rem;
   min-width: unset;
