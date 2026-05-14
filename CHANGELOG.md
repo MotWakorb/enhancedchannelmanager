@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Fixed
+- Stats v2 Users panel — daily watch-minutes chart now displays dates in the operator's **local timezone** and visually marks today as "in progress" (amber dot vs teal for completed days), with a caption explaining the UTC bucketing + 10s update cadence. Resolves the misleading appearance of watch-time "going down" across the UTC date boundary when yesterday-UTC is complete but today-UTC is still accumulating. Server-side aggregation stays UTC; the relabeling anchors each bucket at noon UTC then formats in the operator's tz to pick the most-overlapping local day. ([bd-1qxo9])
+
+### Fixed (existing entry continues below)
 - Stats v2 Providers panel polish: provider rows now display the actual M3U account name instead of `Provider <id>`. Frontend side-loads the existing `/api/providers` endpoint at panel mount, builds an id→name map, and uses it in chart legends, heatmap row labels, and data tables. Falls back to `Provider <id>` for unmapped IDs (e.g., during the fetch); NULL stays "Unknown". ([bd-vjv7k])
 - Stats v2 Providers heatmap polish: column labels rotated -45° (anchored at column center) and default `cellSize` bumped 32px → 48px; column-label band 24px → 80px to fit rotated text. Resolves the "everything super compressed" overlap when real channel names ("Discovery Channel", "ESPN HD") are wider than the column. The `.heatmap` container's existing `overflow-x: auto` handles wider heatmaps via horizontal scroll. Heatmap primitive interface preserved — `cellSize` prop still overridable for the time-of-day use case. ([bd-yteek])
 
