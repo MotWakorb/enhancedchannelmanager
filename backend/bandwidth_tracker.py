@@ -15,6 +15,7 @@ writes are gone.
 import asyncio
 import logging
 import os
+import re
 import time
 from collections import OrderedDict
 from datetime import datetime, date, timedelta, timezone
@@ -32,6 +33,43 @@ from models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Dispatcharr stream-URL convention: the last path segment before ``.ts`` is
+# the integer Dispatcharr stream row id — the same value that ``stream_id``
+# would have carried on the ``/proxy/ts/status`` payload had it been
+# populated. The resolver falls back to this when ``stream_id`` is missing
+# (bd-kbgey — 214 of 235 dev polls observed with stream_id=None on active
+# channels). One capture group, defensive against query-string suffixes
+# like ``.ts?session=abc123`` so the fallback survives Dispatcharr URL
+# annotation conventions that the proxy may add for transcoding hints.
+_STREAM_ID_URL_PATTERN = re.compile(r"/(\d+)\.ts(?:\?|$)")
+
+
+def _extract_stream_id_from_url(url: Optional[str]) -> Optional[int]:
+    """Pull the Dispatcharr stream row id from a stream URL.
+
+    Returns the integer stream id if the URL matches the
+    ``.../<id>.ts[?...]`` convention, otherwise ``None``. Defensive
+    against malformed input (non-string, empty, no path, no integer
+    segment); the caller treats ``None`` the same as a missing
+    ``stream_id`` field and falls through to the NULL-write path.
+
+    Validates the captured value parses as a positive int — guards
+    against pathological inputs like ``/00000.ts`` mapping to id 0.
+    """
+    if not url or not isinstance(url, str):
+        return None
+    match = _STREAM_ID_URL_PATTERN.search(url)
+    if match is None:
+        return None
+    try:
+        parsed = int(match.group(1))
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
 
 
 def _telemetry_opt_out_enabled() -> bool:
@@ -483,7 +521,9 @@ class BandwidthTracker:
                 # ``/proxy/ts/status``, consumed by the provider resolver
                 # in ``_resolve_provider_ids`` (bd-skqln.14). May be missing
                 # if Dispatcharr serves a degraded stats payload; the
-                # resolver tolerates that and returns NULL.
+                # resolver tolerates that and falls back to URL parsing
+                # (bd-kbgey) when ``url`` carries the same id as the trailing
+                # ``.../<stream_id>.ts`` path segment, then NULL.
                 telemetry_channel_snapshot.append({
                     "channel_uuid": channel_id,
                     "channel_number": channel_number,
@@ -491,6 +531,7 @@ class BandwidthTracker:
                     "client_user_map": dict(client_user_map),
                     "channel_bytes_delta": channel_bytes_delta,
                     "stream_id": channel.get("stream_id"),
+                    "url": channel.get("url"),
                 })
 
         # Check for channels that stopped being watched
@@ -995,16 +1036,33 @@ class BandwidthTracker:
         unresolvable_channels: list[str] = []
         # {channel_uuid: stream_id} for channels we'll attempt to resolve.
         stream_id_by_channel: dict[str, int] = {}
+        # Channels whose stream_id came from URL parsing (bd-kbgey fallback)
+        # rather than the direct ``stream_id`` field. Used only to
+        # differentiate the ``stream_not_found`` failure log so operators
+        # can tell a Dispatcharr-direct miss from a URL-derived miss when
+        # we triage; the resolved-success path is identical.
+        url_derived_channels: set[str] = set()
         for entry in channel_snapshot:
             channel_uuid = entry["channel_uuid"]
             stream_id = entry.get("stream_id")
             if stream_id is None:
-                unresolvable_channels.append(channel_uuid)
-                provider_by_channel[channel_uuid] = None
-                logger.warning(
-                    "[STATS_V2] provider_resolution_failed channel=%s reason=no_stream_id",
-                    channel_uuid,
-                )
+                # Fallback (bd-kbgey): Dispatcharr inconsistently surfaces
+                # ``stream_id`` on the ``/proxy/ts/status`` payload, but the
+                # ``url`` field carries the same id as the trailing path
+                # segment before ``.ts``. Parse it and feed it into the
+                # same batched lookup below — no extra API call.
+                url = entry.get("url")
+                derived = _extract_stream_id_from_url(url) if url else None
+                if derived is None:
+                    unresolvable_channels.append(channel_uuid)
+                    provider_by_channel[channel_uuid] = None
+                    logger.warning(
+                        "[STATS_V2] provider_resolution_failed channel=%s reason=no_stream_id",
+                        channel_uuid,
+                    )
+                    continue
+                stream_id_by_channel[channel_uuid] = derived
+                url_derived_channels.add(channel_uuid)
                 continue
             stream_id_by_channel[channel_uuid] = int(stream_id)
 
@@ -1055,11 +1113,18 @@ class BandwidthTracker:
                 # or its m3u_account was None. Both surface as NULL.
                 provider_by_channel[channel_uuid] = None
                 unresolved_count += 1
-                reason = (
-                    "stream_not_found"
-                    if stream_id not in provider_by_stream
-                    else "stream_has_no_provider"
-                )
+                if stream_id not in provider_by_stream:
+                    # Distinguish "Dispatcharr didn't find the id we
+                    # extracted from the URL" from "Dispatcharr didn't
+                    # find the id it gave us directly" — helps observability
+                    # if the URL convention shifts (bd-kbgey).
+                    reason = (
+                        "stream_not_found_url_derived"
+                        if channel_uuid in url_derived_channels
+                        else "stream_not_found"
+                    )
+                else:
+                    reason = "stream_has_no_provider"
                 logger.warning(
                     "[STATS_V2] provider_resolution_failed channel=%s stream=%s reason=%s",
                     channel_uuid,
