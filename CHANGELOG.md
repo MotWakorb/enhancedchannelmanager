@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Fixed
+- Stats v2 provider resolver — URL fallback when Dispatcharr's `/proxy/ts/status` omits `stream_id`. The skqln.14 resolver previously gave up with `reason=no_stream_id` for any active channel where Dispatcharr didn't surface `stream_id` directly, leaving `provider_id=NULL` (the "Unknown" bucket). In dev, this hit 91% of polls (214 of 235). The resolver now also extracts the stream id from the URL path's trailing `<id>.ts` segment (`r"/(\d+)\.ts(?:\?|$)"`) and feeds it into the same `get_streams_by_ids` batch the resolver already runs per poll — no additional API calls. URL-derived lookups that miss log `reason=stream_not_found_url_derived` so ops can differentiate from the direct-stream-id miss case. ([bd-kbgey])
 - Stats v2 Users panel — daily watch-minutes chart now displays dates in the operator's **local timezone** and visually marks today as "in progress" (amber dot vs teal for completed days), with a caption explaining the UTC bucketing + 10s update cadence. Resolves the misleading appearance of watch-time "going down" across the UTC date boundary when yesterday-UTC is complete but today-UTC is still accumulating. Server-side aggregation stays UTC; the relabeling anchors each bucket at noon UTC then formats in the operator's tz to pick the most-overlapping local day. ([bd-1qxo9])
 
 ### Fixed (existing entry continues below)
