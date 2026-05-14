@@ -19,10 +19,11 @@ import re
 import time
 from collections import OrderedDict
 from datetime import datetime, date, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import distinct, func
+from sqlalchemy.exc import IntegrityError
 
 from database import get_session
 from models import (
@@ -65,6 +66,63 @@ def _extract_stream_id_from_url(url: Optional[str]) -> Optional[int]:
         return None
     try:
         parsed = int(match.group(1))
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _coerce_session_user_id(raw: Any) -> Optional[int]:
+    """Coerce a Dispatcharr-supplied user id into a value safe for the
+    ``session_telemetry.user_id`` FK (bead ``enhancedchannelmanager-gbxmj``).
+
+    Dispatcharr's ``/proxy/ts/status`` payload surfaces ``user_id`` for the
+    client of an active session. In the wild that field has been observed as:
+
+    * ``None`` — Dispatcharr did not attribute a user to the connection
+    * ``0`` / ``"0"`` — sentinel for an anonymous viewer (no logged-in user)
+    * ``""`` — Dispatcharr surfaced an empty string
+    * ``"42"`` — stringified positive integer (passes through int())
+    * ``42``  — already a positive integer
+    * ``"abc"`` — garbage / unparseable
+
+    ``session_telemetry.user_id`` is ``INTEGER`` with a real FK to
+    ``users.id`` (``ON DELETE SET NULL`` — the only real FK on the table;
+    see models.SessionTelemetry docstring). The anonymous-viewer sentinel
+    (``0`` / ``"0"``) does NOT exist in ``users`` → ``IntegrityError`` at
+    ``session.commit()``. Because every row in a poll cycle shares one
+    commit, ONE bad sentinel rolls back the ENTIRE batch — provider-
+    attributed rows and all. That's the symptom the bead surfaced on dev.
+
+    Coercion contract — anything that is NOT a positive int (or a string
+    that parses cleanly to one) becomes ``None``:
+
+    * ``None`` / ``""`` / ``0`` / ``"0"`` → ``None`` (anonymous, NULL-write)
+    * ``42`` / ``"42"``                  → ``42``
+    * ``-1`` / ``"abc"``                 → ``None`` (negative / unparseable)
+    * ``42.0``                           → ``None`` (strict — Dispatcharr
+      never sends floats; if we see one it's a bug worth surfacing as
+      NULL-write rather than silently truncating)
+
+    The helper is the primary fix. ``_write_session_telemetry`` also wraps
+    the commit in an IntegrityError catch as defense-in-depth: if a future
+    field grows an FK constraint, the commit-level safety net keeps the
+    batch from poisoning even if this helper falls out of sync.
+    """
+    if raw is None or raw == "" or raw == 0 or raw == "0":
+        return None
+    # Strict: ``bool`` is a subclass of ``int`` in Python; ``True`` would
+    # otherwise coerce to 1. Reject explicitly so a stray boolean cannot
+    # write a "user 1" row by accident.
+    if isinstance(raw, bool):
+        return None
+    # Strict: floats are not a Dispatcharr-supplied shape. Reject rather
+    # than truncate — silent float→int conversion masks upstream bugs.
+    if isinstance(raw, float):
+        return None
+    try:
+        parsed = int(raw)
     except (TypeError, ValueError):
         return None
     if parsed <= 0:
@@ -1493,11 +1551,20 @@ class BandwidthTracker:
                         else:
                             row_buffer_count = 0
 
+                        # bd-gbxmj: coerce the raw Dispatcharr user_id
+                        # through the FK-safety helper. Anonymous sentinels
+                        # ("0"/0/""/None) become NULL; positive ints (or
+                        # int-parseable strings) pass through. Without this
+                        # the FK to users.id raises IntegrityError at
+                        # session.commit() and rolls back the WHOLE batch.
+                        coerced_user_id = _coerce_session_user_id(
+                            client_user_map.get(ip)
+                        )
                         session.add(
                             SessionTelemetry(
                                 session_id=f"conn-{conn_id}",
                                 observed_at=observed_at_ms,
-                                user_id=client_user_map.get(ip),
+                                user_id=coerced_user_id,
                                 provider_id=provider_id,
                                 channel_id=channel_uuid,
                                 bytes_delta=per_client_bytes,
@@ -1520,21 +1587,54 @@ class BandwidthTracker:
                     )
 
                 if rows_written:
-                    session.commit()
-                    logger.debug(
-                        "[STATS_V2] Wrote %s session_telemetry row(s) (observed_at=%s)",
-                        rows_written,
-                        observed_at_ms,
-                    )
+                    # bd-gbxmj defense-in-depth: a future field could grow
+                    # an FK constraint without this helper learning about
+                    # it (and the user-id coercion above is itself a
+                    # single point of failure). Catch IntegrityError at
+                    # the batch commit, roll back the transaction, log
+                    # the failure with enough context for SRE to find the
+                    # poll in question, and treat the write as a
+                    # recoverable failure rather than letting the
+                    # outer Exception handler swallow it as an
+                    # exc_info=True noise event. The primary fix is the
+                    # helper; this is the safety net so a future
+                    # constraint can never poison the entire batch
+                    # silently again.
+                    try:
+                        session.commit()
+                    except IntegrityError as e:
+                        session.rollback()
+                        logger.warning(
+                            "[STATS_V2] session_telemetry batch FK violation "
+                            "observed_at=%s rows_attempted=%s error=%s",
+                            observed_at_ms,
+                            rows_written,
+                            e,
+                        )
+                        # The batch did not land — reflect that in the
+                        # row count the metric block reports, and let
+                        # the success/failure label below mark this as
+                        # a failure so SRE's write-health gauge does not
+                        # mis-attribute success on a rolled-back commit.
+                        rows_written = 0
+                        write_result = "failure"
+                    else:
+                        logger.debug(
+                            "[STATS_V2] Wrote %s session_telemetry row(s) (observed_at=%s)",
+                            rows_written,
+                            observed_at_ms,
+                        )
+                        write_result = "success"
                 else:
                     # Nothing to write; release the (empty) transaction.
                     session.rollback()
-                # Reaching this line means the write attempt completed
-                # without raising (rows_written may be 0). Record success
-                # so the bd-skqln.12 metric reflects "the helper did what
-                # it was asked to do" rather than overstating failures
-                # whenever a poll had no active connections.
-                write_result = "success"
+                    # Reaching this line means the write attempt
+                    # completed without raising (rows_written is 0).
+                    # Record success so the bd-skqln.12 metric reflects
+                    # "the helper did what it was asked to do" rather
+                    # than overstating failures whenever a poll had no
+                    # active connections.
+                    write_result = "success"
             finally:
                 session.close()
         except Exception as e:
