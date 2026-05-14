@@ -51,7 +51,9 @@ class TestHealthEndpoint:
 
     def test_health_returns_ok(self, client):
         """Health endpoint returns status ok."""
-        with patch("server.get_mcp_api_key", return_value="some-key"):
+        with patch(
+            "server.get_mcp_api_key_status", return_value=("some-key", "ok")
+        ):
             response = client.get("/health")
         assert response.status_code == 200
         data = response.json()
@@ -64,16 +66,91 @@ class TestHealthEndpoint:
 
     def test_health_shows_unconfigured(self, client):
         """Health shows api_key_configured=false when no key."""
-        with patch("server.get_mcp_api_key", return_value=""):
+        with patch(
+            "server.get_mcp_api_key_status", return_value=("", "field_empty")
+        ):
             response = client.get("/health")
         assert response.status_code == 200
         assert response.json()["api_key_configured"] is False
 
     def test_health_no_auth_required(self, client):
         """Health endpoint works without API key."""
-        with patch("server.get_mcp_api_key", return_value="secret-key"):
+        with patch(
+            "server.get_mcp_api_key_status", return_value=("secret-key", "ok")
+        ):
             response = client.get("/health")
         assert response.status_code == 200
+
+    def test_health_reports_status_ok_when_key_present(self, client):
+        """/health reports api_key_status='ok' when a key is configured.
+
+        Self-diagnosing /health (bd-ix1g6): operators reporting
+        api_key_configured=false now get a machine-readable reason without
+        needing container shell access. This test pins the contract.
+        """
+        with patch("server.get_mcp_api_key_status", return_value=("real-key", "ok")):
+            response = client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["api_key_configured"] is True
+        assert data["api_key_status"] == "ok"
+        # No setup_hint when everything is wired correctly.
+        assert "setup_hint" not in data
+
+    def test_health_reports_file_not_found(self, client):
+        """/health reports api_key_status='file_not_found' when settings.json
+        is missing on the mounted volume — most common deployment misconfig."""
+        with patch(
+            "server.get_mcp_api_key_status", return_value=("", "file_not_found")
+        ):
+            response = client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["api_key_configured"] is False
+        assert data["api_key_status"] == "file_not_found"
+        # Setup hint is tailored to the specific failure mode.
+        assert "setup_hint" in data
+        assert "settings.json" in data["setup_hint"].lower() or "volume" in data["setup_hint"].lower()
+
+    def test_health_reports_invalid_json(self, client):
+        """/health reports api_key_status='invalid_json' when settings.json
+        exists but is corrupted."""
+        with patch(
+            "server.get_mcp_api_key_status", return_value=("", "invalid_json")
+        ):
+            response = client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["api_key_configured"] is False
+        assert data["api_key_status"] == "invalid_json"
+
+    def test_health_reports_field_missing(self, client):
+        """/health reports api_key_status='field_missing' when settings.json
+        is valid JSON but does not include the mcp_api_key field (legacy file
+        from before the MCP feature shipped)."""
+        with patch(
+            "server.get_mcp_api_key_status", return_value=("", "field_missing")
+        ):
+            response = client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["api_key_configured"] is False
+        assert data["api_key_status"] == "field_missing"
+
+    def test_health_reports_field_empty(self, client):
+        """/health reports api_key_status='field_empty' when the field exists
+        but is blank — i.e. no key has been generated yet (or it was revoked)."""
+        with patch(
+            "server.get_mcp_api_key_status", return_value=("", "field_empty")
+        ):
+            response = client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["api_key_configured"] is False
+        assert data["api_key_status"] == "field_empty"
+        # In this case the setup hint should point the user to Settings.
+        assert "setup_hint" in data
+        assert "settings" in data["setup_hint"].lower()
 
 
 class TestMCPAuth:
