@@ -375,8 +375,11 @@ async def test_provider_resolution_counter_during_full_resolver_run(
         {"channel_uuid": "ch-b", "stream_id": None},  # unresolvable
     ]
     result = await tracker._resolve_provider_ids(snapshot)
-    assert result["ch-a"] == 7
-    assert result["ch-b"] is None
+    # bd-kh23e: resolver now returns ``ProviderResolution`` NamedTuples
+    # instead of bare provider ids. ``.provider_id`` is the carryover for
+    # this counter-side assertion.
+    assert result["ch-a"].provider_id == 7
+    assert result["ch-b"].provider_id is None
 
     after_resolved = _counter_value(counter, result="resolved")
     after_unresolved = _counter_value(counter, result="unresolved")
