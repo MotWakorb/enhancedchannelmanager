@@ -642,6 +642,87 @@ def _telemetry_opt_out_enabled() -> bool:
     return raw.strip().lower() in {"true", "1", "yes", "on"}
 
 
+def _parse_telemetry_exclude_users() -> frozenset[str]:
+    """Parse ``ECM_TELEMETRY_EXCLUDE_USERS`` into a normalized token set.
+
+    Operator-facing filter (bead ``enhancedchannelmanager-uqbob``) for
+    suppressing ``session_telemetry`` writes attributed to non-stream-
+    consuming users. The motivating case: ECM's local ``users`` table
+    and Dispatcharr's ``users`` table are separate namespaces with
+    coincidentally-overlapping integer ids — ECM ``users.id=3`` is the
+    local admin account "claude" while Dispatcharr ``users.id=3`` is a
+    real human ("kmfelmer") whose viewing sessions are being attributed
+    to "claude" in the Stats panel because the ``session_telemetry.
+    user_id`` FK joins on the ECM table.
+
+    The env var is a comma-separated list of tokens. Each token is
+    matched against BOTH the Dispatcharr-side ``user_id`` (string-coerced)
+    AND the Dispatcharr-side ``username`` (case-insensitive). A row is
+    suppressed if EITHER axis matches.
+
+    Examples:
+
+    * ``ECM_TELEMETRY_EXCLUDE_USERS="claude"`` — drop rows whose
+      Dispatcharr-side username is "claude" (case-insensitive).
+    * ``ECM_TELEMETRY_EXCLUDE_USERS="3,claude"`` — drop rows where the
+      raw Dispatcharr user_id is 3 OR the username is "claude". Either
+      match is sufficient.
+    * ``ECM_TELEMETRY_EXCLUDE_USERS=""`` (or unset) — no filtering;
+      pre-uqbob behavior preserved.
+
+    Read per-poll (not cached at import) so an operator who flips the
+    env var at runtime (export + container restart) sees the new value
+    on the next poll cycle without code awareness of when the flip
+    happened — same posture as ``_telemetry_opt_out_enabled``.
+
+    Returns a ``frozenset[str]`` of lower-cased, whitespace-stripped
+    tokens. Empty tokens (from leading / trailing / repeated commas)
+    are dropped. The empty set is the "no filtering" sentinel.
+    """
+    raw = os.environ.get("ECM_TELEMETRY_EXCLUDE_USERS", "")
+    if not raw:
+        return frozenset()
+    tokens = (t.strip().lower() for t in raw.split(","))
+    return frozenset(t for t in tokens if t)
+
+
+def _is_excluded_telemetry_user(
+    user_id: Optional[int],
+    username: Optional[str],
+    exclude_tokens: frozenset[str],
+) -> bool:
+    """Return True if a session_telemetry row should be suppressed.
+
+    Companion to ``_parse_telemetry_exclude_users`` (bead
+    ``enhancedchannelmanager-uqbob``). A row is suppressed when either
+    the FK-coerced user_id or the resolved Dispatcharr username matches
+    a token in the operator-configured exclude list.
+
+    * ``user_id`` — the FK-safe coerced user_id (output of
+      ``_coerce_session_user_id``). ``None`` for anonymous viewers; those
+      can never match a numeric token because they have no id to compare.
+    * ``username`` — the Dispatcharr-side username resolved via the
+      per-poll users map. ``None`` or empty string when the lookup did
+      not produce a value (Dispatcharr returned no user record, or the
+      exclude env var is unset so the lookup was skipped to save a
+      round-trip).
+    * ``exclude_tokens`` — already lower-cased; the caller invokes
+      ``_parse_telemetry_exclude_users`` once per poll.
+
+    Returns ``False`` immediately when ``exclude_tokens`` is empty so
+    the default-OFF posture has zero call overhead beyond a single
+    truthiness check.
+    """
+    if not exclude_tokens:
+        return False
+    if user_id is not None and str(user_id) in exclude_tokens:
+        return True
+    if username:
+        if username.strip().lower() in exclude_tokens:
+            return True
+    return False
+
+
 def get_user_timezone() -> timezone:
     """Get the user's configured timezone, or UTC if not set/invalid."""
     try:
@@ -1142,14 +1223,32 @@ class BandwidthTracker:
         has_user_ids = any(
             ch.get("client_user_map") for ch in all_channel_data
         )
-        if has_user_ids:
+        # The Dispatcharr-side user_id → username map. Populated below
+        # when (a) watch-history flow needs usernames, OR (b) the
+        # bd-uqbob exclude filter is configured and the snapshot carries
+        # user ids that need matching. Keyed by ``str(disp_user_id)`` to
+        # match the watch-history convention.
+        dispatcharr_user_map: dict[str, str] = {}
+        snapshot_has_user_ids = any(
+            entry.get("client_user_map") for entry in telemetry_channel_snapshot
+        )
+        # bd-uqbob: an empty exclude set means no filtering and no need to
+        # pay for the get_users round-trip just to surface usernames the
+        # write helper won't compare against.
+        exclude_user_tokens = _parse_telemetry_exclude_users()
+        need_user_resolution = has_user_ids or (
+            exclude_user_tokens and snapshot_has_user_ids
+        )
+        if need_user_resolution:
             try:
                 users = await self.client.get_users()
-                user_map = {str(u["id"]): u.get("username", "") for u in users}
+                dispatcharr_user_map = {
+                    str(u["id"]): u.get("username", "") for u in users
+                }
                 for ch in all_channel_data:
                     client_user_map = ch.get("client_user_map", {})
                     ch["client_username_map"] = {
-                        ip: user_map.get(str(uid), "")
+                        ip: dispatcharr_user_map.get(str(uid), "")
                         for ip, uid in client_user_map.items()
                     }
             except Exception as e:
@@ -1220,6 +1319,13 @@ class BandwidthTracker:
             observed_at_ms,
             provider_by_channel,
             buffer_events_by_channel,
+            # bd-uqbob: pre-resolved Dispatcharr user_id → username map and
+            # already-parsed exclude token set. Both default to empty on
+            # the call-site signature so older test seams keep working;
+            # an empty exclude set short-circuits the filter inside the
+            # helper before any per-row work runs.
+            dispatcharr_user_map=dispatcharr_user_map,
+            exclude_user_tokens=exclude_user_tokens,
         )
 
     def _update_daily_record(
@@ -1812,6 +1918,7 @@ class BandwidthTracker:
         result: str,
         duration_seconds: float,
         rows_written: int,
+        rows_excluded: int = 0,
     ) -> None:
         """Emit the Stats v2 session_telemetry write metrics (bd-skqln.12).
 
@@ -1819,6 +1926,15 @@ class BandwidthTracker:
         edge-case test, prometheus-client missing) can never propagate into
         the observation path it is instrumenting. The exception swallow
         is deliberate — observability must not break the writer.
+
+        bd-uqbob: ``rows_excluded`` is the count of rows that
+        ``_write_session_telemetry`` filtered out via
+        ``ECM_TELEMETRY_EXCLUDE_USERS`` this poll. Emitted as a single
+        ``.inc(n)`` against the ``session_telemetry_rows_excluded_total``
+        counter (``reason=excluded_user``) so the suppression rate is
+        observable without leaking the excluded identity into the metric
+        label space. Default of 0 keeps the call ergonomics for older
+        test seams that don't pass the kwarg.
         """
         try:
             from observability import get_metric
@@ -1834,6 +1950,10 @@ class BandwidthTracker:
                 # on failure the previous value remains, which is the
                 # behavior SRE wants for storage-growth alerting.
                 get_metric("session_telemetry_row_count").set(int(rows_written))
+            if rows_excluded > 0:
+                get_metric("session_telemetry_rows_excluded_total").labels(
+                    reason="excluded_user"
+                ).inc(int(rows_excluded))
         except Exception:  # pragma: no cover — never break the writer
             logger.debug(
                 "[STATS_V2] failed to emit session_telemetry write metrics",
@@ -1846,6 +1966,9 @@ class BandwidthTracker:
         observed_at_ms: int,
         provider_by_channel: Optional[dict[str, ProviderResolution]] = None,
         buffer_events_by_channel: Optional[dict[str, int]] = None,
+        *,
+        dispatcharr_user_map: Optional[dict[str, str]] = None,
+        exclude_user_tokens: Optional[frozenset[str]] = None,
     ) -> None:
         """Write one row per active viewing connection into ``session_telemetry``.
 
@@ -1904,17 +2027,50 @@ class BandwidthTracker:
         already works" — step (a) is dual-write under a flag, but ONLY for
         the duration needed to prove the new path; legacy-write removal is
         step (d) in this bead, behind a separate commit and PR.
+
+        bd-uqbob (operator-facing exclude filter)
+        -----------------------------------------
+        When ``ECM_TELEMETRY_EXCLUDE_USERS`` is configured, the caller in
+        ``_collect_stats`` parses the env var once and passes the already-
+        lower-cased token set as ``exclude_user_tokens``. The caller also
+        passes the per-poll Dispatcharr ``user_id → username`` map as
+        ``dispatcharr_user_map`` so the per-row filter does not pay for a
+        second Dispatcharr round-trip. Both kwargs default to empty for
+        backward compatibility with the existing test seam — when the
+        token set is empty the filter is short-circuited before any per-
+        row work.
+
+        The filter runs AFTER ``_coerce_session_user_id`` so anonymous
+        sentinels (``0`` / ``"0"`` → ``None``) never trigger a numeric
+        token match. The match is OR-shaped: either the coerced user_id
+        (string-compared against the token set) OR the resolved username
+        (case-insensitive) is sufficient to drop the row. Skipped rows
+        are NOT silently dropped — they increment the
+        ``session_telemetry_rows_excluded_total`` counter (labeled
+        ``reason=excluded_user``) so SRE can see the suppression rate
+        without leaking the excluded identity into the metric label space.
         """
         if provider_by_channel is None:
             provider_by_channel = {}
         if buffer_events_by_channel is None:
             buffer_events_by_channel = {}
+        if dispatcharr_user_map is None:
+            dispatcharr_user_map = {}
+        if exclude_user_tokens is None:
+            exclude_user_tokens = frozenset()
         # bd-skqln.12: time the entire write attempt and record success /
         # failure on the way out. ``rows_written`` is hoisted here so it is
         # visible to the metric-emission block in the ``finally`` (it is 0
         # if the helper raises before the inner counter increments).
         write_start = time.perf_counter()
         rows_written = 0
+        # bd-uqbob: hoisted alongside ``rows_written`` so the metric
+        # emission in the outer ``finally`` can read it even when the
+        # inner try raises before the counter is bumped. Default of 0
+        # means a failed write reports zero exclusions, which is the
+        # truthful posture — we cannot prove any rows were filtered if
+        # the per-row loop never completed.
+        rows_excluded = 0
         write_result = "failure"
         try:
             poll_interval_ms = max(int(self.poll_interval * 1000), 0)
@@ -1971,15 +2127,6 @@ class BandwidthTracker:
                         if conn_id is None:
                             continue
 
-                        # Attribute the channel's buffer-event count to the
-                        # FIRST eligible row only (bd-skqln.15). Sibling
-                        # rows write 0.
-                        if channel_uuid not in buffer_attributed:
-                            row_buffer_count = buffer_events_by_channel.get(channel_uuid, 0)
-                            buffer_attributed.add(channel_uuid)
-                        else:
-                            row_buffer_count = 0
-
                         # bd-gbxmj: coerce the raw Dispatcharr user_id
                         # through the FK-safety helper. Anonymous sentinels
                         # ("0"/0/""/None) become NULL; positive ints (or
@@ -1989,6 +2136,49 @@ class BandwidthTracker:
                         coerced_user_id = _coerce_session_user_id(
                             client_user_map.get(ip)
                         )
+
+                        # bd-uqbob: drop rows attributed to operator-
+                        # configured excluded users (typically the ECM
+                        # admin/API account whose username happens to
+                        # collide with a Dispatcharr-side viewer's
+                        # user_id in the FK namespace — see the
+                        # ``_parse_telemetry_exclude_users`` docstring).
+                        # Resolve the Dispatcharr-side username from the
+                        # caller-supplied map; an empty token set short-
+                        # circuits before any per-row lookup.
+                        if exclude_user_tokens:
+                            raw_uid = client_user_map.get(ip)
+                            disp_username = dispatcharr_user_map.get(
+                                str(raw_uid)
+                            ) if raw_uid is not None else None
+                            if _is_excluded_telemetry_user(
+                                coerced_user_id,
+                                disp_username,
+                                exclude_user_tokens,
+                            ):
+                                rows_excluded += 1
+                                # Per-row debug line for operator-facing
+                                # traceability. Lazy-formatted so the
+                                # interpolation cost is only paid when
+                                # debug logging is enabled.
+                                logger.debug(
+                                    "[BANDWIDTH] Skipped telemetry write "
+                                    "for excluded user user=%s reason=%s",
+                                    disp_username or coerced_user_id,
+                                    "excluded_user",
+                                )
+                                continue
+
+                        # Attribute the channel's buffer-event count to the
+                        # FIRST eligible row only (bd-skqln.15). Sibling
+                        # rows write 0. (bd-uqbob: excluded rows above do
+                        # NOT consume the attribution slot — buffer events
+                        # land on the first row that survives the filter.)
+                        if channel_uuid not in buffer_attributed:
+                            row_buffer_count = buffer_events_by_channel.get(channel_uuid, 0)
+                            buffer_attributed.add(channel_uuid)
+                        else:
+                            row_buffer_count = 0
                         session.add(
                             SessionTelemetry(
                                 session_id=f"conn-{conn_id}",
@@ -2101,6 +2291,7 @@ class BandwidthTracker:
                 result=write_result,
                 duration_seconds=duration,
                 rows_written=rows_written,
+                rows_excluded=rows_excluded,
             )
 
     @staticmethod

@@ -513,6 +513,19 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             "retention policy gives a leading indicator of disk pressure.",
             registry=registry,
         ),
+        "session_telemetry_rows_excluded_total": Counter(
+            "ecm_session_telemetry_rows_excluded_total",
+            "Cumulative count of session_telemetry rows that were filtered "
+            "OUT before insert, labeled by reason. reason ∈ {excluded_user}. "
+            "The ``excluded_user`` reason fires when ECM_TELEMETRY_EXCLUDE_USERS "
+            "matches a row's Dispatcharr-side user_id or username (bd-uqbob). "
+            "Honest accounting: the rows are skipped, not silently zeroed, so "
+            "this counter surfaces 'how many viewers would have shown up that "
+            "we deliberately did not record' without leaking the identity of "
+            "the excluded user into the metric label space.",
+            ["reason"],
+            registry=registry,
+        ),
         "provider_resolution_total": Counter(
             "ecm_provider_resolution_total",
             "Count of channel-poll provider-resolution outcomes, "
