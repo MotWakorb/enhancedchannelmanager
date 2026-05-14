@@ -37,6 +37,9 @@ vi.mock('../../services/api');
 
 // Mock Recharts — same pattern as UserStatsPanel.test.tsx. We never assert
 // on the SVG; the data-table fallback is the screen-reader contract.
+// bd-tknci (2026-05-13): the watch-time chart is now a BarChart instead
+// of a single-bucket AreaChart, so the mock surface includes BarChart /
+// Bar / Cell / Label.
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="responsive-container">{children}</div>
@@ -44,17 +47,27 @@ vi.mock('recharts', () => ({
   LineChart: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="line-chart">{children}</div>
   ),
-  AreaChart: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="area-chart">{children}</div>
+  BarChart: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="bar-chart">{children}</div>
   ),
   Line: (props: { dataKey?: string }) => (
     <div data-testid={`line-${props.dataKey ?? 'unknown'}`} />
   ),
-  Area: (props: { dataKey?: string }) => (
-    <div data-testid={`area-${props.dataKey ?? 'unknown'}`} />
+  Bar: ({ children, dataKey }: { children?: React.ReactNode; dataKey?: string }) => (
+    <div data-testid={`bar-${dataKey ?? 'unknown'}`}>{children}</div>
   ),
-  XAxis: () => <div data-testid="x-axis" />,
-  YAxis: () => <div data-testid="y-axis" />,
+  Cell: (props: { fill?: string }) => (
+    <div data-testid="bar-cell" data-fill={props.fill} />
+  ),
+  XAxis: ({ children }: { children?: React.ReactNode }) => (
+    <div data-testid="x-axis">{children}</div>
+  ),
+  YAxis: ({ children }: { children?: React.ReactNode }) => (
+    <div data-testid="y-axis">{children}</div>
+  ),
+  Label: (props: { value?: string }) => (
+    <div data-testid="axis-label">{props.value}</div>
+  ),
   Tooltip: () => <div data-testid="tooltip" />,
   Legend: () => <div data-testid="legend" />,
   CartesianGrid: () => <div data-testid="cartesian-grid" />,
@@ -209,14 +222,66 @@ describe('ProvidersPanel — admin posture', () => {
     });
   });
 
-  it('renders one Recharts line chart for buffering and one for bitrate, one area chart for watch-time, and one heatmap', async () => {
+  it('renders one Recharts line chart for buffering and one for bitrate, one bar chart for watch-time, and one heatmap', async () => {
     render(<ProvidersPanel />);
     await waitFor(() => {
-      // 2 line charts (buffering + bitrate), 1 stacked area (watch-time)
+      // 2 line charts (buffering + bitrate), 1 bar chart (watch-time per bd-tknci)
       expect(screen.getAllByTestId('line-chart').length).toBeGreaterThanOrEqual(2);
-      expect(screen.getByTestId('area-chart')).toBeInTheDocument();
+      expect(screen.getByTestId('bar-chart')).toBeInTheDocument();
       // The heatmap primitive renders with data-testid="heatmap-root"
       expect(screen.getByTestId('heatmap-root')).toBeInTheDocument();
+    });
+  });
+
+  // bd-tknci (2026-05-13) — Y-axis label + per-provider bar regression guards.
+  it('time-spent chart renders a Y-axis label of "Watch minutes" (bd-tknci)', async () => {
+    render(<ProvidersPanel />);
+    await waitFor(() => {
+      // Multiple axis labels exist (watch-time Y, bitrate Y). At least one
+      // must be the watch-minutes label.
+      const labels = screen.getAllByTestId('axis-label');
+      const labelTexts = labels.map((el) => el.textContent ?? '');
+      expect(labelTexts).toContain('Watch minutes');
+    });
+  });
+
+  it('time-spent chart renders one Bar series with a Cell per provider (bd-tknci)', async () => {
+    render(<ProvidersPanel />);
+    await waitFor(() => {
+      // The Bar uses dataKey="watch_minutes" — exactly one Bar in the panel.
+      expect(screen.getByTestId('bar-watch_minutes')).toBeInTheDocument();
+      // mockWatchTimeResponse has 3 rows (provider 1, provider 2, NULL).
+      // The BarChart renders one Cell per row.
+      const cells = screen.getAllByTestId('bar-cell');
+      expect(cells.length).toBe(3);
+    });
+  });
+
+  it('time-spent chart shows a one-line description above the chart (bd-tknci)', async () => {
+    render(<ProvidersPanel />);
+    await waitFor(() => {
+      expect(
+        screen.getByText(/total minutes streamed from each provider/i),
+      ).toBeInTheDocument();
+    });
+  });
+
+  // bd-zrk05 (2026-05-13) — bitrate chart self-documentation.
+  it('bitrate chart renders a Y-axis label describing units (bd-zrk05)', async () => {
+    render(<ProvidersPanel />);
+    await waitFor(() => {
+      const labels = screen.getAllByTestId('axis-label');
+      const labelTexts = labels.map((el) => el.textContent ?? '');
+      expect(labelTexts).toContain('Bitrate (auto-scaled)');
+    });
+  });
+
+  it('bitrate chart shows a one-line description explaining the metric (bd-zrk05)', async () => {
+    render(<ProvidersPanel />);
+    await waitFor(() => {
+      expect(
+        screen.getByText(/average observed bitrate per provider/i),
+      ).toBeInTheDocument();
     });
   });
 
