@@ -1214,23 +1214,29 @@ async def test_resolver_mixed_batch_url_and_stream_id_share_one_lookup(
 
 
 @pytest.mark.asyncio
-async def test_resolver_url_derived_stream_not_found_logs_distinct_reason(
+async def test_resolver_url_derived_stream_not_found_falls_back_to_channel_streams(
     patched_session_local,
     seed_synthetic_user,
     tracker,
     mock_client,
     caplog,
 ):
-    """URL parsing succeeded but ``get_streams_by_ids`` returns no record
-    for the parsed id. The failure log must carry
-    ``reason=stream_not_found_url_derived`` so operators can distinguish
-    "Dispatcharr 404'd the id we extracted from the URL" from
-    "Dispatcharr 404'd an id it told us directly". Helps observability
-    if the URL convention shifts under us.
+    """When the URL-derived id is not a Dispatcharr stream id (the
+    upstream-provider-id case bd-5g7kx fixes), the resolver no longer
+    terminates with ``stream_not_found_url_derived``. Instead it falls
+    back to ``GET /channels/<uuid>/streams``. When THAT also returns no
+    URL match, the terminal WARNING is ``reason=channel_streams_no_match``.
+
+    Pinned here so the kbgey-era ``stream_not_found_url_derived`` WARNING
+    code doesn't leak back in — operators triaging the Stats v2 Providers
+    panel need a single, stable set of failure-reason codes.
     """
     import logging as _logging
 
     mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    # Channel-streams fallback also returns nothing matching — the
+    # terminal reason becomes ``channel_streams_no_match``.
+    mock_client.get_channel_streams = AsyncMock(return_value=[])
     first = _channel_payload(
         total_bytes=1_000_000,
         client_user_ids={"10.0.0.1": seed_synthetic_user},
@@ -1254,9 +1260,14 @@ async def test_resolver_url_derived_stream_not_found_logs_distinct_reason(
     assert rows and all(r.provider_id is None for r in rows)
     assert any(
         "[STATS_V2] provider_resolution_failed" in r.message
-        and "reason=stream_not_found_url_derived" in r.message
+        and "reason=channel_streams_no_match" in r.message
         for r in caplog.records
     ), [r.message for r in caplog.records]
+    # Conversely: the deprecated WARNING code must not appear.
+    assert not any(
+        "reason=stream_not_found_url_derived" in r.message
+        for r in caplog.records
+    ), "stream_not_found_url_derived is replaced by the channel-streams fallback"
 
 
 @pytest.mark.asyncio
@@ -1338,6 +1349,559 @@ async def test_resolver_integration_three_providers_distribution(
     finally:
         session.close()
     assert distribution == Counter({1: 2, 2: 2, 3: 2}), distribution
+
+
+# ---------------------------------------------------------------------------
+# Channel-streams fallback resolver tests (bd-5g7kx)
+# ---------------------------------------------------------------------------
+#
+# kbgey's URL-fallback parses the trailing ``<id>.ts`` integer from the
+# active stream URL and routes it through ``get_streams_by_ids``. But that
+# integer is the upstream M3U provider's stream id, NOT Dispatcharr's row
+# id — so ``get_streams_by_ids([upstream_id])`` returns nothing on most
+# providers. (Coincidental wins happen when the upstream id happens to
+# collide with a Dispatcharr id.)
+#
+# 5g7kx replaces the terminal ``stream_not_found_url_derived`` failure with
+# a second-stage fallback: ``GET /channels/<channel_id>/streams`` returns
+# the channel's stream list, and the resolver finds the stream whose
+# ``url`` matches the active URL — that stream's ``m3u_account_id`` is the
+# answer.
+#
+# Two cache layers:
+#   * Per-poll: scoped to a single ``_resolve_provider_ids`` invocation, so
+#     multiple unresolved channels with the same channel_uuid don't hit
+#     Dispatcharr twice.
+#   * Cross-poll LRU on ``BandwidthTracker``: channel stream lists are
+#     relatively stable. Capped at 200 entries; TTL is poll-count-based
+#     (30 polls = ~5 min at the 10s default poll interval).
+
+
+@pytest.mark.asyncio
+async def test_resolver_channel_streams_fallback_when_url_derived_id_misses(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """The dev-reproducer: stream_id absent, URL carries upstream provider
+    id (85796), ``get_streams_by_ids([85796])`` returns nothing because
+    85796 is Infinity's id, not Dispatcharr's. The channel-streams
+    fallback fetches ``/channels/<uuid>/streams``, finds the stream whose
+    ``url`` matches the active URL, and writes its ``m3u_account_id``.
+    """
+    channel_uuid = "0b433f49-channel"
+    active_url = "https://infinity.gives/live/mot/16118141/85796.ts"
+    dispatcharr_stream_id = 97000
+    provider_id = 17
+
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    mock_client.get_channel_streams = AsyncMock(
+        return_value=[
+            {
+                "id": dispatcharr_stream_id,
+                "url": active_url,
+                "m3u_account": provider_id,
+            },
+            # A second stream on the same channel (failover slot) — its
+            # URL does not match, so the resolver must NOT pick it.
+            {
+                "id": 97001,
+                "url": "https://other.example/live/99999.ts",
+                "m3u_account": 99,
+            },
+        ]
+    )
+
+    first = _channel_payload(
+        channel_uuid=channel_uuid,
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url=active_url,
+    )
+    second = _channel_payload(
+        channel_uuid=channel_uuid,
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url=active_url,
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).order_by(SessionTelemetry.id).all()
+    finally:
+        session.close()
+    assert rows, "session_telemetry rows must still be written"
+    assert all(r.provider_id == provider_id for r in rows), [
+        (r.id, r.provider_id) for r in rows
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resolver_channel_streams_fallback_per_poll_cache(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """Two channels sharing the same channel_uuid both need the
+    channel-streams fallback in a single poll. ``get_channel_streams``
+    must be called ONCE — the per-poll cache short-circuits the second
+    lookup.
+
+    This is artificial (one channel_uuid per channel in production), but
+    it pins the per-poll cache semantic so the resolver doesn't blow the
+    Dispatcharr API budget when several channels need the fallback in the
+    same poll.
+    """
+    # Both channels parse the same URL → same derived stream id → both
+    # miss in get_streams_by_ids. Both then go to channel-streams. The
+    # second one should hit the per-invocation cache.
+    channel_uuid_a = "uuid-a"
+    channel_uuid_b = "uuid-b"
+    active_url = "https://infinity.gives/live/mot/16118141/85796.ts"
+
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+
+    call_log: list[str] = []
+
+    async def streams_side_effect(channel_id):
+        call_log.append(channel_id)
+        return [
+            {"id": 97000, "url": active_url, "m3u_account": 17},
+        ]
+
+    mock_client.get_channel_streams = AsyncMock(side_effect=streams_side_effect)
+
+    ch_a_first = _channel_payload(
+        channel_uuid=channel_uuid_a,
+        channel_number=101,
+        total_bytes=1_000_000,
+        client_ips=["10.0.0.1"],
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url=active_url,
+    )
+    ch_a_second = _channel_payload(
+        channel_uuid=channel_uuid_a,
+        channel_number=101,
+        total_bytes=2_000_000,
+        client_ips=["10.0.0.1"],
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url=active_url,
+    )
+    # Two channels with DIFFERENT uuids — both need the fallback. The
+    # per-poll cache is keyed by channel_uuid; each uuid gets one call.
+    ch_b_first = _channel_payload(
+        channel_uuid=channel_uuid_b,
+        channel_number=102,
+        total_bytes=1_000_000,
+        client_ips=["10.0.0.2"],
+        url=active_url,
+    )
+    ch_b_second = _channel_payload(
+        channel_uuid=channel_uuid_b,
+        channel_number=102,
+        total_bytes=2_000_000,
+        client_ips=["10.0.0.2"],
+        url=active_url,
+    )
+
+    mock_client.get_channel_stats.return_value = {
+        "channels": [ch_a_first, ch_b_first]
+    }
+    await tracker._collect_stats()
+    mock_client.get_channel_stats.return_value = {
+        "channels": [ch_a_second, ch_b_second]
+    }
+    await tracker._collect_stats()
+
+    # Across the two polls there are TWO distinct channel uuids. Without
+    # the cross-poll cache that'd be 2 channels × 2 polls = 4 calls. With
+    # the cross-poll cache: 2 calls in poll 1 (cold), 0 calls in poll 2
+    # (cache hits). Both layers compose.
+    assert len(call_log) == 2, call_log
+    assert set(call_log) == {channel_uuid_a, channel_uuid_b}
+
+
+@pytest.mark.asyncio
+async def test_resolver_channel_streams_fallback_cross_poll_cache_hit(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """Same channel queried via the channel-streams fallback on two
+    consecutive polls. Poll 1 fetches from Dispatcharr and caches; poll 2
+    reuses the cached list without a network call.
+    """
+    channel_uuid = "stable-channel"
+    active_url = "https://infinity.gives/live/mot/16118141/85796.ts"
+    provider_id = 17
+
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    mock_client.get_channel_streams = AsyncMock(
+        return_value=[{"id": 97000, "url": active_url, "m3u_account": provider_id}]
+    )
+
+    first = _channel_payload(
+        channel_uuid=channel_uuid,
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url=active_url,
+    )
+    second = _channel_payload(
+        channel_uuid=channel_uuid,
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url=active_url,
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    # Exactly one Dispatcharr call across both polls — poll 2 hits the
+    # cross-poll cache.
+    assert mock_client.get_channel_streams.call_count == 1, (
+        "expected 1 channel-streams call across 2 polls (cross-poll cache "
+        "should serve poll 2), got %d"
+        % mock_client.get_channel_streams.call_count
+    )
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows and all(r.provider_id == provider_id for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_resolver_channel_streams_fallback_cross_poll_cache_ttl_expired(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """After the cross-poll TTL elapses (default 30 polls), the next
+    access for the same channel re-fetches. Caps cache staleness so a
+    failover or stream-list edit gets picked up within ~5 minutes at the
+    10s poll cadence.
+    """
+    channel_uuid = "stale-channel"
+    active_url = "https://infinity.gives/live/mot/16118141/85796.ts"
+
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    mock_client.get_channel_streams = AsyncMock(
+        return_value=[{"id": 97000, "url": active_url, "m3u_account": 17}]
+    )
+
+    # Read the configured TTL off the tracker — keeps the test stable if
+    # the TTL value is tuned. The cap of 200 is unrelated.
+    ttl_polls = tracker._channel_streams_cache_ttl_polls
+
+    payload = _channel_payload(
+        channel_uuid=channel_uuid,
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url=active_url,
+    )
+
+    # Poll 1: cold — fetches and caches at poll_count=1.
+    mock_client.get_channel_stats.return_value = {"channels": [payload]}
+    await tracker._collect_stats()
+    assert mock_client.get_channel_streams.call_count == 1
+
+    # Polls 2..(ttl_polls + 1): each poll the cache age is
+    # poll_count - 1, which ranges 1..ttl_polls. All within TTL (TTL =
+    # "stale when age > ttl_polls"), so no re-fetch.
+    for _ in range(ttl_polls):
+        payload = _channel_payload(
+            channel_uuid=channel_uuid,
+            total_bytes=payload["total_bytes"] + 1_000_000,
+            client_user_ids={"10.0.0.1": seed_synthetic_user},
+            url=active_url,
+        )
+        mock_client.get_channel_stats.return_value = {"channels": [payload]}
+        await tracker._collect_stats()
+    assert mock_client.get_channel_streams.call_count == 1, (
+        "cache should serve all polls within the TTL window"
+    )
+
+    # One more poll — cache age now exceeds TTL. Re-fetch required.
+    payload = _channel_payload(
+        channel_uuid=channel_uuid,
+        total_bytes=payload["total_bytes"] + 1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url=active_url,
+    )
+    mock_client.get_channel_stats.return_value = {"channels": [payload]}
+    await tracker._collect_stats()
+    assert mock_client.get_channel_streams.call_count == 2, (
+        "expected re-fetch after TTL expiry"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolver_channel_streams_fallback_no_url_match(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+    caplog,
+):
+    """The channel-streams response contains streams but none of their
+    URLs match the active URL. Resolver returns NULL and logs
+    ``reason=channel_streams_no_match`` — distinct from
+    ``stream_not_found`` (which is for direct stream_id misses) so
+    operators can tell the two failure paths apart.
+    """
+    import logging as _logging
+
+    channel_uuid = "no-match-channel"
+    active_url = "https://infinity.gives/live/mot/16118141/85796.ts"
+
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    mock_client.get_channel_streams = AsyncMock(
+        return_value=[
+            {"id": 97000, "url": "https://other.example/totally-different.ts", "m3u_account": 1},
+            {"id": 97001, "url": "https://yetanother.example/99999.ts", "m3u_account": 2},
+        ]
+    )
+
+    first = _channel_payload(
+        channel_uuid=channel_uuid,
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url=active_url,
+    )
+    second = _channel_payload(
+        channel_uuid=channel_uuid,
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url=active_url,
+    )
+
+    caplog.clear()
+    with caplog.at_level(_logging.WARNING, logger="bandwidth_tracker"):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows and all(r.provider_id is None for r in rows)
+    assert any(
+        "[STATS_V2] provider_resolution_failed" in r.message
+        and "reason=channel_streams_no_match" in r.message
+        for r in caplog.records
+    ), [r.message for r in caplog.records]
+
+
+@pytest.mark.asyncio
+async def test_resolver_channel_streams_fallback_lookup_raises(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+    caplog,
+):
+    """``get_channel_streams`` raises (network, 5xx, timeout). Resolver
+    returns NULL for the affected channel, logs
+    ``reason=channel_streams_lookup_raised``, and the polling cycle
+    continues — a single channel's fallback failure must not propagate.
+    """
+    import logging as _logging
+
+    channel_uuid = "fallback-raise"
+    active_url = "https://infinity.gives/live/mot/16118141/85796.ts"
+
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    mock_client.get_channel_streams = AsyncMock(
+        side_effect=RuntimeError("dispatcharr 503 channel streams")
+    )
+
+    first = _channel_payload(
+        channel_uuid=channel_uuid,
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url=active_url,
+    )
+    second = _channel_payload(
+        channel_uuid=channel_uuid,
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url=active_url,
+    )
+
+    caplog.clear()
+    with caplog.at_level(_logging.WARNING, logger="bandwidth_tracker"):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows, "polling cycle must continue despite fallback raise"
+    assert all(r.provider_id is None for r in rows)
+    assert any(
+        "[STATS_V2] provider_resolution_failed" in r.message
+        and "reason=channel_streams_lookup_raised" in r.message
+        for r in caplog.records
+    ), [r.message for r in caplog.records]
+
+
+@pytest.mark.asyncio
+async def test_resolver_channel_streams_fallback_url_match_with_query_string(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """Active URL carries a session/transcode query suffix
+    (``.ts?session=abc``). The stream record's stored URL is the bare
+    ``.ts``. The URL matcher must normalize query strings off both sides
+    before comparing, so the match succeeds.
+    """
+    channel_uuid = "qs-channel"
+    active_url = "https://infinity.gives/live/mot/16118141/85796.ts?session=tok123&transcode=h264"
+    stored_url = "https://infinity.gives/live/mot/16118141/85796.ts"
+    provider_id = 17
+
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    mock_client.get_channel_streams = AsyncMock(
+        return_value=[{"id": 97000, "url": stored_url, "m3u_account": provider_id}]
+    )
+
+    first = _channel_payload(
+        channel_uuid=channel_uuid,
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url=active_url,
+    )
+    second = _channel_payload(
+        channel_uuid=channel_uuid,
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url=active_url,
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows and all(r.provider_id == provider_id for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_resolver_three_paths_resolve_in_one_poll(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """Mixed batch hitting all three resolution paths in one poll:
+
+    * ``ch-direct`` — surfaces ``stream_id`` directly; resolves via
+      ``get_streams_by_ids``.
+    * ``ch-url`` — no ``stream_id``, URL parses to a Dispatcharr-known
+      id; resolves via ``get_streams_by_ids``.
+    * ``ch-fallback`` — no ``stream_id``, URL parses to an upstream id
+      Dispatcharr doesn't have; resolves via ``get_channel_streams``
+      URL match.
+
+    All three must produce session_telemetry rows with the correct
+    ``provider_id``.
+    """
+    direct_stream_id = 100
+    url_derived_stream_id = 200
+    fallback_upstream_id = 85796  # Infinity's id, NOT in Dispatcharr.
+    fallback_active_url = (
+        "https://infinity.gives/live/mot/16118141/85796.ts"
+    )
+
+    mock_client.get_streams_by_ids = AsyncMock(
+        return_value=[
+            {"id": direct_stream_id, "m3u_account": 1},
+            {"id": url_derived_stream_id, "m3u_account": 2},
+            # fallback_upstream_id (85796) intentionally absent — that's
+            # the whole point of the fallback test.
+        ]
+    )
+    mock_client.get_channel_streams = AsyncMock(
+        return_value=[
+            {
+                "id": 97000,
+                "url": fallback_active_url,
+                "m3u_account": 3,
+            }
+        ]
+    )
+
+    def build(ch_uuid, ch_num, total, ip, **kw):
+        return _channel_payload(
+            channel_uuid=ch_uuid,
+            channel_number=ch_num,
+            total_bytes=total,
+            client_ips=[ip],
+            client_user_ids={ip: seed_synthetic_user},
+            **kw,
+        )
+
+    poll1 = [
+        build("ch-direct", 101, 1_000_000, "10.0.0.1", stream_id=direct_stream_id),
+        build(
+            "ch-url",
+            102,
+            1_000_000,
+            "10.0.0.2",
+            url=f"https://provider.example/path/{url_derived_stream_id}.ts",
+        ),
+        build(
+            "ch-fallback",
+            103,
+            1_000_000,
+            "10.0.0.3",
+            url=fallback_active_url,
+        ),
+    ]
+    poll2 = [
+        build("ch-direct", 101, 2_000_000, "10.0.0.1", stream_id=direct_stream_id),
+        build(
+            "ch-url",
+            102,
+            2_000_000,
+            "10.0.0.2",
+            url=f"https://provider.example/path/{url_derived_stream_id}.ts",
+        ),
+        build(
+            "ch-fallback",
+            103,
+            2_000_000,
+            "10.0.0.3",
+            url=fallback_active_url,
+        ),
+    ]
+
+    mock_client.get_channel_stats.return_value = {"channels": poll1}
+    await tracker._collect_stats()
+    mock_client.get_channel_stats.return_value = {"channels": poll2}
+    await tracker._collect_stats()
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    provider_by_channel = {(r.channel_id, r.provider_id) for r in rows}
+    assert ("ch-direct", 1) in provider_by_channel, provider_by_channel
+    assert ("ch-url", 2) in provider_by_channel, provider_by_channel
+    assert ("ch-fallback", 3) in provider_by_channel, provider_by_channel
 
 
 # ---------------------------------------------------------------------------
