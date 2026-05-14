@@ -35,7 +35,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import database
-from bandwidth_tracker import BandwidthTracker
+from bandwidth_tracker import BandwidthTracker, _coerce_session_user_id
 from models import ChannelWatchStats, SessionTelemetry, UniqueClientConnection, User
 
 
@@ -1806,3 +1806,263 @@ async def test_system_events_fetch_failure_does_not_propagate(
         "[STATS_V2]" in r.message and "buffer_event" in r.message
         for r in caplog.records
     ), [r.message for r in caplog.records]
+
+
+# ---------------------------------------------------------------------------
+# bd-gbxmj — user_id coercion + batch-commit FK safety net
+# ---------------------------------------------------------------------------
+
+class TestCoerceSessionUserId:
+    """Unit tests for ``_coerce_session_user_id`` (bead gbxmj).
+
+    The helper is the primary fix for the anonymous-viewer FK violation
+    that poisoned ``session_telemetry`` batches on dev. Schema contract:
+    ``session_telemetry.user_id`` is ``INTEGER`` with an FK to
+    ``users.id`` (ON DELETE SET NULL). Anonymous viewers come through
+    as ``0`` / ``"0"`` from Dispatcharr — neither value points at a real
+    ``users`` row, so without coercion the FK fires at commit() and
+    rolls back the whole batch.
+    """
+
+    def test_none_returns_none(self):
+        """``None`` input → ``None`` output (Dispatcharr surfaced no user id)."""
+        assert _coerce_session_user_id(None) is None
+
+    def test_empty_string_returns_none(self):
+        """Empty string is the same anonymous sentinel as ``None``."""
+        assert _coerce_session_user_id("") is None
+
+    def test_zero_int_returns_none(self):
+        """Anonymous-viewer sentinel ``0`` → ``None`` (FK-safe NULL write)."""
+        assert _coerce_session_user_id(0) is None
+
+    def test_zero_string_returns_none(self):
+        """Anonymous-viewer sentinel ``"0"`` → ``None`` (FK-safe NULL write).
+
+        This is the exact value Dispatcharr returned on dev that surfaced
+        the bug — the JSON payload had ``user_id`` as a string.
+        """
+        assert _coerce_session_user_id("0") is None
+
+    def test_positive_int_passes_through(self):
+        """A real positive ``int`` is returned verbatim."""
+        assert _coerce_session_user_id(42) == 42
+
+    def test_positive_int_string_is_parsed(self):
+        """A string that ``int()`` parses cleanly → that int."""
+        assert _coerce_session_user_id("42") == 42
+
+    def test_garbage_string_returns_none(self):
+        """Unparseable junk → ``None`` (FK-safe NULL write, no raise)."""
+        assert _coerce_session_user_id("abc") is None
+
+    def test_negative_int_returns_none(self):
+        """Negative ids are not valid ``users.id`` values → ``None``."""
+        assert _coerce_session_user_id(-1) is None
+
+    def test_negative_int_string_returns_none(self):
+        """Negative-int strings also coerce to ``None``."""
+        assert _coerce_session_user_id("-7") is None
+
+    def test_float_returns_none_strict(self):
+        """Floats coerce to ``None`` — strict choice (documented in
+        the helper docstring). Dispatcharr does not send floats; silently
+        truncating ``42.0`` would mask an upstream payload-shape bug.
+        """
+        assert _coerce_session_user_id(42.0) is None
+
+    def test_float_string_returns_none(self):
+        """``"42.0"`` is not a clean ``int()`` parse → ``None``."""
+        assert _coerce_session_user_id("42.0") is None
+
+    def test_bool_true_returns_none(self):
+        """Booleans are a subclass of ``int`` in Python; ``True`` would
+        silently coerce to user_id=1. Reject explicitly so a stray
+        boolean cannot attribute telemetry to "user 1".
+        """
+        assert _coerce_session_user_id(True) is None
+
+    def test_bool_false_returns_none(self):
+        """``False == 0`` would already filter, but assert explicitly so
+        the contract is unambiguous if the falsy short-circuit ever
+        moves around.
+        """
+        assert _coerce_session_user_id(False) is None
+
+
+@pytest.mark.asyncio
+async def test_anonymous_user_id_zero_string_writes_null_not_fk_violation(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """Regression — bd-gbxmj.
+
+    The actual symptom the PO hit on dev: a batch with one
+    anonymous-viewer row (``user_id="0"`` from Dispatcharr) and one
+    real-user row (``user_id=42``) wrote ZERO rows because the
+    anonymous row's FK violation rolled back the whole transaction.
+
+    With the helper in place, the anonymous row writes ``user_id=NULL``
+    and the real-user row writes ``user_id=42`` — both land.
+    """
+    first = _channel_payload(
+        client_count=2,
+        client_ips=["10.0.0.1", "10.0.0.2"],
+        client_user_ids={
+            "10.0.0.1": "0",                  # anonymous sentinel
+            "10.0.0.2": seed_synthetic_user,  # real user_id=42
+        },
+        total_bytes=1_000_000,
+    )
+    second = _channel_payload(
+        client_count=2,
+        client_ips=["10.0.0.1", "10.0.0.2"],
+        client_user_ids={
+            "10.0.0.1": "0",
+            "10.0.0.2": seed_synthetic_user,
+        },
+        total_bytes=2_000_000,
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = (
+            session.query(SessionTelemetry)
+            .order_by(SessionTelemetry.id)
+            .all()
+        )
+    finally:
+        session.close()
+
+    # 2 clients × 2 polls = 4 rows. Pre-fix this was 0 because the
+    # anonymous row's FK violation poisoned the batch.
+    assert len(rows) == 4, (
+        "Anonymous user_id='0' must NOT poison the batch — every row "
+        f"in the poll cycle should land. Got: {len(rows)}"
+    )
+    # Anonymous rows write user_id=NULL; real-user rows write 42. The
+    # split is by client_ip so we look at user_id per row.
+    user_ids = {r.user_id for r in rows}
+    assert user_ids == {None, seed_synthetic_user}, (
+        "Expected a mix of NULL (anonymous) and the seeded user id. "
+        f"Got: {user_ids}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_anonymous_user_id_zero_int_writes_null(
+    patched_session_local,
+    tracker,
+    mock_client,
+):
+    """``user_id`` returned as integer ``0`` (vs. string ``"0"``) also
+    coerces to NULL. ``_collect_stats``'s upstream filter at
+    ``if ip and uid:`` already drops ``uid=0`` before it reaches the
+    telemetry helper, but the helper-level coercion is the canonical
+    defense and must be exercised end-to-end so a future refactor of
+    that upstream filter does not silently re-introduce the bug.
+    """
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": 0},  # int sentinel
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": 0},
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    # Both poll rows land; both with user_id=NULL.
+    assert len(rows) == 2
+    assert all(r.user_id is None for r in rows)
+
+
+def test_write_session_telemetry_batch_commit_fk_violation_does_not_raise(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    caplog,
+):
+    """Defense-in-depth — bd-gbxmj safety net.
+
+    Even with the helper in place, a future field could grow an FK
+    without the helper learning about it. Simulate that by directly
+    invoking ``_write_session_telemetry`` with a channel_snapshot that
+    expects a non-existent ``user_id`` to land verbatim — bypass the
+    coercion helper by patching it to identity.
+
+    The commit-level IntegrityError catch must:
+    1. Roll back the transaction (no partial writes)
+    2. Log ``[STATS_V2] session_telemetry batch FK violation`` at WARNING
+    3. NOT propagate the exception — the poll continues
+
+    Bypass: monkey-patch ``_coerce_session_user_id`` at the module level
+    so the bad user_id reaches the row constructor verbatim and the FK
+    fires at commit() time — exactly the failure mode the safety net
+    exists for.
+    """
+    import logging as _logging
+    import bandwidth_tracker as bt_module
+
+    # Seed the active-connection bookkeeping the helper depends on so
+    # there's something to write.
+    tracker._active_connections[("ch-uuid-1", "10.0.0.1")] = 12345
+
+    channel_snapshot = [
+        {
+            "channel_uuid": "ch-uuid-1",
+            "client_ips": ["10.0.0.1"],
+            "client_user_map": {"10.0.0.1": 999_999},  # non-existent user
+            "channel_bytes_delta": 1_000_000,
+        }
+    ]
+
+    caplog.clear()
+    with caplog.at_level(_logging.WARNING, logger="bandwidth_tracker"):
+        with patch.object(
+            bt_module,
+            "_coerce_session_user_id",
+            lambda raw: raw,  # identity: let the bad value through
+        ):
+            # Must not raise — the safety net handles the FK violation
+            # and the outer poll continues.
+            tracker._write_session_telemetry(
+                channel_snapshot=channel_snapshot,
+                observed_at_ms=1_700_000_000_000,
+            )
+
+    # Rollback worked — no rows landed.
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows == [], (
+        "IntegrityError must roll back the batch — no partial writes. "
+        f"Got: {len(rows)} rows"
+    )
+
+    # The safety net's structured log message is present so SRE can
+    # correlate via the bd-skqln.12 metric tap.
+    fk_logs = [
+        r for r in caplog.records
+        if "[STATS_V2] session_telemetry batch FK violation" in r.message
+    ]
+    assert fk_logs, (
+        "Expected '[STATS_V2] session_telemetry batch FK violation' "
+        f"log line. Got: {[r.message for r in caplog.records]}"
+    )
+    # The log carries observed_at and rows_attempted for correlation.
+    msg = fk_logs[0].message
+    assert "observed_at=1700000000000" in msg
+    assert "rows_attempted=1" in msg
