@@ -97,6 +97,80 @@ function aggregateDailyMinutes(rows: WatchTimeUserDayRow[]): DailyTrendPoint[] {
     .sort((a, b) => a.day.localeCompare(b.day));
 }
 
+/**
+ * Format a UTC day-string ("YYYY-MM-DD") as a short localized label.
+ *
+ * The backend buckets by UTC day (SQLite `date(observed_at/1000, 'unixepoch')`)
+ * but renders to operators who think in their own local timezone. Two
+ * approaches are possible:
+ *
+ *   (A) Relabel: keep server-side UTC bucketing, but show the
+ *       most-overlapping local day. ← chosen
+ *   (B) Client-side re-bucketing: fetch wider, re-bin per local day.
+ *
+ * (A) is correct enough: the UTC day "2026-05-14" spans 00:00–24:00 UTC,
+ * which is at most one local-day boundary off (a few hours of the UTC
+ * day fall in the previous local day). Anchoring at 12:00 UTC means we
+ * convert to the local day that owns the *majority* of the bucket, for
+ * every IANA-recognized tz between UTC-12 and UTC+14. Worst case the
+ * label is off by one date for the bucket whose data is dominated by the
+ * other local day — acceptable for a 30-day trend chart.
+ *
+ * `locale` and `timeZone` are optional injection points for unit tests.
+ * In production we pass nothing and let the browser pick.
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- pure helper co-located with the only component that uses it; splitting is mechanical churn
+export function formatLocalDayLabel(
+  utcDayStr: string,
+  locale?: string,
+  timeZone?: string,
+): string {
+  // Noon UTC is safely inside the bucket for every fixed tz offset between
+  // -12 and +14 hours, so the date that Intl.DateTimeFormat resolves in
+  // the operator's tz is the bucket's most-overlapping local day.
+  const anchor = new Date(`${utcDayStr}T12:00:00Z`);
+  if (Number.isNaN(anchor.getTime())) return utcDayStr;
+  return new Intl.DateTimeFormat(locale, {
+    month: 'short',
+    day: 'numeric',
+    timeZone,
+  }).format(anchor);
+}
+
+/**
+ * Returns true when the UTC day-string maps to the operator's current
+ * local-tz date. Uses the same most-overlapping-day anchor as
+ * `formatLocalDayLabel` so the "today" marker lines up with the label.
+ *
+ * `now` and `timeZone` are injection points for unit tests.
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- pure helper co-located with the only component that uses it; splitting is mechanical churn
+export function isTodayInLocalTz(
+  utcDayStr: string,
+  now: Date = new Date(),
+  timeZone?: string,
+): boolean {
+  // Format both the bucket's anchor and "now" through the same Intl
+  // formatter in the target tz, then compare the year/month/day parts.
+  // This avoids any manual offset math (DST, half-hour tz, etc.).
+  const anchor = new Date(`${utcDayStr}T12:00:00Z`);
+  if (Number.isNaN(anchor.getTime())) return false;
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    timeZone,
+  });
+  // en-CA renders ISO-ish "YYYY-MM-DD" — easy to compare as strings.
+  return fmt.format(anchor) === fmt.format(now);
+}
+
+/** Tol "bright" palette yellow — used as the in-progress amber. Imported
+ *  inline rather than from chartPalette so this file stays self-contained
+ *  and the test mock doesn't need to know about the palette. */
+const IN_PROGRESS_COLOR = '#ccbb44';
+const COMPLETE_COLOR = '#14b8a6';
+
 function isAdminOnly403(err: unknown): boolean {
   return err instanceof HttpError && err.status === 403;
 }
@@ -183,6 +257,17 @@ export function UserStatsPanel() {
 
   const dailyTrend = useMemo(() => aggregateDailyMinutes(daily), [daily]);
 
+  // Enrich each point with its localized label and an in-progress flag for
+  // today. Computed in a memo so re-renders don't redo Intl work per point.
+  const dailyTrendDecorated = useMemo(() => {
+    const now = new Date();
+    return dailyTrend.map(p => ({
+      ...p,
+      label: formatLocalDayLabel(p.day),
+      isToday: isTodayInLocalTz(p.day, now),
+    }));
+  }, [dailyTrend]);
+
   // Auth still resolving — stay quiet until we know the posture.
   if (authLoading) {
     return (
@@ -242,10 +327,10 @@ export function UserStatsPanel() {
         </div>
         <div className="chart-container" aria-hidden="true">
           <ResponsiveContainer width="100%" height={180}>
-            <LineChart data={dailyTrend} margin={{ top: 10, right: 16, bottom: 8, left: 8 }}>
+            <LineChart data={dailyTrendDecorated} margin={{ top: 10, right: 16, bottom: 8, left: 8 }}>
               <CartesianGrid stroke="var(--border-primary)" strokeDasharray="3 3" />
               <XAxis
-                dataKey="day"
+                dataKey="label"
                 tick={{ fontSize: 11, fill: 'var(--text-primary)' }}
                 axisLine={{ stroke: 'var(--border-primary)' }}
                 tickLine={false}
@@ -260,14 +345,42 @@ export function UserStatsPanel() {
               <Line
                 type="monotone"
                 dataKey="minutes"
-                stroke="#14b8a6"
+                stroke={COMPLETE_COLOR}
                 strokeWidth={2}
-                dot={{ fill: '#14b8a6', r: 3 }}
+                // Today's dot renders amber; complete days render teal.
+                // Recharts passes the row payload as `payload` to the dot
+                // renderer — we key off `isToday` to color the marker.
+                dot={(props: {
+                  cx?: number;
+                  cy?: number;
+                  payload?: { isToday?: boolean };
+                  key?: string | number;
+                }) => {
+                  const isToday = Boolean(props.payload?.isToday);
+                  const fill = isToday ? IN_PROGRESS_COLOR : COMPLETE_COLOR;
+                  const stroke = isToday ? IN_PROGRESS_COLOR : COMPLETE_COLOR;
+                  return (
+                    <circle
+                      key={props.key ?? `${props.cx}-${props.cy}`}
+                      cx={props.cx}
+                      cy={props.cy}
+                      r={isToday ? 4 : 3}
+                      fill={fill}
+                      stroke={stroke}
+                      strokeWidth={isToday ? 2 : 1}
+                    />
+                  );
+                }}
                 isAnimationActive={false}
               />
             </LineChart>
           </ResponsiveContainer>
         </div>
+        <p className="chart-caption">
+          Today's value updates every ~10s as new watch data arrives.
+          Metrics aggregated in UTC; labels show the local date with the
+          most overlap.
+        </p>
         {/* Data-table fallback for the chart — always in the DOM for SR users,
             visually-hidden by default. */}
         <table
@@ -282,14 +395,23 @@ export function UserStatsPanel() {
             </tr>
           </thead>
           <tbody>
-            {dailyTrend.length === 0 ? (
+            {dailyTrendDecorated.length === 0 ? (
               <tr>
                 <td colSpan={2}>No data</td>
               </tr>
             ) : (
-              dailyTrend.map(point => (
-                <tr key={point.day}>
-                  <td>{point.day}</td>
+              dailyTrendDecorated.map(point => (
+                <tr
+                  key={point.day}
+                  data-testid={point.isToday ? 'chart-data-row-today' : undefined}
+                  className={point.isToday ? 'in-progress-row' : ''}
+                >
+                  <td>
+                    {point.label}
+                    {point.isToday && (
+                      <span className="in-progress-tag"> (in progress)</span>
+                    )}
+                  </td>
                   <td>{point.minutes}</td>
                 </tr>
               ))
