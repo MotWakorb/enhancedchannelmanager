@@ -1310,6 +1310,21 @@ class SessionTelemetry(Base):
     # Poll cadence in ms — avoids baking in a fixed-interval assumption and
     # makes bitrate derivable.
     poll_interval_ms = Column(Integer, nullable=False)
+    # Dispatcharr stream row id (``streams.id`` upstream). Plain nullable
+    # column, NOT a FK — ``streams`` is not an ECM table, matching the
+    # ``provider_id`` / ``channel_id`` design above. NULL when the resolver
+    # could not attribute the active stream (same failure modes as
+    # provider_id; see ``_resolve_provider_ids`` docstring). Added in
+    # migration 0010 (bd-kh23e).
+    stream_id = Column(Integer, nullable=True)
+    # Stream display name (``name`` field on Dispatcharr's stream record,
+    # e.g. ``"US: TNT"``). Side-loaded by the same batched
+    # ``get_streams_by_ids`` call that powers provider attribution — zero
+    # extra round-trips per poll. NULL on the same conditions as
+    # ``stream_id``. The frontend composes the display label as
+    # ``[<provider_name>] - <stream_name>`` (PO directive 2026-05-14).
+    # Added in migration 0010 (bd-kh23e).
+    stream_name = Column(Text, nullable=True)
 
     __table_args__ = (
         CheckConstraint(

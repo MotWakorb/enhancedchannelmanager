@@ -2630,3 +2630,188 @@ def test_write_session_telemetry_batch_commit_fk_violation_does_not_raise(
     msg = fk_logs[0].message
     assert "observed_at=1700000000000" in msg
     assert "rows_attempted=1" in msg
+
+
+# ---------------------------------------------------------------------------
+# Stream identity capture (bd-kh23e)
+# ---------------------------------------------------------------------------
+#
+# bd-kh23e extends the resolver's batch-lookup output to ALSO surface the
+# stream's ``name`` (from the same ``get_streams_by_ids`` response) and to
+# persist both ``stream_id`` and ``stream_name`` on every
+# ``session_telemetry`` row. The display format ratified by the PO on
+# 2026-05-14 is ``[<provider>] - <stream_name>`` — the provider name
+# side-loads on the frontend, so the backend writes raw identity only.
+#
+# Failure-mode parity with provider_id: every condition that produces
+# ``provider_id=NULL`` also produces ``stream_id=NULL`` and
+# ``stream_name=NULL`` on the same row. The resolver returns a
+# ``ProviderResolution(provider_id, stream_id, stream_name)`` NamedTuple
+# per channel — a resolution failure is the ``(None, None, None)`` triple.
+
+
+@pytest.mark.asyncio
+async def test_resolver_returns_namedtuple_with_stream_identity(
+    patched_session_local,
+    tracker,
+    mock_client,
+):
+    """The resolver's per-channel value is a NamedTuple carrying
+    ``provider_id``, ``stream_id``, and ``stream_name``. The stream id /
+    name come from the same batched ``get_streams_by_ids`` response that
+    already powers provider attribution — zero extra round-trips."""
+    from bandwidth_tracker import ProviderResolution
+
+    mock_client.get_streams_by_ids = AsyncMock(
+        return_value=[
+            {"id": 555, "m3u_account": 7, "name": "US: TNT"},
+        ]
+    )
+    snapshot = [{"channel_uuid": "ch-a", "stream_id": 555}]
+
+    result = await tracker._resolve_provider_ids(snapshot)
+
+    assert "ch-a" in result
+    resolution = result["ch-a"]
+    assert isinstance(resolution, ProviderResolution)
+    assert resolution.provider_id == 7
+    assert resolution.stream_id == 555
+    assert resolution.stream_name == "US: TNT"
+
+
+@pytest.mark.asyncio
+async def test_resolver_returns_null_triple_for_no_stream_id(
+    patched_session_local,
+    tracker,
+    mock_client,
+):
+    """No ``stream_id`` on the snapshot → resolver returns the all-None
+    triple. The row will write with all three columns NULL — same failure
+    semantic as the pre-kh23e provider-only path."""
+    from bandwidth_tracker import ProviderResolution
+
+    snapshot = [{"channel_uuid": "ch-a", "stream_id": None}]
+
+    result = await tracker._resolve_provider_ids(snapshot)
+
+    resolution = result["ch-a"]
+    assert isinstance(resolution, ProviderResolution)
+    assert resolution.provider_id is None
+    assert resolution.stream_id is None
+    assert resolution.stream_name is None
+
+
+@pytest.mark.asyncio
+async def test_write_path_persists_stream_id_and_stream_name(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """End-to-end: a resolver hit lands the stream id + name on every
+    ``session_telemetry`` row for that channel."""
+    stream_id = 555
+    stream_name = "US: TNT"
+    mock_client.get_streams_by_ids = AsyncMock(
+        return_value=[
+            {"id": stream_id, "m3u_account": 7, "name": stream_name},
+        ]
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=stream_id,
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=stream_id,
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).order_by(SessionTelemetry.id).all()
+    finally:
+        session.close()
+    assert len(rows) == 2
+    assert all(r.stream_id == stream_id for r in rows)
+    assert all(r.stream_name == stream_name for r in rows)
+    # provider_id keeps working too — kh23e is additive.
+    assert all(r.provider_id == 7 for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_write_path_null_stream_when_resolver_fails(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """When the resolver returns the all-None triple (no stream_id on the
+    payload), every row writes ``stream_id=NULL`` and ``stream_name=NULL``
+    — matching the provider_id failure semantic."""
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        # No stream_id — resolver returns the (None, None, None) triple.
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows
+    assert all(r.provider_id is None for r in rows)
+    assert all(r.stream_id is None for r in rows)
+    assert all(r.stream_name is None for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_write_path_stream_id_without_name_when_stream_response_lacks_name(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """Defensive: Dispatcharr's stream record returns the id and provider
+    but omits ``name``. The resolver propagates ``stream_id`` and falls
+    back to ``stream_name=NULL`` rather than synthesising a label —
+    presentation is the frontend's job."""
+    stream_id = 555
+    mock_client.get_streams_by_ids = AsyncMock(
+        return_value=[
+            # No ``name`` field — older Dispatcharr versions or partial responses.
+            {"id": stream_id, "m3u_account": 7},
+        ]
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=stream_id,
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=stream_id,
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows
+    assert all(r.stream_id == stream_id for r in rows)
+    assert all(r.stream_name is None for r in rows)
+    assert all(r.provider_id == 7 for r in rows)

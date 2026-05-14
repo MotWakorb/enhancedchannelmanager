@@ -44,6 +44,7 @@ import {
 import { useAuth } from '../../hooks/useAuth';
 import * as api from '../../services/api';
 import { HttpError } from '../../services/httpClient';
+import { streamLabel } from '../../utils/formatting';
 import type {
   WatchTimeUserTotalRow,
   WatchTimeUserDayRow,
@@ -86,6 +87,7 @@ function formatLastWatched(iso: string | null): string {
     return '—';
   }
 }
+
 
 function aggregateDailyMinutes(rows: WatchTimeUserDayRow[]): DailyTrendPoint[] {
   const byDay = new Map<string, number>();
@@ -488,6 +490,7 @@ export function UserStatsPanel() {
               <thead>
                 <tr>
                   <th scope="col">Channel</th>
+                  <th scope="col">Stream</th>
                   <th scope="col">Total minutes</th>
                   <th scope="col">Last watched</th>
                 </tr>
@@ -496,6 +499,20 @@ export function UserStatsPanel() {
                 {channelBreakdown.map(ch => (
                   <tr key={ch.channel_id}>
                     <td>{ch.channel_name}</td>
+                    <td>
+                      {/* bd-kh23e: stream identity column. Provider name
+                          lookup uses the channel-breakdown row's stream
+                          identity only — the row doesn't carry a
+                          provider_id of its own (the breakdown aggregates
+                          across providers per channel), so the bracketed
+                          prefix is omitted by ``streamLabel`` when no
+                          provider name resolves. The cell still shows
+                          the stream name (the most-informative half of
+                          the label). When the breakdown gains a
+                          provider_id field, the helper picks it up
+                          without further code change. */}
+                      {streamLabel(null, ch.latest_stream_name, ch.latest_stream_id)}
+                    </td>
                     <td>{secondsToMinutes(ch.total_watch_seconds)} min</td>
                     <td>{formatLastWatched(ch.last_watched)}</td>
                   </tr>

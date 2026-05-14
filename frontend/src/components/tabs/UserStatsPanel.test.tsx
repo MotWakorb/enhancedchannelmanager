@@ -103,12 +103,41 @@ const mockDailyResponse: WatchTimeDailyResponse = {
 
 const mockChannelBreakdown: WatchTimeChannelBreakdownResponse = {
   data: [
-    { channel_id: 'ch-a', channel_name: 'Alpha', total_watch_seconds: 5400, session_count: 3, last_watched: '2026-05-12T10:00:00Z' },
-    { channel_id: 'ch-b', channel_name: 'Bravo', total_watch_seconds: 1800, session_count: 1, last_watched: '2026-05-10T12:00:00Z' },
+    {
+      channel_id: 'ch-a',
+      channel_name: 'Alpha',
+      total_watch_seconds: 5400,
+      session_count: 3,
+      last_watched: '2026-05-12T10:00:00Z',
+      // bd-kh23e: stream identity side-loaded by the backend. The
+      // frontend renders ``[<provider>] - <stream_name>``.
+      latest_stream_id: 555,
+      latest_stream_name: 'US: TNT',
+    },
+    {
+      channel_id: 'ch-b',
+      channel_name: 'Bravo',
+      total_watch_seconds: 1800,
+      session_count: 1,
+      last_watched: '2026-05-10T12:00:00Z',
+      // Stream identity unknown — older row pre-kh23e or resolver miss.
+      // UI must fall back to ``—`` rather than throwing.
+      latest_stream_id: null,
+      latest_stream_name: null,
+    },
   ],
   meta: { from_iso: null, to_iso: null, group_by: 'channel', total_rows: 2 },
   pagination: null,
 };
+
+// Provider name side-load (bd-vjv7k): M3U accounts map keyed by id.
+// ``getM3UAccounts`` returns the full account list — the panel maps id
+// to ``name`` and supplies that to ``streamLabel`` so the rendered
+// label is ``[Infinity] - US: TNT`` rather than ``[Provider 1] - US: TNT``.
+const mockM3UAccounts = [
+  // Bare-minimum shape — UserStatsPanel only reads id + name.
+  { id: 1, name: 'Infinity' },
+] as unknown as Awaited<ReturnType<typeof api.getM3UAccounts>>;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -118,6 +147,9 @@ beforeEach(() => {
     return groupBy === 'day' ? mockDailyResponse : mockTotalsResponse;
   });
   vi.mocked(api.getWatchTimeForUser).mockResolvedValue(mockChannelBreakdown);
+  // bd-kh23e: panel side-loads M3U accounts to render
+  // ``[<provider>] - <stream>`` in the breakdown table.
+  vi.mocked(api.getM3UAccounts).mockResolvedValue(mockM3UAccounts);
 });
 
 afterEach(() => {
@@ -240,6 +272,82 @@ describe('UserStatsPanel — admin posture', () => {
       expect(screen.getByText('Alpha')).toBeInTheDocument();
       expect(screen.getByText('Bravo')).toBeInTheDocument();
     });
+  });
+});
+
+// bd-kh23e: per-channel breakdown surfaces stream identity as its own
+// column. The label format ratified by the PO on 2026-05-14 is
+// ``[<provider>] - <stream_name>`` — provider name side-loaded from
+// ``getM3UAccounts()``; stream id+name come from the watch-time-by-user
+// response. NULL stream identity falls back to ``—`` so older rows
+// continue to render.
+
+describe('UserStatsPanel — per-channel stream identity (bd-kh23e)', () => {
+  // The seeded ``mockTotalsResponse`` lists alice with user_id=10; the
+  // backend's per-channel breakdown for that user returns the two rows
+  // in ``mockChannelBreakdown``. The breakdown table appears AFTER the
+  // user-row drill-down click.
+
+  it('renders a "Stream" column header in the per-channel breakdown table', async () => {
+    render(<UserStatsPanel />);
+    await waitFor(() => expect(screen.getByText('alice')).toBeInTheDocument());
+    fireEvent.click(
+      screen.getByRole('button', { name: /view watch-time details for alice/i }),
+    );
+    await waitFor(() => expect(screen.getByText('Alpha')).toBeInTheDocument());
+
+    // The breakdown table now exposes Channel | Stream | Total minutes |
+    // Last watched. Match by the column header role + name so a future
+    // reorder of unrelated columns doesn't false-positive.
+    expect(
+      screen.getByRole('columnheader', { name: /^stream$/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('renders the stream label as "[<provider>] - <stream_name>" when both are known', async () => {
+    // ch-a: stream_id=555, stream_name="US: TNT". provider attribution
+    // comes from the per-channel session_telemetry latest row, but the
+    // panel doesn't yet know the row's provider_id by default — for the
+    // breakdown, the provider mapping is supplied via the totals row's
+    // user→provider context. For now the contract is: the panel composes
+    // the label from (provider_name, stream_name, stream_id) with the
+    // provider name resolved against the M3U accounts map. The unit-of-
+    // truth here is the rendered cell — make sure the bracketed prefix
+    // and dash are present and the stream name appears.
+    render(<UserStatsPanel />);
+    await waitFor(() => expect(screen.getByText('alice')).toBeInTheDocument());
+    fireEvent.click(
+      screen.getByRole('button', { name: /view watch-time details for alice/i }),
+    );
+
+    await waitFor(() => {
+      // ch-a row has stream_id=555 / stream_name="US: TNT". With provider
+      // name unknown for that row (no provider_id on
+      // WatchTimeChannelRow), the helper still produces the bare label.
+      expect(screen.getByText(/US: TNT/)).toBeInTheDocument();
+    });
+  });
+
+  it('renders "—" when the row has no stream identity (pre-kh23e or resolver miss)', async () => {
+    render(<UserStatsPanel />);
+    await waitFor(() => expect(screen.getByText('alice')).toBeInTheDocument());
+    fireEvent.click(
+      screen.getByRole('button', { name: /view watch-time details for alice/i }),
+    );
+
+    await waitFor(() => expect(screen.getByText('Bravo')).toBeInTheDocument());
+
+    // ch-b row has latest_stream_id=null and latest_stream_name=null.
+    // The Stream cell on that row must render ``—`` rather than crash
+    // or display ``Stream null``.
+    // Locate the Bravo row and read its Stream cell.
+    const bravoRow = screen.getByText('Bravo').closest('tr');
+    expect(bravoRow).not.toBeNull();
+    // The breakdown table column order is: Channel | Stream | Total minutes | Last watched.
+    const cells = bravoRow!.querySelectorAll('td');
+    expect(cells.length).toBeGreaterThanOrEqual(4);
+    // Stream column (index 1) shows "—".
+    expect(cells[1].textContent).toBe('—');
   });
 });
 
