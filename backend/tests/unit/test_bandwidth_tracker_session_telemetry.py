@@ -134,6 +134,7 @@ def _channel_payload(
     avg_bitrate_kbps: int = 1000,
     name: str = "Test Channel",
     stream_id: int | None = None,
+    url: str | None = None,
 ) -> dict:
     """Build a single ``channels[]`` entry as Dispatcharr's stats endpoint
     surfaces it. Defaults match a single-viewer stream.
@@ -142,6 +143,11 @@ def _channel_payload(
     ``/proxy/ts/status`` payload surfaces — the integer ID of the stream
     currently being served. This is the input the provider resolver (bead
     skqln.14) uses to map the active stream back to its ``m3u_account_id``.
+
+    ``url`` mirrors the per-channel ``url`` field Dispatcharr surfaces in
+    the same payload. The trailing path-segment integer before ``.ts`` is
+    the Dispatcharr stream row id — the resolver's URL-fallback path
+    (bead kbgey) parses it when ``stream_id`` is absent.
     """
     if client_ips is None:
         client_ips = ["10.0.0.1"]
@@ -162,6 +168,8 @@ def _channel_payload(
     }
     if stream_id is not None:
         payload["stream_id"] = stream_id
+    if url is not None:
+        payload["url"] = url
     return payload
 
 
@@ -984,6 +992,271 @@ async def test_resolver_handles_null_m3u_account_on_stream(
         "[STATS_V2] provider_resolution_failed" in r.message
         for r in caplog.records
     )
+
+
+# ---------------------------------------------------------------------------
+# URL-fallback resolver tests (bd-kbgey)
+# ---------------------------------------------------------------------------
+#
+# Dispatcharr's ``/proxy/ts/status`` payload INCONSISTENTLY populates
+# ``stream_id`` per channel — 214 of 235 polls observed in dev surfaced
+# the field missing on active connections (see bd-kbgey description for
+# real payload evidence). The URL field is reliably present, and its
+# trailing path segment before ``.ts`` is the same Dispatcharr stream row
+# id that ``stream_id`` would have carried. The resolver derives the id
+# from the URL when ``stream_id`` is missing, then routes the result
+# through the SAME batched ``get_streams_by_ids`` call — no extra API
+# round-trip.
+
+
+@pytest.mark.asyncio
+async def test_resolver_url_fallback_when_stream_id_missing(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """``stream_id`` absent but ``url`` present — resolver parses the
+    trailing ``.../<stream_id>.ts`` integer from the URL, feeds it into
+    the same batched lookup, and writes the resulting provider_id.
+
+    This is the dev-observed Infinity case: TNT active, ``stream_id``
+    missing, URL ``https://infinity.gives/live/mot/16118141/85796.ts``.
+    """
+    stream_id = 85796
+    provider_id = 9
+    mock_client.get_streams_by_ids = AsyncMock(
+        return_value=[{"id": stream_id, "m3u_account": provider_id}]
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url=f"https://infinity.gives/live/mot/16118141/{stream_id}.ts",
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url=f"https://infinity.gives/live/mot/16118141/{stream_id}.ts",
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).order_by(SessionTelemetry.id).all()
+    finally:
+        session.close()
+    assert rows, "session_telemetry rows must still be written"
+    assert all(r.provider_id == provider_id for r in rows), [
+        (r.id, r.provider_id) for r in rows
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resolver_url_fallback_malformed_url_falls_through_to_null(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+    caplog,
+):
+    """URL present but missing the trailing ``<n>.ts`` segment — resolver
+    has no stream id to look up and falls through to NULL with a
+    ``no_stream_id`` reason log. The row is still written.
+    """
+    import logging as _logging
+
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url="https://example.com/foo/bar",
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url="https://example.com/foo/bar",
+    )
+
+    caplog.clear()
+    with caplog.at_level(_logging.WARNING, logger="bandwidth_tracker"):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows, "session_telemetry rows must still be written"
+    assert all(r.provider_id is None for r in rows)
+    assert any(
+        "[STATS_V2] provider_resolution_failed" in r.message
+        and "reason=no_stream_id" in r.message
+        for r in caplog.records
+    ), [r.message for r in caplog.records]
+
+
+@pytest.mark.asyncio
+async def test_resolver_url_fallback_with_query_string(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """Dispatcharr URLs occasionally carry a query string after ``.ts``
+    (session token, transcode hint). The regex must still extract the
+    stream id from ``.../85796.ts?session=abc123``.
+    """
+    stream_id = 85796
+    provider_id = 9
+    mock_client.get_streams_by_ids = AsyncMock(
+        return_value=[{"id": stream_id, "m3u_account": provider_id}]
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url=f"https://infinity.gives/live/mot/16118141/{stream_id}.ts?session=abc123",
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url=f"https://infinity.gives/live/mot/16118141/{stream_id}.ts?session=abc123",
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows and all(r.provider_id == provider_id for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_resolver_mixed_batch_url_and_stream_id_share_one_lookup(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """Mixed poll: one channel has ``stream_id`` directly, one needs URL
+    parsing. Both ids end up in the SAME batched
+    ``get_streams_by_ids`` call — the URL-fallback path must not
+    multiply the API round-trip count.
+    """
+    mock_client.get_streams_by_ids = AsyncMock(
+        return_value=[
+            {"id": 100, "m3u_account": 1},
+            {"id": 85796, "m3u_account": 9},
+        ]
+    )
+    ch_a_first = _channel_payload(
+        channel_uuid="ch-direct",
+        channel_number=101,
+        total_bytes=1_000_000,
+        client_ips=["10.0.0.1"],
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=100,
+    )
+    ch_b_first = _channel_payload(
+        channel_uuid="ch-url",
+        channel_number=102,
+        total_bytes=1_000_000,
+        client_ips=["10.0.0.2"],
+        url="https://infinity.gives/live/mot/16118141/85796.ts",
+    )
+    ch_a_second = _channel_payload(
+        channel_uuid="ch-direct",
+        channel_number=101,
+        total_bytes=2_000_000,
+        client_ips=["10.0.0.1"],
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=100,
+    )
+    ch_b_second = _channel_payload(
+        channel_uuid="ch-url",
+        channel_number=102,
+        total_bytes=2_000_000,
+        client_ips=["10.0.0.2"],
+        url="https://infinity.gives/live/mot/16118141/85796.ts",
+    )
+
+    mock_client.get_channel_stats.return_value = {
+        "channels": [ch_a_first, ch_b_first]
+    }
+    await tracker._collect_stats()
+    call_count_after_first = mock_client.get_streams_by_ids.call_count
+    mock_client.get_channel_stats.return_value = {
+        "channels": [ch_a_second, ch_b_second]
+    }
+    await tracker._collect_stats()
+    call_count_after_second = mock_client.get_streams_by_ids.call_count
+
+    # One call per poll, regardless of how many channels needed URL parsing.
+    assert call_count_after_first == 1
+    assert call_count_after_second == 2
+
+    # And the single call covered BOTH stream ids — the set passed to
+    # the lookup must contain 100 (direct) and 85796 (URL-derived).
+    second_poll_call_args = mock_client.get_streams_by_ids.call_args_list[1]
+    ids_arg = second_poll_call_args.args[0]
+    assert set(ids_arg) == {100, 85796}, ids_arg
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    provider_by_channel = {(r.channel_id, r.provider_id) for r in rows}
+    assert ("ch-direct", 1) in provider_by_channel
+    assert ("ch-url", 9) in provider_by_channel
+
+
+@pytest.mark.asyncio
+async def test_resolver_url_derived_stream_not_found_logs_distinct_reason(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+    caplog,
+):
+    """URL parsing succeeded but ``get_streams_by_ids`` returns no record
+    for the parsed id. The failure log must carry
+    ``reason=stream_not_found_url_derived`` so operators can distinguish
+    "Dispatcharr 404'd the id we extracted from the URL" from
+    "Dispatcharr 404'd an id it told us directly". Helps observability
+    if the URL convention shifts under us.
+    """
+    import logging as _logging
+
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url="https://infinity.gives/live/mot/16118141/85796.ts",
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        url="https://infinity.gives/live/mot/16118141/85796.ts",
+    )
+
+    caplog.clear()
+    with caplog.at_level(_logging.WARNING, logger="bandwidth_tracker"):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows and all(r.provider_id is None for r in rows)
+    assert any(
+        "[STATS_V2] provider_resolution_failed" in r.message
+        and "reason=stream_not_found_url_derived" in r.message
+        for r in caplog.records
+    ), [r.message for r in caplog.records]
 
 
 @pytest.mark.asyncio
