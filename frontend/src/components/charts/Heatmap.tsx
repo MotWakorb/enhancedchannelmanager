@@ -49,8 +49,11 @@ export interface HeatmapProps {
   columnLabels?: readonly string[];
 
   /**
-   * Cell width and height in pixels. Default 32px — large enough for a
-   * two-digit numeric overlay if the consumer adds one later.
+   * Cell width and height in pixels. Default 48px — large enough that
+   * rotated column labels for typical channel names ("ESPN HD", "Discovery
+   * Channel") don't stack on top of each other in the GH-59 Providers
+   * panel use case. Short labels (hours of day in the skqln.17 use case)
+   * still render fine at this size.
    */
   cellSize?: number;
 
@@ -70,8 +73,16 @@ export interface HeatmapProps {
 
 /** Width reserved on the left for row labels, in pixels. */
 const ROW_LABEL_WIDTH = 96;
-/** Height reserved on the top for column labels, in pixels. */
-const COLUMN_LABEL_HEIGHT = 24;
+/**
+ * Height reserved on the top for column labels, in pixels.
+ *
+ * Sized to fit a -45° rotated label of up to ~80px (≈ 13-14 chars at
+ * 11px font, projected onto the vertical axis). bd-yteek: longer channel
+ * names overflow the band — that's acceptable, the .heatmap container's
+ * existing ``overflow-x: auto`` lets the user scroll, and the rotated
+ * label remains readable diagonally.
+ */
+const COLUMN_LABEL_HEIGHT = 80;
 
 function isEmpty(data: readonly (readonly number[])[]): boolean {
   if (data.length === 0) return true;
@@ -103,7 +114,7 @@ export function Heatmap({
   data,
   rowLabels = [],
   columnLabels = [],
-  cellSize = 32,
+  cellSize = 48,
   colorFor,
   ariaLabel = 'Heatmap',
 }: HeatmapProps) {
@@ -143,18 +154,28 @@ export function Heatmap({
       >
         <title>{ariaLabel}</title>
 
-        {/* Column labels along the top */}
-        {columnLabels.slice(0, columnCount).map((label, colIdx) => (
-          <text
-            key={`col-${colIdx}`}
-            className="heatmap-col-label"
-            x={ROW_LABEL_WIDTH + colIdx * cellSize + cellSize / 2}
-            y={COLUMN_LABEL_HEIGHT - 6}
-            textAnchor="middle"
-          >
-            {label}
-          </text>
-        ))}
+        {/* Column labels along the top.
+            bd-yteek: rotated -45° so long channel names ("Discovery
+            Channel HD") read diagonally instead of overlapping with the
+            label in the next column. textAnchor='end' on a -45°-rotated
+            text anchors the label's right edge at the pivot, which sits
+            at the column center just above the cells. */}
+        {columnLabels.slice(0, columnCount).map((label, colIdx) => {
+          const pivotX = ROW_LABEL_WIDTH + colIdx * cellSize + cellSize / 2;
+          const pivotY = COLUMN_LABEL_HEIGHT - 4;
+          return (
+            <text
+              key={`col-${colIdx}`}
+              className="heatmap-col-label"
+              x={pivotX}
+              y={pivotY}
+              textAnchor="end"
+              transform={`rotate(-45 ${pivotX} ${pivotY})`}
+            >
+              {label}
+            </text>
+          );
+        })}
 
         {/* Row labels down the left side */}
         {data.map((_row, rowIdx) => (
