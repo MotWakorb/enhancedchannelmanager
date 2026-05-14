@@ -14,7 +14,11 @@ from sqlalchemy.orm import Session
 
 from auth.dependencies import get_current_user
 from auth.settings import get_auth_settings
-from bandwidth_tracker import BandwidthTracker
+from bandwidth_tracker import (
+    BandwidthTracker,
+    ChannelStreamsCache,
+    resolve_active_channel_streams,
+)
 from database import get_session
 from dispatcharr_client import get_client
 from models import SessionTelemetry, UniqueClientConnection, User
@@ -166,6 +170,17 @@ async def get_channel_stats():
 
     Returns summary including active channels, client counts, bitrates, speeds, etc.
     Enriches client data with usernames resolved from Dispatcharr user accounts.
+
+    bd-ox5q8: per active channel, additionally surfaces
+    ``stream_name`` and ``m3u_account_id`` resolved live (request-time)
+    via ``resolve_active_channel_streams`` — the same code path the
+    polling tracker uses for ``session_telemetry``. The PO directive is
+    "Active Channels is a live view; operators expect immediate
+    accuracy" — so this is intentionally a fresh resolver call, NOT a
+    read from the (up-to-one-poll-stale) ``session_telemetry`` table.
+    Resolver failure leaves both fields ``None`` and the row still
+    surfaces (best-effort enrichment — never block the live view on a
+    Dispatcharr lookup hiccup).
     """
     logger.debug("[STATS] GET /api/stats/channels")
     client = get_client()
@@ -192,6 +207,63 @@ async def get_channel_stats():
                             c["username"] = user_map[str(uid)]
             except Exception as e:
                 logger.warning("[STATS] Failed to resolve usernames: %s", e)
+
+        # bd-ox5q8: live stream-identity enrichment for the Active
+        # Channels view. Build the snapshot shape ``resolve_active_
+        # channel_streams`` expects (channel_uuid + stream_id + url),
+        # call the resolver with a transient cache so this request
+        # doesn't share state with any other request, and merge the
+        # resolved ``stream_name`` + ``m3u_account_id`` (+ ``stream_id``
+        # for completeness) onto each ChannelStats row.
+        channels = result.get("channels", []) or []
+        if channels:
+            snapshot = [
+                {
+                    "channel_uuid": str(ch.get("channel_id", "")),
+                    "stream_id": ch.get("stream_id"),
+                    "url": ch.get("url"),
+                }
+                for ch in channels
+            ]
+            try:
+                resolutions = await resolve_active_channel_streams(
+                    client,
+                    snapshot,
+                    channel_streams_cache=ChannelStreamsCache(),
+                    poll_count=0,
+                    # Suppress the per-poll SLI metric — that signal is
+                    # owned by the BandwidthTracker hot path. The endpoint
+                    # call is on-demand and would dilute the cyclic SLI.
+                    emit_metrics=False,
+                )
+            except Exception as e:
+                # Defense-in-depth — resolver internals already catch
+                # per-channel failures and return EMPTY_RESOLUTION; an
+                # outer raise here would be unexpected (e.g. structural
+                # bug). Best-effort enrichment: log + degrade gracefully
+                # so the Active Channels view still renders.
+                logger.warning(
+                    "[STATS] live stream-identity resolver raised: %s", e
+                )
+                resolutions = {}
+
+            for ch in channels:
+                uuid = str(ch.get("channel_id", ""))
+                resolution = resolutions.get(uuid)
+                if resolution is None:
+                    ch["stream_name"] = ch.get("stream_name")
+                    ch["m3u_account_id"] = None
+                    continue
+                # Only override the existing stream_name when the
+                # resolver actually produced one (preserve whatever
+                # Dispatcharr surfaced if the resolver came up empty).
+                if resolution.stream_name is not None:
+                    ch["stream_name"] = resolution.stream_name
+                elif "stream_name" not in ch:
+                    ch["stream_name"] = None
+                if resolution.stream_id is not None and not ch.get("stream_id"):
+                    ch["stream_id"] = resolution.stream_id
+                ch["m3u_account_id"] = resolution.provider_id
 
         return result
     except Exception as e:
