@@ -21,7 +21,11 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { UserStatsPanel } from './UserStatsPanel';
+import {
+  UserStatsPanel,
+  formatLocalDayLabel,
+  isTodayInLocalTz,
+} from './UserStatsPanel';
 import * as api from '../../services/api';
 import { HttpError } from '../../services/httpClient';
 import type {
@@ -338,6 +342,132 @@ describe('UserStatsPanel — a11y / keyboard navigation', () => {
     await waitFor(() => {
       // <caption> is exposed as the table's accessible name.
       expect(screen.getByRole('table', { name: /daily watch-minutes data table/i })).toBeInTheDocument();
+    });
+  });
+});
+
+describe('UserStatsPanel — date label helpers (bd-1qxo9)', () => {
+  it('formatLocalDayLabel renders short "MMM D" label in the requested tz (en-US)', () => {
+    // 2026-05-14 UTC midday → May 14 in America/Chicago (UTC-5/-6).
+    expect(formatLocalDayLabel('2026-05-14', 'en-US', 'America/Chicago')).toBe('May 14');
+  });
+
+  it('formatLocalDayLabel uses noon-UTC as the anchor so the most-overlapping local day wins', () => {
+    // The UTC day "2026-05-14" spans 00:00–24:00 UTC. In America/Chicago
+    // (UTC-5 during DST) that's 19:00 May 13 → 19:00 May 14 local. The
+    // local day with the most overlap is May 14 (19 hours of overlap vs.
+    // 5 hours on May 13). Anchoring at 12:00 UTC ensures we land on May 14
+    // even at the western edge of the US (UTC-10 Hawaii: 12:00 UTC = 02:00
+    // local same day).
+    expect(formatLocalDayLabel('2026-05-14', 'en-US', 'Pacific/Honolulu')).toBe('May 14');
+  });
+
+  it('isTodayInLocalTz returns true when the UTC-day string matches "today" in the local tz', () => {
+    // System "now" is 2026-05-14 14:00 UTC. In Chicago (UTC-5 DST) that's
+    // 09:00 local on May 14. The UTC-day "2026-05-14" maps to local
+    // May 14 via the noon-anchor rule, which equals local today.
+    const now = new Date('2026-05-14T14:00:00Z');
+    expect(isTodayInLocalTz('2026-05-14', now, 'America/Chicago')).toBe(true);
+    expect(isTodayInLocalTz('2026-05-13', now, 'America/Chicago')).toBe(false);
+  });
+
+  it('isTodayInLocalTz handles the local-day rollover edge case', () => {
+    // "Now" = 2026-05-15 02:00 UTC. In Chicago that's 21:00 May 14 local.
+    // The UTC-day string "2026-05-15" (most-overlap local = May 15) is NOT
+    // today-local; "2026-05-14" (most-overlap local = May 14) IS today-local.
+    const now = new Date('2026-05-15T02:00:00Z');
+    expect(isTodayInLocalTz('2026-05-14', now, 'America/Chicago')).toBe(true);
+    expect(isTodayInLocalTz('2026-05-15', now, 'America/Chicago')).toBe(false);
+  });
+});
+
+describe('UserStatsPanel — chart data-table labels & in-progress marker (bd-1qxo9)', () => {
+  beforeEach(() => {
+    // Pin system time to 2026-05-14 14:00 UTC so the daily response's last
+    // row ("2026-05-14") is "today" regardless of CI tz. Only fake Date —
+    // leaving timers real lets React effects & promises resolve normally.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-05-14T14:00:00Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('renders localized "MMM D" labels in the chart data-table fallback (not raw YYYY-MM-DD)', async () => {
+    // Daily rows: 05-12, 05-13, 05-14 (today). With noon-UTC anchor + US
+    // locale, labels should be "May 12", "May 13", "May 14".
+    vi.mocked(api.getWatchTimeByUser).mockImplementation(async ({ groupBy } = {}) => {
+      if (groupBy === 'day') {
+        return {
+          data: [
+            { user_id: 1, username: 'a', day: '2026-05-12', watch_seconds: 600 },
+            { user_id: 1, username: 'a', day: '2026-05-13', watch_seconds: 1200 },
+            { user_id: 1, username: 'a', day: '2026-05-14', watch_seconds: 300 },
+          ],
+          meta: { from_iso: null, to_iso: null, group_by: 'day' as const, total_rows: 3 },
+          pagination: null,
+        };
+      }
+      return mockTotalsResponse;
+    });
+
+    render(<UserStatsPanel />);
+
+    // Toggle table visible so getByText doesn't have to search hidden nodes
+    // (visually-hidden is in the DOM either way; we toggle for clarity).
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /show chart data/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /show chart data/i }));
+
+    // Raw YYYY-MM-DD should NOT appear in the table any more.
+    expect(screen.queryByText('2026-05-12')).not.toBeInTheDocument();
+    expect(screen.queryByText('2026-05-14')).not.toBeInTheDocument();
+    // Localized short label should appear (en-US default in test env).
+    // Match leniently — month name in the user's locale will lead, then day.
+    const tbody = screen.getByRole('table', { name: /daily watch-minutes data table/i });
+    expect(tbody.textContent).toMatch(/May\s*1[234]/);
+  });
+
+  it('marks "today" as in-progress in the data-table (yesterday is not marked)', async () => {
+    vi.mocked(api.getWatchTimeByUser).mockImplementation(async ({ groupBy } = {}) => {
+      if (groupBy === 'day') {
+        return {
+          data: [
+            { user_id: 1, username: 'a', day: '2026-05-13', watch_seconds: 1200 },
+            { user_id: 1, username: 'a', day: '2026-05-14', watch_seconds: 300 },
+          ],
+          meta: { from_iso: null, to_iso: null, group_by: 'day' as const, total_rows: 2 },
+          pagination: null,
+        };
+      }
+      return mockTotalsResponse;
+    });
+
+    render(<UserStatsPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /show chart data/i })).toBeInTheDocument();
+    });
+
+    // Today's row in the data table carries an in-progress class/marker;
+    // yesterday's does not. We assert via the "in-progress" cell content
+    // tag so screen-reader users hear the asymmetry too.
+    const inProgressRow = screen.getByTestId('chart-data-row-today');
+    expect(inProgressRow).toBeInTheDocument();
+    expect(inProgressRow.textContent).toMatch(/in progress/i);
+
+    // No other row carries the in-progress testid.
+    const allInProgress = screen.queryAllByTestId('chart-data-row-today');
+    expect(allInProgress).toHaveLength(1);
+  });
+
+  it('renders an "updates every ~10s" caption under the chart so operators know today is live', async () => {
+    render(<UserStatsPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/updates every ~?10s/i)).toBeInTheDocument();
     });
   });
 });
