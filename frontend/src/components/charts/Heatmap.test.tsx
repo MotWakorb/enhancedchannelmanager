@@ -120,4 +120,53 @@ describe('Heatmap', () => {
       screen.getByRole('img', { name: /buffering events by hour/i }),
     ).toBeInTheDocument();
   });
+
+  /**
+   * bd-yteek — column-label readability fix.
+   *
+   * The skqln.18 ProvidersPanel renders top-50 channel names along the
+   * heatmap's X axis. At the default cellSize (32px), 15-25-char names
+   * like "Discovery Channel HD" overlap horizontally. The fix rotates
+   * the column labels so each label reads diagonally rather than
+   * stacking on the cell beside it.
+   *
+   * Contract:
+   *   - The column labels carry a -45° SVG rotate transform.
+   *   - The label still anchors to the column position; the consumer
+   *     can override cellSize.
+   *   - The time-of-day Heatmap use case (skqln.17, "00:00", "01:00")
+   *     still renders without breaking — the rotation is unconditional
+   *     and harmless for short labels.
+   */
+  describe('column-label rotation (bd-yteek)', () => {
+    it('rotates column labels diagonally so long channel names do not overlap', () => {
+      const { container } = render(
+        <Heatmap
+          data={[[1, 2, 3]]}
+          columnLabels={['Discovery Channel HD', 'ESPN Premium', 'Telemundo Internacional']}
+        />,
+      );
+      const colLabels = container.querySelectorAll('text.heatmap-col-label');
+      expect(colLabels.length).toBe(3);
+      colLabels.forEach((label) => {
+        const transform = label.getAttribute('transform') ?? '';
+        // -45° (anti-clockwise tilt) reads top-left to bottom-right —
+        // standard datavis convention.
+        expect(transform).toMatch(/rotate\(\s*-?45\b/);
+      });
+    });
+
+    it('anchors the rotated column label end at the cell so it sits below the label band', () => {
+      const { container } = render(
+        <Heatmap data={[[1, 2]]} columnLabels={['A', 'B']} cellSize={40} />,
+      );
+      const colLabels = container.querySelectorAll('text.heatmap-col-label');
+      expect(colLabels.length).toBe(2);
+      // textAnchor='end' on a -45° rotated text means the label's right
+      // edge meets the column center.
+      colLabels.forEach((label) => {
+        expect(label.getAttribute('text-anchor')).toBe('end');
+      });
+    });
+  });
 });

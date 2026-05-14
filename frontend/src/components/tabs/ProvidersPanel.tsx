@@ -104,8 +104,26 @@ function providerKey(id: number | null): string {
   return id === null ? UNKNOWN_KEY : String(id);
 }
 
-function providerLabel(id: number | null): string {
-  return id === null ? UNKNOWN_LABEL : `Provider ${id}`;
+/**
+ * Resolve a provider_id to a display label.
+ *
+ * - NULL → "Unknown" (the synthetic NULL bucket from the backend).
+ * - Mapped id → the M3U account's display name from ``nameMap``.
+ * - Unmapped id (or ``nameMap`` undefined because the side-load
+ *   failed) → ``"Provider <id>"`` fallback. The panel must remain
+ *   usable when the M3U side-load fails — the provider id is still
+ *   recognizable to the operator.
+ *
+ * bd-vjv7k (2026-05-13) — fixes "Provider 9" leaking into the dev UI by
+ * side-loading account names from ``GET /api/providers``.
+ */
+function providerLabel(
+  id: number | null,
+  nameMap?: ReadonlyMap<number, string>,
+): string {
+  if (id === null) return UNKNOWN_LABEL;
+  const name = nameMap?.get(id);
+  return name ?? `Provider ${id}`;
 }
 
 function isAdminOnly403(err: unknown): boolean {
@@ -114,8 +132,13 @@ function isAdminOnly403(err: unknown): boolean {
 
 /** Collect the unique provider set across a series of rows. Preserves the
  * order rows arrive in; NULL ("Unknown") is placed last so it never gets
- * the primary palette slot. */
+ * the primary palette slot.
+ *
+ * ``nameMap`` (bd-vjv7k) supplies M3U account display names. When absent
+ * (initial render before /api/providers resolves, or the side-load
+ * failed), labels fall back to ``Provider <id>``. */
 function collectProviders(
+  nameMap: ReadonlyMap<number, string> | undefined,
   ...rowSets: ReadonlyArray<ReadonlyArray<{ provider_id: number | null }>>
 ): ProviderKey[] {
   const seen = new Map<string, ProviderKey>();
@@ -123,7 +146,11 @@ function collectProviders(
     for (const r of rows) {
       const key = providerKey(r.provider_id);
       if (!seen.has(key)) {
-        seen.set(key, { key, id: r.provider_id, label: providerLabel(r.provider_id) });
+        seen.set(key, {
+          key,
+          id: r.provider_id,
+          label: providerLabel(r.provider_id, nameMap),
+        });
       }
     }
   }
@@ -158,8 +185,15 @@ function pivotByBucket<TRow extends { provider_id: number | null; time_bucket: s
 
 /** Reduce heatmap cells to a 2D grid: rows = providers, cols = channels.
  * Returns rectangular data with zeros for missing cells so the Heatmap
- * primitive renders a clean grid. */
-function buildHeatmapGrid(rows: readonly ProviderHeatmapRow[]): {
+ * primitive renders a clean grid.
+ *
+ * ``nameMap`` (bd-vjv7k) is threaded through to ``collectProviders`` so
+ * heatmap row labels read as the M3U account name instead of
+ * ``Provider <id>``. */
+function buildHeatmapGrid(
+  rows: readonly ProviderHeatmapRow[],
+  nameMap: ReadonlyMap<number, string> | undefined,
+): {
   data: number[][];
   rowLabels: string[];
   columnLabels: string[];
@@ -179,7 +213,7 @@ function buildHeatmapGrid(rows: readonly ProviderHeatmapRow[]): {
       channelNames.set(r.channel_id, r.channel_name);
     }
   }
-  const providers = collectProviders(rows);
+  const providers = collectProviders(nameMap, rows);
 
   // Build a lookup: (providerKey, channel_id) → bytes.
   const lookup = new Map<string, number>();
@@ -227,6 +261,16 @@ export function ProvidersPanel() {
   const [heatmap, setHeatmap] = useState<ProviderHeatmapRow[]>([]);
   const [bitrate, setBitrate] = useState<ProviderBitrateRow[]>([]);
 
+  // M3U account name lookup (bd-vjv7k). Side-loaded from /api/providers on
+  // panel mount so the four stats datasets — which only carry numeric
+  // provider_id — can render the operator-facing account display name.
+  // ``undefined`` means "not yet resolved or fetch failed"; rendering
+  // falls back to ``Provider <id>`` in that case so the panel never blocks
+  // on this lookup succeeding.
+  const [m3uNameMap, setM3uNameMap] = useState<ReadonlyMap<number, string> | undefined>(
+    undefined,
+  );
+
   const [loading, setLoading] = useState(true);
   const [adminOnly, setAdminOnly] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -250,6 +294,28 @@ export function ProvidersPanel() {
     const myToken = ++requestTokenRef.current;
     setLoading(true);
     setError(null);
+
+    // M3U account names side-load (bd-vjv7k). Isolated from the four
+    // stats fetches: if /api/providers fails, we still render the panel
+    // with the legacy "Provider <id>" fallback. ``allSettled`` keeps the
+    // failure from rejecting the outer Promise.all.
+    const accountsPromise = api.getM3UAccounts().then(
+      (accounts) => {
+        if (myToken !== requestTokenRef.current) return;
+        const map = new Map<number, string>();
+        for (const a of accounts) {
+          map.set(a.id, a.name);
+        }
+        setM3uNameMap(map);
+      },
+      () => {
+        // Swallow — labels fall back to "Provider <id>". No user-facing
+        // error; the four primary panels still load.
+        if (myToken !== requestTokenRef.current) return;
+        setM3uNameMap(undefined);
+      },
+    );
+
     try {
       const [bufRes, watchRes, heatRes, bitRes] = await Promise.all([
         api.getProvidersBuffering({ window: windowSel, bucket: bucketSel }),
@@ -275,6 +341,10 @@ export function ProvidersPanel() {
       setHeatmap([]);
       setBitrate([]);
     } finally {
+      // Wait for the accounts side-load too so the loading state matches
+      // what the user actually sees rendered. Already-handled errors
+      // above mean this just blocks on the name-map resolution.
+      await accountsPromise;
       if (myToken === requestTokenRef.current) {
         setLoading(false);
       }
@@ -291,9 +361,11 @@ export function ProvidersPanel() {
 
   // Provider universe across all four datasets — drives chart legend +
   // palette assignments. Stable across re-renders for the same data.
+  // Re-derives when the M3U name map resolves so legends pick up the
+  // operator-facing names without a full refetch.
   const providers = useMemo(
-    () => collectProviders(buffering, watchTime, heatmap, bitrate),
-    [buffering, watchTime, heatmap, bitrate],
+    () => collectProviders(m3uNameMap, buffering, watchTime, heatmap, bitrate),
+    [m3uNameMap, buffering, watchTime, heatmap, bitrate],
   );
 
   const bufferingChart = useMemo(
@@ -318,7 +390,7 @@ export function ProvidersPanel() {
     return [single];
   }, [watchTime]);
 
-  const heatmapGrid = useMemo(() => buildHeatmapGrid(heatmap), [heatmap]);
+  const heatmapGrid = useMemo(() => buildHeatmapGrid(heatmap, m3uNameMap), [heatmap, m3uNameMap]);
 
   // Auth still resolving — stay quiet until we know the posture.
   if (authLoading) {
@@ -468,7 +540,7 @@ export function ProvidersPanel() {
                   <tr key={`${r.provider_id ?? 'null'}-${r.time_bucket}-${i}`}>
                     <td>{r.time_bucket}</td>
                     <td>
-                      {providerLabel(r.provider_id)}
+                      {providerLabel(r.provider_id, m3uNameMap)}
                       {isUnknown && (
                         <span className="unknown-tooltip" title={UNKNOWN_TOOLTIP} aria-label={UNKNOWN_TOOLTIP}>
                           {' (?)'}
@@ -542,7 +614,7 @@ export function ProvidersPanel() {
                 return (
                   <tr key={r.provider_id ?? 'null'}>
                     <td>
-                      {providerLabel(r.provider_id)}
+                      {providerLabel(r.provider_id, m3uNameMap)}
                       {isUnknown && (
                         <span className="unknown-tooltip" title={UNKNOWN_TOOLTIP} aria-label={UNKNOWN_TOOLTIP}>
                           {' (?)'}
@@ -601,7 +673,7 @@ export function ProvidersPanel() {
                 return (
                   <tr key={`${r.provider_id ?? 'null'}-${r.channel_id}-${i}`}>
                     <td>
-                      {providerLabel(r.provider_id)}
+                      {providerLabel(r.provider_id, m3uNameMap)}
                       {isUnknown && (
                         <span className="unknown-tooltip" title={UNKNOWN_TOOLTIP} aria-label={UNKNOWN_TOOLTIP}>
                           {' (?)'}
@@ -681,7 +753,7 @@ export function ProvidersPanel() {
                   <tr key={`${r.provider_id ?? 'null'}-${r.time_bucket}-${i}`}>
                     <td>{r.time_bucket}</td>
                     <td>
-                      {providerLabel(r.provider_id)}
+                      {providerLabel(r.provider_id, m3uNameMap)}
                       {isUnknown && (
                         <span className="unknown-tooltip" title={UNKNOWN_TOOLTIP} aria-label={UNKNOWN_TOOLTIP}>
                           {' (?)'}
