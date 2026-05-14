@@ -456,9 +456,9 @@ describe('ProvidersPanel — heatmap top-N truncation', () => {
     // Simulate a response capped to 3 channels × 3 providers — 9 cells max.
     const capped: ProviderHeatmapResponse = {
       data: [
-        { provider_id: 1, channel_id: 'c1', channel_name: 'Ch1', bytes: 100 },
-        { provider_id: 1, channel_id: 'c2', channel_name: 'Ch2', bytes: 90 },
-        { provider_id: 1, channel_id: 'c3', channel_name: 'Ch3', bytes: 80 },
+        { provider_id: 1, channel_id: 'c1', channel_name: 'Ch1', bytes: 100, latest_stream_id: null, latest_stream_name: null },
+        { provider_id: 1, channel_id: 'c2', channel_name: 'Ch2', bytes: 90, latest_stream_id: null, latest_stream_name: null },
+        { provider_id: 1, channel_id: 'c3', channel_name: 'Ch3', bytes: 80, latest_stream_id: null, latest_stream_name: null },
       ],
       meta: { from_iso: null, to_iso: null, total_rows: 3, window: '7d', top_n: 3 },
       pagination: null,
