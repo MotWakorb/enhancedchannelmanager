@@ -75,6 +75,8 @@ def _add_telemetry(
     poll_interval_ms: int = 10_000,
     session_id: str | None = None,
     bytes_delta: int = 1000,
+    stream_id: int | None = None,
+    stream_name: str | None = None,
 ) -> None:
     session.add(
         SessionTelemetry(
@@ -86,6 +88,8 @@ def _add_telemetry(
             bytes_delta=bytes_delta,
             buffer_event_count=0,
             poll_interval_ms=poll_interval_ms,
+            stream_id=stream_id,
+            stream_name=stream_name,
         )
     )
 
@@ -431,6 +435,94 @@ class TestWatchTimePerUserBreakdown:
         body = response.json()
         assert body["data"] == []
         assert body["meta"]["total_rows"] == 0
+
+    @pytest.mark.asyncio
+    async def test_per_user_breakdown_surfaces_latest_stream_identity(
+        self, async_client, test_session
+    ):
+        """bd-kh23e: rows include ``latest_stream_id`` + ``latest_stream_name``
+        side-loaded from the row with ``MAX(observed_at)`` per channel.
+
+        Seeds two stream identities on one channel — an OLDER one and a
+        NEWER one. The endpoint must surface the NEWER one (most-recent
+        stream watched on that channel within the window). Picking the
+        latest is intentional: the frontend label ``[provider] - stream``
+        represents what the user MOST RECENTLY watched, not an arbitrary
+        sample.
+        """
+        _add_user(test_session, user_id=10, username="alice")
+        base = datetime(2026, 4, 1, 12, 0, 0, tzinfo=timezone.utc)
+        # Channel ch-a — two consecutive stream identities on the same
+        # channel (e.g., failover hop or user-initiated stream switch).
+        _add_telemetry(
+            test_session,
+            user_id=10,
+            channel_id="ch-a",
+            observed_at_ms=_ms(base),
+            stream_id=100,
+            stream_name="US: TNT (older)",
+        )
+        _add_telemetry(
+            test_session,
+            user_id=10,
+            channel_id="ch-a",
+            observed_at_ms=_ms(base + timedelta(seconds=30)),
+            stream_id=200,
+            stream_name="US: TNT (newer)",
+        )
+        # Channel ch-b — single identity to confirm the field is also
+        # populated on single-stream channels.
+        _add_telemetry(
+            test_session,
+            user_id=10,
+            channel_id="ch-b",
+            observed_at_ms=_ms(base + timedelta(seconds=10)),
+            stream_id=300,
+            stream_name="NESN HD",
+        )
+        test_session.commit()
+
+        response = await async_client.get("/api/stats/watch-time/10")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        rows_by_channel = {r["channel_id"]: r for r in body["data"]}
+        # ch-a — MAX(observed_at) wins; newer identity surfaces.
+        assert rows_by_channel["ch-a"]["latest_stream_id"] == 200
+        assert rows_by_channel["ch-a"]["latest_stream_name"] == "US: TNT (newer)"
+        # ch-b — single identity present.
+        assert rows_by_channel["ch-b"]["latest_stream_id"] == 300
+        assert rows_by_channel["ch-b"]["latest_stream_name"] == "NESN HD"
+
+    @pytest.mark.asyncio
+    async def test_per_user_breakdown_stream_identity_nullable(
+        self, async_client, test_session
+    ):
+        """When the resolver could not attribute the active stream (older
+        rows pre-kh23e, or a resolution failure post-kh23e), both
+        identity fields surface as ``null``. The row must NOT be excluded
+        — channel watch time is still meaningful when stream identity is
+        missing.
+        """
+        _add_user(test_session, user_id=10, username="alice")
+        base = datetime(2026, 4, 1, 12, 0, 0, tzinfo=timezone.utc)
+        _add_telemetry(
+            test_session,
+            user_id=10,
+            channel_id="ch-a",
+            observed_at_ms=_ms(base),
+            stream_id=None,
+            stream_name=None,
+        )
+        test_session.commit()
+
+        response = await async_client.get("/api/stats/watch-time/10")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert len(body["data"]) == 1
+        row = body["data"][0]
+        assert row["channel_id"] == "ch-a"
+        assert row["latest_stream_id"] is None
+        assert row["latest_stream_name"] is None
 
 
 # ---------------------------------------------------------------------------

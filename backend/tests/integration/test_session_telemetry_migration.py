@@ -139,9 +139,14 @@ class TestSessionTelemetryMigration:
 
             # Columns / FK shape.
             cols = {c["name"]: c for c in inspect(engine).get_columns(TABLE)}
+            # ``stream_id`` and ``stream_name`` land in migration 0010
+            # (bd-kh23e) — both NULLABLE, no FK. Carry them in the
+            # head-shape assertion so a future delete/rename of either
+            # surfaces here.
             assert set(cols) == {
                 "id", "session_id", "observed_at", "user_id", "provider_id",
                 "channel_id", "bytes_delta", "buffer_event_count", "poll_interval_ms",
+                "stream_id", "stream_name",
             }
             assert cols["session_id"]["nullable"] is False
             assert cols["observed_at"]["nullable"] is False
@@ -158,6 +163,11 @@ class TestSessionTelemetryMigration:
             assert cols["bytes_delta"]["nullable"] is False
             assert cols["buffer_event_count"]["nullable"] is False
             assert cols["poll_interval_ms"]["nullable"] is False
+            # bd-kh23e: both stream identity columns are NULLABLE
+            # (resolver-failure rows write NULL) and untyped against any
+            # FK (``streams`` is not an ECM table).
+            assert cols["stream_id"]["nullable"] is True
+            assert cols["stream_name"]["nullable"] is True
 
             fks = inspect(engine).get_foreign_keys(TABLE)
             assert len(fks) == 1, f"expected exactly one FK (user_id), got {fks}"

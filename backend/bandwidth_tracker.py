@@ -19,7 +19,7 @@ import re
 import time
 from collections import OrderedDict
 from datetime import datetime, date, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import distinct, func
@@ -80,6 +80,49 @@ def _extract_stream_id_from_url(url: Optional[str]) -> Optional[int]:
     if parsed <= 0:
         return None
     return parsed
+
+
+class ProviderResolution(NamedTuple):
+    """Per-channel resolver output (bd-kh23e).
+
+    ``BandwidthTracker._resolve_provider_ids`` returns one
+    ``ProviderResolution`` per channel in the snapshot. The three
+    fields move together as a unit because they all come from the same
+    ``get_streams_by_ids`` batch response and they all fail (NULL)
+    together when resolution can't complete (same failure modes as the
+    pre-kh23e provider-only path: ``no_stream_id`` /
+    ``stream_not_found`` / ``stream_has_no_provider`` / ``lookup_raised``
+    / channel-streams fallback raise/miss).
+
+    * ``provider_id`` — the M3U-account id of the stream's upstream
+      provider (``streams.m3u_account_id``). NULL when the resolver
+      could not identify the stream's owner.
+    * ``stream_id`` — the Dispatcharr stream row id (``streams.id``).
+      NULL when the resolver could not identify the active stream at
+      all (no stream id on the snapshot, no URL-derived match, etc.).
+    * ``stream_name`` — the ``name`` field on the Dispatcharr stream
+      record (e.g. ``"US: TNT"``). NULL when the stream record had no
+      ``name`` field, or when the resolver could not identify the
+      stream.
+
+    Zero runtime overhead vs. a 3-tuple — ``typing.NamedTuple`` is a
+    plain ``tuple`` subclass. Field access (``.provider_id``) is
+    callsite documentation; iteration / equality / hashing behave
+    identically to a tuple.
+
+    The all-NULL sentinel is ``ProviderResolution(None, None, None)`` —
+    use ``EMPTY_RESOLUTION`` below to avoid re-allocating it.
+    """
+
+    provider_id: Optional[int]
+    stream_id: Optional[int]
+    stream_name: Optional[str]
+
+
+# Sentinel for the "resolution failed" case — same object reused across
+# call sites so the dict[channel_uuid, ProviderResolution] map doesn't
+# allocate a fresh tuple for every NULL row.
+EMPTY_RESOLUTION = ProviderResolution(None, None, None)
 
 
 def _coerce_session_user_id(raw: Any) -> Optional[int]:
@@ -1101,16 +1144,23 @@ class BandwidthTracker:
     async def _resolve_provider_ids(
         self,
         channel_snapshot: list[dict],
-    ) -> dict[str, Optional[int]]:
-        """Resolve each channel's active-stream → provider mapping for one poll.
+    ) -> dict[str, ProviderResolution]:
+        """Resolve each channel's active-stream identity for one poll.
 
         Bead: ``enhancedchannelmanager-skqln.14`` (initial), extended by
-        ``enhancedchannelmanager-kbgey`` (URL fallback) and
+        ``enhancedchannelmanager-kbgey`` (URL fallback),
         ``enhancedchannelmanager-5g7kx`` (channel-streams URL-match
-        fallback).
+        fallback), and ``enhancedchannelmanager-kh23e`` (stream identity
+        capture: returns a ``ProviderResolution`` NamedTuple per channel
+        carrying ``provider_id`` + ``stream_id`` + ``stream_name`` so the
+        writer can persist what's actually playing, not just who owns it).
 
-        Returns a ``{channel_uuid: provider_id_or_None}`` map. The mapping
-        is built primarily from a SINGLE batched
+        Returns a ``{channel_uuid: ProviderResolution}`` map. Resolution
+        failures land ``ProviderResolution(None, None, None)`` (the
+        module-level ``EMPTY_RESOLUTION`` sentinel) — same row still
+        writes, all three identity columns NULL.
+
+        The mapping is built primarily from a SINGLE batched
         ``DispatcharrClient.get_streams_by_ids`` call covering every unique
         ``stream_id`` the snapshot surfaced — not N calls per-channel. The
         per-invocation cache drops when the call returns; a stream's
@@ -1175,7 +1225,7 @@ class BandwidthTracker:
         # vs. nested object) and is the single owner of that contract.
         from stream_prober import extract_m3u_account_id
 
-        provider_by_channel: dict[str, Optional[int]] = {}
+        provider_by_channel: dict[str, ProviderResolution] = {}
         # Channels that surfaced no stream_id at all — directly unresolvable.
         unresolvable_channels: list[str] = []
         # {channel_uuid: stream_id} for channels we'll attempt to resolve.
@@ -1208,7 +1258,7 @@ class BandwidthTracker:
                 derived = _extract_stream_id_from_url(url) if url else None
                 if derived is None:
                     unresolvable_channels.append(channel_uuid)
-                    provider_by_channel[channel_uuid] = None
+                    provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
                     logger.warning(
                         "[STATS_V2] provider_resolution_failed channel=%s reason=no_stream_id",
                         channel_uuid,
@@ -1236,7 +1286,7 @@ class BandwidthTracker:
                 e,
             )
             for channel_uuid in stream_id_by_channel:
-                provider_by_channel[channel_uuid] = None
+                provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
                 logger.warning(
                     "[STATS_V2] provider_resolution_failed channel=%s stream=%s reason=lookup_raised",
                     channel_uuid,
@@ -1247,14 +1297,31 @@ class BandwidthTracker:
             )
             return provider_by_channel
 
-        # Build {stream_id: provider_id} from the batch response.
+        # Build {stream_id: provider_id} and {stream_id: stream_name} from
+        # the batch response. Both maps key off the SAME response — the
+        # name is sourced from the stream record's ``name`` field
+        # (bd-kh23e); side-loading it here means zero additional
+        # Dispatcharr round-trips for stream identity capture.
         provider_by_stream: dict[int, Optional[int]] = {}
+        name_by_stream: dict[int, Optional[str]] = {}
         for stream in streams:
             sid = stream.get("id", stream.get("stream_id"))
             if sid is None:
                 continue
-            provider_by_stream[int(sid)] = extract_m3u_account_id(
+            sid_int = int(sid)
+            provider_by_stream[sid_int] = extract_m3u_account_id(
                 stream.get("m3u_account")
+            )
+            # ``name`` is the Dispatcharr stream record's display label
+            # (e.g. ``"US: TNT"``). Missing on older Dispatcharr versions
+            # or partial responses — propagate NULL rather than
+            # synthesise a fallback string. Presentation is the
+            # frontend's job (PO directive 2026-05-14:
+            # ``[<provider>] - <stream_name>`` is rendered there, not
+            # here).
+            raw_name = stream.get("name")
+            name_by_stream[sid_int] = (
+                str(raw_name) if isinstance(raw_name, str) and raw_name else None
             )
 
         # Per-invocation cache for the channel-streams fallback
@@ -1269,6 +1336,7 @@ class BandwidthTracker:
         for channel_uuid, stream_id in stream_id_by_channel.items():
             provider_id = provider_by_stream.get(stream_id)
             stream_in_response = stream_id in provider_by_stream
+            stream_name = name_by_stream.get(stream_id)
             if provider_id is None and not stream_in_response and channel_uuid in url_derived_channels:
                 # URL-derived id missed Dispatcharr — most likely an
                 # upstream provider id (bd-5g7kx). Try the channel-streams
@@ -1281,6 +1349,9 @@ class BandwidthTracker:
                     per_poll_channel_streams_cache,
                 )
                 if fallback_result is not None:
+                    # ``fallback_result`` is the matched stream's
+                    # ``ProviderResolution`` — already carries id + name +
+                    # provider together (bd-kh23e).
                     provider_by_channel[channel_uuid] = fallback_result
                     resolved_count += 1
                     continue
@@ -1289,13 +1360,15 @@ class BandwidthTracker:
                 # specific failure reason (channel_streams_no_match or
                 # channel_streams_lookup_raised). Fall through to the
                 # NULL-write path.
-                provider_by_channel[channel_uuid] = None
+                provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
                 unresolved_count += 1
                 continue
             if provider_id is None:
                 # Either the stream was not in the batch response (404)
-                # or its m3u_account was None. Both surface as NULL.
-                provider_by_channel[channel_uuid] = None
+                # or its m3u_account was None. Both surface as NULL on
+                # every identity column — the whole row's stream identity
+                # is unattributable in either case.
+                provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
                 unresolved_count += 1
                 if not stream_in_response:
                     # Directly-provided stream_id missed. (The URL-derived
@@ -1311,7 +1384,13 @@ class BandwidthTracker:
                     reason,
                 )
             else:
-                provider_by_channel[channel_uuid] = provider_id
+                # Success: carry id + name + provider together so the
+                # writer persists what's actually playing (bd-kh23e).
+                provider_by_channel[channel_uuid] = ProviderResolution(
+                    provider_id=provider_id,
+                    stream_id=stream_id,
+                    stream_name=stream_name,
+                )
                 resolved_count += 1
 
         self._log_provider_resolution_sli(resolved_count, unresolved_count)
@@ -1322,15 +1401,22 @@ class BandwidthTracker:
         channel_uuid: str,
         active_url: Optional[str],
         per_poll_cache: dict[str, Optional[list[dict]]],
-    ) -> Optional[int]:
-        """Channel-streams URL-match fallback (bd-5g7kx).
+    ) -> Optional[ProviderResolution]:
+        """Channel-streams URL-match fallback (bd-5g7kx, extended by kh23e).
 
         Fetches ``GET /api/channels/channels/<channel_uuid>/streams/`` and
         searches the returned stream list for a stream whose ``url``
         matches the active stream URL. Returns the matched stream's
-        ``m3u_account_id`` on success, or ``None`` on any failure
-        (lookup raise, no streams, no URL match) — with a structured
-        WARNING log identifying the specific reason.
+        ``ProviderResolution`` (id + name + provider) on success, or
+        ``None`` on any failure (lookup raise, no streams, no URL match)
+        — with a structured WARNING log identifying the specific reason.
+
+        kh23e extends the success return shape from a bare provider_id
+        ``int`` to a full ``ProviderResolution`` so the channel-streams
+        path carries stream identity through to the writer too. The
+        matched stream record has the same shape as ``get_streams_by_ids``
+        responses (``id``, ``name``, ``m3u_account``) so the helper
+        reads the same fields on this code path.
 
         Composition of the two cache layers:
 
@@ -1452,7 +1538,27 @@ class BandwidthTracker:
             )
             return None
 
-        return int(provider_id)
+        # Extract stream identity for the writer (bd-kh23e). The
+        # ``id`` and ``name`` fields are populated by Dispatcharr on the
+        # channel-streams response the same way they are on
+        # ``get_streams_by_ids`` — defensive int/str coercion for shape
+        # variance.
+        matched_id = matched_stream.get("id")
+        try:
+            matched_stream_id: Optional[int] = (
+                int(matched_id) if matched_id is not None else None
+            )
+        except (TypeError, ValueError):
+            matched_stream_id = None
+        raw_name = matched_stream.get("name")
+        matched_stream_name: Optional[str] = (
+            str(raw_name) if isinstance(raw_name, str) and raw_name else None
+        )
+        return ProviderResolution(
+            provider_id=int(provider_id),
+            stream_id=matched_stream_id,
+            stream_name=matched_stream_name,
+        )
 
     def _get_cached_channel_streams(
         self, channel_uuid: str
@@ -1730,7 +1836,7 @@ class BandwidthTracker:
         self,
         channel_snapshot: list[dict],
         observed_at_ms: int,
-        provider_by_channel: Optional[dict[str, Optional[int]]] = None,
+        provider_by_channel: Optional[dict[str, ProviderResolution]] = None,
         buffer_events_by_channel: Optional[dict[str, int]] = None,
     ) -> None:
         """Write one row per active viewing connection into ``session_telemetry``.
@@ -1755,6 +1861,14 @@ class BandwidthTracker:
         * ``provider_id`` — populated from ``provider_by_channel`` (built
           upstream by ``_resolve_provider_ids``, bd-skqln.14). NULL when the
           resolver couldn't map the active stream to an M3U account.
+        * ``stream_id`` + ``stream_name`` — populated from the SAME
+          ``ProviderResolution`` NamedTuple the resolver returns
+          (bd-kh23e). Both NULL when the resolver couldn't identify the
+          active stream. ``stream_name`` may be NULL even when
+          ``stream_id`` is present (Dispatcharr record had no ``name``
+          field). The frontend renders these as
+          ``[<provider_name>] - <stream_name>`` with provider name
+          side-loaded from the M3U accounts map (PO 2026-05-14).
         * ``channel_id`` — Dispatcharr channel UUID (``String(64)``). Same
           shape the snapshot loop in ``_collect_stats`` already keys on, and
           matches every other channel-keyed table in the schema
@@ -1813,7 +1927,18 @@ class BandwidthTracker:
                     client_ips = entry["client_ips"]
                     client_user_map = entry["client_user_map"]
                     channel_bytes_delta = max(int(entry["channel_bytes_delta"]), 0)
-                    provider_id = provider_by_channel.get(channel_uuid)
+                    # ``ProviderResolution`` NamedTuple carries id + name +
+                    # provider together (bd-kh23e). Falls back to the
+                    # all-None sentinel for channels the resolver didn't
+                    # visit (defensive — should not happen in practice
+                    # because the resolver returns one entry per snapshot
+                    # entry).
+                    resolution = provider_by_channel.get(
+                        channel_uuid, EMPTY_RESOLUTION
+                    )
+                    provider_id = resolution.provider_id
+                    stream_id = resolution.stream_id
+                    stream_name = resolution.stream_name
 
                     # No active clients on this channel this poll → nothing
                     # to attribute to a session.
@@ -1866,6 +1991,14 @@ class BandwidthTracker:
                                 bytes_delta=per_client_bytes,
                                 buffer_event_count=row_buffer_count,
                                 poll_interval_ms=poll_interval_ms,
+                                # bd-kh23e: capture stream identity so the
+                                # read APIs can surface "what's playing"
+                                # (PO directive 2026-05-14). NULL when
+                                # the resolver couldn't attribute the
+                                # active stream — same failure modes as
+                                # provider_id.
+                                stream_id=stream_id,
+                                stream_name=stream_name,
                             )
                         )
                         rows_written += 1

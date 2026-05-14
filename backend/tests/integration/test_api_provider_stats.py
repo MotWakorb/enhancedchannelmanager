@@ -81,6 +81,8 @@ def _add_telemetry(
     bytes_delta: int = 1000,
     buffer_event_count: int = 0,
     session_id: str | None = None,
+    stream_id: int | None = None,
+    stream_name: str | None = None,
 ) -> None:
     session.add(
         SessionTelemetry(
@@ -93,6 +95,8 @@ def _add_telemetry(
             bytes_delta=bytes_delta,
             buffer_event_count=buffer_event_count,
             poll_interval_ms=poll_interval_ms,
+            stream_id=stream_id,
+            stream_name=stream_name,
         )
     )
 
@@ -469,6 +473,74 @@ class TestProvidersChannelHeatmap:
         assert len(null_rows) == 1
         assert null_rows[0]["bytes"] == 12345
         assert null_rows[0]["channel_id"] == "ch-orphan"
+
+    @pytest.mark.asyncio
+    async def test_heatmap_surfaces_latest_stream_identity(
+        self, async_client, test_session
+    ):
+        """bd-kh23e: each (provider, channel) cell carries
+        ``latest_stream_id`` + ``latest_stream_name`` from the row with
+        ``MAX(observed_at)`` in the (provider_id, channel_id) bucket.
+
+        Seeds two stream identities on (provider=1, channel=ch-a).
+        The newer one (higher observed_at) must surface in the cell.
+        """
+        _add_user(test_session, user_id=10, username="alice")
+        # (provider=1, ch-a): older identity then newer identity
+        _add_telemetry(
+            test_session, user_id=10, provider_id=1, channel_id="ch-a",
+            observed_at_ms=_ms(BASE),
+            bytes_delta=1000,
+            stream_id=100, stream_name="US: TNT (older)",
+        )
+        _add_telemetry(
+            test_session, user_id=10, provider_id=1, channel_id="ch-a",
+            observed_at_ms=_ms(BASE + timedelta(seconds=30)),
+            bytes_delta=2000,
+            stream_id=200, stream_name="US: TNT (newer)",
+        )
+        # (provider=2, ch-a): independent cell with its own identity
+        _add_telemetry(
+            test_session, user_id=10, provider_id=2, channel_id="ch-a",
+            observed_at_ms=_ms(BASE + timedelta(seconds=60)),
+            bytes_delta=500,
+            stream_id=300, stream_name="US: TNT (failover)",
+        )
+        test_session.commit()
+
+        response = await async_client.get("/api/stats/providers/channel-heatmap")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        cells = {(r["provider_id"], r["channel_id"]): r for r in body["data"]}
+        # Newer identity wins per (provider, channel) bucket.
+        assert cells[(1, "ch-a")]["latest_stream_id"] == 200
+        assert cells[(1, "ch-a")]["latest_stream_name"] == "US: TNT (newer)"
+        # (provider=2, ch-a) is its own bucket with its own identity.
+        assert cells[(2, "ch-a")]["latest_stream_id"] == 300
+        assert cells[(2, "ch-a")]["latest_stream_name"] == "US: TNT (failover)"
+
+    @pytest.mark.asyncio
+    async def test_heatmap_stream_identity_nullable(
+        self, async_client, test_session
+    ):
+        """Cells with no stream identity (pre-kh23e rows / resolver miss)
+        surface ``latest_stream_id`` and ``latest_stream_name`` as ``null``
+        — the cell is NOT excluded."""
+        _add_user(test_session, user_id=10, username="alice")
+        _add_telemetry(
+            test_session, user_id=10, provider_id=1, channel_id="ch-a",
+            observed_at_ms=_ms(BASE), bytes_delta=1000,
+            stream_id=None, stream_name=None,
+        )
+        test_session.commit()
+
+        response = await async_client.get("/api/stats/providers/channel-heatmap")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert len(body["data"]) == 1
+        row = body["data"][0]
+        assert row["latest_stream_id"] is None
+        assert row["latest_stream_name"] is None
 
 
 # ---------------------------------------------------------------------------
