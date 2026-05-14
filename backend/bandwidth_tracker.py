@@ -82,6 +82,37 @@ def _extract_stream_id_from_url(url: Optional[str]) -> Optional[int]:
     return parsed
 
 
+def _coerce_session_user_id(raw: Any) -> Optional[int]:
+    """Coerce a Dispatcharr-supplied user id into a value safe for the
+    ``session_telemetry.user_id`` FK (bead ``enhancedchannelmanager-gbxmj``).
+
+    Anonymous viewers surface as ``0`` / ``"0"`` from Dispatcharr; that
+    sentinel doesn't exist in ``users.id`` so a raw write trips the FK
+    constraint at ``session.commit()`` and rolls back the entire poll
+    batch. The helper normalizes anything that isn't a positive int (or
+    a string that parses cleanly to one) to ``None``.
+
+    * ``None`` / ``""`` / ``0`` / ``"0"`` → ``None`` (anonymous)
+    * ``42`` / ``"42"``                  → ``42``
+    * ``-1`` / ``"abc"``                 → ``None``
+    * ``True`` / ``False``               → ``None`` (reject bool → int)
+    * ``42.0``                           → ``None`` (strict: no float)
+    """
+    if raw is None or raw == "" or raw == 0 or raw == "0":
+        return None
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, float):
+        return None
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
 def _normalize_stream_url_for_match(url: Optional[str]) -> Optional[str]:
     """Strip the query string off a stream URL for fallback matching.
 
