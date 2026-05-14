@@ -29,6 +29,7 @@ import type {
   ProviderWatchTimeResponse,
   ProviderHeatmapResponse,
   ProviderBitrateResponse,
+  M3UAccount,
   User,
 } from '../../types';
 
@@ -132,6 +133,21 @@ const mockBitrateResponse: ProviderBitrateResponse = {
   pagination: null,
 };
 
+/**
+ * Minimal M3UAccount factory — just the fields the panel reads.
+ * The full M3UAccount type has ~25 fields; the panel only consumes
+ * id + name. We cast through Partial to keep the test fixtures tight.
+ */
+function makeM3UAccount(id: number, name: string): M3UAccount {
+  return { id, name } as unknown as M3UAccount;
+}
+
+const mockM3UAccounts: M3UAccount[] = [
+  makeM3UAccount(1, 'TopFlix'),
+  makeM3UAccount(2, 'StreamHub'),
+  // No mapping for id=9 on purpose — exercises the fallback path.
+];
+
 beforeEach(() => {
   vi.clearAllMocks();
   authHolder.user = adminUser;
@@ -140,6 +156,7 @@ beforeEach(() => {
   vi.mocked(api.getProvidersWatchTime).mockResolvedValue(mockWatchTimeResponse);
   vi.mocked(api.getProvidersChannelHeatmap).mockResolvedValue(mockHeatmapResponse);
   vi.mocked(api.getProvidersBitrate).mockResolvedValue(mockBitrateResponse);
+  vi.mocked(api.getM3UAccounts).mockResolvedValue(mockM3UAccounts);
 });
 
 afterEach(() => {
@@ -406,6 +423,82 @@ describe('ProvidersPanel — heatmap top-N truncation', () => {
     await waitFor(() => {
       expect(screen.getByText(/no channel\/provider data/i)).toBeInTheDocument();
     });
+  });
+});
+
+describe('ProvidersPanel — M3U account name lookup (bd-vjv7k)', () => {
+  it('fetches M3U accounts on mount alongside the four stats endpoints', async () => {
+    render(<ProvidersPanel />);
+    await waitFor(() => {
+      expect(api.getM3UAccounts).toHaveBeenCalled();
+    });
+  });
+
+  it('renders M3U account names in data tables when the map is populated', async () => {
+    // mockM3UAccounts maps id=1 → 'TopFlix' and id=2 → 'StreamHub'.
+    render(<ProvidersPanel />);
+    await waitFor(() => {
+      const watchTimeTable = screen.getByRole('table', {
+        name: /time spent per provider.*data table/i,
+      });
+      expect(within(watchTimeTable).getByText('TopFlix')).toBeInTheDocument();
+      expect(within(watchTimeTable).getByText('StreamHub')).toBeInTheDocument();
+      // Generic "Provider 1"/"Provider 2" labels must NOT appear when a
+      // name is known.
+      expect(within(watchTimeTable).queryByText('Provider 1')).not.toBeInTheDocument();
+      expect(within(watchTimeTable).queryByText('Provider 2')).not.toBeInTheDocument();
+    });
+  });
+
+  it('falls back to "Provider <id>" for unmapped provider ids', async () => {
+    // Add a row for an id (9) that is NOT in mockM3UAccounts.
+    vi.mocked(api.getProvidersWatchTime).mockResolvedValue({
+      data: [
+        { provider_id: 1, total_watch_seconds: 1200 },
+        { provider_id: 9, total_watch_seconds: 600 },
+      ],
+      meta: { from_iso: null, to_iso: null, total_rows: 2, window: '7d' },
+      pagination: null,
+    });
+    render(<ProvidersPanel />);
+    await waitFor(() => {
+      const watchTimeTable = screen.getByRole('table', {
+        name: /time spent per provider.*data table/i,
+      });
+      expect(within(watchTimeTable).getByText('TopFlix')).toBeInTheDocument();
+      expect(within(watchTimeTable).getByText('Provider 9')).toBeInTheDocument();
+    });
+  });
+
+  it('falls back to "Provider <id>" labels when the M3U fetch fails', async () => {
+    // Regression guard: the panel must NOT block rendering on M3U fetch
+    // failure. The four primary stats endpoints still succeed, so the
+    // panel renders with the legacy fallback labels.
+    vi.mocked(api.getM3UAccounts).mockRejectedValue(new Error('network down'));
+    render(<ProvidersPanel />);
+    await waitFor(() => {
+      const watchTimeTable = screen.getByRole('table', {
+        name: /time spent per provider.*data table/i,
+      });
+      expect(within(watchTimeTable).getByText('Provider 1')).toBeInTheDocument();
+      expect(within(watchTimeTable).getByText('Provider 2')).toBeInTheDocument();
+    });
+  });
+
+  it('keeps NULL provider_id labeled as "Unknown" regardless of M3U map', async () => {
+    render(<ProvidersPanel />);
+    await waitFor(() => {
+      const watchTimeTable = screen.getByRole('table', {
+        name: /time spent per provider.*data table/i,
+      });
+      expect(within(watchTimeTable).getByText(/unknown/i)).toBeInTheDocument();
+    });
+  });
+
+  it('does NOT call getM3UAccounts when the user is known non-admin', async () => {
+    authHolder.user = nonAdminUser;
+    render(<ProvidersPanel />);
+    expect(api.getM3UAccounts).not.toHaveBeenCalled();
   });
 });
 
