@@ -63,6 +63,7 @@ import * as api from '../../services/api';
 import { HttpError } from '../../services/httpClient';
 import { Heatmap } from '../charts/Heatmap';
 import { paletteColorAt } from '../../utils/chartPalette';
+import { streamLabel } from '../../utils/formatting';
 import type {
   ProviderStatsWindow,
   ProviderStatsBucket,
@@ -659,17 +660,30 @@ export function ProvidersPanel() {
             <tr>
               <th scope="col">Provider</th>
               <th scope="col">Channel</th>
+              {/* bd-kh23e: stream identity per cell — most-recently-
+                  observed stream for this (provider, channel) pair in
+                  the window. Renders as ``[<provider>] - <stream>``
+                  with provider name from the M3U side-load. */}
+              <th scope="col">Stream (latest)</th>
               <th scope="col">Bytes</th>
             </tr>
           </thead>
           <tbody>
             {heatmap.length === 0 ? (
               <tr>
-                <td colSpan={3}>No data</td>
+                <td colSpan={4}>No data</td>
               </tr>
             ) : (
               heatmap.map((r, i) => {
                 const isUnknown = r.provider_id === null;
+                // Resolve the provider's display name for the bracketed
+                // prefix. NULL provider → no prefix (the helper handles
+                // that). Unmapped id → omit prefix too: ``[Provider 1] - X``
+                // would leak when the M3U side-load is still in flight.
+                const providerName =
+                  r.provider_id !== null
+                    ? m3uNameMap?.get(r.provider_id) ?? null
+                    : null;
                 return (
                   <tr key={`${r.provider_id ?? 'null'}-${r.channel_id}-${i}`}>
                     <td>
@@ -681,6 +695,13 @@ export function ProvidersPanel() {
                       )}
                     </td>
                     <td>{r.channel_name}</td>
+                    <td>
+                      {streamLabel(
+                        providerName,
+                        r.latest_stream_name,
+                        r.latest_stream_id,
+                      )}
+                    </td>
                     <td>{formatBytes(r.bytes)}</td>
                   </tr>
                 );

@@ -112,11 +112,28 @@ const mockWatchTimeResponse: ProviderWatchTimeResponse = {
 
 const mockHeatmapResponse: ProviderHeatmapResponse = {
   data: [
-    { provider_id: 1, channel_id: 'ch-a', channel_name: 'Alpha', bytes: 5000 },
-    { provider_id: 1, channel_id: 'ch-b', channel_name: 'Bravo', bytes: 3000 },
-    { provider_id: 2, channel_id: 'ch-a', channel_name: 'Alpha', bytes: 1500 },
-    { provider_id: 2, channel_id: 'ch-b', channel_name: 'Bravo', bytes: 200 },
-    { provider_id: null, channel_id: 'ch-a', channel_name: 'Alpha', bytes: 80 },
+    // bd-kh23e: stream identity per cell. Mix of known (provider 1)
+    // and unknown (other rows) so the test asserts both label paths.
+    {
+      provider_id: 1, channel_id: 'ch-a', channel_name: 'Alpha', bytes: 5000,
+      latest_stream_id: 555, latest_stream_name: 'US: TNT',
+    },
+    {
+      provider_id: 1, channel_id: 'ch-b', channel_name: 'Bravo', bytes: 3000,
+      latest_stream_id: 556, latest_stream_name: 'NESN HD',
+    },
+    {
+      provider_id: 2, channel_id: 'ch-a', channel_name: 'Alpha', bytes: 1500,
+      latest_stream_id: null, latest_stream_name: null,
+    },
+    {
+      provider_id: 2, channel_id: 'ch-b', channel_name: 'Bravo', bytes: 200,
+      latest_stream_id: null, latest_stream_name: null,
+    },
+    {
+      provider_id: null, channel_id: 'ch-a', channel_name: 'Alpha', bytes: 80,
+      latest_stream_id: null, latest_stream_name: null,
+    },
   ],
   meta: { from_iso: null, to_iso: null, total_rows: 5, window: '7d', top_n: 50 },
   pagination: null,
@@ -278,6 +295,51 @@ describe('ProvidersPanel — data tables (chart fallbacks)', () => {
     const [firstToggle] = screen.getAllByRole('button', { name: /show chart data/i });
     fireEvent.click(firstToggle);
     expect(screen.getAllByRole('button', { name: /hide chart data/i }).length).toBeGreaterThanOrEqual(1);
+  });
+
+  // bd-kh23e: the heatmap data-table fallback gains a "Stream (latest)"
+  // column. Label rendering is ``[<provider>] - <stream_name>``: provider
+  // name from the M3U accounts side-load (bd-vjv7k), stream name from
+  // the new ``latest_stream_name`` field on each heatmap row.
+
+  it('heatmap data-table renders a "Stream (latest)" column header (bd-kh23e)', async () => {
+    render(<ProvidersPanel />);
+    await waitFor(() => {
+      const heatmapTable = screen.getByRole('table', { name: /channels.*heatmap.*data table/i });
+      expect(within(heatmapTable).getByRole('columnheader', { name: /stream.*latest/i })).toBeInTheDocument();
+    });
+  });
+
+  it('heatmap data-table renders "[<provider>] - <stream_name>" for cells with full identity (bd-kh23e)', async () => {
+    render(<ProvidersPanel />);
+    await waitFor(() => {
+      const heatmapTable = screen.getByRole('table', { name: /channels.*heatmap.*data table/i });
+      // provider_id=1 maps to "TopFlix" via the M3U side-load.
+      // Row (provider=1, ch-a) has stream_name "US: TNT".
+      expect(within(heatmapTable).getByText('[TopFlix] - US: TNT')).toBeInTheDocument();
+      // Row (provider=1, ch-b) has stream_name "NESN HD".
+      expect(within(heatmapTable).getByText('[TopFlix] - NESN HD')).toBeInTheDocument();
+    });
+  });
+
+  it('heatmap data-table renders "—" for cells with no stream identity (bd-kh23e)', async () => {
+    render(<ProvidersPanel />);
+    await waitFor(() => {
+      const heatmapTable = screen.getByRole('table', { name: /channels.*heatmap.*data table/i });
+      // Rows with latest_stream_id=null and latest_stream_name=null
+      // (mocked: provider=2 cells, Unknown cell) must render "—" in
+      // the Stream (latest) column rather than crash or print "null".
+      const rows = within(heatmapTable).getAllByRole('row');
+      // Header + 5 data rows = 6 rows. Find the body rows and verify
+      // at least one has "—" in its stream-latest cell.
+      const bodyRows = rows.slice(1);
+      const dashCells = bodyRows.filter(r => {
+        const tds = r.querySelectorAll('td');
+        // Column order: Provider | Channel | Stream (latest) | Bytes.
+        return tds[2]?.textContent === '—';
+      });
+      expect(dashCells.length).toBeGreaterThanOrEqual(2);
+    });
   });
 });
 
