@@ -53,6 +53,7 @@ import {
   getSpeedClass,
   formatSpeed,
   formatFps,
+  streamLabel,
 } from '../../utils/formatting';
 
 // Check if event type is streaming-related (not login, refresh, etc.)
@@ -573,6 +574,20 @@ export function StatsTab() {
   const totalClients = channelStats?.channels?.reduce((sum, ch) => sum + (ch.client_count || 0), 0) || 0;
   const activeChannels = channelStats?.count || 0;
 
+  // bd-ox5q8: M3U account name lookup for the Active Channels stream
+  // badge. Backend's /api/stats/channels enrichment surfaces each row's
+  // ``m3u_account_id`` (when the live resolver attributes the active
+  // stream to a provider). The map is built from the already-loaded
+  // ``m3uAccounts`` state so no extra round-trip is needed. Same
+  // pattern as ProvidersPanel (bd-vjv7k): id → display name.
+  const m3uAccountNameMap = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const account of m3uAccounts) {
+      map.set(account.id, account.name);
+    }
+    return map;
+  }, [m3uAccounts]);
+
   // Calculate connections per M3U (current/max for all accounts)
   const m3uConnectionStats = (() => {
     // First, build a map of profile ID -> account ID
@@ -772,6 +787,35 @@ export function StatsTab() {
                 ? streamProfileMap.current.get(channel.stream_profile)
                 : null;
 
+              // bd-ox5q8: stream-identity badge formatting. Backend
+              // surfaces ``stream_name`` + ``m3u_account_id`` per row
+              // via the live resolver. Use the shared ``streamLabel``
+              // helper for consistency with kh23e's data-table render
+              // in ProvidersPanel / UserStatsPanel.
+              //
+              // Edge cases:
+              //   * No stream_name AND no m3u_account_id → no badge.
+              //   * stream_name === channel name → no badge (legacy
+              //     behaviour — the badge is meant to surface info NOT
+              //     already in the channel label).
+              //   * m3u_account_id present but not in m3uAccounts map
+              //     → ``providerName`` is null; ``streamLabel`` omits
+              //     the bracketed prefix and renders the bare stream
+              //     name (no leaked ``[Provider 6] - X``).
+              const hasStreamIdentity =
+                (channel.stream_name && channel.stream_name !== displayName)
+                || (channel.m3u_account_id != null);
+              const providerName = (channel.m3u_account_id != null)
+                ? (m3uAccountNameMap.get(channel.m3u_account_id) ?? null)
+                : null;
+              const streamBadgeText = hasStreamIdentity
+                ? streamLabel(
+                    providerName,
+                    channel.stream_name ?? null,
+                    channel.stream_id ?? null,
+                  )
+                : null;
+
               return (
               <div key={channel.channel_id} className="channel-card">
                 <div className="channel-card-header">
@@ -784,9 +828,9 @@ export function StatsTab() {
                     <span className="channel-name" title={`${displayName}${channel.stream_name && channel.stream_name !== displayName ? ` (Stream: ${channel.stream_name})` : ''}`}>
                       {displayName}
                     </span>
-                    {channel.stream_name && channel.stream_name !== displayName && (
-                      <span className="stream-name-badge" title={`Stream: ${channel.stream_name}`}>
-                        {channel.stream_name}
+                    {streamBadgeText && streamBadgeText !== '—' && (
+                      <span className="stream-name-badge" title={`Stream: ${streamBadgeText}`}>
+                        {streamBadgeText}
                       </span>
                     )}
                     {m3uSource && (

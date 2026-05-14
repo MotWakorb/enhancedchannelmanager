@@ -413,11 +413,18 @@ export interface ChannelStats {
 
   // Stream source info (from Dispatcharr)
   stream_id?: number;
-  stream_name?: string;
+  stream_name?: string | null;
   m3u_profile_id?: number;
   m3u_profile_name?: string;
   stream_profile?: string;  // Stream profile ID as string
   url?: string;
+
+  // Stream identity enrichment (bd-ox5q8): backend resolves the active
+  // stream's M3U account id at request time so the Active Channels view
+  // can render the ``[<provider>] - <stream_name>`` badge without an
+  // additional /api round-trip per row. Null when the resolver could
+  // not attribute the active stream to a provider.
+  m3u_account_id?: number | null;
 }
 
 // Response from /proxy/ts/status
