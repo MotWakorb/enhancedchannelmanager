@@ -58,6 +58,15 @@ def _extract_stream_id_from_url(url: Optional[str]) -> Optional[int]:
 
     Validates the captured value parses as a positive int — guards
     against pathological inputs like ``/00000.ts`` mapping to id 0.
+
+    NOTE (bd-5g7kx): the integer this returns is NOT guaranteed to be
+    Dispatcharr's stream row id — empirically it is the *upstream M3U
+    provider's* stream id (e.g. Infinity's ``85796``), which only
+    coincidentally collides with a Dispatcharr id on some providers.
+    The kbgey-era hot path (``get_streams_by_ids`` lookup) is preserved
+    for the coincidental-collision case; ``_resolve_provider_ids`` then
+    falls through to the channel-streams URL-match fallback when the
+    direct lookup misses.
     """
     if not url or not isinstance(url, str):
         return None
@@ -73,61 +82,30 @@ def _extract_stream_id_from_url(url: Optional[str]) -> Optional[int]:
     return parsed
 
 
-def _coerce_session_user_id(raw: Any) -> Optional[int]:
-    """Coerce a Dispatcharr-supplied user id into a value safe for the
-    ``session_telemetry.user_id`` FK (bead ``enhancedchannelmanager-gbxmj``).
+def _normalize_stream_url_for_match(url: Optional[str]) -> Optional[str]:
+    """Strip the query string off a stream URL for fallback matching.
 
-    Dispatcharr's ``/proxy/ts/status`` payload surfaces ``user_id`` for the
-    client of an active session. In the wild that field has been observed as:
+    Used by the channel-streams URL-match fallback (bd-5g7kx): the
+    active stream URL in ``/proxy/ts/status`` may carry a session token
+    or transcode hint as a query string (``...85796.ts?session=abc``),
+    while the URL persisted on Dispatcharr's ``/channels/<id>/streams``
+    record is the bare ``...85796.ts``. Comparing the URLs verbatim
+    would miss this case. Normalizing both sides to the path-only form
+    catches the realistic mutations without coupling the matcher to a
+    specific query-suffix convention.
 
-    * ``None`` — Dispatcharr did not attribute a user to the connection
-    * ``0`` / ``"0"`` — sentinel for an anonymous viewer (no logged-in user)
-    * ``""`` — Dispatcharr surfaced an empty string
-    * ``"42"`` — stringified positive integer (passes through int())
-    * ``42``  — already a positive integer
-    * ``"abc"`` — garbage / unparseable
-
-    ``session_telemetry.user_id`` is ``INTEGER`` with a real FK to
-    ``users.id`` (``ON DELETE SET NULL`` — the only real FK on the table;
-    see models.SessionTelemetry docstring). The anonymous-viewer sentinel
-    (``0`` / ``"0"``) does NOT exist in ``users`` → ``IntegrityError`` at
-    ``session.commit()``. Because every row in a poll cycle shares one
-    commit, ONE bad sentinel rolls back the ENTIRE batch — provider-
-    attributed rows and all. That's the symptom the bead surfaced on dev.
-
-    Coercion contract — anything that is NOT a positive int (or a string
-    that parses cleanly to one) becomes ``None``:
-
-    * ``None`` / ``""`` / ``0`` / ``"0"`` → ``None`` (anonymous, NULL-write)
-    * ``42`` / ``"42"``                  → ``42``
-    * ``-1`` / ``"abc"``                 → ``None`` (negative / unparseable)
-    * ``42.0``                           → ``None`` (strict — Dispatcharr
-      never sends floats; if we see one it's a bug worth surfacing as
-      NULL-write rather than silently truncating)
-
-    The helper is the primary fix. ``_write_session_telemetry`` also wraps
-    the commit in an IntegrityError catch as defense-in-depth: if a future
-    field grows an FK constraint, the commit-level safety net keeps the
-    batch from poisoning even if this helper falls out of sync.
+    Returns the URL up to (but not including) the first ``?`` or ``#``.
+    ``None`` inputs return ``None`` so callers can defer the empty-string
+    guard to the comparison site.
     """
-    if raw is None or raw == "" or raw == 0 or raw == "0":
+    if not url or not isinstance(url, str):
         return None
-    # Strict: ``bool`` is a subclass of ``int`` in Python; ``True`` would
-    # otherwise coerce to 1. Reject explicitly so a stray boolean cannot
-    # write a "user 1" row by accident.
-    if isinstance(raw, bool):
-        return None
-    # Strict: floats are not a Dispatcharr-supplied shape. Reject rather
-    # than truncate — silent float→int conversion masks upstream bugs.
-    if isinstance(raw, float):
-        return None
-    try:
-        parsed = int(raw)
-    except (TypeError, ValueError):
-        return None
-    if parsed <= 0:
-        return None
-    return parsed
+    cut = len(url)
+    for sep in ("?", "#"):
+        i = url.find(sep)
+        if i != -1 and i < cut:
+            cut = i
+    return url[:cut] or None
 
 
 def _telemetry_opt_out_enabled() -> bool:
@@ -221,6 +199,43 @@ class BandwidthTracker:
         # eviction; the LRU sheds the oldest entries first.
         self._seen_buffer_event_ids: OrderedDict[int, None] = OrderedDict()
         self._seen_buffer_event_ids_cap = 10_000
+
+        # Provider resolver: channel-streams URL-match fallback cache
+        # (bd-5g7kx). The fallback runs when the URL-derived stream id
+        # is not a Dispatcharr stream id — usually because the URL's
+        # trailing ``<id>.ts`` segment is the upstream M3U provider's id
+        # (e.g. Infinity's 85796), not Dispatcharr's row id. The
+        # fallback fetches ``/channels/<uuid>/streams`` and finds the
+        # stream whose URL matches the active URL.
+        #
+        # Two cache layers compose:
+        #   * Per-poll cache: scoped to a single ``_resolve_provider_ids``
+        #     invocation (built locally each call, drops on return). Bounds
+        #     the per-poll API rate when multiple unresolved channels share
+        #     a channel_uuid.
+        #   * Cross-poll LRU (this one): channel stream lists are
+        #     relatively stable (rarely edited), so the bulk of unresolved
+        #     channels can be served from this cache. TTL is poll-count-
+        #     based: at the default 10s poll cadence, 30 polls = ~5 min
+        #     of staleness — enough to bound API rate to roughly
+        #     ``unresolved_channels / 30 per poll cycle``, tight enough
+        #     that a failover or stream-list edit gets picked up within
+        #     ~5 min.
+        #
+        # Value shape: ``(poll_count_at_cache_time, streams_list)``. The
+        # poll count anchors TTL relative to ``_poll_count`` below so the
+        # cache survives clock jumps that ``time.time()``-based TTLs
+        # don't.
+        self._channel_streams_cache: OrderedDict[
+            str, tuple[int, list[dict]]
+        ] = OrderedDict()
+        self._channel_streams_cache_cap = 200
+        self._channel_streams_cache_ttl_polls = 30
+        # Monotonically increasing poll counter, used as the TTL anchor
+        # for ``_channel_streams_cache``. Incremented on every
+        # ``_collect_stats`` entry so the counter advances even when the
+        # poll bails early (e.g. ``get_channel_stats`` raise).
+        self._poll_count = 0
 
     async def start(self):
         """Start the background polling task."""
@@ -439,6 +454,13 @@ class BandwidthTracker:
 
     async def _collect_stats(self):
         """Fetch stats from Dispatcharr and update daily totals."""
+        # Bump the poll counter first thing so the channel-streams
+        # fallback's TTL is anchored against a monotonically-increasing
+        # value even on polls that bail early below (bd-5g7kx). The
+        # counter is a simple int — wraparound is not a concern in any
+        # realistic operator timeline (>68 years at 10s polls on 32-bit
+        # int, far longer on 64-bit Python ints).
+        self._poll_count += 1
         try:
             stats = await self.client.get_channel_stats()
         except Exception as e:
@@ -1051,37 +1073,70 @@ class BandwidthTracker:
     ) -> dict[str, Optional[int]]:
         """Resolve each channel's active-stream → provider mapping for one poll.
 
-        Bead: ``enhancedchannelmanager-skqln.14``.
+        Bead: ``enhancedchannelmanager-skqln.14`` (initial), extended by
+        ``enhancedchannelmanager-kbgey`` (URL fallback) and
+        ``enhancedchannelmanager-5g7kx`` (channel-streams URL-match
+        fallback).
 
         Returns a ``{channel_uuid: provider_id_or_None}`` map. The mapping
-        is built from a SINGLE batched ``DispatcharrClient.get_streams_by_ids``
-        call covering every unique ``stream_id`` the snapshot surfaced —
-        not N calls per-channel. The cache lives only for the duration of
-        the call (the function builds it locally each invocation); a
-        stream's failover hop between polls is picked up on the next
+        is built primarily from a SINGLE batched
+        ``DispatcharrClient.get_streams_by_ids`` call covering every unique
+        ``stream_id`` the snapshot surfaced — not N calls per-channel. The
+        per-invocation cache drops when the call returns; a stream's
+        failover hop between polls is picked up on the next
         ``_collect_stats`` cycle without staleness.
+
+        Resolution paths (tried in order, first hit wins per channel):
+
+        1. **Direct stream_id**: snapshot's ``stream_id`` field → batched
+           ``get_streams_by_ids`` → stream's ``m3u_account_id``.
+        2. **URL-derived stream_id** (bd-kbgey): when ``stream_id`` is
+           absent, parse the trailing ``<id>.ts`` integer from the active
+           URL and route it through the SAME batched call. This wins when
+           the URL's trailing id coincidentally collides with a Dispatcharr
+           stream row id.
+        3. **Channel-streams URL match** (bd-5g7kx): when path 2 misses —
+           the URL's trailing id is the *upstream* M3U provider's stream
+           id, not Dispatcharr's — fetch
+           ``GET /api/channels/channels/<channel_uuid>/streams/`` and find
+           the stream whose persisted ``url`` matches the active URL. That
+           stream's ``m3u_account_id`` is the provider. Results cached
+           cross-poll in a bounded LRU (TTL-by-poll-count) so the rate of
+           channel-streams API calls is bounded to roughly
+           ``unresolved_channels / TTL per poll cycle``.
 
         Failure modes — every one returns ``None`` for the affected
         channel, emits a structured ``[STATS_V2] provider_resolution_failed``
-        log line, and lets the ``session_telemetry`` row write with
-        ``provider_id=NULL``:
+        log line at WARNING, and lets the ``session_telemetry`` row write
+        with ``provider_id=NULL``:
 
-        * Channel reports no ``stream_id`` (degraded Dispatcharr payload).
-        * ``get_streams_by_ids`` raises (network error, 5xx, timeout).
-        * Returned stream list omits an expected ``stream_id``
-          (Dispatcharr 404 for one of the IDs).
-        * Stream record has ``m3u_account=None`` (orphaned — the
-          provider was deleted).
+        * ``no_stream_id`` — channel has no ``stream_id`` AND URL parsing
+          produced no derived id (degraded Dispatcharr payload).
+        * ``lookup_raised`` — ``get_streams_by_ids`` raises (network, 5xx,
+          timeout). Whole batch fails.
+        * ``stream_not_found`` — directly-provided ``stream_id`` missing
+          from the batch response (Dispatcharr 404'd an id it gave us).
+        * ``stream_has_no_provider`` — stream record present but
+          ``m3u_account`` is None (orphaned — provider was deleted).
+        * ``channel_streams_no_match`` (bd-5g7kx) — URL-derived id missed,
+          channel-streams fallback returned no stream whose URL matches.
+        * ``channel_streams_lookup_raised`` (bd-5g7kx) — URL-derived id
+          missed, channel-streams fallback raised. Per-channel scope —
+          one channel's fallback failure does NOT kill other channels'
+          resolutions or the poll cycle itself.
 
         A per-poll SLI line is emitted at INFO: ``[STATS_V2]
         provider_resolution resolved=X unresolved=Y``. skqln.12 derives a
         Prometheus ``stats_v2_provider_resolution_total{result=...}``
         counter from this without plumbing a new code path.
 
-        Performance: ONE additional Dispatcharr round-trip per poll cycle,
-        skipped entirely when no channel surfaced a ``stream_id``. The
-        bead's "no p95 regression on _collect_stats" constraint is met
-        because the cost scales as O(1) calls, not O(channels).
+        Performance: ONE batched ``get_streams_by_ids`` round-trip per
+        poll cycle (skipped when no channel surfaced a stream id). The
+        channel-streams fallback adds at most ``unresolved_channels``
+        additional calls in the worst case (every channel's stream list
+        cold), but in steady state the cross-poll cache serves ~all of
+        them — at the default 30-poll TTL the amortized rate is
+        ``unresolved_channels / 30 per poll``.
         """
         # Local import keeps the resolver self-contained — the helper at
         # ``stream_prober.extract_m3u_account_id`` normalizes Dispatcharr's
@@ -1095,21 +1150,30 @@ class BandwidthTracker:
         # {channel_uuid: stream_id} for channels we'll attempt to resolve.
         stream_id_by_channel: dict[str, int] = {}
         # Channels whose stream_id came from URL parsing (bd-kbgey fallback)
-        # rather than the direct ``stream_id`` field. Used only to
-        # differentiate the ``stream_not_found`` failure log so operators
-        # can tell a Dispatcharr-direct miss from a URL-derived miss when
-        # we triage; the resolved-success path is identical.
+        # rather than the direct ``stream_id`` field. These are the
+        # candidates for the channel-streams URL-match fallback (bd-5g7kx)
+        # if the direct lookup misses — because URL-derived ids may be
+        # upstream provider ids that don't exist in Dispatcharr.
         url_derived_channels: set[str] = set()
+        # {channel_uuid: active_url} preserved for the channel-streams
+        # fallback's URL match step (bd-5g7kx). Populated for ALL channels
+        # that surfaced a URL — keeps the path open in case a future
+        # extension wants to use it for direct-stream-id misses too.
+        url_by_channel: dict[str, str] = {}
         for entry in channel_snapshot:
             channel_uuid = entry["channel_uuid"]
             stream_id = entry.get("stream_id")
+            url = entry.get("url")
+            if isinstance(url, str) and url:
+                url_by_channel[channel_uuid] = url
             if stream_id is None:
                 # Fallback (bd-kbgey): Dispatcharr inconsistently surfaces
                 # ``stream_id`` on the ``/proxy/ts/status`` payload, but the
-                # ``url`` field carries the same id as the trailing path
-                # segment before ``.ts``. Parse it and feed it into the
-                # same batched lookup below — no extra API call.
-                url = entry.get("url")
+                # ``url`` field carries an id as the trailing path segment
+                # before ``.ts``. Parse it and feed it into the same
+                # batched lookup below — no extra API call on the hot path.
+                # (The id may be the upstream provider's, in which case
+                # the channel-streams fallback below picks up the slack.)
                 derived = _extract_stream_id_from_url(url) if url else None
                 if derived is None:
                     unresolvable_channels.append(channel_uuid)
@@ -1162,25 +1226,51 @@ class BandwidthTracker:
                 stream.get("m3u_account")
             )
 
+        # Per-invocation cache for the channel-streams fallback
+        # (bd-5g7kx). Multiple unresolved channels sharing a channel_uuid
+        # in one poll consult Dispatcharr ONCE. Distinct from the
+        # cross-poll LRU on ``self`` (which has a TTL); this map drops
+        # when the function returns.
+        per_poll_channel_streams_cache: dict[str, Optional[list[dict]]] = {}
+
         resolved_count = 0
         unresolved_count = len(unresolvable_channels)
         for channel_uuid, stream_id in stream_id_by_channel.items():
             provider_id = provider_by_stream.get(stream_id)
+            stream_in_response = stream_id in provider_by_stream
+            if provider_id is None and not stream_in_response and channel_uuid in url_derived_channels:
+                # URL-derived id missed Dispatcharr — most likely an
+                # upstream provider id (bd-5g7kx). Try the channel-streams
+                # fallback for THIS channel before logging a terminal
+                # failure. Per-channel scope so one channel's fallback
+                # raise does not affect another channel's resolution.
+                fallback_result = await self._resolve_via_channel_streams(
+                    channel_uuid,
+                    url_by_channel.get(channel_uuid),
+                    per_poll_channel_streams_cache,
+                )
+                if fallback_result is not None:
+                    provider_by_channel[channel_uuid] = fallback_result
+                    resolved_count += 1
+                    continue
+                # Fallback didn't resolve — ``_resolve_via_channel_streams``
+                # has already emitted the terminal WARNING with the
+                # specific failure reason (channel_streams_no_match or
+                # channel_streams_lookup_raised). Fall through to the
+                # NULL-write path.
+                provider_by_channel[channel_uuid] = None
+                unresolved_count += 1
+                continue
             if provider_id is None:
                 # Either the stream was not in the batch response (404)
                 # or its m3u_account was None. Both surface as NULL.
                 provider_by_channel[channel_uuid] = None
                 unresolved_count += 1
-                if stream_id not in provider_by_stream:
-                    # Distinguish "Dispatcharr didn't find the id we
-                    # extracted from the URL" from "Dispatcharr didn't
-                    # find the id it gave us directly" — helps observability
-                    # if the URL convention shifts (bd-kbgey).
-                    reason = (
-                        "stream_not_found_url_derived"
-                        if channel_uuid in url_derived_channels
-                        else "stream_not_found"
-                    )
+                if not stream_in_response:
+                    # Directly-provided stream_id missed. (The URL-derived
+                    # miss case is handled above with the channel-streams
+                    # fallback — those channels never reach this branch.)
+                    reason = "stream_not_found"
                 else:
                     reason = "stream_has_no_provider"
                 logger.warning(
@@ -1195,6 +1285,181 @@ class BandwidthTracker:
 
         self._log_provider_resolution_sli(resolved_count, unresolved_count)
         return provider_by_channel
+
+    async def _resolve_via_channel_streams(
+        self,
+        channel_uuid: str,
+        active_url: Optional[str],
+        per_poll_cache: dict[str, Optional[list[dict]]],
+    ) -> Optional[int]:
+        """Channel-streams URL-match fallback (bd-5g7kx).
+
+        Fetches ``GET /api/channels/channels/<channel_uuid>/streams/`` and
+        searches the returned stream list for a stream whose ``url``
+        matches the active stream URL. Returns the matched stream's
+        ``m3u_account_id`` on success, or ``None`` on any failure
+        (lookup raise, no streams, no URL match) — with a structured
+        WARNING log identifying the specific reason.
+
+        Composition of the two cache layers:
+
+        * ``per_poll_cache`` (caller-owned dict): scoped to a single
+          ``_resolve_provider_ids`` invocation. Caller passes it in so
+          the call sees the current poll's lookups. ``None`` value means
+          "we tried this poll and it raised" — short-circuits subsequent
+          attempts in the same poll.
+        * ``self._channel_streams_cache`` (instance-owned LRU): cross-poll
+          cache keyed by channel uuid. Value is
+          ``(poll_count_when_cached, streams_list)``. TTL anchored to
+          ``self._poll_count`` so the cache survives clock jumps. Cap and
+          TTL parameters are instance attrs so tests can tune them.
+
+        URL matching: both the active URL and each stream's URL are
+        stripped of their query string before comparison (path-only
+        match). Defends against session-token / transcode-hint suffixes
+        Dispatcharr may add to the active URL that don't exist on the
+        persisted stream record. Empty-active-URL is a no-match.
+        """
+        from stream_prober import extract_m3u_account_id
+
+        # Per-poll cache hit — same channel already looked up this invocation.
+        if channel_uuid in per_poll_cache:
+            streams = per_poll_cache[channel_uuid]
+        else:
+            streams = self._get_cached_channel_streams(channel_uuid)
+            if streams is None:
+                try:
+                    streams = await self.client.get_channel_streams(channel_uuid)
+                except Exception as e:
+                    # Per-channel failure isolation — do NOT propagate.
+                    # The polling cycle must continue; other channels'
+                    # resolutions must not be affected.
+                    logger.warning(
+                        "[STATS_V2] provider_resolution_failed channel=%s reason=channel_streams_lookup_raised error=%s",
+                        channel_uuid,
+                        e,
+                    )
+                    # Mark this poll's attempt as failed in the per-poll
+                    # cache so a repeat lookup in the same poll skips the
+                    # network call.
+                    per_poll_cache[channel_uuid] = None
+                    return None
+                # Defensive — guard against malformed payloads. An empty
+                # list is a legitimate "no streams configured" answer and
+                # is cached normally; a non-list response is treated as a
+                # transient anomaly and not cached.
+                if not isinstance(streams, list):
+                    logger.warning(
+                        "[STATS_V2] provider_resolution_failed channel=%s reason=channel_streams_lookup_raised error=non_list_response",
+                        channel_uuid,
+                    )
+                    per_poll_cache[channel_uuid] = None
+                    return None
+                self._cache_channel_streams(channel_uuid, streams)
+            per_poll_cache[channel_uuid] = streams
+
+        if streams is None:
+            # Per-poll cache short-circuit for a prior failure in this poll.
+            return None
+
+        if not active_url:
+            # Active URL is the matcher input — without it we cannot
+            # decide which of the channel's streams is currently active.
+            # Surfaces as ``channel_streams_no_match`` so operators see a
+            # single terminal reason regardless of which sub-step failed.
+            logger.warning(
+                "[STATS_V2] provider_resolution_failed channel=%s reason=channel_streams_no_match detail=no_active_url",
+                channel_uuid,
+            )
+            return None
+
+        normalized_active = _normalize_stream_url_for_match(active_url)
+        if normalized_active is None:
+            logger.warning(
+                "[STATS_V2] provider_resolution_failed channel=%s reason=channel_streams_no_match detail=no_active_url",
+                channel_uuid,
+            )
+            return None
+
+        matched_stream: Optional[dict] = None
+        for stream in streams:
+            stream_url = _normalize_stream_url_for_match(stream.get("url"))
+            if stream_url is None:
+                continue
+            if stream_url == normalized_active:
+                matched_stream = stream
+                break
+        # Substring containment fallback — handles edge shapes where the
+        # persisted stream URL is a prefix/suffix of the active URL
+        # (Dispatcharr proxy may inject path components for transcoding).
+        # Only consulted when exact-path match found nothing.
+        if matched_stream is None:
+            for stream in streams:
+                stream_url = _normalize_stream_url_for_match(stream.get("url"))
+                if stream_url is None:
+                    continue
+                if stream_url in normalized_active or normalized_active in stream_url:
+                    matched_stream = stream
+                    break
+
+        if matched_stream is None:
+            logger.warning(
+                "[STATS_V2] provider_resolution_failed channel=%s reason=channel_streams_no_match",
+                channel_uuid,
+            )
+            return None
+
+        provider_id = extract_m3u_account_id(matched_stream.get("m3u_account"))
+        if provider_id is None:
+            # Match succeeded but the stream is orphaned (provider
+            # deleted). Reuse ``stream_has_no_provider`` for consistency
+            # with the direct-lookup path — same semantic, same code.
+            logger.warning(
+                "[STATS_V2] provider_resolution_failed channel=%s stream=%s reason=stream_has_no_provider",
+                channel_uuid,
+                matched_stream.get("id"),
+            )
+            return None
+
+        return int(provider_id)
+
+    def _get_cached_channel_streams(
+        self, channel_uuid: str
+    ) -> Optional[list[dict]]:
+        """Return the cached stream list for ``channel_uuid`` if present
+        and within TTL, otherwise None.
+
+        Side effect on hit: moves the entry to the most-recently-used
+        position in the LRU (touch-on-read). TTL expiry deletes the entry
+        so callers re-fetch.
+        """
+        entry = self._channel_streams_cache.get(channel_uuid)
+        if entry is None:
+            return None
+        cached_at_poll, streams = entry
+        age_polls = self._poll_count - cached_at_poll
+        if age_polls > self._channel_streams_cache_ttl_polls:
+            # Stale — drop and force a re-fetch.
+            del self._channel_streams_cache[channel_uuid]
+            return None
+        # Touch — move to the end (most-recently-used).
+        self._channel_streams_cache.move_to_end(channel_uuid)
+        return streams
+
+    def _cache_channel_streams(
+        self, channel_uuid: str, streams: list[dict]
+    ) -> None:
+        """Insert ``streams`` into the cross-poll LRU keyed by
+        ``channel_uuid``, evicting the least-recently-used entry when the
+        cache is at its cap.
+        """
+        # If the key is already present, drop it so the re-insert is at
+        # the most-recently-used position.
+        if channel_uuid in self._channel_streams_cache:
+            del self._channel_streams_cache[channel_uuid]
+        self._channel_streams_cache[channel_uuid] = (self._poll_count, streams)
+        while len(self._channel_streams_cache) > self._channel_streams_cache_cap:
+            self._channel_streams_cache.popitem(last=False)
 
     def _log_provider_resolution_sli(
         self,
