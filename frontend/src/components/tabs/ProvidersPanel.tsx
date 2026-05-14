@@ -8,12 +8,14 @@
  *   1. Buffering events by provider — multi-series line chart
  *      ``GET /api/stats/providers/buffering?window=7d|30d|90d&bucket=hour|day``
  *
- *   2. Time spent per provider — stacked area chart
+ *   2. Time spent per provider — bar chart (bd-tknci, 2026-05-13)
  *      ``GET /api/stats/providers/watch-time?window=7d|30d|90d``
- *      (Single window value per provider — rendered as a small stacked-bar
- *      style area chart with one bucket; the visual intent of "time spent
- *      stacked across providers" is preserved through stacking and the
- *      data table.)
+ *      One bar per provider with the provider name on X-axis and watch
+ *      minutes on Y-axis. (Earlier shipped as a single-bucket stacked
+ *      AreaChart — visually collapsed to one tall "Total" stack with no
+ *      Y-axis label, so the PO couldn't tell which provider was which
+ *      from the chart itself. The per-bar layout makes provider
+ *      attribution legible without consulting the legend.)
  *
  *   3. Channels-by-provider heatmap — 2D grid of rows×cols
  *      ``GET /api/stats/providers/channel-heatmap?window=...&top_n=50``
@@ -49,10 +51,12 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   LineChart,
   Line,
-  AreaChart,
-  Area,
+  BarChart,
+  Bar,
+  Cell,
   XAxis,
   YAxis,
+  Label,
   Tooltip,
   Legend,
   CartesianGrid,
@@ -378,18 +382,31 @@ export function ProvidersPanel() {
     [bitrate],
   );
 
-  // Watch-time is per-provider total (not time-bucketed). For the stacked
-  // area chart we render a single "Total" bucket; the visual stacking
-  // still communicates relative share. The data-table fallback carries
-  // the precise per-provider numbers.
+  // Watch-time is per-provider total (not time-bucketed). bd-tknci
+  // (2026-05-13): switched from a single-bucket stacked AreaChart to a
+  // per-provider BarChart so each provider gets its own visible bar with
+  // the provider name on the X-axis. Values are converted to whole
+  // minutes for human-friendly readability (the backend ships seconds;
+  // the Y-axis label and data table both say "minutes"). NULL provider
+  // surfaces as a labeled "Unknown" bar — same ordering rules as the
+  // legend (Unknown last). Sort by minutes DESC so the dominant
+  // provider is leftmost — operators care about ranking, not entry
+  // order.
   const watchTimeChart = useMemo(() => {
     if (watchTime.length === 0) return [];
-    const single: Record<string, string | number> = { bucket: 'Total' };
-    for (const r of watchTime) {
-      single[providerKey(r.provider_id)] = r.total_watch_seconds;
-    }
-    return [single];
-  }, [watchTime]);
+    return watchTime
+      .map((r) => ({
+        provider: providerLabel(r.provider_id, m3uNameMap),
+        provider_id: r.provider_id,
+        watch_minutes: secondsToMinutes(r.total_watch_seconds),
+      }))
+      .sort((a, b) => {
+        // NULL ("Unknown") last; otherwise by minutes DESC.
+        if (a.provider_id === null && b.provider_id !== null) return 1;
+        if (b.provider_id === null && a.provider_id !== null) return -1;
+        return b.watch_minutes - a.watch_minutes;
+      });
+  }, [watchTime, m3uNameMap]);
 
   const heatmapGrid = useMemo(() => buildHeatmapGrid(heatmap, m3uNameMap), [heatmap, m3uNameMap]);
 
@@ -436,7 +453,10 @@ export function ProvidersPanel() {
   // produced no rows for that endpoint.
   const seenInBuffering = new Set(buffering.map((r) => providerKey(r.provider_id)));
   const seenInBitrate = new Set(bitrate.map((r) => providerKey(r.provider_id)));
-  const seenInWatchTime = new Set(watchTime.map((r) => providerKey(r.provider_id)));
+  // bd-tknci: the watch-time chart is now a per-provider bar chart that
+  // iterates ``watchTimeChart`` directly (one row per provider). No need
+  // to filter the cross-dataset ``providers`` list against a "seen in
+  // watch-time" set — the bar chart's data already IS the watch-time set.
 
   return (
     <div className="providers-panel">
@@ -557,39 +577,69 @@ export function ProvidersPanel() {
         </table>
       </div>
 
-      {/* 2) Time spent per provider — stacked area chart */}
+      {/* 2) Time spent per provider — bar chart (bd-tknci, 2026-05-13) */}
       <div className="chart-section">
         <div className="chart-toolbar">
           <h4 className="chart-title">Time spent per provider</h4>
           {renderToggle('watchTime', 'providers-watch-time-data-table')}
         </div>
+        <p className="chart-description">
+          Total minutes streamed from each provider across the selected
+          time window. One bar per provider; the Y-axis is minutes.
+        </p>
         {watchTime.length === 0 && !loading ? (
           <div className="empty-state" role="status" aria-live="polite">
             No watch-time data for this window.
           </div>
         ) : (
           <div className="chart-container" aria-hidden="true">
-            <ResponsiveContainer width="100%" height={200}>
-              <AreaChart data={watchTimeChart} margin={{ top: 10, right: 16, bottom: 8, left: 8 }}>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart
+                data={watchTimeChart}
+                margin={{ top: 10, right: 16, bottom: 32, left: 8 }}
+              >
                 <CartesianGrid stroke="var(--border-primary)" strokeDasharray="3 3" />
-                <XAxis dataKey="bucket" tick={{ fontSize: 11, fill: 'var(--text-primary)' }} />
-                <YAxis tick={{ fontSize: 11, fill: 'var(--text-primary)' }} width={50} />
-                <Tooltip />
-                <Legend />
-                {providers.filter((p) => seenInWatchTime.has(p.key)).map((p, idx) => (
-                  <Area
-                    key={p.key}
-                    type="monotone"
-                    dataKey={p.key}
-                    name={p.label}
-                    stackId="1"
-                    stroke={paletteColorAt(idx)}
-                    fill={paletteColorAt(idx)}
-                    fillOpacity={0.5}
-                    isAnimationActive={false}
+                <XAxis
+                  dataKey="provider"
+                  tick={{ fontSize: 11, fill: 'var(--text-primary)' }}
+                  interval={0}
+                />
+                <YAxis
+                  tick={{ fontSize: 11, fill: 'var(--text-primary)' }}
+                  width={70}
+                  tickFormatter={(v: number) => `${v}`}
+                  allowDecimals={false}
+                >
+                  <Label
+                    value="Watch minutes"
+                    angle={-90}
+                    position="insideLeft"
+                    style={{ textAnchor: 'middle', fill: 'var(--text-primary)', fontSize: 11 }}
                   />
-                ))}
-              </AreaChart>
+                </YAxis>
+                <Tooltip
+                  formatter={(v: number) => [`${v} min`, 'Watch minutes']}
+                  labelFormatter={(label: string) => `Provider: ${label}`}
+                />
+                <Bar
+                  dataKey="watch_minutes"
+                  name="Watch minutes"
+                  isAnimationActive={false}
+                >
+                  {/* bd-tknci: per-bar fill from the categorical palette
+                      so each provider keeps its own color, matching the
+                      legend/series colors in the other charts. NULL
+                      provider lands at the tail and gets the next
+                      palette slot — the data ordering above places it
+                      last regardless. */}
+                  {watchTimeChart.map((entry, idx) => (
+                    <Cell
+                      key={`watch-time-bar-${entry.provider_id ?? 'null'}-${idx}`}
+                      fill={paletteColorAt(idx)}
+                    />
+                  ))}
+                </Bar>
+              </BarChart>
             </ResponsiveContainer>
           </div>
         )}
@@ -717,21 +767,40 @@ export function ProvidersPanel() {
           <h4 className="chart-title">Bitrate by provider</h4>
           {renderToggle('bitrate', 'providers-bitrate-data-table')}
         </div>
+        {/* bd-zrk05 (2026-05-13): description + Y-axis label so the
+            chart is self-documenting. Backend computes
+            ``SUM(bytes_delta) * 8 * 1000 / SUM(poll_interval_ms)`` per
+            (provider, time_bucket) — i.e. bits-per-second observed over
+            the bucket interval. The Y-axis label says "Bitrate
+            (auto-scaled)" because the tick formatter renders Mbps /
+            Kbps / bps depending on magnitude. */}
+        <p className="chart-description">
+          Average observed bitrate per provider across the selected time
+          window, derived from per-poll byte counts divided by elapsed
+          poll-interval time. Y-axis units auto-scale (bps, Kbps, Mbps).
+        </p>
         {bitrate.length === 0 && !loading ? (
           <div className="empty-state" role="status" aria-live="polite">
             No bitrate data for this window.
           </div>
         ) : (
           <div className="chart-container" aria-hidden="true">
-            <ResponsiveContainer width="100%" height={200}>
+            <ResponsiveContainer width="100%" height={220}>
               <LineChart data={bitrateChart} margin={{ top: 10, right: 16, bottom: 8, left: 8 }}>
                 <CartesianGrid stroke="var(--border-primary)" strokeDasharray="3 3" />
                 <XAxis dataKey="time_bucket" tick={{ fontSize: 11, fill: 'var(--text-primary)' }} />
                 <YAxis
                   tick={{ fontSize: 11, fill: 'var(--text-primary)' }}
-                  width={70}
+                  width={80}
                   tickFormatter={(v: number) => formatBitrateBps(v)}
-                />
+                >
+                  <Label
+                    value="Bitrate (auto-scaled)"
+                    angle={-90}
+                    position="insideLeft"
+                    style={{ textAnchor: 'middle', fill: 'var(--text-primary)', fontSize: 11 }}
+                  />
+                </YAxis>
                 <Tooltip formatter={(v: number) => formatBitrateBps(v)} />
                 <Legend />
                 {providers.filter((p) => seenInBitrate.has(p.key)).map((p, idx) => (
