@@ -828,3 +828,107 @@ class TestMigration0008:
             )
         finally:
             engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Migration 0010 — session_telemetry.stream_id + stream_name (bd-kh23e)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestMigration0010:
+    """Up/down round-trip for the ``session_telemetry.stream_id`` /
+    ``stream_name`` column additions (bead ``enhancedchannelmanager-kh23e``).
+
+    These two columns capture the active stream identity per poll row, so
+    the read APIs (skqln.5 / skqln.16) can surface "which stream within the
+    channel" on the UI — see PO directive 2026-05-14. Both are NULLABLE
+    (consistent with ``provider_id`` design — resolution failures land NULL).
+
+    Bead: ``enhancedchannelmanager-kh23e``.
+    """
+
+    TABLE = "session_telemetry"
+    NEW_COLUMNS = {"stream_id", "stream_name"}
+
+    def _column_map(self, engine) -> dict[str, dict]:
+        """Return {column_name: SQLAlchemy inspector dict} for the table."""
+        return {c["name"]: c for c in inspect(engine).get_columns(self.TABLE)}
+
+    def test_columns_present_at_head(self, tmp_path):
+        """``alembic upgrade head`` adds ``stream_id`` + ``stream_name``."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0010_head.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = self._column_map(engine)
+            for col in self.NEW_COLUMNS:
+                assert col in cols, (
+                    f"Column {col} missing on {self.TABLE} after upgrade head — "
+                    "migration 0010 did not run correctly."
+                )
+            # stream_id is INTEGER NULL (no FK — consistent with provider_id
+            # per skqln.2 docstring).
+            assert "INT" in str(cols["stream_id"]["type"]).upper(), cols["stream_id"]["type"]
+            assert cols["stream_id"]["nullable"] is True
+            # stream_name is TEXT NULL.
+            assert "TEXT" in str(cols["stream_name"]["type"]).upper(), cols["stream_name"]["type"]
+            assert cols["stream_name"]["nullable"] is True
+        finally:
+            engine.dispose()
+
+    def test_columns_gone_at_prior_revision(self, tmp_path):
+        """Downgrading to 0009 drops both columns."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0010_down.db'}"
+        cfg = _make_alembic_config(db_url)
+
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, "0009")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = self._column_map(engine)
+            for col in self.NEW_COLUMNS:
+                assert col not in cols, (
+                    f"Column {col} still present after downgrade to 0009 — "
+                    "migration 0010's downgrade() did not drop it."
+                )
+        finally:
+            engine.dispose()
+
+    def test_columns_round_trip_up_down_up(self, tmp_path):
+        """Down → up cycle leaves the same columns present with the same types."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0010_roundtrip.db'}"
+        cfg = _make_alembic_config(db_url)
+
+        command.upgrade(cfg, "head")
+        engine = create_engine(db_url, future=True)
+        try:
+            pre_cols = self._column_map(engine)
+        finally:
+            engine.dispose()
+
+        command.downgrade(cfg, "0009")
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            post_cols = self._column_map(engine)
+            for col in self.NEW_COLUMNS:
+                assert col in post_cols, f"{col} missing after round-trip"
+                # Types stay equivalent across the cycle.
+                assert str(post_cols[col]["type"]) == str(pre_cols[col]["type"]), (
+                    f"{col} type drifted: before={pre_cols[col]['type']!r} "
+                    f"after={post_cols[col]['type']!r}"
+                )
+                assert post_cols[col]["nullable"] == pre_cols[col]["nullable"]
+        finally:
+            engine.dispose()

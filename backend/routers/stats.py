@@ -683,13 +683,22 @@ async def get_watch_time_for_user(
 
     Row shape:
         ``{channel_id, channel_name, total_watch_seconds, session_count,
-           last_watched}``
+           last_watched, latest_stream_id, latest_stream_name}``
 
     ``channel_name`` is side-loaded from
     ``UniqueClientConnection.channel_name`` (the skqln.3 step (d)
     precedent) — falls back to ``"Channel <first-8-chars-of-uuid>..."``
     when no connection row carries the name yet (brand-new channels first
     observed only via ``session_telemetry``).
+
+    ``latest_stream_id`` + ``latest_stream_name`` (bd-kh23e) carry the
+    most-recently-watched stream identity on that channel within the
+    window. Aggregation: ``MAX(observed_at)`` per channel — one row per
+    channel, the stream column shows the latest stream the user watched
+    on that channel. The frontend renders the label as
+    ``[<provider>] - <stream_name>`` with provider name side-loaded from
+    the M3U accounts map. Both fields are nullable — older rows
+    pre-kh23e and resolver-miss rows surface as ``null``.
     """
     logger.debug(
         "[STATS] GET /api/stats/watch-time/%s from=%s to=%s",
@@ -754,6 +763,20 @@ async def get_watch_time_for_user(
         # is fine without a join.
         channel_ids = [r.channel_id for r in agg_rows]
         name_map = _load_channel_names(db, channel_ids)
+        # bd-kh23e: side-load the latest stream identity per channel.
+        # Aggregation choice — ``MAX(observed_at)`` per channel: one row
+        # per channel, stream identity reflects the MOST RECENT stream
+        # watched on that channel within the window. Picking the latest
+        # is intentional: the frontend label
+        # ``[<provider>] - <stream_name>`` represents what the user most
+        # recently watched, not an arbitrary sample.
+        latest_stream_map = _load_latest_stream_identity_per_channel(
+            db,
+            channel_ids,
+            user_id=user_id,
+            from_ms=from_ms,
+            to_ms=to_ms,
+        )
 
         data = [
             {
@@ -762,6 +785,11 @@ async def get_watch_time_for_user(
                 "total_watch_seconds": int((r.total_ms or 0) // 1000),
                 "session_count": session_counts.get(r.channel_id, 0),
                 "last_watched": _ms_to_iso_z(r.last_observed_at),
+                # Both null when the resolver couldn't attribute the stream
+                # (older rows pre-kh23e, lookup failures). Channel rendered
+                # gracefully on the frontend with ``—`` for the stream column.
+                "latest_stream_id": latest_stream_map.get(r.channel_id, (None, None))[0],
+                "latest_stream_name": latest_stream_map.get(r.channel_id, (None, None))[1],
             }
             for r in agg_rows
         ]
@@ -804,6 +832,159 @@ def _load_channel_names(db: Session, channel_ids):
         .all()
     )
     return {r.channel_id: r.channel_name for r in rows}
+
+
+def _load_latest_stream_identity_per_channel(
+    db: Session,
+    channel_ids,
+    *,
+    user_id: int,
+    from_ms: Optional[int],
+    to_ms: Optional[int],
+):
+    """Bulk-resolve ``channel_id -> (latest_stream_id, latest_stream_name)`` for one user.
+
+    bd-kh23e: side-loader for the watch-time-by-user breakdown. Returns a
+    map keyed by ``channel_id`` whose value is a 2-tuple of the stream
+    identity on the row with the highest ``observed_at`` for the
+    ``(user_id, channel_id)`` pair within the optional time window.
+
+    Implementation: a per-channel ``MAX(observed_at)`` subquery joins back
+    to ``session_telemetry`` to pull the corresponding stream_id +
+    stream_name. The user_id + observed_at filters mirror the outer
+    aggregation so the per-channel "latest" picks the same row population
+    the user is shown.
+
+    NULL handling: a channel whose latest row has ``stream_id=NULL`` and
+    ``stream_name=NULL`` (older rows pre-kh23e or resolver-miss rows)
+    still appears in the map with both tuple elements set to ``None``.
+    Channels not present in ``channel_ids`` are simply absent from the
+    map — callers use ``.get(channel_id, (None, None))`` to default
+    gracefully.
+    """
+    if not channel_ids:
+        return {}
+
+    # Subquery: the latest observed_at per channel for this user, within
+    # the optional window. Mirrors the outer aggregate's filter set so
+    # the picked row is from the same population the user sees.
+    latest_q = (
+        db.query(
+            SessionTelemetry.channel_id.label("channel_id"),
+            func.max(SessionTelemetry.observed_at).label("max_observed_at"),
+        )
+        .filter(SessionTelemetry.user_id == user_id)
+        .filter(SessionTelemetry.channel_id.in_(channel_ids))
+    )
+    if from_ms is not None:
+        latest_q = latest_q.filter(SessionTelemetry.observed_at >= from_ms)
+    if to_ms is not None:
+        latest_q = latest_q.filter(SessionTelemetry.observed_at < to_ms)
+    latest_sq = latest_q.group_by(SessionTelemetry.channel_id).subquery()
+
+    # Join back: pull stream identity for the matched (channel, max ts).
+    # ``MAX(stream_id)`` / ``MAX(stream_name)`` collapse the rare case
+    # where two rows share the highest observed_at (e.g., two concurrent
+    # clients on the same channel at the same poll-tick): both rows
+    # carry the same stream identity by construction (one resolver pass
+    # per poll), so ``MAX`` is the cheap, deterministic picker.
+    rows = (
+        db.query(
+            SessionTelemetry.channel_id.label("channel_id"),
+            func.max(SessionTelemetry.stream_id).label("stream_id"),
+            func.max(SessionTelemetry.stream_name).label("stream_name"),
+        )
+        .join(
+            latest_sq,
+            (SessionTelemetry.channel_id == latest_sq.c.channel_id)
+            & (SessionTelemetry.observed_at == latest_sq.c.max_observed_at),
+        )
+        .filter(SessionTelemetry.user_id == user_id)
+        .group_by(SessionTelemetry.channel_id)
+        .all()
+    )
+    return {r.channel_id: (r.stream_id, r.stream_name) for r in rows}
+
+
+def _load_latest_stream_identity_per_provider_channel(
+    db: Session,
+    channel_ids,
+    *,
+    from_ms: int,
+    to_ms: int,
+):
+    """Bulk-resolve ``(provider_id, channel_id) -> (latest_stream_id, latest_stream_name)``.
+
+    bd-kh23e: side-loader for the channel-heatmap. Returns a map keyed
+    by ``(provider_id, channel_id)`` tuple whose value is the latest
+    stream identity surfaced on the row with ``MAX(observed_at)`` for
+    that (provider, channel) bucket within the window.
+
+    Same MAX(observed_at) aggregation rule as the watch-time-by-user
+    breakdown — the frontend renders both surfaces with the same
+    ``[<provider>] - <stream_name>`` label format so the rule needs to
+    be consistent.
+
+    ``provider_id`` may be ``None`` in either side of the tuple — NULL
+    provider buckets ("Unknown") still carry stream identity when the
+    resolver attributed the stream but the upstream provider was
+    deleted; the heatmap row still appears and the operator sees which
+    stream ran out of provider attribution.
+    """
+    if not channel_ids:
+        return {}
+    latest_q = (
+        db.query(
+            SessionTelemetry.provider_id.label("provider_id"),
+            SessionTelemetry.channel_id.label("channel_id"),
+            func.max(SessionTelemetry.observed_at).label("max_observed_at"),
+        )
+        .filter(SessionTelemetry.observed_at >= from_ms)
+        .filter(SessionTelemetry.observed_at < to_ms)
+        .filter(SessionTelemetry.channel_id.in_(channel_ids))
+        .group_by(SessionTelemetry.provider_id, SessionTelemetry.channel_id)
+        .subquery()
+    )
+
+    # Join back to pick the matched row's stream identity. ``MAX`` over
+    # stream_id / stream_name collapses ties on observed_at (concurrent
+    # clients on the same poll-tick) deterministically — all such rows
+    # carry the same identity by construction.
+    #
+    # NULL-safety on the join: SQLAlchemy / SQLite treat ``NULL = NULL``
+    # as UNKNOWN in a join predicate, which would drop NULL-provider
+    # cells silently. Use ``IS NOT DISTINCT FROM`` semantics via
+    # explicit ``OR (both NULL)`` so the join survives NULL providers.
+    rows = (
+        db.query(
+            SessionTelemetry.provider_id.label("provider_id"),
+            SessionTelemetry.channel_id.label("channel_id"),
+            func.max(SessionTelemetry.stream_id).label("stream_id"),
+            func.max(SessionTelemetry.stream_name).label("stream_name"),
+        )
+        .join(
+            latest_sq := latest_q,
+            (
+                (SessionTelemetry.channel_id == latest_sq.c.channel_id)
+                & (SessionTelemetry.observed_at == latest_sq.c.max_observed_at)
+                & (
+                    (SessionTelemetry.provider_id == latest_sq.c.provider_id)
+                    | (
+                        SessionTelemetry.provider_id.is_(None)
+                        & latest_sq.c.provider_id.is_(None)
+                    )
+                )
+            ),
+        )
+        .filter(SessionTelemetry.observed_at >= from_ms)
+        .filter(SessionTelemetry.observed_at < to_ms)
+        .group_by(SessionTelemetry.provider_id, SessionTelemetry.channel_id)
+        .all()
+    )
+    return {
+        (r.provider_id, r.channel_id): (r.stream_id, r.stream_name)
+        for r in rows
+    }
 
 
 # =============================================================================
@@ -1079,12 +1260,21 @@ async def get_providers_channel_heatmap(
       across all providers. Default 50; absolute max 500 (defensive).
 
     Response row shape:
-        ``{provider_id, channel_id, channel_name, bytes}``
+        ``{provider_id, channel_id, channel_name, bytes,
+           latest_stream_id, latest_stream_name}``
 
     Each row is one cell of the 2D grid (rows=providers, cols=channels).
     Cells with zero bytes are omitted. ``channel_name`` is side-loaded from
     ``UniqueClientConnection`` (skqln.3 step (d) precedent) with the same
     ``"Channel <first-8-chars>..."`` fallback the per-user breakdown uses.
+
+    ``latest_stream_id`` + ``latest_stream_name`` (bd-kh23e) carry the
+    most-recently-observed stream identity for the (provider, channel)
+    cell within the window. Aggregation: ``MAX(observed_at)`` per
+    (provider_id, channel_id) pair. The frontend's heatmap data-table
+    fallback renders this as ``[<provider>] - <stream_name>`` so the
+    operator can see WHICH stream the bytes were attributed to, not just
+    which channel.
 
     The DBA-flagged covering index ``idx_session_telemetry_provider_channel_observed_bytes``
     (model: ``__table_args__`` of ``SessionTelemetry``) backs this query.
@@ -1131,12 +1321,29 @@ async def get_providers_channel_heatmap(
             .all()
         )
         name_map = _load_channel_names(db, top_channel_ids)
+        # bd-kh23e: side-load latest stream identity per (provider, channel).
+        # MAX(observed_at) per cell — same aggregation rule as the
+        # watch-time-by-user breakdown (bd-kh23e). The frontend's
+        # heatmap data-table fallback uses these to render the
+        # ``[<provider>] - <stream_name>`` label per cell.
+        stream_id_map = _load_latest_stream_identity_per_provider_channel(
+            db,
+            top_channel_ids,
+            from_ms=from_ms,
+            to_ms=to_ms,
+        )
         data = [
             {
                 "provider_id": c.provider_id,
                 "channel_id": c.channel_id,
                 "channel_name": _channel_name_or_fallback(c.channel_id, name_map),
                 "bytes": int(c.bytes or 0),
+                "latest_stream_id": stream_id_map.get(
+                    (c.provider_id, c.channel_id), (None, None)
+                )[0],
+                "latest_stream_name": stream_id_map.get(
+                    (c.provider_id, c.channel_id), (None, None)
+                )[1],
             }
             for c in cells
         ]

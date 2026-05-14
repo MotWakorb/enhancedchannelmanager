@@ -1151,12 +1151,21 @@ export interface WatchTimeUserDayRow {
 }
 
 // Row shape for /watch-time/{user_id}
+//
+// ``latest_stream_id`` + ``latest_stream_name`` (bd-kh23e) carry the
+// most-recently-watched stream identity on the channel within the
+// window (``MAX(observed_at)`` per channel). Both may be ``null`` for
+// pre-kh23e rows or rows where the resolver could not attribute the
+// active stream. The UI composes ``[<provider>] - <stream_name>`` from
+// these + the M3U accounts side-load.
 export interface WatchTimeChannelRow {
   channel_id: string;
   channel_name: string;
   total_watch_seconds: number;
   session_count: number;
   last_watched: string | null;
+  latest_stream_id: number | null;
+  latest_stream_name: string | null;
 }
 
 export interface WatchTimeMeta {
@@ -1207,11 +1216,20 @@ export interface ProviderWatchTimeRow {
 }
 
 // Row shape for /providers/channel-heatmap — one cell of the 2D grid
+//
+// ``latest_stream_id`` + ``latest_stream_name`` (bd-kh23e) carry the
+// most-recently-observed stream identity for the (provider, channel)
+// cell within the window (``MAX(observed_at)`` per cell). Both may be
+// ``null`` for pre-kh23e rows or rows where the resolver could not
+// attribute the active stream. The frontend's heatmap data-table
+// fallback renders these as ``[<provider>] - <stream_name>``.
 export interface ProviderHeatmapRow {
   provider_id: number | null;
   channel_id: string;
   channel_name: string;
   bytes: number;
+  latest_stream_id: number | null;
+  latest_stream_name: string | null;
 }
 
 // Row shape for /providers/bitrate
