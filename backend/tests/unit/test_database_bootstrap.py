@@ -228,3 +228,130 @@ class TestBootstrapAlembic:
                     database._bootstrap_alembic(engine)
         finally:
             engine.dispose()
+
+
+class TestInitDbLoudFailOnBootstrap:
+    """``init_db`` must not silently swallow alembic bootstrap failures (bd-zaaey).
+
+    The original ``init_db`` wrapped ``_bootstrap_alembic`` in a bare
+    ``try/except Exception`` and logged a "falling back to create_all()"
+    message before continuing. That fallback path is the disease vector that
+    let a user's container run for days with a half-applied schema and a
+    flood of ``session_telemetry write failed: no column named stream_id``
+    WARN logs: ``create_all()`` is a no-op for an existing table, so a
+    partially-upgraded ``session_telemetry`` stayed broken forever.
+
+    The contract these tests pin: any failure inside ``_bootstrap_alembic``
+    propagates out of ``init_db`` so startup fails loud (the operator sees
+    the boot failure, the symptom is not silently ongoing log noise).
+    """
+
+    def test_init_db_raises_when_bootstrap_alembic_raises(self, tmp_path, monkeypatch):
+        """A raise inside ``_bootstrap_alembic`` must propagate, not be swallowed."""
+        # Redirect the journal DB to a tmp path so we don't touch the real one.
+        monkeypatch.setattr(database, "JOURNAL_DB_FILE", tmp_path / "journal.db")
+        monkeypatch.setattr(database, "_engine", None)
+        monkeypatch.setattr(database, "_SessionLocal", None)
+
+        def boom(_engine):
+            raise RuntimeError("simulated alembic upgrade failure")
+
+        with patch.object(database, "_bootstrap_alembic", side_effect=boom):
+            with pytest.raises(RuntimeError, match="simulated alembic upgrade failure"):
+                database.init_db()
+
+
+class TestModelSchemaParityCheck:
+    """Post-bootstrap parity check: every SQLAlchemy model column must exist
+    in the live DB (bd-zaaey).
+
+    The original ``_BOOTSTRAP_CANARIES`` list covered migrations 0002 and
+    0004 only. A user whose ``alembic_version`` is stamped beyond the
+    canaries but whose physical schema is missing later-migration columns
+    (e.g. ``session_telemetry.stream_id`` from migration 0010) would pass
+    the canary check and silently run with a broken schema. This durable
+    parity check replaces the canary's hand-curated list with an
+    automatically-derived diff between ``Base.metadata`` and the live DB —
+    so any future migration's columns are covered without extending a
+    canary list per release.
+
+    Contract: ``_assert_schema_matches_models`` raises ``RuntimeError`` with
+    a message naming the missing ``table.column`` if a model-declared
+    column is absent from the live DB. Tables that exist in models but not
+    in the DB are not the parity check's concern (``create_all`` covers
+    that — see ``init_db``'s ordering); only missing **columns on existing
+    tables** are flagged, because those are the columns that ``ALTER TABLE``
+    migrations are supposed to add and that ``create_all`` cannot add.
+    """
+
+    def test_parity_check_passes_at_head(self, tmp_path):
+        """A fully-migrated DB must pass the parity check without raising."""
+        from alembic import command
+
+        db_file = tmp_path / "at_head.db"
+        cfg = _alembic_config(db_file)
+        command.upgrade(cfg, "head")
+
+        engine = _make_engine(db_file)
+        try:
+            # Must not raise.
+            database._assert_schema_matches_models(engine)
+        finally:
+            engine.dispose()
+
+    def test_parity_check_raises_on_missing_column(self, tmp_path):
+        """A column dropped from the live DB (simulating an unapplied migration)
+        must trigger the parity check to raise."""
+        from alembic import command
+
+        db_file = tmp_path / "missing_col.db"
+        cfg = _alembic_config(db_file)
+        command.upgrade(cfg, "head")
+
+        engine = _make_engine(db_file)
+        try:
+            # Drop the ``stream_id`` column from ``session_telemetry`` to
+            # simulate a user whose schema lags behind the model (e.g.
+            # migration 0010 was skipped, the bd-zaaey symptom). SQLite has no
+            # native ``DROP COLUMN`` in older versions; the rebuild dance is:
+            # 1. DROP VIEW that references the table (else the RENAME fails
+            #    with "error in view: no such table" — same constraint that
+            #    forced migration 0010 to drop/recreate channel_watch_stats_v).
+            # 2. CREATE TABLE replacement WITHOUT the dropped columns
+            # 3. INSERT SELECT
+            # 4. DROP original
+            # 5. RENAME replacement → original
+            with engine.begin() as conn:
+                conn.execute(text("DROP VIEW IF EXISTS channel_watch_stats_v"))
+                conn.execute(text(
+                    "CREATE TABLE session_telemetry_rebuild ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "session_id TEXT NOT NULL, "
+                    "observed_at INTEGER NOT NULL, "
+                    "user_id INTEGER, "
+                    "provider_id INTEGER, "
+                    "channel_id VARCHAR(64) NOT NULL, "
+                    "bytes_delta BIGINT NOT NULL, "
+                    "buffer_event_count INTEGER NOT NULL DEFAULT 0, "
+                    "poll_interval_ms INTEGER NOT NULL, "
+                    "CONSTRAINT ck_session_telemetry_bytes_delta_non_negative CHECK (bytes_delta >= 0)"
+                    ")"
+                ))
+                conn.execute(text(
+                    "INSERT INTO session_telemetry_rebuild "
+                    "(id, session_id, observed_at, user_id, provider_id, channel_id, "
+                    " bytes_delta, buffer_event_count, poll_interval_ms) "
+                    "SELECT id, session_id, observed_at, user_id, provider_id, channel_id, "
+                    " bytes_delta, buffer_event_count, poll_interval_ms FROM session_telemetry"
+                ))
+                conn.execute(text("DROP TABLE session_telemetry"))
+                conn.execute(text("ALTER TABLE session_telemetry_rebuild RENAME TO session_telemetry"))
+
+            with pytest.raises(RuntimeError, match="schema drift") as exc_info:
+                database._assert_schema_matches_models(engine)
+
+            # Error message must name the offending column so the operator
+            # can act without re-running pytest.
+            assert "session_telemetry.stream_id" in str(exc_info.value), str(exc_info.value)
+        finally:
+            engine.dispose()

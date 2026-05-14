@@ -241,6 +241,73 @@ def _bootstrap_alembic(engine) -> None:
             )
 
 
+def _assert_schema_matches_models(engine) -> None:
+    """Verify every SQLAlchemy model column exists on the live DB.
+
+    The hand-curated ``_BOOTSTRAP_CANARIES`` list above only covers migrations
+    0002 and 0004 — historical artifacts from the bd-fwpzw stamped-at-head
+    bug. A user whose ``alembic_version`` row is plausible but whose physical
+    schema is missing later-migration columns (e.g. migration 0010's
+    ``session_telemetry.stream_id`` — bd-zaaey symptom) sails past the
+    canaries and runs forever with a half-broken schema, flooding the logs
+    with ``OperationalError: no column named stream_id`` on every poll.
+
+    This check replaces the hand-curated canary list with an automatically-
+    derived diff between ``Base.metadata`` (what the running code expects)
+    and the live DB (what is actually there). Any future migration's columns
+    are covered without extending a canary list per release — the model IS
+    the canary list.
+
+    What the check flags:
+        - Missing **columns on existing tables** — those are exactly the
+          columns an ``ALTER TABLE`` migration is supposed to add, and that
+          ``create_all()`` cannot add to an existing table. This is the
+          bd-zaaey failure surface.
+
+    What the check deliberately does NOT flag:
+        - Missing tables — ``Base.metadata.create_all(engine)`` (called
+          right after this function in ``init_db``) handles that idempotently.
+        - Extra columns in the DB that aren't on the model — that's a
+          downgrade signal, not a missing-migration signal, and not the bug
+          this guard is designed to catch.
+        - Column type mismatches — SQLite type affinity makes that fuzzy
+          enough that a strict diff produces false positives; the migration
+          history is the source of truth for type evolution, not this check.
+
+    Raises:
+        RuntimeError: with a message naming the missing ``table.column``
+        pairs so the operator can act without re-running the app under a
+        debugger.
+    """
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    live_tables = set(inspector.get_table_names())
+
+    drift: list[str] = []
+    for table_name, table in Base.metadata.tables.items():
+        if table_name not in live_tables:
+            # Missing tables are ``create_all``'s job, not this check's.
+            continue
+        live_columns = {c["name"] for c in inspector.get_columns(table_name)}
+        for column in table.columns:
+            if column.name not in live_columns:
+                drift.append(f"{table_name}.{column.name}")
+
+    if drift:
+        # Sorted so the diagnostic is stable across runs — operators
+        # reporting "we got error X" should see the same list every time.
+        drift.sort()
+        raise RuntimeError(
+            "schema drift detected — model declares columns not present in "
+            "the live database (likely an un-applied Alembic migration): "
+            f"{drift}. The container's journal.db is in an inconsistent "
+            "state. Recovery: stop the container, back up "
+            "/config/journal.db, run `alembic upgrade head` against the "
+            "DB (or restore the DB from a known-good backup), then restart."
+        )
+
+
 def get_current_schema_revision(engine=None) -> str:
     """Return the ``alembic_version`` currently applied to the DB, or ``""``."""
     eng = engine if engine is not None else _engine
@@ -297,18 +364,34 @@ def init_db() -> None:
         # Apply Alembic migrations first so schema tracking is authoritative
         # (see ``docs/database_migrations.md``). For legacy installs we stamp
         # to head rather than re-run DDL that would fail on duplicate tables.
-        try:
-            _bootstrap_alembic(_engine)
-        except Exception:
-            logger.exception(
-                "[DATABASE] Alembic bootstrap failed; falling back to create_all()"
-            )
+        #
+        # bd-zaaey: an Exception here used to be swallowed with a "falling
+        # back to create_all()" log line. That fallback is the disease
+        # vector — ``create_all`` is a no-op for an existing table, so any
+        # partially-applied migration leaves the schema half-broken forever
+        # and floods the logs with ``OperationalError: no column named X``
+        # WARN lines on every poll. Loud-fail instead: re-raise so the
+        # operator sees a boot failure and acts on it, rather than running
+        # for days on a silently-broken DB.
+        _bootstrap_alembic(_engine)
 
         # Create all tables (idempotent; no-op on clean Alembic installs but
         # keeps legacy in-process additions working until a proper revision
         # lands for them).
         Base.metadata.create_all(bind=_engine)
         logger.debug("[DATABASE] Database tables created/verified")
+
+        # bd-zaaey defense-in-depth: structural check that every model
+        # column exists in the live DB. The ``_BOOTSTRAP_CANARIES`` list
+        # above is hand-curated against migrations 0002 + 0004 and does NOT
+        # cover later migrations (0006-0010). A user whose ``alembic_version``
+        # row is plausible but whose physical schema is missing
+        # ``session_telemetry.stream_id`` sailed past every other guard and
+        # ran for days with ``[STATS_V2] session_telemetry write failed:
+        # ... no column named stream_id`` on every poll. This check is the
+        # durable replacement — the model IS the canary list, so any
+        # future column added by an unapplied migration is caught at boot.
+        _assert_schema_matches_models(_engine)
 
         # Run migrations for existing tables (add new columns if missing)
         _run_migrations(_engine)
