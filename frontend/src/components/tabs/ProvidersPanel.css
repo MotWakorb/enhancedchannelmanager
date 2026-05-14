@@ -87,6 +87,17 @@
   color: var(--text-primary);
 }
 
+.providers-panel .chart-description {
+  /* bd-tknci / bd-zrk05 (2026-05-13): one-line "what this chart is"
+   * caption rendered immediately under the chart title. Muted text so
+   * it doesn't compete with the chart itself but still reads clearly
+   * against the panel background (WCAG AA via theme tokens). */
+  margin: 0 0 8px 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
 .providers-panel .chart-data-toggle {
   background: transparent;
   color: var(--text-primary);

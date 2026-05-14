@@ -352,6 +352,39 @@ class TestProvidersWatchTime:
         rows = {r["provider_id"]: r for r in body["data"]}
         assert rows[1]["total_watch_seconds"] == 20
 
+    @pytest.mark.asyncio
+    async def test_response_row_shape_matches_documented_contract(
+        self, async_client, test_session
+    ):
+        """bd-tknci (2026-05-13): the documented row contract is
+        ``{provider_id, total_watch_seconds}``. The frontend
+        ``ProviderWatchTimeRow`` TypeScript type and the panel's bar
+        chart depend on those exact field names — drift here would
+        break the panel silently (charts render zeros instead of
+        crashing). Pin the contract.
+        """
+        _add_user(test_session, user_id=10, username="alice")
+        _add_telemetry(
+            test_session,
+            user_id=10,
+            provider_id=1,
+            channel_id="ch-a",
+            observed_at_ms=_ms(BASE),
+        )
+        test_session.commit()
+
+        response = await async_client.get("/api/stats/providers/watch-time")
+        body = response.json()
+        assert isinstance(body["data"], list) and body["data"], (
+            "Expected at least one row for the seeded provider; check fixture"
+        )
+        row = body["data"][0]
+        assert set(row.keys()) == {"provider_id", "total_watch_seconds"}, (
+            "Provider watch-time row contract drifted — the frontend bar "
+            "chart binds to these exact field names"
+        )
+        assert isinstance(row["total_watch_seconds"], int)
+
 
 # ---------------------------------------------------------------------------
 # GET /api/stats/providers/channel-heatmap
@@ -675,6 +708,44 @@ class TestProvidersBitrate:
         assert len(rows) == 1
         # 20000 bytes / 20 s = 8000 bps
         assert rows[0]["bitrate_bps"] == 8000
+
+    @pytest.mark.asyncio
+    async def test_response_row_shape_matches_documented_contract(
+        self, async_client, test_session
+    ):
+        """bd-zrk05 (2026-05-13): the documented row contract is
+        ``{provider_id, time_bucket, bitrate_bps}``. The frontend
+        ``ProviderBitrateRow`` TypeScript type and the bitrate line
+        chart pivot bind to those exact field names. Pin the contract
+        so accidental renames in the SQL select break the test, not
+        production.
+        """
+        _add_user(test_session, user_id=10, username="alice")
+        _add_telemetry(
+            test_session,
+            user_id=10,
+            provider_id=1,
+            channel_id="ch-a",
+            observed_at_ms=_ms(BASE),
+            bytes_delta=1000,
+            poll_interval_ms=10_000,
+        )
+        test_session.commit()
+
+        response = await async_client.get("/api/stats/providers/bitrate")
+        body = response.json()
+        assert isinstance(body["data"], list) and body["data"], (
+            "Expected at least one bitrate row for the seeded provider"
+        )
+        row = body["data"][0]
+        assert set(row.keys()) == {"provider_id", "time_bucket", "bitrate_bps"}, (
+            "Provider bitrate row contract drifted — the frontend line "
+            "chart binds to these exact field names"
+        )
+        # bitrate_bps must be a positive integer (formula:
+        # ``bytes * 8 * 1000 / ms``). 1000 bytes / 10s = 800 bps.
+        assert isinstance(row["bitrate_bps"], int)
+        assert row["bitrate_bps"] > 0
 
 
 # ---------------------------------------------------------------------------

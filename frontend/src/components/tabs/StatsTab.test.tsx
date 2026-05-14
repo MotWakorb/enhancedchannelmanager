@@ -58,6 +58,12 @@ vi.mock('../../hooks/useAuth', () => ({
 }));
 
 // Recharts — never assert on the SVG.
+//
+// bd-tknci (2026-05-13): the ProvidersPanel (rendered inside StatsTab)
+// now nests <Label> inside <YAxis> for the Y-axis title. Add ``Label``
+// to the mock surface and let ``YAxis`` swallow children so the nested
+// JSX renders without crashing the panel — we still don't assert on
+// any of the chart internals here.
 vi.mock('recharts', () => {
   const Stub = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
   return {
@@ -66,9 +72,10 @@ vi.mock('recharts', () => {
     AreaChart: Stub,
     Area: () => <div />,
     BarChart: Stub,
-    Bar: () => <div />,
-    XAxis: () => <div />,
-    YAxis: () => <div />,
+    Bar: Stub,
+    XAxis: Stub,
+    YAxis: Stub,
+    Label: () => <div />,
     Tooltip: () => <div />,
     ReferenceLine: () => <div />,
     CartesianGrid: () => <div />,
