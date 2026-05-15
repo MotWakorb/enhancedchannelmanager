@@ -208,6 +208,44 @@ def _bootstrap_alembic(engine) -> None:
             command.stamp(alembic_cfg, baseline_revision)
             # Fall through to upgrade head so post-baseline migrations apply.
 
+    # bd-5w6jz smart-bootstrap fast-path: when ``alembic_version`` lags head
+    # but ``Base.metadata.create_all()`` (which runs in ``init_db`` after this
+    # bootstrap on every long-running install) has already materialised every
+    # table + column the model declares, running ``alembic upgrade head``
+    # would re-run migrations that try to ``op.create_table`` /
+    # ``op.create_index`` / ``op.add_column`` artifacts that already exist.
+    # Even with per-migration idempotency (the bd-ax3uj / bd-5w6jz tactical
+    # fix on 0003-0010), every future migration author has to remember the
+    # inspect-then-skip pattern or the whack-a-mole resumes. The strategic
+    # fix is here: detect the "live schema covers the model shape" case and
+    # ``stamp`` to head instead of upgrading. The migrations have nothing to
+    # do — the physical schema already matches what they would build.
+    #
+    # Guarded against fresh installs: if ``current_rev`` is ``None`` we have
+    # an empty / unstamped DB and need ``upgrade head`` to actually create
+    # everything. The fast-path only fires when the DB is partially advanced
+    # AND the live schema covers the head model shape.
+    head_revision = script_dir.get_current_head()
+    current_rev = get_current_schema_revision(engine)
+    if (
+        current_rev
+        and head_revision
+        and current_rev != head_revision
+        and _schema_matches_head(engine)
+    ):
+        logger.warning(
+            "[DATABASE] alembic_version=%s lags head=%s but live schema matches "
+            "models — stamping forward (bd-5w6jz: create_all() got ahead of alembic)",
+            current_rev,
+            head_revision,
+        )
+        command.stamp(alembic_cfg, head_revision)
+        # No upgrade needed; the existing _BOOTSTRAP_CANARIES self-heal below
+        # is also skipped (it only fires when canaries are missing — by
+        # construction the schema-matches-head check has already verified
+        # every model column is present, which subsumes the canary list).
+        return
+
     logger.info("[DATABASE] Running alembic upgrade head")
     command.upgrade(alembic_cfg, "head")
 
@@ -306,6 +344,63 @@ def _assert_schema_matches_models(engine) -> None:
             "/config/journal.db, run `alembic upgrade head` against the "
             "DB (or restore the DB from a known-good backup), then restart."
         )
+
+
+def _schema_matches_head(engine) -> bool:
+    """True if every Base.metadata table + column exists in the live DB.
+
+    Used by the bd-5w6jz fast-path in ``_bootstrap_alembic``: when
+    ``alembic_version`` lags head but the physical schema already matches
+    the model shape (because ``Base.metadata.create_all()`` got ahead of
+    Alembic on a long-running install), stamp at head and skip the upgrade
+    — the migrations would all "already exists"-fail otherwise (or, with
+    per-migration idempotency, would all no-op at non-trivial cost).
+
+    Mirrors ``_assert_schema_matches_models``'s column-only diff (no type
+    check — SQLite type affinity makes that fuzzy enough to produce false
+    positives; the migration history is the source of truth for type
+    evolution, not this check). Two key differences:
+
+    * Returns ``bool`` instead of raising. The fast-path needs a yes/no
+      decision, not an exception that aborts startup.
+    * Also checks for missing tables (``_assert_schema_matches_models``
+      delegates that to ``create_all()`` which runs after it). Here we need
+      to know whether the live schema covers the model shape — a missing
+      table means ``upgrade head`` still has work to do; we must NOT stamp
+      forward. ``create_all()`` runs *after* ``_bootstrap_alembic`` so we
+      can't rely on it filling the gap before the stamp decision.
+
+    What this check deliberately does NOT flag:
+
+    * Extra columns or tables in the DB that aren't on the model — those
+      are downgrade signals or dead-code remnants, not "missing migration"
+      signals. The fast-path only cares whether the model shape is a
+      subset of the live schema.
+    * Index / view / FK presence — column shape is the load-bearing
+      surface that the bd-5w6jz failure cluster manifests on. Indexes are
+      either re-creatable cheaply or covered by per-migration idempotency
+      guards; views are recreated by 0010 every time anyway.
+    * Type / nullability mismatches — same SQLite affinity rationale as
+      ``_assert_schema_matches_models``.
+
+    Returns:
+        ``True`` if every model table and column is present in ``engine``;
+        ``False`` if any are missing (in which case ``upgrade head`` should
+        run normally to apply pending migrations).
+    """
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    live_tables = set(inspector.get_table_names())
+
+    for table_name, table in Base.metadata.tables.items():
+        if table_name not in live_tables:
+            return False
+        live_columns = {c["name"] for c in inspector.get_columns(table_name)}
+        for column in table.columns:
+            if column.name not in live_columns:
+                return False
+    return True
 
 
 def get_current_schema_revision(engine=None) -> str:

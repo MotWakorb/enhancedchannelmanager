@@ -1171,3 +1171,582 @@ class TestMigration0010:
                 assert post_cols[col]["nullable"] == pre_cols[col]["nullable"]
         finally:
             engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Migrations 0006-0010 — bd-5w6jz idempotency regression tests
+# ---------------------------------------------------------------------------
+#
+# Same disease vector as bd-ax3uj (which fixed 0003/0004): on a long-running
+# install ``init_db``'s ``Base.metadata.create_all()`` materialises ORM-
+# declared tables/columns/indexes from ``models.py`` ahead of the migrations.
+# Post-bd-zaaey the bootstrap loud-fails on ``OperationalError: ... already
+# exists`` so any unguarded ``op.create_*`` / ``op.add_column`` aborts
+# startup. Each class below reproduces the drift state for one migration and
+# asserts ``alembic upgrade head`` is idempotent.
+
+
+@pytest.mark.integration
+class TestMigration0006:
+    """Regression lock for bd-5w6jz fix in migration 0006.
+
+    User reported ``sqlite3.OperationalError: table session_telemetry
+    already exists`` during ``Running upgrade 0005 -> 0006``. Container
+    startup aborted (post-bd-zaaey, bootstrap loud-fails). Root cause is the
+    bd-ax3uj class on a different migration: ``SessionTelemetry`` and its 5
+    indexes are declared on the ORM model in ``models.py``, so a long-
+    running install where ``create_all()`` ran before Alembic caught up has
+    the table physically present while ``alembic_version`` lagged at 0005.
+    """
+
+    TABLE = "session_telemetry"
+    INDEXES = (
+        "idx_session_telemetry_observed_at",
+        "idx_session_telemetry_user_observed",
+        "idx_session_telemetry_provider_observed",
+        "idx_session_telemetry_session_id",
+        "idx_session_telemetry_provider_channel_observed_bytes",
+    )
+
+    def test_fresh_sqlite_upgrade_through_0006(self, tmp_path):
+        """Fresh empty DB: ``alembic upgrade 0006`` creates the table + 5 indexes."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0006_fresh.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0006")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert inspect(engine).has_table(self.TABLE), (
+                f"{self.TABLE} missing after upgrade 0006 — "
+                "migration 0006 did not run correctly."
+            )
+            idx_names = _index_names(engine, self.TABLE)
+            for idx in self.INDEXES:
+                assert idx in idx_names, (
+                    f"{idx} missing after upgrade 0006 — "
+                    "migration 0006 did not run correctly."
+                )
+        finally:
+            engine.dispose()
+
+    def test_drifted_sqlite_upgrade_is_idempotent(self, tmp_path):
+        """Drifted DB: upgrade head is idempotent when 0006 artifacts exist.
+
+        Reproduces the user's scenario:
+          - ``alembic upgrade 0005`` brings the schema through 0005.
+          - ``Base.metadata.create_all(tables=[SessionTelemetry.__table__])``
+            materialises ``session_telemetry`` + all 5 indexes from the ORM.
+          - ``alembic_version`` stays at 0005.
+
+        ``alembic upgrade head`` must NOT raise
+        ``OperationalError: table session_telemetry already exists`` and
+        must reach head with the table + indexes still present.
+        """
+        from alembic import command
+        from models import SessionTelemetry  # noqa: F401  (registers table)
+
+        db_url = f"sqlite:///{tmp_path / 'mig0006_drifted.db'}"
+        cfg = _make_alembic_config(db_url)
+
+        command.upgrade(cfg, "0005")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert not inspect(engine).has_table(self.TABLE), (
+                f"{self.TABLE} already present at 0005 — test setup is wrong."
+            )
+
+            # Materialise the table + its indexes from the ORM. ``checkfirst``
+            # default keeps other tables created by 0001-0005 untouched.
+            SessionTelemetry.__table__.create(bind=engine, checkfirst=True)
+
+            assert inspect(engine).has_table(self.TABLE)
+            idx_names = _index_names(engine, self.TABLE)
+            for idx in self.INDEXES:
+                assert idx in idx_names
+
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == "0005", (
+                f"Expected alembic_version=0005 after drift setup, got {row}"
+            )
+        finally:
+            engine.dispose()
+
+        # Pre-fix this raised:
+        #   sqlalchemy.exc.OperationalError: (sqlite3.OperationalError)
+        #   table session_telemetry already exists
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == database.get_alembic_head_revision()
+            assert inspect(engine).has_table(self.TABLE)
+            idx_names = _index_names(engine, self.TABLE)
+            for idx in self.INDEXES:
+                assert idx in idx_names
+        finally:
+            engine.dispose()
+
+
+@pytest.mark.integration
+class TestMigration0007Idempotent:
+    """Regression lock for bd-5w6jz fix in migration 0007.
+
+    Migration 0007 alters ``session_telemetry.channel_id`` from INTEGER NULL
+    to VARCHAR(64) NOT NULL. On a drift install where ``create_all()``
+    materialised the post-0007 ORM shape (``String(64) NOT NULL``) ahead of
+    Alembic, the alter is unnecessary — and worse, in some SQLite batch-mode
+    rebuild paths an alter that targets the column's existing shape can
+    still trigger an expensive table-copy (or, with bad luck and a partially
+    drifted FK / check-constraint, fail outright).
+
+    The fix inspects ``channel_id`` and skips the alter if the column is
+    already at the target shape.
+    """
+
+    def test_drifted_sqlite_upgrade_is_idempotent(self, tmp_path):
+        """Drifted DB: 0007 is a no-op when channel_id is already String(64) NOT NULL.
+
+        Setup:
+          - upgrade through 0006 (creates session_telemetry with
+            channel_id INTEGER NULL).
+          - drop the table and recreate it with the post-0007 shape
+            (channel_id VARCHAR(64) NOT NULL) — same effect as create_all()
+            running against the post-0007 ORM model on a drift install.
+          - leave alembic_version at 0006.
+
+        ``alembic upgrade head`` must reach head without raising. Verify
+        ``channel_id`` is still the target type after upgrade.
+        """
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0007_drifted.db'}"
+        cfg = _make_alembic_config(db_url)
+
+        command.upgrade(cfg, "0006")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            with engine.begin() as conn:
+                # Drop and recreate session_telemetry with the post-0007
+                # ORM shape directly. SQLite has no "DROP COLUMN" before
+                # recent versions; we drop the whole table since 0006 just
+                # created it and there's no row data to preserve.
+                conn.execute(text("DROP TABLE session_telemetry"))
+                conn.execute(text(
+                    "CREATE TABLE session_telemetry ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "session_id TEXT NOT NULL, "
+                    "observed_at INTEGER NOT NULL, "
+                    "user_id INTEGER, "
+                    "provider_id INTEGER, "
+                    "channel_id VARCHAR(64) NOT NULL, "
+                    "bytes_delta BIGINT NOT NULL, "
+                    "buffer_event_count INTEGER NOT NULL DEFAULT 0, "
+                    "poll_interval_ms INTEGER NOT NULL, "
+                    "CONSTRAINT ck_session_telemetry_bytes_delta_non_negative "
+                    "CHECK (bytes_delta >= 0), "
+                    "FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL"
+                    ")"
+                ))
+
+            # Sanity: channel_id is already VARCHAR(64) NOT NULL.
+            cols = {c["name"]: c for c in inspect(engine).get_columns("session_telemetry")}
+            assert "VARCHAR" in str(cols["channel_id"]["type"]).upper() or \
+                   "STRING" in str(cols["channel_id"]["type"]).upper(), (
+                f"channel_id type unexpected: {cols['channel_id']['type']!r}"
+            )
+            assert cols["channel_id"]["nullable"] is False
+        finally:
+            engine.dispose()
+
+        # Pre-fix this would either raise (CHECK constraint name conflict on
+        # SQLite versions that derive batch-mode names from existing DDL) or
+        # silently incur a full table-copy. With the bd-5w6jz guard in place
+        # 0007 is a no-op.
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = {c["name"]: c for c in inspect(engine).get_columns("session_telemetry")}
+            # Column still at the target shape after upgrade.
+            assert cols["channel_id"]["nullable"] is False
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == database.get_alembic_head_revision()
+        finally:
+            engine.dispose()
+
+
+@pytest.mark.integration
+class TestMigration0009:
+    """Regression lock for bd-5w6jz fix in migration 0009.
+
+    Migration 0009 creates 3 rollup tables (``session_telemetry_user_daily``,
+    ``session_telemetry_provider_daily``, ``telemetry_rollup_state``) plus 3
+    indexes. All three tables are declared on ORM models in ``models.py``, so
+    a long-running install with ``create_all()`` drift has them physically
+    present while ``alembic_version`` lagged at 0008.
+    """
+
+    TABLES = (
+        "session_telemetry_user_daily",
+        "session_telemetry_provider_daily",
+        "telemetry_rollup_state",
+    )
+    INDEXES = (
+        ("session_telemetry_user_daily", "idx_session_telemetry_user_daily_day"),
+        ("session_telemetry_provider_daily", "idx_session_telemetry_provider_daily_provider_day"),
+        ("session_telemetry_provider_daily", "idx_session_telemetry_provider_daily_day"),
+    )
+
+    def test_drifted_sqlite_upgrade_is_idempotent(self, tmp_path):
+        """Drifted DB: upgrade head is idempotent when all 3 rollup tables exist."""
+        from alembic import command
+        from models import (  # noqa: F401  (registers tables)
+            SessionTelemetryUserDaily,
+            SessionTelemetryProviderDaily,
+            TelemetryRollupState,
+        )
+
+        db_url = f"sqlite:///{tmp_path / 'mig0009_drifted.db'}"
+        cfg = _make_alembic_config(db_url)
+
+        command.upgrade(cfg, "0008")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            for table in self.TABLES:
+                assert not inspect(engine).has_table(table), (
+                    f"{table} already present at 0008 — test setup is wrong."
+                )
+
+            # Materialise all three tables (and their indexes) from the ORM.
+            SessionTelemetryUserDaily.__table__.create(bind=engine, checkfirst=True)
+            SessionTelemetryProviderDaily.__table__.create(bind=engine, checkfirst=True)
+            TelemetryRollupState.__table__.create(bind=engine, checkfirst=True)
+
+            for table in self.TABLES:
+                assert inspect(engine).has_table(table)
+            for table, idx in self.INDEXES:
+                assert idx in _index_names(engine, table)
+
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == "0008"
+        finally:
+            engine.dispose()
+
+        # Pre-fix this raised:
+        #   sqlalchemy.exc.OperationalError: (sqlite3.OperationalError)
+        #   table session_telemetry_user_daily already exists
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == database.get_alembic_head_revision()
+            for table in self.TABLES:
+                assert inspect(engine).has_table(table)
+            for table, idx in self.INDEXES:
+                assert idx in _index_names(engine, table)
+        finally:
+            engine.dispose()
+
+
+@pytest.mark.integration
+class TestMigration0010Idempotent:
+    """Regression lock for bd-5w6jz fix in migration 0010.
+
+    Migration 0010 adds ``stream_id`` and ``stream_name`` to
+    ``session_telemetry``. Both columns are declared on the
+    ``SessionTelemetry`` ORM model in ``models.py``, so a long-running
+    install where ``create_all()`` materialised the post-0010 column shape
+    ahead of Alembic has both columns physically present while
+    ``alembic_version`` lagged at 0009.
+    """
+
+    NEW_COLUMNS = ("stream_id", "stream_name")
+
+    def test_drifted_sqlite_upgrade_is_idempotent(self, tmp_path):
+        """Drifted DB: 0010 is a no-op when stream_id + stream_name already exist."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0010_drifted.db'}"
+        cfg = _make_alembic_config(db_url)
+
+        command.upgrade(cfg, "0009")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            assert "stream_id" not in cols
+            assert "stream_name" not in cols
+
+            # Inject both columns via raw SQL — matches what create_all()
+            # would emit from the ``SessionTelemetry`` ORM model.
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE session_telemetry ADD COLUMN stream_id INTEGER"
+                ))
+                conn.execute(text(
+                    "ALTER TABLE session_telemetry ADD COLUMN stream_name TEXT"
+                ))
+
+            cols = _column_names(engine, "session_telemetry")
+            assert "stream_id" in cols
+            assert "stream_name" in cols
+
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == "0009"
+        finally:
+            engine.dispose()
+
+        # Pre-fix this raised:
+        #   sqlalchemy.exc.OperationalError: (sqlite3.OperationalError)
+        #   duplicate column name: stream_id
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            assert "stream_id" in cols
+            assert "stream_name" in cols
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == database.get_alembic_head_revision()
+        finally:
+            engine.dispose()
+
+
+@pytest.mark.integration
+class TestMigration0008IfNotExists:
+    """Regression lock for bd-5w6jz fix in migration 0008.
+
+    Migration 0008 creates the ``channel_watch_stats_v`` SQL view.
+    ``CREATE VIEW`` (without ``IF NOT EXISTS``) raises on a partial-rerun
+    where the view was already committed by a prior aborted upgrade. The
+    fix changes the DDL to ``CREATE VIEW IF NOT EXISTS``.
+    """
+
+    VIEW_NAME = "channel_watch_stats_v"
+
+    def _view_exists(self, engine) -> bool:
+        with engine.connect() as conn:
+            return conn.execute(text(
+                "SELECT 1 FROM sqlite_master "
+                f"WHERE type='view' AND name='{self.VIEW_NAME}'"
+            )).scalar() is not None
+
+    def test_drifted_sqlite_upgrade_is_idempotent(self, tmp_path):
+        """Drifted DB: 0008 is a no-op when the view already exists.
+
+        Setup:
+          - upgrade through 0007.
+          - manually CREATE the view (matching what a partial-rerun
+            committed before aborting on a later step).
+          - leave alembic_version at 0007.
+
+        ``alembic upgrade head`` must reach head without raising
+        ``OperationalError: view channel_watch_stats_v already exists``.
+        """
+        import importlib.util
+
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0008_drifted.db'}"
+        cfg = _make_alembic_config(db_url)
+
+        command.upgrade(cfg, "0007")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert not self._view_exists(engine)
+
+            # Read the view DDL from the migration module itself — keeps
+            # the test in lock-step with the source of truth (no risk of
+            # the test SQL drifting from the migration's SQL).
+            mig_path = (
+                Path(database.__file__).resolve().parent
+                / "alembic" / "versions"
+                / "20260513_1130_0008_channel_watch_stats_v.py"
+            )
+            spec = importlib.util.spec_from_file_location("mig_0008", mig_path)
+            mig_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mig_module)
+            view_sql = mig_module.CHANNEL_WATCH_STATS_V_SQL
+
+            with engine.begin() as conn:
+                conn.execute(text(view_sql))
+            assert self._view_exists(engine)
+
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == "0007"
+        finally:
+            engine.dispose()
+
+        # Pre-fix (without ``IF NOT EXISTS``) this raised:
+        #   sqlalchemy.exc.OperationalError: (sqlite3.OperationalError)
+        #   view channel_watch_stats_v already exists
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert self._view_exists(engine)
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == database.get_alembic_head_revision()
+        finally:
+            engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# bd-5w6jz smart-bootstrap fast-path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestSmartBootstrapFastPath:
+    """Regression lock for the bd-5w6jz smart-bootstrap fast-path.
+
+    The strategic half of the bd-5w6jz fix: when ``alembic_version`` lags
+    head but ``Base.metadata.create_all()`` has already materialised every
+    table + column the model declares, ``_bootstrap_alembic`` stamps forward
+    instead of running ``upgrade head``. This ends the whack-a-mole
+    architecturally — the per-migration idempotency guards on 0003/0004 +
+    0006-0010 cover the next-rev case, and the fast-path covers the steady-
+    state case where every future migration has columns/tables/indexes
+    declared on the ORM that ``create_all()`` will keep racing into the DB
+    ahead of the migration timeline.
+
+    Two key invariants:
+
+    1. The fast-path MUST trigger when alembic lags head AND schema matches.
+       Without it, the lone unguarded migration in any future release crashes
+       startup again.
+
+    2. The fast-path MUST NOT trigger on fresh installs (``current_rev`` is
+       unset). A fresh DB needs the actual ``upgrade head`` to create
+       everything; stamping at head without running migrations would leave a
+       0-table install marked as up-to-date.
+    """
+
+    def test_fast_path_stamps_forward_when_schema_matches(self, tmp_path):
+        """alembic at 0005 + schema fully materialised → stamp head, no upgrade run."""
+        from unittest.mock import patch
+
+        from alembic import command
+
+        db_file = tmp_path / "fast_path.db"
+        db_url = f"sqlite:///{db_file}"
+        cfg = _make_alembic_config(db_url)
+
+        # 1. Fresh upgrade partway through — alembic_version=0005.
+        command.upgrade(cfg, "0005")
+
+        # 2. Bring the DB to full head shape via Base.metadata.create_all() —
+        # mirrors what init_db's create_all() does on a long-running install
+        # where the ORM model has run ahead of the migration timeline.
+        engine = create_engine(db_url, future=True)
+        try:
+            Base = database.Base
+            Base.metadata.create_all(bind=engine)
+
+            # Sanity: alembic_version is still at 0005 (create_all does not
+            # touch the version row), but every model table is now present.
+            with engine.connect() as conn:
+                rev = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()[0]
+            assert rev == "0005"
+
+            head = database.get_alembic_head_revision()
+            assert head != "0005", "test premise: head must be > 0005"
+
+            # 3. Call _bootstrap_alembic. Patch alembic.command.upgrade so we
+            # can assert the fast-path skipped it — if upgrade ran, the
+            # patch's call_count would be >= 1.
+            with patch("alembic.command.upgrade") as mock_upgrade:
+                database._bootstrap_alembic(engine)
+
+            # 4. Fast-path stamped to head; no upgrade was run.
+            assert mock_upgrade.call_count == 0, (
+                f"upgrade head was called {mock_upgrade.call_count}× — "
+                "fast-path should have skipped it (schema already matches)."
+            )
+
+            with engine.connect() as conn:
+                rev = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()[0]
+            assert rev == head, (
+                f"alembic_version not stamped to head after fast-path: {rev}"
+            )
+        finally:
+            engine.dispose()
+
+    def test_fast_path_does_not_trigger_on_fresh_install(self, tmp_path):
+        """Empty DB (current_rev=None) → fast-path skipped, upgrade head runs.
+
+        Guards the "stamping a fresh install at head leaves it 0-table"
+        regression. The fast-path's ``current_rev and current_rev != head``
+        guard must hold.
+        """
+        from unittest.mock import patch
+
+        db_file = tmp_path / "fresh_install.db"
+        db_url = f"sqlite:///{db_file}"
+        engine = create_engine(db_url, future=True)
+        try:
+            # Spy on command.upgrade to verify it WAS called (the fresh path
+            # needs it; the fast-path must not steal that call).
+            with patch(
+                "alembic.command.upgrade",
+                wraps=__import__("alembic.command", fromlist=["upgrade"]).upgrade,
+            ) as mock_upgrade:
+                database._bootstrap_alembic(engine)
+
+            assert mock_upgrade.call_count >= 1, (
+                "upgrade head was not called on a fresh install — the "
+                "fast-path incorrectly triggered when current_rev was None."
+            )
+
+            head = database.get_alembic_head_revision()
+            with engine.connect() as conn:
+                rev = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()[0]
+            assert rev == head
+            # Spot-check a head-revision artifact lands on disk.
+            assert inspect(engine).has_table("session_telemetry"), (
+                "session_telemetry missing on fresh install — fast-path "
+                "stamped without running upgrade head."
+            )
+        finally:
+            engine.dispose()
