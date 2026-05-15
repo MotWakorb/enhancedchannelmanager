@@ -42,12 +42,25 @@ anyway, so this is best-effort ordering).
 Pre-merge gate: ``backend/tests/integration/test_session_telemetry_rollup_migration.py``
 covers fresh up, fresh down, and round-trip schema identity.
 
-Bead: ``enhancedchannelmanager-7i2vv``.
+bd-5w6jz idempotency: long-running installs where ``init_db``'s
+``Base.metadata.create_all()`` had already created the three rollup tables
++ their indexes from the ORM models in ``models.py``
+(``SessionTelemetryUserDaily``, ``SessionTelemetryProviderDaily``,
+``TelemetryRollupState``) — while ``alembic_version`` was still at
+``0008`` — would explode here with
+``sqlite3.OperationalError: table session_telemetry_user_daily already exists``,
+aborting startup post-bd-zaaey loud-fail. Mirrors the bd-ax3uj fix on
+0003/0004: inspect first, then skip the create on artifacts already
+present.
+
+Bead: ``enhancedchannelmanager-7i2vv`` (original) +
+``enhancedchannelmanager-5w6jz`` (idempotency).
 """
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 
 
 # revision identifiers, used by Alembic.
@@ -56,6 +69,16 @@ down_revision: Union[str, Sequence[str], None] = "0008"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
+
+
+def _table_exists(connection, table_name: str) -> bool:
+    return inspect(connection).has_table(table_name)
+
+
+def _index_names(connection, table_name: str) -> set[str]:
+    if not _table_exists(connection, table_name):
+        return set()
+    return {idx["name"] for idx in inspect(connection).get_indexes(table_name)}
 
 
 def upgrade() -> None:
@@ -80,68 +103,84 @@ def upgrade() -> None:
 
     * ``telemetry_rollup_state.last_completed_day`` is nullable so the
       first-run case (no day has yet been rolled up) is representable.
+
+    Idempotent (bd-5w6jz): for each ``op.create_table`` / ``op.create_index``,
+    inspect first and skip if the artifact already exists (e.g. because
+    ``create_all()`` materialised it from the ORM model on a long-running
+    install before Alembic caught up).
     """
-    op.create_table(
-        "session_telemetry_user_daily",
-        sa.Column("user_id", sa.Integer(), nullable=False),
-        sa.Column("channel_id", sa.String(length=64), nullable=False),
-        sa.Column("day", sa.Date(), nullable=False),
-        sa.Column("watch_seconds", sa.Integer(), nullable=False),
-        sa.Column("session_count", sa.Integer(), nullable=False),
-        sa.PrimaryKeyConstraint(
-            "user_id",
-            "channel_id",
-            "day",
-            name="pk_session_telemetry_user_daily",
-        ),
-    )
-    op.create_index(
-        "idx_session_telemetry_user_daily_day",
-        "session_telemetry_user_daily",
-        ["day"],
-        unique=False,
-    )
+    conn = op.get_bind()
 
-    op.create_table(
-        "session_telemetry_provider_daily",
-        sa.Column("provider_id", sa.Text(), nullable=False),
-        sa.Column("channel_id", sa.String(length=64), nullable=False),
-        sa.Column("day", sa.Date(), nullable=False),
-        sa.Column("watch_seconds", sa.Integer(), nullable=False),
-        sa.Column("bytes_delta_sum", sa.BigInteger(), nullable=False),
-        sa.Column("buffer_event_count", sa.Integer(), nullable=False),
-        sa.PrimaryKeyConstraint(
-            "provider_id",
-            "channel_id",
-            "day",
-            name="pk_session_telemetry_provider_daily",
-        ),
-    )
-    op.create_index(
-        "idx_session_telemetry_provider_daily_provider_day",
-        "session_telemetry_provider_daily",
-        ["provider_id", "day"],
-        unique=False,
-    )
-    op.create_index(
-        "idx_session_telemetry_provider_daily_day",
-        "session_telemetry_provider_daily",
-        ["day"],
-        unique=False,
-    )
+    if not _table_exists(conn, "session_telemetry_user_daily"):
+        op.create_table(
+            "session_telemetry_user_daily",
+            sa.Column("user_id", sa.Integer(), nullable=False),
+            sa.Column("channel_id", sa.String(length=64), nullable=False),
+            sa.Column("day", sa.Date(), nullable=False),
+            sa.Column("watch_seconds", sa.Integer(), nullable=False),
+            sa.Column("session_count", sa.Integer(), nullable=False),
+            sa.PrimaryKeyConstraint(
+                "user_id",
+                "channel_id",
+                "day",
+                name="pk_session_telemetry_user_daily",
+            ),
+        )
+    if "idx_session_telemetry_user_daily_day" not in _index_names(
+        conn, "session_telemetry_user_daily"
+    ):
+        op.create_index(
+            "idx_session_telemetry_user_daily_day",
+            "session_telemetry_user_daily",
+            ["day"],
+            unique=False,
+        )
 
-    op.create_table(
-        "telemetry_rollup_state",
-        sa.Column("rollup_name", sa.Text(), nullable=False),
-        sa.Column("last_completed_day", sa.Date(), nullable=True),
-        sa.Column("last_run_at_ms", sa.BigInteger(), nullable=True),
-        sa.Column("last_run_status", sa.Text(), nullable=True),
-        sa.Column("last_run_error", sa.Text(), nullable=True),
-        sa.PrimaryKeyConstraint(
-            "rollup_name",
-            name="pk_telemetry_rollup_state",
-        ),
-    )
+    if not _table_exists(conn, "session_telemetry_provider_daily"):
+        op.create_table(
+            "session_telemetry_provider_daily",
+            sa.Column("provider_id", sa.Text(), nullable=False),
+            sa.Column("channel_id", sa.String(length=64), nullable=False),
+            sa.Column("day", sa.Date(), nullable=False),
+            sa.Column("watch_seconds", sa.Integer(), nullable=False),
+            sa.Column("bytes_delta_sum", sa.BigInteger(), nullable=False),
+            sa.Column("buffer_event_count", sa.Integer(), nullable=False),
+            sa.PrimaryKeyConstraint(
+                "provider_id",
+                "channel_id",
+                "day",
+                name="pk_session_telemetry_provider_daily",
+            ),
+        )
+    provider_daily_indexes = _index_names(conn, "session_telemetry_provider_daily")
+    if "idx_session_telemetry_provider_daily_provider_day" not in provider_daily_indexes:
+        op.create_index(
+            "idx_session_telemetry_provider_daily_provider_day",
+            "session_telemetry_provider_daily",
+            ["provider_id", "day"],
+            unique=False,
+        )
+    if "idx_session_telemetry_provider_daily_day" not in provider_daily_indexes:
+        op.create_index(
+            "idx_session_telemetry_provider_daily_day",
+            "session_telemetry_provider_daily",
+            ["day"],
+            unique=False,
+        )
+
+    if not _table_exists(conn, "telemetry_rollup_state"):
+        op.create_table(
+            "telemetry_rollup_state",
+            sa.Column("rollup_name", sa.Text(), nullable=False),
+            sa.Column("last_completed_day", sa.Date(), nullable=True),
+            sa.Column("last_run_at_ms", sa.BigInteger(), nullable=True),
+            sa.Column("last_run_status", sa.Text(), nullable=True),
+            sa.Column("last_run_error", sa.Text(), nullable=True),
+            sa.PrimaryKeyConstraint(
+                "rollup_name",
+                name="pk_telemetry_rollup_state",
+            ),
+        )
 
 
 def downgrade() -> None:
@@ -150,21 +189,35 @@ def downgrade() -> None:
     Order: rollup tables first (their indexes are dropped implicitly by
     SQLite when the table is dropped), then the marker table last so a
     partial failure preserves the most data.
+
+    Defensive (bd-5w6jz): skip drops on artifacts that are not present so
+    a half-applied prior state still cleans up rather than raising.
     """
-    op.drop_index(
-        "idx_session_telemetry_provider_daily_day",
-        table_name="session_telemetry_provider_daily",
-    )
-    op.drop_index(
-        "idx_session_telemetry_provider_daily_provider_day",
-        table_name="session_telemetry_provider_daily",
-    )
-    op.drop_table("session_telemetry_provider_daily")
+    conn = op.get_bind()
 
-    op.drop_index(
-        "idx_session_telemetry_user_daily_day",
-        table_name="session_telemetry_user_daily",
-    )
-    op.drop_table("session_telemetry_user_daily")
+    provider_daily_indexes = _index_names(conn, "session_telemetry_provider_daily")
+    if "idx_session_telemetry_provider_daily_day" in provider_daily_indexes:
+        op.drop_index(
+            "idx_session_telemetry_provider_daily_day",
+            table_name="session_telemetry_provider_daily",
+        )
+    if "idx_session_telemetry_provider_daily_provider_day" in provider_daily_indexes:
+        op.drop_index(
+            "idx_session_telemetry_provider_daily_provider_day",
+            table_name="session_telemetry_provider_daily",
+        )
+    if _table_exists(conn, "session_telemetry_provider_daily"):
+        op.drop_table("session_telemetry_provider_daily")
 
-    op.drop_table("telemetry_rollup_state")
+    if "idx_session_telemetry_user_daily_day" in _index_names(
+        conn, "session_telemetry_user_daily"
+    ):
+        op.drop_index(
+            "idx_session_telemetry_user_daily_day",
+            table_name="session_telemetry_user_daily",
+        )
+    if _table_exists(conn, "session_telemetry_user_daily"):
+        op.drop_table("session_telemetry_user_daily")
+
+    if _table_exists(conn, "telemetry_rollup_state"):
+        op.drop_table("telemetry_rollup_state")
