@@ -1253,16 +1253,22 @@ class SessionTelemetry(Base):
     scope here — they live in bead ``enhancedchannelmanager-7i2vv``).
 
     Privacy classification + redaction rules:
-    ``docs/security/threat_model_stats_v2.md`` §2.1, §7. ``user_id`` is the only
-    real FK (``ON DELETE SET NULL`` — deleting a ``users`` row scrubs the
-    behavioral trail; the rollup-table extension of that scrub is
-    ``enhancedchannelmanager-7i2vv``'s responsibility). ``channel_id`` is a
-    plain indexed ``String(64)`` Dispatcharr UUID — NOT a foreign key
-    (``channels`` is not an ECM table) and matches every other channel-keyed
-    table in this schema (``channel_watch_stats`` / ``channel_bandwidth`` /
-    ``channel_popularity_scores`` / ``unique_client_connections``).
-    ``provider_id`` is a plain nullable indexed integer (provider tagging,
-    skqln.14, is still pending).
+    ``docs/security/threat_model_stats_v2.md`` §2.1, §7. ``user_id`` is an
+    **opaque Dispatcharr-side identifier — NOT a FK to ECM ``users``**.
+    The FK was dropped in migration 0011 (bd-gsn3r): ECM's local ``users``
+    table holds ECM auth identities, while Dispatcharr's ``users`` table
+    holds stream-viewer accounts; the two namespaces happen to use
+    overlapping integer IDs but mean different things. The FK was a
+    structural lie — a join from this column to ``users`` returned the
+    wrong human's username when integer IDs collided. The denormalized
+    ``dispatcharr_username`` column carries the Dispatcharr-side username
+    captured at write time (no read-side lookups against any ECM table).
+    ``channel_id`` is a plain indexed ``String(64)`` Dispatcharr UUID —
+    NOT a foreign key (``channels`` is not an ECM table) and matches
+    every other channel-keyed table in this schema (``channel_watch_stats``
+    / ``channel_bandwidth`` / ``channel_popularity_scores`` /
+    ``unique_client_connections``). ``provider_id`` is a plain nullable
+    indexed integer (provider tagging, skqln.14, is still pending).
 
     NOTE: migration 0006 originally declared ``channel_id INTEGER NULL`` —
     that was inconsistent with the rest of the schema and the writer (which
@@ -1289,8 +1295,22 @@ class SessionTelemetry(Base):
     # time-range queries key off this.
     observed_at = Column(Integer, nullable=False)
 
-    # The only real FK. ON DELETE SET NULL: account deletion scrubs the trail.
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # Opaque Dispatcharr-side viewer identifier — NOT a FK to ECM ``users``.
+    # The FK was dropped in migration 0011 (bd-gsn3r); see the class
+    # docstring for the namespace-collision rationale. ``_coerce_session_user_id``
+    # in ``bandwidth_tracker.py`` still scrubs the anonymous ``0``
+    # sentinel to NULL so analytics queries see honest "anonymous" rather
+    # than the noise value.
+    user_id = Column(Integer, nullable=True)
+    # Denormalized Dispatcharr-side username for the row's ``user_id``.
+    # Captured at write time from the per-poll ``dispatcharr_user_map``
+    # the writer already maintains for the bd-uqbob exclude filter — no
+    # read-side lookups against ECM's ``users`` table. NULL when the
+    # writer could not resolve the username (anonymous viewer with
+    # ``user_id=NULL``, Dispatcharr ``get_users()`` failure that poll,
+    # or a pre-0011 row that landed before the column existed). Added
+    # in migration 0011 (bd-gsn3r).
+    dispatcharr_username = Column(Text, nullable=True)
     # Upstream Dispatcharr M3U provider. Plain indexed column, NOT a FK
     # (providers is not an ECM table). Nullable — provider tagging (GH-59)
     # lands separately (skqln.14).

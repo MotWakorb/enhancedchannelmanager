@@ -140,13 +140,15 @@ class TestSessionTelemetryMigration:
             # Columns / FK shape.
             cols = {c["name"]: c for c in inspect(engine).get_columns(TABLE)}
             # ``stream_id`` and ``stream_name`` land in migration 0010
-            # (bd-kh23e) — both NULLABLE, no FK. Carry them in the
-            # head-shape assertion so a future delete/rename of either
-            # surfaces here.
+            # (bd-kh23e) — both NULLABLE, no FK. ``dispatcharr_username``
+            # lands in migration 0011 (bd-gsn3r) — TEXT NULL, no FK; the
+            # denormalized read-side replacement for the dropped FK join
+            # against ECM ``users``. Carry all three in the head-shape
+            # assertion so a future delete/rename surfaces here.
             assert set(cols) == {
                 "id", "session_id", "observed_at", "user_id", "provider_id",
                 "channel_id", "bytes_delta", "buffer_event_count", "poll_interval_ms",
-                "stream_id", "stream_name",
+                "stream_id", "stream_name", "dispatcharr_username",
             }
             assert cols["session_id"]["nullable"] is False
             assert cols["observed_at"]["nullable"] is False
@@ -168,14 +170,20 @@ class TestSessionTelemetryMigration:
             # FK (``streams`` is not an ECM table).
             assert cols["stream_id"]["nullable"] is True
             assert cols["stream_name"]["nullable"] is True
+            # bd-gsn3r: dispatcharr_username is NULLABLE (anonymous
+            # viewers + pre-0011 rows surface as NULL on read).
+            assert cols["dispatcharr_username"]["nullable"] is True
 
+            # bd-gsn3r: migration 0011 dropped the FK to ECM ``users.id``.
+            # ECM and Dispatcharr ``users`` are different namespaces with
+            # coincidentally-overlapping integer IDs; the FK was a
+            # structural lie. ``user_id`` is now an opaque Dispatcharr-
+            # side identifier with no constraints.
             fks = inspect(engine).get_foreign_keys(TABLE)
-            assert len(fks) == 1, f"expected exactly one FK (user_id), got {fks}"
-            fk = fks[0]
-            assert fk["constrained_columns"] == ["user_id"]
-            assert fk["referred_table"] == "users"
-            assert fk["referred_columns"] == ["id"]
-            assert fk.get("options", {}).get("ondelete", "").upper() == "SET NULL"
+            assert fks == [], (
+                "session_telemetry has unexpected FK constraints at head — "
+                f"migration 0011 should have dropped the user_id FK; got {fks}"
+            )
         finally:
             engine.dispose()
 
@@ -271,15 +279,30 @@ class TestSessionTelemetryMigration:
 
 @pytest.mark.integration
 class TestSessionTelemetryAccountDeletionScrub:
-    """Deleting a ``users`` row NULLs ``session_telemetry.user_id`` (ON DELETE SET NULL).
+    """Deleting an ECM ``users`` row no longer affects ``session_telemetry``.
 
-    Privacy 11a §7.8 / ADR-007: account deletion scrubs the behavioral trail.
-    The rollup-table extension of this scrub is bead
-    ``enhancedchannelmanager-7i2vv``'s responsibility (those tables don't exist
-    yet). All identities here are synthetic.
+    bd-gsn3r REVERSAL of the prior privacy semantic: this test originally
+    asserted that deleting an ECM ``User`` SET-NULL'd matching
+    ``session_telemetry.user_id`` rows via the FK. Migration 0011 dropped
+    that FK because ECM ``users`` and Dispatcharr ``users`` are separate
+    namespaces with coincidentally-overlapping integer IDs — the FK was a
+    structural lie that joined ECM identity to Dispatcharr behavioral
+    telemetry, and the SET NULL behavior would scrub the wrong human's
+    rows on any ID collision.
+
+    The new contract: deleting an ECM ``User`` is a no-op against
+    ``session_telemetry`` (those rows are about Dispatcharr-side viewers,
+    not ECM auth identities). Privacy of the actual Dispatcharr-side
+    behavioral trail is the operator's concern via raw-row retention
+    pruning (ADR-007 D1, 30 days) — they cannot scrub a Dispatcharr
+    user from ECM because ECM does not own that identity.
+
+    Privacy 11a §7.8 update follow-up: the threat model and ADR-007
+    docstrings will be updated in a separate doc bead so this test
+    documents the new contract for the runtime.
     """
 
-    def test_deleting_user_nulls_telemetry_user_id(self, tmp_path):
+    def test_deleting_user_does_not_touch_telemetry_user_id(self, tmp_path):
         from alembic import command
 
         db_url = f"sqlite:///{tmp_path / 'st_scrub.db'}"
@@ -349,9 +372,18 @@ class TestSessionTelemetryAccountDeletionScrub:
                 rows = session.execute(text(
                     "SELECT user_id FROM session_telemetry ORDER BY session_id"
                 )).fetchall()
-                # Every row's user_id is now NULL (5 scrubbed + 1 already-null).
-                assert all(r[0] is None for r in rows), (
-                    f"ON DELETE SET NULL did not scrub user_id: {rows}"
+                # bd-gsn3r: post-FK-drop, the 5 attributed rows still
+                # carry user_id == uid and the 1 anonymous row still
+                # carries NULL. Deleting the ECM user is a no-op against
+                # the telemetry trail because that trail is about a
+                # different namespace (Dispatcharr-side viewer accounts).
+                anon_rows = [r for r in rows if r[0] is None]
+                attributed_rows = [r for r in rows if r[0] == uid]
+                assert len(attributed_rows) == 5, (
+                    f"expected 5 attributed rows untouched, got {attributed_rows}"
+                )
+                assert len(anon_rows) == 1, (
+                    f"expected 1 already-null row untouched, got {anon_rows}"
                 )
                 assert len(rows) == 6
             finally:

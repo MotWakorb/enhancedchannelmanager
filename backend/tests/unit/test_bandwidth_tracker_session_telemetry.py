@@ -2551,85 +2551,65 @@ async def test_anonymous_user_id_zero_int_writes_null(
     assert all(r.user_id is None for r in rows)
 
 
-def test_write_session_telemetry_batch_commit_fk_violation_does_not_raise(
+def test_write_session_telemetry_user_id_no_longer_constrained_post_gsn3r(
     patched_session_local,
-    seed_synthetic_user,
     tracker,
-    caplog,
 ):
-    """Defense-in-depth — bd-gbxmj safety net.
+    """bd-gsn3r REVERSAL of the bd-gbxmj FK-violation scenario.
 
-    Even with the helper in place, a future field could grow an FK
-    without the helper learning about it. Simulate that by directly
-    invoking ``_write_session_telemetry`` with a channel_snapshot that
-    expects a non-existent ``user_id`` to land verbatim — bypass the
-    coercion helper by patching it to identity.
+    Migration 0011 dropped the FK from ``session_telemetry.user_id`` to
+    ``users.id`` (ECM and Dispatcharr ``users`` are different namespaces;
+    the FK was a structural lie). The bd-gbxmj defense-in-depth catch
+    in ``_write_session_telemetry`` for ``IntegrityError`` at commit
+    time stays in the writer — it's a future-proof safety net for any
+    field that might grow a constraint later — but ``user_id`` itself
+    can no longer trip it because there is no longer an FK to violate.
 
-    The commit-level IntegrityError catch must:
-    1. Roll back the transaction (no partial writes)
-    2. Log ``[STATS_V2] session_telemetry batch FK violation`` at WARNING
-    3. NOT propagate the exception — the poll continues
-
-    Bypass: monkey-patch ``_coerce_session_user_id`` at the module level
-    so the bad user_id reaches the row constructor verbatim and the FK
-    fires at commit() time — exactly the failure mode the safety net
-    exists for.
+    This test locks in the new contract: an arbitrary integer that
+    previously would have failed FK validation now lands cleanly. The
+    coercion helper still scrubs the anonymous ``0`` sentinel
+    (``_coerce_session_user_id`` returns ``None`` for it), so analytics
+    queries see ``NULL`` rather than the noise value — that behavior
+    is exercised by ``TestCoerceSessionUserId`` above.
     """
-    import logging as _logging
     import bandwidth_tracker as bt_module
 
-    # Seed the active-connection bookkeeping the helper depends on so
-    # there's something to write.
     tracker._active_connections[("ch-uuid-1", "10.0.0.1")] = 12345
 
     channel_snapshot = [
         {
             "channel_uuid": "ch-uuid-1",
             "client_ips": ["10.0.0.1"],
-            "client_user_map": {"10.0.0.1": 999_999},  # non-existent user
+            "client_user_map": {"10.0.0.1": 999_999},  # opaque viewer id
             "channel_bytes_delta": 1_000_000,
         }
     ]
 
-    caplog.clear()
-    with caplog.at_level(_logging.WARNING, logger="bandwidth_tracker"):
-        with patch.object(
-            bt_module,
-            "_coerce_session_user_id",
-            lambda raw: raw,  # identity: let the bad value through
-        ):
-            # Must not raise — the safety net handles the FK violation
-            # and the outer poll continues.
-            tracker._write_session_telemetry(
-                channel_snapshot=channel_snapshot,
-                observed_at_ms=1_700_000_000_000,
-            )
+    # Bypass coercion (which would have NULL'd this if it failed
+    # parsing) so the raw integer reaches the row verbatim — that's the
+    # surface the FK used to guard against. Post-bd-gsn3r the write
+    # succeeds.
+    with patch.object(
+        bt_module,
+        "_coerce_session_user_id",
+        lambda raw: raw,
+    ):
+        tracker._write_session_telemetry(
+            channel_snapshot=channel_snapshot,
+            observed_at_ms=1_700_000_000_000,
+        )
 
-    # Rollback worked — no rows landed.
     session = patched_session_local()
     try:
         rows = session.query(SessionTelemetry).all()
     finally:
         session.close()
-    assert rows == [], (
-        "IntegrityError must roll back the batch — no partial writes. "
-        f"Got: {len(rows)} rows"
+    assert len(rows) == 1, (
+        "Post-bd-gsn3r the user_id has no FK constraint — the write "
+        "must land cleanly even with a Dispatcharr-side viewer id that "
+        "would never have matched any ECM users.id row."
     )
-
-    # The safety net's structured log message is present so SRE can
-    # correlate via the bd-skqln.12 metric tap.
-    fk_logs = [
-        r for r in caplog.records
-        if "[STATS_V2] session_telemetry batch FK violation" in r.message
-    ]
-    assert fk_logs, (
-        "Expected '[STATS_V2] session_telemetry batch FK violation' "
-        f"log line. Got: {[r.message for r in caplog.records]}"
-    )
-    # The log carries observed_at and rows_attempted for correlation.
-    msg = fk_logs[0].message
-    assert "observed_at=1700000000000" in msg
-    assert "rows_attempted=1" in msg
+    assert rows[0].user_id == 999_999
 
 
 # ---------------------------------------------------------------------------
