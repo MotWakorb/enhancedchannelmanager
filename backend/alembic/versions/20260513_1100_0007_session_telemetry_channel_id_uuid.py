@@ -40,12 +40,24 @@ parity with migration 0006's original shape. The downgrade is informational
 only — production never runs it (forward-only deploy policy) — but the
 alembic round-trip smoke test exercises it.
 
-Bead: ``enhancedchannelmanager-skqln.3`` (step (a) corrective).
+bd-5w6jz idempotency: long-running installs where ``init_db``'s
+``Base.metadata.create_all()`` materialised ``session_telemetry`` from the
+ORM model (which has ``channel_id String(64) NOT NULL`` post-migration-0007)
+have the column ALREADY at the target shape while ``alembic_version`` lags
+at ``0006``. Re-running batch_alter_table.alter_column would unnecessarily
+rebuild the table; worse, in the create_all-then-stamp-at-old-rev case the
+"alter to a shape it already is" can be a no-op-but-expensive table copy.
+We inspect the live column type + nullability and skip the alter when the
+column already matches the target ``String(64) NOT NULL``.
+
+Bead: ``enhancedchannelmanager-skqln.3`` (step (a) corrective) +
+``enhancedchannelmanager-5w6jz`` (idempotency).
 """
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 
 
 # revision identifiers, used by Alembic.
@@ -54,6 +66,51 @@ down_revision: Union[str, Sequence[str], None] = "0006"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
+
+
+def _channel_id_column(connection) -> dict | None:
+    """Return SQLAlchemy inspector dict for ``session_telemetry.channel_id``,
+    or ``None`` if the table or the column is missing.
+
+    Used by the bd-5w6jz idempotency guard to decide whether the alter is
+    still needed: if ``channel_id`` is already ``String(64) NOT NULL``,
+    ``create_all()`` (or a prior partial migration) already shaped it the
+    way 0007 wants and the batch alter is a no-op.
+    """
+    insp = inspect(connection)
+    if not insp.has_table("session_telemetry"):
+        return None
+    for col in insp.get_columns("session_telemetry"):
+        if col["name"] == "channel_id":
+            return col
+    return None
+
+
+def _channel_id_already_string64_notnull(col: dict) -> bool:
+    """True if ``col`` is ``String(64) NOT NULL`` (the upgrade target shape).
+
+    SQLAlchemy returns ``col['type']`` as a ``sqlalchemy.types.*`` instance.
+    SQLite's reflection produces ``sa.String`` (or its dialect alias
+    ``sa.VARCHAR``) for ``VARCHAR(N)`` — both subclass ``sa.String``, so
+    ``isinstance(type_, sa.String)`` covers both. ``length`` mirrors the
+    declared ``VARCHAR(64)``. ``nullable`` comes straight from the column dict.
+    """
+    type_ = col["type"]
+    return (
+        isinstance(type_, sa.String)
+        and getattr(type_, "length", None) == 64
+        and col.get("nullable") is False
+    )
+
+
+def _channel_id_already_integer_nullable(col: dict) -> bool:
+    """True if ``col`` is ``INTEGER NULL`` (the downgrade target shape).
+
+    Mirror of ``_channel_id_already_string64_notnull`` for the downgrade
+    path's idempotency guard.
+    """
+    type_ = col["type"]
+    return isinstance(type_, sa.Integer) and col.get("nullable") is True
 
 
 def upgrade() -> None:
@@ -68,7 +125,22 @@ def upgrade() -> None:
     ``idx_session_telemetry_provider_channel_observed_bytes`` references
     ``channel_id`` and is automatically rebuilt by SQLite's table-copy
     semantics during batch mode — we do not touch it explicitly.
+
+    Idempotent (bd-5w6jz): skip the alter if the column is already at the
+    target ``String(64) NOT NULL`` shape (e.g. because ``create_all()``
+    materialised the table from the post-0007 ORM model on a long-running
+    install before Alembic caught up).
     """
+    conn = op.get_bind()
+    col = _channel_id_column(conn)
+    if col is None:
+        # Table missing entirely — 0006 is also idempotent and may have
+        # skipped its create on a fully-drifted DB. Nothing to alter; the
+        # next step's create_all() / canary check will surface it.
+        return
+    if _channel_id_already_string64_notnull(col):
+        return
+
     with op.batch_alter_table("session_telemetry", schema=None) as batch_op:
         batch_op.alter_column(
             "channel_id",
@@ -86,7 +158,18 @@ def downgrade() -> None:
     ``backend/tests/integration/test_alembic_smoke.py`` can downgrade
     through this revision cleanly. Forward-only deploy in production
     means this path never runs there; it exists for round-trip parity.
+
+    Idempotent (bd-5w6jz): skip the alter if the column is already
+    ``INTEGER NULL`` (a partially-applied prior downgrade, or the table
+    not yet touched by 0007).
     """
+    conn = op.get_bind()
+    col = _channel_id_column(conn)
+    if col is None:
+        return
+    if _channel_id_already_integer_nullable(col):
+        return
+
     with op.batch_alter_table("session_telemetry", schema=None) as batch_op:
         batch_op.alter_column(
             "channel_id",

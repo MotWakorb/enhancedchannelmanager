@@ -82,8 +82,19 @@ __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 # the regression-test SQL can reference the same string — drift between
 # the two is the most common source of "the view works in the migration
 # test but not in the equivalence test" failure modes.
+#
+# bd-5w6jz idempotency: ``IF NOT EXISTS`` is a SQLite-supported clause on
+# CREATE VIEW (https://www.sqlite.org/lang_createview.html). On a partial-
+# rerun where the view was already committed by a prior aborted upgrade,
+# this stays a no-op rather than raising
+# ``OperationalError: view channel_watch_stats_v already exists``. The
+# round-trip DDL stability test
+# (``TestMigration0008::test_view_round_trip_ddl_is_stable``) reads
+# ``sqlite_master.sql``; SQLite stores the CREATE statement verbatim
+# including the ``IF NOT EXISTS`` clause, so the test's pre-vs-post
+# comparison still matches against itself.
 CHANNEL_WATCH_STATS_V_SQL = """
-CREATE VIEW channel_watch_stats_v AS
+CREATE VIEW IF NOT EXISTS channel_watch_stats_v AS
 SELECT
     per_poll.channel_id AS channel_id,
     CAST(SUM(per_poll.poll_interval_ms) / 1000 AS INTEGER) AS total_watch_seconds,
