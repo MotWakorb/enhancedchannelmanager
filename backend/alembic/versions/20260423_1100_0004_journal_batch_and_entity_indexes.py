@@ -26,11 +26,18 @@ DB-engineer note: SQLite ``CREATE INDEX`` is not concurrent (no
 journal_entries table is a write-light, append-mostly workload, so
 build cost is acceptable. Postgres would need ``CONCURRENTLY`` if
 this project ever ports off SQLite.
+
+bd-ax3uj idempotency: ``JournalEntry.__table_args__`` declares both
+indexes in ``models.py``, so a long-running install whose ``init_db``
+ran ``Base.metadata.create_all()`` already has them. Re-creating would
+raise ``sqlite3.OperationalError: index ... already exists``. Skip any
+index already present.
 """
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 
 
 # revision identifiers, used by Alembic.
@@ -40,26 +47,43 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _index_names(connection, table_name: str) -> set[str]:
+    if not inspect(connection).has_table(table_name):
+        return set()
+    return {idx["name"] for idx in inspect(connection).get_indexes(table_name)}
+
+
 def upgrade() -> None:
     """Add idx_journal_batch_id and idx_journal_entity to journal_entries."""
-    with op.batch_alter_table('journal_entries', schema=None) as batch_op:
-        batch_op.create_index(
-            'idx_journal_batch_id',
-            ['batch_id'],
-            unique=False,
-        )
+    conn = op.get_bind()
+    existing = _index_names(conn, 'journal_entries')
+
+    if 'idx_journal_batch_id' not in existing:
+        with op.batch_alter_table('journal_entries', schema=None) as batch_op:
+            batch_op.create_index(
+                'idx_journal_batch_id',
+                ['batch_id'],
+                unique=False,
+            )
+
+    if 'idx_journal_entity' not in existing:
         # The descending sort on ``timestamp`` is encoded via literal_column
         # (matching the baseline's idx_journal_timestamp pattern) so SQLAlchemy
         # emits ``CREATE INDEX ... (category, entity_id, timestamp DESC)``.
-        batch_op.create_index(
-            'idx_journal_entity',
-            ['category', 'entity_id', sa.literal_column('timestamp DESC')],
-            unique=False,
-        )
+        with op.batch_alter_table('journal_entries', schema=None) as batch_op:
+            batch_op.create_index(
+                'idx_journal_entity',
+                ['category', 'entity_id', sa.literal_column('timestamp DESC')],
+                unique=False,
+            )
 
 
 def downgrade() -> None:
     """Drop both indexes added in ``upgrade()``."""
+    conn = op.get_bind()
+    existing = _index_names(conn, 'journal_entries')
     with op.batch_alter_table('journal_entries', schema=None) as batch_op:
-        batch_op.drop_index('idx_journal_entity')
-        batch_op.drop_index('idx_journal_batch_id')
+        if 'idx_journal_entity' in existing:
+            batch_op.drop_index('idx_journal_entity')
+        if 'idx_journal_batch_id' in existing:
+            batch_op.drop_index('idx_journal_batch_id')
