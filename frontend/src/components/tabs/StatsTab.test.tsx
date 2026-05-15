@@ -267,3 +267,140 @@ describe('StatsTab — Active Channels stream-identity badge (bd-ox5q8)', () => 
     expect(container.querySelector('.stream-name-badge')).toBeNull();
   });
 });
+
+describe('StatsTab — provider badge sum invariant (bd-lhxfu)', () => {
+  // The "live stats badges" sit in the page header (`.summary-stat`) and
+  // each represents one M3U provider's `current/max` connection count.
+  // Regression lock: the sum of all provider `current` values MUST equal
+  // the Active Channels count. When the resolver can't attribute a
+  // channel to a known provider, the sum used to silently undercount;
+  // bd-lhxfu surfaces those rows in an explicit "Unknown" bucket so the
+  // operator sees the gap instead of a phantom missing channel.
+
+  // M3U accounts marked is_active so the badges actually render. The
+  // bd-ox5q8 baseline tests only need id+name+profiles for the
+  // streamLabel lookup; the badge logic additionally reads is_active +
+  // name (to filter out "Custom") + max_streams (for the `current/max`
+  // display). Each provider here has a generous max_streams so the
+  // tests aren't sensitive to the per-provider cap.
+  const accountsForBadges = [
+    { id: 6, name: 'Infinity', profiles: [], is_active: true, max_streams: 10 },
+    { id: 7, name: 'OtherProvider', profiles: [], is_active: true, max_streams: 4 },
+  ] as unknown as Awaited<ReturnType<typeof api.getM3UAccounts>>;
+
+  function badgeChannel(extras: Partial<{
+    channel_id: string;
+    channel_name: string;
+    stream_name: string | null;
+    m3u_account_id: number | null;
+  }>) {
+    return {
+      ...baseChannel,
+      ...extras,
+    };
+  }
+
+  function readBadgeCounts(container: HTMLElement) {
+    // Each `.summary-stat` block has a `.stat-label` + `.stat-value`.
+    // The first two (Active Channels, Connected Clients) are page
+    // totals — every other badge is one provider OR the Unknown bucket.
+    const blocks = container.querySelectorAll('.summary-stat');
+    const out: Record<string, string> = {};
+    for (const block of Array.from(blocks)) {
+      const label = block.querySelector('.stat-label')?.textContent?.trim() ?? '';
+      const value = block.querySelector('.stat-value')?.textContent?.trim() ?? '';
+      out[label] = value;
+    }
+    return out;
+  }
+
+  function parseCurrent(value: string): number {
+    // "2/10" -> 2, "1" (Unknown bucket) -> 1.
+    const slash = value.indexOf('/');
+    return Number.parseInt(slash >= 0 ? value.slice(0, slash) : value, 10) || 0;
+  }
+
+  beforeEach(() => {
+    vi.mocked(api.getM3UAccounts).mockResolvedValue(accountsForBadges);
+  });
+
+  it('appends an Unknown bucket and the badge sum equals activeChannels when a channel has no provider attribution', async () => {
+    // 3 active channels: 2 attributed to Infinity, 1 unresolved.
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 3,
+      channels: [
+        badgeChannel({ channel_id: 'uuid-1', m3u_account_id: 6 }),
+        badgeChannel({ channel_id: 'uuid-2', m3u_account_id: 6 }),
+        badgeChannel({ channel_id: 'uuid-3', m3u_account_id: null }),
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector('.unknown-bucket')).toBeInTheDocument();
+    });
+
+    const badges = readBadgeCounts(container);
+    expect(badges['Active Channels']).toBe('3');
+    expect(badges['Infinity']).toBe('2/10');
+    expect(badges['Unknown']).toBe('1');
+    // Invariant: Infinity (2) + OtherProvider (0) + Unknown (1) == 3.
+    const providerSum =
+      parseCurrent(badges['Infinity'] ?? '0') +
+      parseCurrent(badges['OtherProvider'] ?? '0') +
+      parseCurrent(badges['Unknown'] ?? '0');
+    expect(providerSum).toBe(parseCurrent(badges['Active Channels'] ?? '0'));
+  });
+
+  it('does not render the Unknown bucket when every active channel is attributed', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 2,
+      channels: [
+        badgeChannel({ channel_id: 'uuid-1', m3u_account_id: 6 }),
+        badgeChannel({ channel_id: 'uuid-2', m3u_account_id: 7 }),
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector('.summary-stat')).toBeInTheDocument();
+    });
+
+    expect(container.querySelector('.unknown-bucket')).toBeNull();
+    const badges = readBadgeCounts(container);
+    expect(badges['Active Channels']).toBe('2');
+    expect(badges['Infinity']).toBe('1/10');
+    expect(badges['OtherProvider']).toBe('1/4');
+    const providerSum =
+      parseCurrent(badges['Infinity'] ?? '0') +
+      parseCurrent(badges['OtherProvider'] ?? '0');
+    expect(providerSum).toBe(parseCurrent(badges['Active Channels'] ?? '0'));
+  });
+
+  it('routes channels attributed to an unknown account id (side-load gap) into the Unknown bucket', async () => {
+    // The resolver attributed the active stream to account 999, but
+    // that account is not in the side-loaded m3uAccounts list (e.g.,
+    // account was just created or m3uAccounts hasn't refreshed). The
+    // channel must still show up — in Unknown — so the badge sum holds.
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 2,
+      channels: [
+        badgeChannel({ channel_id: 'uuid-1', m3u_account_id: 6 }),
+        badgeChannel({ channel_id: 'uuid-2', m3u_account_id: 999 }),
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector('.unknown-bucket')).toBeInTheDocument();
+    });
+
+    const badges = readBadgeCounts(container);
+    expect(badges['Active Channels']).toBe('2');
+    expect(badges['Infinity']).toBe('1/10');
+    expect(badges['Unknown']).toBe('1');
+  });
+});
