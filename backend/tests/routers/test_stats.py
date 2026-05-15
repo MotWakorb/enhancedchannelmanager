@@ -248,6 +248,110 @@ class TestChannelStatsStreamEnrichment:
         mock_client.get_streams_by_ids.assert_not_called()
 
 
+class TestChannelStatsBadgeSumInvariant:
+    """Tests for the bd-lhxfu provider-attribution invariant on
+    ``GET /api/stats/channels``.
+
+    The PO observed: 5 active channels, but the per-provider live-stats
+    badges summed to 4 (one channel missing from every provider bucket).
+    Root cause: the resolver couldn't attribute the missing channel to
+    a provider, so the backend's response had ``m3u_account_id`` set to
+    ``None`` for that row — and the frontend silently dropped null-
+    provider rows from the badge sum.
+
+    These tests lock the **endpoint contract** the frontend relies on
+    to enforce its own sum invariant (provider badges + Unknown bucket
+    == active-channel count):
+
+    1. Every channel in the response has the ``m3u_account_id`` key
+       present (possibly ``None``) — never absent. The frontend's
+       Unknown-bucket logic depends on being able to detect "resolver
+       returned but provider was None" vs "field missing entirely".
+    2. The number of channels in the response equals
+       ``count(channels)`` — no silent dropping of unattributed rows
+       from the response itself.
+    3. Resolver-failure mode (Dispatcharr lookup raises) leaves rows
+       in the response with ``m3u_account_id == None`` so they can be
+       routed to the Unknown bucket, instead of stripping the row.
+    """
+
+    @pytest.mark.asyncio
+    async def test_every_channel_has_m3u_account_id_key_when_resolver_succeeds(
+        self, async_client
+    ):
+        """Mixed-attribution payload: 2 resolved + 1 unresolved. The
+        endpoint MUST surface every row with the ``m3u_account_id``
+        key present (resolved id or ``None``) so the frontend can
+        bucket the unresolved row into Unknown instead of dropping
+        it from the badge sum."""
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {"channel_id": "uuid-1", "stream_id": 555, "clients": []},
+                {"channel_id": "uuid-2", "stream_id": 777, "clients": []},
+                # No stream_id, no URL — resolver can't attribute.
+                {"channel_id": "uuid-3", "channel_name": "Mystery", "clients": []},
+            ],
+        }
+        mock_client.get_streams_by_ids.return_value = [
+            {"id": 555, "name": "ESPN", "m3u_account": 1},
+            {"id": 777, "name": "Discovery", "m3u_account": 2},
+        ]
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200
+        channels = response.json()["channels"]
+        # Invariant lock: response surfaces every active channel.
+        assert len(channels) == 3
+        # Invariant lock: m3u_account_id key present on every row,
+        # even when resolution failed (the frontend keys off this).
+        for ch in channels:
+            assert "m3u_account_id" in ch, (
+                f"channel {ch.get('channel_id')!r} missing m3u_account_id key — "
+                "frontend cannot route to Unknown bucket"
+            )
+        # Spot-check the resolved-vs-unresolved partition.
+        by_uuid = {c["channel_id"]: c for c in channels}
+        assert by_uuid["uuid-1"]["m3u_account_id"] == 1
+        assert by_uuid["uuid-2"]["m3u_account_id"] == 2
+        assert by_uuid["uuid-3"]["m3u_account_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_every_channel_has_m3u_account_id_key_when_resolver_fails(
+        self, async_client
+    ):
+        """Worst-case attribution: Dispatcharr lookup raises mid-batch.
+        The endpoint MUST still return every active row, with
+        ``m3u_account_id`` set to ``None`` — never strip the row, never
+        omit the key. This is what guarantees that "active channels in
+        response" stays equal to "active channels Dispatcharr reported"
+        even when the entire resolver chain is down."""
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {"channel_id": "uuid-1", "stream_id": 555, "clients": []},
+                {"channel_id": "uuid-2", "stream_id": 777, "clients": []},
+            ],
+        }
+        # Resolver chain falls over completely.
+        mock_client.get_streams_by_ids.side_effect = Exception("Dispatcharr down")
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200
+        channels = response.json()["channels"]
+        assert len(channels) == 2
+        for ch in channels:
+            assert "m3u_account_id" in ch
+            # Resolver failure → key present, value None — frontend
+            # bucket-sorts both rows into Unknown so the badge sum
+            # still equals the active-channel count.
+            assert ch["m3u_account_id"] is None
+
+
 class TestChannelStatsDetail:
     """Tests for GET /api/stats/channels/{channel_id}."""
 
