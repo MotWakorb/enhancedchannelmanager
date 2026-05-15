@@ -107,6 +107,12 @@ def _distinct_poll_subquery(session: Session):
     case where two clients report different poll intervals for the same
     (user, channel, observed_at) tuple, take the longer one — never
     overcount.
+
+    bd-gsn3r: ``MAX(dispatcharr_username)`` is also defensive — within a
+    single (user_id, channel_id, observed_at) tuple every row should
+    carry the same username (one human, one poll). MAX picks one
+    deterministically without inflating the row count, so the outer
+    GROUP-BY-user can read the username back without a second join.
     """
     return (
         session.query(
@@ -114,6 +120,7 @@ def _distinct_poll_subquery(session: Session):
             SessionTelemetry.channel_id.label("channel_id"),
             SessionTelemetry.observed_at.label("observed_at"),
             func.max(SessionTelemetry.poll_interval_ms).label("poll_interval_ms"),
+            func.max(SessionTelemetry.dispatcharr_username).label("dispatcharr_username"),
         )
         .group_by(
             SessionTelemetry.user_id,
@@ -684,16 +691,22 @@ async def get_watch_time_by_user(
                     inner.c.user_id,
                     func.sum(inner.c.poll_interval_ms).label("total_ms"),
                     func.max(inner.c.observed_at).label("last_observed_at"),
+                    # bd-gsn3r: surface the denormalized Dispatcharr
+                    # username directly from session_telemetry. MAX is
+                    # defensive (every row for one user_id should carry
+                    # the same username — one human, one Dispatcharr
+                    # account) and gives stable behavior even if a
+                    # Dispatcharr-side rename mid-window left both old
+                    # and new values in the table.
+                    func.max(inner.c.dispatcharr_username).label("username"),
                 )
                 .group_by(inner.c.user_id)
                 .all()
             )
-            user_ids = [r.user_id for r in rows]
-            usernames = _load_usernames(db, user_ids)
             data = [
                 {
                     "user_id": r.user_id,
-                    "username": usernames.get(r.user_id),
+                    "username": r.username,
                     "total_watch_seconds": int((r.total_ms or 0) // 1000),
                     "last_watched": _ms_to_iso_z(r.last_observed_at),
                 }
@@ -709,16 +722,16 @@ async def get_watch_time_by_user(
                     inner.c.user_id,
                     day_expr,
                     func.sum(inner.c.poll_interval_ms).label("total_ms"),
+                    # bd-gsn3r: same denormalized read as the total branch.
+                    func.max(inner.c.dispatcharr_username).label("username"),
                 )
                 .group_by(inner.c.user_id, day_expr)
                 .all()
             )
-            user_ids = [r.user_id for r in rows]
-            usernames = _load_usernames(db, user_ids)
             data = [
                 {
                     "user_id": r.user_id,
-                    "username": usernames.get(r.user_id),
+                    "username": r.username,
                     "day": r.day,
                     "watch_seconds": int((r.total_ms or 0) // 1000),
                 }
@@ -873,15 +886,6 @@ async def get_watch_time_for_user(
     except Exception:
         logger.exception("[STATS] Failed to get per-user watch-time breakdown")
         raise HTTPException(status_code=500, detail="Internal server error")
-
-
-def _load_usernames(db: Session, user_ids):
-    """Bulk-resolve ``user_id -> username`` for the given ids. NULL-safe."""
-    ids = [uid for uid in user_ids if uid is not None]
-    if not ids:
-        return {}
-    rows = db.query(User.id, User.username).filter(User.id.in_(ids)).all()
-    return {r.id: r.username for r in rows}
 
 
 def _load_channel_names(db: Session, channel_ids):

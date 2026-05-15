@@ -1232,12 +1232,22 @@ class BandwidthTracker:
         snapshot_has_user_ids = any(
             entry.get("client_user_map") for entry in telemetry_channel_snapshot
         )
-        # bd-uqbob: an empty exclude set means no filtering and no need to
-        # pay for the get_users round-trip just to surface usernames the
-        # write helper won't compare against.
+        # bd-uqbob: the exclude set means we may need usernames for the
+        # filter even when the watch-history path doesn't need them.
+        # bd-gsn3r: the writer ALSO needs the username unconditionally
+        # to populate ``session_telemetry.dispatcharr_username`` (the
+        # denormalized read-side replacement for the dropped ECM
+        # ``users`` FK join). When the snapshot carries any user IDs,
+        # pay the single get_users() round-trip per poll so the writer
+        # can stamp the username — otherwise pre-migration-style NULL
+        # rows leak through and the panel falls back to "Unknown
+        # viewer". The cost is one Dispatcharr API call per poll which
+        # the watch-history path already paid in the common case.
         exclude_user_tokens = _parse_telemetry_exclude_users()
-        need_user_resolution = has_user_ids or (
-            exclude_user_tokens and snapshot_has_user_ids
+        need_user_resolution = (
+            has_user_ids
+            or snapshot_has_user_ids
+            or bool(exclude_user_tokens)
         )
         if need_user_resolution:
             try:
@@ -2137,20 +2147,39 @@ class BandwidthTracker:
                             client_user_map.get(ip)
                         )
 
+                        # bd-gsn3r: resolve the Dispatcharr-side username
+                        # for this row from the caller-supplied
+                        # ``dispatcharr_user_map`` and persist it as
+                        # ``dispatcharr_username`` (denormalized at write
+                        # time so the read APIs never join against ECM's
+                        # local ``users`` table — that join was the
+                        # namespace-collision bug bd-uqbob worked around
+                        # with the env-var exclude filter; this is the
+                        # architectural fix). NULL when the raw
+                        # ``user_id`` is anonymous (no map key) or when
+                        # the per-poll Dispatcharr ``get_users()`` call
+                        # earlier this cycle failed (the caller passes
+                        # an empty map in that case).
+                        raw_uid = client_user_map.get(ip)
+                        disp_username = (
+                            dispatcharr_user_map.get(str(raw_uid))
+                            if raw_uid is not None
+                            else None
+                        ) or None  # Coerce empty string back to None.
+
                         # bd-uqbob: drop rows attributed to operator-
-                        # configured excluded users (typically the ECM
-                        # admin/API account whose username happens to
-                        # collide with a Dispatcharr-side viewer's
-                        # user_id in the FK namespace — see the
-                        # ``_parse_telemetry_exclude_users`` docstring).
-                        # Resolve the Dispatcharr-side username from the
-                        # caller-supplied map; an empty token set short-
-                        # circuits before any per-row lookup.
+                        # configured excluded users. The original purpose
+                        # — dropping ECM admin/API account rows that
+                        # collided with Dispatcharr viewer IDs in the
+                        # dropped FK namespace — is moot post-bd-gsn3r:
+                        # the dispatcharr_username column lets the read
+                        # APIs surface real Dispatcharr viewers without
+                        # touching ECM's users table. The env var stays
+                        # in place (no harm) for operators who want to
+                        # exclude a specific Dispatcharr viewer for any
+                        # other reason. An empty token set short-
+                        # circuits before any per-row work.
                         if exclude_user_tokens:
-                            raw_uid = client_user_map.get(ip)
-                            disp_username = dispatcharr_user_map.get(
-                                str(raw_uid)
-                            ) if raw_uid is not None else None
                             if _is_excluded_telemetry_user(
                                 coerced_user_id,
                                 disp_username,
@@ -2184,6 +2213,15 @@ class BandwidthTracker:
                                 session_id=f"conn-{conn_id}",
                                 observed_at=observed_at_ms,
                                 user_id=coerced_user_id,
+                                # bd-gsn3r: denormalize the Dispatcharr
+                                # username at write time so the read APIs
+                                # can surface "who watched" without ever
+                                # joining against ECM's local ``users``
+                                # table (whose integer namespace
+                                # collides with Dispatcharr's). NULL on
+                                # anonymous viewers / unresolved
+                                # usernames; documented on the model.
+                                dispatcharr_username=disp_username,
                                 provider_id=provider_id,
                                 channel_id=channel_uuid,
                                 bytes_delta=per_client_bytes,
