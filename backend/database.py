@@ -227,18 +227,33 @@ def _bootstrap_alembic(engine) -> None:
     # AND the live schema covers the head model shape.
     head_revision = script_dir.get_current_head()
     current_rev = get_current_schema_revision(engine)
+    # The ``current_rev != head_revision`` guard fires symmetrically — it would
+    # also match a "rolled-back container code" case where ``current_rev`` is
+    # AHEAD of ``head_revision``. ``_schema_matches_head`` only verifies that
+    # every model artifact EXISTS in the live DB; it does not verify the
+    # absence of artifacts the model no longer declares. So a rolled-back-code
+    # scenario where every current model column still happens to be present
+    # WILL reach this branch and stamp backward. That is benign: the physical
+    # schema still supports every query the older head emits (the unused
+    # extras are ignored), and the next forward upgrade will re-stamp on its
+    # own. We accept the symmetric guard rather than complicate the predicate.
     if (
         current_rev
         and head_revision
         and current_rev != head_revision
         and _schema_matches_head(engine)
     ):
+        # WARNING (not INFO) so operators see the recovery path the first time
+        # it fires after upgrade — this is a one-shot self-heal, not steady-
+        # state behavior. Subsequent restarts no-op (current_rev == head).
         logger.warning(
             "[DATABASE] alembic_version=%s lags head=%s but live schema matches "
             "models — stamping forward (bd-5w6jz: create_all() got ahead of alembic)",
             current_rev,
             head_revision,
         )
+        # Single-process bootstrap; under SQLite WAL a concurrent stamp would
+        # be an idempotent re-write of the same head value (no row churn).
         command.stamp(alembic_cfg, head_revision)
         # No upgrade needed; the existing _BOOTSTRAP_CANARIES self-heal below
         # is also skipped (it only fires when canaries are missing — by

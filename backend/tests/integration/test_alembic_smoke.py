@@ -1187,7 +1187,7 @@ class TestMigration0010:
 
 
 @pytest.mark.integration
-class TestMigration0006:
+class TestMigration0006Idempotent:
     """Regression lock for bd-5w6jz fix in migration 0006.
 
     User reported ``sqlite3.OperationalError: table session_telemetry
@@ -1378,8 +1378,20 @@ class TestMigration0007Idempotent:
         engine = create_engine(db_url, future=True)
         try:
             cols = {c["name"]: c for c in inspect(engine).get_columns("session_telemetry")}
-            # Column still at the target shape after upgrade.
+            # Column still at the target shape after upgrade — both the
+            # NOT NULL constraint AND the VARCHAR(64) type. A regression that
+            # silently changed the column type (e.g. degraded to TEXT or to
+            # a different length) would slip past a nullability-only check.
             assert cols["channel_id"]["nullable"] is False
+            channel_id_type = cols["channel_id"]["type"]
+            type_str = str(channel_id_type).upper()
+            assert "VARCHAR" in type_str or "STRING" in type_str, (
+                f"channel_id type changed shape after upgrade: {channel_id_type!r}"
+            )
+            assert getattr(channel_id_type, "length", None) == 64, (
+                f"channel_id length changed after upgrade: "
+                f"{getattr(channel_id_type, 'length', None)!r}"
+            )
             with engine.connect() as conn:
                 row = conn.execute(
                     text("SELECT version_num FROM alembic_version")
@@ -1390,7 +1402,7 @@ class TestMigration0007Idempotent:
 
 
 @pytest.mark.integration
-class TestMigration0009:
+class TestMigration0009Idempotent:
     """Regression lock for bd-5w6jz fix in migration 0009.
 
     Migration 0009 creates 3 rollup tables (``session_telemetry_user_daily``,
