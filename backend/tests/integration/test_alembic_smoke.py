@@ -1,4 +1,16 @@
-"""Alembic baseline up/down round-trip smoke test (bd-mcnj0 / bd-z7bfj).
+"""Alembic baseline up/down round-trip smoke test (bd-mcnj0 / bd-z7bfj / bd-ax3uj).
+
+Migration 0003/0004 idempotency regression tests (bd-ax3uj)
+---------------------------------------------------------------------------
+Migrations 0003 (``rule_lint_findings`` table + indexes) and 0004
+(``idx_journal_batch_id`` + ``idx_journal_entity`` on ``journal_entries``)
+both create artifacts that ``Base.metadata.create_all()`` also emits from
+the ORM models. On a long-running install the create_all path beat the
+migrations to it — leaving the table/indexes physically present while
+``alembic_version`` lagged behind. The next start re-ran the migrations
+and SQLite raised ``OperationalError: ... already exists``, aborting
+boot (post-bd-zaaey, bootstrap loud-fails). ``TestMigration0003`` and
+``TestMigration0004`` lock in the inspect-then-skip fix.
 
 Migration 0005 batch_alter_table + idempotency regression tests (bd-z7bfj)
 ---------------------------------------------------------------------------
@@ -519,6 +531,233 @@ def _column_names(engine, table_name: str) -> set[str]:
     """Return the set of column names for *table_name* using the given engine."""
     inspector = inspect(engine)
     return {c["name"] for c in inspector.get_columns(table_name)}
+
+
+def _index_names(engine, table_name: str) -> set[str]:
+    """Return the set of index names for *table_name* using the given engine."""
+    inspector = inspect(engine)
+    if not inspector.has_table(table_name):
+        return set()
+    return {idx["name"] for idx in inspector.get_indexes(table_name)}
+
+
+# ---------------------------------------------------------------------------
+# Migration 0003 — rule_lint_findings idempotency (bd-ax3uj)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestMigration0003:
+    """Regression lock for bd-ax3uj fix in migration 0003.
+
+    A user reported ``sqlite3.OperationalError: table rule_lint_findings
+    already exists`` during ``Running upgrade 0002 -> 0003``. Container
+    startup aborted (post-bd-zaaey, bootstrap loud-fails), taking the
+    prober and everything else with it.
+
+    Root cause: ``init_db`` runs ``Base.metadata.create_all()`` after
+    ``_bootstrap_alembic`` (and the older code path also ran it on the
+    bootstrap-failure fallback). On a long-running install that path
+    materialised the ``rule_lint_findings`` table from the
+    ``RuleLintFinding`` ORM model — but ``alembic_version`` was still at
+    ``0002``. The next start re-ran 0003's ``op.create_table`` over the
+    existing table and exploded.
+
+    The 0003 fix mirrors the 0005 pattern (bd-m2k7p / bd-z7bfj):
+    inspect existing schema and skip ``create_table`` / ``create_index``
+    for artifacts already present.
+    """
+
+    def test_fresh_sqlite_upgrade_through_0003(self, tmp_path):
+        """Fresh empty DB: ``alembic upgrade 0003`` creates the table + indexes."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0003_fresh.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0003")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            inspector = inspect(engine)
+            assert inspector.has_table("rule_lint_findings"), (
+                "rule_lint_findings missing after upgrade 0003 — "
+                "migration 0003 did not run correctly."
+            )
+            idx_names = _index_names(engine, "rule_lint_findings")
+            assert "idx_rule_lint_finding_rule" in idx_names, (
+                "idx_rule_lint_finding_rule missing after upgrade 0003"
+            )
+            assert "idx_rule_lint_finding_code" in idx_names, (
+                "idx_rule_lint_finding_code missing after upgrade 0003"
+            )
+        finally:
+            engine.dispose()
+
+    def test_drifted_sqlite_upgrade_is_idempotent(self, tmp_path):
+        """Drifted DB: upgrade head is idempotent when 0003 artifacts exist.
+
+        Reproduces the user's scenario:
+          - ``alembic upgrade 0002`` brings the schema through 0002.
+          - ``Base.metadata.create_all()`` then materialises the
+            ``rule_lint_findings`` table + both 0003 indexes from the ORM
+            (same effect as the historical create_all-fallback path).
+          - ``alembic_version`` stays at 0002.
+
+        ``alembic upgrade head`` must NOT raise
+        ``OperationalError: table rule_lint_findings already exists`` and
+        must reach head with the table + indexes still present.
+        """
+        from alembic import command
+        from models import Base, RuleLintFinding  # noqa: F401  (registers table)
+
+        db_url = f"sqlite:///{tmp_path / 'mig0003_drifted.db'}"
+        cfg = _make_alembic_config(db_url)
+
+        # 1. Bring schema through 0002.
+        command.upgrade(cfg, "0002")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            # Sanity: table must NOT exist yet at 0002.
+            assert not inspect(engine).has_table("rule_lint_findings"), (
+                "rule_lint_findings already present at 0002 — test setup is wrong."
+            )
+
+            # 2. Simulate create_all() drift: build the rule_lint_findings
+            # table from the ORM only. ``checkfirst=True`` (default) means
+            # other tables created by 0001/0002 are not touched.
+            RuleLintFinding.__table__.create(bind=engine, checkfirst=True)
+
+            # Confirm both the table AND its declared indexes landed —
+            # SQLAlchemy create() emits the indexes from __table_args__.
+            assert inspect(engine).has_table("rule_lint_findings")
+            idx_names = _index_names(engine, "rule_lint_findings")
+            assert "idx_rule_lint_finding_rule" in idx_names
+            assert "idx_rule_lint_finding_code" in idx_names
+
+            # alembic_version still at 0002.
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == "0002", (
+                f"Expected alembic_version=0002 after drift setup, got {row}"
+            )
+        finally:
+            engine.dispose()
+
+        # 3. Upgrade to head — must be idempotent.
+        # Pre-fix this raised:
+        #   sqlalchemy.exc.OperationalError: (sqlite3.OperationalError)
+        #   table rule_lint_findings already exists
+        command.upgrade(cfg, "head")
+
+        # 4. Assert head was reached and table/indexes survived.
+        engine = create_engine(db_url, future=True)
+        try:
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == database.get_alembic_head_revision(), (
+                f"Expected head revision after idempotent upgrade, got {row}"
+            )
+            assert inspect(engine).has_table("rule_lint_findings"), (
+                "rule_lint_findings dropped during idempotent upgrade — "
+                "migration 0003 should be a no-op when the table exists."
+            )
+            idx_names = _index_names(engine, "rule_lint_findings")
+            assert "idx_rule_lint_finding_rule" in idx_names
+            assert "idx_rule_lint_finding_code" in idx_names
+        finally:
+            engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Migration 0004 — journal_entries index idempotency (bd-ax3uj)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestMigration0004:
+    """Regression lock for bd-ax3uj fix in migration 0004.
+
+    Same disease vector as 0003: ``JournalEntry.__table_args__`` declares
+    ``idx_journal_batch_id`` and ``idx_journal_entity`` in ``models.py``,
+    so ``Base.metadata.create_all()`` materialises both indexes on the
+    baseline ``journal_entries`` table. Migration 0004 then re-creates
+    them and SQLite raises ``index ... already exists``.
+
+    The 0004 fix inspects existing indexes and skips any already present.
+    """
+
+    def test_drifted_sqlite_upgrade_is_idempotent(self, tmp_path):
+        """Drifted DB: upgrade head is idempotent when 0004 indexes exist.
+
+        Setup: upgrade through 0003, then manually CREATE INDEX both 0004
+        indexes (matching what create_all() does), leave alembic_version at
+        0003, run upgrade head — must not raise "index already exists".
+        """
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0004_drifted.db'}"
+        cfg = _make_alembic_config(db_url)
+
+        # 1. Upgrade through 0003.
+        command.upgrade(cfg, "0003")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            existing = _index_names(engine, "journal_entries")
+            assert "idx_journal_batch_id" not in existing, (
+                "idx_journal_batch_id already present after 0003 — test setup wrong."
+            )
+            assert "idx_journal_entity" not in existing, (
+                "idx_journal_entity already present after 0003 — test setup wrong."
+            )
+
+            # 2. Inject both indexes via raw SQL — matches what
+            # create_all() emits from JournalEntry.__table_args__.
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "CREATE INDEX idx_journal_batch_id "
+                    "ON journal_entries (batch_id)"
+                ))
+                conn.execute(text(
+                    "CREATE INDEX idx_journal_entity "
+                    "ON journal_entries (category, entity_id, timestamp DESC)"
+                ))
+
+            # alembic_version still at 0003.
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == "0003", (
+                f"Expected alembic_version=0003 after drift setup, got {row}"
+            )
+        finally:
+            engine.dispose()
+
+        # 3. Upgrade to head — must be idempotent.
+        # Pre-fix this raised:
+        #   sqlalchemy.exc.OperationalError: (sqlite3.OperationalError)
+        #   index idx_journal_batch_id already exists
+        command.upgrade(cfg, "head")
+
+        # 4. Both indexes present, alembic at head.
+        engine = create_engine(db_url, future=True)
+        try:
+            existing = _index_names(engine, "journal_entries")
+            assert "idx_journal_batch_id" in existing
+            assert "idx_journal_entity" in existing
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == database.get_alembic_head_revision()
+        finally:
+            engine.dispose()
 
 
 @pytest.mark.integration
