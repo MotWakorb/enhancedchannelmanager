@@ -50,6 +50,15 @@ def _ms(dt: datetime) -> int:
 
 
 def _add_user(session, *, user_id: int, username: str, is_admin: bool = False) -> User:
+    """Create an ECM ``User`` row.
+
+    bd-gsn3r: ``session_telemetry.user_id`` is no longer a FK to ``users.id``
+    (the join was a namespace lie — see migration 0011 docstring), so this
+    helper is now ONLY used by the auth-fixture tests below that need a real
+    ECM user identity to inject into ``get_watch_time_caller``. The
+    data-correctness tests that just need a username on a watch-time row use
+    the ``dispatcharr_username`` kwarg on ``_add_telemetry`` instead.
+    """
     user = User(
         id=user_id,
         username=username,
@@ -59,9 +68,6 @@ def _add_user(session, *, user_id: int, username: str, is_admin: bool = False) -
         is_admin=is_admin,
     )
     session.add(user)
-    # Flush so subsequent ``session_telemetry`` inserts (FK -> users.id) see
-    # the row — SQLite checks FKs at insert time and the autoflush=False
-    # fixture session doesn't auto-flush before related inserts.
     session.flush()
     return user
 
@@ -77,12 +83,22 @@ def _add_telemetry(
     bytes_delta: int = 1000,
     stream_id: int | None = None,
     stream_name: str | None = None,
+    dispatcharr_username: str | None = None,
 ) -> None:
+    """Insert one ``session_telemetry`` row.
+
+    bd-gsn3r: ``dispatcharr_username`` is the new denormalized read-side
+    surface — the writer captures the Dispatcharr-side username at write
+    time (no read-side join against ECM ``users``). Tests that need a
+    username on the response must pass it here; absence surfaces as
+    ``null`` in the API response (the "Unknown viewer" frontend case).
+    """
     session.add(
         SessionTelemetry(
             session_id=session_id or f"sess-u{user_id}-{channel_id}-{observed_at_ms}",
             observed_at=observed_at_ms,
             user_id=user_id,
+            dispatcharr_username=dispatcharr_username,
             provider_id=None,
             channel_id=channel_id,
             bytes_delta=bytes_delta,
@@ -120,10 +136,18 @@ class TestWatchTimeListEnvelope:
         self, async_client, test_session
     ):
         """``from == to`` is a valid empty interval; envelope still well-formed."""
-        # Seed data so a non-empty query would return rows.
-        _add_user(test_session, user_id=10, username="alice")
+        # Seed data so a non-empty query would return rows. bd-gsn3r:
+        # post-FK-drop, no ECM ``User`` row needed — the writer
+        # denormalizes ``dispatcharr_username`` straight onto the
+        # telemetry row.
         now = datetime(2026, 4, 1, 12, 0, 0, tzinfo=timezone.utc)
-        _add_telemetry(test_session, user_id=10, channel_id="ch-a", observed_at_ms=_ms(now))
+        _add_telemetry(
+            test_session,
+            user_id=10,
+            channel_id="ch-a",
+            observed_at_ms=_ms(now),
+            dispatcharr_username="alice",
+        )
         test_session.commit()
 
         # Empty range — from == to, zero-width window.
@@ -138,9 +162,12 @@ class TestWatchTimeListEnvelope:
 
     @pytest.mark.asyncio
     async def test_total_aggregates_per_user(self, async_client, test_session):
-        """Two users, multiple polls each — totals sum poll_interval seconds per user."""
-        _add_user(test_session, user_id=10, username="alice")
-        _add_user(test_session, user_id=20, username="bob")
+        """Two users, multiple polls each — totals sum poll_interval seconds per user.
+
+        bd-gsn3r: usernames are denormalized onto the telemetry rows; no
+        ECM ``User`` rows are seeded because the FK was dropped in
+        migration 0011.
+        """
         base = datetime(2026, 4, 1, 12, 0, 0, tzinfo=timezone.utc)
         # alice: 3 polls * 10s = 30s on ch-a
         for i in range(3):
@@ -149,6 +176,7 @@ class TestWatchTimeListEnvelope:
                 user_id=10,
                 channel_id="ch-a",
                 observed_at_ms=_ms(base + timedelta(seconds=10 * i)),
+                dispatcharr_username="alice",
             )
         # bob: 5 polls * 10s = 50s, split across two channels
         for i in range(2):
@@ -157,6 +185,7 @@ class TestWatchTimeListEnvelope:
                 user_id=20,
                 channel_id="ch-a",
                 observed_at_ms=_ms(base + timedelta(seconds=10 * i)),
+                dispatcharr_username="bob",
             )
         for i in range(3):
             _add_telemetry(
@@ -164,6 +193,7 @@ class TestWatchTimeListEnvelope:
                 user_id=20,
                 channel_id="ch-b",
                 observed_at_ms=_ms(base + timedelta(seconds=100 + 10 * i)),
+                dispatcharr_username="bob",
             )
         test_session.commit()
 
@@ -183,23 +213,27 @@ class TestWatchTimeListEnvelope:
         self, async_client, test_session
     ):
         """``?user_id=42`` filters down to that user's row only."""
-        _add_user(test_session, user_id=10, username="alice")
-        _add_user(test_session, user_id=42, username="zoe")
         base = datetime(2026, 4, 1, 12, 0, 0, tzinfo=timezone.utc)
         _add_telemetry(
-            test_session, user_id=10, channel_id="ch-a", observed_at_ms=_ms(base)
+            test_session,
+            user_id=10,
+            channel_id="ch-a",
+            observed_at_ms=_ms(base),
+            dispatcharr_username="alice",
         )
         _add_telemetry(
             test_session,
             user_id=42,
             channel_id="ch-b",
             observed_at_ms=_ms(base + timedelta(seconds=10)),
+            dispatcharr_username="zoe",
         )
         _add_telemetry(
             test_session,
             user_id=42,
             channel_id="ch-c",
             observed_at_ms=_ms(base + timedelta(seconds=20)),
+            dispatcharr_username="zoe",
         )
         test_session.commit()
 
@@ -309,11 +343,22 @@ class TestWatchTimeGroupByDay:
         self, async_client, test_session
     ):
         """Same user, polls across two distinct UTC days → two rows."""
-        _add_user(test_session, user_id=10, username="alice")
         day1 = datetime(2026, 4, 1, 23, 59, 50, tzinfo=timezone.utc)
         day2 = datetime(2026, 4, 2, 0, 0, 0, tzinfo=timezone.utc)
-        _add_telemetry(test_session, user_id=10, channel_id="ch-a", observed_at_ms=_ms(day1))
-        _add_telemetry(test_session, user_id=10, channel_id="ch-a", observed_at_ms=_ms(day2))
+        _add_telemetry(
+            test_session,
+            user_id=10,
+            channel_id="ch-a",
+            observed_at_ms=_ms(day1),
+            dispatcharr_username="alice",
+        )
+        _add_telemetry(
+            test_session,
+            user_id=10,
+            channel_id="ch-a",
+            observed_at_ms=_ms(day2),
+            dispatcharr_username="alice",
+        )
         test_session.commit()
 
         response = await async_client.get("/api/stats/watch-time?group_by=day")

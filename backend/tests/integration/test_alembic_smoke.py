@@ -1762,3 +1762,243 @@ class TestSmartBootstrapFastPath:
             )
         finally:
             engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# bd-gsn3r — migration 0011: dispatcharr_username + drop ECM users FK
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestMigration0011:
+    """Migration 0011 — denormalize Dispatcharr username + drop ECM users FK.
+
+    Stats v2 architectural fix for the namespace-collision bug bd-uqbob
+    worked around with an env-var exclude filter. Migration 0011 adds
+    ``dispatcharr_username TEXT NULL`` to ``session_telemetry`` and drops
+    the FK constraint on ``user_id`` → ``users.id``. Both changes ride
+    in one migration because they touch the same column space and SQLite
+    batch-mode rebuilds the entire table either way.
+
+    Coverage:
+      - Fresh upgrade through 0011 — column exists, FK is gone.
+      - Fresh downgrade — column is gone, FK is back.
+      - Idempotency on the column-add path (mirrors bd-5w6jz pattern):
+        long-running install with ``create_all()`` already added the
+        column from the post-0011 ORM model.
+      - Idempotency on the FK-drop path: long-running install where the
+        smart-bootstrap fast-path stamped through 0011 without dropping
+        the FK; re-running the migration must not raise.
+    """
+
+    NEW_COLUMN = "dispatcharr_username"
+
+    @staticmethod
+    def _user_id_fk(engine) -> list[dict]:
+        """Return the FK descriptors on ``session_telemetry.user_id``."""
+        fks = inspect(engine).get_foreign_keys("session_telemetry")
+        return [
+            fk
+            for fk in fks
+            if "user_id" in (fk.get("constrained_columns") or [])
+        ]
+
+    def test_fresh_sqlite_upgrade_through_0011(self, tmp_path):
+        """Fresh DB: ``alembic upgrade 0011`` adds the column and drops the FK."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0011_fresh.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0011")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            assert self.NEW_COLUMN in cols, (
+                f"{self.NEW_COLUMN} missing after upgrade 0011"
+            )
+            assert self._user_id_fk(engine) == [], (
+                "session_telemetry.user_id still has a FK after upgrade 0011 — "
+                "the namespace-collision fix did not drop the FK as expected."
+            )
+        finally:
+            engine.dispose()
+
+    def test_fresh_sqlite_downgrade_from_0011(self, tmp_path):
+        """Downgrade 0011 -> 0010: column gone, FK restored."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0011_downgrade.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0011")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert self.NEW_COLUMN in _column_names(engine, "session_telemetry")
+            assert self._user_id_fk(engine) == []
+        finally:
+            engine.dispose()
+
+        command.downgrade(cfg, "0010")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            assert self.NEW_COLUMN not in cols, (
+                f"{self.NEW_COLUMN} still present after downgrade — "
+                "0011's downgrade() did not drop the column."
+            )
+            fks = self._user_id_fk(engine)
+            assert len(fks) == 1, (
+                "Downgrade did not restore the user_id FK — "
+                f"expected exactly one FK on user_id, got {fks!r}."
+            )
+            # Also verify the FK target is users.id (not some other
+            # accidental reference).
+            assert fks[0].get("referred_table") == "users"
+        finally:
+            engine.dispose()
+
+
+@pytest.mark.integration
+class TestMigration0011Idempotent:
+    """Regression lock for bd-5w6jz idempotency on migration 0011.
+
+    Two drift scenarios:
+
+    1. ``dispatcharr_username`` already added by ``create_all()`` from the
+       post-0011 ORM model (long-running install, alembic_version still at
+       0010). The column-add half must skip rather than raise
+       ``OperationalError: duplicate column name: dispatcharr_username``.
+
+    2. The smart-bootstrap fast-path stamped past 0011 without ever
+       running the FK drop (because every model column was already
+       present and ``_schema_matches_head`` only checks columns, not
+       constraints). A subsequent forced re-run of 0011 must skip the
+       column-add but still drop the FK. Conversely if 0011 is re-run
+       on a DB where the FK is already absent (e.g. from a previous
+       successful run that the alembic_version row didn't capture due
+       to a crash mid-stamp), the FK-drop half must skip.
+
+    The migration is structured so that re-running it is safe in any of
+    these states — column add and FK drop are independently guarded.
+    """
+
+    NEW_COLUMN = "dispatcharr_username"
+
+    def test_drifted_column_already_added(self, tmp_path):
+        """create_all()-style drift: column already present pre-0011."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0011_col_drift.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0010")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            assert self.NEW_COLUMN not in cols, (
+                "test setup is wrong — dispatcharr_username already at 0010"
+            )
+            # Inject the column via raw SQL — matches what create_all()
+            # would emit from the post-0011 ORM model.
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE session_telemetry ADD COLUMN "
+                    "dispatcharr_username TEXT"
+                ))
+            assert self.NEW_COLUMN in _column_names(engine, "session_telemetry")
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == "0010"
+        finally:
+            engine.dispose()
+
+        # Pre-fix this would raise:
+        #   OperationalError: duplicate column name: dispatcharr_username
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert self.NEW_COLUMN in _column_names(engine, "session_telemetry")
+            # Even on the drift path the FK must be dropped — that's the
+            # second half of the migration and it doesn't depend on the
+            # column-add half.
+            fks = inspect(engine).get_foreign_keys("session_telemetry")
+            user_id_fks = [
+                fk
+                for fk in fks
+                if "user_id" in (fk.get("constrained_columns") or [])
+            ]
+            assert user_id_fks == [], (
+                "user_id FK still present after upgrade head — the FK-drop "
+                "half must run even when the column-add half is a no-op."
+            )
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == database.get_alembic_head_revision()
+        finally:
+            engine.dispose()
+
+    def test_drifted_fk_already_dropped(self, tmp_path):
+        """Re-running 0011 against a DB where the FK is already absent.
+
+        Reproduces the smart-bootstrap fast-path stamping past 0011 and
+        then a subsequent forced re-run of the migration. The migration
+        must skip both halves cleanly without raising.
+        """
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0011_fk_drift.db'}"
+        cfg = _make_alembic_config(db_url)
+        # Run all the way through 0011 to drop the FK + add the column.
+        command.upgrade(cfg, "0011")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert self.NEW_COLUMN in _column_names(engine, "session_telemetry")
+            fks = inspect(engine).get_foreign_keys("session_telemetry")
+            user_id_fks = [
+                fk
+                for fk in fks
+                if "user_id" in (fk.get("constrained_columns") or [])
+            ]
+            assert user_id_fks == [], "test setup is wrong — FK still present"
+            # Roll the alembic_version row back to 0010 to simulate the
+            # version-row-out-of-sync-with-schema state. Schema stays as
+            # it is (column present, FK absent).
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "UPDATE alembic_version SET version_num = '0010'"
+                ))
+        finally:
+            engine.dispose()
+
+        # Re-run the migration. Both halves must no-op cleanly.
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert self.NEW_COLUMN in _column_names(engine, "session_telemetry")
+            fks = inspect(engine).get_foreign_keys("session_telemetry")
+            user_id_fks = [
+                fk
+                for fk in fks
+                if "user_id" in (fk.get("constrained_columns") or [])
+            ]
+            assert user_id_fks == [], (
+                "FK reappeared on re-run of 0011 — the FK-drop guard "
+                "should have detected the FK is already absent and "
+                "skipped the batch rebuild."
+            )
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == database.get_alembic_head_revision()
+        finally:
+            engine.dispose()
