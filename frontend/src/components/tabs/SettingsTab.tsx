@@ -345,6 +345,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [customNetworkPrefixes, setCustomNetworkPrefixes] = useState<string[]>([]);
   const [customNetworkSuffixes, setCustomNetworkSuffixes] = useState<string[]>([]);
   const [normalizeOnChannelCreate, setNormalizeOnChannelCreate] = useState(false);
+  // Dedup settings (BD-K / bd-ugzn4, ADR-008 §D2). UI stores as integer percent (60-100);
+  // converted to float (0.60-1.00) on save and back to integer percent on load.
+  const [dedupThreshold, setDedupThreshold] = useState(80);
+  const [dedupM3uToastSuppressed, setDedupM3uToastSuppressed] = useState(false);
 
   const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels']);
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false });
@@ -776,6 +780,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setCustomNetworkPrefixes(settings.custom_network_prefixes ?? []);
       setCustomNetworkSuffixes(settings.custom_network_suffixes ?? []);
       setNormalizeOnChannelCreate(settings.normalize_on_channel_create ?? false);
+      // Dedup settings: server stores as float (0.60-1.00), UI shows as integer percent (60-100).
+      setDedupThreshold(Math.round((settings.dedup_threshold ?? 0.80) * 100));
+      setDedupM3uToastSuppressed(settings.dedup_m3u_toast_suppressed ?? false);
       setStatsPollInterval(settings.stats_poll_interval ?? 10);
       setOriginalPollInterval(settings.stats_poll_interval ?? 10);
       setUserTimezone(settings.user_timezone ?? '');
@@ -1027,6 +1034,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         custom_network_prefixes: customNetworkPrefixes,
         custom_network_suffixes: customNetworkSuffixes,
         normalize_on_channel_create: normalizeOnChannelCreate,
+        // Dedup: UI works in integer percent (60-100); backend stores float (0.60-1.00).
+        dedup_threshold: dedupThreshold / 100,
+        dedup_m3u_toast_suppressed: dedupM3uToastSuppressed,
         stats_poll_interval: statsPollInterval,
         user_timezone: userTimezone,
         backend_log_level: backendLogLevel,
@@ -2266,6 +2276,61 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Lower values match more channels automatically but may be less accurate.
             Set to 0 to require manual review for all matches.
           </p>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">merge_type</span>
+          <h3>Stream Deduplication</h3>
+        </div>
+
+        <div className="form-group">
+          <div className="threshold-label-row">
+            <label htmlFor="dedupThreshold">Dedup confidence threshold</label>
+            <div className="threshold-input-group">
+              <input
+                id="dedupThreshold"
+                type="number"
+                min="60"
+                max="100"
+                value={dedupThreshold}
+                onChange={(e) => {
+                  const value = Math.max(60, Math.min(100, Number(e.target.value) || 60));
+                  setDedupThreshold(value);
+                }}
+                onBlur={(e) => {
+                  const value = Math.max(60, Math.min(100, Number(e.target.value) || 60));
+                  setDedupThreshold(value);
+                }}
+                className="threshold-input"
+                data-testid="dedup-threshold-input"
+              />
+              <span className="threshold-percent">%</span>
+            </div>
+          </div>
+          <p className="form-hint">
+            Streams matching an existing channel at or above this confidence score are offered as merge
+            candidates. Range: 60–100. Default: 80. Below 60% the matcher will not surface candidates
+            (ADR-008 hard floor).
+          </p>
+        </div>
+
+        <div className="checkbox-group">
+          <input
+            id="dedupM3uToastSuppressed"
+            type="checkbox"
+            checked={dedupM3uToastSuppressed}
+            onChange={(e) => setDedupM3uToastSuppressed(e.target.checked)}
+            data-testid="dedup-toast-suppressed-checkbox"
+          />
+          <div className="checkbox-content">
+            <label htmlFor="dedupM3uToastSuppressed">Suppress &ldquo;pending merges queued&rdquo; toast after M3U refresh</label>
+            <p>
+              Pending merges are still queued and visible on the Pending Merges page; only the
+              post-refresh toast notification is hidden.
+            </p>
+          </div>
         </div>
       </div>
 
