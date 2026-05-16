@@ -1,6 +1,6 @@
 from urllib.parse import urlparse
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 import json
 import os
 import logging
@@ -194,6 +194,53 @@ class DispatcharrSettings(BaseModel):
     # or incrementing counters, and the frontend reporter short-circuits
     # before building the payload.
     telemetry_client_errors_enabled: bool = True
+    # Stream dedup settings (ADR-008 §D2, bd-0b6xj / BD-B).
+    # dedup_threshold: operator-configurable confidence threshold (0.0–1.0).
+    # Default 0.80; clamped to CONFIDENCE_FLOOR (0.60) at the Pydantic validator
+    # (layer 2 of three-layer enforcement per ADR-008 §D2 — the matcher service
+    # BD-A clamps at the same floor as the load-bearing enforcement; this validator
+    # is the settings-persistence boundary guard).
+    # Settings UI (BD-K) constrains the input control to the same range; this
+    # validator is the source of truth so API-direct or settings.json-edited
+    # bypasses also land at the floor.
+    dedup_threshold: float = 0.80
+    # dedup_m3u_toast_suppressed: when True, the "N pending merges queued" toast
+    # after M3U refresh is not shown to the operator.
+    # Default False — the toast is shown by default.
+    dedup_m3u_toast_suppressed: bool = False
+
+    @field_validator("dedup_threshold")
+    @classmethod
+    def clamp_dedup_threshold(cls, v: float) -> float:
+        """Clamp dedup_threshold to [0.60, 1.00] per ADR-008 §D2.
+
+        The confidence floor of 0.60 is a defense-in-depth integrity constraint
+        (Security Engineer veto-class per ADR-008 §D2). A below-floor value
+        triggers a one-time-per-process WARN so operators are informed of the
+        clamp; the upper-bound clamp (> 1.00) is silent.
+
+        The matcher service (BD-A) ALSO clamps to the floor — this validator is
+        layer 2 of three-layer enforcement. Changing the floor value requires an
+        ADR addendum (not a runtime config change).
+        """
+        global _dedup_threshold_floor_warned
+
+        # Upper-bound clamp (silent)
+        if v > 1.00:
+            v = 1.00
+
+        # Lower-bound clamp (one-time WARN per process)
+        if v < 0.60:
+            if not _dedup_threshold_floor_warned:
+                logger.warning(
+                    "[CONFIG] dedup_threshold=%s is below the integrity floor (0.60); "
+                    "clamping to 0.60. See ADR-008 §D2.",
+                    v,
+                )
+                _dedup_threshold_floor_warned = True
+            v = 0.60
+
+        return v
 
     def is_configured(self) -> bool:
         if not self.url:
@@ -238,6 +285,10 @@ _legacy_api_key_warned: bool = False
 # ``clear_settings_cache()`` alongside ``_legacy_api_key_warned``.
 _legacy_api_key_conflict_warned: bool = False
 
+# One-shot flag so the dedup_threshold below-floor WARN only fires once per
+# process startup, not on every settings reload (bd-0b6xj / BD-B, ADR-008 §D2).
+# Cleared by ``clear_settings_cache()`` so test isolation works.
+_dedup_threshold_floor_warned: bool = False
 
 
 def ensure_config_dir():
@@ -442,17 +493,18 @@ def save_settings(settings: DispatcharrSettings) -> None:
 def clear_settings_cache() -> None:
     """Clear the cached settings (forces reload).
 
-    Also resets the legacy ``api_key`` deprecation WARN flag and the
-    legacy/canonical conflict WARN flag (bd-jmi1c) so a subsequent
-    ``load_settings()`` call surfaces both warnings again. Without this,
-    tests that exercise the migration path multiple times in one process
-    would see the WARN fire once and then be silent — making it impossible
-    to assert on the warning per test.
+    Also resets the legacy ``api_key`` deprecation WARN flag, the
+    legacy/canonical conflict WARN flag (bd-jmi1c), and the dedup_threshold
+    below-floor WARN flag (bd-0b6xj) so subsequent calls surface all warnings
+    again. Without this, tests that exercise the load/validation path multiple
+    times in one process would see each WARN fire once and then be silent —
+    making it impossible to assert on the warnings per test.
     """
-    global _cached_settings, _legacy_api_key_warned, _legacy_api_key_conflict_warned
+    global _cached_settings, _legacy_api_key_warned, _legacy_api_key_conflict_warned, _dedup_threshold_floor_warned
     _cached_settings = None
     _legacy_api_key_warned = False
     _legacy_api_key_conflict_warned = False
+    _dedup_threshold_floor_warned = False
     logger.info("[CONFIG] Settings cache cleared")
 
 
