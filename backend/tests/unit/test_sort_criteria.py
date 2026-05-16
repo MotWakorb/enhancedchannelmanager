@@ -167,6 +167,70 @@ class TestM3UPrioritySorting:
         assert sorted_ids == [1, 2]
 
 
+class TestSmartSortCustomStreamsProber:
+    """Reviewer Warn-2 coverage (bd-sgtmx / GH #244): stream_prober.smart_sort_streams
+    respects the ``"custom"`` key in m3u_account_priorities for operator-added
+    streams without an M3U account. Mirrors TestSmartSortCustomStreams in
+    test_auto_creation_engine.py for the prober's smart-sort path."""
+
+    def test_custom_key_lifts_custom_stream_above_m3u(self):
+        """``"custom": 200`` sorts custom streams above M3U account with priority 100."""
+        prober = create_prober(
+            stream_sort_priority=["m3u_priority"],
+            stream_sort_enabled={"m3u_priority": True},
+            m3u_account_priorities={"1": 100, "custom": 200},
+        )
+
+        stats_map = {
+            1: create_mock_stats(1),  # M3U account 1, priority 100
+            2: create_mock_stats(2),  # No M3U account → "custom" → priority 200
+        }
+        stream_m3u_map = {1: 1, 2: None}
+
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, stream_m3u_map, "Test Channel")
+
+        # Custom stream (id=2) ranks first because "custom" priority (200) > account 1 (100)
+        assert sorted_ids == [2, 1]
+
+    def test_no_custom_key_defaults_to_zero_no_regression(self):
+        """Without ``"custom"`` key, custom streams default to priority 0 — pre-fix behaviour preserved."""
+        prober = create_prober(
+            stream_sort_priority=["m3u_priority"],
+            stream_sort_enabled={"m3u_priority": True},
+            m3u_account_priorities={"1": 100},  # no "custom" key
+        )
+
+        stats_map = {
+            1: create_mock_stats(1),  # M3U account 1, priority 100
+            2: create_mock_stats(2),  # No M3U → default priority 0
+        }
+        stream_m3u_map = {1: 1, 2: None}
+
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, stream_m3u_map, "Test Channel")
+
+        # M3U stream (priority 100) > custom stream (priority 0)
+        assert sorted_ids == [1, 2]
+
+    def test_pure_m3u_unaffected_by_custom_key(self):
+        """A pure-M3U channel with no custom streams is unaffected by the ``"custom"`` key."""
+        prober = create_prober(
+            stream_sort_priority=["m3u_priority"],
+            stream_sort_enabled={"m3u_priority": True},
+            m3u_account_priorities={"1": 100, "2": 50, "custom": 200},
+        )
+
+        stats_map = {
+            1: create_mock_stats(1),  # M3U account 2, priority 50
+            2: create_mock_stats(2),  # M3U account 1, priority 100
+        }
+        stream_m3u_map = {1: 2, 2: 1}
+
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, stream_m3u_map, "Test Channel")
+
+        # Pure-M3U ordering: account 1 (100) > account 2 (50)
+        assert sorted_ids == [2, 1]
+
+
 class TestAudioChannelsSorting:
     """Tests for audio channels sort criterion."""
 

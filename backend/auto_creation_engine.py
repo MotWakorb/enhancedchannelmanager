@@ -2444,10 +2444,16 @@ def _smart_sort_streams(
             elif criterion == "m3u_priority":
                 # m3u_priority does NOT require a successful probe — it comes
                 # from the m3u account map, so it's always meaningful.
+                # bd-sgtmx / GH #244: custom streams (no m3u_account_id) fall
+                # back to the "custom" key in m3u_priorities so operators can
+                # assign an explicit priority to operator-added streams.
                 m3u_priority_value = 0
                 m3u_account_id = stream_m3u_map.get(sid)
                 if m3u_account_id is not None:
                     m3u_priority_value = m3u_priorities.get(str(m3u_account_id), 0)
+                else:
+                    # Custom stream — not backed by an M3U account.
+                    m3u_priority_value = m3u_priorities.get("custom", 0)
                 values.append(-m3u_priority_value)
 
             elif criterion == "audio_channels":
@@ -2526,11 +2532,17 @@ def _m3u_account_priority_value(
     stream_m3u_map: dict | None,
     settings,
 ) -> int:
-    """Numeric ECM M3U priority for *sid* (0 when unknown)."""
+    """Numeric ECM M3U priority for *sid* (0 when unknown).
+
+    Custom streams (operator-added, not from any M3U account) fall back to
+    ``m3u_account_priorities["custom"]`` so the same key used by Smart Sort's
+    ``compute_criteria_values`` applies uniformly across provider-order and
+    quality-tie-break paths that consume this helper (bd-sgtmx, GH #244).
+    """
     pri_map = getattr(settings, "m3u_account_priorities", None) or {} if settings is not None else {}
     aid = (stream_m3u_map or {}).get(sid)
     if aid is None:
-        return 0
+        return pri_map.get("custom", 0)
     return pri_map.get(str(aid), 0)
 
 

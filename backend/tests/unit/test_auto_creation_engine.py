@@ -1690,3 +1690,132 @@ class TestAutoCreateSmartSortWithinBucketPrimaryCriteria:
             f"Expected failed bucket ordered by resolution desc then framerate desc "
             f"— [202, 203, 201] — got {failed_bucket}"
         )
+
+
+def _success_stats_dict(stream_id, resolution="1920x1080", fps="25", stream_name=None):
+    """Build a stats-dict for a successfully-probed stream."""
+    return {
+        "stream_id": stream_id,
+        "stream_name": stream_name or f"Stream {stream_id}",
+        "resolution": resolution,
+        "fps": fps,
+        "video_codec": "h264",
+        "audio_codec": "aac",
+        "audio_channels": 2,
+        "bitrate": 5_000_000,
+        "video_bitrate": 5_000_000,
+        "probe_status": "success",
+        "is_black_screen": False,
+        "is_low_fps": False,
+    }
+
+
+class TestSmartSortCustomStreams:
+    """bd-sgtmx / GH #244: custom streams (operator-added, non-M3U) must participate
+    in the m3u_priority sort criterion via the reserved 'custom' key in
+    m3u_account_priorities.  Previously these streams received priority 0 with no
+    way for the operator to promote them above any M3U account.
+    """
+
+    def test_smart_sort_includes_custom_streams_in_priority(self):
+        """Custom stream with m3u_account_priorities['custom']=200 sorts above
+        an M3U stream with priority 100 when m3u_priority is the sole active criterion.
+        """
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["m3u_priority"],
+            stream_sort_enabled={"m3u_priority": True},
+            m3u_account_priorities={"1": 100, "custom": 200},
+        )
+        # sid=10 is an M3U stream from account 1 (priority 100)
+        # sid=20 is a custom stream (no m3u_account_id) — should use "custom" priority 200
+        stats_cache = {
+            10: _success_stats_dict(10, stream_name="M3U Stream"),
+            20: _success_stats_dict(20, stream_name="Custom Stream"),
+        }
+        stream_m3u_map = {10: 1}  # sid=20 absent → custom stream
+
+        result = _smart_sort_streams(
+            [10, 20], stats_cache, stream_m3u_map=stream_m3u_map,
+            channel_name="sgtmx-custom-first", settings=settings,
+        )
+        assert result == [20, 10], (
+            f"Expected custom stream (priority 200) to rank above M3U stream "
+            f"(priority 100), got {result}"
+        )
+
+    def test_smart_sort_custom_stream_priority_does_not_displace_m3u(self):
+        """With no 'custom' key set (default 0), custom streams rank below any M3U
+        stream whose account has a positive priority.  Existing silent-zero behaviour
+        is preserved for operators who never configure the 'custom' key.
+        """
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["m3u_priority"],
+            stream_sort_enabled={"m3u_priority": True},
+            m3u_account_priorities={"1": 50},  # no "custom" key
+        )
+        stats_cache = {
+            10: _success_stats_dict(10, stream_name="M3U Stream"),
+            20: _success_stats_dict(20, stream_name="Custom Stream"),
+        }
+        stream_m3u_map = {10: 1}  # sid=20 is custom
+
+        result = _smart_sort_streams(
+            [10, 20], stats_cache, stream_m3u_map=stream_m3u_map,
+            channel_name="sgtmx-m3u-first", settings=settings,
+        )
+        assert result == [10, 20], (
+            f"Expected M3U stream (priority 50) to rank above custom stream "
+            f"(default priority 0), got {result}"
+        )
+
+    def test_smart_sort_existing_behavior_unchanged_for_pure_m3u_inputs(self):
+        """Regression guard: a channel with only M3U streams sorts identically to
+        before the bd-sgtmx fix.  No custom stream is present so the 'custom' key
+        code path is never reached.
+        """
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["m3u_priority"],
+            stream_sort_enabled={"m3u_priority": True},
+            m3u_account_priorities={"1": 100, "2": 50},
+        )
+        stats_cache = {
+            10: _success_stats_dict(10, stream_name="M3U Acct-1 Stream"),
+            20: _success_stats_dict(20, stream_name="M3U Acct-2 Stream"),
+        }
+        stream_m3u_map = {10: 1, 20: 2}  # both M3U, no custom stream
+
+        result = _smart_sort_streams(
+            [10, 20], stats_cache, stream_m3u_map=stream_m3u_map,
+            channel_name="sgtmx-pure-m3u", settings=settings,
+        )
+        assert result == [10, 20], (
+            f"Expected M3U account 1 (priority 100) before account 2 (priority 50), "
+            f"got {result}"
+        )
+
+    def test_smart_sort_custom_stream_priority_respected_within_deprioritized_bucket(self):
+        """bd-sgtmx: even when a custom stream lands in the deprioritized bucket
+        (no probe stats), its m3u_priority value from 'custom' key is used as a
+        tiebreaker within that bucket — mirrors the bd-bqpq0 within-bucket ordering.
+        """
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["m3u_priority"],
+            stream_sort_enabled={"m3u_priority": True},
+            m3u_account_priorities={"1": 10, "custom": 50},
+            deprioritize_failed_streams=True,
+            failed_stream_sort_order=["failed", "black_screen", "low_fps"],
+        )
+        # Both streams have no probe stats — both land in the failed bucket.
+        # Within the failed bucket, the custom stream (priority 50) should lead.
+        stats_cache = {}  # no probe data for either stream
+
+        result = _smart_sort_streams(
+            [10, 20], stats_cache,
+            stream_m3u_map={10: 1},  # sid=20 is custom
+            channel_name="sgtmx-deprioritzed-bucket",
+            settings=settings,
+        )
+        assert result == [20, 10], (
+            f"Expected custom stream (priority 50) to lead over M3U stream "
+            f"(priority 10) within the deprioritized bucket, got {result}"
+        )
