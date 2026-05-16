@@ -186,18 +186,34 @@ def _wal_checkpoint_truncate(engine) -> None:
     try:
         size_before = wal_path.stat().st_size if wal_path.exists() else 0
         with engine.connect() as conn:
-            conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+            # PRAGMA wal_checkpoint(TRUNCATE) returns a row
+            # ``(busy, log, checkpointed)``. ``busy=1`` means SQLite could
+            # not acquire the exclusive WAL lock — typically because some
+            # other connection still holds a reader open — and the WAL was
+            # NOT fully truncated. Treat that as a partial outcome and log
+            # a WARN so an operator can investigate; falling back to INFO
+            # would hide the GH #274 disease vector (pinned reader keeps
+            # WAL bloated even after the "checkpoint ran" log).
+            row = conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)")).fetchone()
             conn.commit()
+        busy = row[0] if row else 0
         size_after = wal_path.stat().st_size if wal_path.exists() else 0
         # Convert to MB for human readability — a 1.4 GB WAL printed as
         # bytes is a hard number to eyeball.
         mb_before = size_before / (1024 * 1024)
         mb_after = size_after / (1024 * 1024)
-        logger.info(
-            "[DATABASE] WAL checkpoint: %.1f MB -> %.1f MB",
-            mb_before,
-            mb_after,
-        )
+        if busy:
+            logger.warning(
+                "[DATABASE] WAL checkpoint: %.1f MB -> %.1f MB (incomplete -- WAL busy)",
+                mb_before,
+                mb_after,
+            )
+        else:
+            logger.info(
+                "[DATABASE] WAL checkpoint: %.1f MB -> %.1f MB",
+                mb_before,
+                mb_after,
+            )
     except Exception as e:
         # Non-fatal: bootstrap still runs against the bloated WAL. Matches
         # the backup.py pattern's WARN-and-continue posture.

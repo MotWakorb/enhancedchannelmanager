@@ -171,9 +171,20 @@ def _create_backup_zip() -> io.BytesIO:
     try:
         engine = get_engine()
         with engine.connect() as conn:
-            conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+            # PRAGMA wal_checkpoint(TRUNCATE) returns ``(busy, log,
+            # checkpointed)``. ``busy=1`` means SQLite could not acquire
+            # the exclusive WAL lock and the WAL was NOT fully truncated,
+            # so the zipped journal.db may not contain the most recent
+            # writes (they still live in the un-truncated WAL on disk and
+            # are not part of the backup). Surface that as WARN — matches
+            # the database.py startup checkpoint pattern (bd-ej995 polish).
+            row = conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)")).fetchone()
             conn.commit()
-        logger.info("[BACKUP] WAL checkpoint completed")
+        busy = row[0] if row else 0
+        if busy:
+            logger.warning("[BACKUP] WAL checkpoint completed (incomplete -- WAL busy)")
+        else:
+            logger.info("[BACKUP] WAL checkpoint completed")
     except Exception as e:
         logger.warning("[BACKUP] WAL checkpoint failed (non-fatal): %s", e)
 
