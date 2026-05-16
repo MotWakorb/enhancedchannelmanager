@@ -685,12 +685,27 @@ class ActionExecutor:
         # predate the dedup epic and stay on the legacy "always
         # create" semantics — they are not one of the four ADR-008
         # §D1 interactive trigger surfaces).
-        dedup_skip = await self._maybe_enqueue_pending_merge(
-            stream_ctx=stream_ctx,
-            channel_name=channel_name,
-            group_id=group_id,
-            exec_ctx=exec_ctx,
-        )
+        # Per BD-F reviewer Warn-1 (bd-a5lb2 fix-forward): degrade
+        # gracefully on hook failure. Without this guard, a hook bug
+        # (matcher exception, ORM error other than IntegrityError, etc.)
+        # would propagate out of ``_execute_create_channel`` and abort
+        # the entire engine batch via the outer ``run_pipeline``
+        # handler. Falling through to ``create_channel`` preserves
+        # pre-BD-F behavior per stream and keeps batch progress intact.
+        try:
+            dedup_skip = await self._maybe_enqueue_pending_merge(
+                stream_ctx=stream_ctx,
+                channel_name=channel_name,
+                group_id=group_id,
+                exec_ctx=exec_ctx,
+            )
+        except Exception:
+            logger.warning(
+                "[DEDUP] Hook failed for stream=%s group_id=%s; falling through "
+                "to channel creation (pre-BD-F behavior)",
+                channel_name, group_id, exc_info=True,
+            )
+            dedup_skip = None
         if dedup_skip is not None:
             return dedup_skip
 
