@@ -1519,8 +1519,22 @@ class SessionTelemetryProviderDaily(Base):
     # numerator, not the derived rate).
     bytes_delta_sum = Column(BigInteger, nullable=False)
     # Count of buffer/stall events ingested for this provider that day
-    # (skqln.15). Feeds the "buffering by provider" time-series.
+    # (skqln.15). Preserved for back-compat with pre-bd-d0ha9 read paths.
     buffer_event_count = Column(Integer, nullable=False)
+    # Per-type channel-event counters added by migration 0014 (bd-d0ha9).
+    # Companion columns to the three that migration 0013 (bd-ov5vb) added
+    # to the raw ``session_telemetry`` table; the rollup now SUMs them
+    # alongside ``buffer_event_count`` so historical data beyond the 30-day
+    # raw-row retention window retains the full event-type breakdown.
+    reconnect_event_count = Column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    error_event_count = Column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    switch_event_count = Column(
+        Integer, nullable=False, server_default="0", default=0
+    )
 
     __table_args__ = (
         Index(
