@@ -65,7 +65,10 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
       setOriginalUsername(settings.username);
       setPassword(''); // Never load password from server
       setApiKey(''); // Never load api_key from server
-      setApiKeyStored(settings.api_key_configured);
+      // bd-jmi1c (GH #273): prefer the canonical field; fall back to the
+      // legacy alias so this bundle still works against an older backend
+      // that has not yet been redeployed.
+      setApiKeyStored(settings.dispatcharr_api_key_configured ?? settings.api_key_configured);
       setIncludeChannelNumberInName(settings.include_channel_number_in_name);
       setChannelNumberSeparator(settings.channel_number_separator);
       setRemoveCountryPrefix(settings.remove_country_prefix);
@@ -101,7 +104,10 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
     try {
       const result = await api.testConnection(
         authMethod === 'api_key'
-          ? { url, auth_method: 'api_key', api_key: apiKey }
+          // bd-jmi1c (GH #273): canonical field name for the
+          // Dispatcharr REST API key; backend accepts ``api_key`` too
+          // for back-compat with older bundles.
+          ? { url, auth_method: 'api_key', dispatcharr_api_key: apiKey }
           : { url, auth_method: 'password', username, password }
       );
       setConnectionVerified(result.success);
@@ -133,10 +139,13 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
         url,
         auth_method: authMethod,
         username,
-        // Only send password / api_key if the user entered a new value;
+        // Only send password / api key if the user entered a new value;
         // omitting preserves the stored secret on the backend.
+        // bd-jmi1c (GH #273): send the canonical
+        // ``dispatcharr_api_key`` field name; backend accepts the legacy
+        // ``api_key`` alias for one release of back-compat.
         ...(password ? { password } : {}),
-        ...(apiKey ? { api_key: apiKey } : {}),
+        ...(apiKey ? { dispatcharr_api_key: apiKey } : {}),
         include_channel_number_in_name: includeChannelNumberInName,
         channel_number_separator: channelNumberSeparator,
         remove_country_prefix: removeCountryPrefix,

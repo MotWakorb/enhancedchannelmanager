@@ -180,10 +180,30 @@ Things you can ask Claude to do:
 > | Field in `settings.json` | What it is for |
 > |---|---|
 > | `url` | Dispatcharr base URL |
-> | `api_key` | **Dispatcharr REST API token** — ECM uses this to talk to Dispatcharr. Never replace it with an MCP key. |
+> | `dispatcharr_api_key` | **Dispatcharr REST API token** — ECM uses this to talk to Dispatcharr. (Canonical field name as of v0.17.1, GH #273. Operators upgrading from v0.17.0 or earlier will have the value in the legacy `api_key` field; ECM auto-migrates on next startup with a one-time `[CONFIG] Reading deprecated 'api_key' field …` WARN log.) Never replace it with an MCP key. |
+> | `api_key` | **DEPRECATED legacy alias for `dispatcharr_api_key`.** ECM still reads this for one release of back-compat (v0.17.x). The first read after upgrade emits a deprecation WARN and silently mirrors the value into `dispatcharr_api_key` on the next save. Rename or remove this field once you confirm `dispatcharr_api_key` is populated. |
 > | `mcp_api_key` | **ECM MCP key** — the `ecm-mcp` sidecar uses this to authenticate calls to ECM. This is what the Generate / Regenerate button in Settings > MCP Integration writes. |
 >
-> When rotating an MCP key, the new key goes in `mcp_api_key`. Do **not** touch `api_key` — overwriting it with an MCP key breaks every channel and stream operation (ECM returns 401 to Dispatcharr). If you see `api_key_configured: false` from the `/health` endpoint after a rotation, the diagnostic's `status` field will indicate whether `mcp_api_key` is missing from the file (`field_missing`), blank (`field_empty`), or the file itself is unreadable (`file_not_found` / `invalid_json`) — use `GET http://YOUR_ECM_HOST:6100/api/health` to check.
+> When rotating an MCP key, the new key goes in `mcp_api_key`. Do **not** touch `dispatcharr_api_key` (or its legacy `api_key` alias) — overwriting either with an MCP key breaks every channel and stream operation (ECM returns 401 to Dispatcharr). If you see `api_key_configured: false` from the `/health` endpoint after a rotation, the diagnostic's `status` field will indicate whether `mcp_api_key` is missing from the file (`field_missing`), blank (`field_empty`), or the file itself is unreadable (`file_not_found` / `invalid_json`) — use `GET http://YOUR_ECM_HOST:6100/api/health` to check.
+>
+> **Migration example.** A v0.17.0 `settings.json` from an operator hit by GH #273:
+> ```json
+> {
+>   "url": "http://dispatcharr:9191",
+>   "api_key": "real-dispatcharr-rest-token-abc",
+>   "mcp_api_key": "ecm-mcp-key-xyz"
+> }
+> ```
+> After the first v0.17.1 startup and the next settings save, the file becomes:
+> ```json
+> {
+>   "url": "http://dispatcharr:9191",
+>   "dispatcharr_api_key": "real-dispatcharr-rest-token-abc",
+>   "api_key": "real-dispatcharr-rest-token-abc",
+>   "mcp_api_key": "ecm-mcp-key-xyz"
+> }
+> ```
+> Both fields hold the same Dispatcharr token (the duplicate is intentional — external scripts that still read `api_key` keep working). Once you've removed any such scripts, you can manually delete the legacy `api_key` line; ECM will keep using `dispatcharr_api_key` from then on.
 
 1. **Generate an API key** in ECM Settings > MCP Integration (this writes to `mcp_api_key` in `settings.json`)
 2. **Start the MCP container** — add the `ecm-mcp` service to your compose file (see [With MCP Server](#with-mcp-server-claude-ai-integration)) and start it on port 6101
@@ -230,7 +250,7 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 
 **Upgrading from an earlier version:** the MCP server moved from the deprecated SSE transport (`/sse` + `/messages/`) to the modern Streamable HTTP transport on a single `/mcp` endpoint. If you have an existing config pointing at `http://YOUR_ECM_HOST:6101/sse?api_key=...` (or `"type": "sse"` in a `.mcp.json`), change the path to `/mcp` (and `"type": "http"` for Claude Code). The `/sse` endpoint was removed in this version. API-key auth is unchanged.
 
-**Redeploying or rotating the MCP key:** use Settings > MCP Integration > Regenerate Key — this updates `mcp_api_key` in `settings.json`. Then update the `?api_key=` value in your Claude Desktop / Claude Code config. Do **not** edit `api_key` in `settings.json` — that is the Dispatcharr REST token and is separate (see the field reference at the top of this section).
+**Redeploying or rotating the MCP key:** use Settings > MCP Integration > Regenerate Key — this updates `mcp_api_key` in `settings.json`. Then update the `?api_key=` value in your Claude Desktop / Claude Code config. Do **not** edit `dispatcharr_api_key` (or its legacy `api_key` alias) in `settings.json` — that is the Dispatcharr REST token and is separate (see the field reference at the top of this section). As of v0.17.1 (GH #273) the Dispatcharr token lives in `dispatcharr_api_key`; the legacy `api_key` field is still read for one release of back-compat with a deprecation WARN.
 
 ### Available Tools (124)
 

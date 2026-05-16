@@ -108,7 +108,12 @@ class DispatcharrClient:
 
         headers = kwargs.pop("headers", {})
         if self._uses_api_key:
-            headers["X-API-Key"] = self.settings.api_key
+            # bd-jmi1c (GH #273): prefer the canonical
+            # ``dispatcharr_api_key`` field; fall back to the legacy
+            # ``api_key`` when running pre-migration in-memory state (e.g.,
+            # tests constructing ``DispatcharrSettings(api_key=...)`` directly
+            # without going through ``load_settings()``).
+            headers["X-API-Key"] = self.settings.dispatcharr_api_key or self.settings.api_key
         else:
             headers["Authorization"] = f"Bearer {self.access_token}"
 
@@ -1038,8 +1043,17 @@ _client_settings_hash: Optional[str] = None
 
 
 def _settings_hash(settings: DispatcharrSettings) -> str:
-    """Get a hash of settings to detect changes."""
-    return f"{settings.url}:{settings.auth_method}:{settings.username}:{settings.password}:{settings.api_key}"
+    """Get a hash of settings to detect changes.
+
+    Includes both ``dispatcharr_api_key`` (canonical, bd-jmi1c) and the
+    legacy ``api_key`` so the client singleton recreates when either field
+    changes — keeps in-memory state in sync with operators who rotate via
+    the UI (touches canonical) or via on-disk edits (may still touch legacy).
+    """
+    return (
+        f"{settings.url}:{settings.auth_method}:{settings.username}:"
+        f"{settings.password}:{settings.dispatcharr_api_key}:{settings.api_key}"
+    )
 
 
 def get_client() -> DispatcharrClient:
