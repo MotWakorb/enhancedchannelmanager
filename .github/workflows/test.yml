@@ -219,6 +219,86 @@ jobs:
       - name: Verify version touchpoints agree
         run: python scripts/check_version_consistency.py
 
+  # ─── Visual regression (Playwright — bd-lln2x) ─────────────────────────
+  # Screenshots the Heatmap chart primitive in isolation and diffs against
+  # the committed baseline PNG. Catches the bd-yteek → bd-wdpve class of
+  # bug (label rotation that passes jsdom unit tests but renders
+  # incorrectly in real browsers). The fixture page boots from the Vite
+  # dev server with no backend dependency, so this job runs without a
+  # live ECM container — unlike the bd-2lw25-deferred E2E suite under
+  # `e2e/*.spec.ts`. Config: `playwright.visual.config.ts`.
+  visual-regression:
+    name: Visual Regression
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          # The repo-root package.json hosts @playwright/test; the
+          # frontend/ package.json hosts the Vite dev server that serves
+          # the fixture HTML. Both lockfiles feed the cache key.
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+
+      - name: Install root dependencies (Playwright)
+        run: npm ci
+
+      - name: Install frontend dependencies (Vite + React)
+        working-directory: frontend
+        run: npm ci
+
+      # Cache Playwright browsers separately from npm — the binaries
+      # are large (~300 MB) and rotate independently of dep changes.
+      # Key includes the Playwright version so a version bump triggers
+      # a fresh download.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      - name: Install Playwright browsers (chromium only)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        # --with-deps installs the OS-level libs Chromium needs on
+        # ubuntu-latest. Only install chromium since the visual config
+        # has a single chromium project — installing firefox/webkit
+        # would triple the cache size for no test coverage.
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright system deps (cache hit path)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        # When browsers are cached the binaries are restored but the
+        # OS libs may not be — `install-deps` is idempotent and fast.
+        run: npx playwright install-deps chromium
+
+      - name: Run visual regression tests
+        env:
+          # CI=1 makes Playwright start its own dev server (vs. reusing
+          # an existing one) — see playwright.visual.config.ts comment
+          # on `reuseExistingServer`.
+          CI: '1'
+        run: npx playwright test --config=playwright.visual.config.ts
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-visual-report
+          path: |
+            playwright-report/
+            test-results-visual/
+          if-no-files-found: ignore
+          retention-days: 14
+
   # ─── Semgrep lint (ReDoS / safe_regex guard — bd-eio04.8) ──────────────
   # Enforces the `no-bare-re-on-dynamic-pattern` rule in .semgrep.yml so
   # new PRs cannot introduce a stdlib `re.search/match/sub/compile/…` call

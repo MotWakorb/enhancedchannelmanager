@@ -507,10 +507,13 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
         ),
         "session_telemetry_row_count": Gauge(
             "ecm_session_telemetry_row_count",
-            "Number of session_telemetry rows written in the most recent "
-            "BandwidthTracker poll cycle. Used by SRE storage-growth "
-            "alerts: a sustained high value combined with the table's "
-            "retention policy gives a leading indicator of disk pressure.",
+            "Total row count of session_telemetry after the most recent "
+            "nightly rollup + prune run. Set by StatsV2RollupTask after "
+            "a successful prune step — one update per nightly run. Used "
+            "by SRE storage-growth alerts (ECMStatsRowCountGrowthAnomaly). "
+            "bd-ae58c (Option B): BandwidthTracker no longer writes this "
+            "gauge; per-poll batch size is derivable from the "
+            "ecm_session_telemetry_writes_total counter rate.",
             registry=registry,
         ),
         "session_telemetry_rows_excluded_total": Counter(
