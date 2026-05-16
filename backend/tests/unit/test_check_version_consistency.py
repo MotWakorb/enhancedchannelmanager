@@ -162,6 +162,41 @@ def test_main_returns_one_on_skew(tmp_path, script_module, monkeypatch, capsys):
     assert "backend/routers/backup.py" in captured.err
 
 
+def test_main_surfaces_both_files_on_simultaneous_mismatch(
+    tmp_path, script_module, monkeypatch, capsys
+):
+    """Two-of-three skew — mirrors the actual production divergence bd-9rtlc caught.
+
+    The bug that motivated this guard had ``backup.py`` and ``main.py`` BOTH
+    behind ``package.json`` simultaneously (backup.py at 0.16.0 from a stale
+    cherry-pick, main.py at 0.16.0-0003 from a 30-build-old miss). The
+    diagnostic must enumerate every divergent touchpoint with its actual
+    value so an operator can fix all skews in one pass — not whack-a-mole
+    them one CI run at a time.
+    """
+    _build_fake_repo(
+        tmp_path,
+        version_pkg="0.17.0-0034",  # canonical reference
+        version_app="0.17.0-0033",  # one build behind (stale cherry-pick analogue)
+        version_fastapi="0.16.0-0003",  # 30-build skew (long-standing miss analogue)
+    )
+    monkeypatch.setattr(script_module, "REPO_ROOT", tmp_path)
+
+    rc = script_module.main()
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    err = captured.err
+    # Canonical reference must be named so the operator knows which value to bump TO.
+    assert "frontend/package.json" in err
+    assert "0.17.0-0034" in err
+    # Both divergent files must surface, each with its actual divergent value.
+    assert "backend/routers/backup.py" in err
+    assert "0.17.0-0033" in err
+    assert "backend/main.py" in err
+    assert "0.16.0-0003" in err
+
+
 def test_main_returns_one_on_missing_file(tmp_path, script_module, monkeypatch, capsys):
     # Build only two of the three files — main.py is absent.
     (tmp_path / "frontend").mkdir()

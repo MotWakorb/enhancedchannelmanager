@@ -2389,6 +2389,14 @@ class BandwidthTracker:
             # write that exercises the new column. Subsequent failures
             # fall back to WARN so the operator log is not flooded with
             # duplicate alarms while the root cause is being repaired.
+            # Scope is deliberately SQLAlchemy ``OperationalError`` only —
+            # sqlite3 ``OperationalError`` instances get wrapped before they
+            # reach this layer, matching bd-zaaey's
+            # ``_assert_schema_matches_models`` boot-guard scope. The helper
+            # ``_is_schema_drift_error`` itself walks the exception chain so
+            # any future scope expansion (e.g. accepting raw sqlite3 errors
+            # from a different code path) only requires loosening this
+            # ``isinstance`` gate, not changing the helper.
             if (
                 isinstance(e, OperationalError)
                 and _is_schema_drift_error(e)
