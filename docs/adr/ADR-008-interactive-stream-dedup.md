@@ -123,9 +123,11 @@ Prevents duplicate **pending** rows from repeated bulk-M3U imports of the same s
 
 If the bulk-M3U hook (BD-F) tries to enqueue a row that would collide with an existing `pending` row, the hook treats the existing row as the source of truth (oldest `created_at` wins) and does not overwrite. Logged at DEBUG so the operator can see in trace why a stream they expected to re-prompt did not.
 
-### D6 — Audit field set (journal entries for dedup actions)
+### D6 — Audit field set (`pending_merge_journal` table)
 
-Every accept / dismiss / queue / auto-aged-out action writes a row to the existing journal table with the following fields populated:
+Every accept / dismiss / queue / auto-aged-out action writes a row to the **new `pending_merge_journal` table** created in migration 0014 alongside `pending_merges` (see §D8 for the full schema). This is a discrete audit substrate, not a JSON blob — every field is a queryable column. The audit fields **cannot land on the existing `journal_entries` table** (PO decision, 2026-05-16 code-reviewer followup).
+
+Fields:
 
 - `actor_token_id` — **opaque token identifier**, not a username string. The token's database id, so subsequent revocation or rotation is traceable to the action that used the now-rotated credential. MCP-driven actions populate this with the MCP token's id; operator-driven actions populate this with the JWT session's underlying API token id.
 - `action_type` — one of `merge_confirmed`, `merge_dismissed`, `auto_queued`, `auto_aged_out`. The last is reserved for the deferred retention reaper (`enhancedchannelmanager-5136e`); v0.17.1 only writes the first three.
@@ -177,7 +179,31 @@ Indexes:
 - `(candidate_channel_id)` — supports offline orphan detection (§D4) without forcing a table scan.
 - **Partial unique**: `CREATE UNIQUE INDEX uq_pending_merges_active ON pending_merges (stream_name, candidate_channel_id) WHERE status = 'pending'` — see §D5.
 
-Migration discipline: BD-C follows the bd-5w6jz idempotency pattern (per-statement guards against pre-existing tables/indexes from `create_all()`, smart-bootstrap-fast-path safe), per `docs/database_migrations.md`. Five smoke tests in `test_alembic_smoke.py`-style coverage: fresh up, fresh down, full drift (table pre-created), partial drift (table present, one index missing), partial drift (table + indexes present but unique-partial-index missing). Schema-parity boot-guard (`_assert_schema_matches_models`) gates the model against migration head.
+**Second table in migration 0014: `pending_merge_journal`**
+
+The §D6 audit fields land here — a discrete, queryable audit substrate that is separate from `journal_entries` and separate from `pending_merges`.
+
+| Column | Type | Constraint | Purpose |
+|---|---|---|---|
+| `id` | INTEGER | PK AUTOINCREMENT | Monotonic row id |
+| `pending_merge_id` | INTEGER | NOT NULL, FK → `pending_merges.id` | Back-reference to the queue row. NOT NULL: every journal row is created in the context of a `pending_merges` row (drag-drop and add-stream both enqueue a `pending_merges` row before the operator acts; auto-aged-out rows reference the aging row). If a future path exists where no pending row is created (unlikely given §D3 and §D9), that is a schema addendum with its own ADR note |
+| `actor_token_id` | TEXT | NOT NULL | Opaque token identifier — the token's DB id, not a username string (§D6) |
+| `action_type` | TEXT | NOT NULL, CHECK in ('merge_confirmed','merge_dismissed','auto_queued','auto_aged_out') | What was decided (§D6) |
+| `source_channel_id` | TEXT | NOT NULL | Dispatcharr stream UUID that triggered the prompt (§D6) |
+| `target_channel_id` | TEXT | NOT NULL | Dispatcharr channel UUID that was the merge candidate (§D6) |
+| `confidence_score` | REAL | NOT NULL | RapidFuzz score captured at action time, 0.0–1.0 (§D6) |
+| `timestamp_utc` | INTEGER | NOT NULL | Epoch-ms, UTC — consistent with `pending_merges.created_at` and ADR-007 epoch-ms convention |
+| `trigger_context` | TEXT | NOT NULL, CHECK in ('drag_drop','add_stream','m3u_refresh','mcp_tool') | The surface the decision came in through (§D6) |
+
+Indexes on `pending_merge_journal`:
+
+- `(pending_merge_id)` — look up all journal rows for a given pending merge row.
+- `(timestamp_utc)` — time-range queries (audit log reviews, analytics).
+- `(actor_token_id)` — revocation audits: "find all actions taken by this token."
+
+**FK note:** `pending_merge_id` is a hard NOT NULL FK to `pending_merges.id`. The FK ordering in migration 0014 is unproblematic — `pending_merges` is created first in the same migration, so the FK is satisfiable within the single migration transaction. No circular dependency.
+
+Migration discipline: BD-C follows the bd-5w6jz idempotency pattern (per-statement guards against pre-existing tables/indexes from `create_all()`, smart-bootstrap-fast-path safe), per `docs/database_migrations.md`. Five smoke tests in `test_alembic_smoke.py`-style coverage: fresh up, fresh down, full drift (table pre-created), partial drift (table present, one index missing), partial drift (table + indexes present but unique-partial-index missing). Schema-parity boot-guard (`_assert_schema_matches_models`) gates the model against migration head. Coverage should extend to `pending_merge_journal` with the same five-scenario matrix.
 
 ### D9 — Async queue model: rows in `pending_merges`, no broker
 
@@ -227,7 +253,7 @@ Explicitly deferred. Each is filed as a backlog candidate so it surfaces in groo
 - **Bulk-destruction is bounded by construction.** The §D2 hard floor means a future "Resolve All" UI action (deferred backlog `qpgsx`) can ship without re-opening the misconfiguration vector — even the worst plausible operator threshold setting still gets matcher behavior at the floor. The Security Engineer signs off without needing per-action review.
 - **API convention stays consistent with the rest of `/api/*`.** Plural-noun resource paths, flat outcome envelopes, idempotent POST verbs at sub-resources. A new engineer reading `backend/routers/channel_merges.py` should not have to learn a new convention.
 - **No new infrastructure.** SQLite, the existing `asyncio` request loop, the existing JWT middleware, and the existing journal table cover everything. No Celery, no Redis, no APScheduler, no broker. Operators who self-host a single container do not learn a new operational surface.
-- **Audit is real, not nominal.** Every accept / dismiss / queue is attributable to a specific token id, a specific surface, and a specific confidence-at-decision-time. The MCP-vs-operator distinction the epic asks for (was an AI agent driving the merges, or a human?) is answerable from the journal without inferring from log timing.
+- **Audit is real, not nominal.** Every accept / dismiss / queue is attributable to a specific token id, a specific surface, and a specific confidence-at-decision-time. The MCP-vs-operator distinction the epic asks for (was an AI agent driving the merges, or a human?) is answerable from the `pending_merge_journal` table (§D6 / §D8) without inferring from log timing. Every audit field is a queryable column — no JSON blobs.
 - **Retention is deferrable, not ignored.** The terminal-state rows are kept indefinitely in v0.17.1; the reaper bead (`5136e`) is the additive lever if and when SLO-10 (BD-M) shows a real growth problem.
 - **MCP and REST cannot drift.** §D7 names the MCP tools by their final identifiers so BD-O / BD-P land matching the REST surface; future MCP additions go through the same naming convention.
 - **The auto-creation pipeline and the interactive dedup pipeline have a documented boundary.** Migration 0002 / bd-r9mtd is the unattended path; this ADR is the attended path. They do **not** share a matcher in v0.17.1 (epic decision; the architect's case for shared matcher is a backlog candidate but blocked by the auto-creation collision detection's stricter "separate not merge" semantics).
