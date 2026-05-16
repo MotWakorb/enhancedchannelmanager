@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Heatmap Visual Fixture (bd-lln2x)</title>
+    <!--
+      Standalone Vite entry that mounts ONLY the Heatmap component for
+      Playwright visual regression (e2e/heatmap-visual.spec.ts).
+
+      DO NOT add this entry to the production build's `dist/` output —
+      it bypasses auth, error reporting, and the rest of the app shell
+      and is for test fixture use only. The Vite dev server picks it
+      up automatically; production builds default to `index.html` only.
+    -->
+    <style>
+      /* Disable smooth fonts and animations for screenshot determinism.
+         Without these, anti-aliasing on text labels shifts pixel-level
+         RGB values between OS / GPU combinations and the baseline
+         comparison flakes. */
+      html, body {
+        margin: 0;
+        padding: 0;
+        background-color: #1e1e23;
+      }
+      *, *::before, *::after {
+        animation-duration: 0s !important;
+        animation-delay: 0s !important;
+        transition-duration: 0s !important;
+        transition-delay: 0s !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/visual-fixture/heatmap-fixture.tsx"></script>
+  </body>
+</html>

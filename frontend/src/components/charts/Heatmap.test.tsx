@@ -123,6 +123,7 @@ describe('Heatmap', () => {
 
   /**
    * bd-yteek — column-label readability fix.
+   * bd-wdpve — rotation direction fix + band height increase.
    *
    * The skqln.18 ProvidersPanel renders top-50 channel names along the
    * heatmap's X axis. At the default cellSize (32px), 15-25-char names
@@ -131,7 +132,12 @@ describe('Heatmap', () => {
    * stacking on the cell beside it.
    *
    * Contract:
-   *   - The column labels carry a -45° SVG rotate transform.
+   *   - The column labels carry a +45° SVG rotate transform (bd-wdpve:
+   *     yteek used -45° which in SVG y-down sends text DOWN-AND-LEFT,
+   *     rendering labels on top of the cells; +45° sends text UP-AND-RIGHT
+   *     into the COLUMN_LABEL_HEIGHT band above the grid).
+   *   - COLUMN_LABEL_HEIGHT is 140px (up from 80px) to contain long
+   *     labels like "917 | Milwaukee Brewers" (~95-100px at 45°).
    *   - The label still anchors to the column position; the consumer
    *     can override cellSize.
    *   - The time-of-day Heatmap use case (skqln.17, "00:00", "01:00")
@@ -150,9 +156,13 @@ describe('Heatmap', () => {
       expect(colLabels.length).toBe(3);
       colLabels.forEach((label) => {
         const transform = label.getAttribute('transform') ?? '';
-        // -45° (anti-clockwise tilt) reads top-left to bottom-right —
-        // standard datavis convention.
-        expect(transform).toMatch(/rotate\(\s*-?45\b/);
+        // +45° in SVG y-down sends text UP-AND-RIGHT from the pivot —
+        // labels project into the COLUMN_LABEL_HEIGHT band above the cells.
+        // bd-wdpve: yteek used -45° which sends text DOWN-AND-LEFT (on top
+        // of the cells below the band); this test locks in the fix.
+        expect(transform).toMatch(/rotate\(\s*45\b/);
+        // Must NOT be negative rotation.
+        expect(transform).not.toMatch(/rotate\(\s*-45\b/);
       });
     });
 
@@ -162,8 +172,8 @@ describe('Heatmap', () => {
       );
       const colLabels = container.querySelectorAll('text.heatmap-col-label');
       expect(colLabels.length).toBe(2);
-      // textAnchor='end' on a -45° rotated text means the label's right
-      // edge meets the column center.
+      // textAnchor='end' on a +45° rotated text means the label's trailing
+      // edge meets the column center pivot.
       colLabels.forEach((label) => {
         expect(label.getAttribute('text-anchor')).toBe('end');
       });
