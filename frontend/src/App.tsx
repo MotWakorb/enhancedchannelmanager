@@ -2465,6 +2465,10 @@ function App() {
               // Stream dedup cancel-pulse highlight (bd-u6ftw / BD-H)
               dedupReturningStreamIds={dedupOnDrop.returningStreamIds}
 
+              // Refresh channels after BD-I dedup merge (bd-1lznl) so the
+              // mapped-streams set reflects the new channel→stream binding.
+              onChannelsChanged={loadChannels}
+
               // External trigger to open edit modal from Guide tab
               externalChannelToEdit={channelToEditFromGuide}
               onExternalChannelEditHandled={handleExternalChannelEditHandled}

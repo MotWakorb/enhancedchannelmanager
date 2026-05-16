@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, StreamGroupInfo, M3UAccount, ChannelGroup, ChannelProfile, M3UGroupSetting } from '../types';
-import { useSelection, useExpandCollapse } from '../hooks';
+import { useSelection, useExpandCollapse, useAddStreamDedup } from '../hooks';
 import { detectRegionalVariants, filterStreamsByTimezone, normalizeStreamNamesWithBackend, stripQualitySuffixes, type TimezonePreference, type NumberSeparator, type PrefixOrder, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
@@ -11,6 +11,7 @@ import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { CustomSelect } from './CustomSelect';
 import { PreviewStreamModal } from './PreviewStreamModal';
 import { ModalOverlay } from './ModalOverlay';
+import { StreamDedupModal } from './StreamDedupModal';
 import { logger } from '../utils/logger';
 import { setStreamDragData, clearStreamDragData } from '../utils/dragStore';
 import './StreamsPane.css';
@@ -109,6 +110,11 @@ interface StreamsPaneProps {
   hideUngroupedStreams?: boolean;
   // Refresh streams (bypasses cache)
   onRefreshStreams?: () => void;
+  // Optional callback fired after a dedup-modal merge (BD-I / bd-1lznl)
+  // appends a stream to an existing channel, so the parent can re-fetch
+  // the channels list and the mapped-streams set. Distinct from
+  // `onRefreshStreams` (which only re-pulls the stream catalog).
+  onChannelsChanged?: () => void;
   // Set of stream IDs that are already mapped to channels (for "hide mapped" filter)
   mappedStreamIds?: Set<number>;
   // Callback when a group is expanded (for lazy loading streams)
@@ -160,11 +166,19 @@ export function StreamsPane({
   showStreamUrls = true,
   hideUngroupedStreams = true,
   onRefreshStreams,
+  onChannelsChanged,
   mappedStreamIds,
   onGroupExpand,
   defaultNormalizeOnCreate = false,
   dedupReturningStreamIds,
 }: StreamsPaneProps) {
+  // BD-I / bd-1lznl: dedup integration for the single-stream "Add Stream"
+  // surface (context-menu "Create channel(s) in group"). On a single-stream
+  // selection the hook intercepts the click, checks for a candidate, and
+  // either opens StreamDedupModal or falls through to the original
+  // openBulkCreateModalForStreamIds path. Multi-stream selections proceed
+  // unchanged — bulk dedup is BD-J's surface.
+  const addStreamDedup = useAddStreamDedup();
   // Expand/collapse groups with useExpandCollapse hook
   const {
     expandedIds: expandedGroups,
@@ -804,12 +818,40 @@ export function StreamsPane({
     showContextMenu(e.clientX, e.clientY, { streamIds });
   }, [isEditMode, isSelected, clearSelection, toggleSelect, selectedIds, showContextMenu]);
 
-  // Handler for "Create channel(s) in existing group" from context menu
+  // Handler for "Create channel(s) in existing group" from context menu.
+  //
+  // BD-I / bd-1lznl integration (ADR-008 §D1, trigger_context='add_stream'):
+  // For a SINGLE-stream selection the dedup hook intercepts the click to
+  // check for a duplicate-channel candidate first. If a candidate clears
+  // the §D2 floor the operator sees StreamDedupModal and chooses Merge /
+  // Create New / Cancel. For multi-stream selections we proceed unchanged
+  // — bulk dedup is BD-J's surface, not this one.
   const handleCreateInGroup = useCallback((groupId: number) => {
     if (!contextMenu) return;
-    openBulkCreateModalForStreamIds(contextMenu.metadata.streamIds, groupId);
+    const streamIds = contextMenu.metadata.streamIds;
     closeContextMenu();
-  }, [contextMenu, openBulkCreateModalForStreamIds, closeContextMenu]);
+
+    if (streamIds.length === 1) {
+      const cache = selectedStreamsCacheRef.current;
+      const stream = streams.find(s => s.id === streamIds[0]) || cache.get(streamIds[0]);
+      if (stream) {
+        // Route through the dedup hook; on no-candidate / lookup-failure
+        // it falls through to the bulk-create modal exactly as before.
+        void addStreamDedup.requestAddStream(
+          { id: stream.id, name: stream.name },
+          groupId,
+          () => openBulkCreateModalForStreamIds(streamIds, groupId),
+        );
+        return;
+      }
+    }
+
+    // Multi-stream selection or stream lookup miss — preserve the prior
+    // behavior. The miss case is defensive: if the stream is not in the
+    // current page and not in the cache, the dedup hook would have no
+    // stream_name to look up, so we let the bulk-create modal handle it.
+    openBulkCreateModalForStreamIds(streamIds, groupId);
+  }, [contextMenu, openBulkCreateModalForStreamIds, closeContextMenu, streams, addStreamDedup]);
 
   // Handler for "Create channel(s) in new group" from context menu
   const handleCreateInNewGroup = useCallback(() => {
@@ -2740,6 +2782,26 @@ export function StreamsPane({
         onClose={() => setPreviewStream(null)}
         stream={previewStream}
         providerName={previewStream?.m3u_account ? providers.find((p) => p.id === previewStream.m3u_account)?.name : undefined}
+      />
+
+      {/* Stream Dedup Modal (BD-I / bd-1lznl, ADR-008 §D1 trigger_context='add_stream') */}
+      <StreamDedupModal
+        isOpen={addStreamDedup.modalState.isOpen}
+        streamName={addStreamDedup.modalState.streamName}
+        candidate={addStreamDedup.modalState.candidate}
+        trigger="add_stream"
+        onMerge={async (channelId) => {
+          await addStreamDedup.handleMerge(channelId);
+          // After a successful merge the channel now owns this stream, so the
+          // mapped-streams set the parent computes against the channels list
+          // is stale until the next channels fetch. Surface a refresh hint so
+          // the "hide mapped streams" toggle reflects reality immediately.
+          onChannelsChanged?.();
+        }}
+        onCreateNew={async () => {
+          await addStreamDedup.handleCreateNew();
+        }}
+        onCancel={addStreamDedup.handleCancel}
       />
     </div>
   );
