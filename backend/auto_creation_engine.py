@@ -2532,11 +2532,17 @@ def _m3u_account_priority_value(
     stream_m3u_map: dict | None,
     settings,
 ) -> int:
-    """Numeric ECM M3U priority for *sid* (0 when unknown)."""
+    """Numeric ECM M3U priority for *sid* (0 when unknown).
+
+    Custom streams (operator-added, not from any M3U account) fall back to
+    ``m3u_account_priorities["custom"]`` so the same key used by Smart Sort's
+    ``compute_criteria_values`` applies uniformly across provider-order and
+    quality-tie-break paths that consume this helper (bd-sgtmx, GH #244).
+    """
     pri_map = getattr(settings, "m3u_account_priorities", None) or {} if settings is not None else {}
     aid = (stream_m3u_map or {}).get(sid)
     if aid is None:
-        return 0
+        return pri_map.get("custom", 0)
     return pri_map.get(str(aid), 0)
 
 

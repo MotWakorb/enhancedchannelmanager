@@ -320,11 +320,17 @@ def smart_sort_streams(
 
             elif criterion == "m3u_priority":
                 # Get M3U account priority from settings (higher priority = sorted first)
+                # bd-sgtmx / GH #244: custom streams (no m3u_account_id) fall back to
+                # the "custom" key so operators can assign explicit priority. Mirrors
+                # the same fallback in compute_criteria_values and the unprobed-streams
+                # path above — keeps all three smart-sort surfaces consistent.
                 m3u_priority_value = 0
                 m3u_account_id = stream_m3u_map.get(stream_id)
                 if m3u_account_id is not None:
                     # Convert to string since JSON keys are strings
                     m3u_priority_value = m3u_account_priorities.get(str(m3u_account_id), 0)
+                else:
+                    m3u_priority_value = m3u_account_priorities.get("custom", 0)
                 # Negate for descending sort (higher priority first)
                 sort_values.append(-m3u_priority_value)
 
