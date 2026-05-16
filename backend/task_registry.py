@@ -283,6 +283,11 @@ class TaskRegistry:
                 # Cron expression we couldn't translate — fall back to daily at
                 # the configured schedule_time if any, otherwise daily at 03:00 UTC.
                 # This avoids the pre-fix interval/0 silent-skip trap.
+                # Note: ScheduleConfig.schedule_time defaults to "" for CRON
+                # tasks (they carry their time inside cron_expression), so the
+                # `or` below effectively always picks "03:00" in practice. The
+                # branch exists for the legitimate edge case where an operator
+                # subclass populates BOTH cron_expression and schedule_time.
                 task_schedule_type = "daily"
                 cron_fields = {
                     "schedule_type": "daily",
