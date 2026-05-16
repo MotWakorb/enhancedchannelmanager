@@ -732,6 +732,22 @@ class TaskEngine:
                     alert_category=alert_category,
                 )
             elif result.success:
+                # bd-qxi02 (SRE recommendation from bd-p5b8i spike):
+                # stamp the per-task success gauge so the
+                # ECMTaskScheduleStale* alerts in prometheus_rules.yaml
+                # can distinguish "task hasn't been scheduled in days"
+                # (the disease bd-p5b8i hid for 39+ days) from "task
+                # is healthy." Wrapped defensively in observability —
+                # this MUST NOT break the task completion path.
+                try:
+                    from observability import record_task_success
+                    record_task_success(task_id)
+                except Exception as obs_err:  # pragma: no cover — best-effort
+                    logger.debug(
+                        "[%s] Failed to record task success gauge: %s",
+                        task_id, obs_err,
+                    )
+
                 log_entry(
                     category="task",
                     action_type="complete",
