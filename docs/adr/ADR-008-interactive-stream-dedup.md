@@ -33,6 +33,7 @@
   - `docs/api.md` — API reference (BD-N adds the four endpoints in §D1)
   - `docs/adr/ADR-007-session-telemetry-retention.md` — Sibling ADR that pioneered the "bounded retention by construction" framing this ADR adopts for the `pending_merges` audit horizon
   - `docs/adr/ADR-005-code-security-gating-strategy.md` — The new router lands subject to CodeQL delta-zero at PR time
+  - Epic body `bd-1v4ht` MCP tool names (`dedup_get_candidates`, `dedup_resolve_merge`) and `dedup_action` enum (`prompt_equivalent_fail | merge_if_exact | force_create`) predate this ADR; the names + enum in §D7 supersede the epic body
 
 ## Context
 
@@ -48,7 +49,7 @@ The companion **auto-creation pipeline** (migration 0002 / bd-r9mtd) already has
 
 ### Why this ADR must land before BD-A through BD-P start
 
-The epic decomposes into 14 sub-beads (BD-A through BD-P) spanning the matcher service, schema migration, four API endpoints, four frontend integrations, settings, observability, documentation, and two MCP tool families. Without a contract-lock the surface area drifts: the API path naming alone went through one PO override (D4) after the Code Reviewer flagged the original `/api/dedup/*` convention violation, and that override has to land in the ADR *before* BD-D / BD-E start coding the routes. Other contract-lock decisions (the **confidence floor**, the **MCP tool names**, the **`pending_merges` schema**, the **audit field set**) are each gates that one or more sub-beads consume.
+The epic decomposes into 16 sub-beads (BD-A through BD-P, including this ADR as BD-L and the SRE/docs cross-cutters BD-M / BD-N) spanning the matcher service, schema migration, four API endpoints, four frontend integrations, settings, observability, documentation, and two MCP tool families. Without a contract-lock the surface area drifts: the API path naming alone went through one PO override (D4) after the Code Reviewer flagged the original `/api/dedup/*` convention violation, and that override has to land in the ADR *before* BD-D / BD-E start coding the routes. Other contract-lock decisions (the **confidence floor**, the **MCP tool names**, the **`pending_merges` schema**, the **audit field set**) are each gates that one or more sub-beads consume.
 
 The 2026-05-15 team-plan ratified the design with all ten personas converging; the 2026-05-16 D4 override was the single change. This ADR encodes the ratified design verbatim and is **not** the place to re-litigate it.
 
@@ -66,6 +67,8 @@ Four endpoints land under `backend/routers/channel_merges.py`:
 - `GET /api/channel-merges?status=pending` — paginated queue list. Status is a query-param filter, default `pending`; passing `?status=merged` or `?status=dismissed` returns the terminal-state history rows the retention rule in §D3 keeps indefinitely.
 - `POST /api/channel-merges/{id}/accept` — operator confirms the merge. Idempotent: a row already in `merged` returns 200 with the prior outcome envelope, not 409, so a double-click or a retry after a flaky network is safe.
 - `POST /api/channel-merges/{id}/dismiss` — operator rejects the candidate. Also idempotent on terminal `dismissed`.
+
+Pagination follows the existing list-endpoint pattern (`page`, `page_size` query params with sane defaults — 1/50; response envelope includes `total` and `total_pages`).
 
 **Response envelope follows the existing ECM flat-outcome pattern.** No top-level `data` wrapper — the `POST /api/channels/merge` endpoint (`backend/routers/channels.py:1961`, established in bd-ct9wl) is the precedent: it returns the merged channel object directly. The `/accept` endpoint mirrors that, returning `{merged_into_channel_id, journal_entry_id, source_stream_id, confidence, ...}` flat. The `/dismiss` endpoint returns `{journal_entry_id, dismissed_at, ...}` flat. The `GET` endpoints return list/object payloads directly.
 
@@ -88,6 +91,8 @@ The matcher service (BD-A) enforces a **hard floor of 60%** below which it refus
 - **At the matcher API**: BD-A's `find_candidate(stream_name, group_id, threshold) -> Candidate | None` clamps `threshold = max(threshold, HARD_FLOOR)` before any RapidFuzz call. A request that asks for a 30% threshold gets 60% behavior; logged at DEBUG so the operator's intent is visible in postmortem traces but the action is safe.
 - **At the settings persistence boundary** (BD-B): the `dedup_threshold` field's Pydantic validator rejects values below the floor with HTTP 422 (`"dedup_threshold must be >= 60"`). The Settings UI (BD-K) constrains the input control to the same range; the validator is the source of truth so an API-direct or `settings.json`-edited bypass also lands at the floor.
 - **Hard floor value source of truth**: a module-level constant `CONFIDENCE_FLOOR = 60` in BD-A's matcher module. The Pydantic validator imports it so the two layers cannot drift.
+
+**The matcher's clamp is the load-bearing enforcement; the validator is the early-rejection courtesy.** BD-A's test suite MUST include `test_find_candidate_returns_no_match_below_floor`: assert that `find_candidate(stream_name='X', candidates=[(name='Y', confidence=50%)], threshold=5)` returns no candidate — proves the floor holds even when threshold is set below it.
 
 **Rationale.** Without the floor, an accidental or malicious threshold of 5% in the bulk-M3U-import path (BD-F) mass-enqueues low-quality pending rows. A subsequent "Resolve All" action (deferred backlog `qpgsx`, but plausible in v0.17.x) would then mass-destroy channels. The floor is the architectural backstop against this class of misconfiguration; it costs nothing at the happy path (the default 80% is well above it) and bounds the worst-case blast radius. The Security Engineer's veto-class concern, accepted.
 
@@ -153,6 +158,10 @@ MCP tool names are encoded here verbatim so BD-O / BD-P engineers do not invent 
 
 No `mcp__ecm__get_dedup_candidates` tool. The synchronous candidate-lookup behavior is covered by `add_stream(dedup_action='prompt')`, which returns the candidate list; carving the lookup into a separate tool would duplicate surface area without adding capability the agent does not already have through the `add_stream` extension.
 
+**MCP tool error semantics:** When the underlying REST endpoint returns 4xx, the tool returns a structured `{error: {code, message}}` envelope and does NOT throw. The AI agent can then call `dismiss_channel_merge` to clean up a stale row referenced by `accept_channel_merge` that 404s on a deleted target channel (per §D4 lazy-resolution policy).
+
+**MCP api_key holders are authorized to trigger merges as an intentional security posture** (ratified in the 2026-05-15 team-plan security position). The journal's `actor_token_id` + `trigger_context='mcp_tool'` is the audit trail. A future security audit asking "why can an MCP token mutate channels?" references this paragraph.
+
 ### D8 — `pending_merges` schema (informs BD-C migration **0014**)
 
 > Migration revision is **0014**, not 0011 as the original BD-C bead title says. Current Alembic head as of v0.17.1-0002 (`backend/alembic/versions/`) is `0013_session_telemetry_channel_event_counters`. BD-C should update its bead title at implementation time; this ADR is the canonical reference for the migration number.
@@ -203,6 +212,10 @@ Indexes on `pending_merge_journal`:
 
 **FK note:** `pending_merge_id` is a hard NOT NULL FK to `pending_merges.id`. The FK ordering in migration 0014 is unproblematic — `pending_merges` is created first in the same migration, so the FK is satisfiable within the single migration transaction. No circular dependency.
 
+**Channel ID type note:** TypeScript clients receive `candidate_channel_id` as `string` (matches the stored TEXT column, matches ECM's Dispatcharr-UUID handling everywhere else — `backend/models.py:143` precedent). The epic body's `DedupCandidate.channel_id: number` is corrected to `string` at implementation time, mirroring the migration-0014 number correction earlier in §D8.
+
+**Bead title vs filename drift note:** The bead title for bd-2pd5i references `ADR-008-stream-to-channel-deduplication.md`; the actual file landed as `ADR-008-interactive-stream-dedup.md`. Bead title to be updated at close time.
+
 Migration discipline: BD-C follows the bd-5w6jz idempotency pattern (per-statement guards against pre-existing tables/indexes from `create_all()`, smart-bootstrap-fast-path safe), per `docs/database_migrations.md`. Five smoke tests in `test_alembic_smoke.py`-style coverage: fresh up, fresh down, full drift (table pre-created), partial drift (table present, one index missing), partial drift (table + indexes present but unique-partial-index missing). Schema-parity boot-guard (`_assert_schema_matches_models`) gates the model against migration head. Coverage should extend to `pending_merge_journal` with the same five-scenario matrix.
 
 ### D9 — Async queue model: rows in `pending_merges`, no broker
@@ -249,7 +262,7 @@ Explicitly deferred. Each is filed as a backlog candidate so it surfaces in groo
 
 ### Positive
 
-- **Contract-lock for 14 sub-beads.** BD-A through BD-P consume this ADR as their interface document. The API path, the floor constant, the schema columns, the MCP tool names, and the journal field set are all named once here and referenced from there. Divergent implementation choices have nowhere to hide.
+- **Contract-lock for 16 sub-beads (BD-A through BD-P, including this ADR as BD-L and the SRE/docs cross-cutters BD-M / BD-N).** BD-A through BD-P consume this ADR as their interface document. The API path, the floor constant, the schema columns, the MCP tool names, and the journal field set are all named once here and referenced from there. Divergent implementation choices have nowhere to hide.
 - **Bulk-destruction is bounded by construction.** The §D2 hard floor means a future "Resolve All" UI action (deferred backlog `qpgsx`) can ship without re-opening the misconfiguration vector — even the worst plausible operator threshold setting still gets matcher behavior at the floor. The Security Engineer signs off without needing per-action review.
 - **API convention stays consistent with the rest of `/api/*`.** Plural-noun resource paths, flat outcome envelopes, idempotent POST verbs at sub-resources. A new engineer reading `backend/routers/channel_merges.py` should not have to learn a new convention.
 - **No new infrastructure.** SQLite, the existing `asyncio` request loop, the existing JWT middleware, and the existing journal table cover everything. No Celery, no Redis, no APScheduler, no broker. Operators who self-host a single container do not learn a new operational surface.
@@ -334,4 +347,4 @@ No vendor relationship to unwind; no external dependency introduced by this ADR 
 
 | Date | Bead | Change | Rationale |
 |---|---|---|---|
-| 2026-05-16 | `enhancedchannelmanager-2pd5i` | Proposed + accepted same day | Contract-lock for BD-A through BD-P; encodes 2026-05-15 team-plan + 2026-05-16 D4 API-naming override. Hard prerequisite for the 14 sub-beads of the dedup epic |
+| 2026-05-16 | `enhancedchannelmanager-2pd5i` | Proposed + accepted same day | Contract-lock for BD-A through BD-P; encodes 2026-05-15 team-plan + 2026-05-16 D4 API-naming override. Hard prerequisite for the 16 sub-beads of the dedup epic |
