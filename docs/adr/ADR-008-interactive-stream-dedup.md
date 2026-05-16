@@ -136,7 +136,7 @@ Fields:
 
 - `actor_token_id` — **opaque token identifier**, not a username string. The token's database id, so subsequent revocation or rotation is traceable to the action that used the now-rotated credential. MCP-driven actions populate this with the MCP token's id; operator-driven actions populate this with the JWT session's underlying API token id.
 - `action_type` — one of `merge_confirmed`, `merge_dismissed`, `auto_queued`, `auto_aged_out`. The last is reserved for the deferred retention reaper (`enhancedchannelmanager-5136e`); v0.17.1 only writes the first three.
-- `source_channel_id` — the incoming Dispatcharr stream id that triggered the prompt.
+- `source_channel_id` — the Dispatcharr stream id when resolvable from the `stream_name` lookup at accept time, else the raw `stream_name` as fallback. **Audit-first contract:** the operator decision is always recorded, even when the stream-name lookup fails (zero matches, multiple ambiguous matches, or a Dispatcharr-side error during search). The lookup-failure case can be triaged via the human-readable name; the resolved-id case is the canonical cross-system reference. Both shapes are valid for this column. BD-E's accept endpoint records the resolved id when the name search returns exactly one match; the bulk-import hook (BD-F) and dismiss path (which does not call Dispatcharr at all) populate this with the raw `stream_name`. A future schema addendum may widen `pending_merges` to carry the Dispatcharr stream id at queue time, at which point the fallback path disappears — but the column is documented as accepting either shape so existing audit rows are not invalidated.
 - `target_channel_id` — the candidate Dispatcharr channel UUID.
 - `confidence_score` — the RapidFuzz score captured **at action time**. The operator-configurable threshold can drift between queue and accept, so the score is what the operator was looking at when they decided, not what the threshold is now.
 - `timestamp_utc` — epoch-ms, UTC.
@@ -198,7 +198,7 @@ The §D6 audit fields land here — a discrete, queryable audit substrate that i
 | `pending_merge_id` | INTEGER | NOT NULL, FK → `pending_merges.id` | Back-reference to the queue row. NOT NULL: every journal row is created in the context of a `pending_merges` row (drag-drop and add-stream both enqueue a `pending_merges` row before the operator acts; auto-aged-out rows reference the aging row). If a future path exists where no pending row is created (unlikely given §D3 and §D9), that is a schema addendum with its own ADR note |
 | `actor_token_id` | TEXT | NOT NULL | Opaque token identifier — the token's DB id, not a username string (§D6) |
 | `action_type` | TEXT | NOT NULL, CHECK in ('merge_confirmed','merge_dismissed','auto_queued','auto_aged_out') | What was decided (§D6) |
-| `source_channel_id` | TEXT | NOT NULL | Dispatcharr stream UUID that triggered the prompt (§D6) |
+| `source_channel_id` | TEXT | NOT NULL | Dispatcharr stream id when resolvable, else raw `stream_name` as fallback (audit-first contract per §D6) |
 | `target_channel_id` | TEXT | NOT NULL | Dispatcharr channel UUID that was the merge candidate (§D6) |
 | `confidence_score` | REAL | NOT NULL | RapidFuzz score captured at action time, 0.0–1.0 (§D6) |
 | `timestamp_utc` | INTEGER | NOT NULL | Epoch-ms, UTC — consistent with `pending_merges.created_at` and ADR-007 epoch-ms convention |

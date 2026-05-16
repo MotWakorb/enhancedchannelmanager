@@ -2737,7 +2737,17 @@ class PendingMergeJournal(Base):
     actor_token_id = Column(Text, nullable=False)
     # What was decided. CHECK is load-bearing for §D6 audit semantics.
     action_type = Column(Text, nullable=False)
-    # Dispatcharr stream UUID that triggered the prompt.
+    # Identifier for the Dispatcharr stream that triggered the prompt.
+    # Audit-first contract (ADR-008 §D6): when the accept-path's
+    # stream-name lookup resolves to exactly one Dispatcharr stream,
+    # this is the resolved stream id as a string. When the lookup
+    # returns zero matches, multiple ambiguous matches, or fails, this
+    # falls back to the raw ``stream_name`` from the pending_merges
+    # row so the operator decision is still recorded in a queryable
+    # form. The lookup-failure case is triageable from the journal via
+    # the human-readable name; the resolved-id case is the canonical
+    # cross-system reference. Both shapes are valid per the audit-first
+    # contract.
     source_channel_id = Column(Text, nullable=False)
     # Dispatcharr channel UUID that was the merge candidate.
     target_channel_id = Column(Text, nullable=False)
