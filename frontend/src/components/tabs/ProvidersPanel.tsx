@@ -16,7 +16,7 @@
  *      real installs — the operationally-meaningful health signals are
  *      ``channel_reconnect`` / ``channel_error`` / ``stream_switch``,
  *      which the ingest layer now writes to dedicated columns on
- *      ``session_telemetry`` (migration 0012). The chart renders the
+ *      ``session_telemetry`` (migration 0013). The chart renders the
  *      pre-summed ``total_event_count`` (UX option A — single primary
  *      number); the per-type breakdown is surfaced in the data-table
  *      fallback (which screen readers already always render) and a
@@ -583,7 +583,7 @@ export function ProvidersPanel() {
               <th scope="col">Provider</th>
               {/* bd-ov5vb / bd-1x5v0: per-type breakdown surfaces the
                   four counters the broadened ingest writes to
-                  ``session_telemetry`` (migration 0012). "Total" is the
+                  ``session_telemetry`` (migration 0013). "Total" is the
                   pre-summed value the chart renders so a screen-reader
                   user sees the same number visually-sighted users
                   read off the line. */}
