@@ -8,7 +8,7 @@ import time
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from database import get_session
 from dispatcharr_client import get_client
@@ -67,6 +67,28 @@ class TaskScheduleCreate(BaseModel):
     day_of_month: Optional[int] = None  # 1-31, or -1 for last day
     parameters: Optional[dict] = None  # Task-specific parameters (e.g., channel_groups, batch_size)
 
+    @model_validator(mode="after")
+    def _validate_interval_seconds_positive(self):
+        """Reject interval schedules with NULL/<=0 ``interval_seconds`` (bd-lbkck).
+
+        Defense in depth for bd-p5b8i: the placeholder bug wrote
+        ``task_schedules`` rows with ``schedule_type='interval'`` and
+        ``interval_seconds=0``/``NULL``, which surfaces as a fatal
+        "no next-run" condition in the calculator. The DBA spike's
+        verbatim conclusion: "interval/0 as a valid state is always a
+        bug". This validator surfaces a 422 with a clear message at the
+        API surface so the bad shape never reaches the DB. Alembic
+        migration 0012 adds the matching CHECK constraint for the
+        backup-restore and future-code-path attack surfaces.
+        """
+        if self.schedule_type == "interval" and (
+            self.interval_seconds is None or self.interval_seconds <= 0
+        ):
+            raise ValueError(
+                "interval_seconds must be > 0 when schedule_type is 'interval'"
+            )
+        return self
+
 
 class TaskScheduleUpdate(BaseModel):
     """Request body for updating a task schedule."""
@@ -79,6 +101,50 @@ class TaskScheduleUpdate(BaseModel):
     days_of_week: Optional[list] = None
     day_of_month: Optional[int] = None
     parameters: Optional[dict] = None  # Task-specific parameters
+
+    @model_validator(mode="after")
+    def _validate_interval_seconds_positive(self):
+        """Reject updates that would set interval schedule to <=0 (bd-lbkck).
+
+        Two cases must be rejected:
+
+        1. Both ``schedule_type='interval'`` and ``interval_seconds`` provided
+           in the same PATCH, where ``interval_seconds`` is NULL/<=0.
+        2. ``schedule_type='interval'`` provided alone without
+           ``interval_seconds`` — the existing DB row may have a NULL
+           ``interval_seconds`` (in which case the result is interval/NULL
+           = the bug). Rejecting forces the operator to supply both fields
+           together, which is the correct posture for a schema invariant.
+
+        Cases the validator deliberately does NOT block (insufficient
+        context at this layer):
+
+        - ``interval_seconds`` provided alone with NULL/<=0 value but no
+          ``schedule_type`` — the existing row's ``schedule_type`` may be
+          'daily' (in which case NULL interval_seconds is correct). The
+          PATCH handler in ``update_task_schedule`` cross-checks against
+          the loaded row after this validator runs; the DB CHECK
+          constraint (migration 0012) is the backstop for fresh installs.
+
+        The router's PATCH handler must do a final cross-check against
+        the loaded row's ``schedule_type`` because case 1 above can also
+        be triggered by ``interval_seconds=0`` patched onto a row that
+        is currently interval — this validator catches the
+        ``schedule_type='interval'`` half; the handler catches the
+        update-against-existing-interval half.
+        """
+        # Case 1: explicit interval type + bad interval_seconds in same PATCH.
+        if self.schedule_type == "interval" and (
+            self.interval_seconds is None or self.interval_seconds <= 0
+        ):
+            raise ValueError(
+                "interval_seconds must be > 0 when schedule_type is 'interval'"
+            )
+        # Case 2 is the same condition expressed differently — the
+        # short-circuit above catches both. (When schedule_type='interval'
+        # is provided alone, interval_seconds is None by default → fails
+        # the check.)
+        return self
 
 
 # Task parameter schemas - defines what parameters each task type accepts
@@ -775,6 +841,26 @@ async def update_task_schedule(task_id: str, schedule_id: int, data: TaskSchedul
                 schedule.schedule_type = data.schedule_type
             if data.interval_seconds is not None:
                 schedule.interval_seconds = data.interval_seconds
+            # bd-lbkck cross-check: after applying the PATCH, if the row
+            # would end up as interval/NULL or interval/<=0, reject before
+            # commit. Covers the case where the request body has
+            # ``interval_seconds=0`` alone (no ``schedule_type``) and the
+            # existing row is already an interval schedule — the validator
+            # on ``TaskScheduleUpdate`` only catches the half where
+            # ``schedule_type='interval'`` is in the request body. The
+            # DB CHECK constraint (migration 0012) is the backstop for
+            # fresh installs; this guard prevents fast-path-stamped
+            # operators from re-introducing the bug via the API.
+            if schedule.schedule_type == "interval" and (
+                schedule.interval_seconds is None or schedule.interval_seconds <= 0
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "interval_seconds must be > 0 when schedule_type "
+                        "is 'interval'"
+                    ),
+                )
             if data.schedule_time is not None:
                 schedule.schedule_time = data.schedule_time
             if data.timezone is not None:
