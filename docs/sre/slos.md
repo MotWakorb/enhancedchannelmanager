@@ -3,7 +3,7 @@
 **Status:** Initial scaffold (v1). Targets are conservative and MUST be recalibrated against 30+ days of production metrics before being treated as commitments.
 **Owner:** SRE persona.
 **Baseline:** Built on the observability substrate shipped in [PR #80](https://github.com/MotWakorb/enhancedchannelmanager/pull/80) (bd-ak1db). The four `ecm_*` series exposed on `/metrics` are the foundation for every SLI below.
-**Last updated:** 2026-04-24 (bd-5uxwh — added Alerting posture section).
+**Last updated:** 2026-05-16 (bd-ft3hk — added SLO-10 Interactive Stream Dedup section).
 
 ## Why this exists
 
