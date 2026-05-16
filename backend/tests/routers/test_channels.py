@@ -5,6 +5,7 @@ Tests: 22 channel endpoints covering channel CRUD, logos, CSV import/export,
        stream management, number assignment, bulk-commit, and clear-auto-created.
 Mocks: get_client() for all Dispatcharr API calls, csv_handler for CSV operations.
 """
+import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -681,3 +682,48 @@ class TestBulkMergeSanitization:
         assert result["error"] == "RuntimeError"
         assert "internal-dispatcharr" not in result["error"]
         assert "Bad Gateway" not in result["error"]
+
+
+class TestMergeChannelsStaleSourceIds:
+    """Tests for POST /api/channels/merge stale-source-ID handling.
+
+    bd-ct9wl: when the UI submits a merge request with a stale source ID
+    (e.g., a ghost row that survived a previous merge), the upstream
+    get_channel returns 404. Surface 422 with a refresh hint instead of
+    falling through to a generic 500.
+    """
+
+    @pytest.mark.asyncio
+    async def test_returns_422_when_source_id_no_longer_exists(self, async_client):
+        """Stale source ID returns 422 with refresh hint, not 500."""
+        mock_client = AsyncMock()
+        # First source is fine; second is gone (404 from Dispatcharr).
+        not_found_response = MagicMock(spec=httpx.Response)
+        not_found_response.status_code = 404
+        not_found_response.text = "Not found"
+        not_found_request = MagicMock(spec=httpx.Request)
+        mock_client.get_channel.side_effect = [
+            {"id": 100, "name": "Live A", "streams": [10]},
+            httpx.HTTPStatusError(
+                "404 Not Found",
+                request=not_found_request,
+                response=not_found_response,
+            ),
+        ]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post(
+                "/api/channels/merge",
+                json={
+                    "source_channel_ids": [100, 999],
+                    "target_name": "Merged",
+                },
+            )
+
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert "999" in detail
+        assert "refresh" in detail.lower()
+        # Did not proceed to create the merged channel.
+        mock_client.create_channel.assert_not_called()
