@@ -400,6 +400,31 @@ button.group-selection-checkbox {
   color: var(--accent-primary);
 }
 
+/* Cancel-pulse for stream-dedup modal (bd-u6ftw / BD-H, ADR-008 §D5).
+   When the operator cancels the dedup modal after a drop, the stream
+   snaps back to its source location and pulses an accent-color outline
+   for ~500ms so the operator visually re-anchors on it. The duration is
+   coordinated with DEDUP_RETURNING_HIGHLIGHT_MS in useDedupOnDrop.ts.
+   prefers-reduced-motion is honored at the source: the App-level hook
+   never adds the class when reduced motion is active, so no @media rule
+   is needed here. */
+.stream-item.is-dedup-returning {
+  animation: stream-dedup-return-pulse 500ms ease-out;
+}
+
+@keyframes stream-dedup-return-pulse {
+  0% {
+    outline: 2px solid var(--accent-primary);
+    outline-offset: 2px;
+    background-color: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  }
+  100% {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    background-color: transparent;
+  }
+}
+
 .stream-logo {
   width: 32px;
   height: 32px;

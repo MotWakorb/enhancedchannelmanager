@@ -389,6 +389,45 @@ export async function bulkCommit(request: BulkCommitRequest): Promise<BulkCommit
   });
 }
 
+// Stream-to-channel deduplication (ADR-008 / bd-1v4ht epic) ----------------
+// Re-exports the DedupCandidate shape from the modal so consumers don't pull
+// it from a component module. The modal owns the operator-facing fields;
+// this layer owns the wire contract.
+
+/** Single candidate returned by GET /api/channel-merges/candidates (BD-D). */
+export interface DedupCandidate {
+  channel_id: string;
+  channel_name: string;
+  /** Normalized confidence 0.0–1.0. Backend already enforces the ADR-008 §D2 floor. */
+  confidence: number;
+}
+
+/** Envelope for GET /api/channel-merges/candidates (BD-D). */
+export interface DedupCandidatesResponse {
+  stream_name: string;
+  candidates: DedupCandidate[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+/**
+ * Look up dedup candidates for an incoming stream name (BD-D).
+ *
+ * Synchronous top-1 candidate lookup. The backend returns an empty
+ * `candidates` array when nothing clears the §D2 confidence floor — that is
+ * the signal to proceed with normal channel creation. When a candidate is
+ * present, callers should surface the StreamDedupModal for operator decision.
+ */
+export async function getDedupCandidates(
+  streamName: string,
+  groupId?: number | null,
+): Promise<DedupCandidatesResponse> {
+  const query = buildQuery({ stream_name: streamName, group_id: groupId ?? undefined });
+  return fetchJson(`${API_BASE}/channel-merges/candidates${query}`);
+}
+
 // Channel Groups
 export async function getChannelGroups(): Promise<ChannelGroup[]> {
   return fetchJson(`${API_BASE}/channel-groups`);
