@@ -23,13 +23,13 @@ from routers.m3u import router as m3u_router
 from routers.m3u_digest import router as m3u_digest_router
 from routers.channels import router as channels_router
 from routers.channel_groups import router as channel_groups_router
+from routers.channel_merges import router as channel_merges_router
 from routers.dummy_epg import router as dummy_epg_router
 from routers.export import router as export_router
 from routers.backup import router as backup_router
 from routers.lookup_tables import router as lookup_tables_router
 from routers.client_errors import router as client_errors_router
 from routers.session_starts import router as session_starts_router
-from routers.channel_merges import router as channel_merges_router
 
 all_routers = [
     tasks_router,
@@ -52,11 +52,11 @@ all_routers = [
     m3u_digest_router,
     channels_router,
     channel_groups_router,
+    channel_merges_router,
     dummy_epg_router,
     export_router,
     backup_router,
     lookup_tables_router,
     client_errors_router,
     session_starts_router,
-    channel_merges_router,
 ]
