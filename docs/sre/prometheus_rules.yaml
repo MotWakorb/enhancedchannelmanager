@@ -780,43 +780,48 @@ groups:
       - record: ecm:task_schedule:hours_since_success
         expr: (time() - ecm_task_schedule_last_success_timestamp) / 3600
 
-      # ECMTaskSchedulerNextRunNull — DISABLED PENDING DEPLOY ORDER.
+      # ECMTaskSchedulerNextRunNull — ENABLED at v0.17.1 (bd-ft3hk).
       #
-      # UNCOMMENT AFTER v0.17.0 SHIPS — see slos.md
-      # "Capacity planning: Task scheduler health" for the deploy-
-      # order rationale. Operators who copy this file into their
-      # stack today will page themselves immediately because Bundle H
-      # (the next_run_at heal) has not yet shipped to operators. The
-      # alert body is physically commented so accidental ingestion is
-      # impossible. A follow-up PR (~30 days post-v0.17.0 release)
-      # will uncomment this block once operator installs have had a
-      # chance to run the heal at startup.
+      # Previously shipped commented-out at v0.17.0 cut. The deploy-
+      # order rationale (Bundle H's heal must reach operators before
+      # the alert is live, otherwise every existing install pages
+      # itself on first scrape because every non-MANUAL row had
+      # next_run_at=NULL pre-heal) is now satisfied: v0.17.0 shipped
+      # the heal (bd-1weac), operators have had a chance to restart
+      # into a heal-bearing build, and the persistent NULL count
+      # should be 0 on any post-heal install. Uncommented as part of
+      # the BD-M SLO-10 + alert-rules consolidation.
       #
-      # - alert: ECMTaskSchedulerNextRunNull
-      #   # Any non-MANUAL enabled schedule with NULL next_run_at means
-      #   # the scheduler is structurally broken — the schedule MUST
-      #   # have a computed next_run_at for the scheduler loop to pick
-      #   # it up. 5m window rejects single-scrape transients during
-      #   # the registry sync window (the gauge is re-emitted post-sync
-      #   # so a brief mid-sync NULL count is normal).
-      #   expr: ecm_task_schedule_next_run_null_count > 0
-      #   for: 5m
-      #   labels:
-      #     severity: page
-      #     slo: task_scheduler_health
-      #     service: ecm
-      #   annotations:
-      #     summary: "{{ $value }} task_schedules row(s) have NULL next_run_at — scheduler subsystem may be broken"
-      #     description: |
-      #       One or more enabled non-MANUAL rows in task_schedules has
-      #       next_run_at = NULL. The scheduler loop only picks up rows
-      #       with a computed next_run_at, so these tasks will never run
-      #       until the value is healed. This is the bd-p5b8i disease
-      #       vector — silent for 39+ days on the PO's install. Run the
-      #       runbook's diagnostic query to identify the affected
-      #       task_id(s); recovery is automatic on container restart
-      #       once Bundle H's heal is deployed.
-      #     runbook_url: docs/runbooks/task_scheduler_stalled.md
+      # If a fresh operator picks up this rules file before they have
+      # restarted into v0.17.0+, the alert will page on their first
+      # scrape. Acceptable trade: the page is correct (the install is
+      # broken), the runbook explains the heal, and restarting the
+      # container clears the condition within one scrape interval.
+      - alert: ECMTaskSchedulerNextRunNull
+        # Any non-MANUAL enabled schedule with NULL next_run_at means
+        # the scheduler is structurally broken — the schedule MUST
+        # have a computed next_run_at for the scheduler loop to pick
+        # it up. 5m window rejects single-scrape transients during
+        # the registry sync window (the gauge is re-emitted post-sync
+        # so a brief mid-sync NULL count is normal).
+        expr: ecm_task_schedule_next_run_null_count > 0
+        for: 5m
+        labels:
+          severity: page
+          slo: task_scheduler_health
+          service: ecm
+        annotations:
+          summary: "{{ $value }} task_schedules row(s) have NULL next_run_at — scheduler subsystem may be broken"
+          description: |
+            One or more enabled non-MANUAL rows in task_schedules has
+            next_run_at = NULL. The scheduler loop only picks up rows
+            with a computed next_run_at, so these tasks will never run
+            until the value is healed. This is the bd-p5b8i disease
+            vector — silent for 39+ days on the PO's install. Run the
+            runbook's diagnostic query to identify the affected
+            task_id(s); recovery is automatic on container restart
+            once Bundle H's heal is deployed (shipped in v0.17.0).
+          runbook_url: docs/runbooks/task_scheduler_stalled.md
 
       - alert: ECMTaskScheduleStaleStatsRollup
         # stats_v2_rollup runs nightly (24h cadence). 25h budget = 1h
