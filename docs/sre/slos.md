@@ -3,7 +3,7 @@
 **Status:** Initial scaffold (v1). Targets are conservative and MUST be recalibrated against 30+ days of production metrics before being treated as commitments.
 **Owner:** SRE persona.
 **Baseline:** Built on the observability substrate shipped in [PR #80](https://github.com/MotWakorb/enhancedchannelmanager/pull/80) (bd-ak1db). The four `ecm_*` series exposed on `/metrics` are the foundation for every SLI below.
-**Last updated:** 2026-04-24 (bd-5uxwh — added Alerting posture section).
+**Last updated:** 2026-05-16 (bd-ft3hk — added SLO-10 Interactive Stream Dedup section).
 
 ## Why this exists
 
@@ -72,6 +72,7 @@ Everything downstream of that — severity routing, on-call rotations, Slack/ema
 | SLO-7: Stats v2 Telemetry Write Success Rate | `prometheus_rules.yaml` group `ecm_stats_v2_write` | Prometheus window-based (5m failure-ratio threshold, promotes to page if sustained 30m) | Operator-provisioned |
 | SLO-8: Provider Attribution Rate | `prometheus_rules.yaml` group `ecm_stats_v2_provider_resolution` | Prometheus window-based (1h ratio threshold) | Operator-provisioned, **warn-only** |
 | SLO-9: Stats v2 Query Latency | `prometheus_rules.yaml` group `ecm_stats_v2_query_latency` | Prometheus window-based (p95 over 15m) | Operator-provisioned, **warn-only** |
+| SLO-10: Channel Deduplication | `prometheus_rules.yaml` group `ecm_dedup` | Prometheus window-based (3 alerts: candidate-lookup p99, pending resolution rate, merge API error rate) | Operator-provisioned. Rules ship vacuous until BD-D/E/F emit the metrics (intentional — see SLO-10 below). |
 
 This keeps the SLO *targets* credible regardless of what infrastructure the operator runs — the metrics are emitted, the rules are authored, the runbooks exist. Whether an alert actually wakes someone up at 3 AM depends on a scraper that ECM does not ship.
 
@@ -400,6 +401,83 @@ Tighten to p95 < 400ms once 30 days of production data shows we comfortably beat
 
 ---
 
+## SLO-10: Channel Deduplication (v0.17.1 dedup epic, bd-1v4ht / bd-ft3hk)
+
+**Status:** Defined ahead of the metric-emitting code (BD-D / BD-E / BD-F land the candidate-lookup endpoint, the merge endpoint, and the pending-merges queue respectively). Alert rules ship vacuous until those beads emit the metrics. This is deliberate per the team-plan SRE position: rules-without-metrics fire nothing and cost nothing; alert-rule definitions are how downstream engineers learn which metric names and labels to emit. Rules become live signal automatically on the first scrape after BD-D/E/F deploy.
+
+**SLI-10a — Candidate lookup latency.** 99th percentile latency of the `POST /api/channel-merges/candidates` request that surfaces the merge prompt on drag-drop / add-stream / bulk M3U triggers. This is the operator-visible "did the modal pop instantly or did it stutter" signal.
+
+**Prometheus expression (SLI-10a):**
+```promql
+histogram_quantile(
+  0.99,
+  sum by (le) (
+    rate(ecm_dedup_candidate_lookup_duration_seconds_bucket[5m])
+  )
+)
+```
+
+**SLO-10a target:** **p99 < 500ms** over a rolling 7-day window, for at least **99%** of evaluations.
+
+**SLI-10b — Pending merge resolution rate.** Ratio of merge requests that reach a terminal state (`success` or `dismissed`) to merge requests that entered the pending queue over a 24h window. A "pending" merge that lingers indefinitely is a UX failure — the operator either accepts (merge) or dismisses (intentional skip); both are valid, both are tracked. The denominator is the count of items added to the pending-merges queue depth; the numerator is the count of terminal-state transitions out of that queue.
+
+**Prometheus expression (SLI-10b):**
+```promql
+sum(increase(ecm_dedup_merge_requests_total{status=~"success|dismissed"}[24h]))
+/
+sum(increase(ecm_pending_merges_queue_depth_added_total[24h]))
+```
+
+**SLO-10b target:** **95% resolution within 24h** of the merge request entering the pending queue, evaluated weekly.
+
+**SLI-10c — Merge API error rate.** Ratio of failed `POST /api/channel-merges/{id}/accept` calls to total accept calls over a rolling 5m window. The error mode is the merge endpoint returning 5xx (a Dispatcharr proxy failure, a database lock, an internal exception) or the merge body raising an unhandled exception that gets logged with `status="error"`. 4xx responses are explicitly excluded — a 422 on stale source IDs (bd-ozhkf / bd-ct9wl pattern) is correct backend behavior, not service unreliability.
+
+**Prometheus expression (SLI-10c):**
+```promql
+sum(rate(ecm_dedup_merge_requests_total{status="error"}[5m]))
+/
+sum(rate(ecm_dedup_merge_requests_total[5m]))
+```
+
+**SLO-10c target:** **error rate < 1%** over a rolling 5m window, for at least **99%** of evaluations over 7 days.
+
+**Why these targets (initial):**
+
+- **p99 < 500ms (SLI-10a):** the dedup matcher runs server-side and reads channels/streams from the same SQLite instance ECM already queries on every page load. 500ms is the "user perceives the modal as instant" threshold — beyond that, the drag-drop interaction stalls visibly. Tighten to p99 < 250ms after 30 days of production data if the matcher comfortably beats 500ms.
+- **95% / 24h resolution (SLI-10b):** below 95%, the pending-merges queue accumulates faster than operators clear it — the modal becomes a backlog inbox instead of an interrupt. The 24h horizon matches operator daily-attention patterns; a merge sitting longer than a day is functionally abandoned.
+- **<1% error rate (SLI-10c):** the merge endpoint is the dedup epic's load-bearing write path. A failed accept means the channel is in a half-merged state from the operator's perspective (target may already have the streams, sources may already be deleted) — the highest-stakes failure mode in the epic. 1% is the same floor as SLO-3 (HTTP 5xx rate); the dedup-specific alert exists so the merge-failure signal is not buried in general 5xx noise.
+
+**Error budget:**
+
+- **SLO-10a:** 1% of 7d / 5m evaluations = ~20 minutes of windows where p99 ≥ 500ms per 7d.
+- **SLO-10b:** 5% of merges may stall past 24h per week without breaching. On a low-traffic install (one bulk M3U import per week, 10 candidate merges produced), the budget is < 1 stalled merge.
+- **SLO-10c:** 1% of 7d / 5m evaluations = ~20 minutes of windows where accept error rate ≥ 1% per 7d.
+
+**Scope discipline (team-plan ratification):** SLO-10 has exactly three SLIs. The bead description originally enumerated additional matcher-internal metrics (queue depth as its own SLI, merge action breakdown by source); those were collapsed during team-plan because they are *diagnostic dimensions* on the same write path, not independent commitments. Queue depth becomes a sub-signal of SLI-10b (a backlog means resolution is failing); action-by-source belongs in a dashboard, not an SLO. Adding them later is cheap; removing them once shipped is not.
+
+**What breaks this SLO:**
+
+- The candidate matcher executes a query that does not use the dedup index (the index design is BD-B's; a regression at query-time shows up here first).
+- The merge endpoint runs without a transaction boundary and a Dispatcharr-proxy failure leaves the channel half-merged — the `status="error"` series climbs.
+- The pending-merges queue depth gauge grows without operator-side action — typically means the modal is broken (errors out before the operator can act) or the operator is overwhelmed and the queue cap should be enforced.
+- The candidate-lookup endpoint is called inside a request-handler loop instead of once per trigger (regression class — would show as a sustained rate-of-call spike against a flat trigger rate).
+
+**Cardinality discipline:**
+
+- `ecm_dedup_candidate_lookup_duration_seconds`: no labels beyond `le`. The trigger source belongs in a separate counter (`ecm_dedup_candidate_lookup_total{trigger}`) — splitting cardinality across two series keeps the histogram cheap.
+- `ecm_dedup_merge_requests_total{status}`: `status` bounded to ~4 values (`success`, `error`, `dismissed`, `cancelled`).
+- `ecm_pending_merges_queue_depth_added_total`: label-free counter. Per-source attribution belongs in structured logs (`[DEDUP] merge_request_queued source=drag_drop target_channel=...`), not the metric.
+
+**Runbooks:**
+
+- [`docs/runbooks/dedup-candidate-lookup-latency.md`](../runbooks/dedup-candidate-lookup-latency.md) — SLI-10a / `ECMDedupCandidateLookupLatencyHigh`
+- [`docs/runbooks/dedup-pending-merge-resolution-stale.md`](../runbooks/dedup-pending-merge-resolution-stale.md) — SLI-10b / `ECMDedupPendingMergeResolutionStale`
+- [`docs/runbooks/dedup-merge-api-error-rate-high.md`](../runbooks/dedup-merge-api-error-rate-high.md) — SLI-10c / `ECMDedupMergeApiErrorRateHigh`
+
+All three runbooks ship as **stubs** at v0.17.1 — section structure is present, real triage and resolution procedures land as the team accumulates incident experience after BD-D/E/F deploy the metric emitters. Stubs explicitly self-identify at the top of each file so a 3 AM responder knows they have a skeleton, not a complete playbook.
+
+---
+
 ## Capacity planning: Database file size (bd-ygoqr)
 
 **Class:** Capacity-planning, not a numbered SLO. Same posture as the Stats v2 storage-growth alert (`ECMStatsRowCountGrowthAnomaly`) — we expose the signal and ship the alert rule, but the threshold is a leading indicator for operator action, not a user-facing reliability commitment.
@@ -469,7 +547,7 @@ ecm:task_schedule:hours_since_success = (time() - ecm_task_schedule_last_success
 
 **Why this is not a numbered SLO:** Task cadence is operator-configurable (Settings → Tasks lets the operator change every interval and disable any task). ECM cannot make a portable commitment about "the cleanup task ran in the last 8 days" when an operator's documented choice may be MANUAL, monthly, or a non-default cron. The signal is exposed so operators can build their own commitments against their configured schedule.
 
-**Deploy order — IMPORTANT:** `ECMTaskSchedulerNextRunNull` is shipped **commented out** in `prometheus_rules.yaml` (search the file for the `UNCOMMENT AFTER v0.17.0 SHIPS` marker). Pre-heal, every existing operator's gauge is > 0 (the disease) and the alert would page immediately on every install — operators who copy the rules file into their stack today would page themselves. After v0.17.0 has shipped and operators have had a chance to run Bundle H's heal at startup (~30 days post-release), a follow-up PR will uncomment the alert block.
+**Deploy order — RESOLVED at v0.17.1 (bd-ft3hk):** `ECMTaskSchedulerNextRunNull` shipped commented-out at v0.17.0 to avoid paging existing installs before they had a chance to restart into a heal-bearing build (Bundle H, bd-1weac). v0.17.0 has now shipped, the heal is in operators' hands, and the alert is uncommented as part of BD-M (the SLO-10 + alert-rules consolidation). A fresh operator who adopts this rules file before they have restarted into v0.17.0+ will page on their first scrape; the runbook covers the heal path and one container restart clears the condition.
 
 **What breaks these thresholds:**
 
@@ -546,6 +624,8 @@ For the scaffold we ship simpler single-window thresholds for SLO-2/3 (p95 laten
 - **No SLO for long-running tasks.** Task success rate matters (restore jobs, auto-creation runs) but has no metric today. Separate bead.
 
 ## Changelog
+
+- **2026-05-16 (bd-ft3hk / BD-M):** Added **SLO-10: Channel Deduplication** for the v0.17.1 dedup epic (bd-1v4ht). Three SLIs: SLI-10a candidate lookup p99 latency (<500ms / 7d / 99%), SLI-10b pending merge resolution rate (95% within 24h), SLI-10c merge API error rate (<1% / 5m / 99%). New alert group `ecm_dedup` in `prometheus_rules.yaml` with corresponding alerts (`ECMDedupCandidateLookupLatencyHigh` warn, `ECMDedupPendingMergeResolutionStale` warn, `ECMDedupMergeApiErrorRateHigh` page). Metrics `ecm_dedup_candidate_lookup_duration_seconds`, `ecm_dedup_merge_requests_total{status}`, `ecm_pending_merges_queue_depth_added_total` are spec'd here; emission lands with BD-D/E/F — alert rules are intentionally vacuous until then so engineers wiring the emitters have a contract to match. Three runbook stubs at `docs/runbooks/dedup-*.md`. **Also resolves the v0.17.0 deploy-gated alert:** `ECMTaskSchedulerNextRunNull` is uncommented in `prometheus_rules.yaml` now that v0.17.0's Bundle H heal (bd-1weac) has shipped to operators. The "Deploy order" note in the Task scheduler health entry is updated accordingly.
 
 - **2026-05-15 (bd-ygoqr):** Added **Capacity planning: Database file size** entry — two new label-free gauges (`ecm_database_size_bytes`, `ecm_database_wal_size_bytes`) emitted by `observability.update_database_size_metrics` from `database._perform_maintenance` (post-startup VACUUM) and `tasks.cleanup.CleanupTask.execute` (post-weekly VACUUM). New alert rules in `prometheus_rules.yaml` group `ecm_database_size`: `ECMDatabaseSizeWarn` (>500 MB / 30m), `ECMDatabaseSizePage` (>2 GB / 10m), `ECMDatabaseWALSizeWarn` (>200 MB / 15m), `ECMDatabaseSizeGrowthAnomaly` (weekly delta >200 MB / 24h). New recording rule `ecm:database_size_bytes:weekly_delta`. New runbook `database-size-warn.md` covers the WAL-vs-body triage and per-table size attribution. Capacity-planning class, NOT a numbered SLO — disk-pressure failure modes are environment-dependent and ECM cannot make a portable commitment about them. Companion to the bd-ygoqr CleanupTask CRON default flip (Sun 02:00 UTC for fresh installs).
 

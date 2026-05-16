@@ -780,43 +780,48 @@ groups:
       - record: ecm:task_schedule:hours_since_success
         expr: (time() - ecm_task_schedule_last_success_timestamp) / 3600
 
-      # ECMTaskSchedulerNextRunNull — DISABLED PENDING DEPLOY ORDER.
+      # ECMTaskSchedulerNextRunNull — ENABLED at v0.17.1 (bd-ft3hk).
       #
-      # UNCOMMENT AFTER v0.17.0 SHIPS — see slos.md
-      # "Capacity planning: Task scheduler health" for the deploy-
-      # order rationale. Operators who copy this file into their
-      # stack today will page themselves immediately because Bundle H
-      # (the next_run_at heal) has not yet shipped to operators. The
-      # alert body is physically commented so accidental ingestion is
-      # impossible. A follow-up PR (~30 days post-v0.17.0 release)
-      # will uncomment this block once operator installs have had a
-      # chance to run the heal at startup.
+      # Previously shipped commented-out at v0.17.0 cut. The deploy-
+      # order rationale (Bundle H's heal must reach operators before
+      # the alert is live, otherwise every existing install pages
+      # itself on first scrape because every non-MANUAL row had
+      # next_run_at=NULL pre-heal) is now satisfied: v0.17.0 shipped
+      # the heal (bd-1weac), operators have had a chance to restart
+      # into a heal-bearing build, and the persistent NULL count
+      # should be 0 on any post-heal install. Uncommented as part of
+      # the BD-M SLO-10 + alert-rules consolidation.
       #
-      # - alert: ECMTaskSchedulerNextRunNull
-      #   # Any non-MANUAL enabled schedule with NULL next_run_at means
-      #   # the scheduler is structurally broken — the schedule MUST
-      #   # have a computed next_run_at for the scheduler loop to pick
-      #   # it up. 5m window rejects single-scrape transients during
-      #   # the registry sync window (the gauge is re-emitted post-sync
-      #   # so a brief mid-sync NULL count is normal).
-      #   expr: ecm_task_schedule_next_run_null_count > 0
-      #   for: 5m
-      #   labels:
-      #     severity: page
-      #     slo: task_scheduler_health
-      #     service: ecm
-      #   annotations:
-      #     summary: "{{ $value }} task_schedules row(s) have NULL next_run_at — scheduler subsystem may be broken"
-      #     description: |
-      #       One or more enabled non-MANUAL rows in task_schedules has
-      #       next_run_at = NULL. The scheduler loop only picks up rows
-      #       with a computed next_run_at, so these tasks will never run
-      #       until the value is healed. This is the bd-p5b8i disease
-      #       vector — silent for 39+ days on the PO's install. Run the
-      #       runbook's diagnostic query to identify the affected
-      #       task_id(s); recovery is automatic on container restart
-      #       once Bundle H's heal is deployed.
-      #     runbook_url: docs/runbooks/task_scheduler_stalled.md
+      # If a fresh operator picks up this rules file before they have
+      # restarted into v0.17.0+, the alert will page on their first
+      # scrape. Acceptable trade: the page is correct (the install is
+      # broken), the runbook explains the heal, and restarting the
+      # container clears the condition within one scrape interval.
+      - alert: ECMTaskSchedulerNextRunNull
+        # Any non-MANUAL enabled schedule with NULL next_run_at means
+        # the scheduler is structurally broken — the schedule MUST
+        # have a computed next_run_at for the scheduler loop to pick
+        # it up. 5m window rejects single-scrape transients during
+        # the registry sync window (the gauge is re-emitted post-sync
+        # so a brief mid-sync NULL count is normal).
+        expr: ecm_task_schedule_next_run_null_count > 0
+        for: 5m
+        labels:
+          severity: page
+          slo: task_scheduler_health
+          service: ecm
+        annotations:
+          summary: "{{ $value }} task_schedules row(s) have NULL next_run_at — scheduler subsystem may be broken"
+          description: |
+            One or more enabled non-MANUAL rows in task_schedules has
+            next_run_at = NULL. The scheduler loop only picks up rows
+            with a computed next_run_at, so these tasks will never run
+            until the value is healed. This is the bd-p5b8i disease
+            vector — silent for 39+ days on the PO's install. Run the
+            runbook's diagnostic query to identify the affected
+            task_id(s); recovery is automatic on container restart
+            once Bundle H's heal is deployed (shipped in v0.17.0).
+          runbook_url: docs/runbooks/task_scheduler_stalled.md
 
       - alert: ECMTaskScheduleStaleStatsRollup
         # stats_v2_rollup runs nightly (24h cadence). 25h budget = 1h
@@ -930,3 +935,138 @@ groups:
             flagged. Check Settings → Tasks → Stream Probe to confirm
             the schedule and review task execution history for errors.
           runbook_url: docs/runbooks/task_scheduler_stalled.md
+
+  # =====================================================================
+  # SLO-10: Channel Deduplication (bd-ft3hk / BD-M, v0.17.1 dedup epic)
+  # =====================================================================
+  # Consumes metrics emitted by the BD-D / BD-E / BD-F engineering work:
+  #   * ecm_dedup_candidate_lookup_duration_seconds (histogram)
+  #     — instrumented around POST /api/channel-merges/candidates.
+  #   * ecm_dedup_merge_requests_total{status=...} (counter)
+  #     — incremented per POST /api/channel-merges/{id}/accept outcome.
+  #     `status` ∈ {success, error, dismissed, cancelled}.
+  #   * ecm_pending_merges_queue_depth_added_total (counter)
+  #     — incremented every time a merge candidate is added to the
+  #     pending-merges queue (the denominator for the 24h resolution
+  #     ratio).
+  #
+  # IMPORTANT — RULES SHIP VACUOUS UNTIL BD-D/E/F EMIT THE METRICS.
+  # The rules are intentionally landed before the emitters per the
+  # team-plan SRE position: a rule without an emitting metric fires
+  # nothing and costs nothing, but the rule definition is the
+  # contract that tells the engineer wiring the emitter which metric
+  # names + label sets to produce. The alternative (ship BD-D/E
+  # without alert coverage, "we'll add the alerts in a follow-up")
+  # is exactly the pattern that produced the v0.17.0 alert-rules gap
+  # this bead also closes — so we are deliberately not repeating it.
+  #
+  # Once BD-D/E/F ship and the metrics start emitting, the alerts
+  # become live signal on the first scrape. No additional code change
+  # required to "turn them on."
+  - name: ecm_dedup
+    interval: 30s
+    rules:
+      - alert: ECMDedupCandidateLookupLatencyHigh
+        # SLI-10a — candidate-lookup p99 over 500ms sustained 10m.
+        # The modal load is operator-visible; 500ms is the "perceived
+        # as instant" threshold. p99 (not p95) because a single slow
+        # candidate query stalls the drag-drop interaction visibly.
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (
+              rate(ecm_dedup_candidate_lookup_duration_seconds_bucket[5m])
+            )
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          slo: dedup_candidate_lookup_latency
+          service: ecm
+        annotations:
+          summary: "ECM dedup candidate-lookup p99 {{ $value | humanizeDuration }} > 500ms for 10m"
+          description: |
+            Channel-merge candidate-lookup endpoint p99 latency has
+            exceeded 500ms for 10+ minutes. The merge modal stalls
+            visibly at this latency on drag-drop / add-stream /
+            bulk-M3U triggers. Likely root causes: the candidate
+            matcher query stopped using its dedup index (BD-B index
+            regression), the matcher is being called inside a per-
+            channel handler loop instead of once per trigger, or
+            SQLite is under bulk-write contention. Triage steps in
+            the runbook.
+          runbook_url: docs/runbooks/dedup-candidate-lookup-latency.md
+
+      - alert: ECMDedupPendingMergeResolutionStale
+        # SLI-10b — <95% of 24h-window merge requests reach a terminal
+        # state (success | dismissed). Pending merges accumulating
+        # without operator action means the modal is broken, the queue
+        # is overwhelming the operator, or the dismiss path is failing
+        # silently. 1h `for:` window catches sustained backlog without
+        # firing on a brief idle period.
+        # Guards: numerator AND denominator must both be non-zero —
+        # an install with zero merge activity in 24h is healthy, not
+        # a breach.
+        expr: |
+          (
+            sum(increase(ecm_dedup_merge_requests_total{status=~"success|dismissed"}[24h]))
+            /
+            sum(increase(ecm_pending_merges_queue_depth_added_total[24h]))
+          ) < 0.95
+          and
+          sum(increase(ecm_pending_merges_queue_depth_added_total[24h])) > 0
+        for: 1h
+        labels:
+          severity: warning
+          slo: dedup_pending_merge_resolution
+          service: ecm
+        annotations:
+          summary: "ECM dedup pending-merge resolution rate {{ $value | humanizePercentage }} < 95% over 24h"
+          description: |
+            Less than 95% of merge requests added to the pending
+            queue in the last 24h have reached a terminal state
+            (success or dismissed). Likely root causes: the merge
+            modal is erroring before the operator can act (cross-
+            check ECMDedupMergeApiErrorRateHigh and frontend
+            boundary-error counters), the operator is overwhelmed
+            by a candidate flood from a bulk M3U import, or the
+            dismiss path is broken (no state transition recorded).
+            Runbook covers the queue-depth diagnostic and the per-
+            source breakdown.
+          runbook_url: docs/runbooks/dedup-pending-merge-resolution-stale.md
+
+      - alert: ECMDedupMergeApiErrorRateHigh
+        # SLI-10c — accept-endpoint error rate > 1% over 5m.
+        # PAGE severity: the merge endpoint is the load-bearing write
+        # path of the dedup epic; a failed accept leaves the channel
+        # in a half-merged state (target may have streams, sources may
+        # be deleted). 4xx (e.g., 422 on stale source IDs from the
+        # bd-ozhkf / bd-ct9wl pattern) is correct backend behavior
+        # and is NOT counted — the alert fires on status="error"
+        # (5xx / unhandled exception class) only.
+        # Guard: denominator must be > 0.01 req/s (~3.6/hr) to avoid
+        # paging on a single mid-call exception during idle periods.
+        expr: |
+          (
+            sum(rate(ecm_dedup_merge_requests_total{status="error"}[5m]))
+            /
+            sum(rate(ecm_dedup_merge_requests_total[5m]))
+          ) > 0.01
+          and
+          sum(rate(ecm_dedup_merge_requests_total[5m])) > 0.01
+        for: 5m
+        labels:
+          severity: page
+          slo: dedup_merge_api_error_rate
+          service: ecm
+        annotations:
+          summary: "ECM dedup merge API error rate {{ $value | humanizePercentage }} > 1% for 5m"
+          description: |
+            POST /api/channel-merges/{id}/accept is erroring on >1%
+            of requests over the last 5 minutes. Treat as an
+            incident — every error potentially leaves a channel in
+            a half-merged state (target may already have streams,
+            sources may already be deleted from Dispatcharr). Page
+            on-call. The runbook covers the half-merge recovery
+            procedure and the half-state diagnostic query.
+          runbook_url: docs/runbooks/dedup-merge-api-error-rate-high.md
