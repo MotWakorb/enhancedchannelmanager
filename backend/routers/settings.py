@@ -388,6 +388,20 @@ async def update_settings(request: SettingsRequest):
     # frontend bundle sending only ``api_key`` doesn't unconditionally clobber
     # a freshly-rotated canonical value with the legacy mirror.
     request_dispatcharr_key = request.dispatcharr_api_key or request.api_key
+    # bd-jmi1c P1-1: warn (per request — POST is rare enough that flag-gating
+    # isn't worth it) when both fields are present in the body and differ.
+    # The canonical wins silently otherwise; logging only the conflict case
+    # avoids spam from clients that double-send for back-compat.
+    if (
+        request.dispatcharr_api_key
+        and request.api_key
+        and request.dispatcharr_api_key != request.api_key
+    ):
+        logger.warning(
+            "[SETTINGS] POST body has differing 'dispatcharr_api_key' and "
+            "'api_key' values; using canonical 'dispatcharr_api_key' and "
+            "ignoring 'api_key'. (bd-jmi1c, GH #273)"
+        )
     dispatcharr_api_key = (
         request_dispatcharr_key
         if request_dispatcharr_key

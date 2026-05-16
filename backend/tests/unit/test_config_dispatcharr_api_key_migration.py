@@ -271,3 +271,127 @@ class TestMigrationIdempotency:
         assert second_warn_count == 0
         assert settings_again.dispatcharr_api_key == "legacy-key"
         assert settings_again.api_key == "legacy-key"
+
+
+# Marker string used to identify the conflict WARN log in caplog records.
+# Lives in config.py — keep this in sync with the literal there.
+_CONFLICT_WARN_MARKER = "are populated with differing values"
+
+
+class TestLoadSettingsLegacyCanonicalConflict:
+    """Both fields populated AND differ — bd-jmi1c P1-1 / bd-46g4t.
+
+    Prior to the WARN, the legacy field's contents were silently dropped on
+    the next ``save_settings()`` mirror, with no audit trail. The WARN
+    surfaces this so an operator who intentionally edited the legacy field
+    by hand sees that their change will be overwritten.
+    """
+
+    def test_conflict_fires_warn_and_canonical_wins(
+        self, _reset_settings_state, caplog
+    ):
+        settings_file = _reset_settings_state
+        _write_settings(settings_file, {
+            "dispatcharr_api_key": "canonical-active-WINNER",
+            "api_key": "legacy-stale-OVERRIDDEN",
+        })
+
+        with caplog.at_level(logging.WARNING, logger="config"):
+            settings = config.load_settings()
+
+        # Canonical wins.
+        assert settings.dispatcharr_api_key == "canonical-active-WINNER"
+        # WARN fires, references both field names and the bead.
+        conflict_warns = [
+            record.getMessage()
+            for record in caplog.records
+            if _CONFLICT_WARN_MARKER in record.getMessage()
+        ]
+        assert len(conflict_warns) == 1, (
+            f"Expected exactly one conflict WARN; got: {conflict_warns}"
+        )
+        assert "dispatcharr_api_key" in conflict_warns[0]
+        assert "api_key" in conflict_warns[0]
+        assert "bd-jmi1c" in conflict_warns[0]
+
+    def test_identical_values_do_not_fire_conflict_warn(
+        self, _reset_settings_state, caplog
+    ):
+        """The idempotent post-mirror state — both fields populated with the
+        same value — is the steady state ECM itself produces via
+        ``save_settings()``. No WARN should fire on this shape."""
+        settings_file = _reset_settings_state
+        _write_settings(settings_file, {
+            "dispatcharr_api_key": "same-value",
+            "api_key": "same-value",
+        })
+
+        with caplog.at_level(logging.WARNING, logger="config"):
+            config.load_settings()
+
+        assert not any(
+            _CONFLICT_WARN_MARKER in record.getMessage()
+            for record in caplog.records
+        ), "Conflict WARN fired when both fields hold identical values"
+
+    def test_conflict_warn_fires_once_per_process(
+        self, _reset_settings_state, caplog
+    ):
+        """Like the deprecation WARN, the conflict WARN is one-shot. Two
+        ``load_settings`` calls within the same process — bracketed by a
+        cache clear so the second call re-reads disk — should still only
+        produce one WARN unless ``clear_settings_cache`` also resets the
+        flag (see the dedicated test below)."""
+        settings_file = _reset_settings_state
+        _write_settings(settings_file, {
+            "dispatcharr_api_key": "canonical-WINNER",
+            "api_key": "legacy-STALE",
+        })
+
+        with caplog.at_level(logging.WARNING, logger="config"):
+            # First load: WARN fires.
+            config.load_settings()
+            # Cached reload: does not re-read or warn.
+            config.load_settings()
+
+        conflict_count = sum(
+            1 for record in caplog.records
+            if _CONFLICT_WARN_MARKER in record.getMessage()
+        )
+        assert conflict_count == 1, (
+            f"Cached reload should not re-emit conflict WARN; got {conflict_count}"
+        )
+
+    def test_clear_settings_cache_resets_conflict_warn_flag(
+        self, _reset_settings_state, caplog
+    ):
+        """``clear_settings_cache()`` resets the conflict flag so the next
+        load re-fires the WARN. Without this, multi-load tests in a single
+        process would silently lose the warning after the first call."""
+        settings_file = _reset_settings_state
+        _write_settings(settings_file, {
+            "dispatcharr_api_key": "canonical-WINNER",
+            "api_key": "legacy-STALE",
+        })
+
+        with caplog.at_level(logging.WARNING, logger="config"):
+            config.load_settings()
+        first_count = sum(
+            1 for record in caplog.records
+            if _CONFLICT_WARN_MARKER in record.getMessage()
+        )
+
+        # Reset cache + flag, re-load → WARN should fire again.
+        config.clear_settings_cache()
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="config"):
+            config.load_settings()
+        second_count = sum(
+            1 for record in caplog.records
+            if _CONFLICT_WARN_MARKER in record.getMessage()
+        )
+
+        assert first_count == 1
+        assert second_count == 1, (
+            "clear_settings_cache() should reset the conflict WARN flag"
+        )
