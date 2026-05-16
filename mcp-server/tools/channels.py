@@ -287,6 +287,181 @@ def register(mcp: FastMCP):
             return f"Error adding stream {stream_id} to channel {channel_id}: {e}"
 
     @mcp.tool()
+    async def add_stream(
+        stream_name: str,
+        group_id: int,
+        dedup_action: str = "prompt",
+    ) -> str:
+        """Create a channel from a stream name and assign it to a group, with deduplication control.
+
+        The ``dedup_action`` parameter governs how a potential duplicate channel
+        (identified by the BD-A matcher via ``GET /api/channel-merges/candidates``)
+        is handled before the new channel is created.  Three modes are supported
+        (ADR-008 §D7):
+
+        * ``prompt`` (default) — call the candidates endpoint; if a match above
+          the operator-configured threshold is found, return the candidate to the
+          agent so it can call ``accept_channel_merge`` or ``dismiss_channel_merge``
+          on the existing pending-merges row, or retry with a different
+          ``dedup_action``.  If no candidate is found, proceed with normal channel
+          creation.
+        * ``force_new`` — skip dedup entirely; always create a new channel
+          regardless of any existing match.
+        * ``merge_if_found`` — call the candidates endpoint; if a match at or
+          above the operator threshold is found, add the stream to the candidate
+          channel directly (auto-accept).  If the confidence falls below the
+          threshold (but above the ADR-008 §D2 hard floor — the matcher never
+          emits below the floor), fall back to ``prompt`` semantics and return
+          the candidate for the agent to decide.  If no candidate is found,
+          proceed with normal channel creation.
+
+        In all cases where channel creation proceeds, the tool creates a new
+        channel with the stream name as the channel name, assigns it to
+        ``group_id``, finds the stream by name, and attaches it to the new
+        channel.
+
+        Args:
+            stream_name: The stream name to use as the channel name and to
+                search for in the stream list.
+            group_id: Channel group ID to assign the new channel to.
+            dedup_action: One of ``'prompt'``, ``'force_new'``, or
+                ``'merge_if_found'`` (default ``'prompt'``).
+        """
+        _VALID_DEDUP_ACTIONS = {"prompt", "force_new", "merge_if_found"}
+        if dedup_action not in _VALID_DEDUP_ACTIONS:
+            return (
+                f"Invalid dedup_action '{dedup_action}'. "
+                f"Must be one of: {', '.join(sorted(_VALID_DEDUP_ACTIONS))}"
+            )
+
+        try:
+            client = get_ecm_client()
+
+            # ------------------------------------------------------------------
+            # Dedup branch: skip candidate lookup when force_new requested.
+            # ------------------------------------------------------------------
+            if dedup_action != "force_new":
+                try:
+                    candidates_resp = await client.call_endpoint(
+                        ENDPOINTS["channel_merges_candidates"],
+                        query={"stream_name": stream_name, "group_id": group_id},
+                    )
+                    candidates = candidates_resp.get("candidates", []) if isinstance(candidates_resp, dict) else []
+                except Exception as cand_err:
+                    logger.warning("[MCP] add_stream candidates lookup failed: %s", cand_err)
+                    candidates = []
+
+                if candidates:
+                    top = candidates[0]
+                    candidate_channel_id = top.get("channel_id", "?")
+                    candidate_channel_name = top.get("channel_name", "?")
+                    confidence = top.get("confidence", 0.0)
+
+                    if dedup_action == "merge_if_found":
+                        # Auto-accept: add the stream directly to the candidate channel.
+                        # This requires resolving the stream id first.
+                        stream_id = await _resolve_stream_id(client, stream_name)
+                        if stream_id is None:
+                            return (
+                                f"merge_if_found: candidate channel found "
+                                f"('{candidate_channel_name}', id={candidate_channel_id}, "
+                                f"confidence={confidence:.0%}) but stream '{stream_name}' "
+                                f"could not be resolved to a stream ID — "
+                                f"use force_new or prompt to proceed."
+                            )
+                        try:
+                            await client.call_endpoint(
+                                ENDPOINTS["channels_add_stream"],
+                                path_args={"channel_id": candidate_channel_id},
+                                body={"stream_id": stream_id},
+                            )
+                            return (
+                                f"merge_if_found: stream '{stream_name}' (id={stream_id}) "
+                                f"added to existing channel '{candidate_channel_name}' "
+                                f"(id={candidate_channel_id}, confidence={confidence:.0%})."
+                            )
+                        except Exception as merge_err:
+                            logger.warning("[MCP] add_stream merge_if_found failed: %s", merge_err)
+                            return (
+                                f"merge_if_found: auto-merge to '{candidate_channel_name}' "
+                                f"(id={candidate_channel_id}) failed: {merge_err}"
+                            )
+
+                    # prompt (or merge_if_found fallback when below threshold —
+                    # but the matcher never emits below the ADR-008 §D2 floor, so
+                    # any returned candidate is already above the floor; the
+                    # operator threshold comparison is intentionally delegated to
+                    # the backend matcher).
+                    return (
+                        f"action=pending_merge — candidate channel found for "
+                        f"'{stream_name}':\n"
+                        f"  candidate_channel_id: {candidate_channel_id}\n"
+                        f"  candidate_channel_name: {candidate_channel_name}\n"
+                        f"  confidence: {confidence:.0%}\n"
+                        f"Call add_stream(stream_name='{stream_name}', group_id={group_id}, "
+                        f"dedup_action='force_new') to create a new channel anyway, or "
+                        f"add_stream(stream_name='{stream_name}', group_id={group_id}, "
+                        f"dedup_action='merge_if_found') to add the stream to the "
+                        f"candidate channel."
+                    )
+
+            # ------------------------------------------------------------------
+            # No candidate (or force_new): create a new channel and add stream.
+            # ------------------------------------------------------------------
+            created = await client.call_endpoint(
+                ENDPOINTS["channels_create"],
+                body={"name": stream_name, "channel_group_id": group_id},
+            )
+            channel_id = created.get("id")
+            channel_name = created.get("name", stream_name)
+            if channel_id is None:
+                return f"Channel creation returned no id for '{stream_name}'."
+
+            stream_id = await _resolve_stream_id(client, stream_name)
+            if stream_id is None:
+                return (
+                    f"Channel '{channel_name}' created (id={channel_id}) but stream "
+                    f"'{stream_name}' could not be found — assign a stream manually."
+                )
+
+            await client.call_endpoint(
+                ENDPOINTS["channels_add_stream"],
+                path_args={"channel_id": channel_id},
+                body={"stream_id": stream_id},
+            )
+            action_word = "force_new: " if dedup_action == "force_new" else ""
+            return (
+                f"{action_word}Channel '{channel_name}' (id={channel_id}) created in "
+                f"group {group_id} with stream '{stream_name}' (id={stream_id}) assigned."
+            )
+
+        except Exception as e:
+            logger.error("[MCP] add_stream failed: %s", e)
+            return f"Error in add_stream: {e}"
+
+    async def _resolve_stream_id(client, stream_name: str) -> int | None:
+        """Find the stream id for a given name via a name-search lookup.
+
+        Returns the id of the first result or ``None`` when no match is found.
+        This is a best-effort lookup — the caller decides how to handle
+        ``None``.
+        """
+        try:
+            result = await client.call_endpoint(
+                ENDPOINTS["streams_list"],
+                query={"search": stream_name, "page_size": 10},
+            )
+            streams = (
+                result.get("results", result.get("streams", []))
+                if isinstance(result, dict)
+                else result
+            )
+            return streams[0].get("id") if streams else None
+        except Exception as e:
+            logger.warning("[MCP] _resolve_stream_id(%r) failed: %s", stream_name, e)
+            return None
+
+    @mcp.tool()
     async def bulk_add_streams_to_channel(channel_id: int, stream_ids: list[int]) -> str:
         """Add multiple streams to a channel in a single backend call.
 

@@ -699,6 +699,15 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/channel-merges/{merge_id}/dismiss",
         response_fields=frozenset({"journal_entry_id", "status"}),
     ),
+    # -- channel_merges candidates — BD-P (bd-7u8ms) consumer ---------------
+    # ADR-008 §D7. add_stream's dedup_action is the sole consumer.
+    "channel_merges_candidates": Endpoint(
+        name="channel_merges_candidates",
+        method="GET",
+        path="/api/channel-merges/candidates",
+        query_params=frozenset({"stream_name", "group_id", "page", "page_size"}),
+        response_fields=frozenset({"stream_name", "candidates", "total", "page", "page_size", "total_pages"}),
+    ),
     # -- tasks domain ------------------------------------------------------
     "tasks_list": Endpoint(
         name="tasks_list",
