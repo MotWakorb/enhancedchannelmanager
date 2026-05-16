@@ -140,6 +140,9 @@ class DispatcharrSettings(BaseModel):
     # M3U account priorities for sorting - maps M3U account ID (as string) to priority value
     # Higher priority value = preferred (sorted first). Accounts not in this map get priority 0.
     # Example: {"1": 100, "2": 50} means M3U account 1 is preferred over account 2
+    # Special key "custom": priority assigned to operator-added (non-M3U) custom streams
+    # when the m3u_priority sort criterion is active (bd-sgtmx / GH #244).
+    # Example: {"1": 100, "custom": 200} places custom streams above M3U account 1.
     m3u_account_priorities: dict[str, int] = {}
     # Deprioritize failed streams - when enabled, failed/timeout/pending streams sort to bottom
     # Black screen detection - run ffmpeg blackdetect after successful probe
