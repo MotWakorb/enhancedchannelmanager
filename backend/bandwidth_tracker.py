@@ -23,7 +23,7 @@ from typing import Any, NamedTuple, Optional
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import distinct, func
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from database import get_session
 from models import (
@@ -45,6 +45,46 @@ logger = logging.getLogger(__name__)
 # like ``.ts?session=abc123`` so the fallback survives Dispatcharr URL
 # annotation conventions that the proxy may add for transcoding hints.
 _STREAM_ID_URL_PATTERN = re.compile(r"/(\d+)\.ts(?:\?|$)")
+
+
+# bd-8axhi defense-in-depth: substrings the SQLite driver puts into the
+# ``OperationalError`` message when the live schema is missing a column or
+# table that the SQLAlchemy model declares. Used by
+# ``_is_schema_drift_error`` to escalate the runtime hot-deploy hazard to
+# ERROR-level on first observation. Lowercase tokens — the matcher
+# lowercases the candidate before comparing. Both shapes are emitted by
+# SQLite as ``no such column: <name>`` / ``no such table: <name>``; pysqlite
+# preserves that wording on its way through SQLAlchemy. Postgres / other
+# backends would surface a different error class altogether (UndefinedColumn
+# in psycopg2), so this is intentionally SQLite-shaped — ECM is SQLite-only
+# (see ``database.py`` PRAGMA setup).
+_SCHEMA_DRIFT_ERROR_TOKENS = ("no such column", "no such table")
+
+
+def _is_schema_drift_error(exc: BaseException) -> bool:
+    """True if ``exc`` looks like the bd-zaaey/bd-8axhi schema-drift signature.
+
+    Matches the SQLite-driver wording for "model declares X, live DB
+    doesn't have it" — the same disease bd-zaaey loud-fails on at boot,
+    here detected at write time so an in-process hot-deploy that
+    introduces drift after the boot guard has already passed gets a loud
+    log line on the first failed write rather than blending into the
+    routine WARN noise.
+
+    Walks the exception chain (``__cause__`` and ``__context__``) so a
+    SQLAlchemy ``OperationalError`` wrapping a sqlite3 ``OperationalError``
+    is detected on either layer.
+    """
+    seen: set[int] = set()
+    cur: Optional[BaseException] = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        message = str(cur).lower()
+        for token in _SCHEMA_DRIFT_ERROR_TOKENS:
+            if token in message:
+                return True
+        cur = cur.__cause__ or cur.__context__
+    return False
 
 
 def _extract_stream_id_from_url(url: Optional[str]) -> Optional[int]:
@@ -810,6 +850,23 @@ class BandwidthTracker:
         # ``_collect_stats`` entry so the counter advances even when the
         # poll bails early (e.g. ``get_channel_stats`` raise).
         self._poll_count = 0
+
+        # bd-8axhi defense-in-depth: one-shot flag tracking whether
+        # ``_write_session_telemetry`` has already escalated a runtime
+        # schema-drift error to ERROR-level. The bd-zaaey loud-fail at
+        # ``init_db`` (``_assert_schema_matches_models``) catches drift at
+        # boot, but cannot catch drift introduced AFTER the process is
+        # already running — for example, the hot-deploy workflow where a
+        # developer ``docker cp``'s new writer code + a new alembic
+        # migration into a live container without ``docker restart``. The
+        # writer's existing try/except already prevents user-facing damage,
+        # but historically logged "no such column" / "no such table"
+        # OperationalErrors at WARN, where they blended into ordinary
+        # noise. The first such error escalates to ERROR with an
+        # actionable recovery path; subsequent errors fall back to WARN
+        # so the log is not flooded. Cleared by a successful write so
+        # repaired environments re-arm the alarm if drift recurs.
+        self._schema_drift_alarm_armed = True
 
     async def start(self):
         """Start the background polling task."""
@@ -2290,6 +2347,13 @@ class BandwidthTracker:
                             observed_at_ms,
                         )
                         write_result = "success"
+                        # bd-8axhi: a successful write proves the schema is
+                        # currently consistent with the model. Re-arm the
+                        # one-shot ERROR alarm so a future drift event
+                        # (e.g., a second hot-deploy that adds a NEWER
+                        # migration) triggers another ERROR rather than
+                        # silently degrading to WARN.
+                        self._schema_drift_alarm_armed = True
                 else:
                     # Nothing to write; release the (empty) transaction.
                     session.rollback()
@@ -2312,13 +2376,49 @@ class BandwidthTracker:
             # this failure with the poll that produced it. Privacy 11a:
             # we deliberately do NOT enumerate per-row user_id+channel_id
             # pairs — those are aggregated away by the time we get here.
-            logger.warning(
-                "[STATS_V2] session_telemetry write failed observed_at=%s channels_attempted=%s error=%s",
-                observed_at_ms,
-                len(channel_snapshot),
-                e,
-                exc_info=True,
-            )
+            #
+            # bd-8axhi defense-in-depth: when the failure looks like
+            # runtime schema drift (``no such column`` / ``no such
+            # table`` — the bd-zaaey signature), escalate the FIRST
+            # observation to ERROR-level with an explicit recovery path.
+            # This catches the hot-deploy hazard the bd-zaaey boot guard
+            # cannot cover: a developer ``docker cp``'s a new alembic
+            # migration + writer code into a live container without
+            # ``docker restart``. The boot guard already passed on the
+            # last restart; the runtime drift surfaces here on the first
+            # write that exercises the new column. Subsequent failures
+            # fall back to WARN so the operator log is not flooded with
+            # duplicate alarms while the root cause is being repaired.
+            if (
+                isinstance(e, OperationalError)
+                and _is_schema_drift_error(e)
+                and self._schema_drift_alarm_armed
+            ):
+                self._schema_drift_alarm_armed = False
+                logger.error(
+                    "[STATS_V2] session_telemetry SCHEMA DRIFT detected at "
+                    "runtime observed_at=%s channels_attempted=%s error=%s — "
+                    "the SQLAlchemy model declares a column/table the live "
+                    "DB does not have. Most likely cause: a new alembic "
+                    "migration was added to the running container without "
+                    "restarting it. Recovery: ``docker restart ecm-ecm-1`` "
+                    "(the entrypoint runs ``alembic upgrade head`` on boot). "
+                    "If the restart does not clear the error, see bd-zaaey "
+                    "for the structural diagnostic. Subsequent occurrences "
+                    "of this error in the current process will log at WARN.",
+                    observed_at_ms,
+                    len(channel_snapshot),
+                    e,
+                    exc_info=True,
+                )
+            else:
+                logger.warning(
+                    "[STATS_V2] session_telemetry write failed observed_at=%s channels_attempted=%s error=%s",
+                    observed_at_ms,
+                    len(channel_snapshot),
+                    e,
+                    exc_info=True,
+                )
         finally:
             # Always emit the write-health metrics — success or failure
             # paths both observe duration and increment the result-keyed
