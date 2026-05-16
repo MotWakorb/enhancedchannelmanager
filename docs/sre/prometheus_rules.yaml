@@ -551,31 +551,31 @@ groups:
   # Stats v2 Storage Growth (bd-skqln.11)
   # =====================================================================
   # NOT tied to a numbered SLO — this is a capacity-planning alert.
-  # Consumes the `ecm_session_telemetry_row_count` gauge shipped in
-  # skqln.12: the gauge value is the number of rows written in the most
-  # recent BandwidthTracker poll cycle, NOT the total table size. A
-  # sustained high value combined with the table's retention policy
-  # gives a leading indicator of disk pressure.
-  #
-  # The rollup tables in bd-7i2vv, when shipped, will compress the raw
-  # row count. Until then this alert remains useful and tunable. After
-  # bd-7i2vv lands the rollup tables should be observed via a separate
-  # gauge that captures the *table-total* row count; the per-cycle
-  # gauge alone is insufficient for steady-state capacity planning.
+  # Consumes the `ecm_session_telemetry_row_count` gauge (bd-ae58c,
+  # Option B): the gauge now represents the post-prune TABLE TOTAL row
+  # count, updated once per nightly rollup run by StatsV2RollupTask.
+  # BandwidthTracker no longer writes this gauge (it previously set it
+  # to the per-poll batch size ~10, causing wild oscillation with the
+  # rollup task's ~250k total and spurious alert trips).
+  # The 7-day rolling average now tracks the table-total trendline,
+  # which is the right capacity-planning signal.
   - name: ecm_stats_v2_storage
     interval: 5m
     rules:
       - record: ecm:session_telemetry_row_count:avg7d
-        # 7-day rolling average of per-cycle row count. Baseline for
-        # the anomaly detector.
+        # 7-day rolling average of post-prune table-total row count.
+        # Baseline for the anomaly detector. Updated nightly by the
+        # rollup task (StatsV2RollupTask); stable between runs.
         expr: avg_over_time(ecm_session_telemetry_row_count[7d])
 
       - alert: ECMStatsRowCountGrowthAnomaly
-        # Sustained per-cycle row count > 2x the 7-day rolling average
-        # over 24h. Catches "we suddenly added 50 more active channels"
-        # and "the writer is double-emitting" — both worth a ticket.
+        # Table-total row count > 2x the 7-day rolling average over 24h.
+        # Catches "retention policy not running" and "sudden channel-count
+        # explosion" — both worth a ticket.
         # The 2x ratio is a starting point; expect tuning after 30d of
-        # baseline data and after bd-7i2vv rollup tables ship.
+        # baseline data. bd-ae58c: the previous per-cycle gauge made
+        # this alert spuriously fire on every nightly rollup run; the
+        # table-total gauge is stable between nightly runs.
         expr: |
           (
             avg_over_time(ecm_session_telemetry_row_count[24h])
@@ -591,15 +591,14 @@ groups:
           slo: stats_v2_storage
           service: ecm
         annotations:
-          summary: "ECM session_telemetry per-cycle row count growing >2x 7d baseline for 24h"
+          summary: "ECM session_telemetry table row count growing >2x 7d baseline for 24h"
           description: |
-            session_telemetry per-cycle row count over the last 24h is
-            more than 2x the 7-day rolling average. Storage growth
-            ahead of schedule — investigate before disk pressure
-            becomes user-visible. Common causes: legitimate growth in
-            active channels (capacity planning needed), writer
-            regression double-emitting rows, retention policy not
-            running. After bd-7i2vv ships the rollup tables, this
-            alert's threshold should be re-tuned against the smaller
-            steady-state baseline.
+            session_telemetry table-total row count (post-prune, updated
+            nightly) over the last 24h is more than 2x the 7-day rolling
+            average. Storage growth ahead of schedule — investigate before
+            disk pressure becomes user-visible. Common causes: retention
+            policy not running (prune job failing), legitimate growth in
+            active channels (capacity planning needed). Check
+            ecm_telemetry_raw_rows_pruned rate — a sustained zero combined
+            with this alert is failure mode 3 (prune failing silently).
           runbook_url: docs/runbooks/stats-v2-row-growth.md

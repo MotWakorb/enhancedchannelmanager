@@ -76,13 +76,18 @@ const ROW_LABEL_WIDTH = 96;
 /**
  * Height reserved on the top for column labels, in pixels.
  *
- * Sized to fit a -45° rotated label of up to ~80px (≈ 13-14 chars at
- * 11px font, projected onto the vertical axis). bd-yteek: longer channel
- * names overflow the band — that's acceptable, the .heatmap container's
- * existing ``overflow-x: auto`` lets the user scroll, and the rotated
- * label remains readable diagonally.
+ * SVG uses a y-down coordinate system: rotate(+45°) sends text
+ * UP-AND-RIGHT from the anchor — labels project diagonally above the
+ * column-label band into the reserved space. bd-yteek shipped
+ * rotate(-45°) which in y-down sends text DOWN-AND-LEFT, rendering
+ * labels on top of the cells below the band (only the rightmost few
+ * chars were visible at the pivot). bd-wdpve flips to rotate(+45°)
+ * and widens the band to 140px to contain labels like
+ * "917 | Milwaukee Brewers" (~95-100px projected height at 45°).
+ * The .heatmap container's existing overflow-x: auto handles wider
+ * heatmaps via horizontal scroll.
  */
-const COLUMN_LABEL_HEIGHT = 80;
+const COLUMN_LABEL_HEIGHT = 140;
 
 function isEmpty(data: readonly (readonly number[])[]): boolean {
   if (data.length === 0) return true;
@@ -155,11 +160,15 @@ export function Heatmap({
         <title>{ariaLabel}</title>
 
         {/* Column labels along the top.
-            bd-yteek: rotated -45° so long channel names ("Discovery
-            Channel HD") read diagonally instead of overlapping with the
-            label in the next column. textAnchor='end' on a -45°-rotated
-            text anchors the label's right edge at the pivot, which sits
-            at the column center just above the cells. */}
+            bd-yteek: rotated so long channel names ("Discovery Channel HD")
+            read diagonally rather than overlapping horizontally.
+            bd-wdpve: SVG y-down means rotate(+45°) sends text UP-AND-RIGHT
+            from the pivot (labels project into the COLUMN_LABEL_HEIGHT band
+            above the cells). The yteek rotation was -45° which in y-down
+            sends text DOWN-AND-LEFT — ON TOP of the cells below the band.
+            textAnchor='end' on a +45°-rotated text anchors the label's
+            trailing edge at the pivot, sitting at the column center just
+            above the cell grid. */}
         {columnLabels.slice(0, columnCount).map((label, colIdx) => {
           const pivotX = ROW_LABEL_WIDTH + colIdx * cellSize + cellSize / 2;
           const pivotY = COLUMN_LABEL_HEIGHT - 4;
@@ -170,7 +179,7 @@ export function Heatmap({
               x={pivotX}
               y={pivotY}
               textAnchor="end"
-              transform={`rotate(-45 ${pivotX} ${pivotY})`}
+              transform={`rotate(45 ${pivotX} ${pivotY})`}
             >
               {label}
             </text>

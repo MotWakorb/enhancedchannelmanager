@@ -12,9 +12,10 @@ Scope:
   ``result=success|failure``.
 * ``ecm_session_telemetry_write_duration_seconds`` observes the wall time
   of each write call.
-* ``ecm_session_telemetry_row_count`` is a gauge intended for storage-
-  growth alerts; the helper publishes the row count it just wrote on
-  every successful call.
+* ``ecm_session_telemetry_row_count`` is a gauge for storage-growth
+  alerts. bd-ae58c (Option B): BandwidthTracker no longer writes it —
+  StatsV2RollupTask is the sole writer (post-prune table total, nightly).
+  Per-poll batch size is derivable from ecm_session_telemetry_writes_total.
 * ``ecm_provider_resolution_total`` is incremented by the resolver SLI
   hook (``BandwidthTracker._log_provider_resolution_sli``) using the
   ``resolved`` and ``unresolved`` counts the resolver already computes.
@@ -271,14 +272,19 @@ async def test_successful_write_records_duration_observation(
 
 
 @pytest.mark.asyncio
-async def test_successful_write_publishes_row_count_gauge(
+async def test_successful_write_does_not_update_row_count_gauge(
     patched_session_local,
     seed_synthetic_user,
     tracker,
     mock_client,
 ):
-    """The most recent write batch's row count is exposed as a gauge."""
+    """bd-ae58c (Option B): BandwidthTracker no longer sets
+    ecm_session_telemetry_row_count. The gauge is owned exclusively by
+    StatsV2RollupTask (nightly post-prune table total). Per-poll batch
+    size is observable via the ecm_session_telemetry_writes_total rate.
+    After two polls the gauge must remain at its initial value (0)."""
     gauge = observability.get_metric("session_telemetry_row_count")
+    before = gauge._value.get()
 
     first = _channel_payload(
         total_bytes=1_000_000,
@@ -290,9 +296,8 @@ async def test_successful_write_publishes_row_count_gauge(
     )
     await _drive_two_polls(tracker, mock_client, first, second)
 
-    # The second poll writes 2 rows (one per client). The gauge is a
-    # "last observed batch" snapshot, not a monotonic count.
-    assert gauge._value.get() == 2
+    # Gauge must not have been touched by BandwidthTracker.
+    assert gauge._value.get() == before
 
 
 @pytest.mark.asyncio
