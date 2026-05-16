@@ -225,6 +225,11 @@ _cached_settings: DispatcharrSettings | None = None
 # ``clear_settings_cache()`` so test isolation works.
 _legacy_api_key_warned: bool = False
 
+# One-shot flag so the "both fields populated and differ" WARN only fires
+# once per process startup (bd-jmi1c P1-1). Cleared by
+# ``clear_settings_cache()`` alongside ``_legacy_api_key_warned``.
+_legacy_api_key_conflict_warned: bool = False
+
 
 
 def ensure_config_dir():
@@ -293,16 +298,29 @@ def _migrate_dispatcharr_api_key(data: dict) -> dict:
     the legacy field on write so the two stay in sync until the legacy
     field is removed in a future release.
     """
-    global _legacy_api_key_warned
+    global _legacy_api_key_warned, _legacy_api_key_conflict_warned
 
     new_key = (data.get("dispatcharr_api_key") or "").strip()
     legacy_key = (data.get("api_key") or "").strip()
 
     if new_key:
-        # Canonical field wins — silent no-op. Even if the legacy field is
-        # populated and differs, we treat it as stale (operator likely
-        # rotated the Dispatcharr token via the UI and the legacy field
-        # never got updated by an external script).
+        # Canonical field wins — operator likely rotated the Dispatcharr token
+        # via the UI and the legacy field never got updated by an external
+        # script. When the two are populated AND differ we emit one WARN per
+        # process so operators editing the file directly can see they're about
+        # to lose the legacy value on next save (the canonical wins and
+        # save_settings() mirrors canonical → legacy, silently overwriting any
+        # divergent legacy value). bd-jmi1c P1-1.
+        if legacy_key and legacy_key != new_key:
+            if not _legacy_api_key_conflict_warned:
+                logger.warning(
+                    "[CONFIG] Both 'dispatcharr_api_key' and 'api_key' are populated "
+                    "with differing values in settings.json; using canonical "
+                    "'dispatcharr_api_key' and overwriting 'api_key' on next save. "
+                    "If you intend to update the Dispatcharr token via direct file "
+                    "edits, write to 'dispatcharr_api_key'. (bd-jmi1c, GH #273)"
+                )
+                _legacy_api_key_conflict_warned = True
         return data
 
     if legacy_key:
@@ -414,15 +432,17 @@ def save_settings(settings: DispatcharrSettings) -> None:
 def clear_settings_cache() -> None:
     """Clear the cached settings (forces reload).
 
-    Also resets the legacy ``api_key`` deprecation WARN flag (bd-jmi1c) so a
-    subsequent ``load_settings()`` call surfaces the warning again. Without
-    this, tests that exercise the migration path multiple times in one
-    process would see the WARN fire once and then be silent — making it
-    impossible to assert on the warning per test.
+    Also resets the legacy ``api_key`` deprecation WARN flag and the
+    legacy/canonical conflict WARN flag (bd-jmi1c) so a subsequent
+    ``load_settings()`` call surfaces both warnings again. Without this,
+    tests that exercise the migration path multiple times in one process
+    would see the WARN fire once and then be silent — making it impossible
+    to assert on the warning per test.
     """
-    global _cached_settings, _legacy_api_key_warned
+    global _cached_settings, _legacy_api_key_warned, _legacy_api_key_conflict_warned
     _cached_settings = None
     _legacy_api_key_warned = False
+    _legacy_api_key_conflict_warned = False
     logger.info("[CONFIG] Settings cache cleared")
 
 

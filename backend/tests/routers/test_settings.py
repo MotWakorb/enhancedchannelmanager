@@ -361,6 +361,73 @@ class TestUpdateSettings:
         assert captured["dispatcharr_api_key"] == "canonical-wins"
 
     @pytest.mark.asyncio
+    async def test_post_warns_when_both_fields_differ(self, async_client, caplog):
+        """bd-jmi1c P1-1 / bd-46g4t: when the POST body contains both
+        ``dispatcharr_api_key`` and ``api_key`` with differing values, log a
+        WARN so the silent-discard of the legacy value is auditable. POST is
+        rare enough that per-request logging is acceptable — no flag-gating
+        is needed."""
+        import logging
+        current = _mock_settings(auth_method="password")
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            with caplog.at_level(logging.WARNING, logger="routers.settings"):
+                response = await async_client.post("/api/settings", json={
+                    "url": current.url,
+                    "auth_method": "api_key",
+                    "username": current.username,
+                    "dispatcharr_api_key": "canonical-keep-me",
+                    "api_key": "legacy-drop-me",
+                })
+
+        assert response.status_code == 200, response.json()
+        conflict_warns = [
+            record.getMessage()
+            for record in caplog.records
+            if "differing 'dispatcharr_api_key' and 'api_key'" in record.getMessage()
+        ]
+        assert len(conflict_warns) == 1, (
+            f"Expected one conflict WARN; got: {conflict_warns}"
+        )
+        assert "bd-jmi1c" in conflict_warns[0]
+
+    @pytest.mark.asyncio
+    async def test_post_no_warn_when_both_fields_identical(self, async_client, caplog):
+        """If a client double-sends the same value into both field names
+        (e.g., for back-compat with an older backend), there's no conflict
+        and no WARN — the WARN is reserved for the genuine discard case."""
+        import logging
+        current = _mock_settings(auth_method="password")
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            with caplog.at_level(logging.WARNING, logger="routers.settings"):
+                response = await async_client.post("/api/settings", json={
+                    "url": current.url,
+                    "auth_method": "api_key",
+                    "username": current.username,
+                    "dispatcharr_api_key": "same-value",
+                    "api_key": "same-value",
+                })
+
+        assert response.status_code == 200, response.json()
+        assert not any(
+            "differing 'dispatcharr_api_key' and 'api_key'" in record.getMessage()
+            for record in caplog.records
+        ), "Conflict WARN fired despite identical values"
+
+    @pytest.mark.asyncio
     async def test_response_exposes_both_indicators(self, async_client):
         """bd-jmi1c (GH #273): GET /api/settings returns both
         ``dispatcharr_api_key_configured`` (canonical) and the legacy
