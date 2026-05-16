@@ -378,6 +378,24 @@ class TaskEngine:
             except Exception as e:
                 logger.exception("[TASK-ENGINE] Error in scheduler loop: %s", e)
 
+            # bd-qxi02 P1 fix: refresh the
+            # ecm_task_schedule_next_run_null_count gauge on every
+            # scheduler tick so the 5m alert window in
+            # prometheus_rules.yaml sees per-scrape freshness. Without
+            # this, the gauge was only updated at init_db and
+            # TaskRegistry.sync_from_database (both boot-only), so a
+            # mid-life regression that caused next_run_at to drift to
+            # NULL would not be detected until the next container
+            # restart. The COUNT(*) query is cheap (~one indexed
+            # lookup against task_schedules, <10 rows in practice).
+            # Defensive wrapping mirrors the boot-time call site —
+            # observability must never break the scheduler loop.
+            try:
+                from observability import update_task_schedule_null_count
+                update_task_schedule_null_count()
+            except Exception as obs_err:  # pragma: no cover — best-effort
+                logger.debug("[TASK-ENGINE] task_schedule null-count refresh failed: %s", obs_err)
+
             # Wait for next check
             try:
                 await asyncio.sleep(self.check_interval)
@@ -739,6 +757,16 @@ class TaskEngine:
                 # (the disease bd-p5b8i hid for 39+ days) from "task
                 # is healthy." Wrapped defensively in observability —
                 # this MUST NOT break the task completion path.
+                #
+                # CANCELLED is intentionally excluded from success-
+                # stamping. The `if result.error == "CANCELLED"`
+                # branch above is part of the same if/elif chain, so
+                # a cancelled result never reaches this elif — even
+                # if a task returns success=True alongside
+                # error="CANCELLED", the gauge is not stamped. This
+                # is the right behavior: a cancelled run is not a
+                # successful run and should not reset the staleness
+                # clock.
                 try:
                     from observability import record_task_success
                     record_task_success(task_id)

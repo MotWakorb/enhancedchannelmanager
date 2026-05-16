@@ -460,14 +460,16 @@ ecm:task_schedule:hours_since_success = (time() - ecm_task_schedule_last_success
 | `ECMTaskSchedulerNextRunNull` | `next_run_at IS NULL` count > 0 | 5m | page |
 | `ECMTaskScheduleStaleStatsRollup` | `stats_v2_rollup` last success > 25h ago | 1h | warning |
 | `ECMTaskScheduleStaleCleanup` | `cleanup` last success > 8d ago | 24h | warning |
-| `ECMTaskScheduleStaleM3UMonitor` | `m3u_change_monitor` last success > 12h ago | 1h | warning |
-| `ECMTaskScheduleStaleStreamProbe` | `stream_probe` last success > 48h ago | 6h | warning |
+| `ECMTaskScheduleStaleM3UMonitor` | `m3u_change_monitor` last success > 30m ago | 1h | warning |
+| `ECMTaskScheduleStaleStreamProbe` | `stream_probe` last success > 48h ago (guarded — see below) | 6h | warning |
 
-**Why these thresholds (initial):** Each per-task staleness budget is "2× the documented cadence" — `stats_v2_rollup` nightly → 25h budget; `cleanup` weekly → 8d budget; `m3u_change_monitor` 6h interval → 12h budget; `stream_probe` daily-ish → 48h budget. The 2× factor absorbs one missed run (container restart, snapshot pause, single transient failure) without paging, while catching a sustained stall before the next-most-stale signal (data freshness, dashboard staleness, missed alerts) would have surfaced it. `ECMTaskSchedulerNextRunNull` is severity `page` because it indicates a *structural* break (the scheduler never picks the row up at all) rather than a delayed run.
+**Why these thresholds (initial):** Each per-task staleness budget is sized against the actual cadence in code, not aspirational defaults — `stats_v2_rollup` nightly → 25h budget (≈ 1.04× the 24h cadence); `cleanup` weekly → 8d budget (≈ 1.14× the 7d cadence); `m3u_change_monitor` 5-min cadence → 30-min budget = 6 missed runs (room for transient slowness without paging on every blip; previously documented as "6h interval → 12h budget," which was incorrect and would have hidden ~144 missed runs); `stream_probe` defaults to MANUAL in code, so the 48h budget only applies once an operator has scheduled it on a recurring cadence. `ECMTaskSchedulerNextRunNull` is severity `page` because it indicates a *structural* break (the scheduler never picks the row up at all) rather than a delayed run.
+
+**Fresh-install / operator-disabled-task guard:** Every per-task staleness alert in `prometheus_rules.yaml` includes `AND ecm_task_schedule_last_success_timestamp{task_id="..."} > 0` so the alert only fires after the task has succeeded at least once on this install. This prevents false pages on fresh installs (where the gauge defaults to 0 because nothing has ever run) and on operator-disabled or MANUAL-mode tasks (where the gauge legitimately stays at 0 forever). Without this guard, `ECMTaskScheduleStaleStreamProbe` would page every fresh-install operator 48h after first boot because `stream_probe` defaults to MANUAL.
 
 **Why this is not a numbered SLO:** Task cadence is operator-configurable (Settings → Tasks lets the operator change every interval and disable any task). ECM cannot make a portable commitment about "the cleanup task ran in the last 8 days" when an operator's documented choice may be MANUAL, monthly, or a non-default cron. The signal is exposed so operators can build their own commitments against their configured schedule.
 
-**Deploy order — IMPORTANT:** `ECMTaskSchedulerNextRunNull` only becomes useful AFTER the bd-p5b8i / Bundle H heal ships. Pre-heal, every existing operator's gauge is > 0 (the disease) and the alert would page immediately on every install. Land the heal first, then enable the alert rule.
+**Deploy order — IMPORTANT:** `ECMTaskSchedulerNextRunNull` is shipped **commented out** in `prometheus_rules.yaml` (search the file for the `UNCOMMENT AFTER v0.17.0 SHIPS` marker). Pre-heal, every existing operator's gauge is > 0 (the disease) and the alert would page immediately on every install — operators who copy the rules file into their stack today would page themselves. After v0.17.0 has shipped and operators have had a chance to run Bundle H's heal at startup (~30 days post-release), a follow-up PR will uncomment the alert block.
 
 **What breaks these thresholds:**
 

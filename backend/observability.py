@@ -892,6 +892,15 @@ def update_task_schedule_null_count(count: Optional[int] = None) -> None:
     * ``task_registry.TaskRegistry.sync_from_database`` — re-emitted
       after the registry has finished its own bookkeeping so a heal
       that ran during sync_from_database is reflected immediately.
+    * ``task_engine.TaskEngine._scheduler_loop`` — invoked on every
+      scheduler tick (default cadence ~60s, matches
+      ``TaskEngine.check_interval``) so the gauge has per-scrape
+      freshness for the 5m alert window in ``prometheus_rules.yaml``.
+      Without this third call site the gauge would only refresh at
+      boot, which means a mid-life regression that caused
+      ``next_run_at`` to drift to NULL would not be detected until
+      the next container restart. The COUNT(*) query is cheap (one
+      indexed lookup against task_schedules, ~10 rows in practice).
 
     Defensive: never raises. When ``count`` is ``None``, queries the
     DB lazily — the import is inside the function so tests that

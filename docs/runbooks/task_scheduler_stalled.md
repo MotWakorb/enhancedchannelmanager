@@ -12,7 +12,7 @@
 - `ECMTaskSchedulerNextRunNull` (**page**) — one or more enabled non-MANUAL `task_schedules` rows has `next_run_at = NULL`. Scheduler loop will never pick them up. This is the bd-p5b8i disease vector.
 - `ECMTaskScheduleStaleStatsRollup` (warning) — `stats_v2_rollup` last success > 25h ago.
 - `ECMTaskScheduleStaleCleanup` (warning) — `cleanup` last success > 8d ago.
-- `ECMTaskScheduleStaleM3UMonitor` (warning) — `m3u_change_monitor` last success > 12h ago.
+- `ECMTaskScheduleStaleM3UMonitor` (warning) — `m3u_change_monitor` last success > 30m ago (5-min cadence, 30-min staleness budget = 6 missed runs).
 - `ECMTaskScheduleStaleStreamProbe` (warning) — `stream_probe` last success > 48h ago.
 
 **SLO:** Not tied to a numbered SLO. Capacity-planning / operational-health class — task cadence is operator-configurable, so ECM cannot make a portable commitment about it. See `docs/sre/slos.md` → "Capacity planning: Task scheduler health (bd-qxi02)".
@@ -161,6 +161,7 @@ null_count = c.execute(\"\"\"
     WHERE next_run_at IS NULL AND enabled=1 AND schedule_type != 'manual'
 \"\"\").fetchone()[0]
 print(f'NULL next_run_at on enabled non-MANUAL rows: {null_count}')
+c.close()
 "
 
 # 3. Wait one scheduler poll interval (default ~60s) and confirm at
@@ -172,6 +173,7 @@ c = sqlite3.connect('/config/journal.db')
 cutoff = (datetime.utcnow() - timedelta(minutes=5)).isoformat()
 rows = c.execute('SELECT task_id, started_at, status FROM task_executions WHERE started_at >= ? ORDER BY started_at DESC LIMIT 10', (cutoff,)).fetchall()
 for r in rows: print(r)
+c.close()
 "
 ```
 
