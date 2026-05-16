@@ -160,6 +160,22 @@ class TaskRegistry:
                     self._instances[task_id] = task_class()
             self._initialized = True
 
+        # bd-qxi02 (SRE recommendation from bd-p5b8i spike): re-emit the
+        # next_run_at IS NULL gauge after sync_from_database so a heal
+        # that ran during sync_from_database (or Bundle H's heal that
+        # runs in a sibling code path on this same startup) is visible
+        # on the next scrape without waiting for the next container
+        # restart. Defensive — observability MUST NOT break the
+        # registry sync path.
+        try:
+            from observability import update_task_schedule_null_count
+            update_task_schedule_null_count()
+        except Exception as obs_err:  # pragma: no cover — best-effort
+            logger.debug(
+                "[TASK-REGISTRY] Failed to update task_schedule null-count gauge: %s",
+                obs_err,
+            )
+
     def sync_to_database(self, task_id: Optional[str] = None) -> None:
         """
         Save task configuration(s) to database.
