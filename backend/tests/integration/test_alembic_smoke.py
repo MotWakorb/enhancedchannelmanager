@@ -2002,3 +2002,268 @@ class TestMigration0011Idempotent:
             assert row is not None and row[0] == database.get_alembic_head_revision()
         finally:
             engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Migration 0012 — task_schedules CHECK ck_task_schedules_interval_positive (bd-lbkck)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestMigration0012:
+    """Migration 0012 — CHECK constraint preventing task_schedules interval/0.
+
+    Defense in depth for the bd-p5b8i scheduling subsystem regression.
+    The placeholder bug Bundle H (bd-1weac) fixes wrote ``task_schedules``
+    rows with ``schedule_type='interval'`` and ``interval_seconds=0``/``NULL``;
+    this migration adds ``ck_task_schedules_interval_positive`` so SQLite
+    rejects the bad shape at write time and the bug cannot recur via
+    backup-restore or a future code path.
+
+    Coverage:
+      - Fresh upgrade through 0012 — constraint exists in the DDL and
+        rejects interval/0 INSERTs with IntegrityError.
+      - Drift (pre-existing interval/0 rows): the migration's pre-flight
+        DELETE repairs the violating rows before the constraint is
+        added, so the batch rebuild doesn't fail with IntegrityError on
+        bad data.
+      - Idempotency (bd-5w6jz pattern): re-running the migration is a
+        no-op when the constraint is already present.
+    """
+
+    CONSTRAINT_NAME = "ck_task_schedules_interval_positive"
+
+    @staticmethod
+    def _constraint_in_ddl(engine) -> bool:
+        """True if the constraint name appears in task_schedules' DDL."""
+        with engine.connect() as conn:
+            ddl = conn.execute(text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type='table' AND name='task_schedules'"
+            )).scalar()
+        return "ck_task_schedules_interval_positive" in (ddl or "")
+
+    def test_fresh_sqlite_upgrade_through_0012(self, tmp_path):
+        """Fresh DB: ``alembic upgrade 0012`` adds the constraint."""
+        from alembic import command
+        from sqlalchemy.exc import IntegrityError
+
+        db_url = f"sqlite:///{tmp_path / 'mig0012_fresh.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0012")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert self._constraint_in_ddl(engine), (
+                "ck_task_schedules_interval_positive missing from DDL "
+                "after upgrade 0012 — migration did not add the constraint."
+            )
+            # SQLite must enforce the constraint at write time. We use a
+            # raw connection to bypass ORM defaults and inject the
+            # placeholder shape directly.
+            with engine.begin() as conn:
+                with pytest.raises(IntegrityError):
+                    conn.execute(text(
+                        "INSERT INTO task_schedules "
+                        "(task_id, enabled, schedule_type, interval_seconds, "
+                        " timezone, created_at, updated_at) "
+                        "VALUES ('cleanup', 1, 'interval', 0, 'UTC', "
+                        " '2026-05-15 19:00:00', '2026-05-15 19:00:00')"
+                    ))
+            # NULL interval_seconds with interval type also blocked.
+            with engine.begin() as conn:
+                with pytest.raises(IntegrityError):
+                    conn.execute(text(
+                        "INSERT INTO task_schedules "
+                        "(task_id, enabled, schedule_type, interval_seconds, "
+                        " timezone, created_at, updated_at) "
+                        "VALUES ('cleanup', 1, 'interval', NULL, 'UTC', "
+                        " '2026-05-15 19:00:00', '2026-05-15 19:00:00')"
+                    ))
+            # daily/weekly rows with NULL interval_seconds MUST succeed —
+            # the constraint scopes the check to schedule_type='interval'.
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "INSERT INTO task_schedules "
+                    "(task_id, enabled, schedule_type, interval_seconds, "
+                    " schedule_time, timezone, created_at, updated_at) "
+                    "VALUES ('cleanup', 1, 'daily', NULL, '02:00', 'UTC', "
+                    " '2026-05-15 19:00:00', '2026-05-15 19:00:00')"
+                ))
+            # interval rows with positive interval_seconds MUST succeed.
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "INSERT INTO task_schedules "
+                    "(task_id, enabled, schedule_type, interval_seconds, "
+                    " timezone, created_at, updated_at) "
+                    "VALUES ('cleanup', 1, 'interval', 3600, 'UTC', "
+                    " '2026-05-15 19:00:00', '2026-05-15 19:00:00')"
+                ))
+        finally:
+            engine.dispose()
+
+    def test_drifted_preexisting_interval_zero_row_is_repaired(self, tmp_path):
+        """Drift path: pre-existing interval/0 rows repaired pre-add.
+
+        Reproduces the bd-p5b8i scenario where the placeholder bug Bundle H
+        is fixing has already written the bad shape into the DB. The
+        migration's pre-flight DELETE must remove the violating rows before
+        the constraint is added; otherwise the batch rebuild fails with
+        IntegrityError on the copy-rows step.
+        """
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0012_drift.db'}"
+        cfg = _make_alembic_config(db_url)
+        # Upgrade to 0011 — task_schedules exists, no constraint yet.
+        command.upgrade(cfg, "0011")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert not self._constraint_in_ddl(engine), (
+                "test setup is wrong — constraint already present at 0011"
+            )
+            # Inject the placeholder bug rows directly via raw SQL —
+            # matches what the pre-Bundle-H code wrote.
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "INSERT INTO task_schedules "
+                    "(task_id, enabled, schedule_type, interval_seconds, "
+                    " timezone, created_at, updated_at) "
+                    "VALUES ('cleanup', 1, 'interval', 0, 'UTC', "
+                    " '2026-05-15 19:00:00', '2026-05-15 19:00:00')"
+                ))
+                # Also a NULL variant — same bug, slightly different shape.
+                conn.execute(text(
+                    "INSERT INTO task_schedules "
+                    "(task_id, enabled, schedule_type, interval_seconds, "
+                    " timezone, created_at, updated_at) "
+                    "VALUES ('stream_probe', 1, 'interval', NULL, 'UTC', "
+                    " '2026-05-15 19:00:00', '2026-05-15 19:00:00')"
+                ))
+                # A good interval row that MUST survive — defense against
+                # an over-aggressive WHERE clause in the pre-flight DELETE.
+                conn.execute(text(
+                    "INSERT INTO task_schedules "
+                    "(task_id, enabled, schedule_type, interval_seconds, "
+                    " timezone, created_at, updated_at) "
+                    "VALUES ('m3u_refresh', 1, 'interval', 3600, 'UTC', "
+                    " '2026-05-15 19:00:00', '2026-05-15 19:00:00')"
+                ))
+                # A daily row with NULL interval_seconds — also MUST
+                # survive (the constraint scopes the check to interval).
+                conn.execute(text(
+                    "INSERT INTO task_schedules "
+                    "(task_id, enabled, schedule_type, interval_seconds, "
+                    " schedule_time, timezone, created_at, updated_at) "
+                    "VALUES ('epg_refresh', 1, 'daily', NULL, '02:00', 'UTC', "
+                    " '2026-05-15 19:00:00', '2026-05-15 19:00:00')"
+                ))
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == "0011"
+        finally:
+            engine.dispose()
+
+        # Pre-fix this would raise IntegrityError on the batch rebuild's
+        # row-copy step. The pre-flight DELETE in 0012's upgrade() must
+        # remove the two violating rows first.
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert self._constraint_in_ddl(engine), (
+                "constraint missing after upgrade head on drifted DB — "
+                "the migration did not run correctly."
+            )
+            with engine.connect() as conn:
+                rows = conn.execute(text(
+                    "SELECT task_id, schedule_type, interval_seconds "
+                    "FROM task_schedules ORDER BY task_id"
+                )).fetchall()
+            # Survivors: m3u_refresh interval/3600 + epg_refresh daily/NULL.
+            # Casualties: cleanup interval/0 + stream_probe interval/NULL.
+            surviving_ids = {r[0] for r in rows}
+            assert surviving_ids == {"epg_refresh", "m3u_refresh"}, (
+                f"unexpected surviving rows: {rows!r} — the pre-flight "
+                "DELETE should have removed only the two interval/0|NULL "
+                "rows and left the good rows alone."
+            )
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == database.get_alembic_head_revision()
+        finally:
+            engine.dispose()
+
+
+@pytest.mark.integration
+class TestMigration0012Idempotent:
+    """Regression lock for bd-5w6jz idempotency on migration 0012.
+
+    Re-running the migration against a DB where the constraint is
+    already present must be a no-op rather than raising or silently
+    duplicating the CHECK in the rebuilt table DDL. Reproduces the
+    smart-bootstrap fast-path scenario where the alembic_version row
+    gets rolled back but the schema state survives.
+    """
+
+    def test_idempotent_when_constraint_already_present(self, tmp_path):
+        """Re-running 0012 against an already-constrained DB is a no-op."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0012_idemp.db'}"
+        cfg = _make_alembic_config(db_url)
+        # Bring schema all the way through 0012 — constraint is now present.
+        command.upgrade(cfg, "0012")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert TestMigration0012._constraint_in_ddl(engine), (
+                "test setup is wrong — constraint missing after upgrade 0012"
+            )
+            # Roll alembic_version back to 0011 to simulate the
+            # version-row-out-of-sync-with-schema state (smart-bootstrap
+            # fast-path crashed mid-stamp, partial rollback, etc.).
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "UPDATE alembic_version SET version_num = '0011'"
+                ))
+        finally:
+            engine.dispose()
+
+        # Re-run the migration. Must no-op cleanly.
+        # Pre-fix the batch rebuild would either raise or duplicate the
+        # constraint silently in the rebuilt table definition.
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert TestMigration0012._constraint_in_ddl(engine), (
+                "constraint disappeared after re-running 0012 — "
+                "the idempotency guard should have skipped the batch "
+                "rebuild entirely, leaving the existing constraint intact."
+            )
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == database.get_alembic_head_revision()
+            # And the constraint must appear EXACTLY ONCE in the DDL —
+            # a buggy re-run that duplicates the constraint via the
+            # rebuild would have it appearing twice.
+            with engine.connect() as conn:
+                ddl = conn.execute(text(
+                    "SELECT sql FROM sqlite_master "
+                    "WHERE type='table' AND name='task_schedules'"
+                )).scalar()
+            assert (ddl or "").count("ck_task_schedules_interval_positive") == 1, (
+                "constraint appears more than once in the DDL after "
+                "re-running 0012 — the idempotency guard let the batch "
+                "rebuild add a duplicate constraint."
+            )
+        finally:
+            engine.dispose()
