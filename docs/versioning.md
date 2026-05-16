@@ -17,6 +17,27 @@ MAJOR.MINOR.PATCH-BUILD
 
 The canonical version string lives in [`frontend/package.json`](../frontend/package.json) and is baked into the Docker image at build time via the `ECM_VERSION` build-arg. Every image tagged with a `-BUILD` suffix is a dev build; every image tagged `X.Y.Z` with no suffix is a promoted release.
 
+## Touchpoints
+
+The version literal is hand-edited in **three** files. All three must move in lockstep on every bump. CI enforces this via `.github/workflows/test.yml` → `version-consistency` job, which runs [`scripts/check_version_consistency.py`](../scripts/check_version_consistency.py) and fails the PR on divergence.
+
+| File | Line shape | Read by | Why it exists |
+| --- | --- | --- | --- |
+| [`frontend/package.json`](../frontend/package.json) | `"version": "X.Y.Z-NNNN"` | `build.yml` (`jq -r .version` → `ECM_VERSION` build-arg → `/api/version` env, UI footer, Docker label) | Canonical source. Baked into the image. |
+| [`backend/routers/backup.py`](../backend/routers/backup.py) | `APP_VERSION = "X.Y.Z-NNNN"` | Backup-export manifest (`version` field); also re-imported by `routers/auto_creation.py` for the rule-export `ecm_version` field | Stamps backups with the version that produced them so DBAS restore can gate on the source version. |
+| [`backend/main.py`](../backend/main.py) | `version="X.Y.Z-NNNN"` (kwarg to `FastAPI(...)`) | OpenAPI schema (`/api/openapi.json` → `info.version`) | Surfaces in the auto-generated docs at `/api/docs`. Picked up by API-contract tests that diff the schema. |
+
+When you add a fourth touchpoint:
+
+1. Edit the file with the new literal in lockstep with the other three.
+2. Add it to `TOUCHPOINTS` in [`scripts/check_version_consistency.py`](../scripts/check_version_consistency.py) with a name + path + extractor function.
+3. Add a row to the table above so the next agent doing a manual bump sees the full surface.
+
+History — why this guard exists:
+
+- **PR #277** (cherry-pick of bd-lkyg5 from `release/v0.16.1` to `dev`, 2026-05-13): the cherry-pick agent noticed `backend/routers/backup.py` was at `"0.16.0"` while `frontend/package.json` had been bumped 27 times to `"0.17.0-0027"`. The skew had been latent for months — only caught because the cherry-picked commit happened to touch `backup.py`. Fixed inline; bd-9rtlc filed.
+- **bd-9rtlc audit** (2026-05-14): grep across the codebase surfaced a second long-standing skew — `backend/main.py` was at `"0.16.0-0003"` (FastAPI kwarg) while `frontend/package.json` was at `"0.17.0-0033"`. The FastAPI version only shows in the OpenAPI schema, which no external consumer cited, so nobody noticed for ~30 builds. Both touchpoints are now bumped in lockstep at `"0.17.0-0034"` and the CI guard (this job) blocks any future divergence.
+
 ## Yanked release note — 0.16.0
 
 Version `0.16.0` was tagged and pushed to GHCR on 2026-04-20 and then **hard-rolled-back the same day** — the tag, GitHub Release, and GHCR image were all deleted before any external consumer pulled them. See [`docs/runbooks/v0.16.0-rollback.md`](runbooks/v0.16.0-rollback.md) for the full incident and [ADR-004](adr/ADR-004-release-cut-promotion-discipline.md) for the pre-cut gate that now blocks a repeat.
