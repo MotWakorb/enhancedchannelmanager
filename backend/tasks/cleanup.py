@@ -174,9 +174,25 @@ class CleanupTask(TaskScheduler):
                 if self.vacuum_db:
                     try:
                         from sqlalchemy import text
-                        # VACUUM must be outside transaction
+                        # VACUUM must run OUTSIDE any transaction. SQLAlchemy
+                        # 2.0 sessions use implicit transactions: even after
+                        # ``session.commit()``, the next ``session.execute()``
+                        # opens a NEW transaction and SQLite raises
+                        # ``OperationalError: cannot VACUUM from within a
+                        # transaction``. The fix is to acquire a raw DBAPI
+                        # connection from the engine (``session.bind`` is the
+                        # bound ``Engine``) — its ``connect()`` context yields
+                        # a Connection in autocommit-ish mode that does NOT
+                        # auto-open a transaction around bare statements,
+                        # matching the established pattern in
+                        # ``database._perform_maintenance`` (see
+                        # ``backend/database.py``'s startup VACUUM call site).
+                        # The explicit ``session.commit()`` above is kept so
+                        # any pending session-level writes are flushed before
+                        # we hand off to the raw connection.
                         session.commit()
-                        session.execute(text("VACUUM"))
+                        with session.bind.connect() as conn:
+                            conn.execute(text("VACUUM"))
                         deleted_counts["vacuum"] = "completed"
                         logger.info("[%s] Database vacuum completed", self.task_id)
                     except Exception as e:
