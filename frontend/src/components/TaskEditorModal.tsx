@@ -626,6 +626,54 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                     onChange={(e) => setTaskConfig({ ...taskConfig, journal_days: parseInt(e.target.value) || 30 })}
                   />
                 </div>
+                {/* bd-ia28g: three new retention fields for the
+                    auto_creation_executions BLOB columns (77% of operator DB
+                    per DBA spike), the legacy health_checks table (14% / 53k
+                    rows), and the notifications table. */}
+                <div className="retention-item">
+                  <label>Auto-creation execution BLOB retention (days)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    value={(taskConfig.auto_creation_blob_days as number) || 30}
+                    onChange={(e) => setTaskConfig({ ...taskConfig, auto_creation_blob_days: parseInt(e.target.value) || 30 })}
+                  />
+                  <small className="form-hint">
+                    NULLs out execution_log / dry_run_results / created_entities /
+                    modified_entities columns on older rows. Summary row (status,
+                    counts, timing) is preserved for audit history.
+                  </small>
+                </div>
+                <div className="retention-item">
+                  <label>Health checks retention (days)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    value={(taskConfig.health_checks_days as number) || 7}
+                    onChange={(e) => setTaskConfig({ ...taskConfig, health_checks_days: parseInt(e.target.value) || 7 })}
+                  />
+                  <small className="form-hint">
+                    High-frequency polling data; loses diagnostic value
+                    quickly. Default 7 days per DBA recommendation. No-op on
+                    installs without the legacy health_checks table.
+                  </small>
+                </div>
+                <div className="retention-item">
+                  <label>Notifications retention (days)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    value={(taskConfig.notifications_days as number) || 30}
+                    onChange={(e) => setTaskConfig({ ...taskConfig, notifications_days: parseInt(e.target.value) || 30 })}
+                  />
+                  <small className="form-hint">
+                    Uses each row's expires_at if set; otherwise deletes when
+                    older than this many days by created_at.
+                  </small>
+                </div>
                 <label className="config-checkbox">
                   <input
                     type="checkbox"

@@ -955,19 +955,14 @@ function App() {
   };
 
   const loadLogos = async () => {
+    // Pagination + per-page diagnostics live in api.getAllLogos (bd-nh50y).
+    // The helper logs INFO on start, DEBUG per page, INFO on completion, and
+    // ERROR with the page number + partial-results length on failure — see
+    // services/api.ts. We deliberately keep the catch here so a failure does
+    // not blank the existing logos state; the helper already logged the
+    // error with full context.
     try {
-      // Fetch all logos
-      const allLogos: Logo[] = [];
-      let page = 1;
-      let hasMore = true;
-
-      while (hasMore) {
-        const response = await api.getLogos({ page, pageSize: 500 });
-        allLogos.push(...response.results);
-        hasMore = response.next !== null;
-        page++;
-      }
-
+      const allLogos = await api.getAllLogos(500);
       setLogos(allLogos);
     } catch (err) {
       logger.error('Failed to load logos:', err);

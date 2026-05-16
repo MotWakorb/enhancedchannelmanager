@@ -160,6 +160,22 @@ class TaskRegistry:
                     self._instances[task_id] = task_class()
             self._initialized = True
 
+        # bd-qxi02 (SRE recommendation from bd-p5b8i spike): re-emit the
+        # next_run_at IS NULL gauge after sync_from_database so a heal
+        # that ran during sync_from_database (or Bundle H's heal that
+        # runs in a sibling code path on this same startup) is visible
+        # on the next scrape without waiting for the next container
+        # restart. Defensive — observability MUST NOT break the
+        # registry sync path.
+        try:
+            from observability import update_task_schedule_null_count
+            update_task_schedule_null_count()
+        except Exception as obs_err:  # pragma: no cover — best-effort
+            logger.debug(
+                "[TASK-REGISTRY] Failed to update task_schedule null-count gauge: %s",
+                obs_err,
+            )
+
     def sync_to_database(self, task_id: Optional[str] = None) -> None:
         """
         Save task configuration(s) to database.
@@ -227,7 +243,29 @@ class TaskRegistry:
                 self._create_default_task_schedule(session, instance)
 
     def _create_default_task_schedule(self, session, instance: TaskScheduler) -> None:
-        """Create a default TaskSchedule entry for a task with a non-manual schedule."""
+        """Create a default TaskSchedule entry for a task with a non-manual schedule.
+
+        Translates the task's in-memory ``ScheduleConfig`` into the column shape
+        ``task_schedules`` expects (``schedule_type`` in
+        ``{"interval", "daily", "weekly", "monthly"}`` plus the matching
+        ``interval_seconds`` / ``schedule_time`` / ``days_of_week`` / ``day_of_month``
+        fields), then computes ``next_run_at`` so ``task_engine.check_and_run_tasks``
+        (which filters ``WHERE next_run_at IS NOT NULL``) will actually fire the task.
+
+        bd-1weac / bd-p5b8i regression context: prior to v0.17.0-0042, the CRON
+        branch of this function fell through to a default that wrote
+        ``schedule_type='interval', interval_seconds=0``. ``calculate_next_run``
+        returns ``None`` for ``interval_seconds <= 0`` (see
+        ``schedule_calculator._calculate_interval_next_run``), so every CRON-default
+        task (CleanupTask post-bd-ygoqr, StatsV2RollupTask post-bd-7i2vv, etc.)
+        got a row that ``task_engine`` silently filtered out for 4 months.
+        The fix delegates CRON parsing to ``database._convert_cron_to_schedule``
+        — already battle-tested by ``_migrate_task_schedules`` for the v0.8.7
+        ``scheduled_tasks → task_schedules`` migration. Reusing the helper
+        (vs reimplementing cron parsing here) keeps the two write paths
+        — boot-time schedule creation and the v0.8.7 backfill migration —
+        producing identical column shapes for the same cron expression.
+        """
         from schedule_calculator import calculate_next_run
 
         # Check if a TaskSchedule already exists for this task
@@ -241,19 +279,81 @@ class TaskRegistry:
         schedule_config = instance.schedule_config
         schedule_type = schedule_config.schedule_type.value
 
-        # Map internal schedule types to TaskSchedule types
+        # Defaults for the cron branch (overridden when cron translation succeeds).
+        cron_fields = None
+
         if schedule_type == "interval":
             task_schedule_type = "interval"
+        elif schedule_type == "cron" and schedule_config.cron_expression:
+            # Delegate to the helper that handles the cron → task_schedules
+            # column shape, including 0 2 * * 0 → weekly Sunday 02:00 and
+            # 30 3 * * * → daily 03:30.
+            from database import _convert_cron_to_schedule
+            cron_fields = _convert_cron_to_schedule(
+                schedule_config.cron_expression,
+                schedule_config.timezone or "UTC",
+            )
+            if cron_fields:
+                task_schedule_type = cron_fields["schedule_type"]
+            else:
+                # Cron expression we couldn't translate — fall back to daily at
+                # the configured schedule_time if any, otherwise daily at 03:00 UTC.
+                # This avoids the pre-fix interval/0 silent-skip trap.
+                # Note: ScheduleConfig.schedule_time defaults to "" for CRON
+                # tasks (they carry their time inside cron_expression), so the
+                # `or` below effectively always picks "03:00" in practice. The
+                # branch exists for the legitimate edge case where an operator
+                # subclass populates BOTH cron_expression and schedule_time.
+                task_schedule_type = "daily"
+                cron_fields = {
+                    "schedule_type": "daily",
+                    "interval_seconds": None,
+                    "schedule_time": schedule_config.schedule_time or "03:00",
+                    "timezone": schedule_config.timezone or "UTC",
+                    "days_of_week": None,
+                    "day_of_month": None,
+                }
+                logger.warning(
+                    "[TASK-REGISTRY] Could not parse cron expression %r for %s; "
+                    "falling back to daily at %s (bd-1weac)",
+                    schedule_config.cron_expression,
+                    instance.task_id,
+                    cron_fields["schedule_time"],
+                )
         else:
-            # For other types, default to daily if there's a schedule_time
+            # Non-interval, non-cron with a schedule_time set: daily.
+            # Anything else with no schedule_time falls back to interval
+            # (preserves v0.8.7-0023 behaviour for unknown shapes).
             task_schedule_type = "daily" if schedule_config.schedule_time else "interval"
 
-        # Calculate next run time
+        if cron_fields is not None:
+            # Cron branch: use the translated columns directly.
+            interval_seconds = cron_fields["interval_seconds"]
+            schedule_time = cron_fields["schedule_time"]
+            days_of_week = cron_fields["days_of_week"]
+            day_of_month = cron_fields["day_of_month"]
+            timezone = cron_fields["timezone"]
+        else:
+            interval_seconds = schedule_config.interval_seconds if task_schedule_type == "interval" else None
+            schedule_time = schedule_config.schedule_time if task_schedule_type != "interval" else None
+            days_of_week = None
+            day_of_month = None
+            timezone = schedule_config.timezone or "UTC"
+
+        # ``calculate_next_run`` expects ``days_of_week`` as a list of ints;
+        # the column stores a comma-separated string. Translate at the boundary.
+        days_of_week_list = (
+            [int(d.strip()) for d in days_of_week.split(",") if d.strip()]
+            if days_of_week else None
+        )
+
         next_run = calculate_next_run(
             schedule_type=task_schedule_type,
-            interval_seconds=schedule_config.interval_seconds if task_schedule_type == "interval" else None,
-            schedule_time=schedule_config.schedule_time if task_schedule_type != "interval" else None,
-            timezone=schedule_config.timezone or "UTC",
+            interval_seconds=interval_seconds,
+            schedule_time=schedule_time,
+            timezone=timezone,
+            days_of_week=days_of_week_list,
+            day_of_month=day_of_month,
         )
 
         task_schedule = TaskSchedule(
@@ -261,13 +361,19 @@ class TaskRegistry:
             name="Default Schedule",
             enabled=True,
             schedule_type=task_schedule_type,
-            interval_seconds=schedule_config.interval_seconds if task_schedule_type == "interval" else None,
-            schedule_time=schedule_config.schedule_time if task_schedule_type != "interval" else None,
-            timezone=schedule_config.timezone or "UTC",
+            interval_seconds=interval_seconds,
+            schedule_time=schedule_time,
+            days_of_week=days_of_week,
+            day_of_month=day_of_month,
+            timezone=timezone,
             next_run_at=next_run,
         )
         session.add(task_schedule)
-        logger.info("[TASK-REGISTRY] Created default TaskSchedule for %s: %s", instance.task_id, task_schedule_type)
+        logger.info(
+            "[TASK-REGISTRY] Created default TaskSchedule for %s: %s",
+            instance.task_id,
+            task_schedule_type,
+        )
 
     # -------------------------------------------------------------------------
     # Task Configuration API

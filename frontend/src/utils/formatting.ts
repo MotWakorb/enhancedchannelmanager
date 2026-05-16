@@ -213,3 +213,29 @@ export function formatFps(fps: number | undefined): string {
   if (fps === undefined || fps === null) return '-';
   return fps.toFixed(2);
 }
+
+/**
+ * Compose a Stats v2 stream-identity label (bd-kh23e).
+ *
+ * Format per PO directive 2026-05-14: ``[<provider>] - <stream>`` —
+ * for example ``[Infinity] - US: TNT``. Used by the per-user watch-time
+ * breakdown table (UserStatsPanel) and the providers heatmap data-table
+ * fallback (ProvidersPanel).
+ *
+ *   - Both stream fields null → ``—`` (older rows pre-kh23e / resolver
+ *     miss). The row stays — only the stream column degrades to ``—``.
+ *   - Stream name missing but id present → ``Stream <id>`` so the
+ *     operator can still identify which Dispatcharr stream row it was.
+ *   - Provider name missing → omit the bracketed prefix and the dash;
+ *     show just the stream label. Avoids ``[Provider 1] - X`` from
+ *     leaking when the M3U side-load hasn't resolved.
+ */
+export function streamLabel(
+  providerName: string | null,
+  streamName: string | null,
+  streamId: number | null,
+): string {
+  if (!streamName && streamId === null) return '—';
+  const streamDisplay = streamName ?? `Stream ${streamId}`;
+  return providerName ? `[${providerName}] - ${streamDisplay}` : streamDisplay;
+}

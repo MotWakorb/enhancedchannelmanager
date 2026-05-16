@@ -4,7 +4,7 @@ SQLAlchemy ORM models for the Journal and Bandwidth tracking features.
 import json
 import logging
 from datetime import datetime, date
-from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, Date, Float, Index, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, Date, Float, Index, ForeignKey, UniqueConstraint, CheckConstraint
 from sqlalchemy.orm import relationship
 from db_base import Base
 
@@ -115,9 +115,27 @@ class BandwidthDaily(Base):
 
 class ChannelWatchStats(Base):
     """
-    Tracks watch counts and time per channel.
-    Each time a channel is seen active in stats, we increment its watch count.
-    Watch time accumulates while a channel remains active.
+    Legacy per-channel watch-stats aggregate (pre-v0.17.0).
+
+    Tracks watch counts and time per channel. Each time a channel was
+    seen active in stats, we used to increment its watch count, and
+    watch time accumulated while a channel remained active.
+
+    v0.17.0 (bd-skqln.3 step (d)): this table is **no longer written
+    from BandwidthTracker._collect_stats**. The popularity calculator
+    and the ``/api/stats/top-watched`` endpoint derive their inputs
+    from ``session_telemetry`` (per-poll grain) and
+    ``unique_client_connections`` (channel name side-load) instead.
+    See ``docs/database_migrations.md`` → "Backfill policy for
+    session_telemetry" for the cutover-day reasoning.
+
+    The schema is intentionally **kept** at v0.17.0 — pre-cutover rows
+    are still here. The settings reset paths still delete from it.
+    Dropping the table is a separate decision tracked as a follow-up
+    cleanup bead once we are confident nothing in the post-cutover code
+    paths reads it. Until then, ``channel_watch_stats_v`` (migration
+    0008) is the read-compat view over ``session_telemetry`` for the
+    columns that faithfully map across the grain change.
     """
     __tablename__ = "channel_watch_stats"
 
@@ -1218,6 +1236,356 @@ class ChannelPopularityScore(Base):
 
     def __repr__(self):
         return f"<ChannelPopularityScore(id={self.id}, channel={self.channel_name}, score={self.score}, rank={self.rank})>"
+
+
+# =============================================================================
+# Stats v2 — session_telemetry fact table (v0.17.0)
+# =============================================================================
+
+class SessionTelemetry(Base):
+    """Unified per-poll stream-telemetry fact table (Stats v2).
+
+    One row is written per ``BandwidthTracker`` poll cycle for each active
+    viewing session. Append-mostly: rows are pruned by ``observed_at`` per the
+    retention policy in ``docs/adr/ADR-007-session-telemetry-retention.md``
+    (raw rows pruned at 30 days; the daily rollup tables, the
+    ``telemetry_rollup_state`` marker, and the nightly prune job are out of
+    scope here — they live in bead ``enhancedchannelmanager-7i2vv``).
+
+    Privacy classification + redaction rules:
+    ``docs/security/threat_model_stats_v2.md`` §2.1, §7. ``user_id`` is an
+    **opaque Dispatcharr-side identifier — NOT a FK to ECM ``users``**.
+    The FK was dropped in migration 0011 (bd-gsn3r): ECM's local ``users``
+    table holds ECM auth identities, while Dispatcharr's ``users`` table
+    holds stream-viewer accounts; the two namespaces happen to use
+    overlapping integer IDs but mean different things. The FK was a
+    structural lie — a join from this column to ``users`` returned the
+    wrong human's username when integer IDs collided. The denormalized
+    ``dispatcharr_username`` column carries the Dispatcharr-side username
+    captured at write time (no read-side lookups against any ECM table).
+    ``channel_id`` is a plain indexed ``String(64)`` Dispatcharr UUID —
+    NOT a foreign key (``channels`` is not an ECM table) and matches
+    every other channel-keyed table in this schema (``channel_watch_stats``
+    / ``channel_bandwidth`` / ``channel_popularity_scores`` /
+    ``unique_client_connections``). ``provider_id`` is a plain nullable
+    indexed integer (provider tagging, skqln.14, is still pending).
+
+    NOTE: migration 0006 originally declared ``channel_id INTEGER NULL`` —
+    that was inconsistent with the rest of the schema and the writer (which
+    keys channels by Dispatcharr UUID string). Migration 0007 corrects it
+    in-place: ``channel_watch_stats_v`` (skqln.3 step (b)) builds on top of
+    this column and needs the UUID shape to GROUP BY a channel meaningfully.
+
+    ``bitrate_bps`` is deliberately NOT stored — it is derivable from
+    ``bytes_delta / poll_interval_ms`` and storing a derived value invites
+    disagreement (DBA, team-plan).
+
+    Bead: ``enhancedchannelmanager-skqln.2``.
+    """
+    __tablename__ = "session_telemetry"
+
+    # Synthetic PK — matches the house pattern for these fact tables
+    # (channel_bandwidth, channel_popularity_scores). SQLite needs a PK; the
+    # query/access keys are the composite indexes below.
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # UUID string correlating all rows of one viewing session.
+    session_id = Column(Text, nullable=False)
+    # Unix-epoch milliseconds. Mandatory index — retention sweeps and all
+    # time-range queries key off this.
+    observed_at = Column(Integer, nullable=False)
+
+    # Opaque Dispatcharr-side viewer identifier — NOT a FK to ECM ``users``.
+    # The FK was dropped in migration 0011 (bd-gsn3r); see the class
+    # docstring for the namespace-collision rationale. ``_coerce_session_user_id``
+    # in ``bandwidth_tracker.py`` still scrubs the anonymous ``0``
+    # sentinel to NULL so analytics queries see honest "anonymous" rather
+    # than the noise value.
+    user_id = Column(Integer, nullable=True)
+    # Denormalized Dispatcharr-side username for the row's ``user_id``.
+    # Captured at write time from the per-poll ``dispatcharr_user_map``
+    # the writer already maintains for the bd-uqbob exclude filter — no
+    # read-side lookups against ECM's ``users`` table. NULL when the
+    # writer could not resolve the username (anonymous viewer with
+    # ``user_id=NULL``, Dispatcharr ``get_users()`` failure that poll,
+    # or a pre-0011 row that landed before the column existed). Added
+    # in migration 0011 (bd-gsn3r).
+    dispatcharr_username = Column(Text, nullable=True)
+    # Upstream Dispatcharr M3U provider. Plain indexed column, NOT a FK
+    # (providers is not an ECM table). Nullable — provider tagging (GH-59)
+    # lands separately (skqln.14).
+    provider_id = Column(Integer, nullable=True)
+    # Upstream Dispatcharr channel UUID. Plain indexed column, NOT a FK
+    # (channels is not an ECM table). String(64) matches every other
+    # channel-keyed table in this schema. NOT NULL — every writer of a
+    # session_telemetry row (BandwidthTracker today; future buffer-event
+    # ingest in skqln.15) is tied to an active channel by definition.
+    channel_id = Column(String(64), nullable=False)
+
+    # Per-poll bytes delta (NOT cumulative). Named CHECK so the constraint
+    # name is stable across SQLite versions (docs/database_migrations.md).
+    bytes_delta = Column(BigInteger, nullable=False)
+    # Count of ``channel_buffering`` events observed during this poll
+    # window. Preserved verbatim from the pre-0012 schema — see the
+    # per-type counters below for the bd-ov5vb broadening that surfaced
+    # reconnect/error/switch events alongside this one. On real installs
+    # ``channel_buffering`` is rare (ffmpeg-speed threshold only); the
+    # operationally-meaningful health signals are the three counters
+    # below.
+    buffer_event_count = Column(Integer, nullable=False, server_default="0", default=0)
+    # bd-ov5vb (migration 0013): per-type channel-event counters paired
+    # with ``buffer_event_count``. Pre-0012 the writer pulled only
+    # ``event_type=buffering`` from Dispatcharr's system-events feed,
+    # which on real installs returned zero because the events that
+    # actually represent channel-health problems are
+    # ``channel_reconnect`` / ``channel_error`` / ``stream_switch``.
+    # The broadened ingest in ``BandwidthTracker._collect_channel_events``
+    # buckets each event type into its own column so the Providers panel
+    # can surface them distinctly without losing the per-poll
+    # attribution. Each is INTEGER NOT NULL DEFAULT 0 so
+    # ``SUM(<column>) GROUP BY provider, time_bucket`` works the same
+    # way the legacy buffer rollup does. Attribution model is identical
+    # to ``buffer_event_count``: each per-channel count lands on the
+    # FIRST row emitted for that channel per poll; sibling rows write 0
+    # so per-client double-counting cannot inflate the aggregate.
+    reconnect_event_count = Column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    error_event_count = Column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    switch_event_count = Column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    # Poll cadence in ms — avoids baking in a fixed-interval assumption and
+    # makes bitrate derivable.
+    poll_interval_ms = Column(Integer, nullable=False)
+    # Dispatcharr stream row id (``streams.id`` upstream). Plain nullable
+    # column, NOT a FK — ``streams`` is not an ECM table, matching the
+    # ``provider_id`` / ``channel_id`` design above. NULL when the resolver
+    # could not attribute the active stream (same failure modes as
+    # provider_id; see ``_resolve_provider_ids`` docstring). Added in
+    # migration 0010 (bd-kh23e).
+    stream_id = Column(Integer, nullable=True)
+    # Stream display name (``name`` field on Dispatcharr's stream record,
+    # e.g. ``"US: TNT"``). Side-loaded by the same batched
+    # ``get_streams_by_ids`` call that powers provider attribution — zero
+    # extra round-trips per poll. NULL on the same conditions as
+    # ``stream_id``. The frontend composes the display label as
+    # ``[<provider_name>] - <stream_name>`` (PO directive 2026-05-14).
+    # Added in migration 0010 (bd-kh23e).
+    stream_name = Column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "bytes_delta >= 0",
+            name="ck_session_telemetry_bytes_delta_non_negative",
+        ),
+        # Retention sweeps + bare time-range scans.
+        Index("idx_session_telemetry_observed_at", observed_at),
+        # GH-62 "watch time by user" — index-range scan per user.
+        Index("idx_session_telemetry_user_observed", user_id, observed_at),
+        # GH-59 per-provider performance (forward-looking).
+        Index("idx_session_telemetry_provider_observed", provider_id, observed_at),
+        # Session reconstruction.
+        Index("idx_session_telemetry_session_id", session_id),
+        # GH-59 channels-by-provider heatmap (skqln.16). Trailing bytes_delta
+        # makes it a covering index for that aggregate. Plain composite — the
+        # Postgres ``INCLUDE`` form is not valid in SQLite; an ``INCLUDE``
+        # variant is a Postgres-migration future enhancement (ADR D7).
+        Index(
+            "idx_session_telemetry_provider_channel_observed_bytes",
+            provider_id,
+            channel_id,
+            observed_at,
+            bytes_delta,
+        ),
+    )
+
+    def __repr__(self):
+        return (
+            f"<SessionTelemetry(id={self.id}, session={self.session_id}, "
+            f"observed_at={self.observed_at}, user_id={self.user_id}, "
+            f"provider_id={self.provider_id}, channel_id={self.channel_id})>"
+        )
+
+
+# =============================================================================
+# Stats v2 — daily rollup tables + once-per-day marker (ADR-007 D3/D4/D5)
+# =============================================================================
+
+class SessionTelemetryUserDaily(Base):
+    """Per-user, per-channel, per-UTC-day watch rollup (ADR-007 D4).
+
+    Materialised daily by the ``stats_v2_rollup`` nightly task (see
+    ``backend/tasks/stats_v2_rollup.py``). Reads: the Users panel watch-time
+    selector (``SUM(watch_seconds) GROUP BY user_id WHERE day >= ?``) and
+    the per-channel breakdown (``GROUP BY channel_id WHERE user_id = ?``).
+
+    Why a rollup *table*, not a view: ADR-007 D2 — a view over
+    ``session_telemetry`` re-scans up to 26M raw rows on every panel load;
+    the daily-rollup table is on the order of thousands of rows.
+
+    NULL ``user_id`` handling: raw ``session_telemetry.user_id`` is
+    nullable (anonymous/system traffic with no behavioral subject to
+    attribute). The rollup intentionally **excludes** NULL ``user_id``
+    rows — there is no user to attribute the watch time to, so no row is
+    written for them. This is the per-user analog of the per-provider
+    ``'unknown'`` bucket; the per-user case drops rather than buckets
+    because a fabricated ``user_id = -1`` (or similar) would pollute the
+    ``users`` namespace and surface in the Users panel as a non-existent
+    user. The per-provider rollup uses a literal ``'unknown'`` string
+    bucket because TEXT ``provider_id`` allows it without colliding with
+    real provider IDs.
+
+    Bead: ``enhancedchannelmanager-7i2vv``.
+    """
+    __tablename__ = "session_telemetry_user_daily"
+
+    # Composite PK matching the access pattern (Users panel queries).
+    # Dispatcharr user id from the FK in session_telemetry; INTEGER NOT NULL
+    # — NULL raw rows are excluded at rollup time (no behavioral subject).
+    user_id = Column(Integer, primary_key=True, nullable=False)
+    # Dispatcharr channel UUID; String(64) matching session_telemetry.channel_id
+    # (after migration 0007) and every other channel-keyed table in the schema.
+    channel_id = Column(String(64), primary_key=True, nullable=False)
+    # UTC calendar day.
+    day = Column(Date, primary_key=True, nullable=False)
+
+    # Sum of distinct (channel_id, observed_at) poll intervals for the
+    # (user, channel, day) grouping, in seconds. Same DISTINCT-(channel_id,
+    # observed_at) collapse the channel_watch_stats_v view uses (skqln.3
+    # step (b)) so per-poll-per-client multiplicity doesn't inflate the
+    # number.
+    watch_seconds = Column(Integer, nullable=False)
+    # Distinct session_ids contributing to this (user, channel, day).
+    # Approximates "distinct viewing sessions"; feeds the panel's
+    # "times watched" column.
+    session_count = Column(Integer, nullable=False)
+
+    __table_args__ = (
+        Index("idx_session_telemetry_user_daily_day", "day"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<SessionTelemetryUserDaily(user_id={self.user_id}, "
+            f"channel_id={self.channel_id}, day={self.day}, "
+            f"watch_seconds={self.watch_seconds})>"
+        )
+
+
+class SessionTelemetryProviderDaily(Base):
+    """Per-provider, per-channel, per-UTC-day performance rollup (ADR-007 D5).
+
+    Materialised daily by the ``stats_v2_rollup`` nightly task. Reads:
+    every visualisation on the Providers panel — buffering-by-provider
+    time series, time-per-provider stacked area, channels-by-provider
+    heatmap, and bitrate-by-provider (derived from
+    ``bytes_delta_sum * 8 / watch_seconds``).
+
+    NULL ``provider_id`` handling: raw ``session_telemetry.provider_id`` is
+    nullable INTEGER — the resolver (skqln.14) is best-effort and a miss
+    leaves provider unset. ADR-007 §line 109 requires that those rows
+    **surface as an ``'unknown'`` bucket, not silently drop**. The rollup
+    job coalesces raw NULLs to the literal string ``'unknown'`` at rollup
+    time and writes them under that PK; this column is therefore TEXT NOT
+    NULL even though the source column is INTEGER nullable. The cost is
+    one CAST in the rollup INSERT; the gain is that the GH-59 "silently
+    lies" DBA pushback never materialises.
+
+    Bead: ``enhancedchannelmanager-7i2vv``.
+    """
+    __tablename__ = "session_telemetry_provider_daily"
+
+    # TEXT (not INTEGER) so the 'unknown' sentinel from ADR-007 §line 109
+    # can live in the PK as a literal string without colliding with real
+    # provider IDs. The rollup job is responsible for the CAST at write
+    # time.
+    provider_id = Column(Text, primary_key=True, nullable=False)
+    # Dispatcharr channel UUID; String(64) matches session_telemetry.
+    channel_id = Column(String(64), primary_key=True, nullable=False)
+    # UTC calendar day.
+    day = Column(Date, primary_key=True, nullable=False)
+
+    # Total watch time for the (provider, channel, day) — same DISTINCT-
+    # (channel_id, observed_at) collapse used in channel_watch_stats_v
+    # (skqln.3) and the per-user rollup. Feeds the stacked-area
+    # "time per provider" visualisation.
+    watch_seconds = Column(Integer, nullable=False)
+    # Summed bytes for the day; bitrate is derivable as
+    # bytes_delta_sum * 8 / watch_seconds (epic decision — store the
+    # numerator, not the derived rate).
+    bytes_delta_sum = Column(BigInteger, nullable=False)
+    # Count of buffer/stall events ingested for this provider that day
+    # (skqln.15). Feeds the "buffering by provider" time-series.
+    buffer_event_count = Column(Integer, nullable=False)
+
+    __table_args__ = (
+        Index(
+            "idx_session_telemetry_provider_daily_provider_day",
+            "provider_id",
+            "day",
+        ),
+        Index("idx_session_telemetry_provider_daily_day", "day"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<SessionTelemetryProviderDaily(provider_id={self.provider_id}, "
+            f"channel_id={self.channel_id}, day={self.day}, "
+            f"watch_seconds={self.watch_seconds}, "
+            f"bytes_delta_sum={self.bytes_delta_sum})>"
+        )
+
+
+class TelemetryRollupState(Base):
+    """Once-per-calendar-day marker for each named rollup (ADR-007 D3).
+
+    One row per named rollup (``user_daily``, ``provider_daily``). The
+    ``stats_v2_rollup`` nightly task reads ``last_completed_day`` to
+    decide which days still need rolling up (catch-up budget = D1 retention
+    window minus margin), and writes ``last_run_at_ms`` /
+    ``last_run_status`` / ``last_run_error`` after each pass so SRE can
+    alert on staleness (failure modes 1+2: >36h warn, >25d page) and the
+    Providers panel can read "last updated" from a single source of truth.
+
+    Why this is a separate table rather than a settings key: the marker
+    is rollup-name keyed (two named rollups today, more later) and carries
+    structured columns the settings KV would have to JSON-encode. A
+    bespoke 5-column table is cheaper to read, easier to alert on, and
+    survives a settings reset (which a routine support flow can perform).
+
+    Bead: ``enhancedchannelmanager-7i2vv``.
+    """
+    __tablename__ = "telemetry_rollup_state"
+
+    # 'user_daily' | 'provider_daily' — see ROLLUP_NAME_USER_DAILY /
+    # ROLLUP_NAME_PROVIDER_DAILY in tasks/stats_v2_rollup.py for the
+    # canonical string constants used by the writer + the staleness alert.
+    rollup_name = Column(Text, primary_key=True, nullable=False)
+    # Most recent UTC day this rollup has durably aggregated. Nullable for
+    # the first-run case (no day has yet been rolled up).
+    last_completed_day = Column(Date, nullable=True)
+    # Wall-clock ms-since-epoch of the most recent run (success OR failure).
+    # SRE's staleness alert reads this — "no successful run in >36h" is
+    # encoded as ``(now_ms - last_run_at_ms) > 36*3600*1000 AND
+    # last_run_status != 'success'`` plus the symmetric "no run at all".
+    last_run_at_ms = Column(BigInteger, nullable=True)
+    # 'success' | 'failure' | 'partial' (a multi-rollup run where one
+    # rollup succeeded and another failed records 'partial').
+    last_run_status = Column(Text, nullable=True)
+    # Error detail on failure, NULL on success. Held as free-form text
+    # rather than a structured exception class so the runbook can quote
+    # the message verbatim during triage.
+    last_run_error = Column(Text, nullable=True)
+
+    def __repr__(self):
+        return (
+            f"<TelemetryRollupState(rollup_name={self.rollup_name!r}, "
+            f"last_completed_day={self.last_completed_day}, "
+            f"last_run_status={self.last_run_status!r})>"
+        )
 
 
 # =============================================================================

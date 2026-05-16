@@ -152,6 +152,76 @@ def _missing_canaries(engine) -> list[dict]:
     return missing
 
 
+def _wal_checkpoint_truncate(engine) -> None:
+    """Run ``PRAGMA wal_checkpoint(TRUNCATE)`` against the journal DB.
+
+    Long-running installs accumulate a sizeable ``journal.db-wal`` (GH #274
+    reported 1.4 GB+) when the SQLite checkpointer has not been able to merge
+    pages into the main DB file — typically because some connection has kept a
+    read transaction open across the would-be checkpoint window. A bloated
+    WAL slows EVERY subsequent connection's first read because SQLite walks
+    the WAL to satisfy the read; the symptom that motivated bd-ej995 is the
+    v0.16.0 ``normalize_names → normalization_group_ids`` migration timing
+    out the Docker health check.
+
+    Calling ``wal_checkpoint(TRUNCATE)`` at startup — before bootstrap reads
+    or migrations write — forces the WAL contents into the main file and
+    then truncates the WAL to zero bytes, so the migration timeline runs
+    against a clean baseline. Pattern lifted from
+    ``backend/routers/backup.py:_create_backup_zip`` (the backup path
+    already does this so the zipped DB is self-contained).
+
+    Failure mode (file lock, disk full, read-only filesystem): log a WARN
+    and continue. The boot path is more valuable than the optimization;
+    bootstrap will still run, just against the same bloated WAL the user
+    is already living with. The warning surfaces in the operator's logs so
+    they can investigate.
+    """
+    # Logging file size before/after WAL checkpoint gives operators visible
+    # evidence the optimization ran. SQLite stores the WAL alongside the
+    # main DB file with a ``-wal`` suffix; not all environments have a WAL
+    # file (e.g. fresh installs whose first connection has not yet promoted
+    # to WAL mode), so handle the missing-file case as zero bytes.
+    wal_path = Path(f"{JOURNAL_DB_FILE}-wal")
+    try:
+        size_before = wal_path.stat().st_size if wal_path.exists() else 0
+        with engine.connect() as conn:
+            # PRAGMA wal_checkpoint(TRUNCATE) returns a row
+            # ``(busy, log, checkpointed)``. ``busy=1`` means SQLite could
+            # not acquire the exclusive WAL lock — typically because some
+            # other connection still holds a reader open — and the WAL was
+            # NOT fully truncated. Treat that as a partial outcome and log
+            # a WARN so an operator can investigate; falling back to INFO
+            # would hide the GH #274 disease vector (pinned reader keeps
+            # WAL bloated even after the "checkpoint ran" log).
+            row = conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)")).fetchone()
+            conn.commit()
+        busy = row[0] if row else 0
+        size_after = wal_path.stat().st_size if wal_path.exists() else 0
+        # Convert to MB for human readability — a 1.4 GB WAL printed as
+        # bytes is a hard number to eyeball.
+        mb_before = size_before / (1024 * 1024)
+        mb_after = size_after / (1024 * 1024)
+        if busy:
+            logger.warning(
+                "[DATABASE] WAL checkpoint: %.1f MB -> %.1f MB (incomplete -- WAL busy)",
+                mb_before,
+                mb_after,
+            )
+        else:
+            logger.info(
+                "[DATABASE] WAL checkpoint: %.1f MB -> %.1f MB",
+                mb_before,
+                mb_after,
+            )
+    except Exception as e:
+        # Non-fatal: bootstrap still runs against the bloated WAL. Matches
+        # the backup.py pattern's WARN-and-continue posture.
+        logger.warning(
+            "[DATABASE] WAL checkpoint failed (non-fatal): %s", e
+        )
+
+
 def _bootstrap_alembic(engine) -> None:
     """Ensure ``alembic_version`` tracks the deployed schema state.
 
@@ -208,6 +278,59 @@ def _bootstrap_alembic(engine) -> None:
             command.stamp(alembic_cfg, baseline_revision)
             # Fall through to upgrade head so post-baseline migrations apply.
 
+    # bd-5w6jz smart-bootstrap fast-path: when ``alembic_version`` lags head
+    # but ``Base.metadata.create_all()`` (which runs in ``init_db`` after this
+    # bootstrap on every long-running install) has already materialised every
+    # table + column the model declares, running ``alembic upgrade head``
+    # would re-run migrations that try to ``op.create_table`` /
+    # ``op.create_index`` / ``op.add_column`` artifacts that already exist.
+    # Even with per-migration idempotency (the bd-ax3uj / bd-5w6jz tactical
+    # fix on 0003-0010), every future migration author has to remember the
+    # inspect-then-skip pattern or the whack-a-mole resumes. The strategic
+    # fix is here: detect the "live schema covers the model shape" case and
+    # ``stamp`` to head instead of upgrading. The migrations have nothing to
+    # do — the physical schema already matches what they would build.
+    #
+    # Guarded against fresh installs: if ``current_rev`` is ``None`` we have
+    # an empty / unstamped DB and need ``upgrade head`` to actually create
+    # everything. The fast-path only fires when the DB is partially advanced
+    # AND the live schema covers the head model shape.
+    head_revision = script_dir.get_current_head()
+    current_rev = get_current_schema_revision(engine)
+    # The ``current_rev != head_revision`` guard fires symmetrically — it would
+    # also match a "rolled-back container code" case where ``current_rev`` is
+    # AHEAD of ``head_revision``. ``_schema_matches_head`` only verifies that
+    # every model artifact EXISTS in the live DB; it does not verify the
+    # absence of artifacts the model no longer declares. So a rolled-back-code
+    # scenario where every current model column still happens to be present
+    # WILL reach this branch and stamp backward. That is benign: the physical
+    # schema still supports every query the older head emits (the unused
+    # extras are ignored), and the next forward upgrade will re-stamp on its
+    # own. We accept the symmetric guard rather than complicate the predicate.
+    if (
+        current_rev
+        and head_revision
+        and current_rev != head_revision
+        and _schema_matches_head(engine)
+    ):
+        # WARNING (not INFO) so operators see the recovery path the first time
+        # it fires after upgrade — this is a one-shot self-heal, not steady-
+        # state behavior. Subsequent restarts no-op (current_rev == head).
+        logger.warning(
+            "[DATABASE] alembic_version=%s lags head=%s but live schema matches "
+            "models — stamping forward (bd-5w6jz: create_all() got ahead of alembic)",
+            current_rev,
+            head_revision,
+        )
+        # Single-process bootstrap; under SQLite WAL a concurrent stamp would
+        # be an idempotent re-write of the same head value (no row churn).
+        command.stamp(alembic_cfg, head_revision)
+        # No upgrade needed; the existing _BOOTSTRAP_CANARIES self-heal below
+        # is also skipped (it only fires when canaries are missing — by
+        # construction the schema-matches-head check has already verified
+        # every model column is present, which subsumes the canary list).
+        return
+
     logger.info("[DATABASE] Running alembic upgrade head")
     command.upgrade(alembic_cfg, "head")
 
@@ -239,6 +362,130 @@ def _bootstrap_alembic(engine) -> None:
                 "Schema/Alembic self-heal failed — canaries still missing after baseline re-run: "
                 f"{[c['name'] for c in still_missing]}"
             )
+
+
+def _assert_schema_matches_models(engine) -> None:
+    """Verify every SQLAlchemy model column exists on the live DB.
+
+    The hand-curated ``_BOOTSTRAP_CANARIES`` list above only covers migrations
+    0002 and 0004 — historical artifacts from the bd-fwpzw stamped-at-head
+    bug. A user whose ``alembic_version`` row is plausible but whose physical
+    schema is missing later-migration columns (e.g. migration 0010's
+    ``session_telemetry.stream_id`` — bd-zaaey symptom) sails past the
+    canaries and runs forever with a half-broken schema, flooding the logs
+    with ``OperationalError: no column named stream_id`` on every poll.
+
+    This check replaces the hand-curated canary list with an automatically-
+    derived diff between ``Base.metadata`` (what the running code expects)
+    and the live DB (what is actually there). Any future migration's columns
+    are covered without extending a canary list per release — the model IS
+    the canary list.
+
+    What the check flags:
+        - Missing **columns on existing tables** — those are exactly the
+          columns an ``ALTER TABLE`` migration is supposed to add, and that
+          ``create_all()`` cannot add to an existing table. This is the
+          bd-zaaey failure surface.
+
+    What the check deliberately does NOT flag:
+        - Missing tables — ``Base.metadata.create_all(engine)`` (called
+          right after this function in ``init_db``) handles that idempotently.
+        - Extra columns in the DB that aren't on the model — that's a
+          downgrade signal, not a missing-migration signal, and not the bug
+          this guard is designed to catch.
+        - Column type mismatches — SQLite type affinity makes that fuzzy
+          enough that a strict diff produces false positives; the migration
+          history is the source of truth for type evolution, not this check.
+
+    Raises:
+        RuntimeError: with a message naming the missing ``table.column``
+        pairs so the operator can act without re-running the app under a
+        debugger.
+    """
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    live_tables = set(inspector.get_table_names())
+
+    drift: list[str] = []
+    for table_name, table in Base.metadata.tables.items():
+        if table_name not in live_tables:
+            # Missing tables are ``create_all``'s job, not this check's.
+            continue
+        live_columns = {c["name"] for c in inspector.get_columns(table_name)}
+        for column in table.columns:
+            if column.name not in live_columns:
+                drift.append(f"{table_name}.{column.name}")
+
+    if drift:
+        # Sorted so the diagnostic is stable across runs — operators
+        # reporting "we got error X" should see the same list every time.
+        drift.sort()
+        raise RuntimeError(
+            "schema drift detected — model declares columns not present in "
+            "the live database (likely an un-applied Alembic migration): "
+            f"{drift}. The container's journal.db is in an inconsistent "
+            "state. Recovery: stop the container, back up "
+            "/config/journal.db, run `alembic upgrade head` against the "
+            "DB (or restore the DB from a known-good backup), then restart."
+        )
+
+
+def _schema_matches_head(engine) -> bool:
+    """True if every Base.metadata table + column exists in the live DB.
+
+    Used by the bd-5w6jz fast-path in ``_bootstrap_alembic``: when
+    ``alembic_version`` lags head but the physical schema already matches
+    the model shape (because ``Base.metadata.create_all()`` got ahead of
+    Alembic on a long-running install), stamp at head and skip the upgrade
+    — the migrations would all "already exists"-fail otherwise (or, with
+    per-migration idempotency, would all no-op at non-trivial cost).
+
+    Mirrors ``_assert_schema_matches_models``'s column-only diff (no type
+    check — SQLite type affinity makes that fuzzy enough to produce false
+    positives; the migration history is the source of truth for type
+    evolution, not this check). Two key differences:
+
+    * Returns ``bool`` instead of raising. The fast-path needs a yes/no
+      decision, not an exception that aborts startup.
+    * Also checks for missing tables (``_assert_schema_matches_models``
+      delegates that to ``create_all()`` which runs after it). Here we need
+      to know whether the live schema covers the model shape — a missing
+      table means ``upgrade head`` still has work to do; we must NOT stamp
+      forward. ``create_all()`` runs *after* ``_bootstrap_alembic`` so we
+      can't rely on it filling the gap before the stamp decision.
+
+    What this check deliberately does NOT flag:
+
+    * Extra columns or tables in the DB that aren't on the model — those
+      are downgrade signals or dead-code remnants, not "missing migration"
+      signals. The fast-path only cares whether the model shape is a
+      subset of the live schema.
+    * Index / view / FK presence — column shape is the load-bearing
+      surface that the bd-5w6jz failure cluster manifests on. Indexes are
+      either re-creatable cheaply or covered by per-migration idempotency
+      guards; views are recreated by 0010 every time anyway.
+    * Type / nullability mismatches — same SQLite affinity rationale as
+      ``_assert_schema_matches_models``.
+
+    Returns:
+        ``True`` if every model table and column is present in ``engine``;
+        ``False`` if any are missing (in which case ``upgrade head`` should
+        run normally to apply pending migrations).
+    """
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    live_tables = set(inspector.get_table_names())
+
+    for table_name, table in Base.metadata.tables.items():
+        if table_name not in live_tables:
+            return False
+        live_columns = {c["name"] for c in inspector.get_columns(table_name)}
+        for column in table.columns:
+            if column.name not in live_columns:
+                return False
+    return True
 
 
 def get_current_schema_revision(engine=None) -> str:
@@ -290,6 +537,18 @@ def init_db() -> None:
         # Create session factory
         _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
+        # bd-ej995: truncate any pre-existing WAL BEFORE bootstrap reads or
+        # migrations write, so the migration timeline runs against a clean
+        # baseline. Long-running installs have hit GH #274 where a 1.4 GB
+        # WAL stretches the v0.16.0 normalize-names migration past Docker's
+        # health-check start_period, marking the container unhealthy and
+        # blocking ecm-mcp. This is a no-op on fresh installs (no WAL file
+        # yet) and on installs whose checkpointer has been keeping pace.
+        # Must run after the engine is created (we need a connection) but
+        # before _bootstrap_alembic / _assert_schema_matches_models so the
+        # migration path sees the post-truncate state.
+        _wal_checkpoint_truncate(_engine)
+
         # Import models to register them with Base
         from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, AutoCreationRule, AutoCreationExecution, AutoCreationConflict, FFmpegProfile, DummyEPGProfile, DummyEPGChannelAssignment, LookupTable  # noqa: F401
         from export_models import PlaylistProfile, CloudStorageTarget, PublishConfiguration, PublishHistory  # noqa: F401
@@ -297,12 +556,16 @@ def init_db() -> None:
         # Apply Alembic migrations first so schema tracking is authoritative
         # (see ``docs/database_migrations.md``). For legacy installs we stamp
         # to head rather than re-run DDL that would fail on duplicate tables.
-        try:
-            _bootstrap_alembic(_engine)
-        except Exception:
-            logger.exception(
-                "[DATABASE] Alembic bootstrap failed; falling back to create_all()"
-            )
+        #
+        # bd-zaaey: an Exception here used to be swallowed with a "falling
+        # back to create_all()" log line. That fallback is the disease
+        # vector — ``create_all`` is a no-op for an existing table, so any
+        # partially-applied migration leaves the schema half-broken forever
+        # and floods the logs with ``OperationalError: no column named X``
+        # WARN lines on every poll. Loud-fail instead: re-raise so the
+        # operator sees a boot failure and acts on it, rather than running
+        # for days on a silently-broken DB.
+        _bootstrap_alembic(_engine)
 
         # Create all tables (idempotent; no-op on clean Alembic installs but
         # keeps legacy in-process additions working until a proper revision
@@ -310,8 +573,35 @@ def init_db() -> None:
         Base.metadata.create_all(bind=_engine)
         logger.debug("[DATABASE] Database tables created/verified")
 
+        # bd-zaaey defense-in-depth: structural check that every model
+        # column exists in the live DB. The ``_BOOTSTRAP_CANARIES`` list
+        # above is hand-curated against migrations 0002 + 0004 and does NOT
+        # cover later migrations (0006-0010). A user whose ``alembic_version``
+        # row is plausible but whose physical schema is missing
+        # ``session_telemetry.stream_id`` sailed past every other guard and
+        # ran for days with ``[STATS_V2] session_telemetry write failed:
+        # ... no column named stream_id`` on every poll. This check is the
+        # durable replacement — the model IS the canary list, so any
+        # future column added by an unapplied migration is caught at boot.
+        _assert_schema_matches_models(_engine)
+
         # Run migrations for existing tables (add new columns if missing)
         _run_migrations(_engine)
+
+        # bd-qxi02 (SRE recommendation from bd-p5b8i spike): publish the
+        # task_schedules.next_run_at-IS-NULL count onto the Prometheus
+        # gauge before TaskRegistry.sync_from_database runs (which
+        # re-emits the same gauge after its own bookkeeping). Establishes
+        # the boot-time value so SRE sees the pre-heal count in the
+        # /metrics scrape captured right after container start —
+        # important for triaging "did Bundle H's heal actually fire?"
+        # without having to correlate a scrape against the registry
+        # sync log line.
+        try:
+            from observability import update_task_schedule_null_count
+            update_task_schedule_null_count()
+        except Exception as obs_err:  # pragma: no cover — best-effort
+            logger.debug("[DATABASE] task_schedule null-count publish failed: %s", obs_err)
 
         # Create demo normalization rule groups if none exist
         _create_demo_normalization_rules()
@@ -481,6 +771,12 @@ def _run_migrations(engine) -> None:
 
             # Add user_id and username columns to unique_client_connections (v0.16.0 - User tracking)
             _add_unique_client_connections_user_columns(conn)
+
+            # Flip cleanup task MANUAL -> CRON Sunday 02:00 UTC for existing operators (v0.17.0 - bd-ifmr5)
+            _migrate_cleanup_task_manual_to_cron(conn)
+
+            # Heal task_schedules rows with NULL next_run_at (v0.17.0 - bd-1weac / bd-p5b8i)
+            _heal_task_schedules_null_next_run_at(conn)
 
             logger.debug("[DATABASE] All migrations complete - schema is up to date")
     except Exception as e:
@@ -2083,6 +2379,17 @@ def _perform_maintenance(engine) -> None:
         except Exception as e:
             logger.exception("[DATABASE] Database maintenance failed: %s", e)
 
+    # bd-ygoqr: publish the post-maintenance file size onto the
+    # ecm_database_size_bytes / ecm_database_wal_size_bytes gauges so
+    # operators see a value as soon as /metrics is scraped, even before
+    # the first weekly cleanup runs. Outside the connect() block so a
+    # failure here can't poison the connection state.
+    try:
+        from observability import update_database_size_metrics
+        update_database_size_metrics()
+    except Exception as exc:  # pragma: no cover — observability is best-effort
+        logger.debug("[DATABASE] DB size metric publish failed: %s", exc)
+
 
 def close_db() -> None:
     """Close the database engine and session factory.
@@ -2119,6 +2426,274 @@ def _add_unique_client_connections_user_columns(conn) -> None:
         logger.info("[DATABASE] Adding username column to unique_client_connections")
         conn.execute(text("ALTER TABLE unique_client_connections ADD COLUMN username VARCHAR(255)"))
         conn.commit()
+
+
+def _migrate_cleanup_task_manual_to_cron(conn) -> None:
+    """Flip cleanup task from MANUAL to CRON Sunday 02:00 UTC for existing operators (bd-ifmr5).
+
+    bd-ygoqr (PR #289) changed the ``CleanupTask`` constructor default from
+    ``ScheduleType.MANUAL`` to ``ScheduleType.CRON`` (``0 2 * * 0``) so the
+    journal/task-execution/stream_stats retention windows actually enforce
+    on fresh installs. But existing installs already have a persisted
+    ``scheduled_tasks`` row written at first-boot with ``schedule_type='manual'``,
+    and ``task_registry.TaskRegistry.sync_from_database`` faithfully
+    rehydrates it — so the bd-ygoqr fix never reaches operators who
+    upgraded into v0.17.0, exactly the population GH #243 is about.
+
+    Why not an Alembic migration: ``_bootstrap_alembic``'s bd-5w6jz fast-path
+    (see ``_schema_matches_head``) stamps ``alembic_version`` forward to head
+    when the live schema already covers the model shape. For every existing
+    v0.17.0 install, the ``scheduled_tasks`` table + columns are already
+    present, so a regular ALembic data migration would be SILENTLY SKIPPED
+    by the fast-path stamp-forward. ``_run_migrations`` runs unconditionally
+    every startup and uses WHERE-clause idempotency, which is exactly the
+    shape this fix needs.
+
+    Idempotency: the ``schedule_type='manual'`` predicate is the natural gate.
+    - Operator already on CRON or INTERVAL: WHERE matches zero rows, no-op.
+    - Fresh install (no DB row yet): WHERE matches zero rows, no-op.
+    - Already-migrated install (CRON after previous run): WHERE matches
+      zero rows, no-op (second startup logs nothing).
+
+    Operator caveat documented in CHANGELOG: an operator who deliberately
+    set MANUAL via the UI will be flipped to CRON by this one-time
+    migration. They can re-set MANUAL from Settings -> Tasks afterwards.
+    The migration assumes MANUAL was the historical default (it was) and
+    not an explicit operator choice (it usually wasn't, per GH #243).
+    """
+    from sqlalchemy import text
+
+    # Guard against the table not existing yet (extremely defensive — the
+    # scheduled_tasks table is baseline schema and create_all() ensures it
+    # exists before _run_migrations runs, but matches the rest of this file).
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_tasks'"
+    ))
+    if not result.fetchone():
+        logger.debug("[DATABASE] scheduled_tasks table doesn't exist yet, skipping cleanup MANUAL->CRON migration")
+        return
+
+    update = conn.execute(text(
+        "UPDATE scheduled_tasks "
+        "SET schedule_type='cron', cron_expression='0 2 * * 0' "
+        "WHERE task_id='cleanup' AND schedule_type='manual'"
+    ))
+    if update.rowcount > 0:
+        logger.info(
+            "[DATABASE] Flipped cleanup task schedule MANUAL -> CRON Sunday 02:00 UTC "
+            "for %d existing operator(s) (bd-ifmr5)",
+            update.rowcount,
+        )
+        conn.commit()
+
+
+def _heal_task_schedules_null_next_run_at(conn) -> None:
+    """Repair task_schedules rows that have ``next_run_at IS NULL`` for an enabled schedule (bd-1weac).
+
+    Background — bd-p5b8i / bd-1weac:
+
+    ``task_registry.TaskRegistry._create_default_task_schedule`` (added
+    v0.8.7-0023, 2026-01-29) miscompiled CRON-default tasks: when the
+    in-memory ``ScheduleConfig`` was ``ScheduleType.CRON``, the function
+    fell through to a default branch that wrote
+    ``schedule_type='interval', interval_seconds=0`` into ``task_schedules``.
+    ``schedule_calculator.calculate_next_run`` returns ``None`` for
+    ``interval_seconds <= 0`` (see ``_calculate_interval_next_run``), so the
+    row's ``next_run_at`` column was ``NULL`` from the moment it was written.
+    ``task_engine.check_and_run_tasks`` filters
+    ``WHERE next_run_at IS NOT NULL`` (see ``TaskEngine.check_and_run_tasks``),
+    so the row exists in the DB, shows up in the Settings → Tasks UI, but
+    never fires. For 4 months, every operator who restarted ECM between
+    v0.8.7-0023 and v0.17.0-0042 has at least one such row — CleanupTask
+    after bd-ygoqr flipped its default to CRON, StatsV2RollupTask since it
+    landed with a daily-03:30 CRON default.
+
+    The Part 1 fix (bd-1weac, this commit) repairs the WRITE path so new
+    rows never end up broken. This Part 2 heal scans for pre-existing broken
+    rows and rewrites them in place. We have to heal in ``_run_migrations``
+    rather than via Alembic because the bd-5w6jz smart-bootstrap fast-path
+    (see ``_schema_matches_head``) stamps ``alembic_version`` forward to head
+    when the live schema covers the model shape — an Alembic data migration
+    would be SILENTLY SKIPPED on every existing v0.17.0 install (this is
+    the same constraint that drove bd-ifmr5's choice).
+
+    Heal logic:
+    1. Filter: ``next_run_at IS NULL AND enabled = 1``. Disabled rows are
+       NULL by design; we leave them. MANUAL tasks don't get a
+       ``task_schedules`` row at all (per the
+       ``ScheduleType.MANUAL`` guard in
+       ``TaskRegistry.sync_from_database``), so they can't end up in this
+       code path.
+    2. Look up the task's registered class via the registry. If the row's
+       current schedule_type is the broken default (``interval`` with
+       ``interval_seconds=0``), rewrite the schedule columns from the task
+       class's ``schedule_config``. If the row carries an operator-customised
+       schedule (e.g., ``daily 06:30 America/New_York``), preserve the
+       columns and only recompute ``next_run_at``.
+    3. Compute ``next_run_at`` via ``schedule_calculator.calculate_next_run``
+       and UPDATE the row.
+
+    Idempotency: a healed row has ``next_run_at`` set, so subsequent calls
+    find zero rows matching the NULL predicate and log nothing. The
+    operator-visible log fires ONLY on first heal — every container restart
+    after that is silent.
+
+    Operator-visible: a single INFO log per call when N > 0, referencing
+    bd-1weac for traceability. No logs when nothing to heal.
+    """
+    from sqlalchemy import text
+
+    # Defensive: table must exist (matches _migrate_cleanup_task_manual_to_cron).
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='task_schedules'"
+    ))
+    if not result.fetchone():
+        logger.debug(
+            "[DATABASE] task_schedules table doesn't exist yet, skipping NULL next_run_at heal"
+        )
+        return
+
+    # Find broken rows: enabled with no next computed run time.
+    broken = conn.execute(text(
+        "SELECT id, task_id, schedule_type, interval_seconds, schedule_time, "
+        "       timezone, days_of_week, day_of_month, week_parity "
+        "FROM task_schedules "
+        "WHERE next_run_at IS NULL AND enabled = 1"
+    )).fetchall()
+
+    if not broken:
+        logger.debug("[DATABASE] No task_schedules rows need NULL next_run_at heal")
+        return
+
+    # Trigger @register_task decorators so get_task_class() can find class
+    # defaults below. init_db() runs in main.py's lifespan startup BEFORE
+    # main.py imports the tasks package (see main.py "import tasks" near the
+    # end of startup), so at this point task_registry._tasks is otherwise
+    # empty in production. Tests that pre-import a task module mask this —
+    # see test_heal_subprocess_without_pre_imported_tasks (bd-1weac p0 fix).
+    # Gated on `broken` so the import stays off the hot path when N == 0.
+    try:
+        import tasks  # noqa: F401 - imported for @register_task side effects
+    except Exception as e:
+        logger.warning("[DATABASE] Failed to import tasks for heal: %s", e)
+
+    # Lazy imports so this module stays import-light at module load.
+    from schedule_calculator import calculate_next_run
+
+    healed = 0
+    for row in broken:
+        (row_id, task_id, schedule_type, interval_seconds, schedule_time,
+         timezone, days_of_week, day_of_month, week_parity) = row
+
+        # Decide whether to rewrite the schedule (pre-fix broken interval/0)
+        # or preserve operator-customised columns and just recompute next_run_at.
+        is_prefix_broken = (
+            schedule_type == "interval"
+            and (interval_seconds is None or interval_seconds <= 0)
+        )
+
+        new_schedule_type = schedule_type
+        new_interval_seconds = interval_seconds
+        new_schedule_time = schedule_time
+        new_timezone = timezone or "UTC"
+        new_days_of_week = days_of_week
+        new_day_of_month = day_of_month
+        new_week_parity = week_parity
+
+        if is_prefix_broken:
+            # Look up the registered task class and use ITS default config.
+            try:
+                from task_registry import get_registry
+                task_class = get_registry().get_task_class(task_id)
+            except Exception:
+                task_class = None
+
+            class_config = None
+            if task_class is not None:
+                try:
+                    # Instantiate with no args to read the class default
+                    # schedule_config (the pre-bd-ygoqr MANUAL path for the
+                    # caller is gated above by enabled=1 + non-MANUAL).
+                    class_config = task_class().schedule_config
+                except Exception:
+                    class_config = None
+
+            if class_config is not None and class_config.schedule_type.value == "cron" and class_config.cron_expression:
+                cron_fields = _convert_cron_to_schedule(
+                    class_config.cron_expression,
+                    class_config.timezone or "UTC",
+                )
+                if cron_fields:
+                    new_schedule_type = cron_fields["schedule_type"]
+                    new_interval_seconds = cron_fields["interval_seconds"]
+                    new_schedule_time = cron_fields["schedule_time"]
+                    new_timezone = cron_fields["timezone"]
+                    new_days_of_week = cron_fields["days_of_week"]
+                    new_day_of_month = cron_fields["day_of_month"]
+            elif class_config is not None and class_config.schedule_type.value == "interval" and class_config.interval_seconds and class_config.interval_seconds > 0:
+                new_schedule_type = "interval"
+                new_interval_seconds = class_config.interval_seconds
+            # else: leave as-is; calculate_next_run will return None below
+            # and we'll skip the UPDATE for this row.
+
+        # Translate days_of_week string → list for the calculator boundary.
+        days_of_week_list = (
+            [int(d.strip()) for d in new_days_of_week.split(",") if d.strip()]
+            if new_days_of_week else None
+        )
+
+        next_run = calculate_next_run(
+            schedule_type=new_schedule_type,
+            interval_seconds=new_interval_seconds,
+            schedule_time=new_schedule_time,
+            timezone=new_timezone,
+            days_of_week=days_of_week_list,
+            day_of_month=new_day_of_month,
+            week_parity=new_week_parity,
+        )
+
+        if next_run is None:
+            # Couldn't compute a next run even after the rewrite — skip this
+            # row rather than committing a still-broken UPDATE. Operator
+            # can investigate via the Settings → Tasks UI.
+            logger.warning(
+                "[DATABASE] Could not compute next_run_at for task_schedules.id=%s "
+                "(task_id=%s schedule_type=%s) — skipping heal for this row (bd-1weac)",
+                row_id, task_id, new_schedule_type,
+            )
+            continue
+
+        conn.execute(text(
+            "UPDATE task_schedules SET "
+            "  schedule_type = :schedule_type, "
+            "  interval_seconds = :interval_seconds, "
+            "  schedule_time = :schedule_time, "
+            "  timezone = :timezone, "
+            "  days_of_week = :days_of_week, "
+            "  day_of_month = :day_of_month, "
+            "  week_parity = :week_parity, "
+            "  next_run_at = :next_run_at "
+            "WHERE id = :id"
+        ), {
+            "id": row_id,
+            "schedule_type": new_schedule_type,
+            "interval_seconds": new_interval_seconds,
+            "schedule_time": new_schedule_time,
+            "timezone": new_timezone,
+            "days_of_week": new_days_of_week,
+            "day_of_month": new_day_of_month,
+            "week_parity": new_week_parity,
+            "next_run_at": next_run,
+        })
+        healed += 1
+
+    if healed > 0:
+        conn.commit()
+        logger.info(
+            "[DATABASE] Healed %d task_schedules row(s) with NULL next_run_at — "
+            "class defaults rehydrated (bd-1weac)",
+            healed,
+        )
 
 
 def get_session():

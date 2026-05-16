@@ -1,14 +1,41 @@
 """
-Popularity Calculator Service (v0.11.0)
+Popularity Calculator Service (v0.11.0; reader refactored in v0.17.0)
 
 Calculates channel popularity scores based on multiple metrics:
-- Watch count (number of viewing sessions)
-- Watch time (total seconds watched)
+- Watch count (DISTINCT session_id in session_telemetry — see below)
+- Watch time (sum of distinct poll intervals — see below)
 - Unique viewers (distinct IP addresses)
 - Bandwidth usage (bytes transferred)
 
 Scores are normalized to a 0-100 scale and combined with configurable weights.
 Trends are calculated by comparing current period to previous period.
+
+v0.17.0 reader refactor (bead enhancedchannelmanager-skqln.3 step (d)):
+
+The "watch_count" and "watch_time" inputs used to read from the legacy
+``channel_watch_stats`` lifetime aggregate (one row per channel, populated
+by ``BandwidthTracker._update_watch_counts`` / ``_update_watch_time``).
+That table is no longer written. The reader now derives both metrics from
+the per-poll ``session_telemetry`` stream:
+
+* ``watch_count`` (axis name preserved for weight-config compatibility) is
+  ``COUNT(DISTINCT session_id)`` within the period — number of distinct
+  viewing sessions on the channel. The legacy semantic was a
+  state-transition counter (inactive→active edges); that semantic is not
+  derivable from a per-poll observation stream. The DISTINCT-session_id
+  substitute is the closest poll-derivable proxy and ranks similarly in
+  practice. See ``tests/unit/test_popularity_formula_session_telemetry.py``
+  for the regression test that locks the substitution in.
+* ``watch_time`` is the sum of distinct ``poll_interval_ms`` values per
+  channel (DISTINCT by ``(channel_id, observed_at)``) — matches the legacy
+  ``_update_watch_time`` semantic of "one poll interval per active channel
+  per still-active poll, regardless of client count." A channel with N
+  concurrent clients in one poll still contributes only one interval.
+* Channel name is side-loaded from ``UniqueClientConnection`` (the
+  sibling table the BandwidthTracker still writes one row per
+  connection into per poll). ``session_telemetry`` itself does not store
+  the channel name; the ``channel_watch_stats_v`` view that exposes the
+  scoped-down read-compat surface deliberately omits it.
 """
 import logging
 from datetime import datetime, timedelta
@@ -18,10 +45,10 @@ from sqlalchemy import func, distinct
 
 from database import get_session
 from models import (
-    ChannelWatchStats,
     ChannelBandwidth,
-    UniqueClientConnection,
     ChannelPopularityScore,
+    SessionTelemetry,
+    UniqueClientConnection,
 )
 from bandwidth_tracker import get_current_date
 
@@ -201,26 +228,90 @@ class PopularityCalculator:
         """
         Gather metrics for all channels in the specified date range.
 
+        Post step (d): the ``watch_count`` and ``watch_time`` axes read
+        from ``session_telemetry`` (per-poll grain) rather than the legacy
+        ``channel_watch_stats`` aggregate. Channel name is side-loaded
+        from ``UniqueClientConnection`` (or ``ChannelBandwidth`` as a
+        fallback if a channel has bandwidth rows but no connection rows
+        within the window).
+
         Returns:
             dict mapping channel_id to metrics dict
         """
-        metrics = {}
+        metrics: dict = {}
 
-        # Get watch stats from ChannelWatchStats (lifetime stats, filter by last_watched)
-        watch_stats = session.query(ChannelWatchStats).filter(
-            ChannelWatchStats.last_watched >= datetime.combine(start_date, datetime.min.time())
-        ).all()
+        # session_telemetry uses ms-since-epoch for observed_at; convert
+        # the calendar-date bounds to ms once.
+        start_ms = int(
+            datetime.combine(start_date, datetime.min.time()).timestamp() * 1000
+        )
+        # end_date is treated as INCLUSIVE on the day boundary — match
+        # the legacy WHERE last_watched >= start_date semantic which had
+        # no upper bound. We add 1 day so a same-day end_date still
+        # captures rows observed any time on that day.
+        end_ms = int(
+            datetime.combine(end_date + timedelta(days=1), datetime.min.time())
+            .timestamp() * 1000
+        )
 
-        for ws in watch_stats:
-            metrics[ws.channel_id] = {
-                "channel_name": ws.channel_name,
-                "watch_count": ws.watch_count,
-                "watch_time": ws.total_watch_seconds,
+        # Distinct viewing sessions per channel (replaces legacy
+        # state-transition watch_count). Bead skqln.3 step (d).
+        watch_count_rows = session.query(
+            SessionTelemetry.channel_id,
+            func.count(distinct(SessionTelemetry.session_id)).label("watch_count"),
+        ).filter(
+            SessionTelemetry.observed_at >= start_ms,
+            SessionTelemetry.observed_at < end_ms,
+        ).group_by(SessionTelemetry.channel_id).all()
+
+        for row in watch_count_rows:
+            metrics.setdefault(row.channel_id, {
+                "channel_name": None,
+                "watch_count": 0,
+                "watch_time": 0,
                 "unique_viewers": 0,
                 "bandwidth": 0,
-            }
+            })
+            metrics[row.channel_id]["watch_count"] = row.watch_count
 
-        # Get unique viewer counts from UniqueClientConnection
+        # Watch time per channel: sum of distinct-by-(channel, observed_at)
+        # poll intervals. Mirrors the channel_watch_stats_v view shape —
+        # a channel with N concurrent clients in one poll contributes one
+        # interval, not N. This is the same DISTINCT-by-observed_at
+        # collapse the migration 0008 view performs.
+        per_poll = session.query(
+            SessionTelemetry.channel_id.label("channel_id"),
+            SessionTelemetry.observed_at.label("observed_at"),
+            func.max(SessionTelemetry.poll_interval_ms).label("poll_interval_ms"),
+        ).filter(
+            SessionTelemetry.observed_at >= start_ms,
+            SessionTelemetry.observed_at < end_ms,
+        ).group_by(
+            SessionTelemetry.channel_id,
+            SessionTelemetry.observed_at,
+        ).subquery()
+
+        watch_time_rows = session.query(
+            per_poll.c.channel_id,
+            func.coalesce(
+                func.sum(per_poll.c.poll_interval_ms) / 1000, 0
+            ).label("watch_time"),
+        ).group_by(per_poll.c.channel_id).all()
+
+        for row in watch_time_rows:
+            metrics.setdefault(row.channel_id, {
+                "channel_name": None,
+                "watch_count": 0,
+                "watch_time": 0,
+                "unique_viewers": 0,
+                "bandwidth": 0,
+            })
+            metrics[row.channel_id]["watch_time"] = int(row.watch_time or 0)
+
+        # Unique viewer counts and channel-name side-load from
+        # UniqueClientConnection. Same query the legacy reader used; the
+        # channel_name picked up here is the post-step-(d) source of
+        # truth for that field (session_telemetry doesn't store it).
         unique_viewer_data = session.query(
             UniqueClientConnection.channel_id,
             UniqueClientConnection.channel_name,
@@ -234,17 +325,22 @@ class PopularityCalculator:
         ).all()
 
         for uv in unique_viewer_data:
-            if uv.channel_id not in metrics:
-                metrics[uv.channel_id] = {
-                    "channel_name": uv.channel_name,
-                    "watch_count": 0,
-                    "watch_time": 0,
-                    "unique_viewers": 0,
-                    "bandwidth": 0,
-                }
+            metrics.setdefault(uv.channel_id, {
+                "channel_name": None,
+                "watch_count": 0,
+                "watch_time": 0,
+                "unique_viewers": 0,
+                "bandwidth": 0,
+            })
             metrics[uv.channel_id]["unique_viewers"] = uv.unique_viewers
+            # Side-load channel name only if not already set (avoid stomping
+            # on a name from a different connection row if the connection
+            # table has stale denormalized values for the same channel).
+            if not metrics[uv.channel_id]["channel_name"]:
+                metrics[uv.channel_id]["channel_name"] = uv.channel_name
 
-        # Get bandwidth from ChannelBandwidth
+        # Get bandwidth from ChannelBandwidth — same query as the legacy
+        # reader; the table is still written by BandwidthTracker.
         bandwidth_data = session.query(
             ChannelBandwidth.channel_id,
             ChannelBandwidth.channel_name,
@@ -258,15 +354,26 @@ class PopularityCalculator:
         ).all()
 
         for bw in bandwidth_data:
-            if bw.channel_id not in metrics:
-                metrics[bw.channel_id] = {
-                    "channel_name": bw.channel_name,
-                    "watch_count": 0,
-                    "watch_time": 0,
-                    "unique_viewers": 0,
-                    "bandwidth": 0,
-                }
+            metrics.setdefault(bw.channel_id, {
+                "channel_name": None,
+                "watch_count": 0,
+                "watch_time": 0,
+                "unique_viewers": 0,
+                "bandwidth": 0,
+            })
             metrics[bw.channel_id]["bandwidth"] = bw.total_bytes or 0
+            # Fallback channel-name source if UniqueClientConnection
+            # didn't supply one for this channel.
+            if not metrics[bw.channel_id]["channel_name"]:
+                metrics[bw.channel_id]["channel_name"] = bw.channel_name
+
+        # Last-resort fallback so the scoring loop doesn't crash on a
+        # NULL channel_name. Shouldn't happen in production — the writer
+        # always populates UniqueClientConnection.channel_name — but
+        # belt-and-suspenders for the popularity record's NOT NULL field.
+        for channel_id, m in metrics.items():
+            if not m["channel_name"]:
+                m["channel_name"] = f"Channel {channel_id[:8]}..."
 
         return metrics
 

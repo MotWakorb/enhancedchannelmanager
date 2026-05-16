@@ -1017,6 +1017,16 @@ export async function getMCPStatus(): Promise<{
   reachable: boolean;
   status?: string;
   api_key_configured?: boolean;
+  // Self-diagnosing /health diagnostic (bd-ix1g6). Distinguishes the four
+  // ways a key can be missing so the Settings UI Server Status panel can
+  // explain WHY api_key_configured is false without operator shell access.
+  // "ok" — key present and non-empty.
+  // "file_not_found" — /config/settings.json missing (volume mount issue).
+  // "invalid_json" — settings.json exists but is corrupted.
+  // "field_missing" — JSON valid but mcp_api_key field absent (legacy file).
+  // "field_empty" — field present but empty (no key generated / revoked).
+  api_key_status?: 'ok' | 'file_not_found' | 'invalid_json' | 'field_missing' | 'field_empty';
+  setup_hint?: string;
   tools_available?: number;
   resources_available?: number;
   error?: string;
@@ -1105,7 +1115,76 @@ export async function getLogos(params?: {
     page_size: params?.pageSize,
     search: params?.search,
   });
-  return fetchJson(`${API_BASE}/channels/logos${query}`);
+  // Debug instrumentation (bd-nh50y): the channel-edit-modal logo picker
+  // had zero observability between the API response and the rendered grid,
+  // so when operators reported "logos not loading" we had no way to trace
+  // what actually happened. These DEBUG lines fire on every fetch; keep them
+  // at DEBUG so production INFO callers stay quiet.
+  logger.debug(
+    `[LogoApi] GET /logos page=${params?.page ?? 1} ` +
+      `pageSize=${params?.pageSize ?? 'default'} ` +
+      `search=${params?.search ?? '(none)'}`,
+  );
+  try {
+    const result = await fetchJson<PaginatedResponse<Logo>>(
+      `${API_BASE}/channels/logos${query}`,
+    );
+    logger.debug(
+      `[LogoApi] Received ${result.results?.length ?? 0} logos, ` +
+        `next=${result.next ?? 'null'}`,
+    );
+    return result;
+  } catch (err) {
+    logger.error(
+      `[LogoApi] GET /logos failed (page=${params?.page ?? 1} ` +
+        `pageSize=${params?.pageSize ?? 'default'} ` +
+        `search=${params?.search ?? '(none)'}):`,
+      err,
+    );
+    throw err;
+  }
+}
+
+/**
+ * Fetch all logos by paginating until the API reports no `next` page.
+ *
+ * Extracted from inline loops in App.tsx and LogoManagerTab so the
+ * pagination contract — and the diagnostic log line sequence (bd-nh50y) —
+ * lives in exactly one place. Tests in `api.test.ts` lock the log sequence
+ * so a future refactor cannot silently drop observability.
+ *
+ * @param pageSize Defaults to 500 (the historical App.tsx default; the
+ *   LogoManagerTab callsite previously used 1000 — both work, Dispatcharr
+ *   caps at 1000/page).
+ */
+export async function getAllLogos(pageSize = 500): Promise<Logo[]> {
+  logger.info(`[LogoLoader] Starting logo load (pagination, pageSize=${pageSize})`);
+  const allLogos: Logo[] = [];
+  let page = 1;
+  let hasMore = true;
+  try {
+    while (hasMore) {
+      const response = await getLogos({ page, pageSize });
+      const fetchedCount = response.results?.length ?? 0;
+      allLogos.push(...response.results);
+      hasMore = response.next !== null;
+      logger.debug(
+        `[LogoLoader] Page ${page}: fetched ${fetchedCount} logos, hasMore=${hasMore}`,
+      );
+      page++;
+    }
+    logger.info(
+      `[LogoLoader] Loaded ${allLogos.length} logos across ${page - 1} pages`,
+    );
+    return allLogos;
+  } catch (err) {
+    logger.error(
+      `[LogoLoader] Failed on page ${page} after collecting ` +
+        `${allLogos.length} partial results:`,
+      err,
+    );
+    throw err;
+  }
 }
 
 export async function createLogo(data: { name: string; url: string }): Promise<Logo> {
@@ -1537,6 +1616,112 @@ export async function getWatchHistory(options: {
 
   const queryString = params.toString();
   return fetchJson(`${API_BASE}/stats/watch-history${queryString ? `?${queryString}` : ''}`);
+}
+
+// =============================================================================
+// Watch-Time by User (v0.17.0 — GH-62, bd-skqln.5/.6)
+// =============================================================================
+//
+// Admin-only endpoints. Non-admin callers receive 403 — callers must surface
+// that gracefully (see UserStatsPanel).
+
+/**
+ * Get watch-time totals across all users (admin-only).
+ *
+ * When `groupBy="total"` the row shape is per-user totals; when `groupBy="day"`
+ * the rows are (user, day) pairs. `from`/`to` are ISO-8601 UTC strings.
+ */
+export async function getWatchTimeByUser(options: {
+  from?: string;
+  to?: string;
+  userId?: number;
+  groupBy?: 'total' | 'day';
+} = {}): Promise<import('../types').WatchTimeTotalsResponse | import('../types').WatchTimeDailyResponse> {
+  const params = new URLSearchParams();
+  if (options.from) params.set('from', options.from);
+  if (options.to) params.set('to', options.to);
+  if (options.userId !== undefined) params.set('user_id', String(options.userId));
+  if (options.groupBy) params.set('group_by', options.groupBy);
+  const queryString = params.toString();
+  return fetchJson(`${API_BASE}/stats/watch-time${queryString ? `?${queryString}` : ''}`);
+}
+
+/**
+ * Get per-user watch-time breakdown by channel (admin-only).
+ */
+export async function getWatchTimeForUser(
+  userId: number,
+  options: { from?: string; to?: string } = {},
+): Promise<import('../types').WatchTimeChannelBreakdownResponse> {
+  const params = new URLSearchParams();
+  if (options.from) params.set('from', options.from);
+  if (options.to) params.set('to', options.to);
+  const queryString = params.toString();
+  return fetchJson(`${API_BASE}/stats/watch-time/${userId}${queryString ? `?${queryString}` : ''}`);
+}
+
+// =============================================================================
+// Per-Provider Stats (v0.17.0 — GH-59, bd-skqln.16/.18)
+// =============================================================================
+//
+// Admin-only endpoints. Non-admin callers receive 403 — callers must surface
+// that gracefully (see ProvidersPanel).
+
+/**
+ * Per-provider buffer-event time-series.
+ * Default window=7d, bucket=hour.
+ */
+export async function getProvidersBuffering(options: {
+  window?: import('../types').ProviderStatsWindow;
+  bucket?: import('../types').ProviderStatsBucket;
+} = {}): Promise<import('../types').ProviderBufferingResponse> {
+  const params = new URLSearchParams();
+  if (options.window) params.set('window', options.window);
+  if (options.bucket) params.set('bucket', options.bucket);
+  const qs = params.toString();
+  return fetchJson(`${API_BASE}/stats/providers/buffering${qs ? `?${qs}` : ''}`);
+}
+
+/**
+ * Total watch time per provider over a window.
+ */
+export async function getProvidersWatchTime(options: {
+  window?: import('../types').ProviderStatsWindow;
+} = {}): Promise<import('../types').ProviderWatchTimeResponse> {
+  const params = new URLSearchParams();
+  if (options.window) params.set('window', options.window);
+  const qs = params.toString();
+  return fetchJson(`${API_BASE}/stats/providers/watch-time${qs ? `?${qs}` : ''}`);
+}
+
+/**
+ * Provider × top-N channel byte heatmap.
+ * Default window=7d, top_n=50 (backend caps at 500).
+ */
+export async function getProvidersChannelHeatmap(options: {
+  window?: import('../types').ProviderStatsWindow;
+  topN?: number;
+} = {}): Promise<import('../types').ProviderHeatmapResponse> {
+  const params = new URLSearchParams();
+  if (options.window) params.set('window', options.window);
+  if (options.topN !== undefined) params.set('top_n', String(options.topN));
+  const qs = params.toString();
+  return fetchJson(`${API_BASE}/stats/providers/channel-heatmap${qs ? `?${qs}` : ''}`);
+}
+
+/**
+ * Per-provider derived bitrate time-series.
+ * Default window=7d, bucket=hour.
+ */
+export async function getProvidersBitrate(options: {
+  window?: import('../types').ProviderStatsWindow;
+  bucket?: import('../types').ProviderStatsBucket;
+} = {}): Promise<import('../types').ProviderBitrateResponse> {
+  const params = new URLSearchParams();
+  if (options.window) params.set('window', options.window);
+  if (options.bucket) params.set('bucket', options.bucket);
+  const qs = params.toString();
+  return fetchJson(`${API_BASE}/stats/providers/bitrate${qs ? `?${qs}` : ''}`);
 }
 
 // =============================================================================

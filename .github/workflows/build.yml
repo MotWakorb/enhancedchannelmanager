@@ -5,6 +5,12 @@ on:
     branches:
       - main
       - dev
+      # release/** branches produce pre-release test images so external users
+      # can validate hotfixes before a full release cut. See bd-sxv77 — the
+      # chicken-and-egg constraint is that GitHub Actions reads the workflow
+      # file from the commit being pushed, so this trigger MUST land on the
+      # release/** branch itself before the first build can fire.
+      - 'release/**'
     paths-ignore:
       - '.beads/**'
       - '**.md'
@@ -12,6 +18,7 @@ on:
     branches:
       - main
       - dev
+      - 'release/**'
     paths-ignore:
       - '.beads/**'
       - '**.md'
@@ -764,7 +771,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
           tags: |
-            # Branch name tag
+            # Branch name tag (release/v0.16.1 → release-v0.16.1 after docker-tag sanitization)
             type=ref,event=branch
             # SHA tag for traceability
             type=sha,prefix={{branch}}-
@@ -778,6 +785,11 @@ jobs:
             # Minor version tags (e.g., 0.7-dev or 0.7)
             type=raw,value=${{ steps.version.outputs.minor }}-dev,enable=${{ github.ref == 'refs/heads/dev' }}
             type=raw,value=${{ steps.version.outputs.minor }},enable=${{ github.ref == 'refs/heads/main' }}
+            # Release-branch pre-release tag — -test suffix keeps the namespace
+            # separate from final {version} tags (which only main produces).
+            # Yields e.g. 0.16.1-0001-test from frontend/package.json on
+            # release/v0.16.1. See bd-sxv77.
+            type=raw,value=${{ steps.version.outputs.full }}-test,enable=${{ startsWith(github.ref, 'refs/heads/release/') }}
 
       - name: Create manifest list and push
         working-directory: /tmp
@@ -1044,6 +1056,8 @@ jobs:
             type=raw,value=${{ steps.version.outputs.full }},enable=${{ github.ref == 'refs/heads/main' }}
             type=raw,value=${{ steps.version.outputs.minor }}-dev,enable=${{ github.ref == 'refs/heads/dev' }}
             type=raw,value=${{ steps.version.outputs.minor }},enable=${{ github.ref == 'refs/heads/main' }}
+            # Release-branch pre-release tag, see bd-sxv77
+            type=raw,value=${{ steps.version.outputs.full }}-test,enable=${{ startsWith(github.ref, 'refs/heads/release/') }}
 
       - name: Create manifest list and push
         working-directory: /tmp

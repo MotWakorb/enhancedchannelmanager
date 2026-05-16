@@ -1,0 +1,252 @@
+/* UserStatsPanel — GH-62 / bd-skqln.6 (v0.17.0).
+ *
+ * Sibling-panel visual conventions inherited from EnhancedStatsPanel.css /
+ * WatchHistoryPanel.css. Text uses theme tokens that already pass WCAG AA
+ * 4.5:1 contrast (audited at index.css level). Focus rings are explicit so
+ * keyboard users always see where focus is.
+ */
+
+.user-stats-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 16px;
+  color: var(--text-primary);
+}
+
+.user-stats-panel .panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.user-stats-panel .section-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.user-stats-panel .panel-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-stats-panel .range-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.user-stats-panel .range-label {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.user-stats-panel .range-select {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 13px;
+  min-width: 140px;
+}
+
+.user-stats-panel .range-select:focus-visible,
+.user-stats-panel .chart-data-toggle:focus-visible,
+.user-stats-panel .drill-down-btn:focus-visible {
+  outline: 2px solid var(--success);
+  outline-offset: 2px;
+}
+
+/* Chart section ----------------------------------------------------------- */
+
+.user-stats-panel .chart-section {
+  margin-bottom: 16px;
+}
+
+.user-stats-panel .chart-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.user-stats-panel .chart-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.user-stats-panel .chart-data-toggle {
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.user-stats-panel .chart-data-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.user-stats-panel .chart-container {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+/* Caption below the chart explaining the today-in-progress marker and
+ * the UTC-vs-local-tz aggregation. Operators glance at this once. */
+.user-stats-panel .chart-caption {
+  margin: 6px 0 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+/* In-progress marker for "today" in the data-table fallback. Yellow tag
+ * mirrors the chart's amber dot (palette index 3, "Yellow"). */
+.user-stats-panel .chart-data-table .in-progress-tag {
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(204, 187, 68, 0.18); /* #ccbb44 at 18% */
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Data-table fallback for the chart --------------------------------------- */
+
+.user-stats-panel .chart-data-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.user-stats-panel .chart-data-table th,
+.user-stats-panel .chart-data-table td {
+  padding: 6px 10px;
+  border: 1px solid var(--border-primary);
+  text-align: left;
+}
+
+.user-stats-panel .chart-data-table th {
+  background: var(--bg-tertiary);
+}
+
+.user-stats-panel .chart-data-table caption {
+  caption-side: top;
+  text-align: left;
+  padding: 4px 0;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* WCAG-compliant visually-hidden utility — visible to screen readers,
+ * removed from visual flow. (clip + width 1px is the modern recipe;
+ * `clip-path: inset(50%)` is the newer alternative.) */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+/* Tables ------------------------------------------------------------------ */
+
+.user-stats-panel .user-totals-section,
+.user-stats-panel .channel-breakdown-section {
+  margin-top: 12px;
+}
+
+.user-stats-panel .breakdown-title {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.user-stats-panel .user-totals-table,
+.user-stats-panel .channel-breakdown-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.user-stats-panel .user-totals-table th,
+.user-stats-panel .user-totals-table td,
+.user-stats-panel .channel-breakdown-table th,
+.user-stats-panel .channel-breakdown-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-primary);
+  text-align: left;
+}
+
+.user-stats-panel .user-totals-table thead th,
+.user-stats-panel .channel-breakdown-table thead th {
+  background: var(--bg-tertiary);
+  font-weight: 600;
+}
+
+.user-stats-panel .user-totals-table tbody tr.selected {
+  background: var(--accent-10);
+}
+
+.user-stats-panel .drill-down-btn {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.user-stats-panel .drill-down-btn:hover {
+  background: var(--bg-hover);
+}
+
+/* States ------------------------------------------------------------------ */
+
+.user-stats-panel .loading-state,
+.user-stats-panel .empty-state,
+.user-stats-panel .admin-only-state {
+  padding: 12px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  text-align: center;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+}
+
+.user-stats-panel .error-state {
+  padding: 12px;
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-text);
+  border-radius: 6px;
+  font-size: 14px;
+  margin-bottom: 12px;
+}

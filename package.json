@@ -10,7 +10,9 @@
     "test:e2e:debug": "playwright test --debug",
     "test:e2e:report": "playwright show-report",
     "test:css-smoke": "playwright test e2e/css-smoke.spec.ts",
-    "test:css-smoke:update": "playwright test e2e/css-smoke.spec.ts --update-snapshots"
+    "test:css-smoke:update": "playwright test e2e/css-smoke.spec.ts --update-snapshots",
+    "test:visual": "playwright test --config=playwright.visual.config.ts",
+    "test:visual:update": "playwright test --config=playwright.visual.config.ts --update-snapshots"
   },
   "devDependencies": {
     "@playwright/test": "1.59.1"

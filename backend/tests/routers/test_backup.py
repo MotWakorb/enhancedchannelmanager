@@ -178,6 +178,66 @@ class TestCreateBackup:
 
         assert response.status_code == 200
 
+    @pytest.mark.asyncio
+    async def test_wal_checkpoint_busy_logs_warning(self, async_client, tmp_path, caplog):
+        """When the WAL checkpoint returns busy=1, log WARN — not INFO.
+
+        ``PRAGMA wal_checkpoint(TRUNCATE)`` returns ``(busy, log,
+        checkpointed)``. ``busy=1`` means SQLite could not acquire the
+        exclusive WAL lock and the WAL was NOT fully truncated, so the
+        zipped journal.db may not contain the most recent writes (they
+        still live in the un-truncated WAL on disk and are not part of
+        the backup). Surface that as WARN — matching the database.py
+        startup checkpoint pattern (bd-ej995 polish). An INFO "WAL
+        checkpoint completed" would mislead operators into trusting an
+        incomplete backup.
+        """
+        import logging
+
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text('{}')
+        db_file = tmp_path / "journal.db"
+        db_file.write_bytes(b"SQLite format 3\x00" + b"\x00" * 50)
+
+        # Mock the engine.connect() chain so the PRAGMA returns (1, 0, 0).
+        mock_engine = MagicMock()
+        mock_conn = MagicMock()
+        mock_result = MagicMock()
+        mock_result.fetchone.return_value = (1, 0, 0)
+        mock_conn.execute.return_value = mock_result
+        mock_engine.connect.return_value.__enter__ = MagicMock(return_value=mock_conn)
+        mock_engine.connect.return_value.__exit__ = MagicMock(return_value=False)
+
+        with patch("routers.backup.CONFIG_DIR", tmp_path), \
+             patch("routers.backup.CONFIG_FILE", settings_file), \
+             patch("routers.backup.JOURNAL_DB_FILE", db_file), \
+             patch("routers.backup.get_engine", return_value=mock_engine), \
+             caplog.at_level(logging.INFO, logger="routers.backup"):
+            response = await async_client.get("/api/backup/create")
+
+        assert response.status_code == 200
+        # The "incomplete" signal must surface at WARNING level.
+        warn_records = [
+            r for r in caplog.records
+            if r.levelno == logging.WARNING and "incomplete" in r.message
+        ]
+        assert warn_records, (
+            "expected a WARN log naming the incomplete WAL checkpoint; "
+            f"got records: {[(r.levelname, r.message) for r in caplog.records]}"
+        )
+        # And explicitly: the bare INFO "WAL checkpoint completed" with
+        # no qualifier must NOT have been logged for the busy case.
+        misleading_info = [
+            r for r in caplog.records
+            if r.levelno == logging.INFO
+            and "WAL checkpoint completed" in r.message
+            and "incomplete" not in r.message
+        ]
+        assert not misleading_info, (
+            "busy checkpoint must NOT log a bare 'completed' INFO — that would mislead: "
+            f"got {[r.message for r in misleading_info]}"
+        )
+
 
 class TestRestoreBackup:
     """Tests for POST /api/backup/restore."""

@@ -34,9 +34,13 @@ EPG sources, EPG matching, and the dummy EPG template engine for channels that d
 
 Configure SMTP, Discord webhooks, and Telegram bots so scheduled-task alerts (M3U refresh failures, EPG warnings, probe results) reach you outside the UI. Covers the Email Alert Recipients list and how per-task toggles gate dispatch.
 
-### 7. [Stats](stats/index.md) — Placeholder
+### 7. [Stats](stats/index.md) — Stats v2 (v0.17.0)
 
-The Stats tab. Currently a placeholder; the v0.17.0 Stats v2 work (bd-skqln.9) will fill in the metric glossary and operator interpretation guide.
+The Stats tab, including the Stats v2 features shipped in v0.17.0.
+
+- **[Users panel](stats/users-panel.md)** — per-user watch-time totals, per-user channel breakdowns, date-range selector. Admin-only.
+- **[Metric glossary](stats/metric-glossary.md)** — definitions for every Stats v2 number: watch time, session count, last watched, buffer events, provider attribution, bytes delta, and bitrate.
+- **[History cutover note](stats/stats-v2-history-cutover.md)** — what happens to historical stats data at the v0.17.0 cutover; why metrics start on deploy day.
 
 ### 8. [Backup & Restore](backup-restore/index.md) — Placeholder
 

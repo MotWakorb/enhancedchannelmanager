@@ -38,6 +38,320 @@ class TestChannelStats:
         assert response.status_code == 500
 
 
+class TestChannelStatsStreamEnrichment:
+    """Tests for stream identity enrichment on GET /api/stats/channels (bd-ox5q8).
+
+    The endpoint feeds the Stats v2 Active Channels live view. Each
+    active channel must surface ``stream_name`` and ``m3u_account_id``
+    so the UI can render the ``[<provider>] - <stream_name>`` badge.
+    Source of truth is the live resolver (same logic as
+    ``BandwidthTracker._resolve_provider_ids``) — not the persisted
+    ``session_telemetry`` row, because operators expect the live view
+    to be immediately accurate (no poll-cycle lag).
+    """
+
+    @pytest.mark.asyncio
+    async def test_enriches_direct_stream_id_channel(self, async_client):
+        """Channel surfaces ``stream_id`` directly → endpoint populates
+        ``stream_name`` and ``m3u_account_id`` from the streams batch."""
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {
+                    "channel_id": "uuid-1",
+                    "channel_name": "300 | TNT",
+                    "stream_id": 555,
+                    "clients": [],
+                },
+            ],
+        }
+        mock_client.get_streams_by_ids.return_value = [
+            {"id": 555, "name": "US: TNT", "m3u_account": 6},
+        ]
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200
+        body = response.json()
+        ch = body["channels"][0]
+        assert ch["stream_name"] == "US: TNT"
+        assert ch["m3u_account_id"] == 6
+
+    @pytest.mark.asyncio
+    async def test_enriches_url_derived_stream_id_channel(self, async_client):
+        """Channel has no ``stream_id`` but the URL's trailing path
+        segment is a Dispatcharr stream id — resolver's URL fallback
+        (bd-kbgey) kicks in and enrichment completes."""
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {
+                    "channel_id": "uuid-2",
+                    "channel_name": "Channel 2",
+                    "url": "https://example.gives/live/x/y/777.ts",
+                    "clients": [],
+                },
+            ],
+        }
+        mock_client.get_streams_by_ids.return_value = [
+            {"id": 777, "name": "Discovery", "m3u_account": 6},
+        ]
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200
+        ch = response.json()["channels"][0]
+        assert ch["stream_name"] == "Discovery"
+        assert ch["m3u_account_id"] == 6
+
+    @pytest.mark.asyncio
+    async def test_enriches_channel_streams_fallback_channel(self, async_client):
+        """URL-derived id misses the batched lookup → resolver falls back
+        to ``/channels/<uuid>/streams`` URL matching (bd-5g7kx). The
+        endpoint surfaces the matched stream's identity."""
+        mock_client = AsyncMock()
+        active_url = "https://infinity.gives/live/mot/16118141/85796.ts"
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {
+                    "channel_id": "uuid-3",
+                    "channel_name": "300 | TNT",
+                    "url": active_url,
+                    "clients": [],
+                },
+            ],
+        }
+        # URL-derived id is the upstream provider id, not in the batch
+        # response. The channel-streams fallback finds the matching URL.
+        mock_client.get_streams_by_ids.return_value = []
+        mock_client.get_channel_streams.return_value = [
+            {
+                "id": 97205,
+                "name": "US: TNT",
+                "m3u_account": 6,
+                "url": active_url,
+            },
+        ]
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200
+        ch = response.json()["channels"][0]
+        assert ch["stream_name"] == "US: TNT"
+        assert ch["m3u_account_id"] == 6
+
+    @pytest.mark.asyncio
+    async def test_enriches_multiple_channels_in_one_response(self, async_client):
+        """All three resolver paths in one endpoint response (the
+        operator's reality: heterogeneous active channels). Each row's
+        identity is populated correctly without cross-contamination."""
+        mock_client = AsyncMock()
+        active_url_c3 = "https://infinity.gives/live/mot/16118141/85796.ts"
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {
+                    "channel_id": "uuid-1",
+                    "stream_id": 555,
+                    "clients": [],
+                },
+                {
+                    "channel_id": "uuid-2",
+                    "url": "https://example.gives/live/x/y/777.ts",
+                    "clients": [],
+                },
+                {
+                    "channel_id": "uuid-3",
+                    "url": active_url_c3,
+                    "clients": [],
+                },
+            ],
+        }
+        mock_client.get_streams_by_ids.return_value = [
+            {"id": 555, "name": "ESPN", "m3u_account": 1},
+            {"id": 777, "name": "Discovery", "m3u_account": 2},
+        ]
+        mock_client.get_channel_streams.return_value = [
+            {"id": 97205, "name": "US: TNT", "m3u_account": 6, "url": active_url_c3},
+        ]
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200
+        by_uuid = {c["channel_id"]: c for c in response.json()["channels"]}
+        assert by_uuid["uuid-1"]["stream_name"] == "ESPN"
+        assert by_uuid["uuid-1"]["m3u_account_id"] == 1
+        assert by_uuid["uuid-2"]["stream_name"] == "Discovery"
+        assert by_uuid["uuid-2"]["m3u_account_id"] == 2
+        assert by_uuid["uuid-3"]["stream_name"] == "US: TNT"
+        assert by_uuid["uuid-3"]["m3u_account_id"] == 6
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_channel_writes_nulls(self, async_client):
+        """A channel with no stream_id and no URL is unresolvable. The
+        endpoint still returns the row, with ``stream_name`` and
+        ``m3u_account_id`` set to ``None``. The frontend renders the
+        bare channel name with no badge."""
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {"channel_id": "uuid-1", "channel_name": "Unknown", "clients": []},
+            ],
+        }
+        mock_client.get_streams_by_ids.return_value = []
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200
+        ch = response.json()["channels"][0]
+        assert ch["stream_name"] is None
+        assert ch["m3u_account_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_resolver_failure_does_not_break_endpoint(self, async_client):
+        """If the resolver raises (Dispatcharr lookup error), the
+        endpoint still returns successfully — enrichment is best-effort.
+        Active Channels rendering must not depend on resolver success."""
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {"channel_id": "uuid-1", "stream_id": 555, "clients": []},
+            ],
+        }
+        mock_client.get_streams_by_ids.side_effect = Exception("Dispatcharr timeout")
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200
+        ch = response.json()["channels"][0]
+        # Resolver raised → identity columns NULL but row still present.
+        assert ch.get("stream_name") is None
+        assert ch.get("m3u_account_id") is None
+
+    @pytest.mark.asyncio
+    async def test_skips_resolver_round_trip_when_no_channels(self, async_client):
+        """No active channels → no Dispatcharr round-trip for stream
+        resolution. Avoids one wasted HTTP call per poll-equivalent
+        endpoint hit when nothing is streaming."""
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {"channels": []}
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200
+        mock_client.get_streams_by_ids.assert_not_called()
+
+
+class TestChannelStatsBadgeSumInvariant:
+    """Tests for the bd-lhxfu provider-attribution invariant on
+    ``GET /api/stats/channels``.
+
+    The PO observed: 5 active channels, but the per-provider live-stats
+    badges summed to 4 (one channel missing from every provider bucket).
+    Root cause: the resolver couldn't attribute the missing channel to
+    a provider, so the backend's response had ``m3u_account_id`` set to
+    ``None`` for that row — and the frontend silently dropped null-
+    provider rows from the badge sum.
+
+    These tests lock the **endpoint contract** the frontend relies on
+    to enforce its own sum invariant (provider badges + Unknown bucket
+    == active-channel count):
+
+    1. Every channel in the response has the ``m3u_account_id`` key
+       present (possibly ``None``) — never absent. The frontend's
+       Unknown-bucket logic depends on being able to detect "resolver
+       returned but provider was None" vs "field missing entirely".
+    2. The number of channels in the response equals
+       ``count(channels)`` — no silent dropping of unattributed rows
+       from the response itself.
+    3. Resolver-failure mode (Dispatcharr lookup raises) leaves rows
+       in the response with ``m3u_account_id == None`` so they can be
+       routed to the Unknown bucket, instead of stripping the row.
+    """
+
+    @pytest.mark.asyncio
+    async def test_every_channel_has_m3u_account_id_key_when_resolver_succeeds(
+        self, async_client
+    ):
+        """Mixed-attribution payload: 2 resolved + 1 unresolved. The
+        endpoint MUST surface every row with the ``m3u_account_id``
+        key present (resolved id or ``None``) so the frontend can
+        bucket the unresolved row into Unknown instead of dropping
+        it from the badge sum."""
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {"channel_id": "uuid-1", "stream_id": 555, "clients": []},
+                {"channel_id": "uuid-2", "stream_id": 777, "clients": []},
+                # No stream_id, no URL — resolver can't attribute.
+                {"channel_id": "uuid-3", "channel_name": "Mystery", "clients": []},
+            ],
+        }
+        mock_client.get_streams_by_ids.return_value = [
+            {"id": 555, "name": "ESPN", "m3u_account": 1},
+            {"id": 777, "name": "Discovery", "m3u_account": 2},
+        ]
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200
+        channels = response.json()["channels"]
+        # Invariant lock: response surfaces every active channel.
+        assert len(channels) == 3
+        # Invariant lock: m3u_account_id key present on every row,
+        # even when resolution failed (the frontend keys off this).
+        for ch in channels:
+            assert "m3u_account_id" in ch, (
+                f"channel {ch.get('channel_id')!r} missing m3u_account_id key — "
+                "frontend cannot route to Unknown bucket"
+            )
+        # Spot-check the resolved-vs-unresolved partition.
+        by_uuid = {c["channel_id"]: c for c in channels}
+        assert by_uuid["uuid-1"]["m3u_account_id"] == 1
+        assert by_uuid["uuid-2"]["m3u_account_id"] == 2
+        assert by_uuid["uuid-3"]["m3u_account_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_every_channel_has_m3u_account_id_key_when_resolver_fails(
+        self, async_client
+    ):
+        """Worst-case attribution: Dispatcharr lookup raises mid-batch.
+        The endpoint MUST still return every active row, with
+        ``m3u_account_id`` set to ``None`` — never strip the row, never
+        omit the key. This is what guarantees that "active channels in
+        response" stays equal to "active channels Dispatcharr reported"
+        even when the entire resolver chain is down."""
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {"channel_id": "uuid-1", "stream_id": 555, "clients": []},
+                {"channel_id": "uuid-2", "stream_id": 777, "clients": []},
+            ],
+        }
+        # Resolver chain falls over completely.
+        mock_client.get_streams_by_ids.side_effect = Exception("Dispatcharr down")
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200
+        channels = response.json()["channels"]
+        assert len(channels) == 2
+        for ch in channels:
+            assert "m3u_account_id" in ch
+            # Resolver failure → key present, value None — frontend
+            # bucket-sorts both rows into Unknown so the badge sum
+            # still equals the active-channel count.
+            assert ch["m3u_account_id"] is None
+
+
 class TestChannelStatsDetail:
     """Tests for GET /api/stats/channels/{channel_id}."""
 

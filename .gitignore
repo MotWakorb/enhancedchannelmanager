@@ -45,5 +45,18 @@ backend/htmlcov/
 backend/junit.xml
 frontend/junit.xml
 
+# pytest-benchmark local result store (bd-skqln.10). CI uses --benchmark-storage
+# under /tmp; this guard catches local runs that default to ./.benchmarks/.
+backend/.benchmarks/
+backend/tests/performance/.benchmarks/
+
 # User guide screenshots (may contain PII)
 docs/images/
+
+# Playwright run-time artifacts (bd-lln2x). The visual-regression
+# baseline PNGs under e2e/visual/__screenshots__/ ARE checked in (they
+# are the test oracle); only ephemeral run output is excluded.
+test-results/
+test-results-visual/
+playwright-report/
+frontend/test-results/
