@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import httpx
 import logging
 from typing import Optional
@@ -1054,13 +1055,23 @@ def _settings_hash(settings: DispatcharrSettings) -> str:
     changes — keeps in-memory state in sync with operators who rotate via
     the UI (touches canonical) or via on-disk edits (may still touch legacy).
 
+    Returns a SHA-256 hex digest of the concatenated fields rather than the
+    raw plaintext concat (bd-jmi1c P2-3 / bd-46g4t). The function's name
+    promised a hash; the prior implementation returned plaintext that, if
+    ever leaked to a log line or debug bundle, would carry password +
+    dispatcharr_api_key + api_key + username all in one string. SHA-256
+    keeps the equality semantics every caller relies on — the value is
+    used opaquely as a cache key in ``get_client()`` — while ensuring a
+    stray ``logger.info(...)`` cannot accidentally exfiltrate credentials.
+
     Back-compat: drop ``settings.api_key`` from the concat in v0.19.0
     (bd-ewm4h) when the legacy field is removed from the model.
     """
-    return (
+    concat = (
         f"{settings.url}:{settings.auth_method}:{settings.username}:"
         f"{settings.password}:{settings.dispatcharr_api_key}:{settings.api_key}"
     )
+    return hashlib.sha256(concat.encode("utf-8")).hexdigest()
 
 
 def get_client() -> DispatcharrClient:
