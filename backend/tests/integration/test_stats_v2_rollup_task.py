@@ -787,7 +787,7 @@ class TestRollupMetrics:
 
 @pytest.mark.integration
 class TestRollupProviderDailyEventCounters:
-    """Migration 0014 / bd-d0ha9: reconnect/error/switch counters are rolled up.
+    """Migration 0015 / bd-d0ha9: reconnect/error/switch counters are rolled up.
 
     The three per-type channel-event counters added to ``session_telemetry``
     by migration 0013 (bd-ov5vb) must appear in

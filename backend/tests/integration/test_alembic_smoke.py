@@ -2528,11 +2528,11 @@ class TestMigration0013Idempotent:
             engine.dispose()
 
 
-# Migration 0014 — session_telemetry_provider_daily event counter columns (bd-d0ha9)
+# Migration 0015 — session_telemetry_provider_daily event counter columns (bd-d0ha9)
 
 @pytest.mark.integration
-class TestMigration0014:
-    """Migration 0014 — reconnect/error/switch event counters on the rollup table.
+class TestMigration0015:
+    """Migration 0015 — reconnect/error/switch event counters on the rollup table.
 
     bd-d0ha9 extends the nightly rollup to surface the three per-type
     channel-event counters that migration 0013 (bd-ov5vb) added to
@@ -2557,14 +2557,14 @@ class TestMigration0014:
 
     NEW_COLUMNS = ("reconnect_event_count", "error_event_count", "switch_event_count")
 
-    def test_fresh_sqlite_upgrade_through_0014(self, tmp_path):
+    def test_fresh_sqlite_upgrade_through_0015(self, tmp_path):
         """Fresh DB: ``alembic upgrade 0014`` adds three new columns to the
         rollup table."""
         from alembic import command
 
-        db_url = f"sqlite:///{tmp_path / 'mig0014_fresh.db'}"
+        db_url = f"sqlite:///{tmp_path / 'mig0015_fresh.db'}"
         cfg = _make_alembic_config(db_url)
-        command.upgrade(cfg, "0014")
+        command.upgrade(cfg, "0015")
 
         engine = create_engine(db_url, future=True)
         try:
@@ -2597,14 +2597,14 @@ class TestMigration0014:
         finally:
             engine.dispose()
 
-    def test_fresh_sqlite_downgrade_from_0014(self, tmp_path):
+    def test_fresh_sqlite_downgrade_from_0015(self, tmp_path):
         """Downgrade 0014 -> 0013: the three new columns are dropped from
         the rollup table."""
         from alembic import command
 
-        db_url = f"sqlite:///{tmp_path / 'mig0014_downgrade.db'}"
+        db_url = f"sqlite:///{tmp_path / 'mig0015_downgrade.db'}"
         cfg = _make_alembic_config(db_url)
-        command.upgrade(cfg, "0014")
+        command.upgrade(cfg, "0015")
 
         engine = create_engine(db_url, future=True)
         try:
@@ -2636,8 +2636,8 @@ class TestMigration0014:
 
 
 @pytest.mark.integration
-class TestMigration0014Idempotent:
-    """Regression lock for bd-5w6jz idempotency on migration 0014.
+class TestMigration0015Idempotent:
+    """Regression lock for bd-5w6jz idempotency on migration 0015.
 
     Three drift scenarios mirror the 0013 idempotency tests:
 
@@ -2659,7 +2659,7 @@ class TestMigration0014Idempotent:
         """create_all()-style drift: all three columns present pre-0014."""
         from alembic import command
 
-        db_url = f"sqlite:///{tmp_path / 'mig0014_full_drift.db'}"
+        db_url = f"sqlite:///{tmp_path / 'mig0015_full_drift.db'}"
         cfg = _make_alembic_config(db_url)
         command.upgrade(cfg, "0013")
 
@@ -2710,7 +2710,7 @@ class TestMigration0014Idempotent:
         """Partial drift: only ``reconnect_event_count`` already present."""
         from alembic import command
 
-        db_url = f"sqlite:///{tmp_path / 'mig0014_partial_one.db'}"
+        db_url = f"sqlite:///{tmp_path / 'mig0015_partial_one.db'}"
         cfg = _make_alembic_config(db_url)
         command.upgrade(cfg, "0013")
 
@@ -2744,7 +2744,7 @@ class TestMigration0014Idempotent:
         """
         from alembic import command
 
-        db_url = f"sqlite:///{tmp_path / 'mig0014_partial_two.db'}"
+        db_url = f"sqlite:///{tmp_path / 'mig0015_partial_two.db'}"
         cfg = _make_alembic_config(db_url)
         command.upgrade(cfg, "0013")
 
