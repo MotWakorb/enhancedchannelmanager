@@ -11,8 +11,14 @@ RUN uv pip install --system --no-cache -r requirements.txt
 # Don't copy code - we mount it as volume for hot reload
 EXPOSE 8000
 
-# Add healthcheck for development
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+# Add healthcheck for development.
+# Long-running installs may hit slow first-run migrations against bloated
+# SQLite WAL files. WAL checkpoint at startup (bd-ej995) addresses the
+# common case; this start-period absorbs the edge case where a particularly
+# large migration still runs longer than the default. Operators on installs
+# with consistent fast startups can lower this; the default favors safety
+# over startup time.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
 
 # Run as non-root user (note: may need adjustment for volume mounts)
