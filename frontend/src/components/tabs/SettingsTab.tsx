@@ -744,7 +744,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setOriginalUrl(settings.url);
       setOriginalUsername(settings.username);
       setPassword(''); // Never load password from server
-      setApiKeyConfigured(settings.api_key_configured);
+      // bd-jmi1c (GH #273): prefer the canonical
+      // ``dispatcharr_api_key_configured`` indicator; fall back to the
+      // legacy alias so this bundle still works against an older backend.
+      setApiKeyConfigured(settings.dispatcharr_api_key_configured ?? settings.api_key_configured);
       setAutoRenameChannelNumber(settings.auto_rename_channel_number);
       setIncludeChannelNumberInName(settings.include_channel_number_in_name);
       setChannelNumberSeparator(settings.channel_number_separator);

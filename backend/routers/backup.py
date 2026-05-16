@@ -62,14 +62,19 @@ def _resolve_backup_normalization_group_ids(item: dict, session) -> str | None:
 BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 
 # App version for manifest (imported at call time to avoid circular imports)
-APP_VERSION = "0.17.1-0000"
+APP_VERSION = "0.17.1-0001"
 
 REDACTED = "***REDACTED***"
 
 # Credential fields in DispatcharrSettings that must never appear raw in an
 # exported backup. Mirrors the YAML export contract for parity (bd-l0nhi).
+# bd-jmi1c (GH #273): both ``dispatcharr_api_key`` (canonical) and the
+# legacy ``api_key`` are listed so the back-compat mirror in
+# ``config.save_settings`` doesn't accidentally leak a value the canonical
+# redaction would have caught.
 _SETTINGS_CREDENTIAL_FIELDS = (
     "password",
+    "dispatcharr_api_key",
     "api_key",
     "smtp_password",
     "telegram_bot_token",

@@ -42,7 +42,13 @@ class DispatcharrSettings(BaseModel):
     username: str = ""
     password: str = ""
     # Personal API key generated in Dispatcharr (Account → API Keys). Stored
-    # plaintext at rest, same as password.
+    # plaintext at rest, same as password. ``api_key`` is the legacy alias
+    # retained for one release of back-compat (bd-jmi1c, GH #273); new code
+    # MUST read ``dispatcharr_api_key`` — it is the canonical field. The
+    # ``load_settings()`` migration copies the legacy value into the canonical
+    # field on first read, so callers reading ``dispatcharr_api_key`` always
+    # see the value regardless of which field is populated on disk.
+    dispatcharr_api_key: str = ""
     api_key: str = ""
     # Channel naming defaults
     auto_rename_channel_number: bool = False
@@ -192,7 +198,10 @@ class DispatcharrSettings(BaseModel):
         if not self.url:
             return False
         if self.auth_method == "api_key":
-            return bool(self.api_key)
+            # Prefer the canonical ``dispatcharr_api_key`` field; fall back to
+            # the legacy ``api_key`` for callers that constructed the model
+            # directly without going through ``load_settings()`` (bd-jmi1c).
+            return bool(self.dispatcharr_api_key or self.api_key)
         return bool(self.username and self.password)
 
     def is_smtp_configured(self) -> bool:
@@ -210,6 +219,11 @@ class DispatcharrSettings(BaseModel):
 
 # In-memory cache of settings
 _cached_settings: DispatcharrSettings | None = None
+
+# One-shot flag so the legacy ``api_key`` deprecation WARN only fires once
+# per process startup, not on every settings reload (bd-jmi1c). Cleared by
+# ``clear_settings_cache()`` so test isolation works.
+_legacy_api_key_warned: bool = False
 
 
 
@@ -251,6 +265,63 @@ def _migrate_normalization_settings(data: dict) -> dict:
     return data
 
 
+def _migrate_dispatcharr_api_key(data: dict) -> dict:
+    """Migrate legacy ``api_key`` field to ``dispatcharr_api_key`` (bd-jmi1c, GH #273).
+
+    Until v0.17.1, the Dispatcharr REST API token was stored in
+    ``settings.json:api_key``. That field name collides lexically with the
+    MCP integration's ``mcp_api_key`` field; operators rotating the MCP key
+    were copying the new MCP key into ``api_key`` (since the UI labels the
+    Dispatcharr token "API Key"), which caused ECM to send the MCP key to
+    Dispatcharr and break every channel/stream operation with 401.
+
+    The canonical field is now ``dispatcharr_api_key``. This migration runs
+    on every settings load so existing operators don't have to touch their
+    config files:
+
+      - If ``dispatcharr_api_key`` is already populated → no-op (idempotent).
+      - If only legacy ``api_key`` is populated → copy into
+        ``dispatcharr_api_key`` and emit ONE WARN per process startup
+        pointing the operator at the rename.
+      - If both are populated and disagree → ``dispatcharr_api_key`` wins
+        (the legacy field is treated as stale).
+
+    The legacy ``api_key`` field is *not* deleted from the in-memory dict
+    or from settings.json — external tools that read the file directly
+    (the workaround in GH #273's issue body, ad-hoc operator scripts) keep
+    working. ``save_settings()`` also mirrors the canonical value back into
+    the legacy field on write so the two stay in sync until the legacy
+    field is removed in a future release.
+    """
+    global _legacy_api_key_warned
+
+    new_key = (data.get("dispatcharr_api_key") or "").strip()
+    legacy_key = (data.get("api_key") or "").strip()
+
+    if new_key:
+        # Canonical field wins — silent no-op. Even if the legacy field is
+        # populated and differs, we treat it as stale (operator likely
+        # rotated the Dispatcharr token via the UI and the legacy field
+        # never got updated by an external script).
+        return data
+
+    if legacy_key:
+        # One-time deprecation WARN per process. The flag is cleared by
+        # ``clear_settings_cache()`` so tests that exercise the load path
+        # multiple times can observe the warning each time.
+        if not _legacy_api_key_warned:
+            logger.warning(
+                "[CONFIG] Reading deprecated 'api_key' field as Dispatcharr token "
+                "— please rename to 'dispatcharr_api_key' in settings.json. "
+                "The legacy field will continue to be read for v0.17.x and removed "
+                "in a future release. (bd-jmi1c, GH #273)"
+            )
+            _legacy_api_key_warned = True
+        data["dispatcharr_api_key"] = legacy_key
+
+    return data
+
+
 def _sanitize_settings_data(data: dict) -> dict:
     """Replace null values with field defaults to prevent Pydantic validation failures.
 
@@ -282,6 +353,10 @@ def load_settings() -> DispatcharrSettings:
             data = json.loads(CONFIG_FILE.read_text())
             # Apply migrations
             data = _migrate_normalization_settings(data)
+            # bd-jmi1c (GH #273) — rename legacy ``api_key`` to
+            # ``dispatcharr_api_key``. Must run before _sanitize so the WARN
+            # log fires on the actual legacy value, not on a sanitized "".
+            data = _migrate_dispatcharr_api_key(data)
             # Sanitize nulls to prevent Pydantic validation failures
             data = _sanitize_settings_data(data)
             _cached_settings = DispatcharrSettings(**data)
@@ -298,12 +373,28 @@ def load_settings() -> DispatcharrSettings:
 
 
 def save_settings(settings: DispatcharrSettings) -> None:
-    """Save settings to file."""
+    """Save settings to file.
+
+    bd-jmi1c (GH #273): if ``dispatcharr_api_key`` is populated but the legacy
+    ``api_key`` is not, mirror the canonical value into the legacy field on
+    write. This keeps external tools that read settings.json directly (the
+    workaround in the GH #273 issue body, ad-hoc operator scripts) functional
+    until the legacy field is removed in a future release. The reverse mirror
+    (legacy → canonical) is the loader's job, not the saver's.
+    """
     global _cached_settings
 
     ensure_config_dir()
 
     try:
+        # Mirror canonical → legacy on write so external readers stay
+        # current. The legacy field is the documented surface that operators
+        # and ad-hoc scripts touch directly; keeping it in lockstep with the
+        # canonical field avoids the trap where a UI rotation makes the file
+        # look stale to those readers. Only mirror when the canonical field
+        # is populated — an explicit clear (both empty) stays cleared.
+        if settings.dispatcharr_api_key:
+            settings.api_key = settings.dispatcharr_api_key
         settings_json = json.dumps(settings.model_dump(), indent=2)
         CONFIG_FILE.write_text(settings_json)
         _cached_settings = settings
@@ -321,9 +412,17 @@ def save_settings(settings: DispatcharrSettings) -> None:
 
 
 def clear_settings_cache() -> None:
-    """Clear the cached settings (forces reload)."""
-    global _cached_settings
+    """Clear the cached settings (forces reload).
+
+    Also resets the legacy ``api_key`` deprecation WARN flag (bd-jmi1c) so a
+    subsequent ``load_settings()`` call surfaces the warning again. Without
+    this, tests that exercise the migration path multiple times in one
+    process would see the WARN fire once and then be silent — making it
+    impossible to assert on the warning per test.
+    """
+    global _cached_settings, _legacy_api_key_warned
     _cached_settings = None
+    _legacy_api_key_warned = False
     logger.info("[CONFIG] Settings cache cleared")
 
 

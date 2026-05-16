@@ -828,7 +828,11 @@ export interface SettingsResponse {
   url: string;
   auth_method: DispatcharrAuthMethod;
   username: string;
-  api_key_configured: boolean;  // True if an api_key is stored (value never returned)
+  // bd-jmi1c (GH #273): canonical indicator for Dispatcharr REST API token.
+  // Older bundles read ``api_key_configured`` — backend responds with both
+  // for one release of overlap.
+  dispatcharr_api_key_configured: boolean;  // True if a Dispatcharr REST API key is stored (value never returned)
+  api_key_configured: boolean;  // DEPRECATED — alias for dispatcharr_api_key_configured
   configured: boolean;
   auto_rename_channel_number: boolean;
   include_channel_number_in_name: boolean;
@@ -926,7 +930,11 @@ export async function saveSettings(settings: {
   auth_method: DispatcharrAuthMethod;
   username: string;
   password?: string;  // Optional - only required when changing URL or username
-  api_key?: string;   // Optional - only required when (re)setting API key mode
+  // bd-jmi1c (GH #273): canonical Dispatcharr REST API key field. The
+  // backend accepts ``api_key`` as a deprecated alias for one release.
+  // New frontend code should always send ``dispatcharr_api_key``.
+  dispatcharr_api_key?: string;   // Optional - only required when (re)setting Dispatcharr API key mode
+  api_key?: string;   // DEPRECATED — legacy alias for dispatcharr_api_key (bd-jmi1c)
   auto_rename_channel_number: boolean;
   include_channel_number_in_name: boolean;
   channel_number_separator: string;
@@ -1039,7 +1047,10 @@ export async function testConnection(settings: {
   auth_method: DispatcharrAuthMethod;
   username?: string;
   password?: string;
-  api_key?: string;
+  // bd-jmi1c (GH #273): canonical Dispatcharr REST API key; legacy
+  // ``api_key`` accepted for one release of back-compat.
+  dispatcharr_api_key?: string;
+  api_key?: string;  // DEPRECATED — legacy alias for dispatcharr_api_key
 }): Promise<TestConnectionResult> {
   return fetchJson(`${API_BASE}/settings/test`, {
     method: 'POST',
