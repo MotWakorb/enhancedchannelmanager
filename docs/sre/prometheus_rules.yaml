@@ -747,6 +747,23 @@ groups:
   # ships (bd-ygoqr Followup / bd-ifmr5 family) — pre-heal it would
   # page on every existing operator on first scrape. Deploy order
   # matters: heal first, then enable alerting consumers.
+  #
+  # ---------------------------------------------------------------------
+  # Defensive guard on per-task staleness alerts (P0 reviewer fix):
+  #   Every per-task staleness alert below adds an
+  #     AND ecm_task_schedule_last_success_timestamp{task_id="..."} > 0
+  #   guard. Rationale: an operator who changes a task to MANUAL (or
+  #   disables it entirely) should NOT get paged forever after the 2×
+  #   budget expires. The gauge is only stamped on a successful
+  #   execution — value == 0 means "never run on this install,"
+  #   which is the fresh-install state AND the operator-disabled
+  #   state. Both are valid configurations, not outages. Once the
+  #   task has run at least once, the guard lets staleness alerts
+  #   fire normally. Cheap insurance against false pages on fresh
+  #   installs and on operator-disabled tasks. (Without this guard,
+  #   stream_probe — which defaults to MANUAL — would page every
+  #   fresh-install operator 48h after first boot.)
+  # ---------------------------------------------------------------------
   - name: ecm_task_scheduler
     interval: 30s
     rules:
@@ -755,34 +772,51 @@ groups:
       # the same time() expression on every panel render, and so
       # operators can answer "how stale is X?" with one PromQL fetch
       # instead of a synthesized expression.
+      #
+      # Note: this rule emits ONE SERIES PER task_id label value
+      # (vector, not scalar). Dashboard authors should treat it as a
+      # vector — e.g., group/filter by task_id in panel queries
+      # rather than treating it as a single number.
       - record: ecm:task_schedule:hours_since_success
         expr: (time() - ecm_task_schedule_last_success_timestamp) / 3600
 
-      - alert: ECMTaskSchedulerNextRunNull
-        # Any non-MANUAL enabled schedule with NULL next_run_at means
-        # the scheduler is structurally broken — the schedule MUST
-        # have a computed next_run_at for the scheduler loop to pick
-        # it up. 5m window rejects single-scrape transients during
-        # the registry sync window (the gauge is re-emitted post-sync
-        # so a brief mid-sync NULL count is normal).
-        expr: ecm_task_schedule_next_run_null_count > 0
-        for: 5m
-        labels:
-          severity: page
-          slo: task_scheduler_health
-          service: ecm
-        annotations:
-          summary: "{{ $value }} task_schedules row(s) have NULL next_run_at — scheduler subsystem may be broken"
-          description: |
-            One or more enabled non-MANUAL rows in task_schedules has
-            next_run_at = NULL. The scheduler loop only picks up rows
-            with a computed next_run_at, so these tasks will never run
-            until the value is healed. This is the bd-p5b8i disease
-            vector — silent for 39+ days on the PO's install. Run the
-            runbook's diagnostic query to identify the affected
-            task_id(s); recovery is automatic on container restart
-            once Bundle H's heal is deployed.
-          runbook_url: docs/runbooks/task_scheduler_stalled.md
+      # ECMTaskSchedulerNextRunNull — DISABLED PENDING DEPLOY ORDER.
+      #
+      # UNCOMMENT AFTER v0.17.0 SHIPS — see slos.md
+      # "Capacity planning: Task scheduler health" for the deploy-
+      # order rationale. Operators who copy this file into their
+      # stack today will page themselves immediately because Bundle H
+      # (the next_run_at heal) has not yet shipped to operators. The
+      # alert body is physically commented so accidental ingestion is
+      # impossible. A follow-up PR (~30 days post-v0.17.0 release)
+      # will uncomment this block once operator installs have had a
+      # chance to run the heal at startup.
+      #
+      # - alert: ECMTaskSchedulerNextRunNull
+      #   # Any non-MANUAL enabled schedule with NULL next_run_at means
+      #   # the scheduler is structurally broken — the schedule MUST
+      #   # have a computed next_run_at for the scheduler loop to pick
+      #   # it up. 5m window rejects single-scrape transients during
+      #   # the registry sync window (the gauge is re-emitted post-sync
+      #   # so a brief mid-sync NULL count is normal).
+      #   expr: ecm_task_schedule_next_run_null_count > 0
+      #   for: 5m
+      #   labels:
+      #     severity: page
+      #     slo: task_scheduler_health
+      #     service: ecm
+      #   annotations:
+      #     summary: "{{ $value }} task_schedules row(s) have NULL next_run_at — scheduler subsystem may be broken"
+      #     description: |
+      #       One or more enabled non-MANUAL rows in task_schedules has
+      #       next_run_at = NULL. The scheduler loop only picks up rows
+      #       with a computed next_run_at, so these tasks will never run
+      #       until the value is healed. This is the bd-p5b8i disease
+      #       vector — silent for 39+ days on the PO's install. Run the
+      #       runbook's diagnostic query to identify the affected
+      #       task_id(s); recovery is automatic on container restart
+      #       once Bundle H's heal is deployed.
+      #     runbook_url: docs/runbooks/task_scheduler_stalled.md
 
       - alert: ECMTaskScheduleStaleStatsRollup
         # stats_v2_rollup runs nightly (24h cadence). 25h budget = 1h
@@ -791,7 +825,11 @@ groups:
         # rollup is a slow-burn data-loss risk (raw rows approaching
         # the 30d prune horizon without being rolled up), not an
         # acute outage.
-        expr: time() - ecm_task_schedule_last_success_timestamp{task_id="stats_v2_rollup"} > 90000
+        # Guard: only fires once the task has succeeded at least once
+        # on this install (see group-level comment above).
+        expr: |
+          time() - ecm_task_schedule_last_success_timestamp{task_id="stats_v2_rollup"} > 90000
+          AND ecm_task_schedule_last_success_timestamp{task_id="stats_v2_rollup"} > 0
         for: 1h
         labels:
           severity: warning
@@ -815,7 +853,11 @@ groups:
         # 8-day budget = 1d grace. Window 24h because a one-off
         # delay (operator-triggered restart, snapshot pause) is
         # routine — pages only when the delay persists.
-        expr: time() - ecm_task_schedule_last_success_timestamp{task_id="cleanup"} > 604800
+        # Guard: only fires once the task has succeeded at least once
+        # on this install (see group-level comment above).
+        expr: |
+          time() - ecm_task_schedule_last_success_timestamp{task_id="cleanup"} > 604800
+          AND ecm_task_schedule_last_success_timestamp{task_id="cleanup"} > 0
         for: 24h
         labels:
           severity: warning
@@ -834,11 +876,17 @@ groups:
           runbook_url: docs/runbooks/task_scheduler_stalled.md
 
       - alert: ECMTaskScheduleStaleM3UMonitor
-        # m3u_change_monitor runs every 6h by default. 12h budget = 2x
-        # the interval. Window 1h — short, because a stale m3u change
-        # monitor means new/changed channels aren't being noticed and
-        # operators are surprised when auto-creation rules don't fire.
-        expr: time() - ecm_task_schedule_last_success_timestamp{task_id="m3u_change_monitor"} > 43200
+        # m3u_change_monitor runs every 5 minutes by default
+        # (backend/tasks/m3u_change_monitor.py — INTERVAL,
+        # interval_seconds=300). 30-min staleness budget = 6 missed
+        # runs, room for transient slowness (single failing poll,
+        # a brief Dispatcharr blip) without paging on every blip.
+        # Window 1h — sustained stall, not single-scrape transient.
+        # Guard: only fires once the task has succeeded at least once
+        # on this install (see group-level comment above).
+        expr: |
+          time() - ecm_task_schedule_last_success_timestamp{task_id="m3u_change_monitor"} > 1800
+          AND ecm_task_schedule_last_success_timestamp{task_id="m3u_change_monitor"} > 0
         for: 1h
         labels:
           severity: warning
@@ -847,18 +895,27 @@ groups:
         annotations:
           summary: "m3u_change_monitor hasn't succeeded in {{ $value | humanizeDuration }}"
           description: |
-            The M3U change monitor has not completed in over 12 hours
-            (2x its default 6h interval). New / changed streams from
-            upstream M3U providers are not being detected — auto-
-            creation rules may appear stuck. Check task execution
-            history for the underlying error.
+            The M3U change monitor has not completed in over 30
+            minutes (5-min cadence, 30-min staleness budget = 6
+            missed runs). New / changed streams from upstream M3U
+            providers are not being detected — auto-creation rules
+            may appear stuck. Check task execution history for the
+            underlying error.
           runbook_url: docs/runbooks/task_scheduler_stalled.md
 
       - alert: ECMTaskScheduleStaleStreamProbe
-        # stream_probe runs twice daily (typical schedule). 48h budget
-        # = 2x daily. Window 6h to absorb the natural overnight gap
-        # in a once-daily schedule that drifted slightly.
-        expr: time() - ecm_task_schedule_last_success_timestamp{task_id="stream_probe"} > 172800
+        # stream_probe defaults to MANUAL
+        # (backend/tasks/stream_probe.py). When an operator schedules
+        # it on a recurring cadence, 48h budget = 2x typical daily.
+        # Window 6h absorbs the natural overnight gap. Guard: the
+        # alert only fires once the task has succeeded at least once
+        # on this install — fresh installs (and operators who leave
+        # the default MANUAL config) will never have a stamped
+        # success timestamp, so the alert stays silent until they
+        # actually schedule and run the task at least once.
+        expr: |
+          time() - ecm_task_schedule_last_success_timestamp{task_id="stream_probe"} > 172800
+          AND ecm_task_schedule_last_success_timestamp{task_id="stream_probe"} > 0
         for: 6h
         labels:
           severity: warning
