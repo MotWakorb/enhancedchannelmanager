@@ -757,6 +757,9 @@ def _run_migrations(engine) -> None:
             # Add user_id and username columns to unique_client_connections (v0.16.0 - User tracking)
             _add_unique_client_connections_user_columns(conn)
 
+            # Flip cleanup task MANUAL -> CRON Sunday 02:00 UTC for existing operators (v0.17.0 - bd-ifmr5)
+            _migrate_cleanup_task_manual_to_cron(conn)
+
             logger.debug("[DATABASE] All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception("[DATABASE] Migration failed: %s", e)
@@ -2404,6 +2407,65 @@ def _add_unique_client_connections_user_columns(conn) -> None:
     if "username" not in columns:
         logger.info("[DATABASE] Adding username column to unique_client_connections")
         conn.execute(text("ALTER TABLE unique_client_connections ADD COLUMN username VARCHAR(255)"))
+        conn.commit()
+
+
+def _migrate_cleanup_task_manual_to_cron(conn) -> None:
+    """Flip cleanup task from MANUAL to CRON Sunday 02:00 UTC for existing operators (bd-ifmr5).
+
+    bd-ygoqr (PR #289) changed the ``CleanupTask`` constructor default from
+    ``ScheduleType.MANUAL`` to ``ScheduleType.CRON`` (``0 2 * * 0``) so the
+    journal/task-execution/stream_stats retention windows actually enforce
+    on fresh installs. But existing installs already have a persisted
+    ``scheduled_tasks`` row written at first-boot with ``schedule_type='manual'``,
+    and ``task_registry.TaskRegistry.sync_from_database`` faithfully
+    rehydrates it — so the bd-ygoqr fix never reaches operators who
+    upgraded into v0.17.0, exactly the population GH #243 is about.
+
+    Why not an Alembic migration: ``_bootstrap_alembic``'s bd-5w6jz fast-path
+    (see ``_schema_matches_head``) stamps ``alembic_version`` forward to head
+    when the live schema already covers the model shape. For every existing
+    v0.17.0 install, the ``scheduled_tasks`` table + columns are already
+    present, so a regular ALembic data migration would be SILENTLY SKIPPED
+    by the fast-path stamp-forward. ``_run_migrations`` runs unconditionally
+    every startup and uses WHERE-clause idempotency, which is exactly the
+    shape this fix needs.
+
+    Idempotency: the ``schedule_type='manual'`` predicate is the natural gate.
+    - Operator already on CRON or INTERVAL: WHERE matches zero rows, no-op.
+    - Fresh install (no DB row yet): WHERE matches zero rows, no-op.
+    - Already-migrated install (CRON after previous run): WHERE matches
+      zero rows, no-op (second startup logs nothing).
+
+    Operator caveat documented in CHANGELOG: an operator who deliberately
+    set MANUAL via the UI will be flipped to CRON by this one-time
+    migration. They can re-set MANUAL from Settings -> Tasks afterwards.
+    The migration assumes MANUAL was the historical default (it was) and
+    not an explicit operator choice (it usually wasn't, per GH #243).
+    """
+    from sqlalchemy import text
+
+    # Guard against the table not existing yet (extremely defensive — the
+    # scheduled_tasks table is baseline schema and create_all() ensures it
+    # exists before _run_migrations runs, but matches the rest of this file).
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_tasks'"
+    ))
+    if not result.fetchone():
+        logger.debug("[DATABASE] scheduled_tasks table doesn't exist yet, skipping cleanup MANUAL->CRON migration")
+        return
+
+    update = conn.execute(text(
+        "UPDATE scheduled_tasks "
+        "SET schedule_type='cron', cron_expression='0 2 * * 0' "
+        "WHERE task_id='cleanup' AND schedule_type='manual'"
+    ))
+    if update.rowcount > 0:
+        logger.info(
+            "[DATABASE] Flipped cleanup task schedule MANUAL -> CRON Sunday 02:00 UTC "
+            "for %d existing operator(s) (bd-ifmr5)",
+            update.rowcount,
+        )
         conn.commit()
 
 
