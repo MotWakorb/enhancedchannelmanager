@@ -80,6 +80,9 @@ def _add_telemetry(
     poll_interval_ms: int = 10_000,
     bytes_delta: int = 1000,
     buffer_event_count: int = 0,
+    reconnect_event_count: int = 0,
+    error_event_count: int = 0,
+    switch_event_count: int = 0,
     session_id: str | None = None,
     stream_id: int | None = None,
     stream_name: str | None = None,
@@ -94,6 +97,13 @@ def _add_telemetry(
             channel_id=channel_id,
             bytes_delta=bytes_delta,
             buffer_event_count=buffer_event_count,
+            # bd-ov5vb (migration 0013): per-type channel-event counters
+            # paired with buffer_event_count. Default zeros keep older
+            # callers ergonomic; the test below that exercises the per-
+            # type response shape passes non-zero values explicitly.
+            reconnect_event_count=reconnect_event_count,
+            error_event_count=error_event_count,
+            switch_event_count=switch_event_count,
             poll_interval_ms=poll_interval_ms,
             stream_id=stream_id,
             stream_name=stream_name,
@@ -226,6 +236,89 @@ class TestProvidersBufferingEnvelope:
     async def test_invalid_bucket_returns_400(self, async_client, test_session):
         response = await async_client.get("/api/stats/providers/buffering?bucket=minute")
         assert response.status_code == 400, response.text
+
+    @pytest.mark.asyncio
+    async def test_response_carries_four_per_type_counters_and_total(
+        self, async_client, test_session
+    ):
+        """bd-ov5vb: each row exposes all four per-type counters
+        (buffer / reconnect / error / switch) plus a pre-summed
+        ``total_event_count``. Pre-bd-ov5vb the row carried only
+        ``buffer_event_count``; the broadened ingest (migration 0013)
+        is what made the per-type breakdown possible.
+        """
+        _add_user(test_session, user_id=10, username="alice")
+        bucket_a = BASE.replace(minute=0, second=0, microsecond=0)
+        # One row with a representative mix: 2 buffer, 3 reconnect, 1 error, 5 switch.
+        _add_telemetry(
+            test_session, user_id=10, provider_id=1, channel_id="ch-a",
+            observed_at_ms=_ms(bucket_a + timedelta(minutes=5)),
+            buffer_event_count=2,
+            reconnect_event_count=3,
+            error_event_count=1,
+            switch_event_count=5,
+        )
+        test_session.commit()
+
+        response = await async_client.get(
+            "/api/stats/providers/buffering?window=7d&bucket=hour"
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        rows = [r for r in body["data"] if r["provider_id"] == 1]
+        assert len(rows) == 1
+        row = rows[0]
+        # Per-type counters.
+        assert row["buffer_event_count"] == 2
+        assert row["reconnect_event_count"] == 3
+        assert row["error_event_count"] == 1
+        assert row["switch_event_count"] == 5
+        # Pre-summed total — the "Channel events" column primary value.
+        assert row["total_event_count"] == 11
+
+    @pytest.mark.asyncio
+    async def test_response_total_event_count_aggregates_across_polls(
+        self, async_client, test_session
+    ):
+        """``total_event_count`` is the sum across all per-type
+        counters in the SUM-aggregated row, not just one of them.
+        Verifies the SQL SUMs operate per-column and the totaling
+        happens in Python after the aggregation lands.
+        """
+        _add_user(test_session, user_id=10, username="alice")
+        bucket_a = BASE.replace(minute=0, second=0, microsecond=0)
+        # Poll 1: 1 reconnect.
+        _add_telemetry(
+            test_session, user_id=10, provider_id=1, channel_id="ch-a",
+            observed_at_ms=_ms(bucket_a + timedelta(minutes=5)),
+            reconnect_event_count=1,
+        )
+        # Poll 2: 2 errors.
+        _add_telemetry(
+            test_session, user_id=10, provider_id=1, channel_id="ch-a",
+            observed_at_ms=_ms(bucket_a + timedelta(minutes=15)),
+            error_event_count=2,
+        )
+        # Poll 3: 4 switches.
+        _add_telemetry(
+            test_session, user_id=10, provider_id=1, channel_id="ch-a",
+            observed_at_ms=_ms(bucket_a + timedelta(minutes=25)),
+            switch_event_count=4,
+        )
+        test_session.commit()
+
+        response = await async_client.get(
+            "/api/stats/providers/buffering?window=7d&bucket=hour"
+        )
+        body = response.json()
+        rows = [r for r in body["data"] if r["provider_id"] == 1]
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["reconnect_event_count"] == 1
+        assert row["error_event_count"] == 2
+        assert row["switch_event_count"] == 4
+        assert row["buffer_event_count"] == 0
+        assert row["total_event_count"] == 7
 
 
 # ---------------------------------------------------------------------------

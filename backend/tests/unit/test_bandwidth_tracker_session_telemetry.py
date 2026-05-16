@@ -1940,7 +1940,7 @@ def _system_event(
     *,
     event_id: int,
     channel_id: str | int = "ch-uuid-1",
-    event_type: str = "buffering",
+    event_type: str = "channel_buffering",
     ip_address: str | None = None,
     timestamp: str = "2026-05-13T15:00:00Z",
 ) -> dict:
@@ -1951,6 +1951,14 @@ def _system_event(
     increasing integer ``id`` to every event. ``channel_id`` is normalized
     to string at the ingest site so both Dispatcharr's numeric-id channels
     and ECM's UUID-string channels are matched.
+
+    Default ``event_type`` is ``channel_buffering`` because (a) Dispatcharr's
+    upstream ts_proxy emits the raw event_type ``channel_buffering`` (not
+    the abbreviation ``buffering`` that the pre-bd-ov5vb API-side filter
+    was passing) and (b) preserving "buffering" semantics keeps the
+    skqln.15-era buffer-event tests reading naturally — their assertions
+    on ``buffer_event_count`` still hold because the new ingest helper
+    buckets ``channel_buffering`` into that column.
     """
     payload: dict = {
         "id": event_id,
@@ -2366,10 +2374,339 @@ async def test_system_events_fetch_failure_does_not_propagate(
         session.close()
     assert rows, "polling cycle must continue even when system-events fetch fails"
     assert all(r.buffer_event_count == 0 for r in rows)
+    # bd-ov5vb: helper renamed and log prefix updated from
+    # ``buffer_event_*`` → ``channel_event_*`` to reflect the broadened
+    # ingest (channel_buffering + channel_reconnect + channel_error +
+    # stream_switch). The [STATS_V2] prefix is preserved.
     assert any(
-        "[STATS_V2]" in r.message and "buffer_event" in r.message
+        "[STATS_V2]" in r.message and "channel_event" in r.message
         for r in caplog.records
     ), [r.message for r in caplog.records]
+
+
+# ---------------------------------------------------------------------------
+# Broadened channel-event ingest (bd-ov5vb)
+# ---------------------------------------------------------------------------
+#
+# bd-ov5vb broadens the pre-existing buffer-only ingest to cover the four
+# Dispatcharr ts_proxy event_types that actually represent channel-health
+# problems on real installs: channel_buffering (rare, ffmpeg-speed
+# threshold), channel_reconnect (operator-asked-for), channel_error
+# (operator-asked-for), stream_switch (provider-failover indicator).
+#
+# The pre-bd-ov5vb helper passed event_type=buffering as an API-side
+# filter. Live verification on the PO's instance found that filter was
+# returning zero on every poll because Dispatcharr's channel_buffering
+# event is rare on real installs — the operationally-meaningful events
+# (reconnect/error/switch) were being dropped at the API call. The
+# broadened helper drops the API filter, buckets client-side by
+# event_type, and writes each bucket to its own per-poll column
+# (migration 0013).
+
+
+@pytest.mark.asyncio
+async def test_collect_channel_events_buckets_mixed_event_types_by_type(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """bd-ov5vb happy path: a single poll surfaces a mixed bag of
+    channel_buffering, channel_reconnect, channel_error, and stream_switch
+    events. Each lands on its own per-type counter on the session_telemetry
+    row; one row per active connection per channel; first-row-wins
+    attribution holds across every column.
+    """
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    mock_client.get_system_events = AsyncMock(
+        side_effect=[
+            # Poll 1: empty system-events (no events to seed dedup).
+            {"events": [], "count": 0, "total": 0, "offset": 0, "limit": 1000},
+            # Poll 2: 1 of each type for ch-uuid-1.
+            {
+                "events": [
+                    _system_event(event_id=7001, channel_id="ch-uuid-1", event_type="channel_buffering"),
+                    _system_event(event_id=7002, channel_id="ch-uuid-1", event_type="channel_reconnect"),
+                    _system_event(event_id=7003, channel_id="ch-uuid-1", event_type="channel_error"),
+                    _system_event(event_id=7004, channel_id="ch-uuid-1", event_type="stream_switch"),
+                ],
+                "count": 4, "total": 4, "offset": 0, "limit": 1000,
+            },
+        ]
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = (
+            session.query(SessionTelemetry)
+            .order_by(SessionTelemetry.id)
+            .all()
+        )
+    finally:
+        session.close()
+    assert len(rows) == 2
+    # Poll 1: zeros across the board (no events).
+    assert rows[0].buffer_event_count == 0
+    assert rows[0].reconnect_event_count == 0
+    assert rows[0].error_event_count == 0
+    assert rows[0].switch_event_count == 0
+    # Poll 2: one event per type, all attributed to the single row.
+    assert rows[1].buffer_event_count == 1
+    assert rows[1].reconnect_event_count == 1
+    assert rows[1].error_event_count == 1
+    assert rows[1].switch_event_count == 1
+
+
+@pytest.mark.asyncio
+async def test_collect_channel_events_dedups_across_event_types_globally(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """bd-ov5vb: the dedup LRU is keyed on Dispatcharr's monotonic
+    event.id, NOT on (id, event_type). Re-delivery of the same event id
+    across polls counts ONCE total regardless of which type bucket it
+    falls into — because the same event.id can never carry two different
+    event_types in practice (Dispatcharr assigns the id at emission
+    time), the global keying is the correct dedup semantics.
+
+    Poll 1: id=8001 (reconnect) + id=8002 (error). Poll 2: re-delivers
+    8001 + 8002 (must dedup) plus new 8003 (switch). Totals:
+    reconnect=1, error=1, switch=1, buffer=0.
+    """
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    mock_client.get_system_events = AsyncMock(
+        side_effect=[
+            {
+                "events": [
+                    _system_event(event_id=8001, channel_id="ch-uuid-1", event_type="channel_reconnect"),
+                    _system_event(event_id=8002, channel_id="ch-uuid-1", event_type="channel_error"),
+                ],
+                "count": 2, "total": 2, "offset": 0, "limit": 1000,
+            },
+            {
+                "events": [
+                    _system_event(event_id=8001, channel_id="ch-uuid-1", event_type="channel_reconnect"),
+                    _system_event(event_id=8002, channel_id="ch-uuid-1", event_type="channel_error"),
+                    _system_event(event_id=8003, channel_id="ch-uuid-1", event_type="stream_switch"),
+                ],
+                "count": 3, "total": 3, "offset": 0, "limit": 1000,
+            },
+        ]
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+
+    await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = (
+            session.query(SessionTelemetry)
+            .order_by(SessionTelemetry.id)
+            .all()
+        )
+    finally:
+        session.close()
+    assert len(rows) == 2
+    # Poll 1: id=8001 (reconnect) + id=8002 (error) attribute to the row.
+    assert rows[0].reconnect_event_count == 1
+    assert rows[0].error_event_count == 1
+    assert rows[0].switch_event_count == 0
+    # Poll 2: 8001/8002 are deduped (already seen); only 8003 (switch) lands.
+    assert rows[1].reconnect_event_count == 0
+    assert rows[1].error_event_count == 0
+    assert rows[1].switch_event_count == 1
+    # Buffer counter is untouched in this scenario.
+    assert all(r.buffer_event_count == 0 for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_collect_channel_events_drops_noise_event_types_before_lru(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """bd-ov5vb: noise event types (login_success, client_connect,
+    epg_refresh, m3u_refresh, channel_start/stop) are dropped at the
+    type-filter BEFORE the LRU is consulted — they neither pollute the
+    bounded dedup set nor surface as attributed counts.
+
+    The acceptance criterion is twofold:
+
+    1. Per-type counts on the resulting session_telemetry row reflect
+       ONLY the four tracked types; noise events are zero.
+    2. The dedup LRU does not grow by the number of noise events — the
+       cap is bounded and SRE's working-set discipline relies on the
+       set tracking only the four health types.
+    """
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    mock_client.get_system_events = AsyncMock(
+        return_value={
+            "events": [
+                _system_event(event_id=9001, channel_id="ch-uuid-1", event_type="login_success"),
+                _system_event(event_id=9002, channel_id="ch-uuid-1", event_type="client_connect"),
+                _system_event(event_id=9003, channel_id="ch-uuid-1", event_type="client_disconnect"),
+                _system_event(event_id=9004, channel_id="ch-uuid-1", event_type="epg_refresh"),
+                _system_event(event_id=9005, channel_id="ch-uuid-1", event_type="m3u_refresh"),
+                _system_event(event_id=9006, channel_id="ch-uuid-1", event_type="channel_start"),
+                _system_event(event_id=9007, channel_id="ch-uuid-1", event_type="channel_stop"),
+                # One real event mixed in so the test row is non-trivial.
+                _system_event(event_id=9099, channel_id="ch-uuid-1", event_type="channel_reconnect"),
+            ],
+            "count": 8, "total": 8, "offset": 0, "limit": 1000,
+        }
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+
+    mock_client.get_channel_stats.return_value = {"channels": [first]}
+    # Snapshot the LRU size BEFORE the poll so we can prove the noise
+    # events did not pollute it.
+    lru_size_before = len(tracker._seen_buffer_event_ids)
+    await tracker._collect_stats()
+    lru_size_after = len(tracker._seen_buffer_event_ids)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert len(rows) == 1
+    # Only the reconnect event surfaced as a count.
+    assert rows[0].reconnect_event_count == 1
+    assert rows[0].buffer_event_count == 0
+    assert rows[0].error_event_count == 0
+    assert rows[0].switch_event_count == 0
+    # The LRU grew by exactly 1 (the reconnect event), not by the 7
+    # noise events that were filtered before the LRU was touched.
+    assert lru_size_after - lru_size_before == 1, (
+        f"LRU should grow by 1 (reconnect only); grew by "
+        f"{lru_size_after - lru_size_before} — noise events leaked past "
+        f"the type-filter."
+    )
+
+
+@pytest.mark.asyncio
+async def test_collect_channel_events_sli_log_carries_per_type_breakdown(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+    caplog,
+):
+    """bd-ov5vb: the per-poll SLI line is emitted at INFO with stable
+    substring shape ``[STATS_V2] channel_event_ingest fetched=X
+    deduped=Y attributed_buffer=A attributed_reconnect=B
+    attributed_error=C attributed_switch=D``. SRE's log-derived
+    counter parses on this shape; the pre-bd-ov5vb shape
+    ``buffer_event_ingest fetched=X deduped=Y attributed=Z`` is no
+    longer emitted.
+    """
+    import logging as _logging
+
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    mock_client.get_system_events = AsyncMock(
+        return_value={
+            "events": [
+                _system_event(event_id=10001, channel_id="ch-uuid-1", event_type="channel_buffering"),
+                _system_event(event_id=10002, channel_id="ch-uuid-1", event_type="channel_reconnect"),
+                _system_event(event_id=10003, channel_id="ch-uuid-1", event_type="channel_reconnect"),
+                _system_event(event_id=10004, channel_id="ch-uuid-1", event_type="channel_error"),
+            ],
+            "count": 4, "total": 4, "offset": 0, "limit": 1000,
+        }
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+
+    mock_client.get_channel_stats.return_value = {"channels": [first]}
+    caplog.clear()
+    with caplog.at_level(_logging.INFO, logger="bandwidth_tracker"):
+        await tracker._collect_stats()
+
+    sli_lines = [
+        r.message for r in caplog.records
+        if "[STATS_V2] channel_event_ingest" in r.message
+    ]
+    assert len(sli_lines) == 1, (
+        f"Expected exactly one channel_event_ingest SLI line; got "
+        f"{len(sli_lines)}: {sli_lines!r}"
+    )
+    line = sli_lines[0]
+    assert "fetched=4" in line
+    assert "deduped=0" in line
+    assert "attributed_buffer=1" in line
+    assert "attributed_reconnect=2" in line
+    assert "attributed_error=1" in line
+    assert "attributed_switch=0" in line
+    # Pre-bd-ov5vb shape must not be emitted concurrently.
+    legacy = [
+        r.message for r in caplog.records
+        if "buffer_event_ingest" in r.message
+    ]
+    assert legacy == [], (
+        f"Legacy buffer_event_ingest SLI line should be retired; saw {legacy!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_collect_channel_events_no_event_type_filter_passed_to_dispatcharr(
+    patched_session_local,
+    seed_synthetic_user,
+    tracker,
+    mock_client,
+):
+    """bd-ov5vb regression guard: the helper must call
+    ``get_system_events`` WITHOUT an ``event_type`` kwarg. Pre-bd-ov5vb
+    the helper passed ``event_type='buffering'`` which silently filtered
+    out the operationally-meaningful events at the API call. If a future
+    refactor accidentally re-adds the filter, this test pins the gap
+    shut.
+    """
+    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    mock_client.get_system_events = AsyncMock(
+        return_value={"events": [], "count": 0, "total": 0, "offset": 0, "limit": 1000}
+    )
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+    )
+
+    mock_client.get_channel_stats.return_value = {"channels": [first]}
+    await tracker._collect_stats()
+
+    # At least one call landed during the poll cycle.
+    assert mock_client.get_system_events.await_count >= 1
+    # Every call must NOT pass event_type (the load-bearing change).
+    for call in mock_client.get_system_events.await_args_list:
+        assert "event_type" not in call.kwargs, (
+            f"get_system_events called with event_type={call.kwargs.get('event_type')!r} — "
+            f"bd-ov5vb removed the API-side filter; the broadened ingest "
+            f"buckets client-side instead."
+        )
 
 
 # ---------------------------------------------------------------------------
