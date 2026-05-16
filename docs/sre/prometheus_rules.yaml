@@ -602,3 +602,116 @@ groups:
             ecm_telemetry_raw_rows_pruned rate — a sustained zero combined
             with this alert is failure mode 3 (prune failing silently).
           runbook_url: docs/runbooks/stats-v2-row-growth.md
+
+  # =====================================================================
+  # Database file size (bd-ygoqr)
+  # =====================================================================
+  # NOT tied to a numbered SLO — capacity-planning class, like the Stats
+  # v2 storage growth alert above. Consumes the gauges emitted by
+  # ``observability.update_database_size_metrics`` (bd-ygoqr): updated at
+  # process startup post-VACUUM (database._perform_maintenance) and after
+  # the weekly CleanupTask vacuum, so the values are accurate within "one
+  # weekly cron interval + one container lifetime".
+  #
+  # Thresholds are starting points (per-PE spike); expect tuning after
+  # 30d of baseline data on a representative install. The 500 MB warn is
+  # below the typical ECM "everything is healthy" steady state (long-
+  # running installs settle in the 50-200 MB range post-VACUUM with
+  # bd-7i2vv's 30-day Stats v2 raw-row retention); 2 GB page is the
+  # "operator should care today" line.
+  - name: ecm_database_size
+    interval: 5m
+    rules:
+      - record: ecm:database_size_bytes:weekly_delta
+        # Week-over-week growth of the on-disk DB body. Stable input for
+        # ECMDatabaseSizeGrowthAnomaly so the alert doesn't compute the
+        # offset() expression in its trigger condition (PromQL evaluators
+        # like recording-rule-derived inputs more than re-derived ones).
+        expr: ecm_database_size_bytes - ecm_database_size_bytes offset 7d
+
+      - alert: ECMDatabaseSizeWarn
+        # 500 MB body for 30 minutes — leading indicator. The 30m window
+        # rejects single-scrape transients (e.g., a VACUUM-in-progress
+        # snapshot during the weekly cleanup task that the next scrape
+        # corrects) without delaying the real signal.
+        expr: ecm_database_size_bytes > 500e6
+        for: 30m
+        labels:
+          severity: warning
+          service: ecm
+        annotations:
+          summary: "ECM database file size {{ $value | humanize1024 }}B > 500 MB for 30m"
+          description: |
+            journal.db has been larger than 500 MB for 30+ minutes.
+            Capacity-planning warning, not an outage. Check the
+            WAL-vs-body split — a large WAL is a different failure mode
+            from a large body. See runbook for the triage table.
+          runbook_url: docs/runbooks/database-size-warn.md
+
+      - alert: ECMDatabaseSizePage
+        # 2 GB body for 10 minutes — operator should investigate today.
+        # Shorter "for" window than the warn because at this size the
+        # weekly cleanup is no longer keeping up; every additional hour
+        # of growth is an hour the operator could be losing.
+        expr: ecm_database_size_bytes > 2e9
+        for: 10m
+        labels:
+          severity: page
+          service: ecm
+        annotations:
+          summary: "ECM database file size {{ $value | humanize1024 }}B > 2 GB for 10m"
+          description: |
+            journal.db has been larger than 2 GB for 10+ minutes. The
+            weekly CleanupTask VACUUM cannot keep up at this size and
+            blocks readers/writers for seconds-to-minutes per run. Run
+            the runbook's table-attribution step to find the offending
+            table; consider tightening retention on the largest contributor.
+          runbook_url: docs/runbooks/database-size-warn.md
+
+      - alert: ECMDatabaseWALSizeWarn
+        # 200 MB WAL for 15 minutes — checkpointing is stalled. Healthy
+        # WAL stays well under 100 MB on a busy install (SQLite auto-
+        # checkpoints at 1000 frames by default, ~4 MB at 4 KB pages).
+        # 200 MB indicates either a hung writer holding a transaction
+        # open or a checkpoint-on-close not firing.
+        expr: ecm_database_wal_size_bytes > 200e6
+        for: 15m
+        labels:
+          severity: warning
+          service: ecm
+        annotations:
+          summary: "ECM SQLite WAL file {{ $value | humanize1024 }}B > 200 MB for 15m"
+          description: |
+            journal.db-wal has been larger than 200 MB for 15+ minutes —
+            checkpointing is stalled. Usually means a long-running
+            writer is holding a transaction open OR
+            ``PRAGMA wal_autocheckpoint`` was overridden. Runbook covers
+            manual ``PRAGMA wal_checkpoint(TRUNCATE)`` and the
+            "what process holds the writer lock" diagnostic.
+          runbook_url: docs/runbooks/database-size-warn.md
+
+      - alert: ECMDatabaseSizeGrowthAnomaly
+        # Week-over-week growth > 200 MB sustained for 24h. Catches
+        # "retention is not running" before the size alerts trip — at
+        # the typical post-VACUUM steady-state of 50-200 MB, gaining
+        # 200 MB/week means doubling-to-quintupling in a week, which is
+        # the leading indicator that a contributor table is growing
+        # unbounded (journal_entries / task_executions / session_telemetry).
+        expr: ecm:database_size_bytes:weekly_delta > 200e6
+        for: 24h
+        labels:
+          severity: warning
+          service: ecm
+        annotations:
+          summary: "ECM database growing >200 MB/week for 24h+"
+          description: |
+            Week-over-week DB body growth has exceeded 200 MB for 24+
+            hours. Likely causes (in order of probability): the
+            CleanupTask was disabled or set to MANUAL by the operator
+            (bd-ygoqr default is now CRON Sun 02:00 UTC for fresh
+            installs; pre-existing operators may still be on MANUAL),
+            the weekly VACUUM is failing silently (check task history),
+            or session_telemetry is accumulating beyond ADR-007 D1's
+            30d raw-row retention (cross-reference
+            ECMStatsRowCountGrowthAnomaly above).
+          runbook_url: docs/runbooks/database-size-warn.md

@@ -400,6 +400,45 @@ Tighten to p95 < 400ms once 30 days of production data shows we comfortably beat
 
 ---
 
+## Capacity planning: Database file size (bd-ygoqr)
+
+**Class:** Capacity-planning, not a numbered SLO. Same posture as the Stats v2 storage-growth alert (`ECMStatsRowCountGrowthAnomaly`) — we expose the signal and ship the alert rule, but the threshold is a leading indicator for operator action, not a user-facing reliability commitment.
+
+**SLI:** Two gauges emitted by `observability.update_database_size_metrics` (no labels) — sampled at process startup post-`_perform_maintenance` and after the weekly `CleanupTask` VACUUM:
+
+- `ecm_database_size_bytes` — size of the SQLite database file (`journal.db`).
+- `ecm_database_wal_size_bytes` — size of the WAL file (`journal.db-wal`).
+
+**Prometheus expression (recording rule):**
+```promql
+ecm:database_size_bytes:weekly_delta = ecm_database_size_bytes - ecm_database_size_bytes offset 7d
+```
+
+**Operational thresholds (alert rules in `prometheus_rules.yaml` group `ecm_database_size`):**
+
+| Alert | Trigger | Window | Severity |
+|-|-|-|-|
+| `ECMDatabaseSizeWarn` | body > 500 MB | 30m | warning |
+| `ECMDatabaseSizePage` | body > 2 GB | 10m | page |
+| `ECMDatabaseWALSizeWarn` | WAL > 200 MB | 15m | warning |
+| `ECMDatabaseSizeGrowthAnomaly` | weekly delta > 200 MB | 24h | warning |
+
+**Why these thresholds (initial):** The typical post-VACUUM steady-state for a long-running install is 50-200 MB body + < 50 MB WAL (with bd-7i2vv's 30-day Stats v2 raw-row retention and bd-dmu8w's 90-day journal-entry retention applied weekly). The 500 MB warn is "the steady state has drifted high enough to investigate" — usually means a contributor table has lost its retention boundary. The 2 GB page is "the weekly VACUUM is no longer keeping up and the lock duration is starting to disrupt streaming" (per the DBA spike note that VACUUM holds an exclusive lock for seconds-to-minutes on multi-GB SQLite files). The WAL threshold is anchored on SQLite's default `wal_autocheckpoint=1000` — a 200 MB WAL means autocheckpoint is not firing, which is structurally different from "the working set grew."
+
+**Why this is not a numbered SLO:** Disk-pressure failure modes are operator-environment-dependent (SSD vs HDD, container volume sizing, filesystem-level reservations) and ECM cannot make a portable commitment about them. The signal is exposed so operators can build their own commitments against the disk substrate they actually run on.
+
+**What breaks these thresholds:**
+
+- The bd-ygoqr CleanupTask CRON default flip is moot for any pre-existing operator who explicitly persisted MANUAL — they keep their MANUAL choice and journal/task-execution history grows unboundedly until they re-enable scheduling. The `ECMDatabaseSizeGrowthAnomaly` alert is the leading indicator for that scenario.
+- Cross-reference bd-ej995 (WAL checkpoint at startup) — when shipped, will compress the typical post-startup WAL size and may require re-tuning the WAL warn threshold downward.
+- Cross-reference bd-7i2vv (session_telemetry retention) — operators who disable the StatsV2RollupTask will see the body size grow at the per-poll telemetry rate without bound.
+
+**Cardinality discipline:** Both gauges are label-free. The DB is a single process-global file — there is nothing meaningful to label by. Future per-table size attribution belongs in the `database-size-warn` runbook's diagnostic step, NOT as a metric label (table count is bounded but the cardinality budget is better spent on actually-orthogonal signals).
+
+**Runbook:** [`docs/runbooks/database-size-warn.md`](../runbooks/database-size-warn.md) — covers the WAL-vs-body triage table, the "manual checkpoint" command, and the per-table size-attribution query for the body-large case.
+
+---
+
 ## SLO-4: Readiness Sub-check Latency (informational)
 
 **SLI:** 95th percentile duration of readiness sub-checks, per `check` label (`database`, `dispatcharr`, `ffprobe`).
@@ -463,6 +502,8 @@ For the scaffold we ship simpler single-window thresholds for SLO-2/3 (p95 laten
 - **No SLO for long-running tasks.** Task success rate matters (restore jobs, auto-creation runs) but has no metric today. Separate bead.
 
 ## Changelog
+
+- **2026-05-15 (bd-ygoqr):** Added **Capacity planning: Database file size** entry — two new label-free gauges (`ecm_database_size_bytes`, `ecm_database_wal_size_bytes`) emitted by `observability.update_database_size_metrics` from `database._perform_maintenance` (post-startup VACUUM) and `tasks.cleanup.CleanupTask.execute` (post-weekly VACUUM). New alert rules in `prometheus_rules.yaml` group `ecm_database_size`: `ECMDatabaseSizeWarn` (>500 MB / 30m), `ECMDatabaseSizePage` (>2 GB / 10m), `ECMDatabaseWALSizeWarn` (>200 MB / 15m), `ECMDatabaseSizeGrowthAnomaly` (weekly delta >200 MB / 24h). New recording rule `ecm:database_size_bytes:weekly_delta`. New runbook `database-size-warn.md` covers the WAL-vs-body triage and per-table size attribution. Capacity-planning class, NOT a numbered SLO — disk-pressure failure modes are environment-dependent and ECM cannot make a portable commitment about them. Companion to the bd-ygoqr CleanupTask CRON default flip (Sun 02:00 UTC for fresh installs).
 
 - **2026-05-13 (bd-skqln.11):** Added **SLO-7 (Stats v2 telemetry write success rate, 99.5% / 30d)**, **SLO-8 (provider attribution rate, 95% / 24h, warn-only)**, and **SLO-9 (Stats v2 query latency, p95<800ms / p99<2s / 7d, warn-only)**. All three resolve against metrics shipped in skqln.12 (`ecm_session_telemetry_writes_total`, `ecm_session_telemetry_row_count`, `ecm_provider_resolution_total`, `ecm_stats_query_duration_seconds`). Companion alert rules shipped in `prometheus_rules.yaml` groups `ecm_stats_v2_write`, `ecm_stats_v2_provider_resolution`, `ecm_stats_v2_query_latency`, `ecm_stats_v2_storage`. New runbooks: `stats-v2-write-failures.md`, `stats-v2-provider-resolution-degraded.md`, `stats-v2-row-growth.md`, `stats-v2-deployment-safety.md`. The bead's original "dual-write divergence SLI" was obsoleted by skqln.3 step (d), which retired the legacy `ChannelWatchStats` writer — the data-consistency SLI is now the resolver success rate (SLO-8), not a divergence gauge.
 
