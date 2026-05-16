@@ -119,3 +119,48 @@
 .mode-toggle .mode-btn:hover:not(.active) {
   opacity: 0.8;
 }
+
+/* Inline field validation error (not in shared common.css) */
+.print-guide-modal .field-error {
+  margin-top: 4px;
+  margin-bottom: 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--error-color, #ef4444);
+}
+
+/* Channel number range filter row */
+.print-guide-range-row {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.print-guide-range-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.print-guide-range-field input[type="number"] {
+  width: 100%;
+}
+
+/* Clamp hint */
+.print-guide-clamp-hint {
+  margin-bottom: 0.5rem;
+}
+
+/* Empty-range state */
+.print-guide-empty-range {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1.5rem 1rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.print-guide-empty-range .material-icons {
+  font-size: 2rem;
+  opacity: 0.5;
+}
