@@ -1210,10 +1210,27 @@ export type ProviderStatsWindow = '7d' | '30d' | '90d';
 export type ProviderStatsBucket = 'hour' | 'day';
 
 // Row shape for /providers/buffering
+//
+// bd-ov5vb (2026-05-15): the backend ingest layer was broadened to cover
+// every Dispatcharr channel-health event_type, not just
+// ``channel_buffering`` (which is rare on real installs). The endpoint
+// now returns per-type counters paired with a pre-summed total. The
+// URL path stays ``/buffering`` for back-compat with any external
+// dashboard or alerting consumer; the response is additive — the
+// pre-bd-ov5vb ``buffer_event_count`` field is preserved verbatim.
+//
+// Renaming note: the bd-1x5v0 Providers panel relabels the column
+// from "Buffering" to "Channel events" and surfaces the breakdown via
+// a hover tooltip; the rename does not propagate to the type shape so
+// that any other consumer of this response stays unaffected.
 export interface ProviderBufferingRow {
   provider_id: number | null;
   time_bucket: string;  // ISO-8601 with trailing Z, floored to hour or day
   buffer_event_count: number;
+  reconnect_event_count: number;
+  error_event_count: number;
+  switch_event_count: number;
+  total_event_count: number;
 }
 
 // Row shape for /providers/watch-time

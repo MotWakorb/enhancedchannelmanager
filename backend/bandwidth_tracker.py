@@ -19,7 +19,7 @@ import re
 import time
 from collections import OrderedDict
 from datetime import datetime, date, timedelta, timezone
-from typing import Any, NamedTuple, Optional
+from typing import Any, ClassVar, NamedTuple, Optional
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import distinct, func
@@ -659,7 +659,7 @@ def _telemetry_opt_out_enabled() -> bool:
     a truthy value, ``_collect_stats`` short-circuits AFTER the legacy
     sibling writes (``ChannelBandwidth``, ``BandwidthDaily``,
     ``UniqueClientConnection``) and BEFORE the Stats v2 path
-    (``_resolve_provider_ids`` + ``_collect_buffer_events`` +
+    (``_resolve_provider_ids`` + ``_collect_channel_events`` +
     ``_write_session_telemetry``). Net effect:
 
     * Zero rows land in ``session_telemetry``.
@@ -1372,20 +1372,23 @@ class BandwidthTracker:
         provider_by_channel = await self._resolve_provider_ids(
             telemetry_channel_snapshot
         )
-        # Buffer-event ingest (bd-skqln.15). Fetches the buffering subset of
-        # Dispatcharr's ``/api/core/system-events/`` feed, de-duplicates
-        # against the cross-poll LRU, and produces a
-        # ``{channel_uuid: deduped_count}`` map. Failure is non-fatal — the
-        # helper returns ``{}`` and the session_telemetry rows still write
-        # with ``buffer_event_count=0`` as they have since skqln.3 step (a).
-        buffer_events_by_channel = await self._collect_buffer_events(
+        # Channel-event ingest (bd-ov5vb, broadens bd-skqln.15). Fetches
+        # the channel-health subset of Dispatcharr's
+        # ``/api/core/system-events/`` feed (no event_type filter —
+        # buckets client-side into channel_buffering / channel_reconnect
+        # / channel_error / stream_switch), de-duplicates against the
+        # cross-poll LRU, and produces a
+        # ``{channel_uuid: {event_type: deduped_count}}`` map. Failure is
+        # non-fatal — the helper returns ``{}`` and the session_telemetry
+        # rows still write with every per-type counter at 0.
+        channel_events_by_channel = await self._collect_channel_events(
             telemetry_channel_snapshot
         )
         self._write_session_telemetry(
             telemetry_channel_snapshot,
             observed_at_ms,
             provider_by_channel,
-            buffer_events_by_channel,
+            channel_events_by_channel,
             # bd-uqbob: pre-resolved Dispatcharr user_id → username map and
             # already-parsed exclude token set. Both default to empty on
             # the call-site signature so older test seams keep working;
@@ -1822,22 +1825,63 @@ class BandwidthTracker:
         ``_log_provider_resolution_sli`` free function.
         """
         _log_provider_resolution_sli(resolved_count, unresolved_count)
-    async def _collect_buffer_events(
+    # Channel-health event types ECM tracks (bd-ov5vb). These are the four
+    # Dispatcharr ts_proxy ``SystemEvent`` ``event_type`` values that
+    # represent operationally-meaningful channel state — each maps to its
+    # own per-poll counter on ``session_telemetry`` (migration 0013). Any
+    # other event type Dispatcharr emits (client_connect, login_success,
+    # epg_*, m3u_refresh, channel_start/stop, etc.) is noise for this
+    # metric — they're either user-activity signals or routine lifecycle
+    # events, not health signals — and are dropped at the type-filter
+    # before the LRU dedup pays attention.
+    _CHANNEL_EVENT_TYPES: ClassVar[tuple[str, ...]] = (
+        "channel_buffering",
+        "channel_reconnect",
+        "channel_error",
+        "stream_switch",
+    )
+
+    async def _collect_channel_events(
         self,
         channel_snapshot: list[dict],
-    ) -> dict[str, int]:
-        """Fetch the buffering subset of Dispatcharr's system-events feed and
-        return ``{channel_uuid: deduped_event_count}`` for the current poll.
+    ) -> dict[str, dict[str, int]]:
+        """Fetch the channel-health subset of Dispatcharr's system-events
+        feed and bucket the deduped result by event_type for the current
+        poll.
 
-        Bead: ``enhancedchannelmanager-skqln.15``.
+        Bead: ``enhancedchannelmanager-ov5vb`` (broadens
+        ``enhancedchannelmanager-skqln.15``).
 
-        Dispatcharr exposes recent buffer events at
-        ``GET /api/core/system-events/?event_type=buffering`` (already wired
-        on ``DispatcharrClient`` as ``get_system_events``). The feed re-
-        delivers recent events on every fetch — without dedup, the same
-        event would be counted N times across successive polls. The
-        ``self._seen_buffer_event_ids`` LRU is the cross-poll dedup state:
-        an event's integer ``id`` is the dedup key, capped at
+        Returns ``{channel_uuid: {event_type: count}}`` where ``event_type``
+        is one of ``_CHANNEL_EVENT_TYPES``. Missing event types on a given
+        channel are simply absent from the inner dict (the caller treats
+        absence as zero, same shape contract the writer expects).
+
+        Pre-bd-ov5vb history (why the broadening was necessary)
+        --------------------------------------------------------
+        The original ``_collect_buffer_events`` (skqln.15) passed
+        ``event_type=buffering`` as a hard API-side filter, on the
+        assumption that ``channel_buffering`` events were the
+        operationally-meaningful health signal. Live verification on the
+        PO's instance (2026-05-15) found that filter was returning zero
+        on every poll because Dispatcharr's ``channel_buffering`` event
+        only fires on rare ffmpeg-speed threshold trips — the events that
+        actually represent channel-health problems are
+        ``channel_reconnect`` (8 in the 100-event window),
+        ``channel_error`` (4), and ``stream_switch`` (3). All three were
+        being filtered out at the API call. This helper drops the
+        ``event_type`` filter and buckets client-side so each type lands
+        on its own column in ``session_telemetry``.
+
+        Dispatcharr exposes recent events at
+        ``GET /api/core/system-events/`` (wired on ``DispatcharrClient``
+        as ``get_system_events``). The feed re-delivers recent events on
+        every fetch — without dedup, the same event would be counted N
+        times across successive polls. The ``self._seen_buffer_event_ids``
+        LRU (name preserved from skqln.15 to avoid a churny rename across
+        every test that introspects it; carries every channel-event id,
+        not just buffering ones) is the cross-poll dedup state: an
+        event's integer ``id`` is the dedup key, capped at
         ``self._seen_buffer_event_ids_cap`` with LRU eviction.
 
         Channel-id reconciliation: ``ChannelStats`` (``/proxy/ts/status``)
@@ -1848,17 +1892,33 @@ class BandwidthTracker:
         against the snapshot's channel_uuids; events whose channel cannot
         be mapped to a snapshot row are dropped (logged at WARNING).
 
+        Type-filter ordering (cost discipline)
+        ---------------------------------------
+        We drop unwanted event types BEFORE the LRU lookup — see the
+        ``event_type not in _CHANNEL_EVENT_TYPES`` short-circuit. The
+        alternative (always LRU-check, then filter) would pollute the
+        dedup set with the high-volume ``client_connect`` /
+        ``login_success`` event ids and burn the bounded cap on values
+        we have no interest in. The lookup itself is O(1), but the LRU
+        churn is real — at the live cap of 10k and the observed
+        ~70%-noise ratio on the PO's window, type-filter-first keeps
+        the working set at the four health types rather than the full
+        ~10 emitted types.
+
         Failure modes are non-fatal — the helper never raises:
         * ``get_system_events`` raises → ``{}`` returned + structured
-          ``[STATS_V2] buffer_event_fetch_failed`` log.
+          ``[STATS_V2] channel_event_fetch_failed`` log.
         * An event surfaces with no ``id`` → skipped (we cannot dedup it).
         * An event's channel doesn't match any snapshot row → dropped,
           logged once per occurrence as
-          ``[STATS_V2] buffer_event_unmapped_channel``.
+          ``[STATS_V2] channel_event_unmapped_channel``.
 
         A per-poll SLI line is emitted at INFO:
-        ``[STATS_V2] buffer_event_ingest fetched=X deduped=Y attributed=Z``.
-        skqln.12 derives a Prometheus counter from this line.
+        ``[STATS_V2] channel_event_ingest fetched=X deduped=Y
+        attributed_buffer=A attributed_reconnect=B attributed_error=C
+        attributed_switch=D``. The shape is stable so SRE's
+        log-derived counter can grow per-type series without coupling
+        a metric library into the ingest path.
         """
         # No channels active this poll → no rows will be written, so skip
         # the Dispatcharr round-trip entirely.
@@ -1874,34 +1934,50 @@ class BandwidthTracker:
         snapshot_uuids_str = {str(u) for u in snapshot_uuids}
 
         try:
+            # bd-ov5vb: no ``event_type`` arg — broaden ingest so the
+            # full channel-health event set lands in the response. The
+            # client-side type-filter below buckets the result and
+            # drops noise types.
             response = await self.client.get_system_events(
                 limit=1000,
                 offset=0,
-                event_type="buffering",
             )
         except Exception as e:
             logger.warning(
-                "[STATS_V2] buffer_event_fetch_failed reason=request_raised error=%s",
+                "[STATS_V2] channel_event_fetch_failed reason=request_raised error=%s",
                 e,
             )
-            self._log_buffer_event_ingest_sli(
-                fetched=0, deduped=0, attributed=0
+            self._log_channel_event_ingest_sli(
+                fetched=0,
+                deduped=0,
+                attributed_by_type={t: 0 for t in self._CHANNEL_EVENT_TYPES},
             )
             return {}
 
         events = (response or {}).get("events", []) or []
         fetched = len(events)
-        attributed_count = 0
         deduped_count = 0
-        counts_by_channel: dict[str, int] = {}
+        # ``counts_by_channel[channel_uuid][event_type] = count``. The
+        # writer treats absent inner keys as zero so we don't pre-seed
+        # zeros here.
+        counts_by_channel: dict[str, dict[str, int]] = {}
+        attributed_by_type: dict[str, int] = {t: 0 for t in self._CHANNEL_EVENT_TYPES}
 
         for event in events:
+            event_type = event.get("event_type")
+            if event_type not in self._CHANNEL_EVENT_TYPES:
+                # Noise — login_success, client_connect, epg_*, m3u_refresh,
+                # channel_start/stop, etc. Drop BEFORE LRU lookup so the
+                # dedup set stays focused on the four health types.
+                continue
+
             event_id = event.get("id")
             if event_id is None:
                 # Cannot dedup without a stable id — skip rather than
                 # double-count on the next poll.
                 logger.warning(
-                    "[STATS_V2] buffer_event_skipped reason=no_event_id"
+                    "[STATS_V2] channel_event_skipped reason=no_event_id event_type=%s",
+                    event_type,
                 )
                 continue
             event_id = int(event_id)
@@ -1924,8 +2000,10 @@ class BandwidthTracker:
                 self._seen_buffer_event_ids[event_id] = None
                 self._evict_buffer_event_ids_if_over_cap()
                 logger.warning(
-                    "[STATS_V2] buffer_event_unmapped_channel event_id=%s channel_id=%s",
+                    "[STATS_V2] channel_event_unmapped_channel event_id=%s "
+                    "event_type=%s channel_id=%s",
                     event_id,
+                    event_type,
                     event_channel,
                 )
                 continue
@@ -1937,46 +2015,67 @@ class BandwidthTracker:
                 (u for u in snapshot_uuids if str(u) == event_channel_str),
                 event_channel_str,
             )
-            counts_by_channel[attributed_uuid] = counts_by_channel.get(attributed_uuid, 0) + 1
-            attributed_count += 1
+            per_type = counts_by_channel.setdefault(attributed_uuid, {})
+            per_type[event_type] = per_type.get(event_type, 0) + 1
+            attributed_by_type[event_type] += 1
             self._seen_buffer_event_ids[event_id] = None
 
         # Evict any LRU overflow once per poll — cheaper than per-event.
         self._evict_buffer_event_ids_if_over_cap()
 
-        self._log_buffer_event_ingest_sli(
+        self._log_channel_event_ingest_sli(
             fetched=fetched,
             deduped=deduped_count,
-            attributed=attributed_count,
+            attributed_by_type=attributed_by_type,
         )
         return counts_by_channel
 
     def _evict_buffer_event_ids_if_over_cap(self) -> None:
-        """LRU eviction for the buffer-event dedup set. Keeps memory
+        """LRU eviction for the channel-event dedup set. Keeps memory
         bounded; entries are popped from the front (oldest insertion).
+
+        Name preserved from the skqln.15 era (when only buffer events
+        were ingested) to avoid a churny rename across every test that
+        introspects the attribute; the set is now keyed by every
+        channel-health event type tracked, not just buffering.
         """
         while len(self._seen_buffer_event_ids) > self._seen_buffer_event_ids_cap:
             self._seen_buffer_event_ids.popitem(last=False)
 
-    def _log_buffer_event_ingest_sli(
+    def _log_channel_event_ingest_sli(
         self,
         *,
         fetched: int,
         deduped: int,
-        attributed: int,
+        attributed_by_type: dict[str, int],
     ) -> None:
-        """Emit the per-poll buffer-event-ingest SLI line.
+        """Emit the per-poll channel-event-ingest SLI line (bd-ov5vb).
 
-        Format: ``[STATS_V2] buffer_event_ingest fetched=X deduped=Y
-        attributed=Z``. Stable substring shape; skqln.12 derives a
-        Prometheus counter from this without coupling a metric library
-        into the ingest path.
+        Format::
+
+            [STATS_V2] channel_event_ingest fetched=X deduped=Y
+            attributed_buffer=A attributed_reconnect=B
+            attributed_error=C attributed_switch=D
+
+        Stable substring shape; SRE's log-derived counter can grow
+        per-type series without coupling a metric library into the
+        ingest path. Pre-bd-ov5vb the line was
+        ``buffer_event_ingest fetched=X deduped=Y attributed=Z`` —
+        operators reading the new line see at a glance that the four
+        event types are now distinct, and per-type zeros honestly
+        reflect "this install's Dispatcharr did not emit any of that
+        type this poll" rather than masking the gap.
         """
         logger.info(
-            "[STATS_V2] buffer_event_ingest fetched=%s deduped=%s attributed=%s",
+            "[STATS_V2] channel_event_ingest fetched=%s deduped=%s "
+            "attributed_buffer=%s attributed_reconnect=%s "
+            "attributed_error=%s attributed_switch=%s",
             fetched,
             deduped,
-            attributed,
+            attributed_by_type.get("channel_buffering", 0),
+            attributed_by_type.get("channel_reconnect", 0),
+            attributed_by_type.get("channel_error", 0),
+            attributed_by_type.get("stream_switch", 0),
         )
 
     def _record_session_telemetry_metrics(
@@ -2036,7 +2135,7 @@ class BandwidthTracker:
         channel_snapshot: list[dict],
         observed_at_ms: int,
         provider_by_channel: Optional[dict[str, ProviderResolution]] = None,
-        buffer_events_by_channel: Optional[dict[str, int]] = None,
+        channel_events_by_channel: Optional[dict[str, dict[str, int]]] = None,
         *,
         dispatcharr_user_map: Optional[dict[str, str]] = None,
         exclude_user_tokens: Optional[frozenset[str]] = None,
@@ -2081,15 +2180,23 @@ class BandwidthTracker:
         * ``bytes_delta`` — per-channel byte delta divided equally across
           active clients (integer floor; remainder dropped). Acceptable for
           observation-only; refined when consumers exist.
-        * ``buffer_event_count`` — deduplicated count of buffering events
-          surfaced for this channel during this poll (bd-skqln.15). Buffer
-          events are channel-level (a stall on the upstream pipeline
-          affects every viewer), so the count attributes to EXACTLY ONE
-          row per ``(channel_uuid, observed_at)`` bucket — the first row
+        * ``buffer_event_count`` / ``reconnect_event_count`` /
+          ``error_event_count`` / ``switch_event_count`` — deduplicated
+          per-event-type counts surfaced for this channel during this
+          poll (bd-ov5vb, broadens bd-skqln.15). Channel-health events
+          are channel-level (a stall, reconnect, or stream-switch on
+          the upstream pipeline affects every viewer), so each
+          per-type count attributes to EXACTLY ONE row per
+          ``(channel_uuid, observed_at)`` bucket — the first row
           emitted for that channel, with sibling rows writing 0. This
-          keeps ``SUM(buffer_event_count) GROUP BY provider, time_bucket``
-          well-defined for skqln.16 query 1 ("buffering events by
-          provider") without per-client double-counting.
+          keeps ``SUM(<column>) GROUP BY provider, time_bucket``
+          well-defined for the Providers panel rollups without
+          per-client double-counting. ``buffer_event_count`` is
+          preserved for back-compat with the pre-0012 read paths;
+          ``channel_buffering`` events are rare on real installs (only
+          fires on ffmpeg-speed threshold trips) so this column
+          typically reads zero — the other three carry the
+          operationally-meaningful signal.
         * ``poll_interval_ms`` — ``self.poll_interval`` (seconds) × 1000.
 
         The write is wrapped in a defensive try/except so any failure here
@@ -2123,8 +2230,8 @@ class BandwidthTracker:
         """
         if provider_by_channel is None:
             provider_by_channel = {}
-        if buffer_events_by_channel is None:
-            buffer_events_by_channel = {}
+        if channel_events_by_channel is None:
+            channel_events_by_channel = {}
         if dispatcharr_user_map is None:
             dispatcharr_user_map = {}
         if exclude_user_tokens is None:
@@ -2147,16 +2254,20 @@ class BandwidthTracker:
             poll_interval_ms = max(int(self.poll_interval * 1000), 0)
             session = get_session()
             try:
-                # Track which channels have already received their buffer-
-                # event-count attribution this poll. Channel-level counts
-                # land on the FIRST emitted row per channel (sorted by
-                # client_ip for determinism); subsequent rows for the same
-                # channel write 0 so SUM aggregates do not double-count.
-                buffer_attributed: set[str] = set()
-                # Channels with buffer events but no eligible row (no active
-                # client connection recorded) — count is dropped and logged
-                # below.
-                channels_with_buffer = set(buffer_events_by_channel.keys())
+                # Track which channels have already received their per-type
+                # channel-event-count attribution this poll. Channel-level
+                # counts land on the FIRST emitted row per channel (sorted
+                # by client_ip for determinism); subsequent rows for the
+                # same channel write 0 across every per-type column so SUM
+                # aggregates do not double-count. (bd-ov5vb: single flag
+                # covers all four per-type columns because the attribution
+                # rule is the same — first row wins for buffer +
+                # reconnect + error + switch alike.)
+                channel_events_attributed: set[str] = set()
+                # Channels with any per-type events but no eligible row
+                # (no active client connection recorded) — counts are
+                # dropped and logged below.
+                channels_with_events = set(channel_events_by_channel.keys())
                 for entry in channel_snapshot:
                     channel_uuid = entry["channel_uuid"]
                     client_ips = entry["client_ips"]
@@ -2259,16 +2370,31 @@ class BandwidthTracker:
                                 )
                                 continue
 
-                        # Attribute the channel's buffer-event count to the
-                        # FIRST eligible row only (bd-skqln.15). Sibling
-                        # rows write 0. (bd-uqbob: excluded rows above do
-                        # NOT consume the attribution slot — buffer events
-                        # land on the first row that survives the filter.)
-                        if channel_uuid not in buffer_attributed:
-                            row_buffer_count = buffer_events_by_channel.get(channel_uuid, 0)
-                            buffer_attributed.add(channel_uuid)
+                        # Attribute the channel's per-type event counts
+                        # to the FIRST eligible row only (bd-ov5vb,
+                        # broadens bd-skqln.15). Sibling rows write 0
+                        # across every per-type column. (bd-uqbob:
+                        # excluded rows above do NOT consume the
+                        # attribution slot — counts land on the first
+                        # row that survives the filter.) The inner
+                        # ``per_type`` dict carries only the event types
+                        # that fired for this channel this poll; the
+                        # ``.get(<type>, 0)`` calls honestly write 0 for
+                        # absent types.
+                        if channel_uuid not in channel_events_attributed:
+                            per_type = channel_events_by_channel.get(
+                                channel_uuid, {}
+                            )
+                            row_buffer_count = per_type.get("channel_buffering", 0)
+                            row_reconnect_count = per_type.get("channel_reconnect", 0)
+                            row_error_count = per_type.get("channel_error", 0)
+                            row_switch_count = per_type.get("stream_switch", 0)
+                            channel_events_attributed.add(channel_uuid)
                         else:
                             row_buffer_count = 0
+                            row_reconnect_count = 0
+                            row_error_count = 0
+                            row_switch_count = 0
                         session.add(
                             SessionTelemetry(
                                 session_id=f"conn-{conn_id}",
@@ -2287,6 +2413,15 @@ class BandwidthTracker:
                                 channel_id=channel_uuid,
                                 bytes_delta=per_client_bytes,
                                 buffer_event_count=row_buffer_count,
+                                # bd-ov5vb (migration 0013): per-type
+                                # counters paired with buffer_event_count.
+                                # First-row-wins attribution per channel
+                                # — sibling rows for the same channel
+                                # poll write 0 across all four columns
+                                # so SUM rollups don't double-count.
+                                reconnect_event_count=row_reconnect_count,
+                                error_event_count=row_error_count,
+                                switch_event_count=row_switch_count,
                                 poll_interval_ms=poll_interval_ms,
                                 # bd-kh23e: capture stream identity so the
                                 # read APIs can surface "what's playing"
@@ -2300,16 +2435,23 @@ class BandwidthTracker:
                         )
                         rows_written += 1
 
-                # Buffer events were surfaced for channels with no eligible
-                # row this poll (rare — between client disconnect and the
-                # channel stopping). Log per channel so skqln.12's metric
-                # can surface the gap; the count is dropped.
-                unattributed = channels_with_buffer - buffer_attributed
+                # Channel events were surfaced for channels with no
+                # eligible row this poll (rare — between client
+                # disconnect and the channel stopping). Log per channel
+                # with a per-type breakdown so SRE can attribute the
+                # drop without having to re-fetch the raw event feed.
+                unattributed = channels_with_events - channel_events_attributed
                 for channel_uuid in unattributed:
+                    per_type = channel_events_by_channel.get(channel_uuid, {})
                     logger.warning(
-                        "[STATS_V2] buffer_event_dropped channel=%s count=%s reason=no_active_session_row",
+                        "[STATS_V2] channel_event_dropped channel=%s "
+                        "buffer=%s reconnect=%s error=%s switch=%s "
+                        "reason=no_active_session_row",
                         channel_uuid,
-                        buffer_events_by_channel.get(channel_uuid, 0),
+                        per_type.get("channel_buffering", 0),
+                        per_type.get("channel_reconnect", 0),
+                        per_type.get("channel_error", 0),
+                        per_type.get("stream_switch", 0),
                     )
 
                 if rows_written:

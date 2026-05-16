@@ -100,14 +100,40 @@ const nonAdminUser: User = {
   is_admin: false, is_active: true, auth_provider: 'local', external_id: null,
 };
 
+// bd-ov5vb (paired with bd-1x5v0): each row now carries four per-type
+// counters (buffer / reconnect / error / switch) plus a pre-summed
+// ``total_event_count``. The chart renders ``total_event_count``; the
+// data-table fallback renders the per-type breakdown. Mock values are
+// chosen to make the per-type breakdown distinct enough to assert
+// individually and to keep the totals matching obvious arithmetic.
 const mockBufferingResponse: ProviderBufferingResponse = {
   data: [
-    { provider_id: 1, time_bucket: '2026-05-12T00:00:00Z', buffer_event_count: 5 },
-    { provider_id: 1, time_bucket: '2026-05-13T00:00:00Z', buffer_event_count: 7 },
-    { provider_id: 2, time_bucket: '2026-05-12T00:00:00Z', buffer_event_count: 2 },
-    { provider_id: 2, time_bucket: '2026-05-13T00:00:00Z', buffer_event_count: 3 },
+    {
+      provider_id: 1, time_bucket: '2026-05-12T00:00:00Z',
+      buffer_event_count: 5, reconnect_event_count: 0,
+      error_event_count: 0, switch_event_count: 0, total_event_count: 5,
+    },
+    {
+      provider_id: 1, time_bucket: '2026-05-13T00:00:00Z',
+      buffer_event_count: 0, reconnect_event_count: 7,
+      error_event_count: 0, switch_event_count: 0, total_event_count: 7,
+    },
+    {
+      provider_id: 2, time_bucket: '2026-05-12T00:00:00Z',
+      buffer_event_count: 0, reconnect_event_count: 1,
+      error_event_count: 1, switch_event_count: 0, total_event_count: 2,
+    },
+    {
+      provider_id: 2, time_bucket: '2026-05-13T00:00:00Z',
+      buffer_event_count: 0, reconnect_event_count: 0,
+      error_event_count: 1, switch_event_count: 2, total_event_count: 3,
+    },
     // NULL provider_id — "Unknown" bucket
-    { provider_id: null, time_bucket: '2026-05-12T00:00:00Z', buffer_event_count: 1 },
+    {
+      provider_id: null, time_bucket: '2026-05-12T00:00:00Z',
+      buffer_event_count: 1, reconnect_event_count: 0,
+      error_event_count: 0, switch_event_count: 0, total_event_count: 1,
+    },
   ],
   meta: { from_iso: null, to_iso: null, total_rows: 5, window: '7d', bucket: 'day' },
   pagination: null,
@@ -214,8 +240,12 @@ describe('ProvidersPanel — admin posture', () => {
   it('renders all four chart titles', async () => {
     render(<ProvidersPanel />);
     await waitFor(() => {
-      // Buffering, Watch time, Channels heatmap, Bitrate
-      expect(screen.getByRole('heading', { name: /buffering events by provider/i })).toBeInTheDocument();
+      // Channel events, Watch time, Channels heatmap, Bitrate.
+      // bd-1x5v0: chart 1 was historically labeled "Buffering events by
+      // provider"; the broadened ingest (bd-ov5vb) renamed it to
+      // "Channel events by provider" because the chart now sums
+      // reconnect + error + switch + buffer per (provider, time_bucket).
+      expect(screen.getByRole('heading', { name: /channel events by provider/i })).toBeInTheDocument();
       expect(screen.getByRole('heading', { name: /time spent per provider/i })).toBeInTheDocument();
       expect(screen.getByRole('heading', { name: /channels by provider/i })).toBeInTheDocument();
       expect(screen.getByRole('heading', { name: /bitrate by provider/i })).toBeInTheDocument();
@@ -323,10 +353,11 @@ describe('ProvidersPanel — admin posture', () => {
 });
 
 describe('ProvidersPanel — data tables (chart fallbacks)', () => {
-  it('renders a data-table fallback table for the buffering chart', async () => {
+  it('renders a data-table fallback table for the channel events chart', async () => {
     render(<ProvidersPanel />);
     await waitFor(() => {
-      expect(screen.getByRole('table', { name: /buffering events.*data table/i })).toBeInTheDocument();
+      // bd-1x5v0: caption renamed alongside the chart heading.
+      expect(screen.getByRole('table', { name: /channel events.*data table/i })).toBeInTheDocument();
     });
   });
 
@@ -408,6 +439,81 @@ describe('ProvidersPanel — data tables (chart fallbacks)', () => {
   });
 });
 
+describe('ProvidersPanel — channel-event breakdown (bd-ov5vb + bd-1x5v0)', () => {
+  // The Providers panel's channel-events data table renders five
+  // numeric columns: Reconnect | Error | Switch | Buffer | Total.
+  // The chart line value is ``total_event_count``; the per-type
+  // breakdown surfaces here for operators who need to know which
+  // health signal is firing.
+
+  it('channel-events data-table renders per-type breakdown column headers', async () => {
+    render(<ProvidersPanel />);
+    await waitFor(() => {
+      const table = screen.getByRole('table', { name: /channel events.*data table/i });
+      // All five column headers must be present and individually
+      // labeled so screen-reader users can navigate the breakdown.
+      expect(within(table).getByRole('columnheader', { name: /^reconnect$/i })).toBeInTheDocument();
+      expect(within(table).getByRole('columnheader', { name: /^error$/i })).toBeInTheDocument();
+      expect(within(table).getByRole('columnheader', { name: /^switch$/i })).toBeInTheDocument();
+      expect(within(table).getByRole('columnheader', { name: /^buffer$/i })).toBeInTheDocument();
+      expect(within(table).getByRole('columnheader', { name: /^total$/i })).toBeInTheDocument();
+    });
+  });
+
+  it('channel-events data-table renders per-type counts and totals correctly', async () => {
+    render(<ProvidersPanel />);
+    await waitFor(() => {
+      const table = screen.getByRole('table', { name: /channel events.*data table/i });
+      const rows = within(table).getAllByRole('row');
+      // Header + 5 data rows (the 5 mock rows above).
+      expect(rows).toHaveLength(6);
+      // Build a (time_bucket, provider) → row map by reading the
+      // first two td cells of each body row.
+      const bodyRows = rows.slice(1);
+      const cellsByRow = bodyRows.map((r) =>
+        Array.from(r.querySelectorAll('td')).map((td) => td.textContent ?? ''),
+      );
+      // Look for the provider 1, 2026-05-13 row (reconnect=7, total=7).
+      const provider1Day2 = cellsByRow.find(
+        (cells) =>
+          cells[0] === '2026-05-13T00:00:00Z' &&
+          cells[1].startsWith('TopFlix'),
+      );
+      expect(provider1Day2).toBeDefined();
+      // Column order: Time | Provider | Reconnect | Error | Switch | Buffer | Total.
+      expect(provider1Day2![2]).toBe('7'); // reconnect
+      expect(provider1Day2![3]).toBe('0'); // error
+      expect(provider1Day2![4]).toBe('0'); // switch
+      expect(provider1Day2![5]).toBe('0'); // buffer
+      expect(provider1Day2![6]).toBe('7'); // total
+      // Provider 2 on 2026-05-13: reconnect=0, error=1, switch=2, buffer=0, total=3.
+      const provider2Day2 = cellsByRow.find(
+        (cells) =>
+          cells[0] === '2026-05-13T00:00:00Z' &&
+          cells[1].startsWith('StreamHub'),
+      );
+      expect(provider2Day2).toBeDefined();
+      expect(provider2Day2![2]).toBe('0');
+      expect(provider2Day2![3]).toBe('1');
+      expect(provider2Day2![4]).toBe('2');
+      expect(provider2Day2![5]).toBe('0');
+      expect(provider2Day2![6]).toBe('3');
+    });
+  });
+
+  it('channel-events chart description names the four event types operators care about', async () => {
+    render(<ProvidersPanel />);
+    await waitFor(() => {
+      // The chart-description paragraph is the operator's first hint
+      // that the line value is NOT just buffering — it's the sum of
+      // four health signals. Pin the four event names so a future
+      // refactor that drops one surfaces here.
+      const description = screen.getByText(/reconnect.*error.*stream-switch.*buffering/i);
+      expect(description).toBeInTheDocument();
+    });
+  });
+});
+
 describe('ProvidersPanel — NULL provider ("Unknown" bucket)', () => {
   it('labels NULL provider_id as "Unknown" in the watch-time data table', async () => {
     render(<ProvidersPanel />);
@@ -418,10 +524,10 @@ describe('ProvidersPanel — NULL provider ("Unknown" bucket)', () => {
     });
   });
 
-  it('labels NULL provider_id as "Unknown" in the buffering data table', async () => {
+  it('labels NULL provider_id as "Unknown" in the channel events data table', async () => {
     render(<ProvidersPanel />);
     await waitFor(() => {
-      const bufferingTable = screen.getByRole('table', { name: /buffering events.*data table/i });
+      const bufferingTable = screen.getByRole('table', { name: /channel events.*data table/i });
       expect(within(bufferingTable).getByText(/unknown/i)).toBeInTheDocument();
     });
   });
@@ -464,7 +570,7 @@ describe('ProvidersPanel — non-admin posture', () => {
 });
 
 describe('ProvidersPanel — empty states', () => {
-  it('renders aria-live announce when buffering returns no rows', async () => {
+  it('renders aria-live announce when channel events returns no rows', async () => {
     vi.mocked(api.getProvidersBuffering).mockResolvedValue({
       data: [],
       meta: { from_iso: null, to_iso: null, total_rows: 0, window: '7d', bucket: 'hour' },
@@ -472,7 +578,8 @@ describe('ProvidersPanel — empty states', () => {
     });
     render(<ProvidersPanel />);
     await waitFor(() => {
-      const empty = screen.getByText(/no buffering data/i);
+      // bd-1x5v0: empty-state message renamed alongside the chart heading.
+      const empty = screen.getByText(/no channel-event data/i);
       expect(empty).toBeInTheDocument();
       const liveRegion = empty.closest('[aria-live]');
       expect(liveRegion?.getAttribute('aria-live')).toBe('polite');

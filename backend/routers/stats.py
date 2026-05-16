@@ -1197,7 +1197,8 @@ async def get_providers_buffering(
     window: str = "7d",
     bucket: str = "hour",
 ):
-    """Per-provider buffer-event time-series (bd-skqln.16, GH-59).
+    """Per-provider channel-event time-series (bd-ov5vb, broadens
+    bd-skqln.16 / GH-59).
 
     Query params:
 
@@ -1205,12 +1206,34 @@ async def get_providers_buffering(
     * ``bucket`` — ``hour`` or ``day``. Default ``hour``.
 
     Response row shape:
-        ``{provider_id, time_bucket, buffer_event_count}``
+        ``{provider_id, time_bucket, buffer_event_count,
+        reconnect_event_count, error_event_count, switch_event_count,
+        total_event_count}``
 
-    ``buffer_event_count`` is inherently per-poll (one column per row), so
-    no DISTINCT-collapse is needed — the value already represents the
-    per-poll observation. ``NULL`` ``provider_id`` surfaces as a row with
-    ``provider_id: null`` (operators need the attribution gap visible).
+    Pre-bd-ov5vb history: this endpoint historically returned only
+    ``buffer_event_count``. Live verification on the PO's instance
+    (2026-05-15) found that ``channel_buffering`` events are rare on
+    real installs — the operationally-meaningful health signals are
+    ``channel_reconnect`` / ``channel_error`` / ``stream_switch``,
+    which the ingest layer
+    (``BandwidthTracker._collect_channel_events``) now writes to
+    dedicated columns on ``session_telemetry`` (migration 0013). This
+    endpoint surfaces all four counters alongside their pre-summed
+    total so the Providers panel can render a "Channel events" view
+    without a second round-trip. The ``buffer_event_count`` field is
+    preserved for back-compat with any consumer that wired against
+    the pre-bd-ov5vb shape (it now typically reads zero on real
+    installs — the truthful posture for installs whose Dispatcharr
+    does not emit ``channel_buffering``).
+
+    Each per-type counter is inherently per-poll (one column per
+    row), so no DISTINCT-collapse is needed. ``NULL`` ``provider_id``
+    surfaces as a row with ``provider_id: null`` (operators need the
+    attribution gap visible). The URL path stays ``/buffering`` for
+    back-compat with any external dashboard or alerting integration
+    that has the path hard-coded; renaming the path would break
+    those consumers without a benefit beyond aesthetics. The bead
+    documentation surfaces the semantic broadening.
     """
     _check_admin(caller)
     if bucket not in _VALID_BUCKET:
@@ -1228,21 +1251,38 @@ async def get_providers_buffering(
             db.query(
                 SessionTelemetry.provider_id.label("provider_id"),
                 bucket_col,
-                func.sum(SessionTelemetry.buffer_event_count).label("count"),
+                func.sum(SessionTelemetry.buffer_event_count).label("buffer"),
+                func.sum(SessionTelemetry.reconnect_event_count).label("reconnect"),
+                func.sum(SessionTelemetry.error_event_count).label("error"),
+                func.sum(SessionTelemetry.switch_event_count).label("switch"),
             )
             .filter(SessionTelemetry.observed_at >= from_ms)
             .filter(SessionTelemetry.observed_at < to_ms)
             .group_by(SessionTelemetry.provider_id, bucket_col)
             .all()
         )
-        data = [
-            {
+        data = []
+        for r in rows:
+            buffer_n = int(r.buffer or 0)
+            reconnect_n = int(r.reconnect or 0)
+            error_n = int(r.error or 0)
+            switch_n = int(r.switch or 0)
+            data.append({
                 "provider_id": r.provider_id,
                 "time_bucket": r.time_bucket,
-                "buffer_event_count": int(r.count or 0),
-            }
-            for r in rows
-        ]
+                "buffer_event_count": buffer_n,
+                "reconnect_event_count": reconnect_n,
+                "error_event_count": error_n,
+                "switch_event_count": switch_n,
+                # Pre-summed so the frontend's "Channel events" column
+                # can render a single primary number without summing
+                # four fields in the render path. The breakdown
+                # tooltip (bd-1x5v0 option a) consumes the per-type
+                # counters directly.
+                "total_event_count": (
+                    buffer_n + reconnect_n + error_n + switch_n
+                ),
+            })
         # Stable ordering: provider_id NULLS LAST, then bucket ASC.
         data.sort(
             key=lambda d: (
