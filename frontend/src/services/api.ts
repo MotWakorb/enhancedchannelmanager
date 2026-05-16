@@ -919,6 +919,9 @@ export interface SettingsResponse {
   // Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m).
   // Default ON; operator can flip via /api/settings to disable reporting.
   telemetry_client_errors_enabled: boolean;
+  // Dedup settings (BD-B / BD-K). Server-side clamped to [CONFIDENCE_FLOOR=0.60, 1.00].
+  dedup_threshold: number;  // 0.60-1.00 float; UI shows as integer percent 60-100
+  dedup_m3u_toast_suppressed: boolean;  // When true, suppress the toast after M3U refresh queues dedup items
 }
 
 // Stream preview mode for browser playback
@@ -1014,6 +1017,9 @@ export async function saveSettings(settings: {
   auto_creation_exclude_auto_sync_groups?: boolean;
   // Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m)
   telemetry_client_errors_enabled?: boolean;
+  // Dedup settings (BD-B / BD-K, ADR-008 §D2). Float 0.60-1.00; server clamps to floor.
+  dedup_threshold?: number;
+  dedup_m3u_toast_suppressed?: boolean;
 }): Promise<{ status: string; configured: boolean; server_changed: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',

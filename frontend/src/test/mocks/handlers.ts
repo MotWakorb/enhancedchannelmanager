@@ -408,6 +408,8 @@ export const mockDataStore: MockDataStore = {
     hide_m3u_urls: false,
     gracenote_conflict_mode: 'ask',
     epg_auto_match_threshold: 80,
+    dedup_threshold: 0.80,
+    dedup_m3u_toast_suppressed: false,
     include_channel_number_in_name: false,
     channel_number_separator: '-',
     remove_country_prefix: false,
