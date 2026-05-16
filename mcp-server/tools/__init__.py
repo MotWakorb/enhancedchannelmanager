@@ -15,6 +15,7 @@ from . import (
     notifications,
     profiles,
     normalization,
+    dedup,
 )
 
 _MODULES = [
@@ -31,6 +32,7 @@ _MODULES = [
     notifications,
     profiles,
     normalization,
+    dedup,
 ]
 
 
