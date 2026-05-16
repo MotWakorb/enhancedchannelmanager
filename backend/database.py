@@ -588,6 +588,21 @@ def init_db() -> None:
         # Run migrations for existing tables (add new columns if missing)
         _run_migrations(_engine)
 
+        # bd-qxi02 (SRE recommendation from bd-p5b8i spike): publish the
+        # task_schedules.next_run_at-IS-NULL count onto the Prometheus
+        # gauge before TaskRegistry.sync_from_database runs (which
+        # re-emits the same gauge after its own bookkeeping). Establishes
+        # the boot-time value so SRE sees the pre-heal count in the
+        # /metrics scrape captured right after container start —
+        # important for triaging "did Bundle H's heal actually fire?"
+        # without having to correlate a scrape against the registry
+        # sync log line.
+        try:
+            from observability import update_task_schedule_null_count
+            update_task_schedule_null_count()
+        except Exception as obs_err:  # pragma: no cover — best-effort
+            logger.debug("[DATABASE] task_schedule null-count publish failed: %s", obs_err)
+
         # Create demo normalization rule groups if none exist
         _create_demo_normalization_rules()
 

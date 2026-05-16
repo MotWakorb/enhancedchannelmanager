@@ -439,6 +439,50 @@ ecm:database_size_bytes:weekly_delta = ecm_database_size_bytes - ecm_database_si
 
 ---
 
+## Capacity planning: Task scheduler health (bd-qxi02)
+
+**Class:** Capacity-planning / operational-health, not a numbered SLO. Same posture as `database_capacity` above and the `ecm_stats_v2_storage` group — we expose the signal and ship the alert rule, but the threshold is a leading indicator for operator action rather than a user-facing reliability commitment per se. Surfaces a class of regression (silent scheduler stall) that bd-p5b8i demonstrated existing observability did not catch — the scheduling subsystem was broken for 39+ days on the PO's install (4 months across all operators) before manual investigation found it.
+
+**SLI:** Two gauges emitted by the task subsystem:
+
+- `ecm_task_schedule_last_success_timestamp{task_id}` — Unix-epoch seconds of the most recent successful execution per task. Stamped by `task_engine._execute_task` on every successful TaskResult. Per-task so SRE can distinguish a stuck `stats_v2_rollup` from a stuck `cleanup` from a stuck `stream_probe` — each has a different cadence and a different acceptable staleness window.
+- `ecm_task_schedule_next_run_null_count` — Count of `task_schedules` rows where `next_run_at IS NULL AND enabled=1 AND schedule_type != 'manual'`. Any non-zero value is the canonical "scheduler subsystem is broken" signal (the exact bd-p5b8i symptom). Emitted at startup post-`_run_migrations` and on every `TaskRegistry.sync_from_database`.
+
+**Prometheus expression (recording rule):**
+```promql
+ecm:task_schedule:hours_since_success = (time() - ecm_task_schedule_last_success_timestamp) / 3600
+```
+
+**Operational thresholds (alert rules in `prometheus_rules.yaml` group `ecm_task_scheduler`):**
+
+| Alert | Trigger | Window | Severity |
+|-|-|-|-|
+| `ECMTaskSchedulerNextRunNull` | `next_run_at IS NULL` count > 0 | 5m | page |
+| `ECMTaskScheduleStaleStatsRollup` | `stats_v2_rollup` last success > 25h ago | 1h | warning |
+| `ECMTaskScheduleStaleCleanup` | `cleanup` last success > 8d ago | 24h | warning |
+| `ECMTaskScheduleStaleM3UMonitor` | `m3u_change_monitor` last success > 30m ago | 1h | warning |
+| `ECMTaskScheduleStaleStreamProbe` | `stream_probe` last success > 48h ago (guarded — see below) | 6h | warning |
+
+**Why these thresholds (initial):** Each per-task staleness budget is sized against the actual cadence in code, not aspirational defaults — `stats_v2_rollup` nightly → 25h budget (≈ 1.04× the 24h cadence); `cleanup` weekly → 8d budget (≈ 1.14× the 7d cadence); `m3u_change_monitor` 5-min cadence → 30-min budget = 6 missed runs (room for transient slowness without paging on every blip; previously documented as "6h interval → 12h budget," which was incorrect and would have hidden ~144 missed runs); `stream_probe` defaults to MANUAL in code, so the 48h budget only applies once an operator has scheduled it on a recurring cadence. `ECMTaskSchedulerNextRunNull` is severity `page` because it indicates a *structural* break (the scheduler never picks the row up at all) rather than a delayed run.
+
+**Fresh-install / operator-disabled-task guard:** Every per-task staleness alert in `prometheus_rules.yaml` includes `AND ecm_task_schedule_last_success_timestamp{task_id="..."} > 0` so the alert only fires after the task has succeeded at least once on this install. This prevents false pages on fresh installs (where the gauge defaults to 0 because nothing has ever run) and on operator-disabled or MANUAL-mode tasks (where the gauge legitimately stays at 0 forever). Without this guard, `ECMTaskScheduleStaleStreamProbe` would page every fresh-install operator 48h after first boot because `stream_probe` defaults to MANUAL.
+
+**Why this is not a numbered SLO:** Task cadence is operator-configurable (Settings → Tasks lets the operator change every interval and disable any task). ECM cannot make a portable commitment about "the cleanup task ran in the last 8 days" when an operator's documented choice may be MANUAL, monthly, or a non-default cron. The signal is exposed so operators can build their own commitments against their configured schedule.
+
+**Deploy order — IMPORTANT:** `ECMTaskSchedulerNextRunNull` is shipped **commented out** in `prometheus_rules.yaml` (search the file for the `UNCOMMENT AFTER v0.17.0 SHIPS` marker). Pre-heal, every existing operator's gauge is > 0 (the disease) and the alert would page immediately on every install — operators who copy the rules file into their stack today would page themselves. After v0.17.0 has shipped and operators have had a chance to run Bundle H's heal at startup (~30 days post-release), a follow-up PR will uncomment the alert block.
+
+**What breaks these thresholds:**
+
+- An operator legitimately disables a task or sets it to MANUAL → `last_success_timestamp` ages forever. The per-task staleness alerts fire as warnings, not pages. Document operator-disabled tasks in the alert suppression / inhibition layer (deployment-environment-specific).
+- Bundle H's heal hasn't landed → `next_run_at IS NULL` count is non-zero on every existing install. Do not enable `ECMTaskSchedulerNextRunNull` until the heal is deployed.
+- A task is renamed in the registry → its `task_id` label changes. The old series ages out at the Prometheus retention horizon; the new series starts fresh. A burst of staleness alerts in the changeover window is expected and self-resolves.
+
+**Cardinality discipline:** `task_id` is bounded — values are code constants drawn from `task_registry.TaskScheduler.task_id` class attributes (~15 distinct tasks at this time). The label space cannot grow at runtime (no user-derived input). `ecm_task_schedule_next_run_null_count` is label-free — there is exactly one count process-wide.
+
+**Runbook:** [`docs/runbooks/task_scheduler_stalled.md`](../runbooks/task_scheduler_stalled.md) — covers the NULL `next_run_at` diagnostic query, the bd-p5b8i / Bundle H heal recovery path, and per-task triage for the staleness alerts.
+
+---
+
 ## SLO-4: Readiness Sub-check Latency (informational)
 
 **SLI:** 95th percentile duration of readiness sub-checks, per `check` label (`database`, `dispatcharr`, `ffprobe`).
