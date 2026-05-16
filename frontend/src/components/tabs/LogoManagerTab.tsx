@@ -38,19 +38,14 @@ export function LogoManagerTab() {
   // Track logos with failed image loads
   const [failedImages, setFailedImages] = useState<Set<number>>(new Set());
 
-  // Load all logos (Dispatcharr caps at 1000/page and ignores server-side search)
+  // Load all logos (Dispatcharr caps at 1000/page and ignores server-side search).
+  // Pagination + diagnostics live in api.getAllLogos (bd-nh50y) — see
+  // services/api.ts for the log-line contract this path emits.
   const loadLogos = useCallback(async () => {
     setLoading(true);
     setFailedImages(new Set());
     try {
-      const allLogos: Logo[] = [];
-      let p = 1;
-      while (true) {
-        const result = await api.getLogos({ page: p, pageSize: 1000 });
-        allLogos.push(...result.results);
-        if (!result.next) break;
-        p++;
-      }
+      const allLogos = await api.getAllLogos(1000);
       setLogos(allLogos);
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to load logos', 'Logos');

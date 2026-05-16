@@ -373,7 +373,14 @@ async def get_logos(
     page_size: int = 100,
     search: Optional[str] = None,
 ):
-    """List logos with pagination and search."""
+    """List logos with pagination and search.
+
+    Emits a single-line INFO diagnostic per request (bd-nh50y) so operators
+    can grep one log line per request and see page/page_size/search/result
+    count/elapsed/next-flag without enabling DEBUG. Per-row logging is
+    intentionally avoided — at page_size=500 this is the channel-edit-modal
+    fetch path and per-row would flood the log.
+    """
     logger.debug("[CHANNELS-LOGO] GET /channels/logos - page=%s search=%s", page, search)
     client = get_client()
     try:
@@ -381,6 +388,26 @@ async def get_logos(
         result = await client.get_logos(page=page, page_size=page_size, search=search)
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[CHANNELS-LOGO] Fetched logos in %.1fms", elapsed_ms)
+        # Single-line INFO diagnostic for the operator-grepable trace (bd-nh50y).
+        # Pulls result-count from `results` (DRF paginated shape) and `next` from
+        # the paginated envelope. Both can be missing in unusual responses, so
+        # default defensively rather than KeyError on a malformed payload.
+        results_count = (
+            len(result.get("results", []))
+            if isinstance(result, dict)
+            else 0
+        )
+        has_next = bool(result.get("next")) if isinstance(result, dict) else False
+        logger.info(
+            "[CHANNELS-LOGO] GET /logos page=%s page_size=%s search=%s "
+            "returned %s logos in %.1fms next=%s",
+            page,
+            page_size,
+            search,
+            results_count,
+            elapsed_ms,
+            "true" if has_next else "false",
+        )
         return result
     except Exception as e:
         logger.exception("[CHANNELS-LOGO] Failed to fetch logos: %s", e)
