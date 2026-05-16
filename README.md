@@ -169,9 +169,19 @@ Things you can ask Claude to do:
 
 ### Setup
 
-1. **Generate an API key** in ECM Settings > MCP Integration
+> **`settings.json` field reference — two separate keys**
+>
+> | Field in `settings.json` | What it is for |
+> |---|---|
+> | `url` | Dispatcharr base URL |
+> | `api_key` | **Dispatcharr REST API token** — ECM uses this to talk to Dispatcharr. Never replace it with an MCP key. |
+> | `mcp_api_key` | **ECM MCP key** — the `ecm-mcp` sidecar uses this to authenticate calls to ECM. This is what the Generate / Regenerate button in Settings > MCP Integration writes. |
+>
+> When rotating an MCP key, the new key goes in `mcp_api_key`. Do **not** touch `api_key` — overwriting it with an MCP key breaks every channel and stream operation (ECM returns 401 to Dispatcharr). If you see `api_key_configured: false` from the `/health` endpoint after a rotation, the diagnostic's `status` field will indicate whether `mcp_api_key` is missing from the file (`field_missing`), blank (`field_empty`), or the file itself is unreadable (`file_not_found` / `invalid_json`) — use `GET http://YOUR_ECM_HOST:6100/api/health` to check.
+
+1. **Generate an API key** in ECM Settings > MCP Integration (this writes to `mcp_api_key` in `settings.json`)
 2. **Start the MCP container** — add the `ecm-mcp` service to your compose file (see [With MCP Server](#with-mcp-server-claude-ai-integration)) and start it on port 6101
-3. **Connect Claude** using one of the methods below (replace `YOUR_ECM_HOST` and `YOUR_API_KEY`):
+3. **Connect Claude** using one of the methods below (replace `YOUR_ECM_HOST` and `YOUR_API_KEY` with the value from step 1):
 
 **Claude Desktop** — Claude Desktop talks to remote MCP servers through the `mcp-remote` bridge, so add this to your `claude_desktop_config.json`:
 ```json
@@ -189,6 +199,8 @@ Things you can ask Claude to do:
 }
 ```
 (`--allow-http` is needed because the endpoint is plain HTTP. If your Claude Desktop build supports a direct remote URL, `{ "mcpServers": { "ecm": { "url": "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_API_KEY" } } }` also works — the `mcp-remote` form is the most broadly compatible.)
+
+> **Note:** the `?api_key=` query parameter in these URLs is your `mcp_api_key` value from `settings.json` — the key generated in ECM Settings > MCP Integration. It is **not** your Dispatcharr `api_key`.
 
 **Claude Code** — create a `.mcp.json` file in any project directory where you want ECM tools available:
 ```json
@@ -211,6 +223,8 @@ To connect:
 If running ECM locally, use `localhost` as your host. If the MCP container is on the same Docker network as Claude Code, use the container name (`ecm-mcp`).
 
 **Upgrading from an earlier version:** the MCP server moved from the deprecated SSE transport (`/sse` + `/messages/`) to the modern Streamable HTTP transport on a single `/mcp` endpoint. If you have an existing config pointing at `http://YOUR_ECM_HOST:6101/sse?api_key=...` (or `"type": "sse"` in a `.mcp.json`), change the path to `/mcp` (and `"type": "http"` for Claude Code). The `/sse` endpoint was removed in this version. API-key auth is unchanged.
+
+**Redeploying or rotating the MCP key:** use Settings > MCP Integration > Regenerate Key — this updates `mcp_api_key` in `settings.json`. Then update the `?api_key=` value in your Claude Desktop / Claude Code config. Do **not** edit `api_key` in `settings.json` — that is the Dispatcharr REST token and is separate (see the field reference at the top of this section).
 
 ### Available Tools (124)
 
