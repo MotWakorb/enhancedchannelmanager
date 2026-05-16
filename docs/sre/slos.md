@@ -469,7 +469,7 @@ ecm:task_schedule:hours_since_success = (time() - ecm_task_schedule_last_success
 
 **Why this is not a numbered SLO:** Task cadence is operator-configurable (Settings → Tasks lets the operator change every interval and disable any task). ECM cannot make a portable commitment about "the cleanup task ran in the last 8 days" when an operator's documented choice may be MANUAL, monthly, or a non-default cron. The signal is exposed so operators can build their own commitments against their configured schedule.
 
-**Deploy order — IMPORTANT:** `ECMTaskSchedulerNextRunNull` is shipped **commented out** in `prometheus_rules.yaml` (search the file for the `UNCOMMENT AFTER v0.17.0 SHIPS` marker). Pre-heal, every existing operator's gauge is > 0 (the disease) and the alert would page immediately on every install — operators who copy the rules file into their stack today would page themselves. After v0.17.0 has shipped and operators have had a chance to run Bundle H's heal at startup (~30 days post-release), a follow-up PR will uncomment the alert block.
+**Deploy order — RESOLVED at v0.17.1 (bd-ft3hk):** `ECMTaskSchedulerNextRunNull` shipped commented-out at v0.17.0 to avoid paging existing installs before they had a chance to restart into a heal-bearing build (Bundle H, bd-1weac). v0.17.0 has now shipped, the heal is in operators' hands, and the alert is uncommented as part of BD-M (the SLO-10 + alert-rules consolidation). A fresh operator who adopts this rules file before they have restarted into v0.17.0+ will page on their first scrape; the runbook covers the heal path and one container restart clears the condition.
 
 **What breaks these thresholds:**
 
