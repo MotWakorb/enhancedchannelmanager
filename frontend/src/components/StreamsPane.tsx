@@ -116,6 +116,12 @@ interface StreamsPaneProps {
   onGroupExpand?: (groupName: string) => void;
   // Number of consecutive failures before deprioritizing a stream
   strikeThreshold?: number;
+  // Stream IDs currently rendering the dedup cancel-pulse highlight
+  // (bd-u6ftw / BD-H). Each id in this set gets the `.is-dedup-returning`
+  // class for the brief outline pulse after the operator cancels the
+  // dedup modal. Respects prefers-reduced-motion at the source (the App-
+  // level hook never adds the id when the user has reduced motion).
+  dedupReturningStreamIds?: Set<number>;
 }
 
 export function StreamsPane({
@@ -157,6 +163,7 @@ export function StreamsPane({
   mappedStreamIds,
   onGroupExpand,
   defaultNormalizeOnCreate = false,
+  dedupReturningStreamIds,
 }: StreamsPaneProps) {
   // Expand/collapse groups with useExpandCollapse hook
   const {
@@ -1799,7 +1806,8 @@ export function StreamsPane({
                       {group.streams.map((stream) => (
                         <div
                           key={stream.id}
-                          className={`stream-item ${isSelected(stream.id) && isEditMode ? 'selected' : ''} ${isEditMode ? 'edit-mode' : ''}`}
+                          data-stream-id={stream.id}
+                          className={`stream-item ${isSelected(stream.id) && isEditMode ? 'selected' : ''} ${isEditMode ? 'edit-mode' : ''} ${dedupReturningStreamIds?.has(stream.id) ? 'is-dedup-returning' : ''}`}
                           onClick={(e) => {
                             // In edit mode, clicking the row does nothing (use checkbox to select)
                             // Outside edit mode, clicking the row does nothing either

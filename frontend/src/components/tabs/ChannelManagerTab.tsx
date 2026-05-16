@@ -132,6 +132,10 @@ export interface ChannelManagerTabProps {
   // Refresh streams (bypasses cache)
   onRefreshStreams?: () => void;
 
+  // Stream IDs currently rendering the dedup cancel-pulse highlight
+  // (bd-u6ftw / BD-H). Empty Set when no animation is active.
+  dedupReturningStreamIds?: Set<number>;
+
   // Bulk Create
   channelDefaults?: ChannelDefaults;
   // Stream group drop (for opening bulk create modal) - supports multiple groups
@@ -316,6 +320,9 @@ export function ChannelManagerTab({
   // Refresh streams
   onRefreshStreams,
 
+  // Dedup cancel-pulse highlight
+  dedupReturningStreamIds,
+
   // Bulk Create
   channelDefaults,
   externalTriggerGroupNames,
@@ -476,6 +483,7 @@ export function ChannelManagerTab({
           mappedStreamIds={mappedStreamIds}
           onGroupExpand={onStreamGroupExpand}
           defaultNormalizeOnCreate={defaultNormalizeOnCreate}
+          dedupReturningStreamIds={dedupReturningStreamIds}
         />
       }
     />
