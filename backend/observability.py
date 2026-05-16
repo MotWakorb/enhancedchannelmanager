@@ -731,6 +731,38 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             "next scrape without waiting for a container restart.",
             registry=registry,
         ),
+        # ----------------------------------------------------------------
+        # Dedup candidate lookup latency (ADR-008 §D1 + BD-M locked contract).
+        #
+        # ``dedup_candidate_lookup_duration_seconds`` is the BD-M SLO-10
+        # latency SLI for the interactive stream deduplication feature
+        # (bd-1v4ht). Emitted by ``GET /api/channel-merges/candidates``
+        # on every request, wrapping the ``find_candidate`` matcher call
+        # (the latency bottleneck per ADR-008 §D9).
+        #
+        # Metric name is LOCKED CONTRACT per BD-M — do not rename without
+        # updating BD-M's Prometheus alert rules (bd-ft3hk) in lockstep.
+        # Buckets align with the drag-drop p95 < 200ms budget from the
+        # epic body — the sub-100ms buckets cover the happy path (warm
+        # Dispatcharr + small candidate set), the 500ms-2s tail covers
+        # slow/cold Dispatcharr responses, and the 5s/10s buckets capture
+        # the pathological case for SRE alerting.
+        #
+        # No labels — the endpoint has no label-safe bounded dimension
+        # (group_id is user-supplied and unbounded as a label). Per-group
+        # latency breakdown belongs in logs (trace_id correlation), not in
+        # metric label space (SRE cardinality posture).
+        # ----------------------------------------------------------------
+        "dedup_candidate_lookup_duration_seconds": Histogram(
+            "ecm_dedup_candidate_lookup_duration_seconds",
+            "Duration of the find_candidate matcher call inside "
+            "GET /api/channel-merges/candidates, in seconds. "
+            "SLO-10 latency SLI for the interactive dedup feature "
+            "(ADR-008 §D1, bd-ft3hk BD-M locked contract). "
+            "No labels — group_id is unbounded cardinality.",
+            buckets=_HTTP_LATENCY_BUCKETS,
+            registry=registry,
+        ),
     }
 
 

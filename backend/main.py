@@ -101,6 +101,7 @@ tags_metadata = [
     {"name": "Backup", "description": "Backup and restore ECM configuration"},
     {"name": "Lookup Tables", "description": "Named key→value tables used by the dummy EPG template engine"},
     {"name": "Observability", "description": "Telemetry endpoints — frontend runtime error reporting (ADR-006)"},
+    {"name": "Channel Merges", "description": "Interactive stream-to-channel deduplication — candidate lookup and merge queue (ADR-008, bd-1v4ht)"},
 ]
 
 app = FastAPI(
@@ -126,7 +127,7 @@ handle authentication automatically when accessed through the web UI.
 ## Rate Limiting
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
-    version="0.17.1-0009",
+    version="0.17.1-0010",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
