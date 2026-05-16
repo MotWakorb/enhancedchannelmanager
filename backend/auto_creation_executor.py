@@ -75,6 +75,14 @@ class ExecutionContext:
     # Stream IDs queued for post-pipeline probing
     probe_stream_ids: list[int] = field(default_factory=list)
 
+    # BD-F (bd-a5lb2): per-stream count of pending_merges rows
+    # enqueued by the bulk-M3U dedup hook (ADR-008 §D1). One per
+    # would-be channel creation deferred to operator review. The
+    # engine aggregates this across all streams in the run and
+    # surfaces it on the pipeline result as ``pending_merges_added``
+    # so the M3U-refresh response can drive BD-J's toast.
+    pending_merges_added: int = 0
+
     def add_result(self, result: ActionResult):
         """Add an action result and update statistics."""
         self.results.append(result)
@@ -123,7 +131,8 @@ class ActionExecutor:
 
     def __init__(self, client, existing_channels: list = None, existing_groups: list = None,
                  normalization_engine=None, settings=None, all_profile_ids: list = None,
-                 epg_data: list = None, epg_sources: list = None):
+                 epg_data: list = None, epg_sources: list = None,
+                 triggered_by: str = "manual"):
         """
         Initialize the executor.
 
@@ -136,6 +145,13 @@ class ActionExecutor:
             all_profile_ids: All channel profile IDs (for default profile assignment)
             epg_data: EPG data entries from Dispatcharr (for assign_epg resolution)
             epg_sources: EPG source dicts from Dispatcharr (for dummy EPG detection)
+            triggered_by: The engine-side ``triggered_by`` string (e.g.
+                "m3u_refresh", "scheduled", "manual"). Passed through to
+                the BD-F bulk-M3U dedup hook (``services.m3u_dedup_hook``)
+                so only the ``m3u_refresh`` path enqueues pending merges
+                per ADR-008 §D1. Defaults to "manual" so non-engine
+                callers (and existing tests that construct executors
+                directly) keep their pre-BD-F behaviour.
         """
         self.client = client
         self.existing_channels = existing_channels or []
@@ -143,6 +159,7 @@ class ActionExecutor:
         self._normalization_engine = normalization_engine
         self._settings = settings
         self._all_profile_ids = all_profile_ids or []
+        self._triggered_by = triggered_by
 
         # Build EPG data lookup: epg_source_id -> list of data entries
         self._epg_data_by_source: dict[int, list[dict]] = {}
@@ -647,6 +664,35 @@ class ActionExecutor:
             normalized_label = "true" if pre_norm_name != channel_name else "false"
         else:
             normalized_label = "skipped"
+
+        # BD-F (bd-a5lb2) — bulk-M3U dedup hook per ADR-008 §D1.
+        #
+        # The existing exact / normalized lookups above have already
+        # returned None (we are below the `if existing:` branch). If
+        # the engine was invoked from the M3U-refresh post-sync path
+        # (``triggered_by == 'm3u_refresh'``), score the incoming
+        # ``stream_ctx.stream_name`` against the same-group existing
+        # channels via BD-A's matcher. A confidence above the
+        # operator-configured threshold (clamped to the §D2 floor by
+        # the matcher itself) enqueues a ``pending_merges`` row and
+        # signals "skip the create_channel API call" — the pending
+        # row encodes the deferred operator decision for BD-J's UI
+        # (and BD-E's accept/dismiss endpoints) to resolve.
+        #
+        # The hook short-circuits in dry-run (a preview must not
+        # mutate the queue) and for triggered_by values other than
+        # ``m3u_refresh`` (scheduled / manual auto-creation runs
+        # predate the dedup epic and stay on the legacy "always
+        # create" semantics — they are not one of the four ADR-008
+        # §D1 interactive trigger surfaces).
+        dedup_skip = await self._maybe_enqueue_pending_merge(
+            stream_ctx=stream_ctx,
+            channel_name=channel_name,
+            group_id=group_id,
+            exec_ctx=exec_ctx,
+        )
+        if dedup_skip is not None:
+            return dedup_skip
 
         # Create new channel
         if exec_ctx.dry_run:
@@ -2460,6 +2506,148 @@ class ActionExecutor:
                                  name, core_lower, cand.get('id'))
                     return cand
         return None
+
+    async def _maybe_enqueue_pending_merge(
+        self,
+        *,
+        stream_ctx: StreamContext,
+        channel_name: str,
+        group_id: Optional[int],
+        exec_ctx: ExecutionContext,
+    ) -> Optional[ActionResult]:
+        """BD-F bulk-M3U dedup hook integration (ADR-008 §D1, §D5, §D9).
+
+        Wraps ``services.m3u_dedup_hook.check_and_enqueue_pending_merge``
+        with the executor-side concerns: build the same-group candidate
+        list from ``self.existing_channels``, source the operator
+        threshold from settings, manage a short-lived DB session, and
+        translate the hook's ``DedupHookResult`` into either an
+        ``ActionResult`` (when the caller should skip channel creation)
+        or ``None`` (when the caller should proceed with normal
+        channel creation).
+
+        Returns
+        -------
+        ActionResult | None
+            ``ActionResult`` with ``skipped=True`` when a pending merge
+            was enqueued (or was already present from an earlier M3U
+            refresh — §D5 partial-unique-index collision). The caller
+            MUST return this verbatim instead of creating the channel.
+            ``None`` when no candidate was found or the hook
+            short-circuited (dry-run, non-m3u_refresh triggered_by) —
+            the caller proceeds with normal channel creation.
+        """
+        from services.m3u_dedup_hook import (
+            M3U_REFRESH_TRIGGERED_BY,
+            check_and_enqueue_pending_merge,
+        )
+
+        # Cheap short-circuit before any imports / DB work: only the
+        # M3U-refresh path is in scope for BD-F. Other triggered_by
+        # values (scheduled, manual) stay on legacy "always create"
+        # semantics. The hook itself enforces this too — the early
+        # check here just avoids unnecessary settings / candidate
+        # work for the common non-M3U paths.
+        if self._triggered_by != M3U_REFRESH_TRIGGERED_BY:
+            return None
+
+        if exec_ctx.dry_run:
+            # Dry-run preview must not mutate the queue. The
+            # downstream branch handles the simulated channel.
+            return None
+
+        # Build same-group candidate list from the executor's already-
+        # loaded channel cache. The auto-creation engine fetches the
+        # full Dispatcharr channel list once per pipeline run; here we
+        # just filter by ``channel_group_id`` so the matcher scores
+        # against the in-scope set (ADR-008 contract: candidates are
+        # the existing channels in the target group). When
+        # ``group_id`` is None (ungrouped import), we pass the full
+        # list — the matcher's threshold + floor still bounds quality.
+        if group_id is not None:
+            candidates = [
+                (c["id"], c.get("name", ""))
+                for c in self.existing_channels
+                if c.get("channel_group_id") == group_id and c.get("name")
+            ]
+        else:
+            candidates = [
+                (c["id"], c.get("name", ""))
+                for c in self.existing_channels
+                if c.get("name")
+            ]
+
+        if not candidates:
+            return None
+
+        # Source the operator-configured threshold from settings. The
+        # matcher clamps to ADR-008 §D2 CONFIDENCE_FLOOR regardless,
+        # so a missing settings field falls back to the floor (silent
+        # refusal for anything below) rather than crashing.
+        from config import get_settings
+        try:
+            settings = get_settings()
+            threshold = float(getattr(settings, "dedup_threshold", 0.80))
+        except Exception:
+            logger.warning(
+                "[DEDUP] Failed to read dedup_threshold from settings; "
+                "falling back to 0.80",
+                exc_info=True,
+            )
+            threshold = 0.80
+
+        from database import get_session
+        db_session = get_session()
+        try:
+            result = check_and_enqueue_pending_merge(
+                stream_name=stream_ctx.stream_name,
+                group_id=group_id,
+                candidates=candidates,
+                threshold=threshold,
+                triggered_by=self._triggered_by,
+                dry_run=exec_ctx.dry_run,
+                db_session=db_session,
+            )
+        finally:
+            db_session.close()
+
+        if not result.enqueued:
+            return None
+
+        # Track the enqueue (fresh insert OR idempotent collision) on
+        # the execution context so the engine can aggregate
+        # ``pending_merges_added`` across all streams in the run and
+        # surface it on the pipeline result for BD-J's toast.
+        exec_ctx.pending_merges_added += 1
+
+        # A pending merge row exists for this (stream_name, candidate)
+        # pair after the hook returned — either freshly inserted by
+        # this call or already present from an earlier refresh. In
+        # both cases the caller skips the create_channel API call.
+        # Description distinguishes the two paths for trace clarity.
+        if result.candidate is not None:
+            description = (
+                f"Stream '{stream_ctx.stream_name}' enqueued as pending "
+                f"merge candidate for existing channel id="
+                f"{result.candidate.candidate_channel_id} "
+                f"(confidence={result.candidate.confidence:.2f}); "
+                f"channel creation deferred to operator review"
+            )
+        else:
+            description = (
+                f"Stream '{stream_ctx.stream_name}' already in pending "
+                f"merges queue; channel creation deferred"
+            )
+
+        return ActionResult(
+            success=True,
+            action_type="create_channel",
+            description=description,
+            entity_type="channel",
+            entity_name=channel_name,
+            skipped=True,
+            details=[description],
+        )
 
     def _find_channel_by_regex(self, pattern: str) -> Optional[dict]:
         """Find first channel matching regex pattern."""

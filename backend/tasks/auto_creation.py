@@ -280,10 +280,17 @@ async def run_auto_creation_after_refresh(
         updated = result.get("channels_updated", 0)
         matched = result.get("streams_matched", 0)
         evaluated = result.get("streams_evaluated", 0)
+        # BD-F (bd-a5lb2): per-refresh count of pending_merges rows
+        # enqueued by the bulk-M3U dedup hook (ADR-008 §D1). Surfaced
+        # in the post-refresh notification so operators see the toast
+        # signal even if BD-J's UI is not yet shipped (release-cut
+        # production gate per the BD-F PO-ratified order).
+        pending_merges = result.get("pending_merges_added", 0)
 
         logger.info(
-            "[AUTO-CREATION] Post-refresh pipeline: %s channels created, %s updated",
-            created, updated
+            "[AUTO-CREATION] Post-refresh pipeline: %s channels created, "
+            "%s updated, %s pending merges queued",
+            created, updated, pending_merges
         )
 
         # Notify: completed
@@ -292,6 +299,8 @@ async def run_auto_creation_after_refresh(
             parts.append(f"{created} created")
         if updated:
             parts.append(f"{updated} updated")
+        if pending_merges:
+            parts.append(f"{pending_merges} pending merge{'s' if pending_merges != 1 else ''} queued")
         title = f"Auto-Creation: {', '.join(parts)}" if parts else "Auto-Creation: No changes"
         ntype = "success" if parts else "info"
 
