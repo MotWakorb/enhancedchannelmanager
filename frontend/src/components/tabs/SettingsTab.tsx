@@ -747,7 +747,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       // bd-jmi1c (GH #273): prefer the canonical
       // ``dispatcharr_api_key_configured`` indicator; fall back to the
       // legacy alias so this bundle still works against an older backend.
-      setApiKeyConfigured(settings.dispatcharr_api_key_configured ?? settings.api_key_configured);
+      // Both fields are optional on the response type (bd-jmi1c P1-3 /
+      // bd-46g4t), so the trailing ``?? false`` keeps the setter's
+      // boolean contract when both are absent.
+      setApiKeyConfigured(settings.dispatcharr_api_key_configured ?? settings.api_key_configured ?? false);
       setAutoRenameChannelNumber(settings.auto_rename_channel_number);
       setIncludeChannelNumberInName(settings.include_channel_number_in_name);
       setChannelNumberSeparator(settings.channel_number_separator);

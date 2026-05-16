@@ -67,8 +67,12 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
       setApiKey(''); // Never load api_key from server
       // bd-jmi1c (GH #273): prefer the canonical field; fall back to the
       // legacy alias so this bundle still works against an older backend
-      // that has not yet been redeployed.
-      setApiKeyStored(settings.dispatcharr_api_key_configured ?? settings.api_key_configured);
+      // that has not yet been redeployed. Both fields are optional on
+      // the response type (bd-jmi1c P1-3 / bd-46g4t), so the final
+      // ``?? false`` keeps the setter's boolean contract when both are
+      // missing — a defensive case that shouldn't happen against a
+      // v0.17.x+ backend but is cheap to handle.
+      setApiKeyStored(settings.dispatcharr_api_key_configured ?? settings.api_key_configured ?? false);
       setIncludeChannelNumberInName(settings.include_channel_number_in_name);
       setChannelNumberSeparator(settings.channel_number_separator);
       setRemoveCountryPrefix(settings.remove_country_prefix);

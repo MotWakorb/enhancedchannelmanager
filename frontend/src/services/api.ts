@@ -831,8 +831,16 @@ export interface SettingsResponse {
   // bd-jmi1c (GH #273): canonical indicator for Dispatcharr REST API token.
   // Older bundles read ``api_key_configured`` — backend responds with both
   // for one release of overlap.
-  dispatcharr_api_key_configured: boolean;  // True if a Dispatcharr REST API key is stored (value never returned)
-  api_key_configured: boolean;  // DEPRECATED — alias for dispatcharr_api_key_configured
+  // Optional: older backends (pre-v0.17.1) omit this field — frontend
+  // fallbacks (`?? api_key_configured`) in SettingsModal.tsx and
+  // tabs/SettingsTab.tsx handle the undefined case. Remove the `?` (and
+  // the legacy alias below) when removing the legacy field in v0.19.0
+  // per bd-ewm4h.
+  dispatcharr_api_key_configured?: boolean;  // True if a Dispatcharr REST API key is stored (value never returned)
+  // Legacy alias retained for the back-compat window — newer backends
+  // still emit it for one release, but a future client running against
+  // a v0.19.0+ backend may not see it, so this is also optional.
+  api_key_configured?: boolean;  // DEPRECATED — alias for dispatcharr_api_key_configured (remove with bd-ewm4h)
   configured: boolean;
   auto_rename_channel_number: boolean;
   include_channel_number_in_name: boolean;
