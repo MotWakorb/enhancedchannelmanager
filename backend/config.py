@@ -4,6 +4,11 @@ from pydantic import BaseModel, field_validator
 import json
 import os
 import logging
+
+# Single source of truth for the dedup confidence floor per ADR-008 §D2.
+# Imported from BD-A's matcher so this validator (layer 2) cannot drift from
+# the matcher's clamp (layer 1).
+from services.dedup_matcher import CONFIDENCE_FLOOR
 from pathlib import Path
 
 # Set up logging
@@ -212,16 +217,18 @@ class DispatcharrSettings(BaseModel):
     @field_validator("dedup_threshold")
     @classmethod
     def clamp_dedup_threshold(cls, v: float) -> float:
-        """Clamp dedup_threshold to [0.60, 1.00] per ADR-008 §D2.
+        """Clamp dedup_threshold to [CONFIDENCE_FLOOR, 1.00] per ADR-008 §D2.
 
-        The confidence floor of 0.60 is a defense-in-depth integrity constraint
-        (Security Engineer veto-class per ADR-008 §D2). A below-floor value
-        triggers a one-time-per-process WARN so operators are informed of the
-        clamp; the upper-bound clamp (> 1.00) is silent.
+        CONFIDENCE_FLOOR (imported from services.dedup_matcher) is the
+        defense-in-depth integrity constraint (Security Engineer veto-class per
+        ADR-008 §D2). A below-floor value triggers a one-time-per-process WARN
+        so operators are informed of the clamp; the upper-bound clamp (> 1.00)
+        is silent. Negative values hit the lower-bound branch and are clamped
+        to the floor with the same WARN.
 
-        The matcher service (BD-A) ALSO clamps to the floor — this validator is
-        layer 2 of three-layer enforcement. Changing the floor value requires an
-        ADR addendum (not a runtime config change).
+        The matcher service (BD-A) ALSO clamps to CONFIDENCE_FLOOR — this
+        validator is layer 2 of three-layer enforcement. Changing the floor
+        value requires an ADR addendum (not a runtime config change).
         """
         global _dedup_threshold_floor_warned
 
@@ -230,15 +237,15 @@ class DispatcharrSettings(BaseModel):
             v = 1.00
 
         # Lower-bound clamp (one-time WARN per process)
-        if v < 0.60:
+        if v < CONFIDENCE_FLOOR:
             if not _dedup_threshold_floor_warned:
                 logger.warning(
-                    "[CONFIG] dedup_threshold=%s is below the integrity floor (0.60); "
-                    "clamping to 0.60. See ADR-008 §D2.",
-                    v,
+                    "[CONFIG] dedup_threshold=%s is below the integrity floor (%s); "
+                    "clamping to %s. See ADR-008 §D2.",
+                    v, CONFIDENCE_FLOOR, CONFIDENCE_FLOOR,
                 )
                 _dedup_threshold_floor_warned = True
-            v = 0.60
+            v = CONFIDENCE_FLOOR
 
         return v
 
