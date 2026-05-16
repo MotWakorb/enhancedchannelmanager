@@ -15,6 +15,20 @@ name: "ECM CodeQL Configuration"
 # (see PR #110, alerts 1466-1469 dismissed as false-positive). Exclusion
 # is scoped to backend/alembic/versions/** only — all other CodeQL queries
 # (including SQL injection) still run against migration files.
+#
+# Weak sensitive data hashing (py/weak-sensitive-data-hashing) on the
+# Dispatcharr HTTP client (backend/dispatcharr_client.py): the rule is
+# correctly aimed at password-storage hashing — where SHA-256/SHA-512 are
+# too fast for password verification (rainbow tables, dictionary attacks).
+# This file's `_settings_hash()` does NOT store or compare passwords; it
+# derives a process-local cache key (HMAC-SHA-256 with a `secrets.token_bytes`
+# salt) used by `get_client()` to detect when settings have changed and the
+# singleton client needs rebuilding. The hash output is never persisted,
+# never displayed, and never leaves memory. Password-hashing for ECM users
+# lives in backend/auth/ (which correctly uses bcrypt) and is not affected
+# by this exclusion. Scope is `backend/dispatcharr_client.py` only — any
+# future weak-hashing of sensitive data in other files still triggers the
+# rule. See bd-jmi1c P2-3 and the inline docstring on `_settings_hash`.
 query-filters:
   - exclude:
       id: py/log-injection
@@ -22,3 +36,7 @@ query-filters:
       id: py/unused-global-variable
       paths:
         - backend/alembic/versions/**
+  - exclude:
+      id: py/weak-sensitive-data-hashing
+      paths:
+        - backend/dispatcharr_client.py

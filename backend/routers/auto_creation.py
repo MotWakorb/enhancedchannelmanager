@@ -2138,12 +2138,22 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
 
     # -- 5. settings.json — user settings with secrets redacted -------
     from config import get_settings as get_config_settings
+    # Import the canonical credential-field set from the backup router so the
+    # two redactors can never drift (bd-jmi1c P0-1 / bd-46g4t). Prior to this
+    # the local tuple omitted both the Dispatcharr ``api_key`` (legacy, leak
+    # since v0.16.0-0004) and the new ``dispatcharr_api_key`` field.
+    from routers.backup import _SETTINGS_CREDENTIAL_FIELDS as _BACKUP_CREDS
     settings_obj = get_config_settings()
     settings_dict = settings_obj.model_dump()
-    # Redact sensitive fields
+    # Redact sensitive fields. The set is the union of the backup router's
+    # ``_SETTINGS_CREDENTIAL_FIELDS`` (password, dispatcharr_api_key, api_key,
+    # smtp_password, telegram_bot_token, mcp_api_key) plus debug-bundle-only
+    # additions (discord_webhook_url, telegram_chat_id) that aren't credential-
+    # class in the backup contract but are still PII operators wouldn't want
+    # shared in a debug bundle.
     _REDACTED = "***REDACTED***"
-    for key in ("password", "smtp_password", "discord_webhook_url",
-                 "telegram_bot_token", "telegram_chat_id", "mcp_api_key"):
+    _DEBUG_BUNDLE_EXTRA = ("discord_webhook_url", "telegram_chat_id")
+    for key in (*_BACKUP_CREDS, *_DEBUG_BUNDLE_EXTRA):
         if settings_dict.get(key):
             settings_dict[key] = _REDACTED
     # Redact Dispatcharr URL credentials (keep host/port for debugging)
