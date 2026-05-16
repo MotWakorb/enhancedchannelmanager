@@ -176,6 +176,17 @@ function PrintGuideModalInner({
     );
   }, [groupSettings, rangeFilteredGroups]);
 
+  // Label for the toggleAll button — scoped to visible (range-filtered) groups
+  // so the label matches the toggleAll behaviour. An operator who deselects an
+  // out-of-range group and narrows the range should still see "Deselect All"
+  // when every visible group is selected. (bd-9q9z0 reviewer Warn-1 fix-forward.)
+  const allVisibleSelected = useMemo(() => {
+    const visibleIds = new Set(rangeFilteredGroups.map(g => g.id));
+    return groupSettings
+      .filter(s => visibleIds.has(s.groupId))
+      .every(s => s.selected);
+  }, [groupSettings, rangeFilteredGroups]);
+
   // Clamp a value to [globalMin, globalMax] and return the clamped value plus
   // whether clamping actually occurred.
   const clamp = useCallback((val: number): { clamped: number; didClamp: boolean } => {
@@ -401,7 +412,7 @@ function PrintGuideModalInner({
 
         <div className="modal-footer">
           <button className="modal-btn modal-btn-secondary" onClick={toggleAll}>
-            {groupSettings.every(s => s.selected) ? 'Deselect All' : 'Select All'}
+            {allVisibleSelected ? 'Deselect All' : 'Select All'}
           </button>
           <button
             className="modal-btn modal-btn-primary"
