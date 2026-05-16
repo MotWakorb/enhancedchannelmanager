@@ -63,6 +63,21 @@ def test_below_floor_warn_references_adr_008(caplog):
     assert any("ADR-008" in m for m in warn_messages)
 
 
+def test_negative_value_clamps_to_floor(caplog):
+    """Negative dedup_threshold values hit the lower-bound branch and clamp to
+    CONFIDENCE_FLOOR (0.60) with the same WARN as any other below-floor value.
+    Guards against future refactor that might short-circuit negative values to 0
+    before the clamp check runs."""
+    with caplog.at_level(logging.WARNING, logger="config"):
+        s = DispatcharrSettings(dedup_threshold=-0.50)
+    assert s.dedup_threshold == pytest.approx(0.60)
+    assert any(
+        "integrity floor" in r.message
+        for r in caplog.records
+        if r.levelno == logging.WARNING
+    )
+
+
 # ---------------------------------------------------------------------------
 # Validator: at-floor (0.60) accepted, no WARN
 # ---------------------------------------------------------------------------
