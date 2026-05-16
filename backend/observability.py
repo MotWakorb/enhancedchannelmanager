@@ -633,6 +633,49 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             ["phase"],
             registry=registry,
         ),
+        # ----------------------------------------------------------------
+        # Database file size (bd-ygoqr — paired with the CleanupTask CRON
+        # default flip; together they give operators "is my DB growing?"
+        # signal AND an automatic weekly VACUUM that bounds the growth).
+        #
+        # Two gauges, no labels — the SQLite database is a single
+        # process-global file, so labeling would just inject a constant-
+        # cardinality column for no benefit. Update cost is two
+        # ``os.path.getsize`` calls per emit point (single syscall each),
+        # so the gauges are wired only at points that already do real I/O:
+        #
+        #   1. ``database._perform_maintenance`` at startup (post-VACUUM).
+        #   2. ``CleanupTask.execute`` (post-VACUUM) — the gauge reflects
+        #      the freshly-vacuumed file size, not the pre-VACUUM bloat
+        #      that the operator would otherwise see between the weekly
+        #      cron and the next container restart.
+        #
+        # The WAL file gets its own gauge because a large WAL is a
+        # distinct failure mode from a large body — usually it means
+        # checkpointing is stalled, not that the working set has grown.
+        # Splitting the gauges lets the operator (and the alert rules in
+        # ``docs/sre/prometheus_rules.yaml`` group ``ecm_database_size``)
+        # distinguish the two without recomputing a derived series.
+        #
+        # SLO entry: capacity-planning class in ``docs/sre/slos.md``.
+        # Runbook: ``docs/runbooks/database-size-warn.md``.
+        # ----------------------------------------------------------------
+        "database_size_bytes": Gauge(
+            "ecm_database_size_bytes",
+            "Size in bytes of the SQLite database file (``journal.db``). "
+            "Updated post-VACUUM at startup (database._perform_maintenance) "
+            "and after the weekly cleanup task (CleanupTask.execute). No "
+            "labels — single-file, single-tenant.",
+            registry=registry,
+        ),
+        "database_wal_size_bytes": Gauge(
+            "ecm_database_wal_size_bytes",
+            "Size in bytes of the SQLite WAL file (``journal.db-wal``). A "
+            "large WAL relative to the body usually means checkpointing "
+            "is stalled, not that the working set has grown — see the "
+            "``database-size-warn`` runbook for the WAL-vs-body triage.",
+            registry=registry,
+        ),
     }
 
 
@@ -690,6 +733,53 @@ def get_metric(name: str) -> Any:
     if not _METRICS:
         install_metrics()
     return _METRICS[name]
+
+
+def update_database_size_metrics(db_path: Optional[str] = None) -> None:
+    """Sample the SQLite DB and WAL file sizes onto the gauges (bd-ygoqr).
+
+    Called from the two points that already do real DB I/O:
+
+    * ``database._perform_maintenance`` — at process startup, post-VACUUM.
+    * ``tasks.cleanup.CleanupTask.execute`` — after the weekly VACUUM.
+
+    Cost is two ``os.path.getsize`` calls (single syscall each). The body
+    gauge is set to 0 when the file is missing (e.g., a fresh install
+    where ``journal.db`` was created mid-call); the WAL gauge stays at 0
+    when the WAL has been checkpointed away (the steady state on a
+    healthy install).
+
+    Defensive: never raises. Observability instrumentation must not break
+    the maintenance code path it's wrapping. A failure to publish is logged
+    at DEBUG.
+
+    Parameters
+    ----------
+    db_path:
+        Absolute path to the SQLite DB file. When ``None``, resolves to
+        ``database.JOURNAL_DB_FILE`` lazily (the import is inside the
+        function so tests that haven't initialized the DB module don't
+        pay an import-time cost).
+    """
+    try:
+        if db_path is None:
+            from database import JOURNAL_DB_FILE  # local to avoid import cycle
+            db_path = str(JOURNAL_DB_FILE)
+
+        body_size = 0
+        if os.path.exists(db_path):
+            body_size = os.path.getsize(db_path)
+        get_metric("database_size_bytes").set(float(body_size))
+
+        wal_path = db_path + "-wal"
+        wal_size = 0
+        if os.path.exists(wal_path):
+            wal_size = os.path.getsize(wal_path)
+        get_metric("database_wal_size_bytes").set(float(wal_size))
+    except Exception:  # pragma: no cover — never break the caller
+        logging.getLogger(__name__).debug(
+            "[OBSERVABILITY] update_database_size_metrics failed", exc_info=True
+        )
 
 
 def render_metrics() -> bytes:
