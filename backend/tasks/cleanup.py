@@ -42,11 +42,23 @@ class CleanupTask(TaskScheduler):
     task_description = "Clean up old probe history, task execution history, and journal entries"
 
     def __init__(self, schedule_config: Optional[ScheduleConfig] = None):
-        # Default to weekly on Sunday at 2 AM
+        # bd-ygoqr (follow-up to bd-f9gd8 DBA spike): fresh installs now default
+        # the cleanup task to CRON (Sunday 02:00 UTC), not MANUAL. Without this
+        # default, a long-running install never runs the journal/task-execution
+        # prune unless the operator explicitly schedules it from the UI — and
+        # the journal grows unboundedly (bd-dmu8w noted the 90d hot window but
+        # could not enforce it without a default schedule).
+        #
+        # Existing operators who have explicitly set their own ScheduleConfig
+        # (persisted in the ScheduledTask DB row) are NOT clobbered: see
+        # `task_registry.TaskRegistry.sync_from_database` — it reconstructs
+        # `ScheduleConfig` from the DB row and passes it as `schedule_config`
+        # here, so this `if schedule_config is None` branch is hit ONLY on
+        # fresh installs that have no DB row yet.
         if schedule_config is None:
             schedule_config = ScheduleConfig(
-                schedule_type=ScheduleType.MANUAL,
-                cron_expression="0 2 * * 0",  # Weekly on Sunday at 2 AM
+                schedule_type=ScheduleType.CRON,
+                cron_expression="0 2 * * 0",  # Weekly on Sunday at 02:00 UTC
             )
         super().__init__(schedule_config)
 
@@ -162,14 +174,43 @@ class CleanupTask(TaskScheduler):
                 if self.vacuum_db:
                     try:
                         from sqlalchemy import text
-                        # VACUUM must be outside transaction
+                        # VACUUM must run OUTSIDE any transaction. SQLAlchemy
+                        # 2.0 sessions use implicit transactions: even after
+                        # ``session.commit()``, the next ``session.execute()``
+                        # opens a NEW transaction and SQLite raises
+                        # ``OperationalError: cannot VACUUM from within a
+                        # transaction``. The fix is to acquire a raw DBAPI
+                        # connection from the engine (``session.bind`` is the
+                        # bound ``Engine``) — its ``connect()`` context yields
+                        # a Connection in autocommit-ish mode that does NOT
+                        # auto-open a transaction around bare statements,
+                        # matching the established pattern in
+                        # ``database._perform_maintenance`` (see
+                        # ``backend/database.py``'s startup VACUUM call site).
+                        # The explicit ``session.commit()`` above is kept so
+                        # any pending session-level writes are flushed before
+                        # we hand off to the raw connection.
                         session.commit()
-                        session.execute(text("VACUUM"))
+                        with session.bind.connect() as conn:
+                            conn.execute(text("VACUUM"))
                         deleted_counts["vacuum"] = "completed"
                         logger.info("[%s] Database vacuum completed", self.task_id)
                     except Exception as e:
                         logger.error("[%s] Failed to vacuum database: %s", self.task_id, e)
                         errors.append(f"Vacuum: {str(e)}")
+
+                    # bd-ygoqr: publish post-VACUUM file size onto the
+                    # ecm_database_size_bytes / ecm_database_wal_size_bytes
+                    # gauges. Done unconditionally after the VACUUM block
+                    # (success OR failure) so a failed VACUUM still gets
+                    # the current size onto the gauge — operators care more
+                    # about "what is it now?" than "did the most recent
+                    # VACUUM succeed?" (the latter is in the task result).
+                    try:
+                        from observability import update_database_size_metrics
+                        update_database_size_metrics()
+                    except Exception as exc:  # pragma: no cover — observability is best-effort
+                        logger.debug("[%s] DB size metric publish failed: %s", self.task_id, exc)
 
             finally:
                 session.close()

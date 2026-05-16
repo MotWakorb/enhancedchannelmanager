@@ -2358,6 +2358,17 @@ def _perform_maintenance(engine) -> None:
         except Exception as e:
             logger.exception("[DATABASE] Database maintenance failed: %s", e)
 
+    # bd-ygoqr: publish the post-maintenance file size onto the
+    # ecm_database_size_bytes / ecm_database_wal_size_bytes gauges so
+    # operators see a value as soon as /metrics is scraped, even before
+    # the first weekly cleanup runs. Outside the connect() block so a
+    # failure here can't poison the connection state.
+    try:
+        from observability import update_database_size_metrics
+        update_database_size_metrics()
+    except Exception as exc:  # pragma: no cover — observability is best-effort
+        logger.debug("[DATABASE] DB size metric publish failed: %s", exc)
+
 
 def close_db() -> None:
     """Close the database engine and session factory.
