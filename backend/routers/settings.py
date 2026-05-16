@@ -54,7 +54,7 @@ class SettingsRequest(BaseModel):
     # ``api_key`` field below is accepted as a back-compat alias for one
     # release. New clients should send ``dispatcharr_api_key``.
     dispatcharr_api_key: Optional[str] = None  # Optional - only required if (re)setting Dispatcharr API key
-    api_key: Optional[str] = None  # DEPRECATED — legacy alias for dispatcharr_api_key (bd-jmi1c)
+    api_key: Optional[str] = None  # DEPRECATED — legacy alias for dispatcharr_api_key. Remove in v0.19.0 (bd-jmi1c, bd-ewm4h).
     auto_rename_channel_number: bool = False
     include_channel_number_in_name: bool = False
     channel_number_separator: str = "-"
@@ -142,7 +142,7 @@ class SettingsResponse(BaseModel):
     # ``api_key_configured`` is kept for one release so older frontend
     # bundles (cached browser tabs) keep showing the indicator correctly.
     dispatcharr_api_key_configured: bool
-    api_key_configured: bool  # DEPRECATED — alias for dispatcharr_api_key_configured
+    api_key_configured: bool  # DEPRECATED — alias for dispatcharr_api_key_configured. Remove in v0.19.0 (bd-jmi1c, bd-ewm4h).
     configured: bool
     auto_rename_channel_number: bool
     include_channel_number_in_name: bool
@@ -233,7 +233,7 @@ class TestConnectionRequest(BaseModel):
     # ``dispatcharr_api_key or api_key`` so either populates the X-API-Key
     # header on the connection probe.
     dispatcharr_api_key: str = ""
-    api_key: str = ""  # DEPRECATED — legacy alias for dispatcharr_api_key
+    api_key: str = ""  # DEPRECATED — legacy alias for dispatcharr_api_key. Remove in v0.19.0 (bd-jmi1c, bd-ewm4h).
 
 
 class SMTPTestRequest(BaseModel):
@@ -289,6 +289,7 @@ async def get_current_settings():
         # ``or`` covers the migration window where legacy is populated but
         # ``load_settings()`` hasn't yet copied it into the canonical field
         # (won't happen in practice — load always migrates — but defensive).
+        # Back-compat: drop ``api_key_configured`` mirror in v0.19.0 (bd-ewm4h).
         dispatcharr_api_key_configured=bool(settings.dispatcharr_api_key or settings.api_key),
         api_key_configured=bool(settings.dispatcharr_api_key or settings.api_key),
         configured=settings.is_configured(),
@@ -387,6 +388,7 @@ async def update_settings(request: SettingsRequest):
     # are provided. The preserved value also prefers canonical so an older
     # frontend bundle sending only ``api_key`` doesn't unconditionally clobber
     # a freshly-rotated canonical value with the legacy mirror.
+    # Back-compat: drop ``or request.api_key`` and the conflict-WARN block in v0.19.0 (bd-ewm4h).
     request_dispatcharr_key = request.dispatcharr_api_key or request.api_key
     # bd-jmi1c P1-1: warn (per request — POST is rare enough that flag-gating
     # isn't worth it) when both fields are present in the body and differ.
