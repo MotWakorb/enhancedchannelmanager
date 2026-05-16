@@ -126,3 +126,44 @@ def test_settings_is_configured_password_mode_unchanged():
     assert DispatcharrSettings(url="http://d", username="u", password="p").is_configured()
     assert not DispatcharrSettings(url="http://d", username="u", password="").is_configured()
     assert not DispatcharrSettings(url="http://d", username="", password="p").is_configured()
+
+
+# =====================================================================
+# bd-jmi1c P1-2 / bd-46g4t — explicit guards for the legacy api_key
+# fallback in is_configured() and the X-API-Key header path. Production
+# code goes through load_settings() (which migrates legacy → canonical)
+# so these fallbacks shouldn't fire on a real install — but the legacy
+# field exists on the model until bd-ewm4h removes it in v0.19.0, and
+# without these tests a future refactor could silently drop the fallback
+# (breaking direct-construction callers like ad-hoc scripts).
+# =====================================================================
+
+
+def test_is_configured_falls_back_to_legacy_api_key_when_canonical_empty():
+    """``DispatcharrSettings(api_key="...")`` with no canonical value still
+    reports ``is_configured()=True`` so direct-construction callers don't
+    silently report disconnected during the back-compat window."""
+    settings = DispatcharrSettings(
+        url="http://d", auth_method="api_key", dispatcharr_api_key="", api_key="legacy-only"
+    )
+    assert settings.is_configured() is True
+
+
+@pytest.mark.asyncio
+async def test_x_api_key_header_uses_legacy_field_when_canonical_empty():
+    """The X-API-Key header path falls back to the legacy ``api_key`` when
+    the canonical field is empty — mirrors ``is_configured()``'s contract
+    and keeps direct-construction callers functional."""
+    settings = DispatcharrSettings(
+        url="http://d", auth_method="api_key", dispatcharr_api_key="", api_key="legacy-key-only"
+    )
+    client = DispatcharrClient(settings)
+    try:
+        fake_resp = _response(200, {"ok": True})
+        request_mock = AsyncMock(return_value=fake_resp)
+        with patch.object(client._client, "request", request_mock):
+            await client._request("GET", "/api/channels/")
+        sent_headers = request_mock.await_args.kwargs["headers"]
+        assert sent_headers["X-API-Key"] == "legacy-key-only"
+    finally:
+        await client._client.aclose()

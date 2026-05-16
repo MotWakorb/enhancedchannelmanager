@@ -112,7 +112,12 @@ class DispatcharrClient:
             # ``dispatcharr_api_key`` field; fall back to the legacy
             # ``api_key`` when running pre-migration in-memory state (e.g.,
             # tests constructing ``DispatcharrSettings(api_key=...)`` directly
-            # without going through ``load_settings()``).
+            # without going through ``load_settings()``). Production code does
+            # not construct the model with legacy-only fields (every site reads
+            # from ``load_settings()`` which migrates), but the fallback is
+            # kept defensively while the legacy field exists on the model.
+            # Remove this fallback when removing the legacy field in v0.19.0
+            # per bd-ewm4h.
             headers["X-API-Key"] = self.settings.dispatcharr_api_key or self.settings.api_key
         else:
             headers["Authorization"] = f"Bearer {self.access_token}"

@@ -201,6 +201,13 @@ class DispatcharrSettings(BaseModel):
             # Prefer the canonical ``dispatcharr_api_key`` field; fall back to
             # the legacy ``api_key`` for callers that constructed the model
             # directly without going through ``load_settings()`` (bd-jmi1c).
+            # As of 2026-05-16 grep, production code never constructs
+            # ``DispatcharrSettings(api_key=...)`` without ``dispatcharr_api_key=``
+            # — every site reads from ``load_settings()`` first (which migrates
+            # legacy → canonical) or writes via the settings router (which
+            # always passes canonical). The fallback is kept defensively only
+            # because the legacy field exists on the model until v0.19.0 per
+            # bd-ewm4h; remove with that bead.
             return bool(self.dispatcharr_api_key or self.api_key)
         return bool(self.username and self.password)
 
