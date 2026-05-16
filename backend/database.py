@@ -760,6 +760,9 @@ def _run_migrations(engine) -> None:
             # Flip cleanup task MANUAL -> CRON Sunday 02:00 UTC for existing operators (v0.17.0 - bd-ifmr5)
             _migrate_cleanup_task_manual_to_cron(conn)
 
+            # Heal task_schedules rows with NULL next_run_at (v0.17.0 - bd-1weac / bd-p5b8i)
+            _heal_task_schedules_null_next_run_at(conn)
+
             logger.debug("[DATABASE] All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception("[DATABASE] Migration failed: %s", e)
@@ -2467,6 +2470,215 @@ def _migrate_cleanup_task_manual_to_cron(conn) -> None:
             update.rowcount,
         )
         conn.commit()
+
+
+def _heal_task_schedules_null_next_run_at(conn) -> None:
+    """Repair task_schedules rows that have ``next_run_at IS NULL`` for an enabled schedule (bd-1weac).
+
+    Background — bd-p5b8i / bd-1weac:
+
+    ``task_registry.TaskRegistry._create_default_task_schedule`` (added
+    v0.8.7-0023, 2026-01-29) miscompiled CRON-default tasks: when the
+    in-memory ``ScheduleConfig`` was ``ScheduleType.CRON``, the function
+    fell through to a default branch that wrote
+    ``schedule_type='interval', interval_seconds=0`` into ``task_schedules``.
+    ``schedule_calculator.calculate_next_run`` returns ``None`` for
+    ``interval_seconds <= 0`` (see ``_calculate_interval_next_run``), so the
+    row's ``next_run_at`` column was ``NULL`` from the moment it was written.
+    ``task_engine.check_and_run_tasks`` filters
+    ``WHERE next_run_at IS NOT NULL`` (see ``TaskEngine.check_and_run_tasks``),
+    so the row exists in the DB, shows up in the Settings → Tasks UI, but
+    never fires. For 4 months, every operator who restarted ECM between
+    v0.8.7-0023 and v0.17.0-0042 has at least one such row — CleanupTask
+    after bd-ygoqr flipped its default to CRON, StatsV2RollupTask since it
+    landed with a daily-03:30 CRON default.
+
+    The Part 1 fix (bd-1weac, this commit) repairs the WRITE path so new
+    rows never end up broken. This Part 2 heal scans for pre-existing broken
+    rows and rewrites them in place. We have to heal in ``_run_migrations``
+    rather than via Alembic because the bd-5w6jz smart-bootstrap fast-path
+    (see ``_schema_matches_head``) stamps ``alembic_version`` forward to head
+    when the live schema covers the model shape — an Alembic data migration
+    would be SILENTLY SKIPPED on every existing v0.17.0 install (this is
+    the same constraint that drove bd-ifmr5's choice).
+
+    Heal logic:
+    1. Filter: ``next_run_at IS NULL AND enabled = 1``. Disabled rows are
+       NULL by design; we leave them. MANUAL tasks don't get a
+       ``task_schedules`` row at all (per the
+       ``ScheduleType.MANUAL`` guard in
+       ``TaskRegistry.sync_from_database``), so they can't end up in this
+       code path.
+    2. Look up the task's registered class via the registry. If the row's
+       current schedule_type is the broken default (``interval`` with
+       ``interval_seconds=0``), rewrite the schedule columns from the task
+       class's ``schedule_config``. If the row carries an operator-customised
+       schedule (e.g., ``daily 06:30 America/New_York``), preserve the
+       columns and only recompute ``next_run_at``.
+    3. Compute ``next_run_at`` via ``schedule_calculator.calculate_next_run``
+       and UPDATE the row.
+
+    Idempotency: a healed row has ``next_run_at`` set, so subsequent calls
+    find zero rows matching the NULL predicate and log nothing. The
+    operator-visible log fires ONLY on first heal — every container restart
+    after that is silent.
+
+    Operator-visible: a single INFO log per call when N > 0, referencing
+    bd-1weac for traceability. No logs when nothing to heal.
+    """
+    from sqlalchemy import text
+
+    # Defensive: table must exist (matches _migrate_cleanup_task_manual_to_cron).
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='task_schedules'"
+    ))
+    if not result.fetchone():
+        logger.debug(
+            "[DATABASE] task_schedules table doesn't exist yet, skipping NULL next_run_at heal"
+        )
+        return
+
+    # Find broken rows: enabled with no next computed run time.
+    broken = conn.execute(text(
+        "SELECT id, task_id, schedule_type, interval_seconds, schedule_time, "
+        "       timezone, days_of_week, day_of_month, week_parity "
+        "FROM task_schedules "
+        "WHERE next_run_at IS NULL AND enabled = 1"
+    )).fetchall()
+
+    if not broken:
+        logger.debug("[DATABASE] No task_schedules rows need NULL next_run_at heal")
+        return
+
+    # Trigger @register_task decorators so get_task_class() can find class
+    # defaults below. init_db() runs in main.py's lifespan startup BEFORE
+    # main.py imports the tasks package (see main.py "import tasks" near the
+    # end of startup), so at this point task_registry._tasks is otherwise
+    # empty in production. Tests that pre-import a task module mask this —
+    # see test_heal_subprocess_without_pre_imported_tasks (bd-1weac p0 fix).
+    # Gated on `broken` so the import stays off the hot path when N == 0.
+    try:
+        import tasks  # noqa: F401 - imported for @register_task side effects
+    except Exception as e:
+        logger.warning("[DATABASE] Failed to import tasks for heal: %s", e)
+
+    # Lazy imports so this module stays import-light at module load.
+    from schedule_calculator import calculate_next_run
+
+    healed = 0
+    for row in broken:
+        (row_id, task_id, schedule_type, interval_seconds, schedule_time,
+         timezone, days_of_week, day_of_month, week_parity) = row
+
+        # Decide whether to rewrite the schedule (pre-fix broken interval/0)
+        # or preserve operator-customised columns and just recompute next_run_at.
+        is_prefix_broken = (
+            schedule_type == "interval"
+            and (interval_seconds is None or interval_seconds <= 0)
+        )
+
+        new_schedule_type = schedule_type
+        new_interval_seconds = interval_seconds
+        new_schedule_time = schedule_time
+        new_timezone = timezone or "UTC"
+        new_days_of_week = days_of_week
+        new_day_of_month = day_of_month
+        new_week_parity = week_parity
+
+        if is_prefix_broken:
+            # Look up the registered task class and use ITS default config.
+            try:
+                from task_registry import get_registry
+                task_class = get_registry().get_task_class(task_id)
+            except Exception:
+                task_class = None
+
+            class_config = None
+            if task_class is not None:
+                try:
+                    # Instantiate with no args to read the class default
+                    # schedule_config (the pre-bd-ygoqr MANUAL path for the
+                    # caller is gated above by enabled=1 + non-MANUAL).
+                    class_config = task_class().schedule_config
+                except Exception:
+                    class_config = None
+
+            if class_config is not None and class_config.schedule_type.value == "cron" and class_config.cron_expression:
+                cron_fields = _convert_cron_to_schedule(
+                    class_config.cron_expression,
+                    class_config.timezone or "UTC",
+                )
+                if cron_fields:
+                    new_schedule_type = cron_fields["schedule_type"]
+                    new_interval_seconds = cron_fields["interval_seconds"]
+                    new_schedule_time = cron_fields["schedule_time"]
+                    new_timezone = cron_fields["timezone"]
+                    new_days_of_week = cron_fields["days_of_week"]
+                    new_day_of_month = cron_fields["day_of_month"]
+            elif class_config is not None and class_config.schedule_type.value == "interval" and class_config.interval_seconds and class_config.interval_seconds > 0:
+                new_schedule_type = "interval"
+                new_interval_seconds = class_config.interval_seconds
+            # else: leave as-is; calculate_next_run will return None below
+            # and we'll skip the UPDATE for this row.
+
+        # Translate days_of_week string → list for the calculator boundary.
+        days_of_week_list = (
+            [int(d.strip()) for d in new_days_of_week.split(",") if d.strip()]
+            if new_days_of_week else None
+        )
+
+        next_run = calculate_next_run(
+            schedule_type=new_schedule_type,
+            interval_seconds=new_interval_seconds,
+            schedule_time=new_schedule_time,
+            timezone=new_timezone,
+            days_of_week=days_of_week_list,
+            day_of_month=new_day_of_month,
+            week_parity=new_week_parity,
+        )
+
+        if next_run is None:
+            # Couldn't compute a next run even after the rewrite — skip this
+            # row rather than committing a still-broken UPDATE. Operator
+            # can investigate via the Settings → Tasks UI.
+            logger.warning(
+                "[DATABASE] Could not compute next_run_at for task_schedules.id=%s "
+                "(task_id=%s schedule_type=%s) — skipping heal for this row (bd-1weac)",
+                row_id, task_id, new_schedule_type,
+            )
+            continue
+
+        conn.execute(text(
+            "UPDATE task_schedules SET "
+            "  schedule_type = :schedule_type, "
+            "  interval_seconds = :interval_seconds, "
+            "  schedule_time = :schedule_time, "
+            "  timezone = :timezone, "
+            "  days_of_week = :days_of_week, "
+            "  day_of_month = :day_of_month, "
+            "  week_parity = :week_parity, "
+            "  next_run_at = :next_run_at "
+            "WHERE id = :id"
+        ), {
+            "id": row_id,
+            "schedule_type": new_schedule_type,
+            "interval_seconds": new_interval_seconds,
+            "schedule_time": new_schedule_time,
+            "timezone": new_timezone,
+            "days_of_week": new_days_of_week,
+            "day_of_month": new_day_of_month,
+            "week_parity": new_week_parity,
+            "next_run_at": next_run,
+        })
+        healed += 1
+
+    if healed > 0:
+        conn.commit()
+        logger.info(
+            "[DATABASE] Healed %d task_schedules row(s) with NULL next_run_at — "
+            "class defaults rehydrated (bd-1weac)",
+            healed,
+        )
 
 
 def get_session():
