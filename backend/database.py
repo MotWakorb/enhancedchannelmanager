@@ -2550,6 +2550,18 @@ def _heal_task_schedules_null_next_run_at(conn) -> None:
         logger.debug("[DATABASE] No task_schedules rows need NULL next_run_at heal")
         return
 
+    # Trigger @register_task decorators so get_task_class() can find class
+    # defaults below. init_db() runs in main.py's lifespan startup BEFORE
+    # main.py imports the tasks package (see main.py "import tasks" near the
+    # end of startup), so at this point task_registry._tasks is otherwise
+    # empty in production. Tests that pre-import a task module mask this —
+    # see test_heal_subprocess_without_pre_imported_tasks (bd-1weac p0 fix).
+    # Gated on `broken` so the import stays off the hot path when N == 0.
+    try:
+        import tasks  # noqa: F401 - imported for @register_task side effects
+    except Exception as e:
+        logger.warning("[DATABASE] Failed to import tasks for heal: %s", e)
+
     # Lazy imports so this module stays import-light at module load.
     from schedule_calculator import calculate_next_run
 
