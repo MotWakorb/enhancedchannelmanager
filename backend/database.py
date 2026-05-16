@@ -152,6 +152,60 @@ def _missing_canaries(engine) -> list[dict]:
     return missing
 
 
+def _wal_checkpoint_truncate(engine) -> None:
+    """Run ``PRAGMA wal_checkpoint(TRUNCATE)`` against the journal DB.
+
+    Long-running installs accumulate a sizeable ``journal.db-wal`` (GH #274
+    reported 1.4 GB+) when the SQLite checkpointer has not been able to merge
+    pages into the main DB file — typically because some connection has kept a
+    read transaction open across the would-be checkpoint window. A bloated
+    WAL slows EVERY subsequent connection's first read because SQLite walks
+    the WAL to satisfy the read; the symptom that motivated bd-ej995 is the
+    v0.16.0 ``normalize_names → normalization_group_ids`` migration timing
+    out the Docker health check.
+
+    Calling ``wal_checkpoint(TRUNCATE)`` at startup — before bootstrap reads
+    or migrations write — forces the WAL contents into the main file and
+    then truncates the WAL to zero bytes, so the migration timeline runs
+    against a clean baseline. Pattern lifted from
+    ``backend/routers/backup.py:_create_backup_zip`` (the backup path
+    already does this so the zipped DB is self-contained).
+
+    Failure mode (file lock, disk full, read-only filesystem): log a WARN
+    and continue. The boot path is more valuable than the optimization;
+    bootstrap will still run, just against the same bloated WAL the user
+    is already living with. The warning surfaces in the operator's logs so
+    they can investigate.
+    """
+    # Logging file size before/after WAL checkpoint gives operators visible
+    # evidence the optimization ran. SQLite stores the WAL alongside the
+    # main DB file with a ``-wal`` suffix; not all environments have a WAL
+    # file (e.g. fresh installs whose first connection has not yet promoted
+    # to WAL mode), so handle the missing-file case as zero bytes.
+    wal_path = Path(f"{JOURNAL_DB_FILE}-wal")
+    try:
+        size_before = wal_path.stat().st_size if wal_path.exists() else 0
+        with engine.connect() as conn:
+            conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+            conn.commit()
+        size_after = wal_path.stat().st_size if wal_path.exists() else 0
+        # Convert to MB for human readability — a 1.4 GB WAL printed as
+        # bytes is a hard number to eyeball.
+        mb_before = size_before / (1024 * 1024)
+        mb_after = size_after / (1024 * 1024)
+        logger.info(
+            "[DATABASE] WAL checkpoint: %.1f MB -> %.1f MB",
+            mb_before,
+            mb_after,
+        )
+    except Exception as e:
+        # Non-fatal: bootstrap still runs against the bloated WAL. Matches
+        # the backup.py pattern's WARN-and-continue posture.
+        logger.warning(
+            "[DATABASE] WAL checkpoint failed (non-fatal): %s", e
+        )
+
+
 def _bootstrap_alembic(engine) -> None:
     """Ensure ``alembic_version`` tracks the deployed schema state.
 
@@ -466,6 +520,18 @@ def init_db() -> None:
 
         # Create session factory
         _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
+
+        # bd-ej995: truncate any pre-existing WAL BEFORE bootstrap reads or
+        # migrations write, so the migration timeline runs against a clean
+        # baseline. Long-running installs have hit GH #274 where a 1.4 GB
+        # WAL stretches the v0.16.0 normalize-names migration past Docker's
+        # health-check start_period, marking the container unhealthy and
+        # blocking ecm-mcp. This is a no-op on fresh installs (no WAL file
+        # yet) and on installs whose checkpointer has been keeping pace.
+        # Must run after the engine is created (we need a connection) but
+        # before _bootstrap_alembic / _assert_schema_matches_models so the
+        # migration path sees the post-truncate state.
+        _wal_checkpoint_truncate(_engine)
 
         # Import models to register them with Base
         from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, AutoCreationRule, AutoCreationExecution, AutoCreationConflict, FFmpegProfile, DummyEPGProfile, DummyEPGChannelAssignment, LookupTable  # noqa: F401

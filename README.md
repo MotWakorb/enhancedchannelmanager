@@ -22,6 +22,12 @@ services:
       - PGID=1000
       - ECM_PORT=6100
       - ECM_HTTPS_PORT=6143
+    # The image ships a HEALTHCHECK with `start_period=120s` baked in
+    # (bd-ul0ah). On long-running installs the first-run migrations can
+    # run against a bloated SQLite WAL file and take >30s — Docker's
+    # default start_period would mark the container unhealthy before
+    # migrations finish. If you need to override, set the healthcheck
+    # block here; operators on consistently fast installs can lower it.
 ```
 
 That's it. Open `http://localhost:6100` and the setup wizard will guide you through creating an admin account and connecting to Dispatcharr.

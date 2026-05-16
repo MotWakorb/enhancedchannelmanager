@@ -81,8 +81,14 @@ ENV ECM_HTTPS_PORT=6143
 # Note: Actual ports are configurable at runtime via ECM_PORT and ECM_HTTPS_PORT.
 EXPOSE 6100 6143
 
-# Add healthcheck (respects runtime ECM_PORT)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+# Add healthcheck (respects runtime ECM_PORT).
+# Long-running installs may hit slow first-run migrations against bloated
+# SQLite WAL files. WAL checkpoint at startup (bd-ej995) addresses the
+# common case; this start-period absorbs the edge case where a particularly
+# large migration still runs longer than the default. Operators on installs
+# with consistent fast startups can lower this; the default favors safety
+# over startup time.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
   CMD python -c "import urllib.request, os; port = os.environ.get('ECM_PORT', '6100'); urllib.request.urlopen(f'http://localhost:{port}/api/health')" || exit 1
 
 # Entrypoint sets UID/GID from PUID/PGID, fixes permissions, then drops to non-root via gosu
