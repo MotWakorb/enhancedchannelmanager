@@ -23,7 +23,7 @@ Per the DBA's refined schema (skqln.2), the columns are:
 |---|---|---|
 | `session_id` | TEXT (UUID) | indexed; correlates rows in one viewing session |
 | `observed_at` | INTEGER (unix epoch ms) | mandatory index; retention sweeps key off this |
-| `user_id` | INTEGER, FK `users(id)` ON DELETE SET NULL | nullable |
+| `user_id` | INTEGER, no FK constraint | nullable; opaque Dispatcharr-side identifier (see §7.8 and bd-gsn3r) |
 | `provider_id` | INTEGER, FK `providers(id)` ON DELETE SET NULL | nullable until provider tagging ships |
 | `channel_id` | INTEGER, FK `channels(id)` ON DELETE SET NULL | nullable |
 | `bytes_delta` | INTEGER NOT NULL, CHECK ≥ 0 | per-poll byte delta |
@@ -172,7 +172,7 @@ The following are **acceptance criteria** for the schema/write beads (skqln.2, s
 5. **Read-API responses are access-scoped, not just filtered client-side.** The watch-time read API derives `user_id` from the authenticated principal for non-admins; admins may pass an explicit `user_id`/"all". A non-admin requesting another user's data gets `403`. Provider endpoints gate on `RequireAdminIfEnabled` (recommended) and are never in `AUTH_EXEMPT_PATHS`. *(T1, §3)*
 6. **User-facing visibility view shows rollups, not raw rows.** The "what's recorded about you" surface (the Users panel) presents daily-granularity rollup data, not raw per-poll `session_telemetry` rows. If a future "export my data" feature is built, it too exports rollups, not raw rows — or if it must export raw rows, that needs its own privacy review. *(T10)*
 7. **Test fixtures use synthetic identities.** The 5M-row migration/benchmark fixture (skqln.2, skqln.10) uses synthetic `user_id`/`provider_id`/`channel_id` values with no linkage to real accounts. No production DB dumps in committed fixtures. *(T11)*
-8. **Account deletion scrubs the behavioral trail.** Verified by test: deleting a `users` row leaves no `session_telemetry` row (or rollup row) carrying that `user_id` — either deleted or NULLed, in raw *and* rollup tables. *(T8, and a hard ask on ADR-007.)*
+8. **Dispatcharr-side viewer privacy is enforced operator-side via the ADR-007 D1 raw-row retention policy (default 30 days).** The `session_telemetry.user_id` column is an opaque Dispatcharr-side identifier with no FK constraint to ECM `users` — deleting an ECM `users` row no longer cascades to telemetry rows (bd-gsn3r dropped the FK in Alembic migration `0011`). The previous mechanism ("account deletion scrubs the behavioral trail via FK ON DELETE SET NULL") no longer applies. Viewer privacy is now exclusively operator-managed: raw rows age out under ADR-007 D1 (30-day prune); operators who need immediate removal must do so manually per the bd-gsn3r CHANGELOG one-liner. *(T8 — risk posture updated; see ADR-007 D1 and bd-gsn3r for rationale.)*
 
 ---
 
@@ -188,7 +188,7 @@ The following are **acceptance criteria** for the schema/write beads (skqln.2, s
 ## 9. Sign-off Status
 
 - **Pre-implementation threat model + data classification:** complete (this document).
-- **Schema sign-off (gates skqln.2 merge):** the DBA's refined `session_telemetry` schema (§1) is **acceptable from a privacy standpoint** with the following conditions carried into the schema/migration bead: (a) `user_id` FK keeps `ON DELETE SET NULL` (already specified) — and ADR-007 extends the same scrub to rollup tables (T8); (b) the redaction requirements in §7 are added to skqln.2/.3 acceptance criteria; (c) test fixtures use synthetic identities (§7.7). No additional columns required; no columns need to be removed for data-minimization (the schema is already minimal — no IP, no user-agent, no device fingerprint, no derived bitrate). **Conditional sign-off granted; convert to full sign-off when (a)–(c) are reflected in the skqln.2 bead.**
+- **Schema sign-off (gates skqln.2 merge):** the DBA's refined `session_telemetry` schema (§1) is **acceptable from a privacy standpoint** with the following conditions carried into the schema/migration bead: (a) ~~`user_id` FK keeps `ON DELETE SET NULL` (already specified) — and ADR-007 extends the same scrub to rollup tables (T8)~~ **[updated by bd-gsn3r, 2026-05-15]** — Alembic migration `0011` (bd-gsn3r) dropped the FK on `user_id`. The new contract: `session_telemetry.user_id` is an opaque Dispatcharr-side identifier with no FK to ECM `users`. Viewer privacy is operator-managed via ADR-007 D1 raw-row retention (default 30 days). Condition (a) is superseded — see §7.8 for the updated T8 risk posture; (b) the redaction requirements in §7 are added to skqln.2/.3 acceptance criteria; (c) test fixtures use synthetic identities (§7.7). No additional columns required; no columns need to be removed for data-minimization (the schema is already minimal — no IP, no user-agent, no device fingerprint, no derived bitrate). **Conditional sign-off granted; convert to full sign-off when (b)–(c) are reflected in the skqln.2 bead. Condition (a) is resolved (superseded) by bd-gsn3r.**
 - **Retention sign-off (informs skqln.1):** §5 is the input. Full sign-off on ADR-007 happens when ADR-007 incorporates the §5.2 mandatory guarantees; the §5.3 recommendations are advisory.
 - **Post-implementation sign-off (skqln.8):** out of scope here — that bead re-checks the as-built against §3, §6, and §7.
 

@@ -2012,11 +2012,15 @@ class BandwidthTracker:
             get_metric("session_telemetry_write_duration_seconds").observe(
                 max(0.0, float(duration_seconds))
             )
-            if result == "success":
-                # Gauge reflects the most recent successful batch's size —
-                # on failure the previous value remains, which is the
-                # behavior SRE wants for storage-growth alerting.
-                get_metric("session_telemetry_row_count").set(int(rows_written))
+            # bd-ae58c (Option B): do NOT set ecm_session_telemetry_row_count
+            # here. That gauge has one owner: the nightly rollup task sets it
+            # to the post-prune table total after each successful run. The
+            # per-poll batch size is observable via the
+            # ecm_session_telemetry_writes_total counter rate — callers can
+            # derive avg-rows-per-poll = writes_total rate / poll rate.
+            # Having two writers with divergent semantics (batch size ~10 vs.
+            # table total ~250k) caused the gauge to oscillate wildly and
+            # trip the ECMStatsRowCountGrowthAnomaly alert spuriously.
             if rows_excluded > 0:
                 get_metric("session_telemetry_rows_excluded_total").labels(
                     reason="excluded_user"
