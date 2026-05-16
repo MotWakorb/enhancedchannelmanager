@@ -1,7 +1,7 @@
 /**
  * Unit tests for API service.
  */
-import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from 'vitest';
 import { server } from '../test/mocks/server';
 import { http, HttpResponse } from 'msw';
 import {
@@ -33,7 +33,10 @@ import {
   listAlertMethods,
   createAlertMethod,
   updateAlertMethod,
+  // Logos (bd-nh50y debug-logging contract)
+  getAllLogos,
 } from './api';
+import { logger } from '../utils/logger';
 
 // Start/stop the mock server for these tests
 beforeAll(() => server.listen({ onUnhandledRequest: 'bypass' }));
@@ -1089,6 +1092,153 @@ describe('API Service', () => {
       });
       expect(sentBody?.inline_lookups).toEqual({ codes: { a: '1' } });
       expect(sentBody?.global_lookup_ids).toEqual([7, 8, 9]);
+    });
+  });
+
+  // ===========================================================================
+  // Logo loader debug-logging contract (bd-nh50y)
+  //
+  // These tests lock the log-line sequence emitted by getAllLogos(). The lines
+  // are operator-grepable ("[LogoLoader] Starting...", "[LogoLoader] Page N:...")
+  // and are how we diagnose "logos not loading" reports. A future refactor that
+  // silently drops a line would fail these tests rather than dropping
+  // observability into production.
+  // ===========================================================================
+
+  describe('getAllLogos (debug-logging contract — bd-nh50y)', () => {
+    function makeLogo(id: number) {
+      return { id, name: `Logo ${id}`, url: `http://example/${id}.png` };
+    }
+
+    it('emits the full happy-path log sequence across multiple pages', async () => {
+      // Two pages: page 1 returns next=URL, page 2 returns next=null. The
+      // pagination loop stops when the API reports no next page; we verify
+      // every diagnostic line in the documented sequence fires in order.
+      const requestPages: number[] = [];
+      server.use(
+        http.get('/api/channels/logos', ({ request }) => {
+          const url = new URL(request.url);
+          const page = Number(url.searchParams.get('page') ?? '1');
+          requestPages.push(page);
+          if (page === 1) {
+            return HttpResponse.json({
+              results: [makeLogo(1), makeLogo(2)],
+              count: 3,
+              next: '/api/channels/logos?page=2',
+              previous: null,
+            });
+          }
+          return HttpResponse.json({
+            results: [makeLogo(3)],
+            count: 3,
+            next: null,
+            previous: '/api/channels/logos?page=1',
+          });
+        }),
+      );
+
+      // Ensure DEBUG lines actually emit (singleton default is INFO).
+      const prevLevel = logger.getLevel();
+      logger.setLevel('DEBUG');
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      try {
+        const result = await getAllLogos(500);
+
+        expect(result).toHaveLength(3);
+        expect(requestPages).toEqual([1, 2]);
+        expect(errSpy).not.toHaveBeenCalled();
+
+        // Flatten all formatted messages so we can assert on ordered content.
+        const messages = logSpy.mock.calls.map((call) => String(call[0]));
+
+        // INFO "Starting logo load" fires first
+        const startIdx = messages.findIndex((m) =>
+          m.includes('[LogoLoader] Starting logo load'),
+        );
+        expect(startIdx).toBeGreaterThanOrEqual(0);
+        expect(messages[startIdx]).toContain('pageSize=500');
+
+        // DEBUG per page in order
+        const page1Idx = messages.findIndex((m) =>
+          m.includes('[LogoLoader] Page 1: fetched 2 logos, hasMore=true'),
+        );
+        const page2Idx = messages.findIndex((m) =>
+          m.includes('[LogoLoader] Page 2: fetched 1 logos, hasMore=false'),
+        );
+        expect(page1Idx).toBeGreaterThan(startIdx);
+        expect(page2Idx).toBeGreaterThan(page1Idx);
+
+        // INFO completion fires last with total + page count
+        const doneIdx = messages.findIndex((m) =>
+          m.includes('[LogoLoader] Loaded 3 logos across 2 pages'),
+        );
+        expect(doneIdx).toBeGreaterThan(page2Idx);
+
+        // getLogos() per-call DEBUG lines also fire (the API-wrapper layer)
+        const apiCalls = messages.filter((m) => m.includes('[LogoApi]'));
+        // Each page fires "GET /logos" + "Received N logos" — so 2 pages = 4 lines.
+        expect(apiCalls.length).toBe(4);
+        expect(apiCalls[0]).toContain('GET /logos page=1');
+        expect(apiCalls[1]).toContain('Received 2 logos');
+        expect(apiCalls[2]).toContain('GET /logos page=2');
+        expect(apiCalls[3]).toContain('Received 1 logos');
+      } finally {
+        logSpy.mockRestore();
+        errSpy.mockRestore();
+        logger.setLevel(prevLevel);
+      }
+    });
+
+    it('emits ERROR with the failing page number and partial-results length on mid-pagination failure', async () => {
+      // Page 1 succeeds, page 2 errors. The contract: getAllLogos must log an
+      // ERROR line that names both the page number and how many logos were
+      // collected before the failure — that is the operator's only signal
+      // about how much of the list was lost.
+      server.use(
+        http.get('/api/channels/logos', ({ request }) => {
+          const url = new URL(request.url);
+          const page = Number(url.searchParams.get('page') ?? '1');
+          if (page === 1) {
+            return HttpResponse.json({
+              results: [makeLogo(1), makeLogo(2)],
+              count: 5,
+              next: '/api/channels/logos?page=2',
+              previous: null,
+            });
+          }
+          return HttpResponse.error();
+        }),
+      );
+
+      const prevLevel = logger.getLevel();
+      logger.setLevel('DEBUG');
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      try {
+        await expect(getAllLogos(500)).rejects.toThrow();
+
+        // ERROR fires from getAllLogos with page-number + partial-results
+        const errorMessages = errSpy.mock.calls.map((call) => String(call[0]));
+        const loaderError = errorMessages.find((m) =>
+          m.includes('[LogoLoader] Failed on page 2'),
+        );
+        expect(loaderError).toBeDefined();
+        expect(loaderError).toContain('2 partial results');
+
+        // The wrapper-level error from getLogos() also fires for the failing page
+        const apiError = errorMessages.find(
+          (m) => m.includes('[LogoApi]') && m.includes('failed'),
+        );
+        expect(apiError).toBeDefined();
+        expect(apiError).toContain('page=2');
+      } finally {
+        logSpy.mockRestore();
+        errSpy.mockRestore();
+        logger.setLevel(prevLevel);
+      }
     });
   });
 });
