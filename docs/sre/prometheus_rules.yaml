@@ -935,3 +935,138 @@ groups:
             flagged. Check Settings → Tasks → Stream Probe to confirm
             the schedule and review task execution history for errors.
           runbook_url: docs/runbooks/task_scheduler_stalled.md
+
+  # =====================================================================
+  # SLO-10: Channel Deduplication (bd-ft3hk / BD-M, v0.17.1 dedup epic)
+  # =====================================================================
+  # Consumes metrics emitted by the BD-D / BD-E / BD-F engineering work:
+  #   * ecm_dedup_candidate_lookup_duration_seconds (histogram)
+  #     — instrumented around POST /api/channel-merges/candidates.
+  #   * ecm_dedup_merge_requests_total{status=...} (counter)
+  #     — incremented per POST /api/channel-merges/{id}/accept outcome.
+  #     `status` ∈ {success, error, dismissed, cancelled}.
+  #   * ecm_pending_merges_queue_depth_added_total (counter)
+  #     — incremented every time a merge candidate is added to the
+  #     pending-merges queue (the denominator for the 24h resolution
+  #     ratio).
+  #
+  # IMPORTANT — RULES SHIP VACUOUS UNTIL BD-D/E/F EMIT THE METRICS.
+  # The rules are intentionally landed before the emitters per the
+  # team-plan SRE position: a rule without an emitting metric fires
+  # nothing and costs nothing, but the rule definition is the
+  # contract that tells the engineer wiring the emitter which metric
+  # names + label sets to produce. The alternative (ship BD-D/E
+  # without alert coverage, "we'll add the alerts in a follow-up")
+  # is exactly the pattern that produced the v0.17.0 alert-rules gap
+  # this bead also closes — so we are deliberately not repeating it.
+  #
+  # Once BD-D/E/F ship and the metrics start emitting, the alerts
+  # become live signal on the first scrape. No additional code change
+  # required to "turn them on."
+  - name: ecm_dedup
+    interval: 30s
+    rules:
+      - alert: ECMDedupCandidateLookupLatencyHigh
+        # SLI-10a — candidate-lookup p99 over 500ms sustained 10m.
+        # The modal load is operator-visible; 500ms is the "perceived
+        # as instant" threshold. p99 (not p95) because a single slow
+        # candidate query stalls the drag-drop interaction visibly.
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (
+              rate(ecm_dedup_candidate_lookup_duration_seconds_bucket[5m])
+            )
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          slo: dedup_candidate_lookup_latency
+          service: ecm
+        annotations:
+          summary: "ECM dedup candidate-lookup p99 {{ $value | humanizeDuration }} > 500ms for 10m"
+          description: |
+            Channel-merge candidate-lookup endpoint p99 latency has
+            exceeded 500ms for 10+ minutes. The merge modal stalls
+            visibly at this latency on drag-drop / add-stream /
+            bulk-M3U triggers. Likely root causes: the candidate
+            matcher query stopped using its dedup index (BD-B index
+            regression), the matcher is being called inside a per-
+            channel handler loop instead of once per trigger, or
+            SQLite is under bulk-write contention. Triage steps in
+            the runbook.
+          runbook_url: docs/runbooks/dedup-candidate-lookup-latency.md
+
+      - alert: ECMDedupPendingMergeResolutionStale
+        # SLI-10b — <95% of 24h-window merge requests reach a terminal
+        # state (success | dismissed). Pending merges accumulating
+        # without operator action means the modal is broken, the queue
+        # is overwhelming the operator, or the dismiss path is failing
+        # silently. 1h `for:` window catches sustained backlog without
+        # firing on a brief idle period.
+        # Guards: numerator AND denominator must both be non-zero —
+        # an install with zero merge activity in 24h is healthy, not
+        # a breach.
+        expr: |
+          (
+            sum(increase(ecm_dedup_merge_requests_total{status=~"success|dismissed"}[24h]))
+            /
+            sum(increase(ecm_pending_merges_queue_depth_added_total[24h]))
+          ) < 0.95
+          and
+          sum(increase(ecm_pending_merges_queue_depth_added_total[24h])) > 0
+        for: 1h
+        labels:
+          severity: warning
+          slo: dedup_pending_merge_resolution
+          service: ecm
+        annotations:
+          summary: "ECM dedup pending-merge resolution rate {{ $value | humanizePercentage }} < 95% over 24h"
+          description: |
+            Less than 95% of merge requests added to the pending
+            queue in the last 24h have reached a terminal state
+            (success or dismissed). Likely root causes: the merge
+            modal is erroring before the operator can act (cross-
+            check ECMDedupMergeApiErrorRateHigh and frontend
+            boundary-error counters), the operator is overwhelmed
+            by a candidate flood from a bulk M3U import, or the
+            dismiss path is broken (no state transition recorded).
+            Runbook covers the queue-depth diagnostic and the per-
+            source breakdown.
+          runbook_url: docs/runbooks/dedup-pending-merge-resolution-stale.md
+
+      - alert: ECMDedupMergeApiErrorRateHigh
+        # SLI-10c — accept-endpoint error rate > 1% over 5m.
+        # PAGE severity: the merge endpoint is the load-bearing write
+        # path of the dedup epic; a failed accept leaves the channel
+        # in a half-merged state (target may have streams, sources may
+        # be deleted). 4xx (e.g., 422 on stale source IDs from the
+        # bd-ozhkf / bd-ct9wl pattern) is correct backend behavior
+        # and is NOT counted — the alert fires on status="error"
+        # (5xx / unhandled exception class) only.
+        # Guard: denominator must be > 0.01 req/s (~3.6/hr) to avoid
+        # paging on a single mid-call exception during idle periods.
+        expr: |
+          (
+            sum(rate(ecm_dedup_merge_requests_total{status="error"}[5m]))
+            /
+            sum(rate(ecm_dedup_merge_requests_total[5m]))
+          ) > 0.01
+          and
+          sum(rate(ecm_dedup_merge_requests_total[5m])) > 0.01
+        for: 5m
+        labels:
+          severity: page
+          slo: dedup_merge_api_error_rate
+          service: ecm
+        annotations:
+          summary: "ECM dedup merge API error rate {{ $value | humanizePercentage }} > 1% for 5m"
+          description: |
+            POST /api/channel-merges/{id}/accept is erroring on >1%
+            of requests over the last 5 minutes. Treat as an
+            incident — every error potentially leaves a channel in
+            a half-merged state (target may already have streams,
+            sources may already be deleted from Dispatcharr). Page
+            on-call. The runbook covers the half-merge recovery
+            procedure and the half-state diagnostic query.
+          runbook_url: docs/runbooks/dedup-merge-api-error-rate-high.md
