@@ -1360,15 +1360,23 @@ class TestZipExportRedaction:
     """
 
     @pytest.mark.asyncio
-    async def test_zip_export_redacts_all_5_settings_credentials(
+    async def test_zip_export_redacts_all_settings_credentials(
         self, async_client, tmp_path
     ):
-        """Exported settings.json must contain ***REDACTED*** for all 5
-        credential fields and none of the raw values."""
+        """Exported settings.json must contain ***REDACTED*** for every
+        credential field in ``_SETTINGS_CREDENTIAL_FIELDS`` and none of the
+        raw values may appear anywhere in the ZIP archive.
+
+        bd-jmi1c P0-2 / bd-46g4t: extended from 5 to 6 fields when
+        ``dispatcharr_api_key`` (canonical) was added in v0.17.1. The legacy
+        ``api_key`` stays in the seed dict so the back-compat mirror in
+        ``save_settings()`` is also covered.
+        """
         settings_file = tmp_path / "settings.json"
         # Distinctive values so we can search the ZIP for raw leaks.
         raw_creds = {
             "password": "raw-pass-DUDLAH",
+            "dispatcharr_api_key": "raw-canonical-VANSIR-TEST",
             "api_key": "raw-apikey-PORDOX",
             "smtp_password": "raw-smtp-VOLTUM",
             "telegram_bot_token": "raw-tg-bot-NIXAR",
