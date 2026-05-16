@@ -194,6 +194,31 @@ jobs:
           # flake-pr-comment aggregator.
           retention-days: 30
 
+  # ─── Version-bump consistency guard (bd-9rtlc) ────────────────────────
+  # The version string lives in three hand-edited files: frontend/package.json
+  # (canonical), backend/routers/backup.py (APP_VERSION), and backend/main.py
+  # (FastAPI version kwarg). Today's bump workflow requires updating all three
+  # in lockstep — and historically didn't (PR #277 caught backup.py at 0.16.0
+  # while package.json was 0.17.0-0027; the 9rtlc audit caught main.py at
+  # 0.16.0-0003 while package.json was 0.17.0-0033). This job fails the PR if
+  # the touchpoints disagree, so the next missed bump fails before merge
+  # instead of leaking divergence into dev. See docs/versioning.md →
+  # Touchpoints for the canonical list and bd-9rtlc for the audit history.
+  version-consistency:
+    name: Version Consistency
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Verify version touchpoints agree
+        run: python scripts/check_version_consistency.py
+
   # ─── Semgrep lint (ReDoS / safe_regex guard — bd-eio04.8) ──────────────
   # Enforces the `no-bare-re-on-dynamic-pattern` rule in .semgrep.yml so
   # new PRs cannot introduce a stdlib `re.search/match/sub/compile/…` call
