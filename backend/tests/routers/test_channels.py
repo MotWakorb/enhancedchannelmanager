@@ -347,6 +347,49 @@ class TestGetLogos:
 
         assert response.status_code == 200
 
+    @pytest.mark.asyncio
+    async def test_emits_per_request_info_diagnostic(self, async_client, caplog):
+        """Emits the bd-nh50y operator-grepable INFO line per request.
+
+        Contract: every successful GET /logos call must emit a single INFO
+        line tagged "[CHANNELS-LOGO] GET /logos" that names page, page_size,
+        search, the result count, elapsed ms, and the next-page flag. This
+        is the line operators grep when triaging "logos not loading" reports
+        — it lets us correlate the backend response to the frontend log
+        sequence emitted by getAllLogos() in services/api.ts.
+        """
+        import logging
+        mock_client = AsyncMock()
+        mock_client.get_logos.return_value = {
+            "results": [{"id": 1, "name": "ESPN"}, {"id": 2, "name": "FOX"}],
+            "count": 2,
+            "next": None,
+        }
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            with caplog.at_level(logging.INFO, logger="routers.channels"):
+                response = await async_client.get(
+                    "/api/channels/logos?page=3&page_size=250&search=ESPN",
+                )
+
+        assert response.status_code == 200
+        info_lines = [
+            r.getMessage() for r in caplog.records
+            if r.levelno == logging.INFO and "[CHANNELS-LOGO]" in r.getMessage()
+        ]
+        assert len(info_lines) == 1, f"Expected exactly one INFO diagnostic, got: {info_lines}"
+        line = info_lines[0]
+        # Required fields — operators grep for these
+        assert "GET /logos" in line
+        assert "page=3" in line
+        assert "page_size=250" in line
+        assert "search=ESPN" in line
+        assert "returned 2 logos" in line
+        assert "next=false" in line
+        # Elapsed-ms field is present and formatted as a number followed by "ms"
+        import re
+        assert re.search(r"in \d+\.\dms", line), f"Missing elapsed-ms field in: {line}"
+
 
 class TestGetLogo:
     """Tests for GET /api/channels/logos/{logo_id}."""

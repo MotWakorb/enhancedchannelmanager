@@ -102,6 +102,18 @@ export const EditChannelModal = memo(function EditChannelModal({
     logo.name.toLowerCase().includes(logoSearch.toLowerCase())
   );
 
+  // Debug instrumentation (bd-nh50y): the channel-edit-modal logo picker
+  // had zero observability between the API response and the rendered grid.
+  // Operators reported logos "not loading" but backend logs showed 200 OK
+  // and the loop completed. These DEBUG lines fire on every render — that
+  // is intentional, the modal is operator-action low-frequency, and the
+  // render-time count is the smoking gun if `logos` prop is empty when the
+  // user expects a populated grid.
+  logger.debug(
+    `[LogoPicker] Rendering grid: ${filteredLogos.length} filtered ` +
+      `(of ${logos.length} total) logos, search="${logoSearch}"`,
+  );
+
   // Get currently selected logo (use pendingLogo if not yet in logos array)
   const currentLogo = selectedLogoId
     ? (logos.find((l) => l.id === selectedLogoId) || (pendingLogo?.id === selectedLogoId ? pendingLogo : null))
@@ -241,6 +253,27 @@ export const EditChannelModal = memo(function EditChannelModal({
       setAddingStreamLogo(false);
     }
   };
+
+  // Mount diagnostic (bd-nh50y) — fires once on first render with the
+  // initial `logos` prop count. Empty deps array is deliberate: we want one
+  // "did the modal open with N logos?" line per modal open, not per render.
+  useEffect(() => {
+    logger.debug(
+      `[LogoPicker] Mounted — received ${logos.length} logos in props ` +
+        `(channel.id=${channel.id})`,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Logos-prop-change diagnostic (bd-nh50y) — fires when the parent reloads
+  // the logo list (e.g. after onLogoCreate / onLogoUpload, or App.tsx's
+  // loadLogos completing after the modal opened). Dependency is `logos.length`
+  // intentionally: array-reference equality would fire on every parent render
+  // and flood the log; the count is what we actually care about for the
+  // "did the picker ever get its data?" trace.
+  useEffect(() => {
+    logger.debug(`[LogoPicker] logos prop updated — now ${logos.length} logos`);
+  }, [logos.length]);
 
   useEffect(() => {
     if (channel.streams.length === 0) return;
@@ -797,7 +830,18 @@ export const EditChannelModal = memo(function EditChannelModal({
                 src={immediateLogoUrl || currentLogo.cache_url || currentLogo.url}
                 alt={currentLogo.name}
                 onError={(e) => {
+                  // bd-nh50y: log the failure BEFORE the fallback swap so
+                  // we see which URL in the cascade actually 404'd.
                   const target = e.target as HTMLImageElement;
+                  const failedSrc = target.src;
+                  logger.error(
+                    `[LogoPicker] Current-logo image load failed: ` +
+                      `id=${currentLogo.id} name="${currentLogo.name}" ` +
+                      `failedSrc="${failedSrc}" ` +
+                      `immediateLogoUrl="${immediateLogoUrl ?? 'null'}" ` +
+                      `cache_url="${currentLogo.cache_url ?? 'null'}" ` +
+                      `url="${currentLogo.url}"`,
+                  );
                   if (immediateLogoUrl && target.src === immediateLogoUrl) {
                     target.src = currentLogo.cache_url || currentLogo.url;
                   } else if (currentLogo.cache_url && target.src === currentLogo.cache_url) {
@@ -858,7 +902,22 @@ export const EditChannelModal = memo(function EditChannelModal({
                   src={logo.cache_url || logo.url}
                   alt={logo.name}
                   onError={(e) => {
-                    (e.target as HTMLImageElement).src = logo.url;
+                    // bd-nh50y: log the failure BEFORE the fallback so we
+                    // see the original URL that 404'd. Two-stage fallback:
+                    // cache_url fails -> swap to logo.url. If logo.url also
+                    // fails the second onError fires but src already equals
+                    // logo.url so no further swap; the log captures it.
+                    const target = e.target as HTMLImageElement;
+                    const failedSrc = target.src;
+                    logger.error(
+                      `[LogoPicker] Image load failed: id=${logo.id} ` +
+                        `name="${logo.name}" failedSrc="${failedSrc}" ` +
+                        `cache_url="${logo.cache_url ?? 'null'}" ` +
+                        `url="${logo.url}"`,
+                    );
+                    if (target.src !== logo.url) {
+                      target.src = logo.url;
+                    }
                   }}
                 />
               </div>

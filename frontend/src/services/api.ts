@@ -1115,7 +1115,76 @@ export async function getLogos(params?: {
     page_size: params?.pageSize,
     search: params?.search,
   });
-  return fetchJson(`${API_BASE}/channels/logos${query}`);
+  // Debug instrumentation (bd-nh50y): the channel-edit-modal logo picker
+  // had zero observability between the API response and the rendered grid,
+  // so when operators reported "logos not loading" we had no way to trace
+  // what actually happened. These DEBUG lines fire on every fetch; keep them
+  // at DEBUG so production INFO callers stay quiet.
+  logger.debug(
+    `[LogoApi] GET /logos page=${params?.page ?? 1} ` +
+      `pageSize=${params?.pageSize ?? 'default'} ` +
+      `search=${params?.search ?? '(none)'}`,
+  );
+  try {
+    const result = await fetchJson<PaginatedResponse<Logo>>(
+      `${API_BASE}/channels/logos${query}`,
+    );
+    logger.debug(
+      `[LogoApi] Received ${result.results?.length ?? 0} logos, ` +
+        `next=${result.next ?? 'null'}`,
+    );
+    return result;
+  } catch (err) {
+    logger.error(
+      `[LogoApi] GET /logos failed (page=${params?.page ?? 1} ` +
+        `pageSize=${params?.pageSize ?? 'default'} ` +
+        `search=${params?.search ?? '(none)'}):`,
+      err,
+    );
+    throw err;
+  }
+}
+
+/**
+ * Fetch all logos by paginating until the API reports no `next` page.
+ *
+ * Extracted from inline loops in App.tsx and LogoManagerTab so the
+ * pagination contract — and the diagnostic log line sequence (bd-nh50y) —
+ * lives in exactly one place. Tests in `api.test.ts` lock the log sequence
+ * so a future refactor cannot silently drop observability.
+ *
+ * @param pageSize Defaults to 500 (the historical App.tsx default; the
+ *   LogoManagerTab callsite previously used 1000 — both work, Dispatcharr
+ *   caps at 1000/page).
+ */
+export async function getAllLogos(pageSize = 500): Promise<Logo[]> {
+  logger.info(`[LogoLoader] Starting logo load (pagination, pageSize=${pageSize})`);
+  const allLogos: Logo[] = [];
+  let page = 1;
+  let hasMore = true;
+  try {
+    while (hasMore) {
+      const response = await getLogos({ page, pageSize });
+      const fetchedCount = response.results?.length ?? 0;
+      allLogos.push(...response.results);
+      hasMore = response.next !== null;
+      logger.debug(
+        `[LogoLoader] Page ${page}: fetched ${fetchedCount} logos, hasMore=${hasMore}`,
+      );
+      page++;
+    }
+    logger.info(
+      `[LogoLoader] Loaded ${allLogos.length} logos across ${page - 1} pages`,
+    );
+    return allLogos;
+  } catch (err) {
+    logger.error(
+      `[LogoLoader] Failed on page ${page} after collecting ` +
+        `${allLogos.length} partial results:`,
+      err,
+    );
+    throw err;
+  }
 }
 
 export async function createLogo(data: { name: string; url: string }): Promise<Logo> {
