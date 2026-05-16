@@ -2267,3 +2267,262 @@ class TestMigration0012Idempotent:
             )
         finally:
             engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Migration 0013 — session_telemetry per-type channel-event counters (bd-ov5vb)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestMigration0013:
+    """Migration 0013 — per-type channel-event counters on session_telemetry.
+
+    bd-ov5vb broadens the Stats v2 channel-event ingest to cover every
+    event type Dispatcharr emits for channel health (not just
+    ``channel_buffering``). The migration adds three INTEGER NOT NULL
+    DEFAULT 0 columns:
+
+      - ``reconnect_event_count``
+      - ``error_event_count``
+      - ``switch_event_count``
+
+    Pre-existing ``buffer_event_count`` is preserved verbatim — pre-bd-ov5vb
+    read paths keep working unchanged (the column collapses to 0 on
+    installs whose Dispatcharr does not emit ``channel_buffering``,
+    which is the truthful posture; that event is rare on real installs).
+
+    Coverage:
+      - Fresh upgrade through 0013 — all three new columns exist with
+        DEFAULT 0; ``buffer_event_count`` is untouched.
+      - Fresh downgrade — the three new columns are gone;
+        ``buffer_event_count`` is still present.
+
+    Revision-id history: this migration was originally drafted as 0012
+    but bumped to 0013 after rebase to avoid colliding with the
+    bd-lbkck ``task_schedules_interval_positive`` migration that landed
+    on dev concurrently (also 0012).
+    """
+
+    NEW_COLUMNS = ("reconnect_event_count", "error_event_count", "switch_event_count")
+
+    def test_fresh_sqlite_upgrade_through_0013(self, tmp_path):
+        """Fresh DB: ``alembic upgrade 0013`` adds the three new columns."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0013_fresh.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0013")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            for new_col in self.NEW_COLUMNS:
+                assert new_col in cols, (
+                    f"{new_col} missing after upgrade 0013 — migration "
+                    f"0013 did not run correctly."
+                )
+            # buffer_event_count is preserved — pre-bd-ov5vb back-compat.
+            assert "buffer_event_count" in cols, (
+                "buffer_event_count must be preserved by 0013 for "
+                "pre-bd-ov5vb read-path back-compat."
+            )
+            # Verify NOT NULL DEFAULT 0 via PRAGMA.
+            with engine.connect() as conn:
+                rows = conn.execute(text(
+                    "PRAGMA table_info(session_telemetry)"
+                )).fetchall()
+            col_info = {r[1]: r for r in rows}
+            for new_col in self.NEW_COLUMNS:
+                _, name, _type, notnull, dflt, _pk = col_info[new_col]
+                assert notnull == 1, (
+                    f"{name} must be NOT NULL; got notnull={notnull}"
+                )
+                # SQLite returns DEFAULT as a string literal "0".
+                assert dflt == "0", (
+                    f"{name} must have DEFAULT 0; got dflt={dflt!r}"
+                )
+        finally:
+            engine.dispose()
+
+    def test_fresh_sqlite_downgrade_from_0013(self, tmp_path):
+        """Downgrade 0013 -> 0012: the three new columns are dropped."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0013_downgrade.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0013")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            for new_col in self.NEW_COLUMNS:
+                assert new_col in cols, (
+                    f"test setup is wrong — {new_col} missing post-upgrade"
+                )
+        finally:
+            engine.dispose()
+
+        command.downgrade(cfg, "0012")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            for new_col in self.NEW_COLUMNS:
+                assert new_col not in cols, (
+                    f"{new_col} still present after downgrade — 0013's "
+                    f"downgrade() did not drop the column."
+                )
+            # buffer_event_count must survive the downgrade.
+            assert "buffer_event_count" in cols, (
+                "buffer_event_count must survive downgrade — it was never "
+                "added or dropped by 0013."
+            )
+        finally:
+            engine.dispose()
+
+
+@pytest.mark.integration
+class TestMigration0013Idempotent:
+    """Regression lock for bd-5w6jz idempotency on migration 0013.
+
+    Three drift scenarios:
+
+    1. All three new columns already present via ``create_all()`` from
+       the post-0013 ORM model (long-running install, alembic_version
+       still at 0012). The upgrade must early-return without raising
+       ``OperationalError: duplicate column name``.
+
+    2. ONE of the three columns already present (partial drift —
+       e.g. the migration crashed mid-run after one ADD COLUMN
+       succeeded). The upgrade must add the remaining two without
+       raising on the already-present one.
+
+    3. TWO of the three columns already present (alternate partial
+       drift). The upgrade must add the third without raising on the
+       other two.
+
+    Each column's ADD is independently guarded so any subset of
+    drifted columns is safe to re-encounter.
+    """
+
+    NEW_COLUMNS = ("reconnect_event_count", "error_event_count", "switch_event_count")
+
+    def test_drifted_all_three_columns_already_added(self, tmp_path):
+        """create_all()-style drift: all three columns present pre-0013."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0013_full_drift.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0012")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            for new_col in self.NEW_COLUMNS:
+                assert new_col not in cols, (
+                    f"test setup is wrong — {new_col} already at 0012"
+                )
+            # Inject all three columns via raw SQL — matches what
+            # create_all() would emit from the post-0013 ORM model.
+            with engine.begin() as conn:
+                for new_col in self.NEW_COLUMNS:
+                    conn.execute(text(
+                        f"ALTER TABLE session_telemetry ADD COLUMN "
+                        f"{new_col} INTEGER NOT NULL DEFAULT 0"
+                    ))
+            cols = _column_names(engine, "session_telemetry")
+            for new_col in self.NEW_COLUMNS:
+                assert new_col in cols
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == "0012"
+        finally:
+            engine.dispose()
+
+        # Pre-fix this would raise:
+        #   OperationalError: duplicate column name: reconnect_event_count
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            for new_col in self.NEW_COLUMNS:
+                assert new_col in cols
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == database.get_alembic_head_revision()
+        finally:
+            engine.dispose()
+
+    def test_drifted_partial_one_column_present(self, tmp_path):
+        """Partial drift: only ``reconnect_event_count`` already present."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0013_partial_one.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0012")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE session_telemetry ADD COLUMN "
+                    "reconnect_event_count INTEGER NOT NULL DEFAULT 0"
+                ))
+        finally:
+            engine.dispose()
+
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            for new_col in self.NEW_COLUMNS:
+                assert new_col in cols, (
+                    f"{new_col} missing after partial-drift upgrade — "
+                    f"the per-column guard must add absent columns even "
+                    f"when other targets are already present."
+                )
+        finally:
+            engine.dispose()
+
+    def test_drifted_partial_two_columns_present(self, tmp_path):
+        """Partial drift: ``error_event_count`` and ``switch_event_count``
+        already present; only ``reconnect_event_count`` is missing.
+        """
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0013_partial_two.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0012")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE session_telemetry ADD COLUMN "
+                    "error_event_count INTEGER NOT NULL DEFAULT 0"
+                ))
+                conn.execute(text(
+                    "ALTER TABLE session_telemetry ADD COLUMN "
+                    "switch_event_count INTEGER NOT NULL DEFAULT 0"
+                ))
+        finally:
+            engine.dispose()
+
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            for new_col in self.NEW_COLUMNS:
+                assert new_col in cols, (
+                    f"{new_col} missing after partial-drift upgrade"
+                )
+        finally:
+            engine.dispose()

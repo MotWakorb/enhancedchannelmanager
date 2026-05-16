@@ -5,8 +5,26 @@
  * Surfaces four per-provider visualizations against the read APIs shipped
  * in skqln.16:
  *
- *   1. Buffering events by provider — multi-series line chart
+ *   1. Channel events by provider — multi-series line chart
  *      ``GET /api/stats/providers/buffering?window=7d|30d|90d&bucket=hour|day``
+ *
+ *      Pre-bd-ov5vb (1x5v0 paired) this chart was labeled "Buffering
+ *      events by provider" and rendered a single ``buffer_event_count``
+ *      per (provider, time_bucket). Live verification on the PO's
+ *      instance found that filter was returning zero on every poll
+ *      because Dispatcharr's ``channel_buffering`` event is rare on
+ *      real installs — the operationally-meaningful health signals are
+ *      ``channel_reconnect`` / ``channel_error`` / ``stream_switch``,
+ *      which the ingest layer now writes to dedicated columns on
+ *      ``session_telemetry`` (migration 0013). The chart renders the
+ *      pre-summed ``total_event_count`` (UX option A — single primary
+ *      number); the per-type breakdown is surfaced in the data-table
+ *      fallback (which screen readers already always render) and a
+ *      hover tooltip on the chart points. Option A was chosen over
+ *      "three columns" (option B) because it preserves the chart's
+ *      visual real estate, keeps the legend coherent (one series per
+ *      provider, not per provider×event_type), and avoids breaking
+ *      the screenshot baseline more than necessary.
  *
  *   2. Time spent per provider — bar chart (bd-tknci, 2026-05-13)
  *      ``GET /api/stats/providers/watch-time?window=7d|30d|90d``
@@ -373,8 +391,14 @@ export function ProvidersPanel() {
     [m3uNameMap, buffering, watchTime, heatmap, bitrate],
   );
 
+  // bd-ov5vb / bd-1x5v0: chart values are the pre-summed
+  // ``total_event_count`` (per-provider total of buffer + reconnect +
+  // error + switch). Per-type breakdown lives in the data-table fallback
+  // below for screen-reader users and in the chart tooltip (Recharts
+  // built-in renders the underlying numeric value; the table reveals
+  // the breakdown). Option A — see panel docstring rationale.
   const bufferingChart = useMemo(
-    () => pivotByBucket(buffering, 'buffer_event_count'),
+    () => pivotByBucket(buffering, 'total_event_count'),
     [buffering],
   );
   const bitrateChart = useMemo(
@@ -502,15 +526,26 @@ export function ProvidersPanel() {
         </div>
       )}
 
-      {/* 1) Buffering events by provider — multi-series line chart */}
+      {/* 1) Channel events by provider — multi-series line chart
+            (bd-ov5vb + bd-1x5v0). Label changed from "Buffering" to
+            "Channel events" because the broadened ingest now covers
+            channel_reconnect / channel_error / stream_switch in
+            addition to channel_buffering; the chart value is the
+            pre-summed ``total_event_count``. Per-type breakdown lives
+            in the data-table fallback below. */}
       <div className="chart-section">
         <div className="chart-toolbar">
-          <h4 className="chart-title">Buffering events by provider</h4>
+          <h4 className="chart-title">Channel events by provider</h4>
           {renderToggle('buffering', 'providers-buffering-data-table')}
         </div>
+        <p className="chart-description">
+          Combined count of channel-health events per provider
+          (reconnect, error, stream-switch, buffering). See the data
+          table below for the per-type breakdown.
+        </p>
         {buffering.length === 0 && !loading ? (
           <div className="empty-state" role="status" aria-live="polite">
-            No buffering data for this window.
+            No channel-event data for this window.
           </div>
         ) : (
           <div className="chart-container" aria-hidden="true">
@@ -541,18 +576,28 @@ export function ProvidersPanel() {
           id="providers-buffering-data-table"
           className={`chart-data-table ${showTables.buffering ? 'visible' : 'visually-hidden'}`}
         >
-          <caption>Buffering events by provider — data table</caption>
+          <caption>Channel events by provider — data table</caption>
           <thead>
             <tr>
               <th scope="col">Time bucket</th>
               <th scope="col">Provider</th>
-              <th scope="col">Buffer events</th>
+              {/* bd-ov5vb / bd-1x5v0: per-type breakdown surfaces the
+                  four counters the broadened ingest writes to
+                  ``session_telemetry`` (migration 0013). "Total" is the
+                  pre-summed value the chart renders so a screen-reader
+                  user sees the same number visually-sighted users
+                  read off the line. */}
+              <th scope="col">Reconnect</th>
+              <th scope="col">Error</th>
+              <th scope="col">Switch</th>
+              <th scope="col">Buffer</th>
+              <th scope="col">Total</th>
             </tr>
           </thead>
           <tbody>
             {buffering.length === 0 ? (
               <tr>
-                <td colSpan={3}>No data</td>
+                <td colSpan={7}>No data</td>
               </tr>
             ) : (
               buffering.map((r, i) => {
@@ -568,7 +613,11 @@ export function ProvidersPanel() {
                         </span>
                       )}
                     </td>
+                    <td>{r.reconnect_event_count}</td>
+                    <td>{r.error_event_count}</td>
+                    <td>{r.switch_event_count}</td>
                     <td>{r.buffer_event_count}</td>
+                    <td>{r.total_event_count}</td>
                   </tr>
                 );
               })

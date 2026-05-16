@@ -1325,8 +1325,38 @@ class SessionTelemetry(Base):
     # Per-poll bytes delta (NOT cumulative). Named CHECK so the constraint
     # name is stable across SQLite versions (docs/database_migrations.md).
     bytes_delta = Column(BigInteger, nullable=False)
-    # Count of buffer/stall events observed during this poll window.
+    # Count of ``channel_buffering`` events observed during this poll
+    # window. Preserved verbatim from the pre-0012 schema — see the
+    # per-type counters below for the bd-ov5vb broadening that surfaced
+    # reconnect/error/switch events alongside this one. On real installs
+    # ``channel_buffering`` is rare (ffmpeg-speed threshold only); the
+    # operationally-meaningful health signals are the three counters
+    # below.
     buffer_event_count = Column(Integer, nullable=False, server_default="0", default=0)
+    # bd-ov5vb (migration 0013): per-type channel-event counters paired
+    # with ``buffer_event_count``. Pre-0012 the writer pulled only
+    # ``event_type=buffering`` from Dispatcharr's system-events feed,
+    # which on real installs returned zero because the events that
+    # actually represent channel-health problems are
+    # ``channel_reconnect`` / ``channel_error`` / ``stream_switch``.
+    # The broadened ingest in ``BandwidthTracker._collect_channel_events``
+    # buckets each event type into its own column so the Providers panel
+    # can surface them distinctly without losing the per-poll
+    # attribution. Each is INTEGER NOT NULL DEFAULT 0 so
+    # ``SUM(<column>) GROUP BY provider, time_bucket`` works the same
+    # way the legacy buffer rollup does. Attribution model is identical
+    # to ``buffer_event_count``: each per-channel count lands on the
+    # FIRST row emitted for that channel per poll; sibling rows write 0
+    # so per-client double-counting cannot inflate the aggregate.
+    reconnect_event_count = Column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    error_event_count = Column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    switch_event_count = Column(
+        Integer, nullable=False, server_default="0", default=0
+    )
     # Poll cadence in ms — avoids baking in a fixed-interval assumption and
     # makes bitrate derivable.
     poll_interval_ms = Column(Integer, nullable=False)

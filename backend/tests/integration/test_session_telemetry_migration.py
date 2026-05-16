@@ -143,12 +143,19 @@ class TestSessionTelemetryMigration:
             # (bd-kh23e) — both NULLABLE, no FK. ``dispatcharr_username``
             # lands in migration 0011 (bd-gsn3r) — TEXT NULL, no FK; the
             # denormalized read-side replacement for the dropped FK join
-            # against ECM ``users``. Carry all three in the head-shape
-            # assertion so a future delete/rename surfaces here.
+            # against ECM ``users``. ``reconnect_event_count``,
+            # ``error_event_count``, and ``switch_event_count`` land in
+            # migration 0013 (bd-ov5vb) — INTEGER NOT NULL DEFAULT 0,
+            # paired with the pre-existing ``buffer_event_count`` so the
+            # broadened channel-event ingest can attribute each
+            # ``event_type`` to its own per-poll counter. Carry every
+            # column in the head-shape assertion so a future
+            # delete/rename surfaces here.
             assert set(cols) == {
                 "id", "session_id", "observed_at", "user_id", "provider_id",
                 "channel_id", "bytes_delta", "buffer_event_count", "poll_interval_ms",
                 "stream_id", "stream_name", "dispatcharr_username",
+                "reconnect_event_count", "error_event_count", "switch_event_count",
             }
             assert cols["session_id"]["nullable"] is False
             assert cols["observed_at"]["nullable"] is False
@@ -164,6 +171,13 @@ class TestSessionTelemetryMigration:
             )
             assert cols["bytes_delta"]["nullable"] is False
             assert cols["buffer_event_count"]["nullable"] is False
+            # bd-ov5vb (migration 0013): the three per-type counters
+            # are NOT NULL DEFAULT 0 — same shape contract as
+            # ``buffer_event_count`` so SUM rollups never need
+            # COALESCE / NULL-safe arithmetic.
+            assert cols["reconnect_event_count"]["nullable"] is False
+            assert cols["error_event_count"]["nullable"] is False
+            assert cols["switch_event_count"]["nullable"] is False
             assert cols["poll_interval_ms"]["nullable"] is False
             # bd-kh23e: both stream identity columns are NULLABLE
             # (resolver-failure rows write NULL) and untyped against any
