@@ -1671,6 +1671,89 @@ class TestDebugBundle:
         assert manifest["normalization_group_count"] == 1
         assert manifest["normalization_rule_count"] == 1
 
+    @pytest.mark.asyncio
+    async def test_bundle_redacts_both_dispatcharr_api_key_and_legacy_api_key(
+        self, async_client
+    ):
+        """The debug-bundle settings.json redactor must scrub BOTH the
+        canonical ``dispatcharr_api_key`` (bd-jmi1c) and the legacy
+        ``api_key`` field (pre-existing leak since v0.16.0-0004). Regression
+        guard for bd-46g4t / bd-jmi1c P0-1.
+        """
+        import asyncio as _asyncio
+        import io as _io
+        import json as _json
+        import tarfile as _tarfile
+        from config import DispatcharrSettings
+
+        # Distinctive sentinels so a substring scan on the tarball bytes
+        # catches any leak path, not just the settings.json file we assert on.
+        raw_canonical = "raw-canon-VANSIRTEST"
+        raw_legacy = "raw-leg-XYZSENTINEL"
+        raw_password = "raw-pass-PWDLEAK"
+        raw_smtp = "raw-smtp-SMTPLEAK"
+        raw_telegram_bot = "raw-tg-bot-TELEGRAMLEAK"
+        raw_mcp = "raw-mcp-MCPLEAK"
+
+        seeded = DispatcharrSettings(
+            url="http://dispatcharr:9191",
+            auth_method="api_key",
+            username="admin",
+            password=raw_password,
+            dispatcharr_api_key=raw_canonical,
+            api_key=raw_legacy,
+            smtp_password=raw_smtp,
+            telegram_bot_token=raw_telegram_bot,
+            mcp_api_key=raw_mcp,
+        )
+
+        mock_client = AsyncMock()
+        mock_client.get_channels = AsyncMock(return_value={"results": [], "next": None, "count": 0})
+        mock_client.get_channel_groups = AsyncMock(return_value=[])
+        mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+        mock_client.get_m3u_accounts = AsyncMock(return_value=[])
+
+        with patch("routers.auto_creation.get_client", return_value=mock_client), \
+             patch("log_utils.get_recent_logs", return_value=[]), \
+             patch("config.get_settings", return_value=seeded), \
+             patch("config.load_settings", return_value=seeded):
+            enqueue = await async_client.post("/api/auto-creation/debug-bundle")
+            assert enqueue.status_code == 202
+            job_id = enqueue.json()["job_id"]
+            for _ in range(80):
+                await _asyncio.sleep(0)
+
+            response = await async_client.get(f"/api/auto-creation/debug-bundle/{job_id}")
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("application/gzip")
+            archive_bytes = response.content
+
+        # Belt-and-suspenders: no raw credential value may appear anywhere in
+        # the tar.gz bytes — catches future leak paths beyond settings.json.
+        for label, raw in (
+            ("dispatcharr_api_key", raw_canonical),
+            ("api_key", raw_legacy),
+            ("password", raw_password),
+            ("smtp_password", raw_smtp),
+            ("telegram_bot_token", raw_telegram_bot),
+            ("mcp_api_key", raw_mcp),
+        ):
+            assert raw.encode() not in archive_bytes, (
+                f"raw {label} value '{raw}' leaked into the debug bundle"
+            )
+
+        with _tarfile.open(fileobj=_io.BytesIO(archive_bytes), mode="r:gz") as tf:
+            settings_member = tf.extractfile("settings.json")
+            assert settings_member is not None
+            settings_in_bundle = _json.loads(settings_member.read().decode("utf-8"))
+
+        assert settings_in_bundle["dispatcharr_api_key"] == "***REDACTED***"
+        assert settings_in_bundle["api_key"] == "***REDACTED***"
+        assert settings_in_bundle["password"] == "***REDACTED***"
+        assert settings_in_bundle["smtp_password"] == "***REDACTED***"
+        assert settings_in_bundle["telegram_bot_token"] == "***REDACTED***"
+        assert settings_in_bundle["mcp_api_key"] == "***REDACTED***"
+
 
 # =========================================================================
 # Rule analyzer endpoints (bd-0gntx).
