@@ -1,8 +1,37 @@
-import { useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { SplitPane, ChannelsPane, StreamsPane } from '../';
+import { PendingMergesPage } from './PendingMergesPage';
+import * as api from '../../services/api';
+import { logger } from '../../utils/logger';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord } from '../../types';
 import type { TimezonePreference, NumberSeparator, PrefixOrder } from '../../services/api';
 import type { ChannelDefaults } from '../StreamsPane';
+import './ChannelManagerTab.css';
+
+/**
+ * Window-level event the toast action (and any other surface) can dispatch to
+ * open the Pending Merges sub-view from outside the React tree. The toast
+ * that fires after an M3U refresh queues new dedup candidates (BD-J) is the
+ * first consumer; the contract is
+ * `dispatchEvent(new CustomEvent('ecm:open-pending-merges'))`.
+ *
+ * Why a DOM event rather than prop drilling: NotificationCenter lives next
+ * to TabNavigation in App.tsx, not inside this tab. A DOM event keeps the
+ * cross-tree coupling minimal — no shared context, no callback chain.
+ */
+export const PENDING_MERGES_EVENT = 'ecm:open-pending-merges';
+
+/**
+ * How often the subnav badge re-polls the pending-merges count. 30s mirrors
+ * the NotificationCenter's idle-poll cadence — the next-best signal that
+ * something queue-affecting just happened (an M3U refresh surfaces via the
+ * auto_creation notification on the same cadence). When the operator opens
+ * the Pending Merges view the page fetches its own fresh data; the badge
+ * poll is solely for the count affordance on the subnav link.
+ */
+const COUNT_POLL_INTERVAL_MS = 30_000;
+
+type ChannelManagerView = 'default' | 'pending-merges';
 
 export interface ChannelManagerTabProps {
   // Channel Groups
@@ -356,8 +385,94 @@ export function ChannelManagerTab({
     return ids;
   }, [channels]);
 
+  // Pending Merges sub-view state (BD-J / bd-gfxrz, ADR-008 §D1). The view
+  // toggles between the default channels/streams split-pane and the
+  // PendingMergesPage. The subnav link is the only entry point from this
+  // tab; outside-tree entry points (e.g. the M3U-refresh toast) fire the
+  // PENDING_MERGES_EVENT, which the listener below handles.
+  const [view, setView] = useState<ChannelManagerView>('default');
+  const [pendingMergesCount, setPendingMergesCount] = useState(0);
+
+  // Poll the pending-merges count so the subnav badge stays current without
+  // requiring the operator to switch into the page. We use the same list
+  // endpoint with page_size=1 — we only need `total`, not the rows. A poll
+  // failure is logged and the badge stays at its last-known value rather
+  // than dropping to 0 (which would falsely hide the affordance).
+  const refreshCount = useCallback(async () => {
+    try {
+      const response = await api.getPendingMerges({
+        status: 'pending',
+        page: 1,
+        pageSize: 1,
+      });
+      setPendingMergesCount(response.total);
+    } catch (err) {
+      logger.debug('ChannelManagerTab: pending-merges count poll failed', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshCount();
+    const interval = window.setInterval(refreshCount, COUNT_POLL_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [refreshCount]);
+
+  // Listen for the cross-tree open-page event (toast action, MCP redirect,
+  // future deep-links). Switches into the pending-merges view and triggers
+  // an immediate count refresh — the toast that just fired is the strongest
+  // signal that the queue depth just changed.
+  useEffect(() => {
+    const handler = () => {
+      setView('pending-merges');
+      refreshCount();
+    };
+    window.addEventListener(PENDING_MERGES_EVENT, handler);
+    return () => window.removeEventListener(PENDING_MERGES_EVENT, handler);
+  }, [refreshCount]);
+
+  // Subnav link visibility per spec: render only when count > 0 OR when the
+  // operator is already on the page (so a single-resolve doesn't strand the
+  // operator on a view with no way back to the default panes via the subnav).
+  const showSubnavLink = pendingMergesCount > 0 || view === 'pending-merges';
+
   return (
-    <SplitPane
+    <div className="channel-manager-tab">
+      {showSubnavLink && (
+        <nav className="channel-manager-subnav" aria-label="Channel Manager views">
+          <button
+            type="button"
+            className={`channel-manager-subnav-link ${view === 'default' ? 'is-active' : ''}`}
+            onClick={() => setView('default')}
+          >
+            Channels &amp; Streams
+          </button>
+          <button
+            type="button"
+            className={`channel-manager-subnav-link ${view === 'pending-merges' ? 'is-active' : ''}`}
+            onClick={() => setView('pending-merges')}
+            aria-label={
+              pendingMergesCount > 0
+                ? `Pending Merges (${pendingMergesCount})`
+                : 'Pending Merges'
+            }
+          >
+            Pending Merges
+            {pendingMergesCount > 0 && (
+              <span
+                className="channel-manager-subnav-badge"
+                data-testid="pending-merges-badge"
+              >
+                {pendingMergesCount}
+              </span>
+            )}
+          </button>
+        </nav>
+      )}
+
+      {view === 'pending-merges' ? (
+        <PendingMergesPage />
+      ) : (
+        <SplitPane
       left={
         <ChannelsPane
           channelGroups={channelGroups}
@@ -487,5 +602,7 @@ export function ChannelManagerTab({
         />
       }
     />
+      )}
+    </div>
   );
 }

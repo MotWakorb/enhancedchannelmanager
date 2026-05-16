@@ -1,0 +1,130 @@
+/**
+ * PendingMergesPage styles (BD-J / bd-gfxrz, ADR-008 §D1).
+ *
+ * Uses shared/common.css for:
+ *   .btn-primary, .btn-secondary, .empty-state, .error-banner,
+ *   .spinning-cw
+ *
+ * Confidence badge visual mirrors the scoped `.confidence-badge` in
+ * StreamDedupModal.css (BD-G), kept scoped under `.pending-merges-page` so
+ * the two surfaces do not have to share a stylesheet boundary. If a third
+ * consumer appears, promoting `.confidence-badge` to common.css is the
+ * right next move — see StreamDedupModal.css header note.
+ *
+ * Tokens (`--bg-tertiary`, `--border-color`, etc.) come from index.css.
+ * Dark theme is the default.
+ */
+
+.pending-merges-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  padding: 1rem 1.5rem;
+  overflow: auto;
+  box-sizing: border-box;
+}
+
+.pending-merges-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  flex-shrink: 0;
+}
+
+.pending-merges-header h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  color: var(--text-primary);
+}
+
+.pending-merges-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.pending-merges-row {
+  background: var(--bg-secondary, #252540);
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-lg);
+  padding: 0.875rem 1rem;
+}
+
+.pending-merges-row-main {
+  display: grid;
+  grid-template-columns: 1.5fr 1.5fr auto;
+  gap: 1rem;
+  align-items: center;
+}
+
+@media (max-width: 768px) {
+  .pending-merges-row-main {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+}
+
+.pending-merges-label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-muted, #888);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.25rem;
+}
+
+.pending-merges-stream-name,
+.pending-merges-candidate-id {
+  color: var(--text-primary, #fff);
+  font-size: 0.95rem;
+  font-weight: 500;
+  /* Long stream/channel ids should wrap rather than overflow horizontally. */
+  word-break: break-word;
+}
+
+.pending-merges-candidate-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+/*
+ * Confidence badge — scoped clone of StreamDedupModal.css's `.confidence-badge`.
+ * See header note: if a third consumer lands, promote to common.css.
+ */
+.pending-merges-page .confidence-badge {
+  flex-shrink: 0;
+  padding: 0.25rem 0.625rem;
+  background: var(--bg-tertiary, #1a1a2e);
+  color: var(--text-secondary, #888);
+  font-size: 0.8rem;
+  font-weight: 600;
+  border-radius: var(--radius-2xl);
+}
+
+.pending-merges-page .pending-merges-exact-badge {
+  background: var(--success-bg, rgba(34, 197, 94, 0.15));
+  color: var(--success, #4ade80);
+}
+
+.pending-merges-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.pending-merges-merge-btn {
+  min-width: 5.5rem;
+}
+
+.pending-merges-row-error {
+  margin-top: 0.75rem;
+  margin-bottom: 0;
+}

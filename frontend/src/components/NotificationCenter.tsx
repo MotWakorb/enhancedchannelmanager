@@ -3,10 +3,28 @@ import * as api from '../services/api';
 import type { Notification } from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
 import { logger } from '../utils/logger';
+import { decoratePendingMergesToast } from './pendingMergesToast';
+import { PENDING_MERGES_EVENT } from './tabs/ChannelManagerTab';
 import './NotificationCenter.css';
 
 interface NotificationCenterProps {
   onNotificationClick?: (notification: Notification) => void;
+  /**
+   * When true, suppress the dedup-specific "N streams queued for dedup
+   * review" toast that would otherwise fire when a post-M3U-refresh
+   * auto_creation notification carries a non-zero pending_merges_added
+   * count. Sourced from `Settings.dedup_m3u_toast_suppressed` (BD-K).
+   * Defaults to `false` so the toast fires by default when the feature
+   * is shipped.
+   *
+   * The underlying notification still appears in NotificationCenter; only
+   * the dedicated decorated toast (with a "View" action linking to the
+   * Pending Merges page) is suppressed. The plain auto_creation toast
+   * fired by the existing TOAST_SOURCES branch is also suppressed for the
+   * pending-merges case so we do not surface two stacked toasts for the
+   * same event.
+   */
+  dedupM3uToastSuppressed?: boolean;
 }
 
 // Progress metadata structure for task notifications
@@ -50,7 +68,10 @@ const isProbeActive = (status: ProbeProgress['status']): boolean => {
 // Sources that should auto-show toasts when new notifications arrive
 const TOAST_SOURCES = new Set(['auto_creation']);
 
-export function NotificationCenter({ onNotificationClick }: NotificationCenterProps) {
+export function NotificationCenter({
+  onNotificationClick,
+  dedupM3uToastSuppressed = false,
+}: NotificationCenterProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -65,6 +86,12 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
   const toasts = useNotifications();
   const toastsRef = useRef(toasts);
   toastsRef.current = toasts;
+  // Stable ref for the suppress flag — read inside the polling callback so
+  // the operator flipping the Settings toggle is honoured on the next poll
+  // without forcing the callback to re-create (which would also re-create
+  // the polling interval and re-fire the initial load).
+  const dedupSuppressedRef = useRef(dedupM3uToastSuppressed);
+  dedupSuppressedRef.current = dedupM3uToastSuppressed;
   const seenNotificationIds = useRef<Set<number>>(new Set());
   const initialLoadDone = useRef(false);
 
@@ -84,16 +111,56 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
         return 0; // preserve API order within each group
       });
 
-      // Show toasts for new notifications from opted-in sources
+      // Show toasts for new notifications from opted-in sources.
+      // For dedup-relevant auto_creation notifications (post-M3U-refresh
+      // pending merges added), `decoratePendingMergesToast` returns the
+      // BD-J decorated toast options with a "View" action that opens the
+      // Pending Merges page; otherwise we fall back to the existing un-
+      // decorated toast. Per ADR-008 §D1 / bd-gfxrz we emit at most ONE
+      // toast per refresh — the seen-id guard in NotificationCenter is the
+      // de-dupe contract.
       if (initialLoadDone.current) {
         for (const n of response.notifications) {
           if (!seenNotificationIds.current.has(n.id) && n.source && TOAST_SOURCES.has(n.source)) {
             const t = toastsRef.current;
-            const toastMethod = n.type === 'error' ? t.error
-              : n.type === 'warning' ? t.warning
-              : n.type === 'success' ? t.success
-              : t.info;
-            toastMethod(n.message, n.title || undefined);
+            const dedup = n.source === 'auto_creation'
+              ? decoratePendingMergesToast({
+                  notification: n,
+                  dedupM3uToastSuppressed: dedupSuppressedRef.current,
+                })
+              : null;
+
+            if (dedup) {
+              // Decorated dedup toast — operator-facing action routes them
+              // straight into the Pending Merges page via the cross-tree
+              // CustomEvent contract.
+              t.notify({
+                type: 'info',
+                title: dedup.title,
+                message: dedup.message,
+                action: {
+                  label: dedup.actionLabel,
+                  onClick: () => {
+                    window.dispatchEvent(new CustomEvent(PENDING_MERGES_EVENT));
+                  },
+                },
+              });
+            } else if (n.source === 'auto_creation' && dedupSuppressedRef.current
+                && /pending\s+merges?\s+queued/i.test(n.title ?? '')) {
+              // Operator has suppressed the dedup toast in Settings (BD-K)
+              // AND this notification is the dedup case. Honour the
+              // suppression by skipping the plain toast as well — otherwise
+              // the operator would still see a toast for the event they
+              // explicitly silenced. The notification still appears in
+              // NotificationCenter so the operator can find it later.
+              continue;
+            } else {
+              const toastMethod = n.type === 'error' ? t.error
+                : n.type === 'warning' ? t.warning
+                : n.type === 'success' ? t.success
+                : t.info;
+              toastMethod(n.message, n.title || undefined);
+            }
           }
         }
       }
