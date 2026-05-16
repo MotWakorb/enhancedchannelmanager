@@ -2390,7 +2390,13 @@ async def bulk_merge_channels(request: BulkMergeRequest):
             target = await client.get_channel(item.target_channel_id)
             target_name = target.get("name", f"Channel {item.target_channel_id}")
 
-            # Collect all streams from target + sources (deduplicated, target first)
+            # Collect all streams from target + sources (deduplicated, target first).
+            # Pre-validate source IDs before mutating anything: if any source no longer
+            # exists upstream (e.g., stale ID from a previous merge), surface 422 with a
+            # refresh hint instead of silently calling DELETE on a ghost row and producing
+            # [DISPATCHARR] API request failed: DELETE 404 noise.  Mirror of the same
+            # pattern in merge_channels (bd-ct9wl); applied here for the bulk path
+            # (bd-ozhkf).
             all_streams: list[int] = []
             seen: set[int] = set()
             for sid in target.get("streams", []):
@@ -2399,6 +2405,7 @@ async def bulk_merge_channels(request: BulkMergeRequest):
                     seen.add(sid)
 
             source_names = []
+            missing_ids: list[int] = []
             for src_id in item.source_channel_ids:
                 try:
                     src = await client.get_channel(src_id)
@@ -2407,8 +2414,24 @@ async def bulk_merge_channels(request: BulkMergeRequest):
                         if sid not in seen:
                             all_streams.append(sid)
                             seen.add(sid)
-                except Exception as e:
-                    logger.warning("[CHANNELS] bulk-merge: failed to fetch source %s: %s", src_id, e)
+                except httpx.HTTPStatusError as fetch_err:
+                    if fetch_err.response.status_code == 404:
+                        missing_ids.append(src_id)
+                    else:
+                        raise
+
+            if missing_ids:
+                logger.warning(
+                    "[CHANNELS] bulk-merge: rejected — stale source IDs %s no longer exist",
+                    missing_ids,
+                )
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Source channels {missing_ids} no longer exist — "
+                        "refresh the channels list and try again"
+                    ),
+                )
 
             # Update target with combined streams
             if all_streams:
@@ -2442,6 +2465,8 @@ async def bulk_merge_channels(request: BulkMergeRequest):
                 "success": True,
             })
 
+        except HTTPException:
+            raise
         except Exception as e:
             failed_count += 1
             # CodeQL py/stack-trace-exposure (#1413): log full exception (with

@@ -770,3 +770,93 @@ class TestMergeChannelsStaleSourceIds:
         assert "refresh" in detail.lower()
         # Did not proceed to create the merged channel.
         mock_client.create_channel.assert_not_called()
+
+
+class TestBulkMergeChannelsStaleSourceIds:
+    """Tests for POST /api/channels/bulk-merge stale-source-ID handling.
+
+    bd-ozhkf (follow-up to bd-ct9wl): the bulk path had the same footgun as
+    the single-channel merge endpoint — bare except swallowed get_channel 404s
+    and then called delete_channel anyway, producing DELETE 404 log noise.
+    Pre-validation now runs before the delete loop and returns 422 with a
+    refresh hint when any source ID no longer exists.
+    """
+
+    @pytest.mark.asyncio
+    async def test_returns_422_when_source_id_no_longer_exists(self, async_client):
+        """Stale source ID in bulk merge returns 422 with refresh hint, not 200 + failed count."""
+        mock_client = AsyncMock()
+        # target fetch succeeds; first source fine; second source is gone (404).
+        not_found_response = MagicMock(spec=httpx.Response)
+        not_found_response.status_code = 404
+        not_found_response.text = "Not found"
+        not_found_request = MagicMock(spec=httpx.Request)
+        mock_client.get_channel.side_effect = [
+            {"id": 1, "name": "Target", "streams": [10]},   # target
+            {"id": 2, "name": "Source A", "streams": [20]}, # source 2 OK
+            httpx.HTTPStatusError(                           # source 999 gone
+                "404 Not Found",
+                request=not_found_request,
+                response=not_found_response,
+            ),
+        ]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post(
+                "/api/channels/bulk-merge",
+                json={
+                    "merges": [
+                        {
+                            "target_channel_id": 1,
+                            "source_channel_ids": [2, 999],
+                        }
+                    ]
+                },
+            )
+
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert "999" in detail
+        assert "refresh" in detail.lower()
+        # Did not proceed to delete source channels.
+        mock_client.delete_channel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_detail_string_matches_single_channel_endpoint(self, async_client):
+        """Bulk-merge 422 detail is identical in structure to merge_channels (operator-facing copy consistency)."""
+        mock_client = AsyncMock()
+        not_found_response = MagicMock(spec=httpx.Response)
+        not_found_response.status_code = 404
+        not_found_response.text = "Not found"
+        not_found_request = MagicMock(spec=httpx.Request)
+        stale_id = 888
+        mock_client.get_channel.side_effect = [
+            {"id": 1, "name": "Target", "streams": []},
+            httpx.HTTPStatusError(
+                "404 Not Found",
+                request=not_found_request,
+                response=not_found_response,
+            ),
+        ]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post(
+                "/api/channels/bulk-merge",
+                json={
+                    "merges": [
+                        {
+                            "target_channel_id": 1,
+                            "source_channel_ids": [stale_id],
+                        }
+                    ]
+                },
+            )
+
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        # Must contain the stale ID and the refresh hint phrase used by merge_channels.
+        assert str(stale_id) in detail
+        assert "no longer exist" in detail
+        assert "refresh the channels list and try again" in detail
