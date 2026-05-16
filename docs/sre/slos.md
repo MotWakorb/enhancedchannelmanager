@@ -439,6 +439,48 @@ ecm:database_size_bytes:weekly_delta = ecm_database_size_bytes - ecm_database_si
 
 ---
 
+## Capacity planning: Task scheduler health (bd-qxi02)
+
+**Class:** Capacity-planning / operational-health, not a numbered SLO. Same posture as `database_capacity` above and the `ecm_stats_v2_storage` group — we expose the signal and ship the alert rule, but the threshold is a leading indicator for operator action rather than a user-facing reliability commitment per se. Surfaces a class of regression (silent scheduler stall) that bd-p5b8i demonstrated existing observability did not catch — the scheduling subsystem was broken for 39+ days on the PO's install (4 months across all operators) before manual investigation found it.
+
+**SLI:** Two gauges emitted by the task subsystem:
+
+- `ecm_task_schedule_last_success_timestamp{task_id}` — Unix-epoch seconds of the most recent successful execution per task. Stamped by `task_engine._execute_task` on every successful TaskResult. Per-task so SRE can distinguish a stuck `stats_v2_rollup` from a stuck `cleanup` from a stuck `stream_probe` — each has a different cadence and a different acceptable staleness window.
+- `ecm_task_schedule_next_run_null_count` — Count of `task_schedules` rows where `next_run_at IS NULL AND enabled=1 AND schedule_type != 'manual'`. Any non-zero value is the canonical "scheduler subsystem is broken" signal (the exact bd-p5b8i symptom). Emitted at startup post-`_run_migrations` and on every `TaskRegistry.sync_from_database`.
+
+**Prometheus expression (recording rule):**
+```promql
+ecm:task_schedule:hours_since_success = (time() - ecm_task_schedule_last_success_timestamp) / 3600
+```
+
+**Operational thresholds (alert rules in `prometheus_rules.yaml` group `ecm_task_scheduler`):**
+
+| Alert | Trigger | Window | Severity |
+|-|-|-|-|
+| `ECMTaskSchedulerNextRunNull` | `next_run_at IS NULL` count > 0 | 5m | page |
+| `ECMTaskScheduleStaleStatsRollup` | `stats_v2_rollup` last success > 25h ago | 1h | warning |
+| `ECMTaskScheduleStaleCleanup` | `cleanup` last success > 8d ago | 24h | warning |
+| `ECMTaskScheduleStaleM3UMonitor` | `m3u_change_monitor` last success > 12h ago | 1h | warning |
+| `ECMTaskScheduleStaleStreamProbe` | `stream_probe` last success > 48h ago | 6h | warning |
+
+**Why these thresholds (initial):** Each per-task staleness budget is "2× the documented cadence" — `stats_v2_rollup` nightly → 25h budget; `cleanup` weekly → 8d budget; `m3u_change_monitor` 6h interval → 12h budget; `stream_probe` daily-ish → 48h budget. The 2× factor absorbs one missed run (container restart, snapshot pause, single transient failure) without paging, while catching a sustained stall before the next-most-stale signal (data freshness, dashboard staleness, missed alerts) would have surfaced it. `ECMTaskSchedulerNextRunNull` is severity `page` because it indicates a *structural* break (the scheduler never picks the row up at all) rather than a delayed run.
+
+**Why this is not a numbered SLO:** Task cadence is operator-configurable (Settings → Tasks lets the operator change every interval and disable any task). ECM cannot make a portable commitment about "the cleanup task ran in the last 8 days" when an operator's documented choice may be MANUAL, monthly, or a non-default cron. The signal is exposed so operators can build their own commitments against their configured schedule.
+
+**Deploy order — IMPORTANT:** `ECMTaskSchedulerNextRunNull` only becomes useful AFTER the bd-p5b8i / Bundle H heal ships. Pre-heal, every existing operator's gauge is > 0 (the disease) and the alert would page immediately on every install. Land the heal first, then enable the alert rule.
+
+**What breaks these thresholds:**
+
+- An operator legitimately disables a task or sets it to MANUAL → `last_success_timestamp` ages forever. The per-task staleness alerts fire as warnings, not pages. Document operator-disabled tasks in the alert suppression / inhibition layer (deployment-environment-specific).
+- Bundle H's heal hasn't landed → `next_run_at IS NULL` count is non-zero on every existing install. Do not enable `ECMTaskSchedulerNextRunNull` until the heal is deployed.
+- A task is renamed in the registry → its `task_id` label changes. The old series ages out at the Prometheus retention horizon; the new series starts fresh. A burst of staleness alerts in the changeover window is expected and self-resolves.
+
+**Cardinality discipline:** `task_id` is bounded — values are code constants drawn from `task_registry.TaskScheduler.task_id` class attributes (~15 distinct tasks at this time). The label space cannot grow at runtime (no user-derived input). `ecm_task_schedule_next_run_null_count` is label-free — there is exactly one count process-wide.
+
+**Runbook:** [`docs/runbooks/task_scheduler_stalled.md`](../runbooks/task_scheduler_stalled.md) — covers the NULL `next_run_at` diagnostic query, the bd-p5b8i / Bundle H heal recovery path, and per-task triage for the staleness alerts.
+
+---
+
 ## SLO-4: Readiness Sub-check Latency (informational)
 
 **SLI:** 95th percentile duration of readiness sub-checks, per `check` label (`database`, `dispatcharr`, `ffprobe`).

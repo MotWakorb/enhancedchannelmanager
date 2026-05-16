@@ -676,6 +676,61 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             "``database-size-warn`` runbook for the WAL-vs-body triage.",
             registry=registry,
         ),
+        # ----------------------------------------------------------------
+        # Task scheduler health (bd-qxi02, bd-p5b8i SRE recommendation).
+        #
+        # Two gauges expose the operational health of the task scheduler
+        # subsystem — the gap that allowed bd-p5b8i to go undetected for
+        # 39+ days on the PO's install (4 months across all operators)
+        # because the existing ecm_telemetry_rollup_last_success_timestamp
+        # gauge fired only for rollup-specific tasks, no alert rule wired
+        # it up, and no Prometheus deployment consumed the signal.
+        #
+        # ``task_schedule_last_success_timestamp`` labels by ``task_id`` —
+        # a bounded enum drawn from the task_registry (~15 tasks defined
+        # in code; the label space is the set of task_class.task_id
+        # constants, not user-derived input, so cardinality cannot grow
+        # at runtime). Updated by the task_engine on every successful
+        # task execution to the current Unix epoch seconds. Per-task so
+        # SRE staleness alerts can distinguish a stuck stats_v2_rollup
+        # from a stuck cleanup from a stuck stream_probe — each has a
+        # different cadence and a different acceptable staleness window.
+        #
+        # ``task_schedule_next_run_null_count`` is label-free — the count
+        # of task_schedules rows where next_run_at IS NULL AND enabled=1
+        # AND schedule_type != 'manual'. Any non-zero value is the
+        # canonical "scheduler subsystem is broken" signal — the exact
+        # symptom bd-p5b8i exhibited (every non-MANUAL schedule had NULL
+        # next_run_at, so the scheduler loop never picked them up). The
+        # gauge is emitted at startup (post-Alembic) AND on every
+        # ``sync_from_database`` so a heal during Bundle H's bd-p5b8i
+        # remediation is visible on the next scrape.
+        # ----------------------------------------------------------------
+        "task_schedule_last_success_timestamp": Gauge(
+            "ecm_task_schedule_last_success_timestamp",
+            "Unix-epoch seconds of the most recent SUCCESSFUL execution "
+            "of each scheduled task, labeled by task_id. Updated by the "
+            "task_engine post-execution when the TaskResult is success. "
+            "Per-task so SRE staleness alerts can distinguish a stuck "
+            "stats_v2_rollup (25h budget) from a stuck cleanup (8d "
+            "weekly) from a stuck stream_probe (48h, runs twice daily). "
+            "Label cardinality is bounded by the task_registry — task_id "
+            "values are code constants, not user-derived input.",
+            ["task_id"],
+            registry=registry,
+        ),
+        "task_schedule_next_run_null_count": Gauge(
+            "ecm_task_schedule_next_run_null_count",
+            "Count of task_schedules rows where next_run_at IS NULL AND "
+            "enabled=1 AND schedule_type != 'manual'. Any non-zero value "
+            "is the canonical 'scheduler subsystem is broken' signal — "
+            "non-MANUAL enabled schedules MUST have a computed next_run_at "
+            "for the scheduler loop to pick them up. Emitted at startup "
+            "post-Alembic (database.init_db) AND on every TaskRegistry "
+            "sync_from_database so Bundle H's heal is visible on the "
+            "next scrape without waiting for a container restart.",
+            registry=registry,
+        ),
     }
 
 
@@ -779,6 +834,99 @@ def update_database_size_metrics(db_path: Optional[str] = None) -> None:
     except Exception:  # pragma: no cover — never break the caller
         logging.getLogger(__name__).debug(
             "[OBSERVABILITY] update_database_size_metrics failed", exc_info=True
+        )
+
+
+def record_task_success(task_id: str, timestamp: Optional[float] = None) -> None:
+    """Stamp the ``ecm_task_schedule_last_success_timestamp`` gauge for a task.
+
+    Called by ``task_engine._execute_task`` immediately after a task's
+    ``TaskResult`` reports ``success=True`` and ``error != "CANCELLED"``.
+    The gauge is the SLI surface for the per-task staleness alerts in
+    the ``ecm_task_scheduler`` Prometheus rules group — without this
+    update, those alerts cannot distinguish "task hasn't been scheduled
+    in days" (the bd-p5b8i failure mode) from "task is healthy and
+    polling normally."
+
+    Defensive: never raises. Observability instrumentation must not
+    take down the task execution path it's wrapping. A failure to
+    publish is logged at DEBUG.
+
+    Parameters
+    ----------
+    task_id:
+        The task registry key (e.g. ``"stats_v2_rollup"``,
+        ``"cleanup"``, ``"stream_probe"``). Must be a code constant
+        from the task_registry — not user-derived input. Label
+        cardinality is bounded by the registry, not by request shape.
+    timestamp:
+        Override for the Unix-epoch timestamp value. Defaults to
+        ``time.time()`` (current wall-clock). Exposed for tests so
+        they can pin the value without mocking ``time.time``.
+    """
+    try:
+        if timestamp is None:
+            timestamp = time.time()
+        get_metric("task_schedule_last_success_timestamp").labels(
+            task_id=task_id
+        ).set(float(timestamp))
+    except Exception:  # pragma: no cover — observability must not break task engine
+        logging.getLogger(__name__).debug(
+            "[OBSERVABILITY] record_task_success failed for task_id=%s",
+            task_id, exc_info=True,
+        )
+
+
+def update_task_schedule_null_count(count: Optional[int] = None) -> None:
+    """Set the ``ecm_task_schedule_next_run_null_count`` gauge.
+
+    Counts ``task_schedules`` rows where ``next_run_at IS NULL AND
+    enabled=1 AND schedule_type != 'manual'`` — any non-zero value is
+    the canonical "scheduler subsystem is broken" signal (bd-p5b8i).
+
+    Called from:
+
+    * ``database.init_db`` post-``_run_migrations`` — establishes the
+      startup value before Bundle H's heal can change it, so SRE sees
+      the pre-heal count in the boot trace.
+    * ``task_registry.TaskRegistry.sync_from_database`` — re-emitted
+      after the registry has finished its own bookkeeping so a heal
+      that ran during sync_from_database is reflected immediately.
+
+    Defensive: never raises. When ``count`` is ``None``, queries the
+    DB lazily — the import is inside the function so tests that
+    haven't initialized the DB module don't pay an import-time cost.
+    A query failure (DB unreachable, table missing on a fresh install)
+    leaves the gauge untouched and logs at DEBUG. The caller can pass
+    ``count`` directly to avoid the implicit query (e.g., when the
+    caller already has a live session open).
+
+    Parameters
+    ----------
+    count:
+        When provided, the gauge is set to ``float(count)`` directly.
+        When ``None``, the function opens a fresh session via
+        ``database.get_session`` and runs the count query itself.
+    """
+    try:
+        if count is None:
+            from sqlalchemy import text  # local — keep observability importable without sqlalchemy
+            from database import get_session
+            session = get_session()
+            try:
+                row = session.execute(text(
+                    "SELECT COUNT(*) FROM task_schedules "
+                    "WHERE next_run_at IS NULL "
+                    "AND enabled = 1 "
+                    "AND schedule_type != 'manual'"
+                )).fetchone()
+                count = int(row[0]) if row and row[0] is not None else 0
+            finally:
+                session.close()
+        get_metric("task_schedule_next_run_null_count").set(float(count))
+    except Exception:  # pragma: no cover — observability must not break startup or scheduler
+        logging.getLogger(__name__).debug(
+            "[OBSERVABILITY] update_task_schedule_null_count failed", exc_info=True
         )
 
 
