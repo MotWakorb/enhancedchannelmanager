@@ -116,8 +116,7 @@ class DispatcharrClient:
             # not construct the model with legacy-only fields (every site reads
             # from ``load_settings()`` which migrates), but the fallback is
             # kept defensively while the legacy field exists on the model.
-            # Remove this fallback when removing the legacy field in v0.19.0
-            # per bd-ewm4h.
+            # Back-compat: drop 'or self.settings.api_key' in v0.19.0 (bd-ewm4h).
             headers["X-API-Key"] = self.settings.dispatcharr_api_key or self.settings.api_key
         else:
             headers["Authorization"] = f"Bearer {self.access_token}"
@@ -1054,6 +1053,9 @@ def _settings_hash(settings: DispatcharrSettings) -> str:
     legacy ``api_key`` so the client singleton recreates when either field
     changes — keeps in-memory state in sync with operators who rotate via
     the UI (touches canonical) or via on-disk edits (may still touch legacy).
+
+    Back-compat: drop ``settings.api_key`` from the concat in v0.19.0
+    (bd-ewm4h) when the legacy field is removed from the model.
     """
     return (
         f"{settings.url}:{settings.auth_method}:{settings.username}:"
