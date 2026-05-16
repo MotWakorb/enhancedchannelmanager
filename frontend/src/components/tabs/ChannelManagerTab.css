@@ -1,0 +1,78 @@
+/**
+ * ChannelManagerTab subnav styles (BD-J / bd-gfxrz, ADR-008 §D1).
+ *
+ * The tab content area was historically just <SplitPane> taking the full
+ * height. With BD-J we wrap the content in a flex column with an optional
+ * subnav header above so the SplitPane / PendingMergesPage child still
+ * stretches to fill the rest of the tab.
+ *
+ * Tokens (`--bg-secondary`, `--border-color`, etc.) come from index.css.
+ */
+
+.channel-manager-tab {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+}
+
+.channel-manager-subnav {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.5rem 1rem;
+  background: var(--bg-secondary, #252540);
+  border-bottom: 1px solid var(--border-color, #3a3a5a);
+  flex-shrink: 0;
+}
+
+.channel-manager-subnav-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.875rem;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  color: var(--text-secondary, #888);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.channel-manager-subnav-link:hover {
+  background: var(--bg-tertiary, #1a1a2e);
+  color: var(--text-primary, #fff);
+}
+
+.channel-manager-subnav-link.is-active {
+  background: var(--bg-tertiary, #1a1a2e);
+  border-color: var(--border-color, #3a3a5a);
+  color: var(--text-primary, #fff);
+}
+
+/*
+ * Count badge — UX-ratified placement is on the subnav link only (NOT on the
+ * top-level Channel Manager tab) per the parent epic's alert-fatigue
+ * decision. The badge is non-zero by construction: when the count is 0 the
+ * subnav link is not rendered (unless the operator is already on the page),
+ * so a "0" can never appear here.
+ */
+.channel-manager-subnav-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  height: 1.25rem;
+  padding: 0 0.4rem;
+  background: var(--accent, #6366f1);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  border-radius: 999px;
+  line-height: 1;
+}
+
+/* Pure-opacity reduced-motion-safe transitions only; no transform/keyframes. */

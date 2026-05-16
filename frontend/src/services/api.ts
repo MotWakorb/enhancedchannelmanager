@@ -3572,3 +3572,116 @@ export async function updateLookupTable(id: number, data: LookupTableUpdateReque
 export async function deleteLookupTable(id: number): Promise<void> {
   return fetchJson(`${API_BASE}/lookup-tables/${id}`, { method: 'DELETE' });
 }
+
+// =============================================================================
+// Channel Merges (Pending Merges queue) — ADR-008 §D1
+// =============================================================================
+//
+// The pending_merges queue is populated by:
+//   • the bulk M3U import dedup hook (BD-F / bd-a5lb2)
+//   • the drag-drop and Add Stream surfaces (BD-H, BD-I)
+//
+// and consumed by the Pending Merges page (BD-J / bd-gfxrz) which renders one
+// row per queued candidate with operator-facing Merge / Create New actions.
+//
+// The list endpoint is GET-only and `RequireAuthIfEnabled`; the accept and
+// dismiss endpoints are `RequireAdminIfEnabled` (they mutate either ECM state
+// or Dispatcharr channel structure). All three follow the ECM flat-outcome
+// response envelope established by `POST /api/channels/merge` (no top-level
+// `data` wrapper).
+
+/**
+ * One pending_merges row, as projected by `GET /api/channel-merges`.
+ *
+ * Field set matches the backend `PendingMergeRecord` Pydantic model in
+ * `backend/routers/channel_merges.py`. `confidence` is a 0.0–1.0 float
+ * captured at queue-time; the UI renders it as an integer-percent badge.
+ * `created_at` and `resolved_at` are epoch-ms integers per ADR-007/§D8.
+ */
+export interface PendingMergeRecord {
+  id: number;
+  stream_name: string;
+  group_id: number | null;
+  candidate_channel_id: string;
+  confidence: number;
+  status: 'pending' | 'merged' | 'dismissed';
+  created_at: number;
+  resolved_at: number | null;
+  resolution_source: string | null;
+  trigger_context: string;
+}
+
+/** Paginated envelope for `GET /api/channel-merges`. */
+export interface PendingMergesListResponse {
+  merges: PendingMergeRecord[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+/**
+ * Flat-outcome envelope for `POST /api/channel-merges/{id}/accept` per
+ * ADR-008 §D1. Mirrors the `AcceptOutcome` Pydantic model.
+ */
+export interface AcceptMergeOutcome {
+  merged_into_channel_id: string;
+  journal_entry_id: number;
+  source_stream_id: string;
+  confidence: number;
+  status: 'merged';
+}
+
+/**
+ * Flat-outcome envelope for `POST /api/channel-merges/{id}/dismiss` per
+ * ADR-008 §D1. Mirrors the `DismissOutcome` Pydantic model.
+ */
+export interface DismissMergeOutcome {
+  journal_entry_id: number;
+  status: 'dismissed';
+}
+
+/**
+ * List pending merge queue rows. Defaults match BD-J's Pending Merges page:
+ * status='pending', page=1, page_size=50. Pass `group_id` to scope to a
+ * single channel group; omit to list across all groups.
+ */
+export async function getPendingMerges(params?: {
+  status?: 'pending' | 'merged' | 'dismissed';
+  groupId?: number;
+  page?: number;
+  pageSize?: number;
+}): Promise<PendingMergesListResponse> {
+  const query = buildQuery({
+    status: params?.status ?? 'pending',
+    group_id: params?.groupId,
+    page: params?.page ?? 1,
+    page_size: params?.pageSize ?? 50,
+  });
+  return fetchJson(`${API_BASE}/channel-merges${query}`);
+}
+
+/**
+ * Accept a pending merge (operator confirms the candidate match).
+ * Idempotent on terminal `merged` (returns the prior outcome envelope);
+ * 409 on terminal `dismissed`; 404 if the candidate channel has been
+ * deleted in Dispatcharr since the row was queued (ADR-008 §D4 lazy
+ * resolution — the operator's recovery is `/dismiss` + re-trigger).
+ */
+export async function acceptPendingMerge(mergeId: number): Promise<AcceptMergeOutcome> {
+  return fetchJson(`${API_BASE}/channel-merges/${mergeId}/accept`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * Dismiss a pending merge (operator rejects the candidate). Idempotent on
+ * terminal `dismissed`; 409 on terminal `merged`. The downstream creation
+ * path (drag-drop, Add Stream, M3U refresh) is the operator's next step
+ * — `dismiss` is purely an ECM-side state flip plus audit-journal row.
+ */
+export async function dismissPendingMerge(mergeId: number): Promise<DismissMergeOutcome> {
+  return fetchJson(`${API_BASE}/channel-merges/${mergeId}/dismiss`, {
+    method: 'POST',
+  });
+}
