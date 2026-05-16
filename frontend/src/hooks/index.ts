@@ -13,3 +13,10 @@ export { useAutoCreationExecution } from './useAutoCreationExecution';
 export type { UseAutoCreationExecutionOptions, UseAutoCreationExecutionResult } from './useAutoCreationExecution';
 export { useHashRoute } from './useHashRoute';
 export type { UseHashRouteReturn, SettingsPage } from './useHashRoute';
+export { useDedupOnDrop, DEDUP_RETURNING_HIGHLIGHT_MS } from './useDedupOnDrop';
+export type {
+  DedupDropRequest,
+  DedupModalState,
+  UseDedupOnDropOptions,
+  UseDedupOnDropReturn,
+} from './useDedupOnDrop';
