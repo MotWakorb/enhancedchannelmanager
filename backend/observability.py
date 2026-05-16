@@ -797,6 +797,48 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             buckets=_HTTP_LATENCY_BUCKETS,
             registry=registry,
         ),
+        # ----------------------------------------------------------------
+        # Interactive stream-dedup merge outcome (ADR-008, bd-ft3hk /
+        # BD-M contract; emitted by BD-E's accept/dismiss endpoints).
+        #
+        # ``dedup_merge_requests_total`` labels by ``status`` — a bounded
+        # enum drawn from ADR-008 §D6 outcome semantics:
+        #   * ``success`` — accept completed end-to-end (SLO-10c denominator).
+        #   * ``error``   — accept raised an unhandled exception or a
+        #                   Dispatcharr 5xx (SLO-10c numerator). Excludes
+        #                   4xx-by-design (404 stale target, 409 invalid
+        #                   state) — those are correct backend behavior
+        #                   per the bd-ct9wl / bd-ozhkf precedent and are
+        #                   NOT service unreliability.
+        #   * ``dismissed`` — operator (or MCP) chose to reject the
+        #                   candidate. Not an error; counts toward
+        #                   SLI-10b resolution (terminal state).
+        #   * ``cancelled`` — reserved for the modal-cancel surface
+        #                   (BD-G) when the operator opens the prompt and
+        #                   then dismisses without choosing accept/reject.
+        #                   BD-E does not emit this label itself.
+        #
+        # Label cardinality is hard-bounded to those four values per the
+        # runbook contract (docs/runbooks/dedup-merge-api-error-rate-high.md).
+        #
+        # The SLI-10b denominator counter
+        # ``pending_merges_queue_depth_added_total`` is declared earlier
+        # in this function (in the BD-F block) — owned by the enqueue
+        # surface (currently bulk-M3U-import). BD-E does NOT emit it;
+        # accept/dismiss transition the row's status, they do not INSERT.
+        # ----------------------------------------------------------------
+        "dedup_merge_requests_total": Counter(
+            "ecm_dedup_merge_requests_total",
+            "Count of POST /api/channel-merges/{id}/accept and /dismiss "
+            "outcomes, labeled by status (success|error|dismissed|"
+            "cancelled). SLI-10c numerator (status='error') and SLI-10b "
+            "numerator (status='success'|'dismissed' = terminal-state "
+            "transitions out of the pending queue). 4xx-by-design "
+            "responses (404 stale target, 409 invalid state) are NOT "
+            "counted as 'error' per the bd-ct9wl / bd-ozhkf precedent.",
+            ["status"],
+            registry=registry,
+        ),
     }
 
 
