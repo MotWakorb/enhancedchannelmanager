@@ -12,6 +12,7 @@ import uuid
 from datetime import date
 from typing import Optional, Literal, Union
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Response
 from pydantic import BaseModel
 
@@ -1947,17 +1948,39 @@ async def merge_channels(request: "MergeChannelsRequest"):
     client = get_client()
     new_channel = None
     try:
-        # 1. Fetch all source channels and collect their streams (ordered, deduplicated)
+        # 1. Fetch all source channels and collect their streams (ordered, deduplicated).
+        #    If any source ID no longer exists upstream (e.g., the operator's UI
+        #    held a stale reference after a previous merge), surface 422 with a
+        #    refresh hint instead of falling through to the catch-all 500. The
+        #    UI fix in useEditMode keeps these stale IDs from accumulating in the
+        #    first place; this is defense in depth for any other stale-state path.
         source_channels = []
         all_streams: list[int] = []
         seen_streams: set[int] = set()
+        missing_ids: list[int] = []
         for cid in request.source_channel_ids:
-            channel = await client.get_channel(cid)
+            try:
+                channel = await client.get_channel(cid)
+            except httpx.HTTPStatusError as fetch_err:
+                if fetch_err.response.status_code == 404:
+                    missing_ids.append(cid)
+                    continue
+                raise
             source_channels.append(channel)
             for sid in channel.get("streams", []):
                 if sid not in seen_streams:
                     all_streams.append(sid)
                     seen_streams.add(sid)
+
+        if missing_ids:
+            logger.warning("[CHANNELS] Merge rejected: stale source IDs %s no longer exist", missing_ids)
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Source channels {missing_ids} no longer exist — "
+                    "refresh the channels list and try again"
+                ),
+            )
 
         # 2. Create the new merged channel
         create_data = {"name": request.target_name}

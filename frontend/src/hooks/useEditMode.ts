@@ -1311,24 +1311,39 @@ export function useEditMode({
   // without causing re-renders of the entire component tree every second
   const editModeEnteredAt = state.isActive ? state.enteredAt : null;
 
-  // Sync new channels from API into the working copy (e.g., from CSV import)
-  // This adds channels that exist in the API but not yet in the working copy
+  // Sync the working copy with the API channel list.
+  // Adds channels that exist in the API but not in the working copy (e.g.,
+  // from CSV import) AND removes channels that have disappeared from the API
+  // (e.g., source channels deleted as a side effect of /api/channels/merge).
+  // Removal is gated on `id >= 0` so locally-created not-yet-saved channels
+  // (negative temp IDs from stageCreateChannel) are preserved across syncs.
   useEffect(() => {
     if (!state.isActive) return;
 
+    const apiIds = new Set(channels.map((ch) => ch.id));
     const workingCopyIds = new Set(state.workingCopy.map((ch) => ch.id));
     const newChannels = channels.filter((ch) => !workingCopyIds.has(ch.id));
+    const removedIds = state.workingCopy
+      .filter((ch) => ch.id >= 0 && !apiIds.has(ch.id))
+      .map((ch) => ch.id);
+
+    if (newChannels.length === 0 && removedIds.length === 0) return;
 
     if (newChannels.length > 0) {
       logger.debug('[useEditMode] Syncing', newChannels.length, 'new channels from API into working copy');
-      setState((prev) => ({
-        ...prev,
-        workingCopy: [
-          ...prev.workingCopy,
-          ...newChannels.map((ch) => ({ ...ch, streams: [...ch.streams] })),
-        ],
-      }));
     }
+    if (removedIds.length > 0) {
+      logger.debug('[useEditMode] Removing', removedIds.length, 'channels from working copy (no longer in API):', removedIds);
+    }
+
+    const removedIdSet = new Set(removedIds);
+    setState((prev) => ({
+      ...prev,
+      workingCopy: [
+        ...prev.workingCopy.filter((ch) => !removedIdSet.has(ch.id)),
+        ...newChannels.map((ch) => ({ ...ch, streams: [...ch.streams] })),
+      ],
+    }));
     // state.workingCopy is read inside the effect; we use a functional setState
     // (setState(prev => ...)) so it reads the latest, but exhaustive-deps still
     // flags the outer read. Adding state.workingCopy would cause a render loop
