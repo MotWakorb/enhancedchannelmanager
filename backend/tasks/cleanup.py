@@ -226,10 +226,17 @@ class CleanupTask(TaskScheduler):
                 # 4. bd-ia28g: NULL out BLOB columns in old auto_creation_executions
                 # rows. KEEP the summary row (id, status, started_at, counts, etc.)
                 # for audit history per DBA recommendation — only the multi-MB
-                # JSON BLOB payloads age out. The execution_log.isnot(None) filter
-                # makes this idempotent: a second cleanup pass on the same row
-                # is a no-op (rowcount==0), so the log message reflects only
-                # rows actually pruned this run.
+                # JSON BLOB payloads age out. The idempotency gate ORs across
+                # all four BLOB columns: a row is eligible if ANY of them is
+                # non-NULL. Filtering on execution_log alone would miss rows
+                # whose per-stream log was empty (auto_creation_engine writes
+                # ``execution_log = json.dumps(log) if log else None`` — see
+                # ``models.AutoCreationExecution.set_execution_log``) but whose
+                # created_entities / modified_entities / dry_run_results
+                # payloads were populated. After one prune all four columns are
+                # NULL, so the next pass naturally returns 0 rows (idempotent)
+                # and the log message reflects only rows actually pruned this
+                # run.
                 self._set_progress(
                     current=4,
                     current_item="Pruning auto_creation_executions BLOB columns",
@@ -242,7 +249,12 @@ class CleanupTask(TaskScheduler):
                     result = session.execute(
                         update(AutoCreationExecution)
                         .where(AutoCreationExecution.started_at < auto_creation_blob_cutoff)
-                        .where(AutoCreationExecution.execution_log.isnot(None))
+                        .where(
+                            AutoCreationExecution.execution_log.isnot(None)
+                            | AutoCreationExecution.dry_run_results.isnot(None)
+                            | AutoCreationExecution.created_entities.isnot(None)
+                            | AutoCreationExecution.modified_entities.isnot(None)
+                        )
                         .values(
                             execution_log=None,
                             dry_run_results=None,
@@ -303,6 +315,7 @@ class CleanupTask(TaskScheduler):
                             )
                             deleted_counts["health_checks"] = 0
                         else:
+                            # Safe: ts_column is drawn from a hardcoded allowlist tuple above, not user input.
                             result = session.execute(
                                 text(
                                     f"DELETE FROM health_checks WHERE {ts_column} < :cutoff"
@@ -419,22 +432,35 @@ class CleanupTask(TaskScheduler):
             finally:
                 session.close()
 
-            # Calculate totals
+            # Calculate totals. ``auto_creation_blobs_pruned`` is intentionally
+            # excluded from ``total_deleted`` and reported separately — those
+            # rows are BLOB-nulled (summary rows preserved), not deleted, so
+            # bundling them into the "deleted N records" headline would
+            # mislead an operator reading the log into thinking summary rows
+            # were removed.
             total_deleted = sum(
                 v for k, v in deleted_counts.items()
-                if isinstance(v, int)
+                if isinstance(v, int) and k != "auto_creation_blobs_pruned"
             )
+            total_blobs_nulled = deleted_counts.get("auto_creation_blobs_pruned", 0)
+            if not isinstance(total_blobs_nulled, int):
+                total_blobs_nulled = 0
 
             self._set_progress(
-                success_count=total_deleted,
+                success_count=total_deleted + total_blobs_nulled,
                 failed_count=len(errors),
                 status="completed",
+            )
+
+            summary_line = (
+                f"deleted {total_deleted} records, "
+                f"nulled {total_blobs_nulled} auto-creation BLOBs"
             )
 
             if errors:
                 return TaskResult(
                     success=len(errors) < total_steps,  # Partial success if some operations worked
-                    message=f"Cleanup completed with {len(errors)} errors. Deleted {total_deleted} records.",
+                    message=f"Cleanup completed with {len(errors)} errors. {summary_line}.",
                     started_at=started_at,
                     completed_at=datetime.utcnow(),
                     total_items=total_steps,
@@ -445,7 +471,7 @@ class CleanupTask(TaskScheduler):
 
             return TaskResult(
                 success=True,
-                message=f"Cleanup completed. Deleted {total_deleted} old records.",
+                message=f"Cleanup completed. {summary_line.capitalize()}.",
                 started_at=started_at,
                 completed_at=datetime.utcnow(),
                 total_items=total_steps,
@@ -465,14 +491,25 @@ class CleanupTask(TaskScheduler):
             )
 
     def _cancelled_result(self, started_at: datetime, deleted_counts: dict) -> TaskResult:
-        """Create a cancelled result with partial progress."""
+        """Create a cancelled result with partial progress.
+
+        Mirrors the main execute() reporting: ``auto_creation_blobs_pruned`` is
+        a NULL-out, not a delete, so it gets its own counter rather than being
+        folded into the "deleted N" headline.
+        """
         total_deleted = sum(
             v for k, v in deleted_counts.items()
-            if isinstance(v, int)
+            if isinstance(v, int) and k != "auto_creation_blobs_pruned"
         )
+        total_blobs_nulled = deleted_counts.get("auto_creation_blobs_pruned", 0)
+        if not isinstance(total_blobs_nulled, int):
+            total_blobs_nulled = 0
         return TaskResult(
             success=False,
-            message=f"Cleanup cancelled. Deleted {total_deleted} records before cancellation.",
+            message=(
+                f"Cleanup cancelled. Deleted {total_deleted} records, "
+                f"nulled {total_blobs_nulled} auto-creation BLOBs before cancellation."
+            ),
             error="CANCELLED",
             started_at=started_at,
             completed_at=datetime.utcnow(),

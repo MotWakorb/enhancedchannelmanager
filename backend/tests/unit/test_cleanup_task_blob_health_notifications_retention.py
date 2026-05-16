@@ -227,11 +227,11 @@ class TestAutoCreationBlobPrune:
     async def test_idempotent_across_runs(self, tmp_path):
         """Second run on the same data is a strict no-op (rowcount == 0).
 
-        The ``execution_log.isnot(None)`` filter is the idempotency gate:
-        once BLOBs are NULL on a row, the next prune pass skips it
-        entirely. Without this gate, the rowcount would be 1 on every
-        cron run forever and the operator log would lie about "pruned 1
-        row" every Sunday.
+        The OR'd ``isnot(None)`` filter across all four BLOB columns is the
+        idempotency gate: once BLOBs are NULL on a row, the next prune pass
+        skips it entirely. Without this gate, the rowcount would be 1 on
+        every cron run forever and the operator log would lie about "pruned
+        1 row" every Sunday.
         """
         db_file = tmp_path / "blob_idempotent.db"
         engine = _make_engine(db_file)
@@ -255,6 +255,73 @@ class TestAutoCreationBlobPrune:
 
         assert first.details["deleted"]["auto_creation_blobs_pruned"] == 1
         assert second.details["deleted"]["auto_creation_blobs_pruned"] == 0
+
+    @pytest.mark.asyncio
+    async def test_prunes_row_with_null_execution_log_but_populated_entities(self, tmp_path):
+        """Regression: the gate must catch rows where ``execution_log`` is
+        NULL but other BLOB columns are populated.
+
+        ``auto_creation_engine.py`` writes ``execution_log = json.dumps(log)
+        if log else None`` (see ``models.AutoCreationExecution.set_execution_log``).
+        A real production row with a NON-empty ``created_entities`` payload
+        but an empty per-stream ``log`` list is born with
+        ``execution_log = NULL`` and ``created_entities = <json>``. The
+        original gate filtered only on ``execution_log.isnot(None)``, so
+        these rows would never be pruned — their multi-MB ``created_entities``
+        / ``modified_entities`` / ``dry_run_results`` payloads accumulated
+        forever. The fix broadens the gate to OR across all four BLOB
+        columns; this test fails on the OLD gate code (no UPDATE
+        evaluates the row because the WHERE clause filters it out) and
+        passes on the broadened gate.
+        """
+        db_file = tmp_path / "blob_null_log.db"
+        engine = _make_engine(db_file)
+        Base.metadata.create_all(engine)
+        session, task = _make_session_and_task(engine)
+
+        old = datetime.utcnow() - timedelta(days=31)
+        row = AutoCreationExecution(
+            rule_name="empty-log-but-created-entities",
+            mode="execute",
+            triggered_by="manual",
+            started_at=old,
+            status="completed",
+            # The bug shape: execution_log is NULL (engine writes NULL when
+            # per-stream log list is empty) but created_entities is populated
+            # because the run did in fact create channels.
+            execution_log=None,
+            dry_run_results=None,
+            created_entities=json.dumps([{"type": "channel", "id": 7}] * 20),
+            modified_entities=None,
+        )
+        session.add(row)
+        session.commit()
+        row_id = row.id
+
+        with patch("tasks.cleanup.get_session", return_value=session):
+            result = await task.execute()
+
+        # Reload from a fresh session to defeat ORM caching.
+        SessionLocal = sessionmaker(bind=engine)
+        verify = SessionLocal()
+        try:
+            persisted = verify.get(AutoCreationExecution, row_id)
+            assert persisted is not None, "summary row must NOT be deleted"
+            # The bug-shape column must have been NULLed.
+            assert persisted.created_entities is None, (
+                "created_entities must be NULL after prune — if this assertion "
+                "fails, the BLOB-prune gate is too narrow and missed a row whose "
+                "execution_log was NULL but had other populated BLOBs"
+            )
+            # The other BLOBs were already NULL — they stay NULL.
+            assert persisted.execution_log is None
+            assert persisted.dry_run_results is None
+            assert persisted.modified_entities is None
+        finally:
+            verify.close()
+
+        deleted = result.details.get("deleted", {})
+        assert deleted.get("auto_creation_blobs_pruned") == 1
 
 
 # ============================================================================
