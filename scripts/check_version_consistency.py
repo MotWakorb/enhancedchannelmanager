@@ -44,6 +44,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 # Resolve repo root from this script's location: scripts/ -> repo root.
@@ -85,7 +86,7 @@ def _extract_fastapi_version_kwarg(text: str) -> str | None:
 
 # Each entry: (display name, repo-relative path, extractor callable).
 # Extractor returns the version string or None when the file cannot be parsed.
-TOUCHPOINTS: tuple[tuple[str, str, callable], ...] = (
+TOUCHPOINTS: tuple[tuple[str, str, Callable[[str], str | None]], ...] = (
     (
         "frontend/package.json (canonical)",
         "frontend/package.json",
