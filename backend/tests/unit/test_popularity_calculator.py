@@ -12,10 +12,10 @@ from datetime import datetime, date, timedelta
 from unittest.mock import patch
 
 from models import (
-    ChannelWatchStats,
-    UniqueClientConnection,
     ChannelBandwidth,
     ChannelPopularityScore,
+    SessionTelemetry,
+    UniqueClientConnection,
 )
 from popularity_calculator import (
     PopularityCalculator,
@@ -24,6 +24,77 @@ from popularity_calculator import (
     TREND_UP_THRESHOLD,
     TREND_DOWN_THRESHOLD,
 )
+
+
+# ---------------------------------------------------------------------------
+# Test helpers — seed session_telemetry the way the post-step-(d) calculator
+# expects (per-poll rows, with a UniqueClientConnection row for channel_name).
+# ---------------------------------------------------------------------------
+
+def _seed_watch_session(
+    test_session,
+    *,
+    channel_id: str,
+    channel_name: str,
+    poll_count: int,
+    base_observed_at_ms: int | None = None,
+    distinct_sessions: int = 1,
+    poll_interval_ms: int = 10_000,
+    bytes_per_poll: int = 1000,
+):
+    """Seed ``session_telemetry`` rows + a ``UniqueClientConnection`` row.
+
+    Mirrors the production write shape so the calculator's reader path is
+    exercised. ``distinct_sessions`` controls how the polls are split
+    across ``session_id`` values — this is what the post-step-(d) formula
+    uses as the ``watch_count`` substitute (DISTINCT session_id).
+
+    Returns the (start_date, end_date) tuple covering the seeded rows.
+    """
+    if base_observed_at_ms is None:
+        base_observed_at_ms = int(
+            (datetime.utcnow() - timedelta(days=1)).timestamp() * 1000
+        )
+
+    polls_per_session = poll_count // distinct_sessions
+    extra = poll_count - polls_per_session * distinct_sessions
+
+    poll_index = 0
+    for s in range(distinct_sessions):
+        n = polls_per_session + (1 if s < extra else 0)
+        for _ in range(n):
+            observed_at = base_observed_at_ms + poll_index * poll_interval_ms
+            test_session.add(
+                SessionTelemetry(
+                    session_id=f"conn-{channel_id}-{s}",
+                    observed_at=observed_at,
+                    user_id=None,
+                    provider_id=None,
+                    channel_id=channel_id,
+                    bytes_delta=bytes_per_poll,
+                    buffer_event_count=0,
+                    poll_interval_ms=poll_interval_ms,
+                )
+            )
+            poll_index += 1
+
+    last_observed_dt = datetime.utcfromtimestamp(
+        (base_observed_at_ms + (poll_count - 1) * poll_interval_ms) / 1000.0
+    )
+    # One UniqueClientConnection row so the channel_name side-load has a
+    # source. IP uses channel_id to keep rows distinct across channels.
+    test_session.add(
+        UniqueClientConnection(
+            ip_address=f"10.0.0.{abs(hash(channel_id)) % 200 + 1}",
+            channel_id=channel_id,
+            channel_name=channel_name,
+            user_id=None,
+            username=None,
+            date=last_observed_dt.date(),
+            connected_at=last_observed_dt,
+            watch_seconds=poll_count * (poll_interval_ms // 1000),
+        )
+    )
 
 
 class TestPopularityCalculatorInit:
@@ -182,30 +253,38 @@ class TestCalculateScores:
 class TestGatherMetrics:
     """Tests for the _gather_metrics method."""
 
-    def test_gather_metrics_from_watch_stats(self, test_session):
-        """Gathers watch_count and watch_time from ChannelWatchStats."""
-        # Create test data
-        now = datetime.utcnow()
-        stats = ChannelWatchStats(
+    def test_gather_metrics_from_session_telemetry(self, test_session):
+        """Gathers watch_count (DISTINCT session_id) and watch_time
+        (sum of distinct poll intervals) from ``session_telemetry``.
+
+        Post step (d): the calculator reads per-poll telemetry rows
+        instead of the legacy ``channel_watch_stats`` lifetime
+        aggregate. The legacy ``ChannelWatchStats.watch_count``
+        semantic (state-transition counter) is replaced by
+        ``COUNT(DISTINCT session_id)``.
+        """
+        _seed_watch_session(
+            test_session,
             channel_id="test-channel",
             channel_name="Test Channel",
-            watch_count=50,
-            total_watch_seconds=3600,
-            last_watched=now,
+            poll_count=10,
+            distinct_sessions=2,
         )
-        test_session.add(stats)
         test_session.commit()
 
         calc = PopularityCalculator()
         start_date = date.today() - timedelta(days=7)
-        end_date = date.today()
+        end_date = date.today() + timedelta(days=1)
 
-        with patch("popularity_calculator.get_session", return_value=test_session):
-            metrics = calc._gather_metrics(test_session, start_date, end_date)
+        metrics = calc._gather_metrics(test_session, start_date, end_date)
 
         assert "test-channel" in metrics
-        assert metrics["test-channel"]["watch_count"] == 50
-        assert metrics["test-channel"]["watch_time"] == 3600
+        # watch_count = DISTINCT session_id (post step (d) semantic).
+        assert metrics["test-channel"]["watch_count"] == 2
+        # watch_time = sum of distinct poll intervals (10 polls × 10s/poll).
+        assert metrics["test-channel"]["watch_time"] == 100
+        # channel_name side-loaded from UniqueClientConnection.
+        assert metrics["test-channel"]["channel_name"] == "Test Channel"
 
     def test_gather_metrics_from_unique_connections(self, test_session):
         """Gathers unique_viewers from UniqueClientConnection."""
@@ -321,17 +400,14 @@ class TestCalculateAll:
     def test_calculate_all_creates_score_records(self, test_session):
         """Creates ChannelPopularityScore records for channels."""
         today = date.today()
-        now = datetime.utcnow()
 
-        # Create test data
-        stats = ChannelWatchStats(
+        # Seed session_telemetry data (the post-step-(d) data source).
+        _seed_watch_session(
+            test_session,
             channel_id="test-channel",
             channel_name="Test Channel",
-            watch_count=100,
-            total_watch_seconds=3600,
-            last_watched=now,
+            poll_count=10,
         )
-        test_session.add(stats)
         test_session.commit()
 
         with patch("popularity_calculator.get_session", return_value=test_session):
@@ -371,15 +447,13 @@ class TestCalculateAll:
         )
         test_session.add(existing)
 
-        # Create watch stats for recalculation
-        stats = ChannelWatchStats(
+        # Seed session_telemetry for the recalculation pass.
+        _seed_watch_session(
+            test_session,
             channel_id="test-channel",
             channel_name="Test Channel",
-            watch_count=100,
-            total_watch_seconds=3600,
-            last_watched=now,
+            poll_count=10,
         )
-        test_session.add(stats)
         test_session.commit()
 
         with patch("popularity_calculator.get_session", return_value=test_session):
@@ -398,24 +472,30 @@ class TestCalculateAll:
         assert score.previous_rank == 1
 
     def test_calculate_all_assigns_correct_ranks(self, test_session):
-        """Assigns ranks based on score (1 = highest)."""
-        today = date.today()
-        now = datetime.utcnow()
+        """Assigns ranks based on score (1 = highest).
 
-        # Create channels with different activity levels
-        for i, (count, name) in enumerate([
-            (100, "Most Popular"),
-            (50, "Medium Popular"),
-            (10, "Least Popular"),
+        Seeds three channels with stepped-down activity (poll counts and
+        distinct sessions both decrease). All score components move in
+        the same direction so the ranking is unambiguous regardless of
+        weight allocation.
+        """
+        today = date.today()
+
+        # Stepped-down activity: high → medium → low on every axis.
+        # poll_count and distinct_sessions both scale, so watch_count
+        # (DISTINCT session_id) and watch_time both decrease together.
+        for i, (poll_count, distinct, name) in enumerate([
+            (60, 6, "Most Popular"),
+            (30, 3, "Medium Popular"),
+            (10, 1, "Least Popular"),
         ]):
-            stats = ChannelWatchStats(
+            _seed_watch_session(
+                test_session,
                 channel_id=f"channel-{i}",
                 channel_name=name,
-                watch_count=count,
-                total_watch_seconds=count * 60,
-                last_watched=now,
+                poll_count=poll_count,
+                distinct_sessions=distinct,
             )
-            test_session.add(stats)
         test_session.commit()
 
         with patch("popularity_calculator.get_session", return_value=test_session):
@@ -438,18 +518,16 @@ class TestCalculateAll:
     def test_calculate_all_returns_top_channels(self, test_session):
         """Returns list of top 10 channels in result."""
         today = date.today()
-        now = datetime.utcnow()
 
-        # Create 15 channels
+        # Create 15 channels with stepped poll counts so they sort cleanly.
         for i in range(15):
-            stats = ChannelWatchStats(
+            _seed_watch_session(
+                test_session,
                 channel_id=f"channel-{i}",
                 channel_name=f"Channel {i}",
-                watch_count=100 - i * 5,  # Decreasing popularity
-                total_watch_seconds=3600,
-                last_watched=now,
+                poll_count=60 - i * 3,  # 60, 57, 54, ... 18 polls
+                distinct_sessions=1,
             )
-            test_session.add(stats)
         test_session.commit()
 
         with patch("popularity_calculator.get_session", return_value=test_session):
@@ -556,17 +634,14 @@ class TestTrendCalculation:
     def test_trend_stable_when_score_changes_slightly(self, test_session):
         """Trend is 'stable' when score changes < 5%."""
         today = date.today()
-        now = datetime.utcnow()
 
-        # Create watch stats
-        stats = ChannelWatchStats(
+        # Seed session_telemetry data (the post-step-(d) source).
+        _seed_watch_session(
+            test_session,
             channel_id="test-channel",
             channel_name="Test Channel",
-            watch_count=100,
-            total_watch_seconds=3600,
-            last_watched=now,
+            poll_count=10,
         )
-        test_session.add(stats)
         test_session.commit()
 
         with patch("popularity_calculator.get_session", return_value=test_session):

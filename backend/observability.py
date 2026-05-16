@@ -444,6 +444,293 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             "growing value indicates the lazy TTL reaper has regressed.",
             registry=registry,
         ),
+        # ----------------------------------------------------------------
+        # Stats v2 observability (bd-skqln.12).
+        #
+        # The metric set below covers the four observability surfaces the
+        # Stats v2 epic requires:
+        #
+        #   1. session_telemetry write health (success/failure counter,
+        #      duration histogram, last-batch row-count gauge)
+        #   2. Per-poll provider resolution success rate (the modernized
+        #      replacement for the dual-write divergence SLI that the
+        #      epic originally specified; skqln.3 step (d) removed the
+        #      legacy writer, so the divergence is no longer measurable
+        #      — the resolver's resolved-rate is the surviving SLI)
+        #   3. Stats v2 HTTP query latency (emitted by the existing
+        #      observability middleware in main.py with a filter on
+        #      ``/api/stats/*`` paths; gives the SLI surface a clean
+        #      handle distinct from generic HTTP traffic)
+        #
+        # Cardinality posture (SRE veto on user_id / channel_id):
+        #
+        # * No metric below carries user_id, channel_id, session_id,
+        #   target_id, or client_ip as a label. Those identifiers belong
+        #   in logs (correlated by trace_id), never in the metric label
+        #   space. Even though session_telemetry rows DO record user_id
+        #   and channel_id, the metrics aggregate over them.
+        # * provider_id IS allowed by SRE pre-clearance (<20 providers
+        #   bounded), but NO stats v2 metric below uses it as a label in
+        #   this bead. Future provider-keyed metrics belong to follow-up
+        #   beads with explicit SRE sign-off.
+        # * ``result`` labels are fixed enums: success/failure for write
+        #   health, resolved/unresolved for provider resolution. No other
+        #   values are ever emitted.
+        # * ``endpoint`` uses the FastAPI matched route PATTERN
+        #   (``/api/stats/watch-time/{user_id}``), NEVER the resolved
+        #   path. ``granularity`` is sourced from the ``group_by`` query
+        #   parameter when present (currently ``total`` / ``day``);
+        #   defaults to ``"none"`` for endpoints that don't accept a
+        #   group-by axis. Combined ceiling is ~5 endpoints × 3
+        #   granularities = ~15 series.
+        # ----------------------------------------------------------------
+        "session_telemetry_writes_total": Counter(
+            "ecm_session_telemetry_writes_total",
+            "Count of session_telemetry write attempts (one per "
+            "BandwidthTracker poll cycle), labeled by outcome. "
+            "result ∈ {success, failure}. Failures are wrapped by the "
+            "tracker's try/except so the legacy sibling writes that ran "
+            "before the helper survive — this counter exposes the "
+            "swallowed failure rate so SRE can alert on it.",
+            ["result"],
+            registry=registry,
+        ),
+        "session_telemetry_write_duration_seconds": Histogram(
+            "ecm_session_telemetry_write_duration_seconds",
+            "Wall time of one _write_session_telemetry call, in seconds. "
+            "Buckets cover the sub-millisecond regime typical for a "
+            "small batch of inserts into a SQLite WAL store, with a long "
+            "tail for the pathological 'something is wrong with the "
+            "database' case.",
+            buckets=_NORMALIZATION_LATENCY_BUCKETS,
+            registry=registry,
+        ),
+        "session_telemetry_row_count": Gauge(
+            "ecm_session_telemetry_row_count",
+            "Total row count of session_telemetry after the most recent "
+            "nightly rollup + prune run. Set by StatsV2RollupTask after "
+            "a successful prune step — one update per nightly run. Used "
+            "by SRE storage-growth alerts (ECMStatsRowCountGrowthAnomaly). "
+            "bd-ae58c (Option B): BandwidthTracker no longer writes this "
+            "gauge; per-poll batch size is derivable from the "
+            "ecm_session_telemetry_writes_total counter rate.",
+            registry=registry,
+        ),
+        "session_telemetry_rows_excluded_total": Counter(
+            "ecm_session_telemetry_rows_excluded_total",
+            "Cumulative count of session_telemetry rows that were filtered "
+            "OUT before insert, labeled by reason. reason ∈ {excluded_user}. "
+            "The ``excluded_user`` reason fires when ECM_TELEMETRY_EXCLUDE_USERS "
+            "matches a row's Dispatcharr-side user_id or username (bd-uqbob). "
+            "Honest accounting: the rows are skipped, not silently zeroed, so "
+            "this counter surfaces 'how many viewers would have shown up that "
+            "we deliberately did not record' without leaking the identity of "
+            "the excluded user into the metric label space.",
+            ["reason"],
+            registry=registry,
+        ),
+        "provider_resolution_total": Counter(
+            "ecm_provider_resolution_total",
+            "Count of channel-poll provider-resolution outcomes, "
+            "labeled by outcome. result ∈ {resolved, unresolved}. The "
+            "ratio resolved / (resolved + unresolved) is the bd-skqln.14 "
+            "data-consistency SLI — target ≥95% steady state. Increments "
+            "ONCE PER CHANNEL per poll cycle, so the rate scales with "
+            "active channels, not active sessions.",
+            ["result"],
+            registry=registry,
+        ),
+        "stats_query_duration_seconds": Histogram(
+            "ecm_stats_query_duration_seconds",
+            "Latency of Stats v2 HTTP queries, in seconds. Labels: "
+            "endpoint (FastAPI route pattern, e.g. "
+            "'/api/stats/watch-time/{user_id}') and granularity "
+            "(value of the 'group_by' query param, or 'none' if absent). "
+            "Bounded label set: ~5 stats endpoints × 3 granularities. "
+            "Emitted by the observability middleware in main.py with a "
+            "filter on /api/stats/* paths; non-stats traffic continues "
+            "to use the generic ecm_http_request_duration_seconds.",
+            ["endpoint", "granularity"],
+            buckets=_HTTP_LATENCY_BUCKETS,
+            registry=registry,
+        ),
+        # ----------------------------------------------------------------
+        # Stats v2 — nightly rollup/prune job (ADR-007 D6, bd-7i2vv).
+        #
+        # Five metrics emitted by ``tasks.stats_v2_rollup.StatsV2RollupTask``
+        # after each nightly run. SRE owns operational behavior (skqln.11
+        # alert rules wire on these); this module just publishes them.
+        #
+        # Cardinality posture:
+        #   * No user_id, channel_id, or session_id in labels (SRE veto).
+        #   * No provider_id in labels here either — the rollup job
+        #     aggregates over providers per run, so the per-run metrics
+        #     are label-free. (Future per-provider rollup latency, if it
+        #     ever lands, gets its own bead and explicit SRE sign-off.)
+        #   * ``rollup_name`` is a bounded enum {user_daily,
+        #     provider_daily} — explicit allowlist; new rollups need to
+        #     extend the enum in tasks/stats_v2_rollup.py.
+        # ----------------------------------------------------------------
+        "telemetry_rollup_last_success_timestamp": Gauge(
+            "ecm_telemetry_rollup_last_success_timestamp",
+            "Unix-epoch seconds of the most recent SUCCESSFUL nightly "
+            "rollup run for each named rollup. SRE's staleness alert "
+            "wires on (time() - this_gauge): >36h warn (failure mode 1), "
+            ">25d page (failure mode 2, raw rows approaching the 30d "
+            "prune horizon before being rolled up). Updated by the "
+            "rollup task only after the prune step also completed; a "
+            "failure during rollup or a guard-fired prune-skip does NOT "
+            "advance this gauge. Per-rollup so SRE can distinguish a "
+            "stuck user_daily from a stuck provider_daily.",
+            ["rollup_name"],
+            registry=registry,
+        ),
+        "telemetry_rollup_duration_seconds": Histogram(
+            "ecm_telemetry_rollup_duration_seconds",
+            "Wall time of one rollup run for each named rollup, in "
+            "seconds. Buckets cover the sub-second case (the rollup "
+            "writes <few-thousand rows per day) up to the long tail "
+            "where the catch-up budget kicks in and the job is rolling "
+            "up many days at once after extended downtime.",
+            ["rollup_name"],
+            buckets=_HTTP_LATENCY_BUCKETS,
+            registry=registry,
+        ),
+        "telemetry_rollup_days_processed": Gauge(
+            "ecm_telemetry_rollup_days_processed",
+            "Number of UTC calendar days processed by the most recent "
+            "rollup run for each named rollup. Normally 1 (the previous "
+            "complete day); higher values indicate a catch-up run after "
+            "downtime, which is the leading indicator for failure mode "
+            "2 (>25 days uncovered → page).",
+            ["rollup_name"],
+            registry=registry,
+        ),
+        "telemetry_raw_rows_pruned": Counter(
+            "ecm_telemetry_raw_rows_pruned",
+            "Cumulative count of raw session_telemetry rows deleted by "
+            "the nightly prune step (ADR-007 D3 step 3). Always-monotonic; "
+            "deltas over the alerting window are the rate of pruning. A "
+            "sustained zero rate combined with a growing "
+            "ecm_session_telemetry_row_count is failure mode 3 (prune "
+            "failing silently). The prune step runs only after rollup "
+            "succeeded — so a zero rate when rollup is failing is "
+            "expected (fail-safe).",
+            registry=registry,
+        ),
+        "telemetry_rollup_errors_total": Counter(
+            "ecm_telemetry_rollup_errors_total",
+            "Cumulative count of rollup-job error conditions, labeled by "
+            "phase. phase ∈ {rollup, prune, marker, sanity_check}. "
+            "'sanity_check' increments when a day had source rows but "
+            "produced zero rollup rows (failure mode 5 — never prune "
+            "what you couldn't roll up). 'rollup' covers SQL/IO failures "
+            "during the aggregate INSERT. 'prune' covers DELETE failures. "
+            "'marker' covers failures persisting telemetry_rollup_state. "
+            "A non-zero rate is the SRE signal that the job has begun "
+            "drifting; failure modes 1-2 ride on (time-since-success) "
+            "in the gauge above, this counter ride on (rate-of-errors).",
+            ["phase"],
+            registry=registry,
+        ),
+        # ----------------------------------------------------------------
+        # Database file size (bd-ygoqr — paired with the CleanupTask CRON
+        # default flip; together they give operators "is my DB growing?"
+        # signal AND an automatic weekly VACUUM that bounds the growth).
+        #
+        # Two gauges, no labels — the SQLite database is a single
+        # process-global file, so labeling would just inject a constant-
+        # cardinality column for no benefit. Update cost is two
+        # ``os.path.getsize`` calls per emit point (single syscall each),
+        # so the gauges are wired only at points that already do real I/O:
+        #
+        #   1. ``database._perform_maintenance`` at startup (post-VACUUM).
+        #   2. ``CleanupTask.execute`` (post-VACUUM) — the gauge reflects
+        #      the freshly-vacuumed file size, not the pre-VACUUM bloat
+        #      that the operator would otherwise see between the weekly
+        #      cron and the next container restart.
+        #
+        # The WAL file gets its own gauge because a large WAL is a
+        # distinct failure mode from a large body — usually it means
+        # checkpointing is stalled, not that the working set has grown.
+        # Splitting the gauges lets the operator (and the alert rules in
+        # ``docs/sre/prometheus_rules.yaml`` group ``ecm_database_size``)
+        # distinguish the two without recomputing a derived series.
+        #
+        # SLO entry: capacity-planning class in ``docs/sre/slos.md``.
+        # Runbook: ``docs/runbooks/database-size-warn.md``.
+        # ----------------------------------------------------------------
+        "database_size_bytes": Gauge(
+            "ecm_database_size_bytes",
+            "Size in bytes of the SQLite database file (``journal.db``). "
+            "Updated post-VACUUM at startup (database._perform_maintenance) "
+            "and after the weekly cleanup task (CleanupTask.execute). No "
+            "labels — single-file, single-tenant.",
+            registry=registry,
+        ),
+        "database_wal_size_bytes": Gauge(
+            "ecm_database_wal_size_bytes",
+            "Size in bytes of the SQLite WAL file (``journal.db-wal``). A "
+            "large WAL relative to the body usually means checkpointing "
+            "is stalled, not that the working set has grown — see the "
+            "``database-size-warn`` runbook for the WAL-vs-body triage.",
+            registry=registry,
+        ),
+        # ----------------------------------------------------------------
+        # Task scheduler health (bd-qxi02, bd-p5b8i SRE recommendation).
+        #
+        # Two gauges expose the operational health of the task scheduler
+        # subsystem — the gap that allowed bd-p5b8i to go undetected for
+        # 39+ days on the PO's install (4 months across all operators)
+        # because the existing ecm_telemetry_rollup_last_success_timestamp
+        # gauge fired only for rollup-specific tasks, no alert rule wired
+        # it up, and no Prometheus deployment consumed the signal.
+        #
+        # ``task_schedule_last_success_timestamp`` labels by ``task_id`` —
+        # a bounded enum drawn from the task_registry (~15 tasks defined
+        # in code; the label space is the set of task_class.task_id
+        # constants, not user-derived input, so cardinality cannot grow
+        # at runtime). Updated by the task_engine on every successful
+        # task execution to the current Unix epoch seconds. Per-task so
+        # SRE staleness alerts can distinguish a stuck stats_v2_rollup
+        # from a stuck cleanup from a stuck stream_probe — each has a
+        # different cadence and a different acceptable staleness window.
+        #
+        # ``task_schedule_next_run_null_count`` is label-free — the count
+        # of task_schedules rows where next_run_at IS NULL AND enabled=1
+        # AND schedule_type != 'manual'. Any non-zero value is the
+        # canonical "scheduler subsystem is broken" signal — the exact
+        # symptom bd-p5b8i exhibited (every non-MANUAL schedule had NULL
+        # next_run_at, so the scheduler loop never picked them up). The
+        # gauge is emitted at startup (post-Alembic) AND on every
+        # ``sync_from_database`` so a heal during Bundle H's bd-p5b8i
+        # remediation is visible on the next scrape.
+        # ----------------------------------------------------------------
+        "task_schedule_last_success_timestamp": Gauge(
+            "ecm_task_schedule_last_success_timestamp",
+            "Unix-epoch seconds of the most recent SUCCESSFUL execution "
+            "of each scheduled task, labeled by task_id. Updated by the "
+            "task_engine post-execution when the TaskResult is success. "
+            "Per-task so SRE staleness alerts can distinguish a stuck "
+            "stats_v2_rollup (25h budget) from a stuck cleanup (8d "
+            "weekly) from a stuck stream_probe (48h, runs twice daily). "
+            "Label cardinality is bounded by the task_registry — task_id "
+            "values are code constants, not user-derived input.",
+            ["task_id"],
+            registry=registry,
+        ),
+        "task_schedule_next_run_null_count": Gauge(
+            "ecm_task_schedule_next_run_null_count",
+            "Count of task_schedules rows where next_run_at IS NULL AND "
+            "enabled=1 AND schedule_type != 'manual'. Any non-zero value "
+            "is the canonical 'scheduler subsystem is broken' signal — "
+            "non-MANUAL enabled schedules MUST have a computed next_run_at "
+            "for the scheduler loop to pick them up. Emitted at startup "
+            "post-Alembic (database.init_db) AND on every TaskRegistry "
+            "sync_from_database so Bundle H's heal is visible on the "
+            "next scrape without waiting for a container restart.",
+            registry=registry,
+        ),
     }
 
 
@@ -501,6 +788,155 @@ def get_metric(name: str) -> Any:
     if not _METRICS:
         install_metrics()
     return _METRICS[name]
+
+
+def update_database_size_metrics(db_path: Optional[str] = None) -> None:
+    """Sample the SQLite DB and WAL file sizes onto the gauges (bd-ygoqr).
+
+    Called from the two points that already do real DB I/O:
+
+    * ``database._perform_maintenance`` — at process startup, post-VACUUM.
+    * ``tasks.cleanup.CleanupTask.execute`` — after the weekly VACUUM.
+
+    Cost is two ``os.path.getsize`` calls (single syscall each). The body
+    gauge is set to 0 when the file is missing (e.g., a fresh install
+    where ``journal.db`` was created mid-call); the WAL gauge stays at 0
+    when the WAL has been checkpointed away (the steady state on a
+    healthy install).
+
+    Defensive: never raises. Observability instrumentation must not break
+    the maintenance code path it's wrapping. A failure to publish is logged
+    at DEBUG.
+
+    Parameters
+    ----------
+    db_path:
+        Absolute path to the SQLite DB file. When ``None``, resolves to
+        ``database.JOURNAL_DB_FILE`` lazily (the import is inside the
+        function so tests that haven't initialized the DB module don't
+        pay an import-time cost).
+    """
+    try:
+        if db_path is None:
+            from database import JOURNAL_DB_FILE  # local to avoid import cycle
+            db_path = str(JOURNAL_DB_FILE)
+
+        body_size = 0
+        if os.path.exists(db_path):
+            body_size = os.path.getsize(db_path)
+        get_metric("database_size_bytes").set(float(body_size))
+
+        wal_path = db_path + "-wal"
+        wal_size = 0
+        if os.path.exists(wal_path):
+            wal_size = os.path.getsize(wal_path)
+        get_metric("database_wal_size_bytes").set(float(wal_size))
+    except Exception:  # pragma: no cover — never break the caller
+        logging.getLogger(__name__).debug(
+            "[OBSERVABILITY] update_database_size_metrics failed", exc_info=True
+        )
+
+
+def record_task_success(task_id: str, timestamp: Optional[float] = None) -> None:
+    """Stamp the ``ecm_task_schedule_last_success_timestamp`` gauge for a task.
+
+    Called by ``task_engine._execute_task`` immediately after a task's
+    ``TaskResult`` reports ``success=True`` and ``error != "CANCELLED"``.
+    The gauge is the SLI surface for the per-task staleness alerts in
+    the ``ecm_task_scheduler`` Prometheus rules group — without this
+    update, those alerts cannot distinguish "task hasn't been scheduled
+    in days" (the bd-p5b8i failure mode) from "task is healthy and
+    polling normally."
+
+    Defensive: never raises. Observability instrumentation must not
+    take down the task execution path it's wrapping. A failure to
+    publish is logged at DEBUG.
+
+    Parameters
+    ----------
+    task_id:
+        The task registry key (e.g. ``"stats_v2_rollup"``,
+        ``"cleanup"``, ``"stream_probe"``). Must be a code constant
+        from the task_registry — not user-derived input. Label
+        cardinality is bounded by the registry, not by request shape.
+    timestamp:
+        Override for the Unix-epoch timestamp value. Defaults to
+        ``time.time()`` (current wall-clock). Exposed for tests so
+        they can pin the value without mocking ``time.time``.
+    """
+    try:
+        if timestamp is None:
+            timestamp = time.time()
+        get_metric("task_schedule_last_success_timestamp").labels(
+            task_id=task_id
+        ).set(float(timestamp))
+    except Exception:  # pragma: no cover — observability must not break task engine
+        logging.getLogger(__name__).debug(
+            "[OBSERVABILITY] record_task_success failed for task_id=%s",
+            task_id, exc_info=True,
+        )
+
+
+def update_task_schedule_null_count(count: Optional[int] = None) -> None:
+    """Set the ``ecm_task_schedule_next_run_null_count`` gauge.
+
+    Counts ``task_schedules`` rows where ``next_run_at IS NULL AND
+    enabled=1 AND schedule_type != 'manual'`` — any non-zero value is
+    the canonical "scheduler subsystem is broken" signal (bd-p5b8i).
+
+    Called from:
+
+    * ``database.init_db`` post-``_run_migrations`` — establishes the
+      startup value before Bundle H's heal can change it, so SRE sees
+      the pre-heal count in the boot trace.
+    * ``task_registry.TaskRegistry.sync_from_database`` — re-emitted
+      after the registry has finished its own bookkeeping so a heal
+      that ran during sync_from_database is reflected immediately.
+    * ``task_engine.TaskEngine._scheduler_loop`` — invoked on every
+      scheduler tick (default cadence ~60s, matches
+      ``TaskEngine.check_interval``) so the gauge has per-scrape
+      freshness for the 5m alert window in ``prometheus_rules.yaml``.
+      Without this third call site the gauge would only refresh at
+      boot, which means a mid-life regression that caused
+      ``next_run_at`` to drift to NULL would not be detected until
+      the next container restart. The COUNT(*) query is cheap (one
+      indexed lookup against task_schedules, ~10 rows in practice).
+
+    Defensive: never raises. When ``count`` is ``None``, queries the
+    DB lazily — the import is inside the function so tests that
+    haven't initialized the DB module don't pay an import-time cost.
+    A query failure (DB unreachable, table missing on a fresh install)
+    leaves the gauge untouched and logs at DEBUG. The caller can pass
+    ``count`` directly to avoid the implicit query (e.g., when the
+    caller already has a live session open).
+
+    Parameters
+    ----------
+    count:
+        When provided, the gauge is set to ``float(count)`` directly.
+        When ``None``, the function opens a fresh session via
+        ``database.get_session`` and runs the count query itself.
+    """
+    try:
+        if count is None:
+            from sqlalchemy import text  # local — keep observability importable without sqlalchemy
+            from database import get_session
+            session = get_session()
+            try:
+                row = session.execute(text(
+                    "SELECT COUNT(*) FROM task_schedules "
+                    "WHERE next_run_at IS NULL "
+                    "AND enabled = 1 "
+                    "AND schedule_type != 'manual'"
+                )).fetchone()
+                count = int(row[0]) if row and row[0] is not None else 0
+            finally:
+                session.close()
+        get_metric("task_schedule_next_run_null_count").set(float(count))
+    except Exception:  # pragma: no cover — observability must not break startup or scheduler
+        logging.getLogger(__name__).debug(
+            "[OBSERVABILITY] update_task_schedule_null_count failed", exc_info=True
+        )
 
 
 def render_metrics() -> bytes:

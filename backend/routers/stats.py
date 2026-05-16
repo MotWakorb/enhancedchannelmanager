@@ -5,17 +5,165 @@ Extracted from main.py (Phase 3 of v0.13.0 backend refactor).
 """
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import func
+from sqlalchemy.orm import Session
 
-from bandwidth_tracker import BandwidthTracker
+from auth.dependencies import get_current_user
+from auth.settings import get_auth_settings
+from bandwidth_tracker import (
+    BandwidthTracker,
+    ChannelStreamsCache,
+    resolve_active_channel_streams,
+)
 from database import get_session
 from dispatcharr_client import get_client
+from models import SessionTelemetry, UniqueClientConnection, User
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/stats", tags=["Stats"])
+
+
+# =============================================================================
+# GH-62 watch-time read API (bd-skqln.5) — module-level helpers
+# =============================================================================
+
+
+async def get_watch_time_caller(
+    request: Request,
+    session: Session = Depends(get_session),
+) -> Optional[User]:
+    """Resolve the calling user for watch-time endpoints.
+
+    Returns the authenticated ``User`` when global auth is enabled, ``None``
+    when auth is disabled (the global auth middleware has already let the
+    request through in that posture). The watch-time handlers use this to
+    enforce the "non-admin can only query own user_id" rule per bd-skqln.5
+    acceptance.
+
+    Defined as a module-level function (rather than reusing
+    ``auth.RequireAuthIfEnabled``) so tests can override it via
+    ``app.dependency_overrides[get_watch_time_caller]`` — the standard
+    FastAPI test seam.
+    """
+    settings = get_auth_settings()
+    if not settings.require_auth or not settings.setup_complete:
+        return None
+    return await get_current_user(request, session)
+
+
+def _parse_iso_utc(value: str, *, param: str) -> int:
+    """Parse an ISO-8601 UTC string into unix-epoch milliseconds.
+
+    Accepts both ``...Z`` and ``...+00:00`` forms. Rejects anything else with
+    HTTP 400 so timezone-naive inputs cannot silently slip through and be
+    interpreted as local time.
+    """
+    raw = value.strip()
+    # Python's fromisoformat doesn't accept the 'Z' suffix until 3.11; accept
+    # either form by normalising 'Z' -> '+00:00'.
+    normalised = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        dt = datetime.fromisoformat(normalised)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{param} must be an ISO-8601 UTC timestamp (got {value!r})",
+        )
+    if dt.tzinfo is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{param} must include a timezone (Z or +00:00)",
+        )
+    return int(dt.astimezone(timezone.utc).timestamp() * 1000)
+
+
+def _ms_to_iso_z(ms: Optional[int]) -> Optional[str]:
+    """Convert ms-since-epoch -> ISO-8601 UTC string with trailing Z."""
+    if ms is None:
+        return None
+    return (
+        datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
+
+
+def _distinct_poll_subquery(session: Session):
+    """DISTINCT (user_id, channel_id, observed_at) collapse subquery.
+
+    Returns one row per (user, channel, poll-tick) tuple with the poll
+    interval. Collapses multi-client overcount: a user with N concurrent
+    sessions on the same channel in one poll contributes ONE poll interval,
+    not N. Mirrors the ``channel_watch_stats_v`` view's collapse pattern
+    (migration 0008) but adds ``user_id`` to the DISTINCT key so per-user
+    aggregations get the same guarantee.
+
+    ``MAX(poll_interval_ms)`` inside the GROUP BY is defensive: in the rare
+    case where two clients report different poll intervals for the same
+    (user, channel, observed_at) tuple, take the longer one — never
+    overcount.
+
+    bd-gsn3r: ``MAX(dispatcharr_username)`` is also defensive — within a
+    single (user_id, channel_id, observed_at) tuple every row should
+    carry the same username (one human, one poll). MAX picks one
+    deterministically without inflating the row count, so the outer
+    GROUP-BY-user can read the username back without a second join.
+    """
+    return (
+        session.query(
+            SessionTelemetry.user_id.label("user_id"),
+            SessionTelemetry.channel_id.label("channel_id"),
+            SessionTelemetry.observed_at.label("observed_at"),
+            func.max(SessionTelemetry.poll_interval_ms).label("poll_interval_ms"),
+            func.max(SessionTelemetry.dispatcharr_username).label("dispatcharr_username"),
+        )
+        .group_by(
+            SessionTelemetry.user_id,
+            SessionTelemetry.channel_id,
+            SessionTelemetry.observed_at,
+        )
+        .subquery()
+    )
+
+
+def _build_envelope(data, *, from_ms, to_ms, group_by):
+    """Standard response envelope for watch-time endpoints.
+
+    Shape: ``{data: [...], meta: {...}, pagination: null}``. The pagination
+    slot is reserved for a future page-cursor extension (bd-skqln.10 perf
+    work may add it); for now both endpoints return all rows in-range and
+    leave the slot ``null`` so clients can be coded against the full shape
+    upfront.
+    """
+    return {
+        "data": data,
+        "meta": {
+            "from_iso": _ms_to_iso_z(from_ms),
+            "to_iso": _ms_to_iso_z(to_ms),
+            "group_by": group_by,
+            "total_rows": len(data),
+        },
+        "pagination": None,
+    }
+
+
+def _channel_name_or_fallback(channel_id: str, name_map: dict) -> str:
+    """Look up channel name from UniqueClientConnection map, else synth fallback.
+
+    Matches the skqln.3 step (d) precedent for popularity_calculator:
+    side-load from ``UniqueClientConnection.channel_name``, fall back to
+    ``"Channel <first-8-chars>..."`` when the connection table has no row
+    yet (e.g., a brand-new channel observed only by ``session_telemetry``).
+    """
+    name = name_map.get(channel_id)
+    if name:
+        return name
+    return f"Channel {channel_id[:8]}..."
 
 
 # =============================================================================
@@ -29,6 +177,17 @@ async def get_channel_stats():
 
     Returns summary including active channels, client counts, bitrates, speeds, etc.
     Enriches client data with usernames resolved from Dispatcharr user accounts.
+
+    bd-ox5q8: per active channel, additionally surfaces
+    ``stream_name`` and ``m3u_account_id`` resolved live (request-time)
+    via ``resolve_active_channel_streams`` — the same code path the
+    polling tracker uses for ``session_telemetry``. The PO directive is
+    "Active Channels is a live view; operators expect immediate
+    accuracy" — so this is intentionally a fresh resolver call, NOT a
+    read from the (up-to-one-poll-stale) ``session_telemetry`` table.
+    Resolver failure leaves both fields ``None`` and the row still
+    surfaces (best-effort enrichment — never block the live view on a
+    Dispatcharr lookup hiccup).
     """
     logger.debug("[STATS] GET /api/stats/channels")
     client = get_client()
@@ -55,6 +214,63 @@ async def get_channel_stats():
                             c["username"] = user_map[str(uid)]
             except Exception as e:
                 logger.warning("[STATS] Failed to resolve usernames: %s", e)
+
+        # bd-ox5q8: live stream-identity enrichment for the Active
+        # Channels view. Build the snapshot shape ``resolve_active_
+        # channel_streams`` expects (channel_uuid + stream_id + url),
+        # call the resolver with a transient cache so this request
+        # doesn't share state with any other request, and merge the
+        # resolved ``stream_name`` + ``m3u_account_id`` (+ ``stream_id``
+        # for completeness) onto each ChannelStats row.
+        channels = result.get("channels", []) or []
+        if channels:
+            snapshot = [
+                {
+                    "channel_uuid": str(ch.get("channel_id", "")),
+                    "stream_id": ch.get("stream_id"),
+                    "url": ch.get("url"),
+                }
+                for ch in channels
+            ]
+            try:
+                resolutions = await resolve_active_channel_streams(
+                    client,
+                    snapshot,
+                    channel_streams_cache=ChannelStreamsCache(),
+                    poll_count=0,
+                    # Suppress the per-poll SLI metric — that signal is
+                    # owned by the BandwidthTracker hot path. The endpoint
+                    # call is on-demand and would dilute the cyclic SLI.
+                    emit_metrics=False,
+                )
+            except Exception as e:
+                # Defense-in-depth — resolver internals already catch
+                # per-channel failures and return EMPTY_RESOLUTION; an
+                # outer raise here would be unexpected (e.g. structural
+                # bug). Best-effort enrichment: log + degrade gracefully
+                # so the Active Channels view still renders.
+                logger.warning(
+                    "[STATS] live stream-identity resolver raised: %s", e
+                )
+                resolutions = {}
+
+            for ch in channels:
+                uuid = str(ch.get("channel_id", ""))
+                resolution = resolutions.get(uuid)
+                if resolution is None:
+                    ch["stream_name"] = ch.get("stream_name")
+                    ch["m3u_account_id"] = None
+                    continue
+                # Only override the existing stream_name when the
+                # resolver actually produced one (preserve whatever
+                # Dispatcharr surfaced if the resolver came up empty).
+                if resolution.stream_name is not None:
+                    ch["stream_name"] = resolution.stream_name
+                elif "stream_name" not in ch:
+                    ch["stream_name"] = None
+                if resolution.stream_id is not None and not ch.get("stream_id"):
+                    ch["stream_id"] = resolution.stream_id
+                ch["m3u_account_id"] = resolution.provider_id
 
         return result
     except Exception as e:
@@ -369,4 +585,980 @@ async def calculate_popularity_scores(
         return result
     except Exception as e:
         logger.exception("[STATS] Failed to calculate popularity")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# =============================================================================
+# GH-62 watch-time read API (bd-skqln.5)
+# =============================================================================
+#
+# Both endpoints read directly from ``session_telemetry`` (the per-poll fact
+# table from bd-skqln.2 / .3). The ``channel_watch_stats_v`` view from
+# bd-skqln.3 step (b) aggregates per-channel only and does NOT expose
+# ``user_id``, so it cannot satisfy these per-user queries — using
+# ``session_telemetry`` directly with a DISTINCT-by-(user, channel,
+# observed_at) subquery is the honest fit.
+#
+# Performance: relies on the ``idx_session_telemetry_user_observed``
+# composite index (migration 0006) for range scans by user_id, and the
+# bare ``idx_session_telemetry_observed_at`` index when ``user_id`` is not
+# filtered. p95 < 800ms / p99 < 2s at 3-6 months of data per
+# bd-skqln.5 acceptance — pytest-benchmark gate lands separately in
+# bd-skqln.10.
+
+
+_VALID_GROUP_BY = {"total", "day"}
+
+
+@router.get("/watch-time")
+async def get_watch_time_by_user(
+    db: Session = Depends(get_session),
+    caller: Optional[User] = Depends(get_watch_time_caller),
+    from_: Optional[str] = Query(None, alias="from"),
+    to: Optional[str] = None,
+    user_id: Optional[int] = None,
+    group_by: str = "total",
+):
+    """List per-user watch-time totals (GH-62).
+
+    Query parameters (all snake_case in the URL):
+
+    * ``from`` — ISO-8601 UTC range start (inclusive). Optional.
+    * ``to`` — ISO-8601 UTC range end (exclusive). Optional.
+    * ``user_id`` — filter to a single user. Optional. **Admin-only
+      endpoint**: non-admin callers receive 403.
+    * ``group_by`` — ``total`` (default) or ``day``. ``total`` returns one
+      row per user. ``day`` returns one row per (user, UTC-day) pair.
+
+    Response envelope (per bd-skqln.5):
+        ``{data: [...], meta: {from_iso, to_iso, group_by, total_rows},
+           pagination: null}``
+
+    Row shape for ``group_by=total``:
+        ``{user_id, username, total_watch_seconds, last_watched}``
+
+    Row shape for ``group_by=day``:
+        ``{user_id, username, day, watch_seconds}``
+    """
+    logger.debug(
+        "[STATS] GET /api/stats/watch-time from=%s to=%s user_id=%s group_by=%s",
+        from_, to, user_id, group_by,
+    )
+    if group_by not in _VALID_GROUP_BY:
+        raise HTTPException(
+            status_code=400,
+            detail=f"group_by must be one of {sorted(_VALID_GROUP_BY)}",
+        )
+
+    # Auth enforcement: watch-time stats are admin-only. Non-admin callers
+    # are blocked regardless of which user_id they query (or whether they
+    # omit the filter). PO directive 2026-05-13: non-admins do not see stats.
+    # (caller is None when global auth is disabled — auth-disabled mode is
+    # the test-default posture and operator-only deployments; treat as
+    # admin-equivalent there.)
+    if caller is not None and not caller.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Watch-time stats are admin-only",
+        )
+
+    from_ms = _parse_iso_utc(from_, param="from") if from_ else None
+    to_ms = _parse_iso_utc(to, param="to") if to else None
+
+    # Empty-range short-circuit: if from == to, the inclusive/exclusive
+    # convention makes the window empty. Skip the DB round-trip.
+    if from_ms is not None and to_ms is not None and from_ms >= to_ms:
+        return _build_envelope([], from_ms=from_ms, to_ms=to_ms, group_by=group_by)
+
+    try:
+        distinct = _distinct_poll_subquery(db)
+        # Only count rows whose user_id is non-NULL: NULL user_id == anonymous
+        # poll (no logged-in user). Watch-time-by-user has no meaningful row
+        # for the anonymous bucket — drop them rather than emit a NULL-user
+        # row.
+        base_q = db.query(distinct).filter(distinct.c.user_id.isnot(None))
+        if from_ms is not None:
+            base_q = base_q.filter(distinct.c.observed_at >= from_ms)
+        if to_ms is not None:
+            base_q = base_q.filter(distinct.c.observed_at < to_ms)
+        if user_id is not None:
+            base_q = base_q.filter(distinct.c.user_id == user_id)
+        inner = base_q.subquery()
+
+        if group_by == "total":
+            rows = (
+                db.query(
+                    inner.c.user_id,
+                    func.sum(inner.c.poll_interval_ms).label("total_ms"),
+                    func.max(inner.c.observed_at).label("last_observed_at"),
+                    # bd-gsn3r: surface the denormalized Dispatcharr
+                    # username directly from session_telemetry. MAX is
+                    # defensive (every row for one user_id should carry
+                    # the same username — one human, one Dispatcharr
+                    # account) and gives stable behavior even if a
+                    # Dispatcharr-side rename mid-window left both old
+                    # and new values in the table.
+                    func.max(inner.c.dispatcharr_username).label("username"),
+                )
+                .group_by(inner.c.user_id)
+                .all()
+            )
+            data = [
+                {
+                    "user_id": r.user_id,
+                    "username": r.username,
+                    "total_watch_seconds": int((r.total_ms or 0) // 1000),
+                    "last_watched": _ms_to_iso_z(r.last_observed_at),
+                }
+                for r in rows
+            ]
+            # Stable ordering: highest total first, then user_id ASC.
+            data.sort(key=lambda d: (-d["total_watch_seconds"], d["user_id"]))
+        else:  # group_by == "day"
+            # SQLite ``date()`` accepts unixepoch seconds — divide ms by 1000.
+            day_expr = func.date(inner.c.observed_at / 1000, "unixepoch").label("day")
+            rows = (
+                db.query(
+                    inner.c.user_id,
+                    day_expr,
+                    func.sum(inner.c.poll_interval_ms).label("total_ms"),
+                    # bd-gsn3r: same denormalized read as the total branch.
+                    func.max(inner.c.dispatcharr_username).label("username"),
+                )
+                .group_by(inner.c.user_id, day_expr)
+                .all()
+            )
+            data = [
+                {
+                    "user_id": r.user_id,
+                    "username": r.username,
+                    "day": r.day,
+                    "watch_seconds": int((r.total_ms or 0) // 1000),
+                }
+                for r in rows
+            ]
+            data.sort(key=lambda d: (d["user_id"], d["day"]))
+
+        return _build_envelope(data, from_ms=from_ms, to_ms=to_ms, group_by=group_by)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("[STATS] Failed to get watch-time totals")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/watch-time/{user_id}")
+async def get_watch_time_for_user(
+    user_id: int,
+    db: Session = Depends(get_session),
+    caller: Optional[User] = Depends(get_watch_time_caller),
+    from_: Optional[str] = Query(None, alias="from"),
+    to: Optional[str] = None,
+):
+    """Per-user breakdown of watch time by channel (GH-62).
+
+    Query parameters:
+
+    * ``from`` — ISO-8601 UTC range start (inclusive). Optional.
+    * ``to`` — ISO-8601 UTC range end (exclusive). Optional.
+
+    Response envelope (per bd-skqln.5):
+        ``{data: [...], meta: {from_iso, to_iso, group_by, total_rows},
+           pagination: null}``
+
+    Row shape:
+        ``{channel_id, channel_name, total_watch_seconds, session_count,
+           last_watched, latest_stream_id, latest_stream_name}``
+
+    ``channel_name`` is side-loaded from
+    ``UniqueClientConnection.channel_name`` (the skqln.3 step (d)
+    precedent) — falls back to ``"Channel <first-8-chars-of-uuid>..."``
+    when no connection row carries the name yet (brand-new channels first
+    observed only via ``session_telemetry``).
+
+    ``latest_stream_id`` + ``latest_stream_name`` (bd-kh23e) carry the
+    most-recently-watched stream identity on that channel within the
+    window. Aggregation: ``MAX(observed_at)`` per channel — one row per
+    channel, the stream column shows the latest stream the user watched
+    on that channel. The frontend renders the label as
+    ``[<provider>] - <stream_name>`` with provider name side-loaded from
+    the M3U accounts map. Both fields are nullable — older rows
+    pre-kh23e and resolver-miss rows surface as ``null``.
+    """
+    logger.debug(
+        "[STATS] GET /api/stats/watch-time/%s from=%s to=%s",
+        user_id, from_, to,
+    )
+
+    # Auth enforcement: watch-time stats are admin-only. PO directive
+    # 2026-05-13: non-admins do not see stats — including their own.
+    if caller is not None and not caller.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Watch-time stats are admin-only",
+        )
+
+    from_ms = _parse_iso_utc(from_, param="from") if from_ else None
+    to_ms = _parse_iso_utc(to, param="to") if to else None
+    if from_ms is not None and to_ms is not None and from_ms >= to_ms:
+        return _build_envelope([], from_ms=from_ms, to_ms=to_ms, group_by="channel")
+
+    try:
+        distinct = _distinct_poll_subquery(db)
+        base_q = db.query(distinct).filter(distinct.c.user_id == user_id)
+        if from_ms is not None:
+            base_q = base_q.filter(distinct.c.observed_at >= from_ms)
+        if to_ms is not None:
+            base_q = base_q.filter(distinct.c.observed_at < to_ms)
+        inner = base_q.subquery()
+
+        # session_count: count distinct session_ids per channel (informational
+        # only — not the legacy ``watch_count`` state-transition counter,
+        # which is not derivable from per-poll rows; see migration 0008
+        # docstring).
+        sess_q = (
+            db.query(
+                SessionTelemetry.channel_id.label("channel_id"),
+                func.count(func.distinct(SessionTelemetry.session_id)).label(
+                    "session_count"
+                ),
+            )
+            .filter(SessionTelemetry.user_id == user_id)
+        )
+        if from_ms is not None:
+            sess_q = sess_q.filter(SessionTelemetry.observed_at >= from_ms)
+        if to_ms is not None:
+            sess_q = sess_q.filter(SessionTelemetry.observed_at < to_ms)
+        sess_q = sess_q.group_by(SessionTelemetry.channel_id)
+        session_counts = {r.channel_id: int(r.session_count) for r in sess_q.all()}
+
+        agg_rows = (
+            db.query(
+                inner.c.channel_id,
+                func.sum(inner.c.poll_interval_ms).label("total_ms"),
+                func.max(inner.c.observed_at).label("last_observed_at"),
+            )
+            .group_by(inner.c.channel_id)
+            .all()
+        )
+
+        # Side-load channel names from UniqueClientConnection. One query per
+        # request — the in-range channel_id set is bounded by the user's
+        # viewing footprint (typically O(10) channels), so an IN-list lookup
+        # is fine without a join.
+        channel_ids = [r.channel_id for r in agg_rows]
+        name_map = _load_channel_names(db, channel_ids)
+        # bd-kh23e: side-load the latest stream identity per channel.
+        # Aggregation choice — ``MAX(observed_at)`` per channel: one row
+        # per channel, stream identity reflects the MOST RECENT stream
+        # watched on that channel within the window. Picking the latest
+        # is intentional: the frontend label
+        # ``[<provider>] - <stream_name>`` represents what the user most
+        # recently watched, not an arbitrary sample.
+        latest_stream_map = _load_latest_stream_identity_per_channel(
+            db,
+            channel_ids,
+            user_id=user_id,
+            from_ms=from_ms,
+            to_ms=to_ms,
+        )
+
+        data = [
+            {
+                "channel_id": r.channel_id,
+                "channel_name": _channel_name_or_fallback(r.channel_id, name_map),
+                "total_watch_seconds": int((r.total_ms or 0) // 1000),
+                "session_count": session_counts.get(r.channel_id, 0),
+                "last_watched": _ms_to_iso_z(r.last_observed_at),
+                # Both null when the resolver couldn't attribute the stream
+                # (older rows pre-kh23e, lookup failures). Channel rendered
+                # gracefully on the frontend with ``—`` for the stream column.
+                "latest_stream_id": latest_stream_map.get(r.channel_id, (None, None))[0],
+                "latest_stream_name": latest_stream_map.get(r.channel_id, (None, None))[1],
+            }
+            for r in agg_rows
+        ]
+        # Stable ordering: highest total first, then channel_id ASC.
+        data.sort(key=lambda d: (-d["total_watch_seconds"], d["channel_id"]))
+        return _build_envelope(data, from_ms=from_ms, to_ms=to_ms, group_by="channel")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("[STATS] Failed to get per-user watch-time breakdown")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+def _load_channel_names(db: Session, channel_ids):
+    """Bulk-resolve ``channel_id -> channel_name`` via UniqueClientConnection.
+
+    Picks an arbitrary name per channel — the connection table stores one
+    row per (ip, channel) viewing session and ECM keeps the channel name
+    cached in every row, so they all agree under normal operation. ``MAX``
+    is the cheap, stable picker.
+    """
+    if not channel_ids:
+        return {}
+    rows = (
+        db.query(
+            UniqueClientConnection.channel_id,
+            func.max(UniqueClientConnection.channel_name).label("channel_name"),
+        )
+        .filter(UniqueClientConnection.channel_id.in_(channel_ids))
+        .group_by(UniqueClientConnection.channel_id)
+        .all()
+    )
+    return {r.channel_id: r.channel_name for r in rows}
+
+
+def _load_latest_stream_identity_per_channel(
+    db: Session,
+    channel_ids,
+    *,
+    user_id: int,
+    from_ms: Optional[int],
+    to_ms: Optional[int],
+):
+    """Bulk-resolve ``channel_id -> (latest_stream_id, latest_stream_name)`` for one user.
+
+    bd-kh23e: side-loader for the watch-time-by-user breakdown. Returns a
+    map keyed by ``channel_id`` whose value is a 2-tuple of the stream
+    identity on the row with the highest ``observed_at`` for the
+    ``(user_id, channel_id)`` pair within the optional time window.
+
+    Implementation: a per-channel ``MAX(observed_at)`` subquery joins back
+    to ``session_telemetry`` to pull the corresponding stream_id +
+    stream_name. The user_id + observed_at filters mirror the outer
+    aggregation so the per-channel "latest" picks the same row population
+    the user is shown.
+
+    NULL handling: a channel whose latest row has ``stream_id=NULL`` and
+    ``stream_name=NULL`` (older rows pre-kh23e or resolver-miss rows)
+    still appears in the map with both tuple elements set to ``None``.
+    Channels not present in ``channel_ids`` are simply absent from the
+    map — callers use ``.get(channel_id, (None, None))`` to default
+    gracefully.
+    """
+    if not channel_ids:
+        return {}
+
+    # Subquery: the latest observed_at per channel for this user, within
+    # the optional window. Mirrors the outer aggregate's filter set so
+    # the picked row is from the same population the user sees.
+    latest_q = (
+        db.query(
+            SessionTelemetry.channel_id.label("channel_id"),
+            func.max(SessionTelemetry.observed_at).label("max_observed_at"),
+        )
+        .filter(SessionTelemetry.user_id == user_id)
+        .filter(SessionTelemetry.channel_id.in_(channel_ids))
+    )
+    if from_ms is not None:
+        latest_q = latest_q.filter(SessionTelemetry.observed_at >= from_ms)
+    if to_ms is not None:
+        latest_q = latest_q.filter(SessionTelemetry.observed_at < to_ms)
+    latest_sq = latest_q.group_by(SessionTelemetry.channel_id).subquery()
+
+    # Join back: pull stream identity for the matched (channel, max ts).
+    # ``MAX(stream_id)`` / ``MAX(stream_name)`` collapse the rare case
+    # where two rows share the highest observed_at (e.g., two concurrent
+    # clients on the same channel at the same poll-tick): both rows
+    # carry the same stream identity by construction (one resolver pass
+    # per poll), so ``MAX`` is the cheap, deterministic picker.
+    rows = (
+        db.query(
+            SessionTelemetry.channel_id.label("channel_id"),
+            func.max(SessionTelemetry.stream_id).label("stream_id"),
+            func.max(SessionTelemetry.stream_name).label("stream_name"),
+        )
+        .join(
+            latest_sq,
+            (SessionTelemetry.channel_id == latest_sq.c.channel_id)
+            & (SessionTelemetry.observed_at == latest_sq.c.max_observed_at),
+        )
+        .filter(SessionTelemetry.user_id == user_id)
+        .group_by(SessionTelemetry.channel_id)
+        .all()
+    )
+    return {r.channel_id: (r.stream_id, r.stream_name) for r in rows}
+
+
+def _load_latest_stream_identity_per_provider_channel(
+    db: Session,
+    channel_ids,
+    *,
+    from_ms: int,
+    to_ms: int,
+):
+    """Bulk-resolve ``(provider_id, channel_id) -> (latest_stream_id, latest_stream_name)``.
+
+    bd-kh23e: side-loader for the channel-heatmap. Returns a map keyed
+    by ``(provider_id, channel_id)`` tuple whose value is the latest
+    stream identity surfaced on the row with ``MAX(observed_at)`` for
+    that (provider, channel) bucket within the window.
+
+    Same MAX(observed_at) aggregation rule as the watch-time-by-user
+    breakdown — the frontend renders both surfaces with the same
+    ``[<provider>] - <stream_name>`` label format so the rule needs to
+    be consistent.
+
+    ``provider_id`` may be ``None`` in either side of the tuple — NULL
+    provider buckets ("Unknown") still carry stream identity when the
+    resolver attributed the stream but the upstream provider was
+    deleted; the heatmap row still appears and the operator sees which
+    stream ran out of provider attribution.
+    """
+    if not channel_ids:
+        return {}
+    latest_q = (
+        db.query(
+            SessionTelemetry.provider_id.label("provider_id"),
+            SessionTelemetry.channel_id.label("channel_id"),
+            func.max(SessionTelemetry.observed_at).label("max_observed_at"),
+        )
+        .filter(SessionTelemetry.observed_at >= from_ms)
+        .filter(SessionTelemetry.observed_at < to_ms)
+        .filter(SessionTelemetry.channel_id.in_(channel_ids))
+        .group_by(SessionTelemetry.provider_id, SessionTelemetry.channel_id)
+        .subquery()
+    )
+
+    # Join back to pick the matched row's stream identity. ``MAX`` over
+    # stream_id / stream_name collapses ties on observed_at (concurrent
+    # clients on the same poll-tick) deterministically — all such rows
+    # carry the same identity by construction.
+    #
+    # NULL-safety on the join: SQLAlchemy / SQLite treat ``NULL = NULL``
+    # as UNKNOWN in a join predicate, which would drop NULL-provider
+    # cells silently. Use ``IS NOT DISTINCT FROM`` semantics via
+    # explicit ``OR (both NULL)`` so the join survives NULL providers.
+    rows = (
+        db.query(
+            SessionTelemetry.provider_id.label("provider_id"),
+            SessionTelemetry.channel_id.label("channel_id"),
+            func.max(SessionTelemetry.stream_id).label("stream_id"),
+            func.max(SessionTelemetry.stream_name).label("stream_name"),
+        )
+        .join(
+            latest_sq := latest_q,
+            (
+                (SessionTelemetry.channel_id == latest_sq.c.channel_id)
+                & (SessionTelemetry.observed_at == latest_sq.c.max_observed_at)
+                & (
+                    (SessionTelemetry.provider_id == latest_sq.c.provider_id)
+                    | (
+                        SessionTelemetry.provider_id.is_(None)
+                        & latest_sq.c.provider_id.is_(None)
+                    )
+                )
+            ),
+        )
+        .filter(SessionTelemetry.observed_at >= from_ms)
+        .filter(SessionTelemetry.observed_at < to_ms)
+        .group_by(SessionTelemetry.provider_id, SessionTelemetry.channel_id)
+        .all()
+    )
+    return {
+        (r.provider_id, r.channel_id): (r.stream_id, r.stream_name)
+        for r in rows
+    }
+
+
+# =============================================================================
+# GH-59 per-provider stats read API (bd-skqln.16)
+# =============================================================================
+#
+# Four endpoints that aggregate ``session_telemetry`` per provider for the
+# Stats v2 Providers panel (skqln.18). All four reuse skqln.5's auth seam
+# (``get_watch_time_caller``) and {data, meta, pagination} envelope; the
+# panel is admin-only (PO directive 2026-05-13).
+#
+# Indexes used (skqln.2 / migration 0006 + the trailing-bytes index
+# co-located with skqln.2):
+#   - idx_session_telemetry_provider_observed     (queries 1, 2, 4)
+#   - idx_session_telemetry_provider_channel_observed_bytes  (query 3)
+#
+# Multi-client overcount guard: queries 2 (watch-time) and 4 (bitrate)
+# aggregate quantities that must be counted once per (channel, observed_at)
+# tuple — concurrent clients on the same channel-poll-tick double-count
+# otherwise. Both use the ``_distinct_provider_poll_subquery`` collapse;
+# query 1 (buffering) sums an inherently per-poll quantity and does not
+# need the collapse; query 3 (heatmap) sums per-poll bytes_delta similarly.
+
+
+_VALID_WINDOW = {"7d": 7, "30d": 30, "90d": 90}
+_VALID_BUCKET = {"hour", "day"}
+_HEATMAP_DEFAULT_TOP_N = 50
+_HEATMAP_MAX_TOP_N = 500  # absolute cap regardless of caller param
+
+
+def _check_admin(caller: Optional[User]) -> None:
+    """Reject non-admin callers with 403. PO directive 2026-05-13:
+    per-provider stats are admin-only.
+
+    Mirrors the inline check in ``get_watch_time_by_user`` — extracted so
+    the four provider-stats handlers don't duplicate it. ``caller`` is
+    ``None`` when global auth is disabled (test-default + operator-only
+    deployments); treat that as admin-equivalent.
+    """
+    if caller is not None and not caller.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Provider stats are admin-only",
+        )
+
+
+def _resolve_window_ms(window: str) -> tuple[int, int]:
+    """Resolve a ``window`` literal to (from_ms, to_ms).
+
+    ``to`` is the current wall time (anchor); ``from`` is N days back. Both
+    are unix-epoch milliseconds for direct comparison with
+    ``session_telemetry.observed_at``.
+    """
+    if window not in _VALID_WINDOW:
+        raise HTTPException(
+            status_code=400,
+            detail=f"window must be one of {sorted(_VALID_WINDOW)}",
+        )
+    days = _VALID_WINDOW[window]
+    to_dt = datetime.now(timezone.utc)
+    from_dt = to_dt - timedelta(days=days)
+    return int(from_dt.timestamp() * 1000), int(to_dt.timestamp() * 1000)
+
+
+def _bucket_expr(bucket: str, observed_at_col):
+    """Return a SQLAlchemy expression that floors ``observed_at`` (ms-epoch)
+    to the start of its hour or UTC-day bucket, in ISO-8601 with trailing Z.
+
+    Uses SQLite's ``strftime`` over ``unixepoch``: ``observed_at_col / 1000``
+    converts ms → seconds, then ``strftime('%Y-%m-%dT%H:00:00Z', ..., 'unixepoch')``
+    yields the floor as a string. Day bucket uses ``T00:00:00Z`` suffix.
+    """
+    if bucket == "hour":
+        fmt = "%Y-%m-%dT%H:00:00Z"
+    else:  # day
+        fmt = "%Y-%m-%dT00:00:00Z"
+    return func.strftime(fmt, observed_at_col / 1000, "unixepoch")
+
+
+def _build_provider_envelope(data, *, from_ms, to_ms, **meta_extras):
+    """Provider-stats response envelope. Same {data, meta, pagination}
+    shape as skqln.5 with ``meta`` extended for window/bucket/top_n etc.
+    """
+    meta = {
+        "from_iso": _ms_to_iso_z(from_ms),
+        "to_iso": _ms_to_iso_z(to_ms),
+        "total_rows": len(data),
+    }
+    meta.update(meta_extras)
+    return {"data": data, "meta": meta, "pagination": None}
+
+
+def _distinct_provider_poll_subquery(db: Session, from_ms: int, to_ms: int):
+    """DISTINCT (provider_id, channel_id, observed_at) collapse subquery.
+
+    Returns one row per (provider, channel, poll-tick) tuple with the poll
+    interval and bytes. Collapses multi-client overcount in per-provider
+    aggregations the same way ``_distinct_poll_subquery`` does for
+    per-user aggregations (skqln.5).
+
+    ``MAX(poll_interval_ms)`` / ``MAX(bytes_delta)`` are defensive: in the
+    rare case where two clients report different values for the same
+    (provider, channel, observed_at), take the larger one — never
+    overcount, but don't undercount either. Under normal operation all
+    concurrent clients report the same values from the same upstream poll.
+
+    NOTE: SQLite's ``GROUP BY`` treats ``NULL`` values as a single group,
+    so rows with ``provider_id = NULL`` aggregate into one "Unknown" bucket
+    correctly with no special handling.
+    """
+    return (
+        db.query(
+            SessionTelemetry.provider_id.label("provider_id"),
+            SessionTelemetry.channel_id.label("channel_id"),
+            SessionTelemetry.observed_at.label("observed_at"),
+            func.max(SessionTelemetry.poll_interval_ms).label("poll_interval_ms"),
+            func.max(SessionTelemetry.bytes_delta).label("bytes_delta"),
+        )
+        .filter(SessionTelemetry.observed_at >= from_ms)
+        .filter(SessionTelemetry.observed_at < to_ms)
+        .group_by(
+            SessionTelemetry.provider_id,
+            SessionTelemetry.channel_id,
+            SessionTelemetry.observed_at,
+        )
+        .subquery()
+    )
+
+
+@router.get("/providers/buffering")
+async def get_providers_buffering(
+    db: Session = Depends(get_session),
+    caller: Optional[User] = Depends(get_watch_time_caller),
+    window: str = "7d",
+    bucket: str = "hour",
+):
+    """Per-provider channel-event time-series (bd-ov5vb, broadens
+    bd-skqln.16 / GH-59).
+
+    Query params:
+
+    * ``window`` — one of ``7d`` / ``30d`` / ``90d``. Default ``7d``.
+    * ``bucket`` — ``hour`` or ``day``. Default ``hour``.
+
+    Response row shape:
+        ``{provider_id, time_bucket, buffer_event_count,
+        reconnect_event_count, error_event_count, switch_event_count,
+        total_event_count}``
+
+    Pre-bd-ov5vb history: this endpoint historically returned only
+    ``buffer_event_count``. Live verification on the PO's instance
+    (2026-05-15) found that ``channel_buffering`` events are rare on
+    real installs — the operationally-meaningful health signals are
+    ``channel_reconnect`` / ``channel_error`` / ``stream_switch``,
+    which the ingest layer
+    (``BandwidthTracker._collect_channel_events``) now writes to
+    dedicated columns on ``session_telemetry`` (migration 0013). This
+    endpoint surfaces all four counters alongside their pre-summed
+    total so the Providers panel can render a "Channel events" view
+    without a second round-trip. The ``buffer_event_count`` field is
+    preserved for back-compat with any consumer that wired against
+    the pre-bd-ov5vb shape (it now typically reads zero on real
+    installs — the truthful posture for installs whose Dispatcharr
+    does not emit ``channel_buffering``).
+
+    Each per-type counter is inherently per-poll (one column per
+    row), so no DISTINCT-collapse is needed. ``NULL`` ``provider_id``
+    surfaces as a row with ``provider_id: null`` (operators need the
+    attribution gap visible). The URL path stays ``/buffering`` for
+    back-compat with any external dashboard or alerting integration
+    that has the path hard-coded; renaming the path would break
+    those consumers without a benefit beyond aesthetics. The bead
+    documentation surfaces the semantic broadening.
+    """
+    _check_admin(caller)
+    if bucket not in _VALID_BUCKET:
+        raise HTTPException(
+            status_code=400,
+            detail=f"bucket must be one of {sorted(_VALID_BUCKET)}",
+        )
+    from_ms, to_ms = _resolve_window_ms(window)
+
+    try:
+        bucket_col = _bucket_expr(bucket, SessionTelemetry.observed_at).label(
+            "time_bucket"
+        )
+        rows = (
+            db.query(
+                SessionTelemetry.provider_id.label("provider_id"),
+                bucket_col,
+                func.sum(SessionTelemetry.buffer_event_count).label("buffer"),
+                func.sum(SessionTelemetry.reconnect_event_count).label("reconnect"),
+                func.sum(SessionTelemetry.error_event_count).label("error"),
+                func.sum(SessionTelemetry.switch_event_count).label("switch"),
+            )
+            .filter(SessionTelemetry.observed_at >= from_ms)
+            .filter(SessionTelemetry.observed_at < to_ms)
+            .group_by(SessionTelemetry.provider_id, bucket_col)
+            .all()
+        )
+        data = []
+        for r in rows:
+            buffer_n = int(r.buffer or 0)
+            reconnect_n = int(r.reconnect or 0)
+            error_n = int(r.error or 0)
+            switch_n = int(r.switch or 0)
+            data.append({
+                "provider_id": r.provider_id,
+                "time_bucket": r.time_bucket,
+                "buffer_event_count": buffer_n,
+                "reconnect_event_count": reconnect_n,
+                "error_event_count": error_n,
+                "switch_event_count": switch_n,
+                # Pre-summed so the frontend's "Channel events" column
+                # can render a single primary number without summing
+                # four fields in the render path. The breakdown
+                # tooltip (bd-1x5v0 option a) consumes the per-type
+                # counters directly.
+                "total_event_count": (
+                    buffer_n + reconnect_n + error_n + switch_n
+                ),
+            })
+        # Stable ordering: provider_id NULLS LAST, then bucket ASC.
+        data.sort(
+            key=lambda d: (
+                d["provider_id"] is None,
+                d["provider_id"] or 0,
+                d["time_bucket"],
+            )
+        )
+        return _build_provider_envelope(
+            data, from_ms=from_ms, to_ms=to_ms, window=window, bucket=bucket
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("[STATS] Failed to get provider buffering stats")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/providers/watch-time")
+async def get_providers_watch_time(
+    db: Session = Depends(get_session),
+    caller: Optional[User] = Depends(get_watch_time_caller),
+    window: str = "7d",
+):
+    """Total watch time per provider (bd-skqln.16, GH-59).
+
+    Query params:
+
+    * ``window`` — one of ``7d`` / ``30d`` / ``90d``. Default ``7d``.
+
+    Response row shape:
+        ``{provider_id, total_watch_seconds}``
+
+    Aggregates ``SUM(poll_interval_ms)`` per provider_id, with the
+    DISTINCT-(provider_id, channel_id, observed_at) collapse to prevent
+    multi-client overcount. ``NULL`` ``provider_id`` surfaces as its own
+    row (``provider_id: null``).
+    """
+    _check_admin(caller)
+    from_ms, to_ms = _resolve_window_ms(window)
+
+    try:
+        distinct = _distinct_provider_poll_subquery(db, from_ms, to_ms)
+        rows = (
+            db.query(
+                distinct.c.provider_id,
+                func.sum(distinct.c.poll_interval_ms).label("total_ms"),
+            )
+            .group_by(distinct.c.provider_id)
+            .all()
+        )
+        data = [
+            {
+                "provider_id": r.provider_id,
+                "total_watch_seconds": int((r.total_ms or 0) // 1000),
+            }
+            for r in rows
+        ]
+        # Stable ordering: highest watch-time first, then provider_id ASC
+        # (NULL last).
+        data.sort(
+            key=lambda d: (
+                -d["total_watch_seconds"],
+                d["provider_id"] is None,
+                d["provider_id"] or 0,
+            )
+        )
+        return _build_provider_envelope(
+            data, from_ms=from_ms, to_ms=to_ms, window=window
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("[STATS] Failed to get provider watch-time stats")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/providers/channel-heatmap")
+async def get_providers_channel_heatmap(
+    db: Session = Depends(get_session),
+    caller: Optional[User] = Depends(get_watch_time_caller),
+    window: str = "7d",
+    top_n: int = _HEATMAP_DEFAULT_TOP_N,
+):
+    """Provider × channel byte heatmap (bd-skqln.16, GH-59).
+
+    Query params:
+
+    * ``window`` — one of ``7d`` / ``30d`` / ``90d``. Default ``7d``.
+    * ``top_n`` — cap the response at the top-N channels by total bytes
+      across all providers. Default 50; absolute max 500 (defensive).
+
+    Response row shape:
+        ``{provider_id, channel_id, channel_name, bytes,
+           latest_stream_id, latest_stream_name}``
+
+    Each row is one cell of the 2D grid (rows=providers, cols=channels).
+    Cells with zero bytes are omitted. ``channel_name`` is side-loaded from
+    ``UniqueClientConnection`` (skqln.3 step (d) precedent) with the same
+    ``"Channel <first-8-chars>..."`` fallback the per-user breakdown uses.
+
+    ``latest_stream_id`` + ``latest_stream_name`` (bd-kh23e) carry the
+    most-recently-observed stream identity for the (provider, channel)
+    cell within the window. Aggregation: ``MAX(observed_at)`` per
+    (provider_id, channel_id) pair. The frontend's heatmap data-table
+    fallback renders this as ``[<provider>] - <stream_name>`` so the
+    operator can see WHICH stream the bytes were attributed to, not just
+    which channel.
+
+    The DBA-flagged covering index ``idx_session_telemetry_provider_channel_observed_bytes``
+    (model: ``__table_args__`` of ``SessionTelemetry``) backs this query.
+    """
+    _check_admin(caller)
+    if top_n < 1:
+        raise HTTPException(status_code=400, detail="top_n must be >= 1")
+    top_n = min(top_n, _HEATMAP_MAX_TOP_N)
+    from_ms, to_ms = _resolve_window_ms(window)
+
+    try:
+        # First pass: total bytes per channel across all providers — pick the
+        # top-N channel_ids by that total.
+        channel_totals = (
+            db.query(
+                SessionTelemetry.channel_id.label("channel_id"),
+                func.sum(SessionTelemetry.bytes_delta).label("total"),
+            )
+            .filter(SessionTelemetry.observed_at >= from_ms)
+            .filter(SessionTelemetry.observed_at < to_ms)
+            .group_by(SessionTelemetry.channel_id)
+            .order_by(func.sum(SessionTelemetry.bytes_delta).desc())
+            .limit(top_n)
+            .all()
+        )
+        top_channel_ids = [r.channel_id for r in channel_totals]
+        if not top_channel_ids:
+            return _build_provider_envelope(
+                [], from_ms=from_ms, to_ms=to_ms, window=window, top_n=top_n
+            )
+
+        # Second pass: per-(provider, channel) bytes_delta sum, restricted to
+        # the top-N channels.
+        cells = (
+            db.query(
+                SessionTelemetry.provider_id.label("provider_id"),
+                SessionTelemetry.channel_id.label("channel_id"),
+                func.sum(SessionTelemetry.bytes_delta).label("bytes"),
+            )
+            .filter(SessionTelemetry.observed_at >= from_ms)
+            .filter(SessionTelemetry.observed_at < to_ms)
+            .filter(SessionTelemetry.channel_id.in_(top_channel_ids))
+            .group_by(SessionTelemetry.provider_id, SessionTelemetry.channel_id)
+            .all()
+        )
+        name_map = _load_channel_names(db, top_channel_ids)
+        # bd-kh23e: side-load latest stream identity per (provider, channel).
+        # MAX(observed_at) per cell — same aggregation rule as the
+        # watch-time-by-user breakdown (bd-kh23e). The frontend's
+        # heatmap data-table fallback uses these to render the
+        # ``[<provider>] - <stream_name>`` label per cell.
+        stream_id_map = _load_latest_stream_identity_per_provider_channel(
+            db,
+            top_channel_ids,
+            from_ms=from_ms,
+            to_ms=to_ms,
+        )
+        data = [
+            {
+                "provider_id": c.provider_id,
+                "channel_id": c.channel_id,
+                "channel_name": _channel_name_or_fallback(c.channel_id, name_map),
+                "bytes": int(c.bytes or 0),
+                "latest_stream_id": stream_id_map.get(
+                    (c.provider_id, c.channel_id), (None, None)
+                )[0],
+                "latest_stream_name": stream_id_map.get(
+                    (c.provider_id, c.channel_id), (None, None)
+                )[1],
+            }
+            for c in cells
+        ]
+        # Stable ordering: by bytes DESC, then (provider, channel).
+        data.sort(
+            key=lambda d: (
+                -d["bytes"],
+                d["provider_id"] is None,
+                d["provider_id"] or 0,
+                d["channel_id"],
+            )
+        )
+        return _build_provider_envelope(
+            data, from_ms=from_ms, to_ms=to_ms, window=window, top_n=top_n
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("[STATS] Failed to get provider channel-heatmap")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/providers/bitrate")
+async def get_providers_bitrate(
+    db: Session = Depends(get_session),
+    caller: Optional[User] = Depends(get_watch_time_caller),
+    window: str = "7d",
+    bucket: str = "hour",
+):
+    """Per-provider derived bitrate time-series (bd-skqln.16, GH-59).
+
+    Query params:
+
+    * ``window`` — one of ``7d`` / ``30d`` / ``90d``. Default ``7d``.
+    * ``bucket`` — ``hour`` or ``day``. Default ``hour``.
+
+    Response row shape:
+        ``{provider_id, time_bucket, bitrate_bps}``
+
+    Computes ``bitrate_bps = SUM(bytes_delta) * 8 * 1000 / SUM(poll_interval_ms)``
+    per (provider_id, time_bucket) — the *1000 converts the denominator
+    from ms to s so the result is bits/second. Uses the DISTINCT-(provider,
+    channel, observed_at) collapse so multi-client polls don't multiply
+    the denominator.
+
+    Buckets with ``SUM(poll_interval_ms) == 0`` are skipped (defensive —
+    shouldn't happen in practice since poll_interval_ms is a NOT-NULL
+    field with check constraint > 0 in the writer).
+    """
+    _check_admin(caller)
+    if bucket not in _VALID_BUCKET:
+        raise HTTPException(
+            status_code=400,
+            detail=f"bucket must be one of {sorted(_VALID_BUCKET)}",
+        )
+    from_ms, to_ms = _resolve_window_ms(window)
+
+    try:
+        distinct = _distinct_provider_poll_subquery(db, from_ms, to_ms)
+        bucket_col = _bucket_expr(bucket, distinct.c.observed_at).label("time_bucket")
+        rows = (
+            db.query(
+                distinct.c.provider_id,
+                bucket_col,
+                func.sum(distinct.c.bytes_delta).label("total_bytes"),
+                func.sum(distinct.c.poll_interval_ms).label("total_ms"),
+            )
+            .group_by(distinct.c.provider_id, bucket_col)
+            .all()
+        )
+        data = []
+        for r in rows:
+            total_ms = int(r.total_ms or 0)
+            if total_ms <= 0:
+                continue
+            # bytes * 8 / seconds = bits/second. seconds = total_ms / 1000,
+            # so bps = total_bytes * 8 * 1000 / total_ms. Integer-truncated
+            # — fractional bps is noise at the scales we operate on.
+            bps = int((int(r.total_bytes or 0) * 8 * 1000) // total_ms)
+            data.append(
+                {
+                    "provider_id": r.provider_id,
+                    "time_bucket": r.time_bucket,
+                    "bitrate_bps": bps,
+                }
+            )
+        # Stable ordering: provider_id (NULLS LAST), then time_bucket ASC.
+        data.sort(
+            key=lambda d: (
+                d["provider_id"] is None,
+                d["provider_id"] or 0,
+                d["time_bucket"],
+            )
+        )
+        return _build_provider_envelope(
+            data, from_ms=from_ms, to_ms=to_ms, window=window, bucket=bucket
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("[STATS] Failed to get provider bitrate stats")
         raise HTTPException(status_code=500, detail="Internal server error")

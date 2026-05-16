@@ -49,8 +49,11 @@ export interface HeatmapProps {
   columnLabels?: readonly string[];
 
   /**
-   * Cell width and height in pixels. Default 32px — large enough for a
-   * two-digit numeric overlay if the consumer adds one later.
+   * Cell width and height in pixels. Default 48px — large enough that
+   * rotated column labels for typical channel names ("ESPN HD", "Discovery
+   * Channel") don't stack on top of each other in the GH-59 Providers
+   * panel use case. Short labels (hours of day in the skqln.17 use case)
+   * still render fine at this size.
    */
   cellSize?: number;
 
@@ -70,8 +73,21 @@ export interface HeatmapProps {
 
 /** Width reserved on the left for row labels, in pixels. */
 const ROW_LABEL_WIDTH = 96;
-/** Height reserved on the top for column labels, in pixels. */
-const COLUMN_LABEL_HEIGHT = 24;
+/**
+ * Height reserved on the top for column labels, in pixels.
+ *
+ * SVG uses a y-down coordinate system: rotate(+45°) sends text
+ * UP-AND-RIGHT from the anchor — labels project diagonally above the
+ * column-label band into the reserved space. bd-yteek shipped
+ * rotate(-45°) which in y-down sends text DOWN-AND-LEFT, rendering
+ * labels on top of the cells below the band (only the rightmost few
+ * chars were visible at the pivot). bd-wdpve flips to rotate(+45°)
+ * and widens the band to 140px to contain labels like
+ * "917 | Milwaukee Brewers" (~95-100px projected height at 45°).
+ * The .heatmap container's existing overflow-x: auto handles wider
+ * heatmaps via horizontal scroll.
+ */
+const COLUMN_LABEL_HEIGHT = 140;
 
 function isEmpty(data: readonly (readonly number[])[]): boolean {
   if (data.length === 0) return true;
@@ -103,7 +119,7 @@ export function Heatmap({
   data,
   rowLabels = [],
   columnLabels = [],
-  cellSize = 32,
+  cellSize = 48,
   colorFor,
   ariaLabel = 'Heatmap',
 }: HeatmapProps) {
@@ -143,18 +159,32 @@ export function Heatmap({
       >
         <title>{ariaLabel}</title>
 
-        {/* Column labels along the top */}
-        {columnLabels.slice(0, columnCount).map((label, colIdx) => (
-          <text
-            key={`col-${colIdx}`}
-            className="heatmap-col-label"
-            x={ROW_LABEL_WIDTH + colIdx * cellSize + cellSize / 2}
-            y={COLUMN_LABEL_HEIGHT - 6}
-            textAnchor="middle"
-          >
-            {label}
-          </text>
-        ))}
+        {/* Column labels along the top.
+            bd-yteek: rotated so long channel names ("Discovery Channel HD")
+            read diagonally rather than overlapping horizontally.
+            bd-wdpve: SVG y-down means rotate(+45°) sends text UP-AND-RIGHT
+            from the pivot (labels project into the COLUMN_LABEL_HEIGHT band
+            above the cells). The yteek rotation was -45° which in y-down
+            sends text DOWN-AND-LEFT — ON TOP of the cells below the band.
+            textAnchor='end' on a +45°-rotated text anchors the label's
+            trailing edge at the pivot, sitting at the column center just
+            above the cell grid. */}
+        {columnLabels.slice(0, columnCount).map((label, colIdx) => {
+          const pivotX = ROW_LABEL_WIDTH + colIdx * cellSize + cellSize / 2;
+          const pivotY = COLUMN_LABEL_HEIGHT - 4;
+          return (
+            <text
+              key={`col-${colIdx}`}
+              className="heatmap-col-label"
+              x={pivotX}
+              y={pivotY}
+              textAnchor="end"
+              transform={`rotate(45 ${pivotX} ${pivotY})`}
+            >
+              {label}
+            </text>
+          );
+        })}
 
         {/* Row labels down the left side */}
         {data.map((_row, rowIdx) => (

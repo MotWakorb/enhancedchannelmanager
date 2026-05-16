@@ -5,6 +5,7 @@ Tests: 22 channel endpoints covering channel CRUD, logos, CSV import/export,
        stream management, number assignment, bulk-commit, and clear-auto-created.
 Mocks: get_client() for all Dispatcharr API calls, csv_handler for CSV operations.
 """
+import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -346,6 +347,49 @@ class TestGetLogos:
 
         assert response.status_code == 200
 
+    @pytest.mark.asyncio
+    async def test_emits_per_request_info_diagnostic(self, async_client, caplog):
+        """Emits the bd-nh50y operator-grepable INFO line per request.
+
+        Contract: every successful GET /logos call must emit a single INFO
+        line tagged "[CHANNELS-LOGO] GET /logos" that names page, page_size,
+        search, the result count, elapsed ms, and the next-page flag. This
+        is the line operators grep when triaging "logos not loading" reports
+        — it lets us correlate the backend response to the frontend log
+        sequence emitted by getAllLogos() in services/api.ts.
+        """
+        import logging
+        mock_client = AsyncMock()
+        mock_client.get_logos.return_value = {
+            "results": [{"id": 1, "name": "ESPN"}, {"id": 2, "name": "FOX"}],
+            "count": 2,
+            "next": None,
+        }
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            with caplog.at_level(logging.INFO, logger="routers.channels"):
+                response = await async_client.get(
+                    "/api/channels/logos?page=3&page_size=250&search=ESPN",
+                )
+
+        assert response.status_code == 200
+        info_lines = [
+            r.getMessage() for r in caplog.records
+            if r.levelno == logging.INFO and "[CHANNELS-LOGO]" in r.getMessage()
+        ]
+        assert len(info_lines) == 1, f"Expected exactly one INFO diagnostic, got: {info_lines}"
+        line = info_lines[0]
+        # Required fields — operators grep for these
+        assert "GET /logos" in line
+        assert "page=3" in line
+        assert "page_size=250" in line
+        assert "search=ESPN" in line
+        assert "returned 2 logos" in line
+        assert "next=false" in line
+        # Elapsed-ms field is present and formatted as a number followed by "ms"
+        import re
+        assert re.search(r"in \d+\.\dms", line), f"Missing elapsed-ms field in: {line}"
+
 
 class TestGetLogo:
     """Tests for GET /api/channels/logos/{logo_id}."""
@@ -681,3 +725,48 @@ class TestBulkMergeSanitization:
         assert result["error"] == "RuntimeError"
         assert "internal-dispatcharr" not in result["error"]
         assert "Bad Gateway" not in result["error"]
+
+
+class TestMergeChannelsStaleSourceIds:
+    """Tests for POST /api/channels/merge stale-source-ID handling.
+
+    bd-ct9wl: when the UI submits a merge request with a stale source ID
+    (e.g., a ghost row that survived a previous merge), the upstream
+    get_channel returns 404. Surface 422 with a refresh hint instead of
+    falling through to a generic 500.
+    """
+
+    @pytest.mark.asyncio
+    async def test_returns_422_when_source_id_no_longer_exists(self, async_client):
+        """Stale source ID returns 422 with refresh hint, not 500."""
+        mock_client = AsyncMock()
+        # First source is fine; second is gone (404 from Dispatcharr).
+        not_found_response = MagicMock(spec=httpx.Response)
+        not_found_response.status_code = 404
+        not_found_response.text = "Not found"
+        not_found_request = MagicMock(spec=httpx.Request)
+        mock_client.get_channel.side_effect = [
+            {"id": 100, "name": "Live A", "streams": [10]},
+            httpx.HTTPStatusError(
+                "404 Not Found",
+                request=not_found_request,
+                response=not_found_response,
+            ),
+        ]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post(
+                "/api/channels/merge",
+                json={
+                    "source_channel_ids": [100, 999],
+                    "target_name": "Merged",
+                },
+            )
+
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert "999" in detail
+        assert "refresh" in detail.lower()
+        # Did not proceed to create the merged channel.
+        mock_client.create_channel.assert_not_called()

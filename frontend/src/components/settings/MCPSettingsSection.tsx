@@ -25,6 +25,13 @@ export function MCPSettingsSection({ isAdmin }: Props) {
   const [mcpStatus, setMcpStatus] = useState<{
     reachable: boolean;
     tools_available?: number;
+    // Self-diagnosing /health diagnostic (bd-ix1g6) — when reachable=true
+    // but api_key_configured=false, api_key_status tells the operator WHY
+    // (file_not_found / invalid_json / field_missing / field_empty), and
+    // setup_hint carries a remediation matching the cause.
+    api_key_configured?: boolean;
+    api_key_status?: 'ok' | 'file_not_found' | 'invalid_json' | 'field_missing' | 'field_empty';
+    setup_hint?: string;
   } | null>(null);
 
   const loadSettings = useCallback(async () => {
@@ -149,10 +156,24 @@ export function MCPSettingsSection({ isAdmin }: Props) {
               <span className="material-icons spinning">sync</span>
               <span>Checking MCP server...</span>
             </div>
-          ) : mcpStatus.reachable ? (
+          ) : mcpStatus.reachable && mcpStatus.api_key_configured ? (
             <div className="mcp-status-badge mcp-status-online">
               <span className="material-icons">check_circle</span>
               <span>MCP server online — {mcpStatus.tools_available ?? '?'} tools available</span>
+            </div>
+          ) : mcpStatus.reachable ? (
+            // Reachable but unconfigured — surface the diagnostic so the
+            // operator can tell apart deployment misconfiguration (volume
+            // mount, corrupted file) from a not-yet-generated key.
+            // bd-ix1g6.
+            <div className="mcp-status-badge mcp-status-warning" data-testid="mcp-status-unconfigured">
+              <span className="material-icons">warning</span>
+              <span>
+                MCP server online but API key not configured
+                {mcpStatus.api_key_status && mcpStatus.api_key_status !== 'ok' && (
+                  <> — <code data-testid="mcp-api-key-status">{mcpStatus.api_key_status}</code></>
+                )}
+              </span>
             </div>
           ) : (
             <div className="mcp-status-badge mcp-status-offline">
@@ -164,6 +185,15 @@ export function MCPSettingsSection({ isAdmin }: Props) {
             <span className="material-icons">refresh</span>
           </button>
         </div>
+        {mcpStatus?.reachable && !mcpStatus.api_key_configured && mcpStatus.setup_hint && (
+          <p
+            className="mcp-status-hint"
+            data-testid="mcp-status-hint"
+            style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary, #888)' }}
+          >
+            {mcpStatus.setup_hint}
+          </p>
+        )}
       </div>
 
       {/* API Key Management */}

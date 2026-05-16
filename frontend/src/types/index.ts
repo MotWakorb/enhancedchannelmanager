@@ -413,11 +413,18 @@ export interface ChannelStats {
 
   // Stream source info (from Dispatcharr)
   stream_id?: number;
-  stream_name?: string;
+  stream_name?: string | null;
   m3u_profile_id?: number;
   m3u_profile_name?: string;
   stream_profile?: string;  // Stream profile ID as string
   url?: string;
+
+  // Stream identity enrichment (bd-ox5q8): backend resolves the active
+  // stream's M3U account id at request time so the Active Channels view
+  // can render the ``[<provider>] - <stream_name>`` badge without an
+  // additional /api round-trip per row. Null when the resolver could
+  // not attribute the active stream to a provider.
+  m3u_account_id?: number | null;
 }
 
 // Response from /proxy/ts/status
@@ -1124,6 +1131,157 @@ export interface WatchHistoryResponse {
   summary: WatchHistorySummary;
   history: WatchHistoryEntry[];
 }
+
+// =============================================================================
+// Watch-Time by User (v0.17.0 — GH-62, bd-skqln.5/.6)
+// =============================================================================
+//
+// Backend endpoints: GET /api/stats/watch-time and
+// GET /api/stats/watch-time/{user_id}. Both return the envelope
+// { data, meta: { from_iso, to_iso, group_by, total_rows }, pagination: null }.
+// Both are admin-only — non-admin callers receive 403.
+
+// Row shape for /watch-time with group_by=total
+export interface WatchTimeUserTotalRow {
+  user_id: number;
+  username: string | null;
+  total_watch_seconds: number;
+  last_watched: string | null;  // ISO-8601 UTC, e.g. "2026-05-13T12:34:56Z"
+}
+
+// Row shape for /watch-time with group_by=day
+export interface WatchTimeUserDayRow {
+  user_id: number;
+  username: string | null;
+  day: string;  // "YYYY-MM-DD" (UTC)
+  watch_seconds: number;
+}
+
+// Row shape for /watch-time/{user_id}
+//
+// ``latest_stream_id`` + ``latest_stream_name`` (bd-kh23e) carry the
+// most-recently-watched stream identity on the channel within the
+// window (``MAX(observed_at)`` per channel). Both may be ``null`` for
+// pre-kh23e rows or rows where the resolver could not attribute the
+// active stream. The UI composes ``[<provider>] - <stream_name>`` from
+// these + the M3U accounts side-load.
+export interface WatchTimeChannelRow {
+  channel_id: string;
+  channel_name: string;
+  total_watch_seconds: number;
+  session_count: number;
+  last_watched: string | null;
+  latest_stream_id: number | null;
+  latest_stream_name: string | null;
+}
+
+export interface WatchTimeMeta {
+  from_iso: string | null;
+  to_iso: string | null;
+  group_by: string;  // "total" | "day" | "channel"
+  total_rows: number;
+}
+
+export interface WatchTimeEnvelope<TRow> {
+  data: TRow[];
+  meta: WatchTimeMeta;
+  pagination: null;
+}
+
+export type WatchTimeTotalsResponse = WatchTimeEnvelope<WatchTimeUserTotalRow>;
+export type WatchTimeDailyResponse = WatchTimeEnvelope<WatchTimeUserDayRow>;
+export type WatchTimeChannelBreakdownResponse = WatchTimeEnvelope<WatchTimeChannelRow>;
+
+// =============================================================================
+// Per-Provider Stats (v0.17.0 — GH-59, bd-skqln.16/.18)
+// =============================================================================
+//
+// Backend endpoints (all admin-only — non-admin callers receive 403):
+//   GET /api/stats/providers/buffering        ?window=7d|30d|90d&bucket=hour|day
+//   GET /api/stats/providers/watch-time       ?window=7d|30d|90d
+//   GET /api/stats/providers/channel-heatmap  ?window=7d|30d|90d&top_n=1..500
+//   GET /api/stats/providers/bitrate          ?window=7d|30d|90d&bucket=hour|day
+//
+// All four return the standard {data, meta, pagination: null} envelope.
+// ``provider_id`` may be ``null`` — that's the "Unknown" attribution-gap
+// bucket the operator must see explicitly (UX directive 2026-05-13).
+
+export type ProviderStatsWindow = '7d' | '30d' | '90d';
+export type ProviderStatsBucket = 'hour' | 'day';
+
+// Row shape for /providers/buffering
+//
+// bd-ov5vb (2026-05-15): the backend ingest layer was broadened to cover
+// every Dispatcharr channel-health event_type, not just
+// ``channel_buffering`` (which is rare on real installs). The endpoint
+// now returns per-type counters paired with a pre-summed total. The
+// URL path stays ``/buffering`` for back-compat with any external
+// dashboard or alerting consumer; the response is additive — the
+// pre-bd-ov5vb ``buffer_event_count`` field is preserved verbatim.
+//
+// Renaming note: the bd-1x5v0 Providers panel relabels the column
+// from "Buffering" to "Channel events" and surfaces the breakdown via
+// a hover tooltip; the rename does not propagate to the type shape so
+// that any other consumer of this response stays unaffected.
+export interface ProviderBufferingRow {
+  provider_id: number | null;
+  time_bucket: string;  // ISO-8601 with trailing Z, floored to hour or day
+  buffer_event_count: number;
+  reconnect_event_count: number;
+  error_event_count: number;
+  switch_event_count: number;
+  total_event_count: number;
+}
+
+// Row shape for /providers/watch-time
+export interface ProviderWatchTimeRow {
+  provider_id: number | null;
+  total_watch_seconds: number;
+}
+
+// Row shape for /providers/channel-heatmap — one cell of the 2D grid
+//
+// ``latest_stream_id`` + ``latest_stream_name`` (bd-kh23e) carry the
+// most-recently-observed stream identity for the (provider, channel)
+// cell within the window (``MAX(observed_at)`` per cell). Both may be
+// ``null`` for pre-kh23e rows or rows where the resolver could not
+// attribute the active stream. The frontend's heatmap data-table
+// fallback renders these as ``[<provider>] - <stream_name>``.
+export interface ProviderHeatmapRow {
+  provider_id: number | null;
+  channel_id: string;
+  channel_name: string;
+  bytes: number;
+  latest_stream_id: number | null;
+  latest_stream_name: string | null;
+}
+
+// Row shape for /providers/bitrate
+export interface ProviderBitrateRow {
+  provider_id: number | null;
+  time_bucket: string;
+  bitrate_bps: number;
+}
+
+export interface ProviderStatsMeta {
+  from_iso: string | null;
+  to_iso: string | null;
+  total_rows: number;
+  window?: ProviderStatsWindow;
+  bucket?: ProviderStatsBucket;
+  top_n?: number;
+}
+
+export interface ProviderStatsEnvelope<TRow> {
+  data: TRow[];
+  meta: ProviderStatsMeta;
+  pagination: null;
+}
+
+export type ProviderBufferingResponse = ProviderStatsEnvelope<ProviderBufferingRow>;
+export type ProviderWatchTimeResponse = ProviderStatsEnvelope<ProviderWatchTimeRow>;
+export type ProviderHeatmapResponse = ProviderStatsEnvelope<ProviderHeatmapRow>;
+export type ProviderBitrateResponse = ProviderStatsEnvelope<ProviderBitrateRow>;
 
 // =============================================================================
 // Authentication Types

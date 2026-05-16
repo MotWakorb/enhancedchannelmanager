@@ -20,6 +20,8 @@ import { EnhancedStatsPanel } from './EnhancedStatsPanel';
 import { PopularityPanel } from './PopularityPanel';
 import { WatchHistoryPanel } from './WatchHistoryPanel';
 import { BandwidthPanel } from './BandwidthPanel';
+import { UserStatsPanel } from './UserStatsPanel';
+import { ProvidersPanel } from './ProvidersPanel';
 import './StatsTab.css';
 
 // Historical data point for charts
@@ -51,6 +53,7 @@ import {
   getSpeedClass,
   formatSpeed,
   formatFps,
+  streamLabel,
 } from '../../utils/formatting';
 
 // Check if event type is streaming-related (not login, refresh, etc.)
@@ -571,9 +574,40 @@ export function StatsTab() {
   const totalClients = channelStats?.channels?.reduce((sum, ch) => sum + (ch.client_count || 0), 0) || 0;
   const activeChannels = channelStats?.count || 0;
 
-  // Calculate connections per M3U (current/max for all accounts)
+  // bd-ox5q8: M3U account name lookup for the Active Channels stream
+  // badge. Backend's /api/stats/channels enrichment surfaces each row's
+  // ``m3u_account_id`` (when the live resolver attributes the active
+  // stream to a provider). The map is built from the already-loaded
+  // ``m3uAccounts`` state so no extra round-trip is needed. Same
+  // pattern as ProvidersPanel (bd-vjv7k): id → display name.
+  const m3uAccountNameMap = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const account of m3uAccounts) {
+      map.set(account.id, account.name);
+    }
+    return map;
+  }, [m3uAccounts]);
+
+  // Calculate connections per M3U (current/max for all accounts).
+  //
+  // bd-lhxfu invariant: the sum of all displayed badge `current` values
+  // MUST equal `activeChannels`. Any channel that does not attribute to a
+  // displayed provider — because the resolver couldn't pin it down, the
+  // attributed account is filtered out (e.g., "Custom"), or the account
+  // isn't in `m3uAccounts` (side-load lag) — falls into the "Unknown"
+  // bucket so the count surfaces visibly instead of vanishing. This is a
+  // user-visible regression lock: a missing channel in the badge sum
+  // hides genuine resolver gaps and mis-deduces operator capacity.
+  //
+  // Provider attribution preference (per channel):
+  //   1. `m3u_account_id` — backend's bd-ox5q8 live resolver result
+  //      (direct stream_id → URL-derived → channel-streams cross-ref).
+  //      This is the authoritative source when present (post-bd-ox5q8).
+  //   2. `m3u_profile_id` → account-id map — legacy fallback for any
+  //      payload where the backend resolver didn't populate the field.
+  //   3. Otherwise → "Unknown" bucket.
   const m3uConnectionStats = (() => {
-    // First, build a map of profile ID -> account ID
+    // Build a map of profile ID -> account ID for the legacy fallback.
     const profileToAccountMap = new Map<number, number>();
     for (const account of m3uAccounts) {
       for (const profile of account.profiles || []) {
@@ -581,33 +615,49 @@ export function StatsTab() {
       }
     }
 
-    // Count active connections per M3U account ID (not profile ID!)
+    // Set of account IDs that will be displayed as their own badge —
+    // anything outside this set falls into the Unknown bucket so the sum
+    // invariant holds even when an account is filtered out (Custom /
+    // is_active=false) or hasn't been side-loaded yet.
+    const displayedAccountIds = new Set<number>(
+      m3uAccounts
+        .filter(a => a.is_active && a.name.toLowerCase() !== 'custom')
+        .map(a => a.id),
+    );
+
+    // Count active connections per displayed M3U account ID, plus a
+    // separate `unknownCount` for everything that doesn't attribute.
     const activeCount = new Map<number, number>();
+    let unknownCount = 0;
     if (channelStats?.channels) {
       logger.debug(`Stats Tab M3U Debug: Processing ${channelStats.channels.length} active channels for M3U connection counts`);
       for (const ch of channelStats.channels) {
-        logger.debug(`Stats Tab M3U Debug: Channel ${ch.channel_id} (${ch.channel_name}) - m3u_profile_id: ${ch.m3u_profile_id}, stream_name: ${ch.stream_name}`);
-        if (ch.m3u_profile_id) {
-          // Map profile ID to account ID
-          const accountId = profileToAccountMap.get(ch.m3u_profile_id);
-          if (accountId) {
-            activeCount.set(accountId, (activeCount.get(accountId) || 0) + 1);
-            logger.debug(`Stats Tab M3U Debug: Profile ${ch.m3u_profile_id} -> Account ${accountId}, incremented count`);
-          } else {
-            logger.debug(`Stats Tab M3U Debug: Profile ${ch.m3u_profile_id} not found in any M3U account`);
-          }
+        // Prefer the backend-resolved account id (bd-ox5q8) over the
+        // raw m3u_profile_id mapping. `m3u_account_id` is `null` when
+        // the resolver couldn't attribute the active stream.
+        let accountId: number | undefined;
+        if (ch.m3u_account_id != null) {
+          accountId = ch.m3u_account_id;
+        } else if (ch.m3u_profile_id) {
+          accountId = profileToAccountMap.get(ch.m3u_profile_id);
+        }
+
+        if (accountId != null && displayedAccountIds.has(accountId)) {
+          activeCount.set(accountId, (activeCount.get(accountId) || 0) + 1);
+          logger.debug(`Stats Tab M3U Debug: Channel ${ch.channel_id} -> Account ${accountId}, incremented count`);
         } else {
-          logger.debug(`Stats Tab M3U Debug: Channel ${ch.channel_id} has NO m3u_profile_id - will not count toward any M3U`);
+          unknownCount += 1;
+          logger.debug(`Stats Tab M3U Debug: Channel ${ch.channel_id} (${ch.channel_name}) unattributed (m3u_account_id=${ch.m3u_account_id}, m3u_profile_id=${ch.m3u_profile_id}, resolved=${accountId ?? 'none'}) — counted as Unknown`);
         }
       }
-      logger.debug(`Stats Tab M3U Debug: Active connection counts by M3U Account ID: ${JSON.stringify(Object.fromEntries(activeCount))}`);
+      logger.debug(`Stats Tab M3U Debug: Active counts by account: ${JSON.stringify(Object.fromEntries(activeCount))}, unknown=${unknownCount}`);
     } else {
       logger.debug('Stats Tab M3U Debug: No active channels to process');
     }
 
-    // Build stats for all M3U accounts (exclude "Custom" M3U)
+    // Build stats for displayed M3U accounts (exclude "Custom" + inactive).
     // If profiles exist, use sum of active profile max_streams (profiles include the base account)
-    // Otherwise use account.max_streams directly
+    // Otherwise use account.max_streams directly.
     logger.debug(`Stats Tab M3U Debug: Processing ${m3uAccounts.length} M3U accounts`);
     const result = m3uAccounts
       .filter(account => {
@@ -637,6 +687,24 @@ export function StatsTab() {
         };
       })
       .sort((a, b) => a.name.localeCompare(b.name));
+
+    // bd-lhxfu invariant lock: append the Unknown bucket whenever there
+    // are unattributed active channels. Use a sentinel id (-1) that
+    // can't collide with any real M3U account id; render with no max
+    // (we don't know the upstream provider's capacity) and label
+    // "Unknown" so the operator sees the gap at a glance — a non-zero
+    // Unknown count is the visible signal that the resolver chain
+    // (bandwidth_tracker `_resolve_provider_ids`) couldn't attribute
+    // one or more active streams.
+    if (unknownCount > 0) {
+      result.push({
+        id: -1,
+        name: 'Unknown',
+        current: unknownCount,
+        max: null as unknown as number,
+      });
+      logger.debug(`Stats Tab M3U Debug: Added Unknown bucket with ${unknownCount} unattributed channels`);
+    }
 
     logger.debug(`Stats Tab M3U Debug: Final M3U connection stats: ${JSON.stringify(result)}`);
     return result;
@@ -681,15 +749,28 @@ export function StatsTab() {
                 <div className="stat-label">Connected Clients</div>
               </div>
             </div>
-            {m3uConnectionStats.map((m3u) => (
-              <div key={m3u.id} className="summary-stat">
-                <span className="material-icons">cloud_queue</span>
-                <div>
-                  <div className="stat-value">{m3u.current}/{m3u.max}</div>
-                  <div className="stat-label">{m3u.name}</div>
+            {m3uConnectionStats.map((m3u) => {
+              // bd-lhxfu Unknown bucket: no upstream max to show — render
+              // bare current count so the operator can read it as
+              // "this many unattributed live streams" without a fake
+              // capacity ratio.
+              const isUnknown = m3u.id === -1;
+              return (
+                <div
+                  key={m3u.id}
+                  className={isUnknown ? 'summary-stat unknown-bucket' : 'summary-stat'}
+                  title={isUnknown ? 'Live streams whose upstream provider could not be attributed by the resolver. See SLO-8 (provider attribution rate).' : undefined}
+                >
+                  <span className="material-icons">{isUnknown ? 'help_outline' : 'cloud_queue'}</span>
+                  <div>
+                    <div className="stat-value">
+                      {isUnknown ? m3u.current : `${m3u.current}/${m3u.max}`}
+                    </div>
+                    <div className="stat-label">{m3u.name}</div>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -770,6 +851,35 @@ export function StatsTab() {
                 ? streamProfileMap.current.get(channel.stream_profile)
                 : null;
 
+              // bd-ox5q8: stream-identity badge formatting. Backend
+              // surfaces ``stream_name`` + ``m3u_account_id`` per row
+              // via the live resolver. Use the shared ``streamLabel``
+              // helper for consistency with kh23e's data-table render
+              // in ProvidersPanel / UserStatsPanel.
+              //
+              // Edge cases:
+              //   * No stream_name AND no m3u_account_id → no badge.
+              //   * stream_name === channel name → no badge (legacy
+              //     behaviour — the badge is meant to surface info NOT
+              //     already in the channel label).
+              //   * m3u_account_id present but not in m3uAccounts map
+              //     → ``providerName`` is null; ``streamLabel`` omits
+              //     the bracketed prefix and renders the bare stream
+              //     name (no leaked ``[Provider 6] - X``).
+              const hasStreamIdentity =
+                (channel.stream_name && channel.stream_name !== displayName)
+                || (channel.m3u_account_id != null);
+              const providerName = (channel.m3u_account_id != null)
+                ? (m3uAccountNameMap.get(channel.m3u_account_id) ?? null)
+                : null;
+              const streamBadgeText = hasStreamIdentity
+                ? streamLabel(
+                    providerName,
+                    channel.stream_name ?? null,
+                    channel.stream_id ?? null,
+                  )
+                : null;
+
               return (
               <div key={channel.channel_id} className="channel-card">
                 <div className="channel-card-header">
@@ -782,9 +892,9 @@ export function StatsTab() {
                     <span className="channel-name" title={`${displayName}${channel.stream_name && channel.stream_name !== displayName ? ` (Stream: ${channel.stream_name})` : ''}`}>
                       {displayName}
                     </span>
-                    {channel.stream_name && channel.stream_name !== displayName && (
-                      <span className="stream-name-badge" title={`Stream: ${channel.stream_name}`}>
-                        {channel.stream_name}
+                    {streamBadgeText && streamBadgeText !== '—' && (
+                      <span className="stream-name-badge" title={`Stream: ${streamBadgeText}`}>
+                        {streamBadgeText}
                       </span>
                     )}
                     {m3uSource && (
@@ -1264,6 +1374,12 @@ export function StatsTab() {
 
         {/* Watch History Log (v0.11.0) */}
         <WatchHistoryPanel />
+
+        {/* User Watch Time (v0.17.0 — GH-62, bd-skqln.6) */}
+        <UserStatsPanel />
+
+        {/* Providers (v0.17.0 — GH-59, bd-skqln.18) */}
+        <ProvidersPanel />
       </div>
     </div>
   );

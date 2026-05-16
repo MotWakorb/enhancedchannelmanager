@@ -83,8 +83,12 @@ jobs:
           # --junitxml emits a JUnit-format report consumed by the
           # flake-pr-comment workflow (bead xq19y) to surface
           # flagged-in-last-30-runs flakes on every PR.
+          # tests/performance/ runs in the dedicated perf-benchmarks
+          # workflow (bd-skqln.10) — exclude it here so the unit/integration
+          # suite isn't burdened with the 250k-row seed.
           python -m pytest \
             --ignore=tests/e2e \
+            --ignore=tests/performance \
             -m "not slow" --tb=short --no-header -p no:warnings \
             --junitxml=junit.xml
 
@@ -189,6 +193,111 @@ jobs:
           # 30-day retention matches the 30-run rolling window used by the
           # flake-pr-comment aggregator.
           retention-days: 30
+
+  # ─── Version-bump consistency guard (bd-9rtlc) ────────────────────────
+  # The version string lives in three hand-edited files: frontend/package.json
+  # (canonical), backend/routers/backup.py (APP_VERSION), and backend/main.py
+  # (FastAPI version kwarg). Today's bump workflow requires updating all three
+  # in lockstep — and historically didn't (PR #277 caught backup.py at 0.16.0
+  # while package.json was 0.17.0-0027; the 9rtlc audit caught main.py at
+  # 0.16.0-0003 while package.json was 0.17.0-0033). This job fails the PR if
+  # the touchpoints disagree, so the next missed bump fails before merge
+  # instead of leaking divergence into dev. See docs/versioning.md →
+  # Touchpoints for the canonical list and bd-9rtlc for the audit history.
+  version-consistency:
+    name: Version Consistency
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Verify version touchpoints agree
+        run: python scripts/check_version_consistency.py
+
+  # ─── Visual regression (Playwright — bd-lln2x) ─────────────────────────
+  # Screenshots the Heatmap chart primitive in isolation and diffs against
+  # the committed baseline PNG. Catches the bd-yteek → bd-wdpve class of
+  # bug (label rotation that passes jsdom unit tests but renders
+  # incorrectly in real browsers). The fixture page boots from the Vite
+  # dev server with no backend dependency, so this job runs without a
+  # live ECM container — unlike the bd-2lw25-deferred E2E suite under
+  # `e2e/*.spec.ts`. Config: `playwright.visual.config.ts`.
+  visual-regression:
+    name: Visual Regression
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          # The repo-root package.json hosts @playwright/test; the
+          # frontend/ package.json hosts the Vite dev server that serves
+          # the fixture HTML. Both lockfiles feed the cache key.
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+
+      - name: Install root dependencies (Playwright)
+        run: npm ci
+
+      - name: Install frontend dependencies (Vite + React)
+        working-directory: frontend
+        run: npm ci
+
+      # Cache Playwright browsers separately from npm — the binaries
+      # are large (~300 MB) and rotate independently of dep changes.
+      # Key includes the Playwright version so a version bump triggers
+      # a fresh download.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      - name: Install Playwright browsers (chromium only)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        # --with-deps installs the OS-level libs Chromium needs on
+        # ubuntu-latest. Only install chromium since the visual config
+        # has a single chromium project — installing firefox/webkit
+        # would triple the cache size for no test coverage.
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright system deps (cache hit path)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        # When browsers are cached the binaries are restored but the
+        # OS libs may not be — `install-deps` is idempotent and fast.
+        run: npx playwright install-deps chromium
+
+      - name: Run visual regression tests
+        env:
+          # CI=1 makes Playwright start its own dev server (vs. reusing
+          # an existing one) — see playwright.visual.config.ts comment
+          # on `reuseExistingServer`.
+          CI: '1'
+        run: npx playwright test --config=playwright.visual.config.ts
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-visual-report
+          path: |
+            playwright-report/
+            test-results-visual/
+          if-no-files-found: ignore
+          retention-days: 14
 
   # ─── Semgrep lint (ReDoS / safe_regex guard — bd-eio04.8) ──────────────
   # Enforces the `no-bare-re-on-dynamic-pattern` rule in .semgrep.yml so

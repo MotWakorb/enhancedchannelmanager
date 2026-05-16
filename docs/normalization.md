@@ -217,6 +217,24 @@ Work this checklist in order:
 4. **Rule ordering.** Does an earlier rule in the pipeline already transform the input away from what your pattern expects? The Test Rules trace drawer shows the intermediate values; read it top-down.
 5. **Regex timeout.** Check logs for `[SAFE_REGEX]` WARN mentioning your rule_id. If present, the pattern is timing out on this input — rewrite per style guide.
 
+### "Auto Create stopped stripping country prefixes / quality suffixes after upgrade" (bd-0tryb)
+
+Symptom: channels land with the full raw stream name (e.g., `DE: RTL 3840P` instead of `RTL`, or `RX: RELAX TROPICAL BEACH ᵁᴴᴰ 3840P` instead of `RELAX TROPICAL BEACH`). Test Rules shows the expected normalized output, so the engine is healthy.
+
+Cause: per-rule normalization. The legacy `normalize_names: true` boolean was replaced in v0.16.0 by `normalization_group_ids` (a list of `NormalizationRuleGroup` IDs to apply on this rule). The migration sets `normalization_group_ids` to all enabled groups for any rule that had `normalize_names=true`; rules that had `normalize_names=false` (the default for new rules created before the migration) end up with `normalization_group_ids = NULL`, which means **normalization is skipped on that rule** — and so does the `merge_streams` core-name fallback that strips country/quality tags before channel lookup (see `auto_creation_executor.py` _merge_streams core-name branch).
+
+Fix:
+
+1. **UI**: Auto-Creation Rules → edit the rule → **Normalization Groups** picker → select the groups you want this rule to apply (typically all enabled groups). Save. Re-run the rule.
+2. **API**: `PUT /api/auto-creation/rules/{id}` with body `{"normalization_group_ids": [<ids>]}`. To list available group IDs: `GET /api/normalization/groups`.
+
+Pre-existing channels created before you set the groups are not retroactively renamed by this change — they were stored with their original raw names. Use [Re-normalize existing channels](#re-normalize-existing-channels) (Settings UI or `POST /api/normalization/apply-to-channels`) for a one-shot cleanup.
+
+Verification:
+
+- Test Rules with the raw stream name should already show the desired normalized output (proof the engine and tag groups are correct).
+- After enabling `normalization_group_ids`, run the rule in **dry-run mode** first and inspect the execution log for `Normalization applied` entries — these confirm the new behavior on the actual streams.
+
 ### `[SAFE_REGEX]` log entries
 
 ```

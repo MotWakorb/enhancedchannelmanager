@@ -1,18 +1,766 @@
 """
 Background bandwidth tracking service.
 Polls Dispatcharr stats periodically and accumulates bandwidth data.
+
+v0.17.0 Stats v2 (bd-skqln.3 step (d)):
+``_collect_stats`` writes one row per active viewing connection into
+``session_telemetry`` unconditionally. The legacy ``channel_watch_stats``
+write inside this module is gone — its readers (popularity calculator,
+top-watched API) now derive their inputs from ``session_telemetry`` and
+``unique_client_connections``. The transitional
+``ECM_SESSION_TELEMETRY_WRITE_ENABLED`` kill-switch is retired; its job
+was the (a)→(d) transition gate and there is no off-state once legacy
+writes are gone.
 """
 import asyncio
 import logging
+import os
+import re
 import time
+from collections import OrderedDict
 from datetime import datetime, date, timedelta, timezone
-from typing import Optional
+from typing import Any, ClassVar, NamedTuple, Optional
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import distinct, func
+from sqlalchemy.exc import IntegrityError, OperationalError
+
 from database import get_session
-from models import BandwidthDaily, ChannelWatchStats, UniqueClientConnection, ChannelBandwidth
+from models import (
+    BandwidthDaily,
+    ChannelBandwidth,
+    SessionTelemetry,
+    UniqueClientConnection,
+)
 
 logger = logging.getLogger(__name__)
+
+
+# Dispatcharr stream-URL convention: the last path segment before ``.ts`` is
+# the integer Dispatcharr stream row id — the same value that ``stream_id``
+# would have carried on the ``/proxy/ts/status`` payload had it been
+# populated. The resolver falls back to this when ``stream_id`` is missing
+# (bd-kbgey — 214 of 235 dev polls observed with stream_id=None on active
+# channels). One capture group, defensive against query-string suffixes
+# like ``.ts?session=abc123`` so the fallback survives Dispatcharr URL
+# annotation conventions that the proxy may add for transcoding hints.
+_STREAM_ID_URL_PATTERN = re.compile(r"/(\d+)\.ts(?:\?|$)")
+
+
+# bd-8axhi defense-in-depth: substrings the SQLite driver puts into the
+# ``OperationalError`` message when the live schema is missing a column or
+# table that the SQLAlchemy model declares. Used by
+# ``_is_schema_drift_error`` to escalate the runtime hot-deploy hazard to
+# ERROR-level on first observation. Lowercase tokens — the matcher
+# lowercases the candidate before comparing. Both shapes are emitted by
+# SQLite as ``no such column: <name>`` / ``no such table: <name>``; pysqlite
+# preserves that wording on its way through SQLAlchemy. Postgres / other
+# backends would surface a different error class altogether (UndefinedColumn
+# in psycopg2), so this is intentionally SQLite-shaped — ECM is SQLite-only
+# (see ``database.py`` PRAGMA setup).
+_SCHEMA_DRIFT_ERROR_TOKENS = ("no such column", "no such table")
+
+
+def _is_schema_drift_error(exc: BaseException) -> bool:
+    """True if ``exc`` looks like the bd-zaaey/bd-8axhi schema-drift signature.
+
+    Matches the SQLite-driver wording for "model declares X, live DB
+    doesn't have it" — the same disease bd-zaaey loud-fails on at boot,
+    here detected at write time so an in-process hot-deploy that
+    introduces drift after the boot guard has already passed gets a loud
+    log line on the first failed write rather than blending into the
+    routine WARN noise.
+
+    Walks the exception chain (``__cause__`` and ``__context__``) so a
+    SQLAlchemy ``OperationalError`` wrapping a sqlite3 ``OperationalError``
+    is detected on either layer.
+    """
+    seen: set[int] = set()
+    cur: Optional[BaseException] = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        message = str(cur).lower()
+        for token in _SCHEMA_DRIFT_ERROR_TOKENS:
+            if token in message:
+                return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+def _extract_stream_id_from_url(url: Optional[str]) -> Optional[int]:
+    """Pull the Dispatcharr stream row id from a stream URL.
+
+    Returns the integer stream id if the URL matches the
+    ``.../<id>.ts[?...]`` convention, otherwise ``None``. Defensive
+    against malformed input (non-string, empty, no path, no integer
+    segment); the caller treats ``None`` the same as a missing
+    ``stream_id`` field and falls through to the NULL-write path.
+
+    Validates the captured value parses as a positive int — guards
+    against pathological inputs like ``/00000.ts`` mapping to id 0.
+
+    NOTE (bd-5g7kx): the integer this returns is NOT guaranteed to be
+    Dispatcharr's stream row id — empirically it is the *upstream M3U
+    provider's* stream id (e.g. Infinity's ``85796``), which only
+    coincidentally collides with a Dispatcharr id on some providers.
+    The kbgey-era hot path (``get_streams_by_ids`` lookup) is preserved
+    for the coincidental-collision case; ``_resolve_provider_ids`` then
+    falls through to the channel-streams URL-match fallback when the
+    direct lookup misses.
+    """
+    if not url or not isinstance(url, str):
+        return None
+    match = _STREAM_ID_URL_PATTERN.search(url)
+    if match is None:
+        return None
+    try:
+        parsed = int(match.group(1))
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+class ProviderResolution(NamedTuple):
+    """Per-channel resolver output (bd-kh23e).
+
+    ``BandwidthTracker._resolve_provider_ids`` returns one
+    ``ProviderResolution`` per channel in the snapshot. The three
+    fields move together as a unit because they all come from the same
+    ``get_streams_by_ids`` batch response and they all fail (NULL)
+    together when resolution can't complete (same failure modes as the
+    pre-kh23e provider-only path: ``no_stream_id`` /
+    ``stream_not_found`` / ``stream_has_no_provider`` / ``lookup_raised``
+    / channel-streams fallback raise/miss).
+
+    * ``provider_id`` — the M3U-account id of the stream's upstream
+      provider (``streams.m3u_account_id``). NULL when the resolver
+      could not identify the stream's owner.
+    * ``stream_id`` — the Dispatcharr stream row id (``streams.id``).
+      NULL when the resolver could not identify the active stream at
+      all (no stream id on the snapshot, no URL-derived match, etc.).
+    * ``stream_name`` — the ``name`` field on the Dispatcharr stream
+      record (e.g. ``"US: TNT"``). NULL when the stream record had no
+      ``name`` field, or when the resolver could not identify the
+      stream.
+
+    Zero runtime overhead vs. a 3-tuple — ``typing.NamedTuple`` is a
+    plain ``tuple`` subclass. Field access (``.provider_id``) is
+    callsite documentation; iteration / equality / hashing behave
+    identically to a tuple.
+
+    The all-NULL sentinel is ``ProviderResolution(None, None, None)`` —
+    use ``EMPTY_RESOLUTION`` below to avoid re-allocating it.
+    """
+
+    provider_id: Optional[int]
+    stream_id: Optional[int]
+    stream_name: Optional[str]
+
+
+# Sentinel for the "resolution failed" case — same object reused across
+# call sites so the dict[channel_uuid, ProviderResolution] map doesn't
+# allocate a fresh tuple for every NULL row.
+EMPTY_RESOLUTION = ProviderResolution(None, None, None)
+
+
+# Default LRU sizing for the cross-poll channel-streams cache. Matches
+# the historical instance defaults so behaviour is unchanged when the
+# tracker swaps from instance state to an injected cache.
+DEFAULT_CHANNEL_STREAMS_CACHE_CAP = 200
+DEFAULT_CHANNEL_STREAMS_CACHE_TTL_POLLS = 30
+
+
+class ChannelStreamsCache:
+    """Cross-call cache for the channel-streams URL-match fallback
+    (bd-5g7kx). Bounded LRU keyed by channel uuid; TTL anchored to a
+    monotonically-increasing ``poll_count``-style integer the caller
+    advances each invocation so a stream's failover hop / stream-list
+    edit is picked up within ``ttl_polls`` cycles.
+
+    Two callers share this cache shape:
+
+    * ``BandwidthTracker._resolve_provider_ids`` — owns one instance for
+      the life of the tracker; the tracker advances ``poll_count`` once
+      per polling cycle.
+    * ``routers.stats.get_channel_stats`` — the live ``/api/stats/channels``
+      enrichment (bd-ox5q8) creates a transient instance per request.
+      Per-request scope is deliberate: the endpoint is hit on operator
+      UI refresh cadence (10s+), the cache reuse only matters within
+      one resolver invocation, and a transient instance avoids
+      cross-request state.
+
+    Value shape: ``(poll_count_at_cache_time, streams_list)``. The poll
+    count anchors TTL so the cache survives wall-clock jumps that
+    ``time.time()``-based TTLs don't.
+    """
+
+    def __init__(
+        self,
+        cap: int = DEFAULT_CHANNEL_STREAMS_CACHE_CAP,
+        ttl_polls: int = DEFAULT_CHANNEL_STREAMS_CACHE_TTL_POLLS,
+    ) -> None:
+        self._entries: "OrderedDict[str, tuple[int, list[dict]]]" = OrderedDict()
+        self.cap = cap
+        self.ttl_polls = ttl_polls
+
+    def get(self, channel_uuid: str, current_poll: int) -> Optional[list[dict]]:
+        """Return the cached stream list if present and within TTL,
+        otherwise ``None``. Touch-on-read promotes the entry to MRU.
+        """
+        entry = self._entries.get(channel_uuid)
+        if entry is None:
+            return None
+        cached_at_poll, streams = entry
+        age_polls = current_poll - cached_at_poll
+        if age_polls > self.ttl_polls:
+            del self._entries[channel_uuid]
+            return None
+        self._entries.move_to_end(channel_uuid)
+        return streams
+
+    def put(
+        self, channel_uuid: str, streams: list[dict], current_poll: int
+    ) -> None:
+        """Insert streams keyed by channel uuid, evicting the LRU
+        entry when the cache hits its cap.
+        """
+        if channel_uuid in self._entries:
+            del self._entries[channel_uuid]
+        self._entries[channel_uuid] = (current_poll, streams)
+        while len(self._entries) > self.cap:
+            self._entries.popitem(last=False)
+
+    def __contains__(self, channel_uuid: str) -> bool:
+        return channel_uuid in self._entries
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+
+async def resolve_active_channel_streams(
+    client,
+    channel_snapshot: list[dict],
+    *,
+    channel_streams_cache: Optional[ChannelStreamsCache] = None,
+    poll_count: int = 0,
+    emit_metrics: bool = True,
+) -> dict[str, ProviderResolution]:
+    """Resolve each active channel's stream identity (id + name + provider).
+
+    Free-function entry point shared by:
+
+    * ``BandwidthTracker._resolve_provider_ids`` — the polling cycle's
+      hot path. Passes its instance ``ChannelStreamsCache`` so successive
+      polls reuse channel-streams responses (bd-5g7kx) within TTL.
+    * ``routers.stats.get_channel_stats`` — the live Stats v2 Active
+      Channels endpoint (bd-ox5q8). Passes a fresh cache per request so
+      operator-facing data is at most one Dispatcharr round-trip behind
+      reality (no cross-request caching of channel-streams lookups —
+      operators expect immediate accuracy).
+
+    Snapshot entry shape (the union both callers feed in):
+
+    * ``channel_uuid`` (str, required) — Dispatcharr channel UUID.
+    * ``stream_id`` (int | None) — Dispatcharr stream row id from
+      ``/proxy/ts/status``. Resolved first; absence triggers the
+      URL-derived fallback below.
+    * ``url`` (str | None) — Active stream URL. Used for the URL-derived
+      stream-id parse (bd-kbgey) and for the channel-streams URL-match
+      fallback (bd-5g7kx).
+
+    Returns ``{channel_uuid: ProviderResolution}``. Resolution failures
+    land ``EMPTY_RESOLUTION`` (the all-None NamedTuple) — same row still
+    surfaces, all three identity fields NULL.
+
+    Resolution paths (tried in order, first hit wins per channel):
+
+    1. **Direct stream_id**: snapshot's ``stream_id`` → batched
+       ``get_streams_by_ids`` → stream's ``m3u_account_id``.
+    2. **URL-derived stream_id** (bd-kbgey): when ``stream_id`` is
+       absent, parse the trailing ``<id>.ts`` integer from the active
+       URL and route it through the SAME batched call. Wins when the
+       URL's trailing id coincidentally collides with a Dispatcharr
+       stream row id.
+    3. **Channel-streams URL match** (bd-5g7kx): when path 2 misses —
+       the URL's trailing id is the *upstream* M3U provider's id, not
+       Dispatcharr's — fetch ``/api/channels/channels/<uuid>/streams/``
+       and find the stream whose persisted ``url`` matches the active
+       URL. Results cached (when a cache is provided) cross-call in a
+       bounded LRU.
+
+    Failure modes — all surface as ``EMPTY_RESOLUTION`` with a
+    structured ``[STATS_V2] provider_resolution_failed`` log line.
+    See ``BandwidthTracker._resolve_provider_ids`` docstring for the
+    full reason taxonomy.
+
+    Metrics: when ``emit_metrics`` is True (the default — the polling
+    hot path) a per-call SLI line and Prometheus counter increment are
+    emitted via ``_log_provider_resolution_sli``. When False (the
+    on-demand endpoint path) the SLI line is suppressed so it doesn't
+    drown the cyclic poll signal.
+    """
+    from stream_prober import extract_m3u_account_id
+
+    provider_by_channel: dict[str, ProviderResolution] = {}
+    unresolvable_channels: list[str] = []
+    stream_id_by_channel: dict[str, int] = {}
+    # Channels whose stream_id came from URL parsing (bd-kbgey fallback)
+    # rather than the direct ``stream_id`` field. These are the
+    # candidates for the channel-streams URL-match fallback (bd-5g7kx)
+    # if the direct lookup misses.
+    url_derived_channels: set[str] = set()
+    url_by_channel: dict[str, str] = {}
+    for entry in channel_snapshot:
+        channel_uuid = entry["channel_uuid"]
+        stream_id = entry.get("stream_id")
+        url = entry.get("url")
+        if isinstance(url, str) and url:
+            url_by_channel[channel_uuid] = url
+        if stream_id is None:
+            derived = _extract_stream_id_from_url(url) if url else None
+            if derived is None:
+                unresolvable_channels.append(channel_uuid)
+                provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
+                logger.warning(
+                    "[STATS_V2] provider_resolution_failed channel=%s reason=no_stream_id",
+                    channel_uuid,
+                )
+                continue
+            stream_id_by_channel[channel_uuid] = derived
+            url_derived_channels.add(channel_uuid)
+            continue
+        stream_id_by_channel[channel_uuid] = int(stream_id)
+
+    if not stream_id_by_channel:
+        if emit_metrics:
+            _log_provider_resolution_sli(0, len(unresolvable_channels))
+        return provider_by_channel
+
+    unique_stream_ids = sorted(set(stream_id_by_channel.values()))
+    try:
+        streams = await client.get_streams_by_ids(unique_stream_ids)
+    except Exception as e:
+        logger.warning(
+            "[STATS_V2] provider_resolution_failed reason=lookup_raised error=%s",
+            e,
+        )
+        for channel_uuid in stream_id_by_channel:
+            provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
+            logger.warning(
+                "[STATS_V2] provider_resolution_failed channel=%s stream=%s reason=lookup_raised",
+                channel_uuid,
+                stream_id_by_channel[channel_uuid],
+            )
+        if emit_metrics:
+            _log_provider_resolution_sli(
+                0, len(unresolvable_channels) + len(stream_id_by_channel)
+            )
+        return provider_by_channel
+
+    provider_by_stream: dict[int, Optional[int]] = {}
+    name_by_stream: dict[int, Optional[str]] = {}
+    for stream in streams:
+        sid = stream.get("id", stream.get("stream_id"))
+        if sid is None:
+            continue
+        sid_int = int(sid)
+        provider_by_stream[sid_int] = extract_m3u_account_id(
+            stream.get("m3u_account")
+        )
+        raw_name = stream.get("name")
+        name_by_stream[sid_int] = (
+            str(raw_name) if isinstance(raw_name, str) and raw_name else None
+        )
+
+    # Per-invocation cache for the channel-streams fallback. Multiple
+    # unresolved channels sharing a channel_uuid in one call consult
+    # Dispatcharr ONCE. Distinct from the cross-call LRU passed in;
+    # this map drops when the function returns.
+    per_call_channel_streams_cache: dict[str, Optional[list[dict]]] = {}
+
+    resolved_count = 0
+    unresolved_count = len(unresolvable_channels)
+    for channel_uuid, stream_id in stream_id_by_channel.items():
+        provider_id = provider_by_stream.get(stream_id)
+        stream_in_response = stream_id in provider_by_stream
+        stream_name = name_by_stream.get(stream_id)
+        if (
+            provider_id is None
+            and not stream_in_response
+            and channel_uuid in url_derived_channels
+        ):
+            fallback_result = await _resolve_via_channel_streams(
+                client,
+                channel_uuid,
+                url_by_channel.get(channel_uuid),
+                per_call_channel_streams_cache,
+                channel_streams_cache,
+                poll_count,
+            )
+            if fallback_result is not None:
+                provider_by_channel[channel_uuid] = fallback_result
+                resolved_count += 1
+                continue
+            provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
+            unresolved_count += 1
+            continue
+        if provider_id is None:
+            provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
+            unresolved_count += 1
+            if not stream_in_response:
+                reason = "stream_not_found"
+            else:
+                reason = "stream_has_no_provider"
+            logger.warning(
+                "[STATS_V2] provider_resolution_failed channel=%s stream=%s reason=%s",
+                channel_uuid,
+                stream_id,
+                reason,
+            )
+        else:
+            provider_by_channel[channel_uuid] = ProviderResolution(
+                provider_id=provider_id,
+                stream_id=stream_id,
+                stream_name=stream_name,
+            )
+            resolved_count += 1
+
+    if emit_metrics:
+        _log_provider_resolution_sli(resolved_count, unresolved_count)
+    return provider_by_channel
+
+
+async def _resolve_via_channel_streams(
+    client,
+    channel_uuid: str,
+    active_url: Optional[str],
+    per_call_cache: dict[str, Optional[list[dict]]],
+    cross_call_cache: Optional[ChannelStreamsCache],
+    current_poll: int,
+) -> Optional[ProviderResolution]:
+    """Channel-streams URL-match fallback (bd-5g7kx, extended by kh23e).
+
+    Pulled out of ``BandwidthTracker._resolve_via_channel_streams`` as
+    a free function so the live ``/api/stats/channels`` endpoint
+    (bd-ox5q8) and the polling tracker share one implementation.
+
+    Two cache layers compose:
+
+    * ``per_call_cache`` (caller-owned dict): scoped to a single
+      ``resolve_active_channel_streams`` invocation. ``None`` value
+      means "we tried this call and it raised" — short-circuits
+      subsequent attempts in the same call.
+    * ``cross_call_cache`` (``ChannelStreamsCache`` | None): bounded
+      LRU. When supplied, channel stream lists are reused across
+      successive calls within the TTL. ``None`` means no cross-call
+      caching (the endpoint passes ``None`` so operator-facing data
+      stays at most one Dispatcharr round-trip stale).
+    """
+    from stream_prober import extract_m3u_account_id
+
+    if channel_uuid in per_call_cache:
+        streams = per_call_cache[channel_uuid]
+    else:
+        streams = (
+            cross_call_cache.get(channel_uuid, current_poll)
+            if cross_call_cache is not None
+            else None
+        )
+        if streams is None:
+            try:
+                streams = await client.get_channel_streams(channel_uuid)
+            except Exception as e:
+                logger.warning(
+                    "[STATS_V2] provider_resolution_failed channel=%s reason=channel_streams_lookup_raised error=%s",
+                    channel_uuid,
+                    e,
+                )
+                per_call_cache[channel_uuid] = None
+                return None
+            if not isinstance(streams, list):
+                logger.warning(
+                    "[STATS_V2] provider_resolution_failed channel=%s reason=channel_streams_lookup_raised error=non_list_response",
+                    channel_uuid,
+                )
+                per_call_cache[channel_uuid] = None
+                return None
+            if cross_call_cache is not None:
+                cross_call_cache.put(channel_uuid, streams, current_poll)
+        per_call_cache[channel_uuid] = streams
+
+    if streams is None:
+        return None
+
+    if not active_url:
+        logger.warning(
+            "[STATS_V2] provider_resolution_failed channel=%s reason=channel_streams_no_match detail=no_active_url",
+            channel_uuid,
+        )
+        return None
+
+    normalized_active = _normalize_stream_url_for_match(active_url)
+    if normalized_active is None:
+        logger.warning(
+            "[STATS_V2] provider_resolution_failed channel=%s reason=channel_streams_no_match detail=no_active_url",
+            channel_uuid,
+        )
+        return None
+
+    matched_stream: Optional[dict] = None
+    for stream in streams:
+        stream_url = _normalize_stream_url_for_match(stream.get("url"))
+        if stream_url is None:
+            continue
+        if stream_url == normalized_active:
+            matched_stream = stream
+            break
+    if matched_stream is None:
+        for stream in streams:
+            stream_url = _normalize_stream_url_for_match(stream.get("url"))
+            if stream_url is None:
+                continue
+            if stream_url in normalized_active or normalized_active in stream_url:
+                matched_stream = stream
+                break
+
+    if matched_stream is None:
+        logger.warning(
+            "[STATS_V2] provider_resolution_failed channel=%s reason=channel_streams_no_match",
+            channel_uuid,
+        )
+        return None
+
+    provider_id = extract_m3u_account_id(matched_stream.get("m3u_account"))
+    if provider_id is None:
+        logger.warning(
+            "[STATS_V2] provider_resolution_failed channel=%s stream=%s reason=stream_has_no_provider",
+            channel_uuid,
+            matched_stream.get("id"),
+        )
+        return None
+
+    matched_id = matched_stream.get("id")
+    try:
+        matched_stream_id: Optional[int] = (
+            int(matched_id) if matched_id is not None else None
+        )
+    except (TypeError, ValueError):
+        matched_stream_id = None
+    raw_name = matched_stream.get("name")
+    matched_stream_name: Optional[str] = (
+        str(raw_name) if isinstance(raw_name, str) and raw_name else None
+    )
+    return ProviderResolution(
+        provider_id=int(provider_id),
+        stream_id=matched_stream_id,
+        stream_name=matched_stream_name,
+    )
+
+
+def _log_provider_resolution_sli(
+    resolved_count: int,
+    unresolved_count: int,
+) -> None:
+    """Emit the per-call provider-resolution SLI line + metric.
+
+    Free-function shared by ``resolve_active_channel_streams`` and the
+    legacy ``BandwidthTracker._log_provider_resolution_sli`` instance
+    method (kept as a back-compat wrapper for existing tests).
+
+    Format: ``[STATS_V2] provider_resolution resolved=X unresolved=Y``.
+    Stable substring shape — operators grep on this prefix. The
+    Prometheus counter ``ecm_provider_resolution_total`` is incremented
+    with a bounded ``result`` label (resolved/unresolved).
+    """
+    logger.info(
+        "[STATS_V2] provider_resolution resolved=%s unresolved=%s",
+        resolved_count,
+        unresolved_count,
+    )
+    try:
+        from observability import get_metric
+
+        counter = get_metric("provider_resolution_total")
+        if resolved_count:
+            counter.labels(result="resolved").inc(int(resolved_count))
+        if unresolved_count:
+            counter.labels(result="unresolved").inc(int(unresolved_count))
+    except Exception:  # pragma: no cover — never break the resolver
+        logger.debug(
+            "[STATS_V2] failed to emit provider_resolution_total metric",
+            exc_info=True,
+        )
+
+
+def _coerce_session_user_id(raw: Any) -> Optional[int]:
+    """Coerce a Dispatcharr-supplied user id into a value safe for the
+    ``session_telemetry.user_id`` FK (bead ``enhancedchannelmanager-gbxmj``).
+
+    Anonymous viewers surface as ``0`` / ``"0"`` from Dispatcharr; that
+    sentinel doesn't exist in ``users.id`` so a raw write trips the FK
+    constraint at ``session.commit()`` and rolls back the entire poll
+    batch. The helper normalizes anything that isn't a positive int (or
+    a string that parses cleanly to one) to ``None``.
+
+    * ``None`` / ``""`` / ``0`` / ``"0"`` → ``None`` (anonymous)
+    * ``42`` / ``"42"``                  → ``42``
+    * ``-1`` / ``"abc"``                 → ``None``
+    * ``True`` / ``False``               → ``None`` (reject bool → int)
+    * ``42.0``                           → ``None`` (strict: no float)
+    """
+    if raw is None or raw == "" or raw == 0 or raw == "0":
+        return None
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, float):
+        return None
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _normalize_stream_url_for_match(url: Optional[str]) -> Optional[str]:
+    """Strip the query string off a stream URL for fallback matching.
+
+    Used by the channel-streams URL-match fallback (bd-5g7kx): the
+    active stream URL in ``/proxy/ts/status`` may carry a session token
+    or transcode hint as a query string (``...85796.ts?session=abc``),
+    while the URL persisted on Dispatcharr's ``/channels/<id>/streams``
+    record is the bare ``...85796.ts``. Comparing the URLs verbatim
+    would miss this case. Normalizing both sides to the path-only form
+    catches the realistic mutations without coupling the matcher to a
+    specific query-suffix convention.
+
+    Returns the URL up to (but not including) the first ``?`` or ``#``.
+    ``None`` inputs return ``None`` so callers can defer the empty-string
+    guard to the comparison site.
+    """
+    if not url or not isinstance(url, str):
+        return None
+    cut = len(url)
+    for sep in ("?", "#"):
+        i = url.find(sep)
+        if i != -1 and i < cut:
+            cut = i
+    return url[:cut] or None
+
+
+def _telemetry_opt_out_enabled() -> bool:
+    """Parse ``ECM_STATS_TELEMETRY_OPT_OUT``. Default-OFF (writes happen).
+
+    Operator-facing opt-out for the Stats v2 data path
+    (bead ``enhancedchannelmanager-tp1pd``). When the env var is set to
+    a truthy value, ``_collect_stats`` short-circuits AFTER the legacy
+    sibling writes (``ChannelBandwidth``, ``BandwidthDaily``,
+    ``UniqueClientConnection``) and BEFORE the Stats v2 path
+    (``_resolve_provider_ids`` + ``_collect_channel_events`` +
+    ``_write_session_telemetry``). Net effect:
+
+    * Zero rows land in ``session_telemetry``.
+    * No Dispatcharr ``get_streams_by_ids`` round-trip per poll.
+    * No Dispatcharr ``get_system_events`` round-trip per poll.
+    * Legacy stats (existing since v0.11.0) continue to record.
+
+    Read per-poll (not cached at import) so an operator who flips the
+    env var at runtime (export + container restart) sees the new value
+    on the next poll cycle without code awareness of when the flip
+    happened. The string-compare cost is microseconds; the latency-
+    sensitive surface is the network round-trip the flag elides.
+
+    Truthy-value enum mirrors ``_confusables_fold_enabled`` in
+    ``normalization_engine.py`` — ``true``, ``1``, ``yes``, ``on``
+    (case-insensitive, whitespace-tolerant). Everything else (including
+    empty string and unset) is OFF.
+    """
+    raw = os.environ.get("ECM_STATS_TELEMETRY_OPT_OUT", "false")
+    return raw.strip().lower() in {"true", "1", "yes", "on"}
+
+
+def _parse_telemetry_exclude_users() -> frozenset[str]:
+    """Parse ``ECM_TELEMETRY_EXCLUDE_USERS`` into a normalized token set.
+
+    Operator-facing filter (bead ``enhancedchannelmanager-uqbob``) for
+    suppressing ``session_telemetry`` writes attributed to non-stream-
+    consuming users. The motivating case: ECM's local ``users`` table
+    and Dispatcharr's ``users`` table are separate namespaces with
+    coincidentally-overlapping integer ids — ECM ``users.id=3`` is the
+    local admin account "claude" while Dispatcharr ``users.id=3`` is a
+    real human ("kmfelmer") whose viewing sessions are being attributed
+    to "claude" in the Stats panel because the ``session_telemetry.
+    user_id`` FK joins on the ECM table.
+
+    The env var is a comma-separated list of tokens. Each token is
+    matched against BOTH the Dispatcharr-side ``user_id`` (string-coerced)
+    AND the Dispatcharr-side ``username`` (case-insensitive). A row is
+    suppressed if EITHER axis matches.
+
+    Examples:
+
+    * ``ECM_TELEMETRY_EXCLUDE_USERS="claude"`` — drop rows whose
+      Dispatcharr-side username is "claude" (case-insensitive).
+    * ``ECM_TELEMETRY_EXCLUDE_USERS="3,claude"`` — drop rows where the
+      raw Dispatcharr user_id is 3 OR the username is "claude". Either
+      match is sufficient.
+    * ``ECM_TELEMETRY_EXCLUDE_USERS=""`` (or unset) — no filtering;
+      pre-uqbob behavior preserved.
+
+    Read per-poll (not cached at import) so an operator who flips the
+    env var at runtime (export + container restart) sees the new value
+    on the next poll cycle without code awareness of when the flip
+    happened — same posture as ``_telemetry_opt_out_enabled``.
+
+    Returns a ``frozenset[str]`` of lower-cased, whitespace-stripped
+    tokens. Empty tokens (from leading / trailing / repeated commas)
+    are dropped. The empty set is the "no filtering" sentinel.
+    """
+    raw = os.environ.get("ECM_TELEMETRY_EXCLUDE_USERS", "")
+    if not raw:
+        return frozenset()
+    tokens = (t.strip().lower() for t in raw.split(","))
+    return frozenset(t for t in tokens if t)
+
+
+def _is_excluded_telemetry_user(
+    user_id: Optional[int],
+    username: Optional[str],
+    exclude_tokens: frozenset[str],
+) -> bool:
+    """Return True if a session_telemetry row should be suppressed.
+
+    Companion to ``_parse_telemetry_exclude_users`` (bead
+    ``enhancedchannelmanager-uqbob``). A row is suppressed when either
+    the FK-coerced user_id or the resolved Dispatcharr username matches
+    a token in the operator-configured exclude list.
+
+    * ``user_id`` — the FK-safe coerced user_id (output of
+      ``_coerce_session_user_id``). ``None`` for anonymous viewers; those
+      can never match a numeric token because they have no id to compare.
+    * ``username`` — the Dispatcharr-side username resolved via the
+      per-poll users map. ``None`` or empty string when the lookup did
+      not produce a value (Dispatcharr returned no user record, or the
+      exclude env var is unset so the lookup was skipped to save a
+      round-trip).
+    * ``exclude_tokens`` — already lower-cased; the caller invokes
+      ``_parse_telemetry_exclude_users`` once per poll.
+
+    Returns ``False`` immediately when ``exclude_tokens`` is empty so
+    the default-OFF posture has zero call overhead beyond a single
+    truthiness check.
+    """
+    if not exclude_tokens:
+        return False
+    if user_id is not None and str(user_id) in exclude_tokens:
+        return True
+    if username:
+        if username.strip().lower() in exclude_tokens:
+            return True
+    return False
 
 
 def get_user_timezone() -> timezone:
@@ -66,6 +814,59 @@ class BandwidthTracker:
         self._active_connections: dict[tuple[str, str], int] = {}
         # Track last known clients per channel for detecting new/disconnected clients
         self._last_channel_clients: dict[str, set[str]] = {}  # channel_id -> set of IPs
+        # Buffer-event ingest (bd-skqln.15). Bounded LRU of Dispatcharr
+        # ``system_event.id`` values already counted. Persists across polls
+        # because Dispatcharr's ``/api/core/system-events/`` feed re-delivers
+        # recent events on every fetch — without cross-poll dedup the same
+        # event would be counted N times. The cap is intentionally generous
+        # (10x the per-poll fetch limit) so a stable working set fits without
+        # eviction; the LRU sheds the oldest entries first.
+        self._seen_buffer_event_ids: OrderedDict[int, None] = OrderedDict()
+        self._seen_buffer_event_ids_cap = 10_000
+
+        # Provider resolver: channel-streams URL-match fallback cache
+        # (bd-5g7kx, refactored bd-ox5q8). The cross-poll LRU now lives
+        # in a ``ChannelStreamsCache`` instance owned by the tracker so
+        # the same cache type can be reused by the on-demand
+        # ``/api/stats/channels`` enrichment path (which constructs a
+        # fresh cache per request).
+        #
+        # Default cap (200 channels) and TTL (30 polls — ~5 min at the
+        # default 10s poll cadence) are surfaced as module-level
+        # constants ``DEFAULT_CHANNEL_STREAMS_CACHE_CAP`` and
+        # ``DEFAULT_CHANNEL_STREAMS_CACHE_TTL_POLLS``.
+        self._provider_cache = ChannelStreamsCache()
+        # Back-compat attributes — older tests introspect
+        # ``_channel_streams_cache_ttl_polls`` directly. Mirror to the
+        # cache instance values so the legacy attribute names continue
+        # to resolve. The legacy ``_channel_streams_cache`` OrderedDict
+        # is replaced by ``self._provider_cache._entries``; tests that
+        # poked at the raw dict are migrated to the public API in the
+        # same change.
+        self._channel_streams_cache_cap = self._provider_cache.cap
+        self._channel_streams_cache_ttl_polls = self._provider_cache.ttl_polls
+        # Monotonically increasing poll counter, used as the TTL anchor
+        # for ``_provider_cache``. Incremented on every
+        # ``_collect_stats`` entry so the counter advances even when the
+        # poll bails early (e.g. ``get_channel_stats`` raise).
+        self._poll_count = 0
+
+        # bd-8axhi defense-in-depth: one-shot flag tracking whether
+        # ``_write_session_telemetry`` has already escalated a runtime
+        # schema-drift error to ERROR-level. The bd-zaaey loud-fail at
+        # ``init_db`` (``_assert_schema_matches_models``) catches drift at
+        # boot, but cannot catch drift introduced AFTER the process is
+        # already running — for example, the hot-deploy workflow where a
+        # developer ``docker cp``'s new writer code + a new alembic
+        # migration into a live container without ``docker restart``. The
+        # writer's existing try/except already prevents user-facing damage,
+        # but historically logged "no such column" / "no such table"
+        # OperationalErrors at WARN, where they blended into ordinary
+        # noise. The first such error escalates to ERROR with an
+        # actionable recovery path; subsequent errors fall back to WARN
+        # so the log is not flooded. Cleared by a successful write so
+        # repaired environments re-arm the alarm if drift recurs.
+        self._schema_drift_alarm_armed = True
 
     async def start(self):
         """Start the background polling task."""
@@ -78,6 +879,19 @@ class BandwidthTracker:
 
         # Clean up stale connections from previous runs
         self._cleanup_stale_connections()
+
+        # Operator-facing Stats v2 opt-out (bd-tp1pd). When the env var
+        # is set at process start, announce it ONCE — operators reading
+        # ``docker logs`` need a visible signal that Stats v2 is
+        # silenced. Per-poll re-emission would be log spam (one line
+        # every ``poll_interval`` seconds). Read at start() time
+        # because the start log is the operator's single-pane-of-glass
+        # check; ``_collect_stats`` rechecks per-poll so a runtime flip
+        # still takes effect.
+        if _telemetry_opt_out_enabled():
+            logger.info(
+                "[STATS_V2] telemetry opt-out is ENABLED — no session_telemetry data will be collected"
+            )
 
         self._running = True
         self._task = asyncio.create_task(self._poll_loop())
@@ -271,11 +1085,25 @@ class BandwidthTracker:
 
     async def _collect_stats(self):
         """Fetch stats from Dispatcharr and update daily totals."""
+        # Bump the poll counter first thing so the channel-streams
+        # fallback's TTL is anchored against a monotonically-increasing
+        # value even on polls that bail early below (bd-5g7kx). The
+        # counter is a simple int — wraparound is not a concern in any
+        # realistic operator timeline (>68 years at 10s polls on 32-bit
+        # int, far longer on 64-bit Python ints).
+        self._poll_count += 1
         try:
             stats = await self.client.get_channel_stats()
         except Exception as e:
             logger.warning("[BANDWIDTH] Failed to fetch stats from Dispatcharr: %s", e)
             return
+
+        # Stamp the moment we observed this poll. Used by the Stats v2
+        # session_telemetry write (skqln.3 step (a)). Held outside the
+        # feature-flag check so the value is identical whether or not the
+        # additive write is enabled — keeps observed_at semantics stable
+        # if/when the flag flips at runtime mid-cycle.
+        observed_at_ms = int(time.time() * 1000)
 
         channels = stats.get("channels", [])
         logger.debug("[BANDWIDTH] Collected stats for %s active channels", len(channels))
@@ -296,6 +1124,9 @@ class BandwidthTracker:
         still_active_channels: list[dict] = []
         # Per-channel bandwidth tracking (v0.11.0)
         channel_bandwidth_updates: list[dict] = []
+        # Per-channel snapshot for the Stats v2 session_telemetry helper
+        # (skqln.3 step (a)). One entry per active channel this poll.
+        telemetry_channel_snapshot: list[dict] = []
 
         for channel in channels:
             channel_id = str(channel.get("channel_id", ""))
@@ -393,6 +1224,27 @@ class BandwidthTracker:
                         "client_count": client_count,
                     })
 
+                # Capture the snapshot the Stats v2 session_telemetry helper
+                # needs (skqln.3 step (a)). Built unconditionally so the data
+                # shape is stable; the helper is a no-op when the feature
+                # flag is OFF. ``stream_id`` is the Dispatcharr integer ID
+                # of the stream currently being served — surfaced by
+                # ``/proxy/ts/status``, consumed by the provider resolver
+                # in ``_resolve_provider_ids`` (bd-skqln.14). May be missing
+                # if Dispatcharr serves a degraded stats payload; the
+                # resolver tolerates that and falls back to URL parsing
+                # (bd-kbgey) when ``url`` carries the same id as the trailing
+                # ``.../<stream_id>.ts`` path segment, then NULL.
+                telemetry_channel_snapshot.append({
+                    "channel_uuid": channel_id,
+                    "channel_number": channel_number,
+                    "client_ips": list(client_ips),
+                    "client_user_map": dict(client_user_map),
+                    "channel_bytes_delta": channel_bytes_delta,
+                    "stream_id": channel.get("stream_id"),
+                    "url": channel.get("url"),
+                })
+
         # Check for channels that stopped being watched
         stopped_channels = self._last_active_channels - current_active_channels
         if stopped_channels:
@@ -428,14 +1280,42 @@ class BandwidthTracker:
         has_user_ids = any(
             ch.get("client_user_map") for ch in all_channel_data
         )
-        if has_user_ids:
+        # The Dispatcharr-side user_id → username map. Populated below
+        # when (a) watch-history flow needs usernames, OR (b) the
+        # bd-uqbob exclude filter is configured and the snapshot carries
+        # user ids that need matching. Keyed by ``str(disp_user_id)`` to
+        # match the watch-history convention.
+        dispatcharr_user_map: dict[str, str] = {}
+        snapshot_has_user_ids = any(
+            entry.get("client_user_map") for entry in telemetry_channel_snapshot
+        )
+        # bd-uqbob: the exclude set means we may need usernames for the
+        # filter even when the watch-history path doesn't need them.
+        # bd-gsn3r: the writer ALSO needs the username unconditionally
+        # to populate ``session_telemetry.dispatcharr_username`` (the
+        # denormalized read-side replacement for the dropped ECM
+        # ``users`` FK join). When the snapshot carries any user IDs,
+        # pay the single get_users() round-trip per poll so the writer
+        # can stamp the username — otherwise pre-migration-style NULL
+        # rows leak through and the panel falls back to "Unknown
+        # viewer". The cost is one Dispatcharr API call per poll which
+        # the watch-history path already paid in the common case.
+        exclude_user_tokens = _parse_telemetry_exclude_users()
+        need_user_resolution = (
+            has_user_ids
+            or snapshot_has_user_ids
+            or bool(exclude_user_tokens)
+        )
+        if need_user_resolution:
             try:
                 users = await self.client.get_users()
-                user_map = {str(u["id"]): u.get("username", "") for u in users}
+                dispatcharr_user_map = {
+                    str(u["id"]): u.get("username", "") for u in users
+                }
                 for ch in all_channel_data:
                     client_user_map = ch.get("client_user_map", {})
                     ch["client_username_map"] = {
-                        ip: user_map.get(str(uid), "")
+                        ip: dispatcharr_user_map.get(str(uid), "")
                         for ip, uid in client_user_map.items()
                     }
             except Exception as e:
@@ -453,6 +1333,70 @@ class BandwidthTracker:
         # Log stopped channels
         if stopped_channels:
             logger.info("[BANDWIDTH] %s channel(s) stopped streaming", len(stopped_channels))
+
+        # Operator-facing Stats v2 telemetry opt-out (bd-tp1pd). When the
+        # ``ECM_STATS_TELEMETRY_OPT_OUT`` env var is truthy, the entire
+        # Stats v2 path is short-circuited: the provider resolver is not
+        # called (skips the Dispatcharr ``get_streams_by_ids`` round-trip),
+        # the buffer-event ingest is not called (skips the
+        # ``get_system_events`` round-trip), and no ``session_telemetry``
+        # rows are written. The legacy sibling writes above
+        # (``ChannelBandwidth``, ``BandwidthDaily``,
+        # ``UniqueClientConnection``) are NOT affected — they pre-date
+        # Stats v2 and are not part of the opt-out surface.
+        #
+        # The env var is read per-poll so a runtime flip takes effect on
+        # the next cycle. Cost: one os.environ lookup + string compare
+        # per poll (microseconds). The latency-sensitive surface is the
+        # network round-trips this flag elides, not the parse itself.
+        if _telemetry_opt_out_enabled():
+            return
+
+        # Stats v2 write (bd-skqln.3 step (d)). Runs LAST and is wrapped in
+        # a defensive try/except inside the helper so a failure in this
+        # path cannot disturb the legacy sibling writes above. Step (d)
+        # made this unconditional — the ECM_SESSION_TELEMETRY_WRITE_ENABLED
+        # kill-switch was retired along with the legacy
+        # ``ChannelWatchStats`` writes that the gate used to protect.
+        # (bd-tp1pd re-introduces an env var, but as an operator-facing
+        # opt-out, not a transition gate — see the short-circuit above.)
+        #
+        # Provider resolution (bd-skqln.14): the snapshot already carries
+        # the ``stream_id`` Dispatcharr surfaced per-channel. The resolver
+        # batches those stream IDs into ONE ``get_streams_by_ids`` call
+        # per poll and returns a ``{channel_uuid: provider_id}`` map. The
+        # cache lives only for the duration of this invocation — next
+        # poll re-resolves so a stream's failover hop is picked up
+        # immediately. NULL on failure (network, missing stream, deleted
+        # provider); the row still gets written.
+        provider_by_channel = await self._resolve_provider_ids(
+            telemetry_channel_snapshot
+        )
+        # Channel-event ingest (bd-ov5vb, broadens bd-skqln.15). Fetches
+        # the channel-health subset of Dispatcharr's
+        # ``/api/core/system-events/`` feed (no event_type filter —
+        # buckets client-side into channel_buffering / channel_reconnect
+        # / channel_error / stream_switch), de-duplicates against the
+        # cross-poll LRU, and produces a
+        # ``{channel_uuid: {event_type: deduped_count}}`` map. Failure is
+        # non-fatal — the helper returns ``{}`` and the session_telemetry
+        # rows still write with every per-type counter at 0.
+        channel_events_by_channel = await self._collect_channel_events(
+            telemetry_channel_snapshot
+        )
+        self._write_session_telemetry(
+            telemetry_channel_snapshot,
+            observed_at_ms,
+            provider_by_channel,
+            channel_events_by_channel,
+            # bd-uqbob: pre-resolved Dispatcharr user_id → username map and
+            # already-parsed exclude token set. Both default to empty on
+            # the call-site signature so older test seams keep working;
+            # an empty exclude set short-circuits the filter inside the
+            # helper before any per-row work runs.
+            dispatcharr_user_map=dispatcharr_user_map,
+            exclude_user_tokens=exclude_user_tokens,
+        )
 
     def _update_daily_record(
         self,
@@ -548,7 +1492,14 @@ class BandwidthTracker:
             session.close()
 
     def _update_watch_counts(self, channels: list[dict]):
-        """Update watch counts for channels that just became active and log journal events."""
+        """Record newly active channels: create UniqueClientConnection rows,
+        bump per-channel connection_count, and emit the journal start event.
+
+        bd-skqln.3 step (d): the legacy ``ChannelWatchStats`` write that
+        used to live in this method is gone — the popularity calculator
+        and the top-watched API now derive their inputs from
+        ``session_telemetry`` and ``unique_client_connections``.
+        """
         from journal import log_entry
 
         session = get_session()
@@ -561,25 +1512,6 @@ class BandwidthTracker:
                 client_ips = ch.get("client_ips", [])
                 client_user_map = ch.get("client_user_map", {})
                 client_username_map = ch.get("client_username_map", {})
-                # Get or create watch stats record
-                record = session.query(ChannelWatchStats).filter(
-                    ChannelWatchStats.channel_id == channel_id
-                ).first()
-
-                if record is None:
-                    record = ChannelWatchStats(
-                        channel_id=channel_id,
-                        channel_name=channel_name,
-                        watch_count=0,
-                        total_watch_seconds=0,
-                    )
-                    session.add(record)
-
-                # Update record
-                record.watch_count += 1
-                record.last_watched = now
-                # Update channel name in case it changed
-                record.channel_name = channel_name
 
                 # Create UniqueClientConnection records for each client (v0.11.0)
                 for ip in client_ips:
@@ -619,7 +1551,6 @@ class BandwidthTracker:
                     user_initiated=False,
                     after_value={
                         "channel_id": channel_id,
-                        "watch_count": record.watch_count,
                         "client_ips": client_ips,
                     },
                 )
@@ -633,7 +1564,15 @@ class BandwidthTracker:
             session.close()
 
     def _update_watch_time(self, channels: list[dict]):
-        """Accumulate watch time for channels that are still active."""
+        """Accumulate watch time for channels that are still active.
+
+        bd-skqln.3 step (d): the legacy ``ChannelWatchStats`` write that
+        used to live in this method is gone — watch time is now derived
+        from ``session_telemetry`` (one row per poll per client) on read.
+        The per-client ``UniqueClientConnection.watch_seconds`` write
+        below stays — it's a per-connection accumulator, not the
+        per-channel aggregate that was retired.
+        """
         session = get_session()
         today = get_current_date()
         try:
@@ -645,15 +1584,6 @@ class BandwidthTracker:
                 continuing_clients = ch.get("continuing_clients", [])
                 client_user_map = ch.get("client_user_map", {})
                 client_username_map = ch.get("client_username_map", {})
-                record = session.query(ChannelWatchStats).filter(
-                    ChannelWatchStats.channel_id == channel_id
-                ).first()
-
-                if record:
-                    # Add poll interval seconds to watch time
-                    record.total_watch_seconds += self.poll_interval
-                    record.last_watched = now
-                    record.channel_name = channel_name
 
                 # Handle new clients that joined mid-stream (v0.11.0)
                 for ip in new_clients:
@@ -712,29 +1642,48 @@ class BandwidthTracker:
             session.close()
 
     def _log_watch_stop_events(self, channel_ids: set[str]):
-        """Log journal entries when channels stop being watched."""
+        """Log journal entries when channels stop being watched.
+
+        bd-skqln.3 step (d): the channel-name fallback no longer reads
+        from ``ChannelWatchStats`` (which is no longer written) — it
+        falls through to a UUID-derived placeholder if neither the ECM
+        channel map nor the in-memory cache has a name. The
+        ``total_watch_seconds`` figure that was previously fetched from
+        ``ChannelWatchStats`` is replaced by a session_telemetry
+        aggregate using the same DISTINCT-by-(channel, observed_at)
+        collapse the view (migration 0008) and popularity calculator
+        use, so per-channel watch-time semantics stay consistent
+        across surfaces.
+        """
         from journal import log_entry
 
         session = get_session()
         try:
             for channel_id in channel_ids:
-                # Get channel name - prefer ECM map, then cache, then database
+                # Get channel name - prefer ECM map, then cache, then placeholder.
                 channel_name = (
                     self._ecm_channel_map.get(channel_id)
                     or self._channel_names.get(channel_id)
+                    or f"Channel {channel_id[:8]}..."
                 )
-                if not channel_name:
-                    record = session.query(ChannelWatchStats).filter(
-                        ChannelWatchStats.channel_id == channel_id
-                    ).first()
-                    channel_name = record.channel_name if record else f"Channel {channel_id[:8]}..."
 
-                # Get current stats for the log
-                record = session.query(ChannelWatchStats).filter(
-                    ChannelWatchStats.channel_id == channel_id
-                ).first()
-
-                watch_time = record.total_watch_seconds if record else 0
+                # Derive lifetime watch_seconds for this channel from
+                # session_telemetry. Same DISTINCT-by-(channel,
+                # observed_at) collapse as the channel_watch_stats_v
+                # view: a channel with N concurrent clients in one poll
+                # contributes one interval, not N.
+                per_poll = session.query(
+                    SessionTelemetry.observed_at.label("observed_at"),
+                    func.max(SessionTelemetry.poll_interval_ms).label("poll_interval_ms"),
+                ).filter(
+                    SessionTelemetry.channel_id == channel_id,
+                ).group_by(
+                    SessionTelemetry.observed_at,
+                ).subquery()
+                total_ms = session.query(
+                    func.coalesce(func.sum(per_poll.c.poll_interval_ms), 0)
+                ).scalar() or 0
+                watch_time = int(total_ms) // 1000
 
                 # Log journal entry for watch stop
                 log_entry(
@@ -786,6 +1735,856 @@ class BandwidthTracker:
             session.rollback()
         finally:
             session.close()
+
+    async def _resolve_provider_ids(
+        self,
+        channel_snapshot: list[dict],
+    ) -> dict[str, ProviderResolution]:
+        """Resolve each channel's active-stream identity for one poll.
+
+        Bead: ``enhancedchannelmanager-skqln.14`` (initial), extended by
+        ``enhancedchannelmanager-kbgey`` (URL fallback),
+        ``enhancedchannelmanager-5g7kx`` (channel-streams URL-match
+        fallback), ``enhancedchannelmanager-kh23e`` (stream identity
+        capture), and ``enhancedchannelmanager-ox5q8`` (extraction of
+        resolver core into ``resolve_active_channel_streams`` so the
+        live ``/api/stats/channels`` Active Channels view shares one
+        implementation with the polling tracker).
+
+        Thin wrapper around the module-level
+        ``resolve_active_channel_streams`` free function. The instance
+        owns the cross-poll ``ChannelStreamsCache`` plus the
+        ``_poll_count`` TTL anchor; the free function does the actual
+        resolution work.
+
+        Returns a ``{channel_uuid: ProviderResolution}`` map. Resolution
+        failures land ``EMPTY_RESOLUTION`` (the all-None NamedTuple) —
+        same row still writes, all three identity columns NULL. See
+        ``resolve_active_channel_streams`` for the full path/failure
+        taxonomy.
+        """
+        return await resolve_active_channel_streams(
+            self.client,
+            channel_snapshot,
+            channel_streams_cache=self._provider_cache,
+            poll_count=self._poll_count,
+            emit_metrics=True,
+        )
+
+    # ------------------------------------------------------------------
+    # Legacy method bodies removed in bd-ox5q8 — resolution logic now
+    # lives in the module-level free functions above. The instance
+    # methods below remain as back-compat shims so existing test names
+    # (``tracker._resolve_via_channel_streams``,
+    # ``tracker._get_cached_channel_streams``,
+    # ``tracker._cache_channel_streams``,
+    # ``tracker._log_provider_resolution_sli``) keep working unchanged.
+    # ------------------------------------------------------------------
+
+    async def _resolve_via_channel_streams(
+        self,
+        channel_uuid: str,
+        active_url: Optional[str],
+        per_poll_cache: dict[str, Optional[list[dict]]],
+    ) -> Optional[ProviderResolution]:
+        """Back-compat shim for the channel-streams fallback. Delegates
+        to the module-level ``_resolve_via_channel_streams`` free
+        function, passing the tracker's cross-poll cache + poll count.
+        """
+        return await _resolve_via_channel_streams(
+            self.client,
+            channel_uuid,
+            active_url,
+            per_poll_cache,
+            self._provider_cache,
+            self._poll_count,
+        )
+
+    def _get_cached_channel_streams(
+        self, channel_uuid: str
+    ) -> Optional[list[dict]]:
+        """Back-compat shim. Delegates to the instance
+        ``ChannelStreamsCache``.
+        """
+        return self._provider_cache.get(channel_uuid, self._poll_count)
+
+    def _cache_channel_streams(
+        self, channel_uuid: str, streams: list[dict]
+    ) -> None:
+        """Back-compat shim. Delegates to the instance
+        ``ChannelStreamsCache``.
+        """
+        self._provider_cache.put(channel_uuid, streams, self._poll_count)
+
+    def _log_provider_resolution_sli(
+        self,
+        resolved_count: int,
+        unresolved_count: int,
+    ) -> None:
+        """Back-compat shim. Delegates to the module-level
+        ``_log_provider_resolution_sli`` free function.
+        """
+        _log_provider_resolution_sli(resolved_count, unresolved_count)
+    # Channel-health event types ECM tracks (bd-ov5vb). These are the four
+    # Dispatcharr ts_proxy ``SystemEvent`` ``event_type`` values that
+    # represent operationally-meaningful channel state — each maps to its
+    # own per-poll counter on ``session_telemetry`` (migration 0013). Any
+    # other event type Dispatcharr emits (client_connect, login_success,
+    # epg_*, m3u_refresh, channel_start/stop, etc.) is noise for this
+    # metric — they're either user-activity signals or routine lifecycle
+    # events, not health signals — and are dropped at the type-filter
+    # before the LRU dedup pays attention.
+    _CHANNEL_EVENT_TYPES: ClassVar[tuple[str, ...]] = (
+        "channel_buffering",
+        "channel_reconnect",
+        "channel_error",
+        "stream_switch",
+    )
+
+    async def _collect_channel_events(
+        self,
+        channel_snapshot: list[dict],
+    ) -> dict[str, dict[str, int]]:
+        """Fetch the channel-health subset of Dispatcharr's system-events
+        feed and bucket the deduped result by event_type for the current
+        poll.
+
+        Bead: ``enhancedchannelmanager-ov5vb`` (broadens
+        ``enhancedchannelmanager-skqln.15``).
+
+        Returns ``{channel_uuid: {event_type: count}}`` where ``event_type``
+        is one of ``_CHANNEL_EVENT_TYPES``. Missing event types on a given
+        channel are simply absent from the inner dict (the caller treats
+        absence as zero, same shape contract the writer expects).
+
+        Pre-bd-ov5vb history (why the broadening was necessary)
+        --------------------------------------------------------
+        The original ``_collect_buffer_events`` (skqln.15) passed
+        ``event_type=buffering`` as a hard API-side filter, on the
+        assumption that ``channel_buffering`` events were the
+        operationally-meaningful health signal. Live verification on the
+        PO's instance (2026-05-15) found that filter was returning zero
+        on every poll because Dispatcharr's ``channel_buffering`` event
+        only fires on rare ffmpeg-speed threshold trips — the events that
+        actually represent channel-health problems are
+        ``channel_reconnect`` (8 in the 100-event window),
+        ``channel_error`` (4), and ``stream_switch`` (3). All three were
+        being filtered out at the API call. This helper drops the
+        ``event_type`` filter and buckets client-side so each type lands
+        on its own column in ``session_telemetry``.
+
+        Dispatcharr exposes recent events at
+        ``GET /api/core/system-events/`` (wired on ``DispatcharrClient``
+        as ``get_system_events``). The feed re-delivers recent events on
+        every fetch — without dedup, the same event would be counted N
+        times across successive polls. The ``self._seen_buffer_event_ids``
+        LRU (name preserved from skqln.15 to avoid a churny rename across
+        every test that introspects it; carries every channel-event id,
+        not just buffering ones) is the cross-poll dedup state: an
+        event's integer ``id`` is the dedup key, capped at
+        ``self._seen_buffer_event_ids_cap`` with LRU eviction.
+
+        Channel-id reconciliation: ``ChannelStats`` (``/proxy/ts/status``)
+        and ``SystemEvent`` (``/api/core/system-events/``) can disagree on
+        the ``channel_id`` field shape — the former is the Dispatcharr UUID
+        string, the latter has historically been a numeric channel id.
+        This helper normalizes both to ``str(channel_id)`` and tries match
+        against the snapshot's channel_uuids; events whose channel cannot
+        be mapped to a snapshot row are dropped (logged at WARNING).
+
+        Type-filter ordering (cost discipline)
+        ---------------------------------------
+        We drop unwanted event types BEFORE the LRU lookup — see the
+        ``event_type not in _CHANNEL_EVENT_TYPES`` short-circuit. The
+        alternative (always LRU-check, then filter) would pollute the
+        dedup set with the high-volume ``client_connect`` /
+        ``login_success`` event ids and burn the bounded cap on values
+        we have no interest in. The lookup itself is O(1), but the LRU
+        churn is real — at the live cap of 10k and the observed
+        ~70%-noise ratio on the PO's window, type-filter-first keeps
+        the working set at the four health types rather than the full
+        ~10 emitted types.
+
+        Failure modes are non-fatal — the helper never raises:
+        * ``get_system_events`` raises → ``{}`` returned + structured
+          ``[STATS_V2] channel_event_fetch_failed`` log.
+        * An event surfaces with no ``id`` → skipped (we cannot dedup it).
+        * An event's channel doesn't match any snapshot row → dropped,
+          logged once per occurrence as
+          ``[STATS_V2] channel_event_unmapped_channel``.
+
+        A per-poll SLI line is emitted at INFO:
+        ``[STATS_V2] channel_event_ingest fetched=X deduped=Y
+        attributed_buffer=A attributed_reconnect=B attributed_error=C
+        attributed_switch=D``. The shape is stable so SRE's
+        log-derived counter can grow per-type series without coupling
+        a metric library into the ingest path.
+        """
+        # No channels active this poll → no rows will be written, so skip
+        # the Dispatcharr round-trip entirely.
+        if not channel_snapshot:
+            return {}
+
+        # Build the (str(channel_id) → channel_uuid) lookup so we can
+        # reconcile Dispatcharr's two channel_id shapes (numeric on
+        # system-events, UUID on /proxy/ts/status). Snapshot rows always
+        # use UUID strings; we map numeric-id events through the
+        # channel_number map if needed.
+        snapshot_uuids = {entry["channel_uuid"] for entry in channel_snapshot}
+        snapshot_uuids_str = {str(u) for u in snapshot_uuids}
+
+        try:
+            # bd-ov5vb: no ``event_type`` arg — broaden ingest so the
+            # full channel-health event set lands in the response. The
+            # client-side type-filter below buckets the result and
+            # drops noise types.
+            response = await self.client.get_system_events(
+                limit=1000,
+                offset=0,
+            )
+        except Exception as e:
+            logger.warning(
+                "[STATS_V2] channel_event_fetch_failed reason=request_raised error=%s",
+                e,
+            )
+            self._log_channel_event_ingest_sli(
+                fetched=0,
+                deduped=0,
+                attributed_by_type={t: 0 for t in self._CHANNEL_EVENT_TYPES},
+            )
+            return {}
+
+        events = (response or {}).get("events", []) or []
+        fetched = len(events)
+        deduped_count = 0
+        # ``counts_by_channel[channel_uuid][event_type] = count``. The
+        # writer treats absent inner keys as zero so we don't pre-seed
+        # zeros here.
+        counts_by_channel: dict[str, dict[str, int]] = {}
+        attributed_by_type: dict[str, int] = {t: 0 for t in self._CHANNEL_EVENT_TYPES}
+
+        for event in events:
+            event_type = event.get("event_type")
+            if event_type not in self._CHANNEL_EVENT_TYPES:
+                # Noise — login_success, client_connect, epg_*, m3u_refresh,
+                # channel_start/stop, etc. Drop BEFORE LRU lookup so the
+                # dedup set stays focused on the four health types.
+                continue
+
+            event_id = event.get("id")
+            if event_id is None:
+                # Cannot dedup without a stable id — skip rather than
+                # double-count on the next poll.
+                logger.warning(
+                    "[STATS_V2] channel_event_skipped reason=no_event_id event_type=%s",
+                    event_type,
+                )
+                continue
+            event_id = int(event_id)
+            if event_id in self._seen_buffer_event_ids:
+                # Already counted in an earlier poll — bump it to MRU so the
+                # LRU eviction prefers genuinely stale entries.
+                self._seen_buffer_event_ids.move_to_end(event_id)
+                deduped_count += 1
+                continue
+
+            event_channel = event.get("channel_id")
+            event_channel_str = str(event_channel) if event_channel is not None else None
+            if event_channel_str not in snapshot_uuids_str:
+                # Dispatcharr surfaced an event for a channel that's not in
+                # our snapshot — either the channel stopped between the
+                # stats and system-events fetches, or the channel_id shape
+                # mismatch documented above. Drop it; record the dedup
+                # entry so we don't keep re-evaluating the same id every
+                # poll.
+                self._seen_buffer_event_ids[event_id] = None
+                self._evict_buffer_event_ids_if_over_cap()
+                logger.warning(
+                    "[STATS_V2] channel_event_unmapped_channel event_id=%s "
+                    "event_type=%s channel_id=%s",
+                    event_id,
+                    event_type,
+                    event_channel,
+                )
+                continue
+
+            # Attribute the event to the snapshot's UUID-keyed map. Reverse
+            # the str() lookup back to the original UUID value so the
+            # caller's keys match.
+            attributed_uuid = next(
+                (u for u in snapshot_uuids if str(u) == event_channel_str),
+                event_channel_str,
+            )
+            per_type = counts_by_channel.setdefault(attributed_uuid, {})
+            per_type[event_type] = per_type.get(event_type, 0) + 1
+            attributed_by_type[event_type] += 1
+            self._seen_buffer_event_ids[event_id] = None
+
+        # Evict any LRU overflow once per poll — cheaper than per-event.
+        self._evict_buffer_event_ids_if_over_cap()
+
+        self._log_channel_event_ingest_sli(
+            fetched=fetched,
+            deduped=deduped_count,
+            attributed_by_type=attributed_by_type,
+        )
+        return counts_by_channel
+
+    def _evict_buffer_event_ids_if_over_cap(self) -> None:
+        """LRU eviction for the channel-event dedup set. Keeps memory
+        bounded; entries are popped from the front (oldest insertion).
+
+        Name preserved from the skqln.15 era (when only buffer events
+        were ingested) to avoid a churny rename across every test that
+        introspects the attribute; the set is now keyed by every
+        channel-health event type tracked, not just buffering.
+        """
+        while len(self._seen_buffer_event_ids) > self._seen_buffer_event_ids_cap:
+            self._seen_buffer_event_ids.popitem(last=False)
+
+    def _log_channel_event_ingest_sli(
+        self,
+        *,
+        fetched: int,
+        deduped: int,
+        attributed_by_type: dict[str, int],
+    ) -> None:
+        """Emit the per-poll channel-event-ingest SLI line (bd-ov5vb).
+
+        Format::
+
+            [STATS_V2] channel_event_ingest fetched=X deduped=Y
+            attributed_buffer=A attributed_reconnect=B
+            attributed_error=C attributed_switch=D
+
+        Stable substring shape; SRE's log-derived counter can grow
+        per-type series without coupling a metric library into the
+        ingest path. Pre-bd-ov5vb the line was
+        ``buffer_event_ingest fetched=X deduped=Y attributed=Z`` —
+        operators reading the new line see at a glance that the four
+        event types are now distinct, and per-type zeros honestly
+        reflect "this install's Dispatcharr did not emit any of that
+        type this poll" rather than masking the gap.
+        """
+        logger.info(
+            "[STATS_V2] channel_event_ingest fetched=%s deduped=%s "
+            "attributed_buffer=%s attributed_reconnect=%s "
+            "attributed_error=%s attributed_switch=%s",
+            fetched,
+            deduped,
+            attributed_by_type.get("channel_buffering", 0),
+            attributed_by_type.get("channel_reconnect", 0),
+            attributed_by_type.get("channel_error", 0),
+            attributed_by_type.get("stream_switch", 0),
+        )
+
+    def _record_session_telemetry_metrics(
+        self,
+        *,
+        result: str,
+        duration_seconds: float,
+        rows_written: int,
+        rows_excluded: int = 0,
+    ) -> None:
+        """Emit the Stats v2 session_telemetry write metrics (bd-skqln.12).
+
+        Wrapped so a metric-side failure (registry not installed in some
+        edge-case test, prometheus-client missing) can never propagate into
+        the observation path it is instrumenting. The exception swallow
+        is deliberate — observability must not break the writer.
+
+        bd-uqbob: ``rows_excluded`` is the count of rows that
+        ``_write_session_telemetry`` filtered out via
+        ``ECM_TELEMETRY_EXCLUDE_USERS`` this poll. Emitted as a single
+        ``.inc(n)`` against the ``session_telemetry_rows_excluded_total``
+        counter (``reason=excluded_user``) so the suppression rate is
+        observable without leaking the excluded identity into the metric
+        label space. Default of 0 keeps the call ergonomics for older
+        test seams that don't pass the kwarg.
+        """
+        try:
+            from observability import get_metric
+
+            get_metric("session_telemetry_writes_total").labels(
+                result=result
+            ).inc()
+            get_metric("session_telemetry_write_duration_seconds").observe(
+                max(0.0, float(duration_seconds))
+            )
+            # bd-ae58c (Option B): do NOT set ecm_session_telemetry_row_count
+            # here. That gauge has one owner: the nightly rollup task sets it
+            # to the post-prune table total after each successful run. The
+            # per-poll batch size is observable via the
+            # ecm_session_telemetry_writes_total counter rate — callers can
+            # derive avg-rows-per-poll = writes_total rate / poll rate.
+            # Having two writers with divergent semantics (batch size ~10 vs.
+            # table total ~250k) caused the gauge to oscillate wildly and
+            # trip the ECMStatsRowCountGrowthAnomaly alert spuriously.
+            if rows_excluded > 0:
+                get_metric("session_telemetry_rows_excluded_total").labels(
+                    reason="excluded_user"
+                ).inc(int(rows_excluded))
+        except Exception:  # pragma: no cover — never break the writer
+            logger.debug(
+                "[STATS_V2] failed to emit session_telemetry write metrics",
+                exc_info=True,
+            )
+
+    def _write_session_telemetry(
+        self,
+        channel_snapshot: list[dict],
+        observed_at_ms: int,
+        provider_by_channel: Optional[dict[str, ProviderResolution]] = None,
+        channel_events_by_channel: Optional[dict[str, dict[str, int]]] = None,
+        *,
+        dispatcharr_user_map: Optional[dict[str, str]] = None,
+        exclude_user_tokens: Optional[frozenset[str]] = None,
+    ) -> None:
+        """Write one row per active viewing connection into ``session_telemetry``.
+
+        Stats v2 additive write path — bead ``enhancedchannelmanager-skqln.3``
+        step (a). Called from ``_collect_stats`` AFTER the four legacy writes
+        and ONLY when ``ECM_SESSION_TELEMETRY_WRITE_ENABLED`` is on. No
+        consumers of ``session_telemetry`` exist yet, so this is observation-
+        only — the row shape is what later beads (skqln.5 read API, skqln.14
+        provider resolver, skqln.15 buffer ingest) will populate further.
+
+        Row population (step (a), conservative):
+
+        * ``session_id`` — synthesized from the active-connection id we track
+          in ``self._active_connections``; namespaced ``conn-<id>`` so it does
+          not collide with future session-id sources. Stable for the life of
+          the connection.
+        * ``observed_at`` — ms since epoch stamped at the start of the poll
+          (passed in so all rows in this cycle share the same value).
+        * ``user_id`` — from the per-channel ``client_user_map`` if present;
+          NULL when Dispatcharr did not surface a user id for that ip.
+        * ``provider_id`` — populated from ``provider_by_channel`` (built
+          upstream by ``_resolve_provider_ids``, bd-skqln.14). NULL when the
+          resolver couldn't map the active stream to an M3U account.
+        * ``stream_id`` + ``stream_name`` — populated from the SAME
+          ``ProviderResolution`` NamedTuple the resolver returns
+          (bd-kh23e). Both NULL when the resolver couldn't identify the
+          active stream. ``stream_name`` may be NULL even when
+          ``stream_id`` is present (Dispatcharr record had no ``name``
+          field). The frontend renders these as
+          ``[<provider_name>] - <stream_name>`` with provider name
+          side-loaded from the M3U accounts map (PO 2026-05-14).
+        * ``channel_id`` — Dispatcharr channel UUID (``String(64)``). Same
+          shape the snapshot loop in ``_collect_stats`` already keys on, and
+          matches every other channel-keyed table in the schema
+          (``channel_watch_stats`` etc.). Migration 0007 corrected the
+          column type from INTEGER to VARCHAR(64) NOT NULL after the
+          step-(a) commit was first drafted with NULL writes; see the
+          bead body for the schema-mismatch correction.
+        * ``bytes_delta`` — per-channel byte delta divided equally across
+          active clients (integer floor; remainder dropped). Acceptable for
+          observation-only; refined when consumers exist.
+        * ``buffer_event_count`` / ``reconnect_event_count`` /
+          ``error_event_count`` / ``switch_event_count`` — deduplicated
+          per-event-type counts surfaced for this channel during this
+          poll (bd-ov5vb, broadens bd-skqln.15). Channel-health events
+          are channel-level (a stall, reconnect, or stream-switch on
+          the upstream pipeline affects every viewer), so each
+          per-type count attributes to EXACTLY ONE row per
+          ``(channel_uuid, observed_at)`` bucket — the first row
+          emitted for that channel, with sibling rows writing 0. This
+          keeps ``SUM(<column>) GROUP BY provider, time_bucket``
+          well-defined for the Providers panel rollups without
+          per-client double-counting. ``buffer_event_count`` is
+          preserved for back-compat with the pre-0012 read paths;
+          ``channel_buffering`` events are rare on real installs (only
+          fires on ffmpeg-speed threshold trips) so this column
+          typically reads zero — the other three carry the
+          operationally-meaningful signal.
+        * ``poll_interval_ms`` — ``self.poll_interval`` (seconds) × 1000.
+
+        The write is wrapped in a defensive try/except so any failure here
+        cannot disturb the legacy writes that already committed. This is
+        the keystone of "single-write refactor that can't break what
+        already works" — step (a) is dual-write under a flag, but ONLY for
+        the duration needed to prove the new path; legacy-write removal is
+        step (d) in this bead, behind a separate commit and PR.
+
+        bd-uqbob (operator-facing exclude filter)
+        -----------------------------------------
+        When ``ECM_TELEMETRY_EXCLUDE_USERS`` is configured, the caller in
+        ``_collect_stats`` parses the env var once and passes the already-
+        lower-cased token set as ``exclude_user_tokens``. The caller also
+        passes the per-poll Dispatcharr ``user_id → username`` map as
+        ``dispatcharr_user_map`` so the per-row filter does not pay for a
+        second Dispatcharr round-trip. Both kwargs default to empty for
+        backward compatibility with the existing test seam — when the
+        token set is empty the filter is short-circuited before any per-
+        row work.
+
+        The filter runs AFTER ``_coerce_session_user_id`` so anonymous
+        sentinels (``0`` / ``"0"`` → ``None``) never trigger a numeric
+        token match. The match is OR-shaped: either the coerced user_id
+        (string-compared against the token set) OR the resolved username
+        (case-insensitive) is sufficient to drop the row. Skipped rows
+        are NOT silently dropped — they increment the
+        ``session_telemetry_rows_excluded_total`` counter (labeled
+        ``reason=excluded_user``) so SRE can see the suppression rate
+        without leaking the excluded identity into the metric label space.
+        """
+        if provider_by_channel is None:
+            provider_by_channel = {}
+        if channel_events_by_channel is None:
+            channel_events_by_channel = {}
+        if dispatcharr_user_map is None:
+            dispatcharr_user_map = {}
+        if exclude_user_tokens is None:
+            exclude_user_tokens = frozenset()
+        # bd-skqln.12: time the entire write attempt and record success /
+        # failure on the way out. ``rows_written`` is hoisted here so it is
+        # visible to the metric-emission block in the ``finally`` (it is 0
+        # if the helper raises before the inner counter increments).
+        write_start = time.perf_counter()
+        rows_written = 0
+        # bd-uqbob: hoisted alongside ``rows_written`` so the metric
+        # emission in the outer ``finally`` can read it even when the
+        # inner try raises before the counter is bumped. Default of 0
+        # means a failed write reports zero exclusions, which is the
+        # truthful posture — we cannot prove any rows were filtered if
+        # the per-row loop never completed.
+        rows_excluded = 0
+        write_result = "failure"
+        try:
+            poll_interval_ms = max(int(self.poll_interval * 1000), 0)
+            session = get_session()
+            try:
+                # Track which channels have already received their per-type
+                # channel-event-count attribution this poll. Channel-level
+                # counts land on the FIRST emitted row per channel (sorted
+                # by client_ip for determinism); subsequent rows for the
+                # same channel write 0 across every per-type column so SUM
+                # aggregates do not double-count. (bd-ov5vb: single flag
+                # covers all four per-type columns because the attribution
+                # rule is the same — first row wins for buffer +
+                # reconnect + error + switch alike.)
+                channel_events_attributed: set[str] = set()
+                # Channels with any per-type events but no eligible row
+                # (no active client connection recorded) — counts are
+                # dropped and logged below.
+                channels_with_events = set(channel_events_by_channel.keys())
+                for entry in channel_snapshot:
+                    channel_uuid = entry["channel_uuid"]
+                    client_ips = entry["client_ips"]
+                    client_user_map = entry["client_user_map"]
+                    channel_bytes_delta = max(int(entry["channel_bytes_delta"]), 0)
+                    # ``ProviderResolution`` NamedTuple carries id + name +
+                    # provider together (bd-kh23e). Falls back to the
+                    # all-None sentinel for channels the resolver didn't
+                    # visit (defensive — should not happen in practice
+                    # because the resolver returns one entry per snapshot
+                    # entry).
+                    resolution = provider_by_channel.get(
+                        channel_uuid, EMPTY_RESOLUTION
+                    )
+                    provider_id = resolution.provider_id
+                    stream_id = resolution.stream_id
+                    stream_name = resolution.stream_name
+
+                    # No active clients on this channel this poll → nothing
+                    # to attribute to a session.
+                    if not client_ips:
+                        continue
+
+                    per_client_bytes = channel_bytes_delta // len(client_ips)
+                    # Deterministic emission order so the buffer-event count
+                    # consistently lands on the same row across runs (test
+                    # parity + reproducible aggregates).
+                    sorted_ips = sorted(client_ips)
+
+                    for ip in sorted_ips:
+                        conn_key = (channel_uuid, ip)
+                        conn_id = self._active_connections.get(conn_key)
+                        # Tracker has not yet recorded a connection row for
+                        # this (channel, ip) — happens on the first poll of
+                        # a brand-new viewer because _update_watch_counts
+                        # has already run by the time we reach here, so this
+                        # should be rare. Skip rather than synthesize a
+                        # session id we cannot correlate later.
+                        if conn_id is None:
+                            continue
+
+                        # bd-gbxmj: coerce the raw Dispatcharr user_id
+                        # through the FK-safety helper. Anonymous sentinels
+                        # ("0"/0/""/None) become NULL; positive ints (or
+                        # int-parseable strings) pass through. Without this
+                        # the FK to users.id raises IntegrityError at
+                        # session.commit() and rolls back the WHOLE batch.
+                        coerced_user_id = _coerce_session_user_id(
+                            client_user_map.get(ip)
+                        )
+
+                        # bd-gsn3r: resolve the Dispatcharr-side username
+                        # for this row from the caller-supplied
+                        # ``dispatcharr_user_map`` and persist it as
+                        # ``dispatcharr_username`` (denormalized at write
+                        # time so the read APIs never join against ECM's
+                        # local ``users`` table — that join was the
+                        # namespace-collision bug bd-uqbob worked around
+                        # with the env-var exclude filter; this is the
+                        # architectural fix). NULL when the raw
+                        # ``user_id`` is anonymous (no map key) or when
+                        # the per-poll Dispatcharr ``get_users()`` call
+                        # earlier this cycle failed (the caller passes
+                        # an empty map in that case).
+                        raw_uid = client_user_map.get(ip)
+                        disp_username = (
+                            dispatcharr_user_map.get(str(raw_uid))
+                            if raw_uid is not None
+                            else None
+                        ) or None  # Coerce empty string back to None.
+
+                        # bd-uqbob: drop rows attributed to operator-
+                        # configured excluded users. The original purpose
+                        # — dropping ECM admin/API account rows that
+                        # collided with Dispatcharr viewer IDs in the
+                        # dropped FK namespace — is moot post-bd-gsn3r:
+                        # the dispatcharr_username column lets the read
+                        # APIs surface real Dispatcharr viewers without
+                        # touching ECM's users table. The env var stays
+                        # in place (no harm) for operators who want to
+                        # exclude a specific Dispatcharr viewer for any
+                        # other reason. An empty token set short-
+                        # circuits before any per-row work.
+                        if exclude_user_tokens:
+                            if _is_excluded_telemetry_user(
+                                coerced_user_id,
+                                disp_username,
+                                exclude_user_tokens,
+                            ):
+                                rows_excluded += 1
+                                # Per-row debug line for operator-facing
+                                # traceability. Lazy-formatted so the
+                                # interpolation cost is only paid when
+                                # debug logging is enabled.
+                                logger.debug(
+                                    "[BANDWIDTH] Skipped telemetry write "
+                                    "for excluded user user=%s reason=%s",
+                                    disp_username or coerced_user_id,
+                                    "excluded_user",
+                                )
+                                continue
+
+                        # Attribute the channel's per-type event counts
+                        # to the FIRST eligible row only (bd-ov5vb,
+                        # broadens bd-skqln.15). Sibling rows write 0
+                        # across every per-type column. (bd-uqbob:
+                        # excluded rows above do NOT consume the
+                        # attribution slot — counts land on the first
+                        # row that survives the filter.) The inner
+                        # ``per_type`` dict carries only the event types
+                        # that fired for this channel this poll; the
+                        # ``.get(<type>, 0)`` calls honestly write 0 for
+                        # absent types.
+                        if channel_uuid not in channel_events_attributed:
+                            per_type = channel_events_by_channel.get(
+                                channel_uuid, {}
+                            )
+                            row_buffer_count = per_type.get("channel_buffering", 0)
+                            row_reconnect_count = per_type.get("channel_reconnect", 0)
+                            row_error_count = per_type.get("channel_error", 0)
+                            row_switch_count = per_type.get("stream_switch", 0)
+                            channel_events_attributed.add(channel_uuid)
+                        else:
+                            row_buffer_count = 0
+                            row_reconnect_count = 0
+                            row_error_count = 0
+                            row_switch_count = 0
+                        session.add(
+                            SessionTelemetry(
+                                session_id=f"conn-{conn_id}",
+                                observed_at=observed_at_ms,
+                                user_id=coerced_user_id,
+                                # bd-gsn3r: denormalize the Dispatcharr
+                                # username at write time so the read APIs
+                                # can surface "who watched" without ever
+                                # joining against ECM's local ``users``
+                                # table (whose integer namespace
+                                # collides with Dispatcharr's). NULL on
+                                # anonymous viewers / unresolved
+                                # usernames; documented on the model.
+                                dispatcharr_username=disp_username,
+                                provider_id=provider_id,
+                                channel_id=channel_uuid,
+                                bytes_delta=per_client_bytes,
+                                buffer_event_count=row_buffer_count,
+                                # bd-ov5vb (migration 0013): per-type
+                                # counters paired with buffer_event_count.
+                                # First-row-wins attribution per channel
+                                # — sibling rows for the same channel
+                                # poll write 0 across all four columns
+                                # so SUM rollups don't double-count.
+                                reconnect_event_count=row_reconnect_count,
+                                error_event_count=row_error_count,
+                                switch_event_count=row_switch_count,
+                                poll_interval_ms=poll_interval_ms,
+                                # bd-kh23e: capture stream identity so the
+                                # read APIs can surface "what's playing"
+                                # (PO directive 2026-05-14). NULL when
+                                # the resolver couldn't attribute the
+                                # active stream — same failure modes as
+                                # provider_id.
+                                stream_id=stream_id,
+                                stream_name=stream_name,
+                            )
+                        )
+                        rows_written += 1
+
+                # Channel events were surfaced for channels with no
+                # eligible row this poll (rare — between client
+                # disconnect and the channel stopping). Log per channel
+                # with a per-type breakdown so SRE can attribute the
+                # drop without having to re-fetch the raw event feed.
+                unattributed = channels_with_events - channel_events_attributed
+                for channel_uuid in unattributed:
+                    per_type = channel_events_by_channel.get(channel_uuid, {})
+                    logger.warning(
+                        "[STATS_V2] channel_event_dropped channel=%s "
+                        "buffer=%s reconnect=%s error=%s switch=%s "
+                        "reason=no_active_session_row",
+                        channel_uuid,
+                        per_type.get("channel_buffering", 0),
+                        per_type.get("channel_reconnect", 0),
+                        per_type.get("channel_error", 0),
+                        per_type.get("stream_switch", 0),
+                    )
+
+                if rows_written:
+                    # bd-gbxmj defense-in-depth: a future field could grow
+                    # an FK constraint without this helper learning about
+                    # it (and the user-id coercion above is itself a
+                    # single point of failure). Catch IntegrityError at
+                    # the batch commit, roll back the transaction, log
+                    # the failure with enough context for SRE to find the
+                    # poll in question, and treat the write as a
+                    # recoverable failure rather than letting the
+                    # outer Exception handler swallow it as an
+                    # exc_info=True noise event. The primary fix is the
+                    # helper; this is the safety net so a future
+                    # constraint can never poison the entire batch
+                    # silently again.
+                    try:
+                        session.commit()
+                    except IntegrityError as e:
+                        session.rollback()
+                        logger.warning(
+                            "[STATS_V2] session_telemetry batch FK violation "
+                            "observed_at=%s rows_attempted=%s error=%s",
+                            observed_at_ms,
+                            rows_written,
+                            e,
+                        )
+                        # The batch did not land — reflect that in the
+                        # row count the metric block reports, and let
+                        # the success/failure label below mark this as
+                        # a failure so SRE's write-health gauge does not
+                        # mis-attribute success on a rolled-back commit.
+                        rows_written = 0
+                        write_result = "failure"
+                    else:
+                        logger.debug(
+                            "[STATS_V2] Wrote %s session_telemetry row(s) (observed_at=%s)",
+                            rows_written,
+                            observed_at_ms,
+                        )
+                        write_result = "success"
+                        # bd-8axhi: a successful write proves the schema is
+                        # currently consistent with the model. Re-arm the
+                        # one-shot ERROR alarm so a future drift event
+                        # (e.g., a second hot-deploy that adds a NEWER
+                        # migration) triggers another ERROR rather than
+                        # silently degrading to WARN.
+                        self._schema_drift_alarm_armed = True
+                else:
+                    # Nothing to write; release the (empty) transaction.
+                    session.rollback()
+                    # Reaching this line means the write attempt
+                    # completed without raising (rows_written is 0).
+                    # Record success so the bd-skqln.12 metric reflects
+                    # "the helper did what it was asked to do" rather
+                    # than overstating failures whenever a poll had no
+                    # active connections.
+                    write_result = "success"
+            finally:
+                session.close()
+        except Exception as e:
+            # Observation-only path — failures must never propagate. The
+            # legacy writes already committed before we got here.
+            #
+            # bd-skqln.12: WARN-level log carries trace_id (via the
+            # observability filter) + observed_at (poll-scoped correlator)
+            # + the count of channels we attempted, so SRE can correlate
+            # this failure with the poll that produced it. Privacy 11a:
+            # we deliberately do NOT enumerate per-row user_id+channel_id
+            # pairs — those are aggregated away by the time we get here.
+            #
+            # bd-8axhi defense-in-depth: when the failure looks like
+            # runtime schema drift (``no such column`` / ``no such
+            # table`` — the bd-zaaey signature), escalate the FIRST
+            # observation to ERROR-level with an explicit recovery path.
+            # This catches the hot-deploy hazard the bd-zaaey boot guard
+            # cannot cover: a developer ``docker cp``'s a new alembic
+            # migration + writer code into a live container without
+            # ``docker restart``. The boot guard already passed on the
+            # last restart; the runtime drift surfaces here on the first
+            # write that exercises the new column. Subsequent failures
+            # fall back to WARN so the operator log is not flooded with
+            # duplicate alarms while the root cause is being repaired.
+            # Scope is deliberately SQLAlchemy ``OperationalError`` only —
+            # sqlite3 ``OperationalError`` instances get wrapped before they
+            # reach this layer, matching bd-zaaey's
+            # ``_assert_schema_matches_models`` boot-guard scope. The helper
+            # ``_is_schema_drift_error`` itself walks the exception chain so
+            # any future scope expansion (e.g. accepting raw sqlite3 errors
+            # from a different code path) only requires loosening this
+            # ``isinstance`` gate, not changing the helper.
+            if (
+                isinstance(e, OperationalError)
+                and _is_schema_drift_error(e)
+                and self._schema_drift_alarm_armed
+            ):
+                self._schema_drift_alarm_armed = False
+                logger.error(
+                    "[STATS_V2] session_telemetry SCHEMA DRIFT detected at "
+                    "runtime observed_at=%s channels_attempted=%s error=%s — "
+                    "the SQLAlchemy model declares a column/table the live "
+                    "DB does not have. Most likely cause: a new alembic "
+                    "migration was added to the running container without "
+                    "restarting it. Recovery: ``docker restart ecm-ecm-1`` "
+                    "(the entrypoint runs ``alembic upgrade head`` on boot). "
+                    "If the restart does not clear the error, see bd-zaaey "
+                    "for the structural diagnostic. Subsequent occurrences "
+                    "of this error in the current process will log at WARN.",
+                    observed_at_ms,
+                    len(channel_snapshot),
+                    e,
+                    exc_info=True,
+                )
+            else:
+                logger.warning(
+                    "[STATS_V2] session_telemetry write failed observed_at=%s channels_attempted=%s error=%s",
+                    observed_at_ms,
+                    len(channel_snapshot),
+                    e,
+                    exc_info=True,
+                )
+        finally:
+            # Always emit the write-health metrics — success or failure
+            # paths both observe duration and increment the result-keyed
+            # counter. Wrapped helper so a metric-emission failure cannot
+            # propagate out of the observation-only writer.
+            duration = time.perf_counter() - write_start
+            self._record_session_telemetry_metrics(
+                result=write_result,
+                duration_seconds=duration,
+                rows_written=rows_written,
+                rows_excluded=rows_excluded,
+            )
 
     @staticmethod
     def get_bandwidth_summary() -> dict:
@@ -911,20 +2710,100 @@ class BandwidthTracker:
             sort_by: "views" for watch count, "time" for total watch time (default "views")
 
         Returns:
-            List of channel watch stats dicts, ordered by selected metric desc
+            List of channel watch stats dicts (channel_id, channel_name,
+            watch_count, total_watch_seconds, last_watched), ordered by
+            selected metric desc.
+
+        bd-skqln.3 step (d): reads from ``session_telemetry`` (DISTINCT
+        session_id and DISTINCT-by-observed_at poll-interval sum) and
+        side-loads channel_name from ``UniqueClientConnection``. Returns
+        the same dict shape the legacy ``ChannelWatchStats.to_dict()``
+        produced, so API consumers don't need to change.
         """
         session = get_session()
         try:
-            if sort_by == "time":
-                records = session.query(ChannelWatchStats).order_by(
-                    ChannelWatchStats.total_watch_seconds.desc()
-                ).limit(limit).all()
-            else:
-                records = session.query(ChannelWatchStats).order_by(
-                    ChannelWatchStats.watch_count.desc()
-                ).limit(limit).all()
+            # DISTINCT-by-(channel_id, observed_at) collapse so concurrent
+            # clients in one poll contribute one interval each — matches
+            # the channel_watch_stats_v view + popularity calculator.
+            per_poll = session.query(
+                SessionTelemetry.channel_id.label("channel_id"),
+                SessionTelemetry.observed_at.label("observed_at"),
+                func.max(SessionTelemetry.poll_interval_ms).label("poll_interval_ms"),
+            ).group_by(
+                SessionTelemetry.channel_id,
+                SessionTelemetry.observed_at,
+            ).subquery()
 
-            return [record.to_dict() for record in records]
+            per_channel = session.query(
+                per_poll.c.channel_id.label("channel_id"),
+                func.coalesce(
+                    func.sum(per_poll.c.poll_interval_ms) / 1000, 0
+                ).label("total_watch_seconds"),
+                func.max(per_poll.c.observed_at).label("last_observed_at_ms"),
+            ).group_by(per_poll.c.channel_id).subquery()
+
+            session_counts = session.query(
+                SessionTelemetry.channel_id.label("channel_id"),
+                func.count(distinct(SessionTelemetry.session_id)).label("watch_count"),
+            ).group_by(SessionTelemetry.channel_id).subquery()
+
+            query = session.query(
+                per_channel.c.channel_id,
+                per_channel.c.total_watch_seconds,
+                per_channel.c.last_observed_at_ms,
+                func.coalesce(session_counts.c.watch_count, 0).label("watch_count"),
+            ).outerjoin(
+                session_counts,
+                session_counts.c.channel_id == per_channel.c.channel_id,
+            )
+
+            if sort_by == "time":
+                query = query.order_by(per_channel.c.total_watch_seconds.desc())
+            else:
+                query = query.order_by(func.coalesce(session_counts.c.watch_count, 0).desc())
+
+            rows = query.limit(limit).all()
+            if not rows:
+                return []
+
+            # Side-load channel_name from UniqueClientConnection. One
+            # round-trip for the candidate channel set rather than per-row.
+            channel_ids = [r.channel_id for r in rows]
+            name_rows = session.query(
+                UniqueClientConnection.channel_id,
+                UniqueClientConnection.channel_name,
+            ).filter(
+                UniqueClientConnection.channel_id.in_(channel_ids),
+            ).all()
+            name_lookup: dict[str, str] = {}
+            for cn_row in name_rows:
+                # Take the first non-empty name we see per channel; the
+                # writer keeps names consistent across rows on the same
+                # channel but a stale row may still exist.
+                if cn_row.channel_id not in name_lookup and cn_row.channel_name:
+                    name_lookup[cn_row.channel_id] = cn_row.channel_name
+
+            results = []
+            for row in rows:
+                last_watched_dt = (
+                    datetime.utcfromtimestamp(row.last_observed_at_ms / 1000.0)
+                    if row.last_observed_at_ms is not None
+                    else None
+                )
+                results.append({
+                    "channel_id": row.channel_id,
+                    "channel_name": name_lookup.get(
+                        row.channel_id, f"Channel {row.channel_id[:8]}..."
+                    ),
+                    "watch_count": int(row.watch_count or 0),
+                    "total_watch_seconds": int(row.total_watch_seconds or 0),
+                    "last_watched": (
+                        last_watched_dt.isoformat() + "Z"
+                        if last_watched_dt is not None
+                        else None
+                    ),
+                })
+            return results
         finally:
             session.close()
 

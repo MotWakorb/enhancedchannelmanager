@@ -12,6 +12,7 @@ import uuid
 from datetime import date
 from typing import Optional, Literal, Union
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Response
 from pydantic import BaseModel
 
@@ -372,7 +373,14 @@ async def get_logos(
     page_size: int = 100,
     search: Optional[str] = None,
 ):
-    """List logos with pagination and search."""
+    """List logos with pagination and search.
+
+    Emits a single-line INFO diagnostic per request (bd-nh50y) so operators
+    can grep one log line per request and see page/page_size/search/result
+    count/elapsed/next-flag without enabling DEBUG. Per-row logging is
+    intentionally avoided — at page_size=500 this is the channel-edit-modal
+    fetch path and per-row would flood the log.
+    """
     logger.debug("[CHANNELS-LOGO] GET /channels/logos - page=%s search=%s", page, search)
     client = get_client()
     try:
@@ -380,6 +388,26 @@ async def get_logos(
         result = await client.get_logos(page=page, page_size=page_size, search=search)
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[CHANNELS-LOGO] Fetched logos in %.1fms", elapsed_ms)
+        # Single-line INFO diagnostic for the operator-grepable trace (bd-nh50y).
+        # Pulls result-count from `results` (DRF paginated shape) and `next` from
+        # the paginated envelope. Both can be missing in unusual responses, so
+        # default defensively rather than KeyError on a malformed payload.
+        results_count = (
+            len(result.get("results", []))
+            if isinstance(result, dict)
+            else 0
+        )
+        has_next = bool(result.get("next")) if isinstance(result, dict) else False
+        logger.info(
+            "[CHANNELS-LOGO] GET /logos page=%s page_size=%s search=%s "
+            "returned %s logos in %.1fms next=%s",
+            page,
+            page_size,
+            search,
+            results_count,
+            elapsed_ms,
+            "true" if has_next else "false",
+        )
         return result
     except Exception as e:
         logger.exception("[CHANNELS-LOGO] Failed to fetch logos: %s", e)
@@ -1947,17 +1975,39 @@ async def merge_channels(request: "MergeChannelsRequest"):
     client = get_client()
     new_channel = None
     try:
-        # 1. Fetch all source channels and collect their streams (ordered, deduplicated)
+        # 1. Fetch all source channels and collect their streams (ordered, deduplicated).
+        #    If any source ID no longer exists upstream (e.g., the operator's UI
+        #    held a stale reference after a previous merge), surface 422 with a
+        #    refresh hint instead of falling through to the catch-all 500. The
+        #    UI fix in useEditMode keeps these stale IDs from accumulating in the
+        #    first place; this is defense in depth for any other stale-state path.
         source_channels = []
         all_streams: list[int] = []
         seen_streams: set[int] = set()
+        missing_ids: list[int] = []
         for cid in request.source_channel_ids:
-            channel = await client.get_channel(cid)
+            try:
+                channel = await client.get_channel(cid)
+            except httpx.HTTPStatusError as fetch_err:
+                if fetch_err.response.status_code == 404:
+                    missing_ids.append(cid)
+                    continue
+                raise
             source_channels.append(channel)
             for sid in channel.get("streams", []):
                 if sid not in seen_streams:
                     all_streams.append(sid)
                     seen_streams.add(sid)
+
+        if missing_ids:
+            logger.warning("[CHANNELS] Merge rejected: stale source IDs %s no longer exist", missing_ids)
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Source channels {missing_ids} no longer exist — "
+                    "refresh the channels list and try again"
+                ),
+            )
 
         # 2. Create the new merged channel
         create_data = {"name": request.target_name}

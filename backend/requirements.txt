@@ -114,6 +114,8 @@ propcache==0.4.1
     # via
     #   aiohttp
     #   yarl
+py-cpuinfo==9.0.0
+    # via pytest-benchmark
 pyasn1==0.6.3
     # via
     #   python-jose
@@ -132,8 +134,11 @@ pytest==9.0.3
     # via
     #   -r requirements.in
     #   pytest-asyncio
+    #   pytest-benchmark
     #   pytest-cov
 pytest-asyncio==1.3.0
+    # via -r requirements.in
+pytest-benchmark==5.2.3
     # via -r requirements.in
 pytest-cov==7.1.0
     # via -r requirements.in
@@ -177,16 +182,12 @@ starlette==1.0.0
     #   fastapi
 typing-extensions==4.15.0
     # via
-    #   aiosignal
     #   alembic
-    #   anyio
     #   fastapi
     #   limits
     #   pydantic
     #   pydantic-core
-    #   pytest-asyncio
     #   sqlalchemy
-    #   starlette
     #   typing-inspection
 typing-inspection==0.4.2
     # via

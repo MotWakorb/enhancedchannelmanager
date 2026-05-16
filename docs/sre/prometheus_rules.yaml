@@ -341,3 +341,592 @@ groups:
             on-call, identify the offending `release` label from
             /metrics and consider rolling back the last deploy.
           runbook_url: docs/runbooks/frontend_error_rate.md
+
+  # =====================================================================
+  # SLO-7: Stats v2 Telemetry Write Success Rate (bd-skqln.11)
+  # =====================================================================
+  # Consumes the `ecm_session_telemetry_writes_total{result}` counter
+  # shipped in skqln.12. The tracker wraps `_write_session_telemetry` in
+  # try/except so the writer survives transient failures — those
+  # swallowed failures increment `result="failure"` and feed this alert.
+  #
+  # Thresholds intentionally simpler than MWMBR for the scaffold (we
+  # don't yet have recording rules to encode multi-window burn-rate
+  # expressions cleanly):
+  #   - >5% failure rate over 5m for 30m → ticket
+  #   - >5% failure rate over 5m for 30m AND sustained → page (handled by
+  #     the same alert; severity escalates on long `for:`).
+  # The "and rate(...) > 0" guard avoids div-by-zero during idle periods
+  # (BandwidthTracker polls every 60s, so steady-state rate is ~0.017
+  # writes/s; the 0.001 floor accepts even one write/minute as enough
+  # signal to evaluate).
+  - name: ecm_stats_v2_write
+    interval: 30s
+    rules:
+      - record: ecm:stats_v2_write_failure_ratio:5m
+        # SLO-7 SLI inverted (failure ratio) on a 5m window. The SLO
+        # statement uses 30d for budget calculation; this 5m ratio is
+        # the burn signal the alert rules consume.
+        expr: |
+          sum(rate(ecm_session_telemetry_writes_total{result="failure"}[5m]))
+          /
+          sum(rate(ecm_session_telemetry_writes_total[5m]))
+
+      - alert: ECMStatsTelemetryWriteFailing
+        # >5% failure rate sustained for 30m → page. The 30m `for:` is
+        # what promotes this from warn to page: a brief blip during a
+        # Dispatcharr restart or SQLite checkpoint won't fire it, but a
+        # sustained 30m failure storm wakes someone up.
+        expr: |
+          ecm:stats_v2_write_failure_ratio:5m > 0.05
+          and
+          sum(rate(ecm_session_telemetry_writes_total[5m])) > 0.001
+        for: 30m
+        labels:
+          severity: page
+          slo: stats_v2_write
+          service: ecm
+        annotations:
+          summary: "ECM Stats v2 write failure ratio {{ $value | humanizePercentage }} > 5% sustained 30m"
+          description: |
+            session_telemetry write failure ratio has exceeded 5% for at
+            least 30 minutes. Likely causes (in order of frequency):
+            SQLite WAL contention from bulk auto-creation, database file
+            locked by a long transaction, disk full on /config, or a
+            migration mismatch after a botched upgrade. Search the logs
+            for `[STATS_V2]` error lines:
+              docker logs ecm-ecm-1 --since 30m | grep '\[STATS_V2\]'
+          runbook_url: docs/runbooks/stats-v2-write-failures.md
+
+      - alert: ECMStatsTelemetryWriteFailingWarn
+        # >5% failure rate sustained for 5m → ticket. Earlier signal so
+        # on-call sees the burn before the 30m page fires.
+        expr: |
+          ecm:stats_v2_write_failure_ratio:5m > 0.05
+          and
+          sum(rate(ecm_session_telemetry_writes_total[5m])) > 0.001
+        for: 5m
+        labels:
+          severity: ticket
+          slo: stats_v2_write
+          service: ecm
+        annotations:
+          summary: "ECM Stats v2 write failure ratio {{ $value | humanizePercentage }} > 5% for 5m"
+          description: |
+            session_telemetry write failure ratio has exceeded 5% over
+            the last 5 minutes. Begin runbook triage now; if sustained
+            30m the page-tier alert fires.
+          runbook_url: docs/runbooks/stats-v2-write-failures.md
+
+  # =====================================================================
+  # SLO-8: Provider Attribution Rate (bd-skqln.11)
+  # =====================================================================
+  # Consumes the `ecm_provider_resolution_total{result}` counter shipped
+  # in skqln.12. The resolver increments this once per channel per poll
+  # cycle. An "unresolved" outcome means the channel's active stream
+  # could not be mapped to an M3U provider — this is CORRECT BEHAVIOR
+  # (the row is still written with provider_id=NULL and surfaces as
+  # "Unknown" on the Providers panel), not a fault. Hence: warn-only.
+  # Paging on this is alert fatigue.
+  #
+  # The 1h evaluation window matches the SLO statement's "24h steady
+  # state" semantics at a finer granularity — a sustained 1h drop is
+  # the alert-actionable signal; the SLO's 24h window is the budget
+  # math, not the alert math.
+  - name: ecm_stats_v2_provider_resolution
+    interval: 1m
+    rules:
+      - record: ecm:provider_resolution_ratio:1h
+        # SLO-8 SLI on a 1h window.
+        expr: |
+          sum(rate(ecm_provider_resolution_total{result="resolved"}[1h]))
+          /
+          sum(rate(ecm_provider_resolution_total[1h]))
+
+      - alert: ECMStatsProviderResolutionDegraded
+        # Resolution rate < 80% over 1h. Threshold deliberately well
+        # below the 95% SLO target — alerting at 95% would fire every
+        # time a single provider blip pushed us slightly below floor.
+        # 80% means a meaningful fraction of channel-polls are landing
+        # in the "Unknown" bucket, which is the operator-visible signal
+        # the Providers panel is becoming uninterpretable.
+        expr: |
+          ecm:provider_resolution_ratio:1h < 0.80
+          and
+          sum(rate(ecm_provider_resolution_total[1h])) > 0.001
+        for: 1h
+        labels:
+          severity: warning
+          slo: stats_v2_provider_resolution
+          service: ecm
+        annotations:
+          summary: "ECM provider resolution ratio {{ $value | humanizePercentage }} < 80% for 1h"
+          description: |
+            Provider attribution is degraded — more than 20% of channel-
+            poll resolutions are landing in the "Unknown" bucket on the
+            Providers panel. NOT user-facing outage; the Channels and
+            Users panels and watch-time math are unaffected. Triage at
+            next business hour. Grep logs for the breakdown by reason:
+              docker logs ecm-ecm-1 --since 1h \
+                | grep '\[STATS_V2\] provider_resolution_failed' \
+                | sed 's/.*reason=\([^ ]*\).*/\1/' | sort | uniq -c
+            Common reasons: lookup_raised (network blip), no_stream_id
+            (Dispatcharr API quirk), no_match (M3U source rotated URLs).
+          runbook_url: docs/runbooks/stats-v2-provider-resolution-degraded.md
+
+  # =====================================================================
+  # SLO-9: Stats v2 Query Latency (bd-skqln.11)
+  # =====================================================================
+  # Consumes the `ecm_stats_query_duration_seconds_bucket` histogram
+  # shipped in skqln.12. The middleware filters on /api/stats/* paths
+  # and labels each observation with the parameterized route pattern
+  # (endpoint) and the group_by query param (granularity). The bucket
+  # layout matches `ecm_http_request_duration_seconds`, so the SLO-2
+  # interpolation behavior applies here too.
+  #
+  # Warn-only — Stats v2 is an admin tool. Slow stats panels are
+  # annoying, not user-facing outages. Paging on this is alert fatigue;
+  # the runbook covers triage at next business hour.
+  - name: ecm_stats_v2_query_latency
+    interval: 30s
+    rules:
+      - alert: ECMStatsQueryLatencyHigh
+        # p95 > 800ms across all stats endpoints, sustained 15m.
+        # Aggregated across `endpoint` so we catch a regression in any
+        # one panel; the runbook tells the responder how to group_by
+        # endpoint when triaging.
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(ecm_stats_query_duration_seconds_bucket[5m])
+            )
+          ) > 0.8
+        for: 15m
+        labels:
+          severity: warning
+          slo: stats_v2_query_latency
+          service: ecm
+        annotations:
+          summary: "ECM Stats v2 p95 query latency {{ $value | humanizeDuration }} > 800ms for 15m"
+          description: |
+            95th percentile Stats v2 query latency has exceeded 800ms
+            for 15+ minutes. Likely causes: session_telemetry table
+            growth past index-friendly size (rollup tables in bd-7i2vv
+            will address this structurally), a new aggregate endpoint
+            shipped without a perf-benchmark gate, or SQLite WAL
+            checkpoint stalling a long stats query. Group by endpoint
+            to identify the offender:
+              histogram_quantile(0.95,
+                sum by (le, endpoint) (
+                  rate(ecm_stats_query_duration_seconds_bucket[5m])))
+          runbook_url: docs/runbooks/stats-v2-write-failures.md
+
+      - alert: ECMStatsQueryLatencyP99High
+        # p99 > 2s — the "one query just blew the budget" signal. Same
+        # warn severity; the p99 alert exists so the responder sees
+        # tail-latency regressions even when p95 is healthy.
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (
+              rate(ecm_stats_query_duration_seconds_bucket[5m])
+            )
+          ) > 2.0
+        for: 15m
+        labels:
+          severity: warning
+          slo: stats_v2_query_latency
+          service: ecm
+        annotations:
+          summary: "ECM Stats v2 p99 query latency {{ $value | humanizeDuration }} > 2s for 15m"
+          description: |
+            99th percentile Stats v2 query latency has exceeded 2s for
+            15+ minutes. Tail-latency regression — usually a single
+            slow endpoint dragging the p99 even when p95 is healthy.
+            Group by endpoint as in ECMStatsQueryLatencyHigh runbook.
+          runbook_url: docs/runbooks/stats-v2-write-failures.md
+
+  # =====================================================================
+  # Stats v2 Storage Growth (bd-skqln.11)
+  # =====================================================================
+  # NOT tied to a numbered SLO — this is a capacity-planning alert.
+  # Consumes the `ecm_session_telemetry_row_count` gauge (bd-ae58c,
+  # Option B): the gauge now represents the post-prune TABLE TOTAL row
+  # count, updated once per nightly rollup run by StatsV2RollupTask.
+  # BandwidthTracker no longer writes this gauge (it previously set it
+  # to the per-poll batch size ~10, causing wild oscillation with the
+  # rollup task's ~250k total and spurious alert trips).
+  # The 7-day rolling average now tracks the table-total trendline,
+  # which is the right capacity-planning signal.
+  - name: ecm_stats_v2_storage
+    interval: 5m
+    rules:
+      - record: ecm:session_telemetry_row_count:avg7d
+        # 7-day rolling average of post-prune table-total row count.
+        # Baseline for the anomaly detector. Updated nightly by the
+        # rollup task (StatsV2RollupTask); stable between runs.
+        expr: avg_over_time(ecm_session_telemetry_row_count[7d])
+
+      - alert: ECMStatsRowCountGrowthAnomaly
+        # Table-total row count > 2x the 7-day rolling average over 24h.
+        # Catches "retention policy not running" and "sudden channel-count
+        # explosion" — both worth a ticket.
+        # The 2x ratio is a starting point; expect tuning after 30d of
+        # baseline data. bd-ae58c: the previous per-cycle gauge made
+        # this alert spuriously fire on every nightly rollup run; the
+        # table-total gauge is stable between nightly runs.
+        expr: |
+          (
+            avg_over_time(ecm_session_telemetry_row_count[24h])
+            /
+            ignoring() group_left
+            ecm:session_telemetry_row_count:avg7d
+          ) > 2.0
+          and
+          ecm:session_telemetry_row_count:avg7d > 0
+        for: 24h
+        labels:
+          severity: warning
+          slo: stats_v2_storage
+          service: ecm
+        annotations:
+          summary: "ECM session_telemetry table row count growing >2x 7d baseline for 24h"
+          description: |
+            session_telemetry table-total row count (post-prune, updated
+            nightly) over the last 24h is more than 2x the 7-day rolling
+            average. Storage growth ahead of schedule — investigate before
+            disk pressure becomes user-visible. Common causes: retention
+            policy not running (prune job failing), legitimate growth in
+            active channels (capacity planning needed). Check
+            ecm_telemetry_raw_rows_pruned rate — a sustained zero combined
+            with this alert is failure mode 3 (prune failing silently).
+          runbook_url: docs/runbooks/stats-v2-row-growth.md
+
+  # =====================================================================
+  # Database file size (bd-ygoqr)
+  # =====================================================================
+  # NOT tied to a numbered SLO — capacity-planning class, like the Stats
+  # v2 storage growth alert above. Consumes the gauges emitted by
+  # ``observability.update_database_size_metrics`` (bd-ygoqr): updated at
+  # process startup post-VACUUM (database._perform_maintenance) and after
+  # the weekly CleanupTask vacuum, so the values are accurate within "one
+  # weekly cron interval + one container lifetime".
+  #
+  # Thresholds are starting points (per-PE spike); expect tuning after
+  # 30d of baseline data on a representative install. The 500 MB warn is
+  # below the typical ECM "everything is healthy" steady state (long-
+  # running installs settle in the 50-200 MB range post-VACUUM with
+  # bd-7i2vv's 30-day Stats v2 raw-row retention); 2 GB page is the
+  # "operator should care today" line.
+  - name: ecm_database_size
+    interval: 5m
+    rules:
+      - record: ecm:database_size_bytes:weekly_delta
+        # Week-over-week growth of the on-disk DB body. Stable input for
+        # ECMDatabaseSizeGrowthAnomaly so the alert doesn't compute the
+        # offset() expression in its trigger condition (PromQL evaluators
+        # like recording-rule-derived inputs more than re-derived ones).
+        expr: ecm_database_size_bytes - ecm_database_size_bytes offset 7d
+
+      - alert: ECMDatabaseSizeWarn
+        # 500 MB body for 30 minutes — leading indicator. The 30m window
+        # rejects single-scrape transients (e.g., a VACUUM-in-progress
+        # snapshot during the weekly cleanup task that the next scrape
+        # corrects) without delaying the real signal.
+        expr: ecm_database_size_bytes > 500e6
+        for: 30m
+        labels:
+          severity: warning
+          slo: database_capacity
+          service: ecm
+        annotations:
+          summary: "ECM database file size {{ $value | humanize1024 }}B > 500 MB for 30m"
+          description: |
+            journal.db has been larger than 500 MB for 30+ minutes.
+            Capacity-planning warning, not an outage. Check the
+            WAL-vs-body split — a large WAL is a different failure mode
+            from a large body. See runbook for the triage table.
+          runbook_url: docs/runbooks/database-size-warn.md
+
+      - alert: ECMDatabaseSizePage
+        # 2 GB body for 10 minutes — operator should investigate today.
+        # Shorter "for" window than the warn because at this size the
+        # weekly cleanup is no longer keeping up; every additional hour
+        # of growth is an hour the operator could be losing.
+        expr: ecm_database_size_bytes > 2e9
+        for: 10m
+        labels:
+          severity: page
+          slo: database_capacity
+          service: ecm
+        annotations:
+          summary: "ECM database file size {{ $value | humanize1024 }}B > 2 GB for 10m"
+          description: |
+            journal.db has been larger than 2 GB for 10+ minutes. The
+            weekly CleanupTask VACUUM cannot keep up at this size and
+            blocks readers/writers for seconds-to-minutes per run. Run
+            the runbook's table-attribution step to find the offending
+            table; consider tightening retention on the largest contributor.
+          runbook_url: docs/runbooks/database-size-warn.md
+
+      - alert: ECMDatabaseWALSizeWarn
+        # 200 MB WAL for 15 minutes — checkpointing is stalled. Healthy
+        # WAL stays well under 100 MB on a busy install (SQLite auto-
+        # checkpoints at 1000 frames by default, ~4 MB at 4 KB pages).
+        # 200 MB indicates either a hung writer holding a transaction
+        # open or a checkpoint-on-close not firing.
+        expr: ecm_database_wal_size_bytes > 200e6
+        for: 15m
+        labels:
+          severity: warning
+          slo: database_capacity
+          service: ecm
+        annotations:
+          summary: "ECM SQLite WAL file {{ $value | humanize1024 }}B > 200 MB for 15m"
+          description: |
+            journal.db-wal has been larger than 200 MB for 15+ minutes —
+            checkpointing is stalled. Usually means a long-running
+            writer is holding a transaction open OR
+            ``PRAGMA wal_autocheckpoint`` was overridden. Runbook covers
+            manual ``PRAGMA wal_checkpoint(TRUNCATE)`` and the
+            "what process holds the writer lock" diagnostic.
+          runbook_url: docs/runbooks/database-size-warn.md
+
+      - alert: ECMDatabaseSizeGrowthAnomaly
+        # Week-over-week growth > 200 MB sustained for 24h. Catches
+        # "retention is not running" before the size alerts trip — at
+        # the typical post-VACUUM steady-state of 50-200 MB, gaining
+        # 200 MB/week means doubling-to-quintupling in a week, which is
+        # the leading indicator that a contributor table is growing
+        # unbounded (journal_entries / task_executions / session_telemetry).
+        expr: ecm:database_size_bytes:weekly_delta > 200e6
+        for: 24h
+        labels:
+          severity: warning
+          slo: database_capacity
+          service: ecm
+        annotations:
+          summary: "ECM database growing >200 MB/week for 24h+"
+          description: |
+            Week-over-week DB body growth has exceeded 200 MB for 24+
+            hours. Likely causes (in order of probability): the
+            CleanupTask was disabled or set to MANUAL by the operator
+            (bd-ygoqr default is now CRON Sun 02:00 UTC for fresh
+            installs; pre-existing operators may still be on MANUAL),
+            the weekly VACUUM is failing silently (check task history),
+            or session_telemetry is accumulating beyond ADR-007 D1's
+            30d raw-row retention (cross-reference
+            ECMStatsRowCountGrowthAnomaly above).
+          runbook_url: docs/runbooks/database-size-warn.md
+
+  # =====================================================================
+  # Task scheduler health (bd-qxi02, bd-p5b8i SRE recommendation)
+  # =====================================================================
+  # NOT tied to a numbered SLO — capacity-planning / operational-health
+  # class, like the database-size group above. Consumes the gauges
+  # emitted by:
+  #   * task_engine._execute_task (success path) — stamps
+  #     ecm_task_schedule_last_success_timestamp{task_id} per execution
+  #   * task_registry.TaskRegistry.sync_from_database AND
+  #     database.init_db post-_run_migrations — both publish
+  #     ecm_task_schedule_next_run_null_count
+  #
+  # Why these exist: bd-p5b8i was a silent scheduler regression that
+  # ran for 39+ days on the PO's install (4 months across all
+  # operators). Every non-MANUAL task_schedules row had next_run_at =
+  # NULL, so the scheduler loop never picked them up — no executions,
+  # no successes, no failures, no journal entries. The only signal was
+  # the absence of expected work. ECMTaskSchedulerNextRunNull catches
+  # the same disease in the future; the per-task staleness alerts
+  # catch a stuck task even when next_run_at is populated correctly
+  # (e.g., a single task is failing its execute() and never updating
+  # last_run, while other tasks continue to run normally).
+  #
+  # The NextRunNull alert ONLY becomes useful AFTER Bundle H's heal
+  # ships (bd-ygoqr Followup / bd-ifmr5 family) — pre-heal it would
+  # page on every existing operator on first scrape. Deploy order
+  # matters: heal first, then enable alerting consumers.
+  #
+  # ---------------------------------------------------------------------
+  # Defensive guard on per-task staleness alerts (P0 reviewer fix):
+  #   Every per-task staleness alert below adds an
+  #     AND ecm_task_schedule_last_success_timestamp{task_id="..."} > 0
+  #   guard. Rationale: an operator who changes a task to MANUAL (or
+  #   disables it entirely) should NOT get paged forever after the 2×
+  #   budget expires. The gauge is only stamped on a successful
+  #   execution — value == 0 means "never run on this install,"
+  #   which is the fresh-install state AND the operator-disabled
+  #   state. Both are valid configurations, not outages. Once the
+  #   task has run at least once, the guard lets staleness alerts
+  #   fire normally. Cheap insurance against false pages on fresh
+  #   installs and on operator-disabled tasks. (Without this guard,
+  #   stream_probe — which defaults to MANUAL — would page every
+  #   fresh-install operator 48h after first boot.)
+  # ---------------------------------------------------------------------
+  - name: ecm_task_scheduler
+    interval: 30s
+    rules:
+      # Recording rule — hours-since-success per task. Exposed as a
+      # stable input so dashboards and ad-hoc queries don't recompute
+      # the same time() expression on every panel render, and so
+      # operators can answer "how stale is X?" with one PromQL fetch
+      # instead of a synthesized expression.
+      #
+      # Note: this rule emits ONE SERIES PER task_id label value
+      # (vector, not scalar). Dashboard authors should treat it as a
+      # vector — e.g., group/filter by task_id in panel queries
+      # rather than treating it as a single number.
+      - record: ecm:task_schedule:hours_since_success
+        expr: (time() - ecm_task_schedule_last_success_timestamp) / 3600
+
+      # ECMTaskSchedulerNextRunNull — DISABLED PENDING DEPLOY ORDER.
+      #
+      # UNCOMMENT AFTER v0.17.0 SHIPS — see slos.md
+      # "Capacity planning: Task scheduler health" for the deploy-
+      # order rationale. Operators who copy this file into their
+      # stack today will page themselves immediately because Bundle H
+      # (the next_run_at heal) has not yet shipped to operators. The
+      # alert body is physically commented so accidental ingestion is
+      # impossible. A follow-up PR (~30 days post-v0.17.0 release)
+      # will uncomment this block once operator installs have had a
+      # chance to run the heal at startup.
+      #
+      # - alert: ECMTaskSchedulerNextRunNull
+      #   # Any non-MANUAL enabled schedule with NULL next_run_at means
+      #   # the scheduler is structurally broken — the schedule MUST
+      #   # have a computed next_run_at for the scheduler loop to pick
+      #   # it up. 5m window rejects single-scrape transients during
+      #   # the registry sync window (the gauge is re-emitted post-sync
+      #   # so a brief mid-sync NULL count is normal).
+      #   expr: ecm_task_schedule_next_run_null_count > 0
+      #   for: 5m
+      #   labels:
+      #     severity: page
+      #     slo: task_scheduler_health
+      #     service: ecm
+      #   annotations:
+      #     summary: "{{ $value }} task_schedules row(s) have NULL next_run_at — scheduler subsystem may be broken"
+      #     description: |
+      #       One or more enabled non-MANUAL rows in task_schedules has
+      #       next_run_at = NULL. The scheduler loop only picks up rows
+      #       with a computed next_run_at, so these tasks will never run
+      #       until the value is healed. This is the bd-p5b8i disease
+      #       vector — silent for 39+ days on the PO's install. Run the
+      #       runbook's diagnostic query to identify the affected
+      #       task_id(s); recovery is automatic on container restart
+      #       once Bundle H's heal is deployed.
+      #     runbook_url: docs/runbooks/task_scheduler_stalled.md
+
+      - alert: ECMTaskScheduleStaleStatsRollup
+        # stats_v2_rollup runs nightly (24h cadence). 25h budget = 1h
+        # grace. Window 1h gates against single-scrape transients
+        # during the nightly run itself. Severity warning — a stuck
+        # rollup is a slow-burn data-loss risk (raw rows approaching
+        # the 30d prune horizon without being rolled up), not an
+        # acute outage.
+        # Guard: only fires once the task has succeeded at least once
+        # on this install (see group-level comment above).
+        expr: |
+          time() - ecm_task_schedule_last_success_timestamp{task_id="stats_v2_rollup"} > 90000
+          AND ecm_task_schedule_last_success_timestamp{task_id="stats_v2_rollup"} > 0
+        for: 1h
+        labels:
+          severity: warning
+          slo: task_scheduler_health
+          service: ecm
+        annotations:
+          summary: "stats_v2_rollup hasn't succeeded in {{ $value | humanizeDuration }}"
+          description: |
+            The Stats v2 nightly rollup task has not completed
+            successfully in over 25 hours. The Users + Providers
+            panels will be missing the most recent day's data, and
+            raw session_telemetry rows are accumulating toward the
+            30-day prune horizon without being rolled up — a sustained
+            stall risks data loss (see ADR-007 D6 failure mode 2).
+            Check task execution history and the registry sync log
+            for the underlying error.
+          runbook_url: docs/runbooks/task_scheduler_stalled.md
+
+      - alert: ECMTaskScheduleStaleCleanup
+        # cleanup runs weekly (bd-ygoqr default = Sunday 02:00 UTC).
+        # 8-day budget = 1d grace. Window 24h because a one-off
+        # delay (operator-triggered restart, snapshot pause) is
+        # routine — pages only when the delay persists.
+        # Guard: only fires once the task has succeeded at least once
+        # on this install (see group-level comment above).
+        expr: |
+          time() - ecm_task_schedule_last_success_timestamp{task_id="cleanup"} > 604800
+          AND ecm_task_schedule_last_success_timestamp{task_id="cleanup"} > 0
+        for: 24h
+        labels:
+          severity: warning
+          slo: task_scheduler_health
+          service: ecm
+        annotations:
+          summary: "cleanup task hasn't succeeded in {{ $value | humanizeDuration }}"
+          description: |
+            The weekly database cleanup task (journal entries,
+            task-execution history, failed stream_stats rows, VACUUM)
+            has not completed in over 8 days. Disk growth will
+            accelerate — cross-reference ECMDatabaseSizeGrowthAnomaly
+            for the leading indicator. Check Settings → Tasks →
+            Database Cleanup to confirm the schedule isn't disabled
+            or set to MANUAL.
+          runbook_url: docs/runbooks/task_scheduler_stalled.md
+
+      - alert: ECMTaskScheduleStaleM3UMonitor
+        # m3u_change_monitor runs every 5 minutes by default
+        # (backend/tasks/m3u_change_monitor.py — INTERVAL,
+        # interval_seconds=300). 30-min staleness budget = 6 missed
+        # runs, room for transient slowness (single failing poll,
+        # a brief Dispatcharr blip) without paging on every blip.
+        # Window 1h — sustained stall, not single-scrape transient.
+        # Guard: only fires once the task has succeeded at least once
+        # on this install (see group-level comment above).
+        expr: |
+          time() - ecm_task_schedule_last_success_timestamp{task_id="m3u_change_monitor"} > 1800
+          AND ecm_task_schedule_last_success_timestamp{task_id="m3u_change_monitor"} > 0
+        for: 1h
+        labels:
+          severity: warning
+          slo: task_scheduler_health
+          service: ecm
+        annotations:
+          summary: "m3u_change_monitor hasn't succeeded in {{ $value | humanizeDuration }}"
+          description: |
+            The M3U change monitor has not completed in over 30
+            minutes (5-min cadence, 30-min staleness budget = 6
+            missed runs). New / changed streams from upstream M3U
+            providers are not being detected — auto-creation rules
+            may appear stuck. Check task execution history for the
+            underlying error.
+          runbook_url: docs/runbooks/task_scheduler_stalled.md
+
+      - alert: ECMTaskScheduleStaleStreamProbe
+        # stream_probe defaults to MANUAL
+        # (backend/tasks/stream_probe.py). When an operator schedules
+        # it on a recurring cadence, 48h budget = 2x typical daily.
+        # Window 6h absorbs the natural overnight gap. Guard: the
+        # alert only fires once the task has succeeded at least once
+        # on this install — fresh installs (and operators who leave
+        # the default MANUAL config) will never have a stamped
+        # success timestamp, so the alert stays silent until they
+        # actually schedule and run the task at least once.
+        expr: |
+          time() - ecm_task_schedule_last_success_timestamp{task_id="stream_probe"} > 172800
+          AND ecm_task_schedule_last_success_timestamp{task_id="stream_probe"} > 0
+        for: 6h
+        labels:
+          severity: warning
+          slo: task_scheduler_health
+          service: ecm
+        annotations:
+          summary: "stream_probe hasn't succeeded in {{ $value | humanizeDuration }}"
+          description: |
+            The stream prober has not completed a successful run in
+            over 48 hours (2x its typical daily cadence). Stream
+            health signal is stale — failing streams may not be
+            flagged. Check Settings → Tasks → Stream Probe to confirm
+            the schedule and review task execution history for errors.
+          runbook_url: docs/runbooks/task_scheduler_stalled.md

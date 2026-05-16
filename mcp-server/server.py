@@ -15,7 +15,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
-from config import MCP_PORT, get_mcp_api_key
+from config import MCP_PORT, get_mcp_api_key, get_mcp_api_key_status
 from resources import register_all_resources
 from tools import register_all_tools
 
@@ -88,19 +88,54 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
 
 
 async def handle_health(request):
-    """Health check endpoint."""
-    api_key = get_mcp_api_key()
+    """Health check endpoint.
+
+    Self-diagnosing /health (bd-ix1g6): in addition to the boolean
+    ``api_key_configured`` flag, we surface ``api_key_status`` — a machine-
+    readable reason that distinguishes the four ways a key can be missing
+    (no settings file, corrupted JSON, missing field, empty field). This
+    lets an operator (and the ECM Settings UI's MCP Server Status panel)
+    diagnose a misconfigured deployment without container shell access.
+    """
+    api_key, status = get_mcp_api_key_status()
     configured = bool(api_key)
+
+    # Pick a hint tailored to the specific failure mode so the user sees a
+    # remediation matching the actual cause, not a one-size-fits-all message.
+    setup_hints = {
+        "file_not_found": (
+            "ECM has not written settings.json yet, or the MCP container's "
+            "/config volume is not sharing the same data as ECM. Verify both "
+            "containers mount the same volume and that ECM Settings has been "
+            "saved at least once."
+        ),
+        "invalid_json": (
+            "/config/settings.json could not be parsed as JSON. The file may "
+            "be corrupted, partially written, or unrelated. Restore from a "
+            "backup or recreate it by saving ECM Settings."
+        ),
+        "field_missing": (
+            "settings.json predates the MCP feature and does not contain an "
+            "mcp_api_key field. Open ECM Settings > MCP Integration and "
+            "generate a key — saving will add the field."
+        ),
+        "field_empty": (
+            "No MCP API key configured. Generate one in ECM Settings > "
+            "MCP Integration."
+        ),
+    }
+
     response = {
         "status": "ok" if configured else "not_configured",
         "server": "ecm-mcp",
         "transport": "streamable-http",
         "api_key_configured": configured,
+        "api_key_status": status,
         "tools_available": len(mcp._tool_manager.list_tools()),
         "resources_available": len(mcp._resource_manager.list_resources()),
     }
-    if not configured:
-        response["setup_hint"] = "Generate an MCP API key in ECM Settings > MCP Integration"
+    if not configured and status in setup_hints:
+        response["setup_hint"] = setup_hints[status]
     return JSONResponse(response)
 
 
