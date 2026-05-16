@@ -372,6 +372,40 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             registry=registry,
         ),
         # ----------------------------------------------------------------
+        # Interactive stream dedup (ADR-008, BD-F / bd-a5lb2).
+        #
+        # ``pending_merges_queue_depth_added_total`` is the LOCKED CONTRACT
+        # counter per BD-M (``docs/sre/slos.md`` SLI-10b denominator and
+        # the ``ECMDedupPendingMergeResolutionStale`` alert rule). One
+        # increment per row inserted into the ``pending_merges`` queue —
+        # currently emitted only by BD-F's bulk-M3U-import hook; BD-D
+        # (candidate lookup) and BD-E (operator drag-drop / add-stream /
+        # MCP enqueue) will also emit it as those land.
+        #
+        # Label-free: per-source attribution belongs in structured logs
+        # (``[DEDUP] Enqueued pending merge … trigger=m3u_refresh``), NOT
+        # in the metric. ADR-008 §D6's ``trigger_context`` enum has four
+        # values; pushing them through a label would create a cardinality
+        # contract this metric does not commit to.
+        #
+        # The companion gauge ``ecm_pending_merges_queue_depth`` (current
+        # number of ``status='pending'`` rows) is NOT in the BD-M locked
+        # contract — gauge maintenance landed as a follow-up bead (see
+        # CHANGELOG) so BD-F is not blocked on the cross-cutting plumbing
+        # required to keep a gauge in sync across all four trigger
+        # surfaces + the operator-resolution paths.
+        # ----------------------------------------------------------------
+        "pending_merges_queue_depth_added_total": Counter(
+            "ecm_pending_merges_queue_depth_added_total",
+            "Count of rows inserted into the pending_merges queue by the "
+            "interactive stream-dedup epic (ADR-008). One increment per "
+            "fresh insert; partial-unique-index collisions (ADR-008 §D5) "
+            "do not increment. Denominator for SLI-10b "
+            "(pending merge resolution rate within 24h) per "
+            "docs/sre/slos.md.",
+            registry=registry,
+        ),
+        # ----------------------------------------------------------------
         # Frontend error telemetry (ADR-006, bd-i6a1m).
         #
         # ``client_errors_total`` labels:
