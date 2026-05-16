@@ -49,6 +49,7 @@ class DispatcharrSettings(BaseModel):
     # field on first read, so callers reading ``dispatcharr_api_key`` always
     # see the value regardless of which field is populated on disk.
     dispatcharr_api_key: str = ""
+    # Back-compat: legacy 'api_key' field. Remove in v0.19.0 (bd-ewm4h).
     api_key: str = ""
     # Channel naming defaults
     auto_rename_channel_number: bool = False
@@ -277,6 +278,7 @@ def _migrate_normalization_settings(data: dict) -> dict:
     return data
 
 
+# Back-compat: legacy 'api_key' field migration helper. Remove in v0.19.0 (bd-ewm4h).
 def _migrate_dispatcharr_api_key(data: dict) -> dict:
     """Migrate legacy ``api_key`` field to ``dispatcharr_api_key`` (bd-jmi1c, GH #273).
 
@@ -418,6 +420,7 @@ def save_settings(settings: DispatcharrSettings) -> None:
         # canonical field avoids the trap where a UI rotation makes the file
         # look stale to those readers. Only mirror when the canonical field
         # is populated — an explicit clear (both empty) stays cleared.
+        # Back-compat: legacy 'api_key' mirror. Remove in v0.19.0 (bd-ewm4h).
         if settings.dispatcharr_api_key:
             settings.api_key = settings.dispatcharr_api_key
         settings_json = json.dumps(settings.model_dump(), indent=2)
