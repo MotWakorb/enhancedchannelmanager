@@ -13,7 +13,8 @@ import {
   type TabId,
 } from './components';
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
-import { useChangeHistory, useEditMode, useHashRoute } from './hooks';
+import { useChangeHistory, useEditMode, useHashRoute, useDedupOnDrop } from './hooks';
+import { StreamDedupModal } from './components/StreamDedupModal';
 import * as api from './services/api';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress } from './types';
 import packageJson from '../package.json';
@@ -2015,13 +2016,46 @@ function App() {
     }
   }, []);
 
+  // Dedup-on-drop integration (bd-u6ftw / BD-H, ADR-008 §D1).
+  // Wraps the single-stream drop-into-group flow with the BD-D candidates
+  // lookup. Multi-stream drops bypass dedup entirely — bulk dedup is a
+  // separate epic surface (bd-a5lb2 / bulk M3U dedup hook).
+  const dedupOnDrop = useDedupOnDrop({ reloadChannels: loadChannels });
+
   // Handle bulk streams drop on channels pane (triggers bulk create modal for specific streams)
   const handleBulkStreamsDrop = useCallback((streamIds: number[], groupId: number | null, startingNumber: number) => {
-    // Set the dropped stream IDs and target info - StreamsPane will react to this and open the modal
-    setDroppedStreamIds(streamIds);
-    setDroppedStreamTargetGroupId(groupId);
-    setDroppedStreamStartingNumber(startingNumber);
-  }, []);
+    const proceedWithCreate = () => {
+      // Set the dropped stream IDs and target info - StreamsPane will react to this and open the modal
+      setDroppedStreamIds(streamIds);
+      setDroppedStreamTargetGroupId(groupId);
+      setDroppedStreamStartingNumber(startingNumber);
+    };
+
+    if (streamIds.length !== 1) {
+      // Multi-stream drops keep the existing bulk-create flow unchanged.
+      proceedWithCreate();
+      return;
+    }
+
+    const streamId = streamIds[0];
+    const stream = streams.find((s) => s.id === streamId) ?? seenStreams.get(streamId);
+    if (!stream) {
+      // No stream metadata available — proceed with the existing flow so
+      // the drop is never silently dropped on the floor.
+      logger.warn('[DEDUP] dropped stream id %s not found in client cache; skipping dedup lookup', streamId);
+      proceedWithCreate();
+      return;
+    }
+
+    void dedupOnDrop.handleSingleStreamDrop(
+      {
+        streamId,
+        streamName: stream.name,
+        targetGroupId: groupId,
+      },
+      proceedWithCreate,
+    );
+  }, [streams, seenStreams, dedupOnDrop]);
 
   // Handle open create channel modal (triggers bulk create modal in manual entry mode)
   const handleOpenCreateChannelModal = useCallback(() => {
@@ -2260,6 +2294,19 @@ function App() {
         onSaved={handleSettingsSaved}
       />
 
+      {/* Stream dedup decision surface (bd-u6ftw / BD-H). Opens when a
+          single-stream drop onto a group finds a candidate channel above
+          the §D2 confidence floor. Multi-stream drops never reach this. */}
+      <StreamDedupModal
+        isOpen={dedupOnDrop.modalState !== null}
+        streamName={dedupOnDrop.modalState?.streamName ?? ''}
+        candidate={dedupOnDrop.modalState?.candidate ?? null}
+        trigger="drag_drop"
+        onMerge={dedupOnDrop.handleMerge}
+        onCreateNew={dedupOnDrop.handleCreateNew}
+        onCancel={dedupOnDrop.handleCancel}
+      />
+
       <main className="main">
         <Suspense fallback={<div className="tab-loading"><span className="material-icons spinning">sync</span><p>Loading...</p></div>}>
           {activeTab === 'channel-manager' && (
@@ -2408,6 +2455,9 @@ function App() {
 
               // Refresh streams (bypasses cache)
               onRefreshStreams={refreshStreams}
+
+              // Stream dedup cancel-pulse highlight (bd-u6ftw / BD-H)
+              dedupReturningStreamIds={dedupOnDrop.returningStreamIds}
 
               // External trigger to open edit modal from Guide tab
               externalChannelToEdit={channelToEditFromGuide}
