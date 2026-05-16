@@ -40,10 +40,15 @@ Default Setup cannot satisfy:
    correctness queries Default Setup omits.
 2. **Query exclusions.** We exclude `py/log-injection` repository-wide (custom
    runtime sanitizer in `backend/log_utils.py` makes the static-analysis flow
-   model wrong for our code) and `py/unused-global-variable` for
+   model wrong for our code), `py/unused-global-variable` for
    `backend/alembic/versions/**` only (Alembic reads module-level names by
    runtime introspection — see PR #110, alerts 1466-1469 dismissed as
-   false-positive). Default Setup does not support `query-filters` at all.
+   false-positive), and `py/weak-sensitive-data-hashing` for
+   `backend/dispatcharr_client.py` only (the file's `_settings_hash()`
+   derives a process-local HMAC-SHA-256 cache key from settings — it does
+   not store or compare passwords; the rule's password-storage threat
+   model does not apply — see bd-jmi1c P2-3). Default Setup does not
+   support `query-filters` at all.
 3. **Language matrix control.** We pin to `['javascript-typescript', 'python']`
    — Default Setup's auto-language detection currently expands to five
    languages including `actions`, `javascript`, and `typescript` (see API
@@ -164,3 +169,4 @@ A second entry in the array is drift.
 - PR #108 — workflow-level delta-zero enforcement (substitute for UI merge protection rules)
 - PR #110 — Alembic `py/unused-global-variable` exclusion (bd-877dw)
 - Bead `enhancedchannelmanager-bsbr3` — investigation that produced this document
+- Bead `enhancedchannelmanager-jmi1c` — Dispatcharr `py/weak-sensitive-data-hashing` exclusion (P2-3 fix-forward)

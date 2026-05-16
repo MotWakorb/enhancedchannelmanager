@@ -19,6 +19,9 @@ def _mock_settings(**overrides):
         "auth_method": "password",
         "username": "admin",
         "password": "secret",
+        # bd-jmi1c (GH #273): canonical Dispatcharr REST API token field.
+        # ``api_key`` is the legacy alias retained for one release.
+        "dispatcharr_api_key": "",
         "api_key": "",
         "auto_rename_channel_number": False,
         "include_channel_number_in_name": False,
@@ -268,6 +271,178 @@ class TestUpdateSettings:
         assert captured["smtp_password"] == "stored-smtp-password-xyz", (
             "Partial POST cleared smtp_password — sensitive field not preserved"
         )
+
+    @pytest.mark.asyncio
+    async def test_accepts_canonical_dispatcharr_api_key_field(self, async_client):
+        """bd-jmi1c (GH #273): POST with canonical ``dispatcharr_api_key``
+        field name persists to the canonical attribute on the saved settings."""
+        current = _mock_settings(auth_method="password")
+        captured = {}
+
+        def capture_save(new_settings):
+            captured["dispatcharr_api_key"] = new_settings.dispatcharr_api_key
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "auth_method": "api_key",
+                "username": current.username,
+                "dispatcharr_api_key": "new-canonical-key",
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["dispatcharr_api_key"] == "new-canonical-key"
+
+    @pytest.mark.asyncio
+    async def test_accepts_legacy_api_key_field_for_back_compat(self, async_client):
+        """bd-jmi1c (GH #273): POST with legacy ``api_key`` field name still
+        works — an older frontend bundle in a cached browser tab continues to
+        function. The value is persisted into the canonical attribute on the
+        saved settings (legacy in, canonical out)."""
+        current = _mock_settings(auth_method="password")
+        captured = {}
+
+        def capture_save(new_settings):
+            captured["dispatcharr_api_key"] = new_settings.dispatcharr_api_key
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "auth_method": "api_key",
+                "username": current.username,
+                "api_key": "legacy-from-old-bundle",
+            })
+
+        assert response.status_code == 200, response.json()
+        # Legacy field on the request body maps to the canonical attribute
+        # on the persisted settings — operators never see the legacy name
+        # re-emerge as the source of truth on disk.
+        assert captured["dispatcharr_api_key"] == "legacy-from-old-bundle"
+
+    @pytest.mark.asyncio
+    async def test_canonical_field_wins_when_both_fields_in_request_body(self, async_client):
+        """bd-jmi1c (GH #273): if a confused client sends BOTH field names,
+        the canonical wins so a stale value in the legacy slot cannot
+        override an intentionally-rotated canonical value."""
+        current = _mock_settings(auth_method="password")
+        captured = {}
+
+        def capture_save(new_settings):
+            captured["dispatcharr_api_key"] = new_settings.dispatcharr_api_key
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "auth_method": "api_key",
+                "username": current.username,
+                "dispatcharr_api_key": "canonical-wins",
+                "api_key": "legacy-loses",
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["dispatcharr_api_key"] == "canonical-wins"
+
+    @pytest.mark.asyncio
+    async def test_post_warns_when_both_fields_differ(self, async_client, caplog):
+        """bd-jmi1c P1-1 / bd-46g4t: when the POST body contains both
+        ``dispatcharr_api_key`` and ``api_key`` with differing values, log a
+        WARN so the silent-discard of the legacy value is auditable. POST is
+        rare enough that per-request logging is acceptable — no flag-gating
+        is needed."""
+        import logging
+        current = _mock_settings(auth_method="password")
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            with caplog.at_level(logging.WARNING, logger="routers.settings"):
+                response = await async_client.post("/api/settings", json={
+                    "url": current.url,
+                    "auth_method": "api_key",
+                    "username": current.username,
+                    "dispatcharr_api_key": "canonical-keep-me",
+                    "api_key": "legacy-drop-me",
+                })
+
+        assert response.status_code == 200, response.json()
+        conflict_warns = [
+            record.getMessage()
+            for record in caplog.records
+            if "differing 'dispatcharr_api_key' and 'api_key'" in record.getMessage()
+        ]
+        assert len(conflict_warns) == 1, (
+            f"Expected one conflict WARN; got: {conflict_warns}"
+        )
+        assert "bd-jmi1c" in conflict_warns[0]
+
+    @pytest.mark.asyncio
+    async def test_post_no_warn_when_both_fields_identical(self, async_client, caplog):
+        """If a client double-sends the same value into both field names
+        (e.g., for back-compat with an older backend), there's no conflict
+        and no WARN — the WARN is reserved for the genuine discard case."""
+        import logging
+        current = _mock_settings(auth_method="password")
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            with caplog.at_level(logging.WARNING, logger="routers.settings"):
+                response = await async_client.post("/api/settings", json={
+                    "url": current.url,
+                    "auth_method": "api_key",
+                    "username": current.username,
+                    "dispatcharr_api_key": "same-value",
+                    "api_key": "same-value",
+                })
+
+        assert response.status_code == 200, response.json()
+        assert not any(
+            "differing 'dispatcharr_api_key' and 'api_key'" in record.getMessage()
+            for record in caplog.records
+        ), "Conflict WARN fired despite identical values"
+
+    @pytest.mark.asyncio
+    async def test_response_exposes_both_indicators(self, async_client):
+        """bd-jmi1c (GH #273): GET /api/settings returns both
+        ``dispatcharr_api_key_configured`` (canonical) and the legacy
+        ``api_key_configured`` for one release of frontend back-compat. Both
+        track the same underlying state — a key is either configured or not."""
+        current = _mock_settings(dispatcharr_api_key="stored-canonical-key")
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["dispatcharr_api_key_configured"] is True
+        assert data["api_key_configured"] is True
 
 
 class TestTestConnection:

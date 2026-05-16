@@ -1,10 +1,24 @@
 import asyncio
+import hashlib
+import hmac
+import secrets
 import httpx
 import logging
 from typing import Optional
 from config import get_settings, DispatcharrSettings
 
 logger = logging.getLogger(__name__)
+
+# Process-local random key used by ``_settings_hash`` (see below). Generated
+# once per Python process; same Python process always produces the same hash
+# for the same settings (so the in-memory client-singleton cache invalidation
+# in ``get_client()`` works), but the same settings on a different process
+# produce a different hash (defense against any cross-process correlation).
+# Using HMAC with a random key rather than a bare SHA-256 of the credentials
+# also avoids the CodeQL false-positive ``py/weak-sensitive-data-hashing``
+# (which is correctly aimed at password-storage hashing, not at process-local
+# cache-key derivation).
+_SETTINGS_HASH_KEY: bytes = secrets.token_bytes(32)
 
 
 class DispatcharrClient:
@@ -108,7 +122,16 @@ class DispatcharrClient:
 
         headers = kwargs.pop("headers", {})
         if self._uses_api_key:
-            headers["X-API-Key"] = self.settings.api_key
+            # bd-jmi1c (GH #273): prefer the canonical
+            # ``dispatcharr_api_key`` field; fall back to the legacy
+            # ``api_key`` when running pre-migration in-memory state (e.g.,
+            # tests constructing ``DispatcharrSettings(api_key=...)`` directly
+            # without going through ``load_settings()``). Production code does
+            # not construct the model with legacy-only fields (every site reads
+            # from ``load_settings()`` which migrates), but the fallback is
+            # kept defensively while the legacy field exists on the model.
+            # Back-compat: drop 'or self.settings.api_key' in v0.19.0 (bd-ewm4h).
+            headers["X-API-Key"] = self.settings.dispatcharr_api_key or self.settings.api_key
         else:
             headers["Authorization"] = f"Bearer {self.access_token}"
 
@@ -1038,8 +1061,37 @@ _client_settings_hash: Optional[str] = None
 
 
 def _settings_hash(settings: DispatcharrSettings) -> str:
-    """Get a hash of settings to detect changes."""
-    return f"{settings.url}:{settings.auth_method}:{settings.username}:{settings.password}:{settings.api_key}"
+    """Get a hash of settings to detect changes.
+
+    Includes both ``dispatcharr_api_key`` (canonical, bd-jmi1c) and the
+    legacy ``api_key`` so the client singleton recreates when either field
+    changes — keeps in-memory state in sync with operators who rotate via
+    the UI (touches canonical) or via on-disk edits (may still touch legacy).
+
+    Returns an HMAC-SHA-256 hex digest of the concatenated fields keyed by
+    a process-local random salt (bd-jmi1c P2-3 / bd-46g4t). The function's
+    name promised a hash; the prior implementation returned plaintext that,
+    if ever leaked to a log line or debug bundle, would carry password +
+    dispatcharr_api_key + api_key + username all in one string. The MAC
+    keeps the equality semantics every caller relies on — the value is
+    used opaquely as a cache key in ``get_client()`` — while ensuring a
+    stray ``logger.info(...)`` cannot accidentally exfiltrate credentials.
+
+    HMAC (not bare SHA-256) is used because (a) the random per-process key
+    makes the output uncorrelated across processes even for identical
+    settings, and (b) CodeQL's ``py/weak-sensitive-data-hashing`` rule
+    correctly flags bare SHA-256 of credentials as inappropriate for
+    password-storage hashing — not the use case here, but switching to MAC
+    avoids the false positive cleanly.
+
+    Back-compat: drop ``settings.api_key`` from the concat in v0.19.0
+    (bd-ewm4h) when the legacy field is removed from the model.
+    """
+    concat = (
+        f"{settings.url}:{settings.auth_method}:{settings.username}:"
+        f"{settings.password}:{settings.dispatcharr_api_key}:{settings.api_key}"
+    )
+    return hmac.new(_SETTINGS_HASH_KEY, concat.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def get_client() -> DispatcharrClient:

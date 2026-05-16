@@ -50,7 +50,11 @@ class SettingsRequest(BaseModel):
     auth_method: str = "password"  # "password" or "api_key"
     username: str = ""
     password: Optional[str] = None  # Optional - only required if changing auth settings
-    api_key: Optional[str] = None  # Optional - only required if changing to/rotating api_key
+    # bd-jmi1c (GH #273): canonical Dispatcharr REST token field. The legacy
+    # ``api_key`` field below is accepted as a back-compat alias for one
+    # release. New clients should send ``dispatcharr_api_key``.
+    dispatcharr_api_key: Optional[str] = None  # Optional - only required if (re)setting Dispatcharr API key
+    api_key: Optional[str] = None  # DEPRECATED — legacy alias for dispatcharr_api_key. Remove in v0.19.0 (bd-jmi1c, bd-ewm4h).
     auto_rename_channel_number: bool = False
     include_channel_number_in_name: bool = False
     channel_number_separator: str = "-"
@@ -132,8 +136,13 @@ class SettingsResponse(BaseModel):
     url: str
     auth_method: str
     username: str
-    # Non-empty signal that an API key is stored, without returning the secret.
-    api_key_configured: bool
+    # Non-empty signal that a Dispatcharr REST API key is stored, without
+    # returning the secret. bd-jmi1c (GH #273): both field names are
+    # surfaced — ``dispatcharr_api_key_configured`` is canonical; the legacy
+    # ``api_key_configured`` is kept for one release so older frontend
+    # bundles (cached browser tabs) keep showing the indicator correctly.
+    dispatcharr_api_key_configured: bool
+    api_key_configured: bool  # DEPRECATED — alias for dispatcharr_api_key_configured. Remove in v0.19.0 (bd-jmi1c, bd-ewm4h).
     configured: bool
     auto_rename_channel_number: bool
     include_channel_number_in_name: bool
@@ -219,7 +228,12 @@ class TestConnectionRequest(BaseModel):
     auth_method: str = "password"  # "password" or "api_key"
     username: str = ""
     password: str = ""
-    api_key: str = ""
+    # bd-jmi1c (GH #273): canonical field; legacy ``api_key`` accepted below
+    # for one release of back-compat. The handler reads
+    # ``dispatcharr_api_key or api_key`` so either populates the X-API-Key
+    # header on the connection probe.
+    dispatcharr_api_key: str = ""
+    api_key: str = ""  # DEPRECATED — legacy alias for dispatcharr_api_key. Remove in v0.19.0 (bd-jmi1c, bd-ewm4h).
 
 
 class SMTPTestRequest(BaseModel):
@@ -270,7 +284,14 @@ async def get_current_settings():
         url=settings.url,
         auth_method=settings.auth_method,
         username=settings.username,
-        api_key_configured=bool(settings.api_key),
+        # bd-jmi1c (GH #273): both indicators reflect the same underlying
+        # state — whether ECM has a Dispatcharr REST token configured. The
+        # ``or`` covers the migration window where legacy is populated but
+        # ``load_settings()`` hasn't yet copied it into the canonical field
+        # (won't happen in practice — load always migrates — but defensive).
+        # Back-compat: drop ``api_key_configured`` mirror in v0.19.0 (bd-ewm4h).
+        dispatcharr_api_key_configured=bool(settings.dispatcharr_api_key or settings.api_key),
+        api_key_configured=bool(settings.dispatcharr_api_key or settings.api_key),
         configured=settings.is_configured(),
         auto_rename_channel_number=settings.auto_rename_channel_number,
         include_channel_number_in_name=settings.include_channel_number_in_name,
@@ -362,7 +383,32 @@ async def update_settings(request: SettingsRequest):
     # If password is not provided, keep the existing password (preserve-on-omit
     # lets the UI update non-auth fields without re-asking for the secret).
     password = request.password if request.password else current_settings.password
-    api_key = request.api_key if request.api_key else current_settings.api_key
+    # bd-jmi1c (GH #273): accept either ``dispatcharr_api_key`` (canonical)
+    # or legacy ``api_key`` in the request body. Canonical wins when both
+    # are provided. The preserved value also prefers canonical so an older
+    # frontend bundle sending only ``api_key`` doesn't unconditionally clobber
+    # a freshly-rotated canonical value with the legacy mirror.
+    # Back-compat: drop ``or request.api_key`` and the conflict-WARN block in v0.19.0 (bd-ewm4h).
+    request_dispatcharr_key = request.dispatcharr_api_key or request.api_key
+    # bd-jmi1c P1-1: warn (per request — POST is rare enough that flag-gating
+    # isn't worth it) when both fields are present in the body and differ.
+    # The canonical wins silently otherwise; logging only the conflict case
+    # avoids spam from clients that double-send for back-compat.
+    if (
+        request.dispatcharr_api_key
+        and request.api_key
+        and request.dispatcharr_api_key != request.api_key
+    ):
+        logger.warning(
+            "[SETTINGS] POST body has differing 'dispatcharr_api_key' and "
+            "'api_key' values; using canonical 'dispatcharr_api_key' and "
+            "ignoring 'api_key'. (bd-jmi1c, GH #273)"
+        )
+    dispatcharr_api_key = (
+        request_dispatcharr_key
+        if request_dispatcharr_key
+        else (current_settings.dispatcharr_api_key or current_settings.api_key)
+    )
 
     # Same for SMTP password - preserve existing if not provided
     smtp_password = request.smtp_password if request.smtp_password else current_settings.smtp_password
@@ -386,12 +432,13 @@ async def update_settings(request: SettingsRequest):
     if request.auth_method == "api_key":
         # api_key mode: url + api_key required; ignore password entirely.
         # Require a new key when switching modes or rotating an empty key.
-        if mode_changed and not request.api_key:
+        # bd-jmi1c: accept either field name on the request body.
+        if mode_changed and not request_dispatcharr_key:
             raise HTTPException(
                 status_code=400,
                 detail="API key is required when switching to API key authentication",
             )
-        if not api_key:
+        if not dispatcharr_api_key:
             raise HTTPException(
                 status_code=400,
                 detail="API key is required when auth_method is 'api_key'",
@@ -415,7 +462,10 @@ async def update_settings(request: SettingsRequest):
         auth_method=request.auth_method,
         username=request.username,
         password=password,
-        api_key=api_key,
+        # bd-jmi1c (GH #273): canonical field; ``save_settings()`` mirrors
+        # this value into the legacy ``api_key`` field on disk for one
+        # release of back-compat with external readers.
+        dispatcharr_api_key=dispatcharr_api_key,
         auto_rename_channel_number=request.auto_rename_channel_number,
         include_channel_number_in_name=request.include_channel_number_in_name,
         channel_number_separator=request.channel_number_separator,
@@ -656,12 +706,14 @@ async def test_connection(request: TestConnectionRequest):
             if request.auth_method == "api_key":
                 # API key auth: probe /api/accounts/users/me/ with X-API-Key.
                 # A 2xx means the key authenticates to an active user.
-                if not request.api_key:
+                # bd-jmi1c (GH #273): accept either field name; canonical wins.
+                test_key = request.dispatcharr_api_key or request.api_key
+                if not test_key:
                     return {"success": False, "message": "API key is required"}
                 target_url = f"{base_url}/api/accounts/users/me/"
                 response = await client.get(
                     target_url,
-                    headers={"X-API-Key": request.api_key},
+                    headers={"X-API-Key": test_key},
                 )
                 if 200 <= response.status_code < 300:
                     logger.info("[SETTINGS-TEST] API key connection test successful - %s", parsed.hostname)
