@@ -72,6 +72,14 @@ class SettingsRequest(BaseModel):
     default_channel_profile_ids: list[int] = []
     linked_m3u_accounts: list[list[int]] = []
     epg_auto_match_threshold: int = 80
+    # bd-ugzn4 (BD-K): dedup epic operator settings. Defaults match
+    # config.DispatcharrSettings so an older frontend bundle that doesn't
+    # send these fields persists the current value rather than getting
+    # nudged back to a hardcoded default on every save. Pydantic validator
+    # on the canonical field (bd-0b6xj / BD-B in backend/config.py) clamps
+    # to [CONFIDENCE_FLOOR, 1.00] per ADR-008 §D2.
+    dedup_threshold: float = 0.80
+    dedup_m3u_toast_suppressed: bool = False
     custom_network_prefixes: list[str] = []
     custom_network_suffixes: list[str] = []
     stats_poll_interval: int = 10
@@ -161,6 +169,8 @@ class SettingsResponse(BaseModel):
     default_channel_profile_ids: list[int]
     linked_m3u_accounts: list[list[int]]
     epg_auto_match_threshold: int
+    dedup_threshold: float
+    dedup_m3u_toast_suppressed: bool
     custom_network_prefixes: list[str]
     custom_network_suffixes: list[str]
     stats_poll_interval: int
@@ -310,6 +320,8 @@ async def get_current_settings():
         default_channel_profile_ids=settings.default_channel_profile_ids,
         linked_m3u_accounts=settings.linked_m3u_accounts,
         epg_auto_match_threshold=settings.epg_auto_match_threshold,
+        dedup_threshold=settings.dedup_threshold,
+        dedup_m3u_toast_suppressed=settings.dedup_m3u_toast_suppressed,
         custom_network_prefixes=settings.custom_network_prefixes,
         custom_network_suffixes=settings.custom_network_suffixes,
         stats_poll_interval=settings.stats_poll_interval,
@@ -483,6 +495,8 @@ async def update_settings(request: SettingsRequest):
         default_channel_profile_ids=request.default_channel_profile_ids,
         linked_m3u_accounts=request.linked_m3u_accounts,
         epg_auto_match_threshold=request.epg_auto_match_threshold,
+        dedup_threshold=request.dedup_threshold,
+        dedup_m3u_toast_suppressed=request.dedup_m3u_toast_suppressed,
         custom_network_prefixes=request.custom_network_prefixes,
         custom_network_suffixes=request.custom_network_suffixes,
         stats_poll_interval=request.stats_poll_interval,
