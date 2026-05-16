@@ -30,6 +30,13 @@ aiohttp>=3.9.0
 # ReDoS-guarded regex wrapper (backend/safe_regex.py, bd-eio04.5)
 regex>=2024.5.15
 
+# Fuzzy string matching for the interactive stream-to-channel dedup epic
+# (bd-7xo8e / BD-A; see ADR-008). Used by backend/services/dedup_matcher.py
+# via fuzz.token_set_ratio for the non-exact match path. The 3.x line is
+# stable and the maintainer has been responsive on CVE fixes; the <4 cap
+# guards against a future major-version break per ADR-001 pin guidance.
+rapidfuzz>=3.0,<4.0
+
 # Observability — Prometheus metrics exposition
 prometheus-client>=0.20.0
 
