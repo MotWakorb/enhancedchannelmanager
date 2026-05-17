@@ -6,6 +6,32 @@
 > This file covers stack/structure orientation only — it defers to the
 > style guide for any rule about how code should be written.
 
+## Worktree workaround
+
+Agents spawned into `.claude/worktrees/agent-*/` find `frontend/node_modules` empty
+and `npm` unavailable. Fix it in one step from the worktree root:
+
+```bash
+bash scripts/worktree-bootstrap.sh
+```
+
+Then invoke tooling via `.bin` directly (no `npm run`):
+
+```bash
+./frontend/node_modules/.bin/vitest run
+./frontend/node_modules/.bin/eslint frontend/src --max-warnings 0
+./frontend/node_modules/.bin/tsc --noEmit
+./frontend/node_modules/.bin/vite build
+```
+
+Also add `node` to `PATH` (fnm — adjust version if needed):
+
+```bash
+export PATH="$HOME/.fnm/node-versions/v24.13.0/installation/bin:./frontend/node_modules/.bin:$PATH"
+```
+
+Full explanation and root cause: `docs/shipping.md` → "Worktree quirks".
+
 ## Framework & Stack
 
 - **React 18** + **TypeScript** (strict mode) + **Vite** build tool
