@@ -129,7 +129,6 @@ Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
     version="0.17.1-0030",
-    version="0.17.1-0030",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
