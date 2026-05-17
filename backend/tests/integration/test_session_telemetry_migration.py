@@ -148,14 +148,18 @@ class TestSessionTelemetryMigration:
             # migration 0013 (bd-ov5vb) — INTEGER NOT NULL DEFAULT 0,
             # paired with the pre-existing ``buffer_event_count`` so the
             # broadened channel-event ingest can attribute each
-            # ``event_type`` to its own per-poll counter. Carry every
-            # column in the head-shape assertion so a future
-            # delete/rename surfaces here.
+            # ``event_type`` to its own per-poll counter. ``emby_user_id``
+            # and ``emby_user_name`` land in migration 0016 (bd-k026g) —
+            # both TEXT NULL, denormalized Emby attribution from the
+            # bd-2cenq epic resolver. Carry every column in the
+            # head-shape assertion so a future delete/rename surfaces
+            # here.
             assert set(cols) == {
                 "id", "session_id", "observed_at", "user_id", "provider_id",
                 "channel_id", "bytes_delta", "buffer_event_count", "poll_interval_ms",
                 "stream_id", "stream_name", "dispatcharr_username",
                 "reconnect_event_count", "error_event_count", "switch_event_count",
+                "emby_user_id", "emby_user_name",
             }
             assert cols["session_id"]["nullable"] is False
             assert cols["observed_at"]["nullable"] is False
@@ -187,6 +191,12 @@ class TestSessionTelemetryMigration:
             # bd-gsn3r: dispatcharr_username is NULLABLE (anonymous
             # viewers + pre-0011 rows surface as NULL on read).
             assert cols["dispatcharr_username"]["nullable"] is True
+            # bd-k026g: both Emby attribution columns are NULLABLE
+            # (non-Emby viewers + Emby-mediated rows where the resolver
+            # could not match the active stream + pre-0016 rows surface
+            # as NULL on read).
+            assert cols["emby_user_id"]["nullable"] is True
+            assert cols["emby_user_name"]["nullable"] is True
 
             # bd-gsn3r: migration 0011 dropped the FK to ECM ``users.id``.
             # ECM and Dispatcharr ``users`` are different namespaces with
