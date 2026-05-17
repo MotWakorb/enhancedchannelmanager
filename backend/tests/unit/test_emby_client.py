@@ -44,8 +44,9 @@ def _emby_sessions_payload() -> list[dict]:
             "UserName": "alice",
             "RemoteEndPoint": "192.168.1.50",
             "NowPlayingItem": {
-                "Name": "BBC News",
+                "Name": "408 | ESPN",
                 "ChannelName": "BBC One HD",
+                "ChannelNumber": "408",
             },
             "LastActivityDate": "2026-05-16T14:32:01.0000000Z",
         },
@@ -100,23 +101,63 @@ async def test_get_sessions_maps_emby_payload_to_dataclass():
             sessions = await client.get_sessions()
 
         assert len(sessions) == 2
-        # Playing session
+        # Playing session — live-TV item with the
+        # ``"<channel_number> | <channel_name>"`` Name format Emby uses
+        # for live channels. ChannelNumber is extracted as a string
+        # (preserved verbatim from upstream) to support sub-channel
+        # numbers like ``"408.1"``.
         alice = sessions[0]
         assert isinstance(alice, EmbySession)
         assert alice.session_id == "session-abc-123"
         assert alice.user_id == "user-uuid-1"
         assert alice.user_name == "alice"
         assert alice.remote_endpoint == "192.168.1.50"
-        assert alice.now_playing_item_name == "BBC News"
+        assert alice.now_playing_item_name == "408 | ESPN"
         assert alice.now_playing_channel_name == "BBC One HD"
+        assert alice.channel_number == "408"
         assert alice.last_activity_date == "2026-05-16T14:32:01.0000000Z"
 
-        # Idle session — NowPlayingItem absent
+        # Idle session — NowPlayingItem absent → every now-playing
+        # field defaults to None, including channel_number.
         bob = sessions[1]
         assert bob.session_id == "session-def-456"
         assert bob.user_name == "bob"
         assert bob.now_playing_item_name is None
         assert bob.now_playing_channel_name is None
+        assert bob.channel_number is None
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_sessions_playing_item_without_channel_number_is_none():
+    """VOD playback (movies / episodes) populates ``NowPlayingItem.Name``
+    but NOT ``ChannelNumber`` — the resulting ``EmbySession.channel_number``
+    must be ``None`` so the resolver's tier-2 channel_number match does
+    not false-positive on a movie session.
+    """
+    client = EmbyClient(base_url="http://emby.local:8096", api_key="k")
+    try:
+        payload = [
+            {
+                "Id": "vod-1",
+                "UserId": "user-vod",
+                "UserName": "vod_viewer",
+                "RemoteEndPoint": "192.168.1.99",
+                "NowPlayingItem": {
+                    "Name": "The Matrix",
+                    # No ChannelName, no ChannelNumber — VOD
+                },
+                "LastActivityDate": "2026-05-16T15:00:00.0000000Z",
+            },
+        ]
+        fake_resp = _response(200, payload)
+        request_mock = AsyncMock(return_value=fake_resp)
+        with patch.object(client._client, "request", request_mock):
+            sessions = await client.get_sessions()
+        assert len(sessions) == 1
+        assert sessions[0].now_playing_item_name == "The Matrix"
+        assert sessions[0].channel_number is None
     finally:
         await client.close()
 

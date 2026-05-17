@@ -150,6 +150,8 @@ class EmbyAttribution:
 async def resolve_emby_user(
     ecm_session_ip: str,
     ecm_stream_name: str,
+    ecm_channel_name: str | None = None,
+    ecm_channel_number: str | int | None = None,
 ) -> EmbyAttribution | None:
     """Cross-reference one ECM stream against the live Emby session list.
 
@@ -158,6 +160,32 @@ async def resolve_emby_user(
     (rare — same channel on multiple Emby clients) tie-break on
     most-recent ``last_activity_date``.
 
+    Matching is tiered (bd-zldrq fix-forward for v0.17.1-0033 — live
+    test surfaced that Dispatcharr stream names like ``"US: ESPN FHD"``
+    do not fuzzy-match Emby live-TV item names like ``"408 | ESPN"`` at
+    the 0.85 floor, because the only token in common is "ESPN"):
+
+    1. **Tier 1 — channel_name exact.** Parse each Emby session's
+       ``now_playing_item_name`` as ``"<number> | <name>"`` and compare
+       the right-hand part case-insensitively to ``ecm_channel_name``.
+       Whole-string equal also counts (some Emby installs surface live
+       TV without the ``"<number> | "`` prefix).
+    2. **Tier 2 — channel_number exact.** When both ``ecm_channel_number``
+       and the session's ``channel_number`` are present, string-compare
+       (cast ECM input to str). Defensive against name divergence
+       between ECM and Emby.
+    3. **Tier 3 — fuzzy stream_name fallback.** The legacy path: score
+       ``ecm_stream_name`` against ``now_playing_item_name`` and
+       ``now_playing_channel_name`` via RapidFuzz ``token_set_ratio /
+       100`` against ``FUZZY_MATCH_THRESHOLD``. Still the right behavior
+       for non-live-TV Emby content (movies, episodes).
+
+    Matches across tiers are pooled into one disambiguation set; the
+    most-recent ``last_activity_date`` wins. When the candidate set has
+    N > 1 entries, a ``[EMBY] resolver:`` DEBUG line names the count,
+    ip, name, and picked user so operators can see the disambiguation
+    in trace.
+
     Args:
         ecm_session_ip: The client IP of the Dispatcharr stream session
             ECM is trying to attribute. For Emby-mediated streams this
@@ -165,12 +193,21 @@ async def resolve_emby_user(
             not, and the resolver short-circuits.
         ecm_stream_name: The Dispatcharr stream name (e.g. "CNN HD") —
             matched case-insensitively against each Emby session's
-            ``now_playing_item_name`` and ``now_playing_channel_name``.
+            ``now_playing_item_name`` and ``now_playing_channel_name``
+            in the tier-3 fallback. Required for back-compat (the
+            pre-bd-zldrq signature was ``(ip, stream_name)``).
+        ecm_channel_name: ECM channel name (e.g. "ESPN"). When
+            populated, the resolver tries tier 1 first. Optional so
+            non-live-TV callers do not need to pass it.
+        ecm_channel_number: ECM channel number (e.g. ``408`` or
+            ``"408"``). When populated, the resolver tries tier 2.
+            Optional — accepts ``int`` or ``str`` and casts to ``str``
+            for compare.
 
     Returns:
         ``EmbyAttribution`` with the resolved user_id + user_name, or
         ``None`` when the IP does not match the Emby server, no Emby
-        session matches the stream name, or any defensive failure
+        session matches across any tier, or any defensive failure
         (DNS resolution failure, malformed base URL).
 
     Notes:
@@ -199,19 +236,37 @@ async def resolve_emby_user(
         # no prior cache). Nothing to match.
         return None
 
-    matches = _find_matching_sessions(ecm_stream_name, sessions)
+    matches = _find_matching_sessions(
+        ecm_stream_name=ecm_stream_name,
+        ecm_channel_name=ecm_channel_name,
+        ecm_channel_number=ecm_channel_number,
+        sessions=sessions,
+    )
     if not matches:
         logger.debug(
-            "[EMBY] No match for stream=%r against %d Emby session(s)",
-            ecm_stream_name, len(sessions),
+            "[EMBY] No match for stream=%r channel=%r number=%r "
+            "against %d Emby session(s)",
+            ecm_stream_name, ecm_channel_name, ecm_channel_number,
+            len(sessions),
         )
         return None
 
     winner = _tiebreak_most_recent(matches)
-    logger.debug(
-        "[EMBY] Resolved stream=%r → user=%s (uid=%s) from %d match(es)",
-        ecm_stream_name, winner.user_name, winner.user_id, len(matches),
-    )
+    if len(matches) > 1:
+        # Surface disambiguation so operators can see the tie-break in
+        # trace. Hot path — keep at DEBUG.
+        logger.debug(
+            "[EMBY] resolver: %d candidates for ip=%s name=%s, "
+            "picked %s by recency",
+            len(matches), ecm_session_ip,
+            ecm_channel_name or ecm_stream_name,
+            winner.user_name,
+        )
+    else:
+        logger.debug(
+            "[EMBY] Resolved stream=%r → user=%s (uid=%s) from 1 match",
+            ecm_stream_name, winner.user_name, winner.user_id,
+        )
     return EmbyAttribution(user_id=winner.user_id, user_name=winner.user_name)
 
 
@@ -324,55 +379,133 @@ def _normalize(value: str) -> str:
 
 
 def _find_matching_sessions(
+    *,
     ecm_stream_name: str,
+    ecm_channel_name: str | None,
+    ecm_channel_number: str | int | None,
     sessions: list[EmbySession],
 ) -> list[EmbySession]:
-    """Return every session whose now-playing name matches the stream.
+    """Return every Emby session that matches across any of the three tiers.
 
-    Match contract: for each session, compare ``ecm_stream_name``
-    against BOTH ``now_playing_item_name`` and
-    ``now_playing_channel_name`` (live-TV sessions populate the channel
-    name, VOD sessions populate only the item name, idle sessions
-    populate neither). A session matches if EITHER candidate name
-    passes the exact-or-fuzzy check; ``None`` candidate names are
-    skipped, not scored.
+    bd-zldrq tiered match (live-TV fix for v0.17.1-0033):
 
-    Returns the unfiltered list of matching sessions so the
-    multi-match tiebreaker can operate on the full set.
+    * **Tier 1** — channel name primary. Parse ``item_name`` as
+      ``"<number> | <name>"``; the right-hand part (or the whole
+      string when there's no ``"|"`` separator) must equal
+      ``ecm_channel_name`` after normalization.
+    * **Tier 2** — channel number exact (string compare). Skipped
+      when either side is missing.
+    * **Tier 3** — RapidFuzz ``token_set_ratio`` on
+      ``ecm_stream_name`` against ``item_name`` / ``channel_name``
+      with the bead-spec 0.85 floor. Back-compat for movies / VOD
+      where neither channel argument is available.
+
+    A session matches if ANY tier accepts it. The list is the union
+    of tier hits — duplicates are de-duped by session identity so the
+    same physical session is not double-counted in the tie-break.
+
+    Hot-path discipline (bandwidth tracker calls this every ~5s per
+    channel on every poll, with up to ~30 Emby sessions per call): the
+    normalized Emby item names and channel names are computed ONCE up
+    front into a list of (session, normalized_item, normalized_channel,
+    normalized_channel_suffix) tuples so the inner loops avoid
+    re-running NFC + lower + strip per tier per session. Without this,
+    a busy poll with N channels × M sessions × 3 tiers would
+    re-normalize the same Emby strings 3×N×M times.
     """
-    normalized_stream = _normalize(ecm_stream_name)
-    if not normalized_stream:
-        return []
-
-    matches: list[EmbySession] = []
+    # Pre-normalize Emby session strings ONCE — see hot-path note above.
+    prepared: list[tuple[EmbySession, str, str, str]] = []
     for session in sessions:
-        if _session_matches(normalized_stream, session):
-            matches.append(session)
+        normalized_item = _normalize(session.now_playing_item_name or "")
+        normalized_channel = _normalize(session.now_playing_channel_name or "")
+        # The right-hand side of "<number> | <name>" (or empty when
+        # there's no pipe). Tier 1 compares this to ecm_channel_name.
+        suffix = _parse_pipe_suffix(normalized_item)
+        prepared.append((session, normalized_item, normalized_channel, suffix))
+
+    # Track matched sessions by identity to avoid double-counting when
+    # two tiers both accept the same physical session.
+    matched_ids: set[str] = set()
+    matches: list[EmbySession] = []
+
+    def _accept(session: EmbySession) -> None:
+        if session.session_id in matched_ids:
+            return
+        matched_ids.add(session.session_id)
+        matches.append(session)
+
+    # ----- Tier 1: channel name primary match
+    normalized_ecm_channel = _normalize(ecm_channel_name or "")
+    if normalized_ecm_channel:
+        for session, normalized_item, _ch, suffix in prepared:
+            # Right-hand side of "<number> | <name>" matches (the
+            # primary live-TV path), OR the whole item_name matches
+            # (some Emby installs have no "<number> | " prefix).
+            if suffix and suffix == normalized_ecm_channel:
+                _accept(session)
+                continue
+            if normalized_item and normalized_item == normalized_ecm_channel:
+                _accept(session)
+
+    # ----- Tier 2: channel number exact (string compare)
+    if ecm_channel_number is not None:
+        ecm_number_str = str(ecm_channel_number).strip()
+        if ecm_number_str:
+            for session, _it, _ch, _sfx in prepared:
+                session_number = session.channel_number
+                if session_number is None:
+                    continue
+                if str(session_number).strip() == ecm_number_str:
+                    _accept(session)
+
+    # ----- Tier 3: legacy fuzzy fallback on stream_name
+    normalized_stream = _normalize(ecm_stream_name or "")
+    if normalized_stream:
+        for session, normalized_item, normalized_channel, _sfx in prepared:
+            if _fuzzy_or_exact_match(normalized_stream, normalized_item):
+                _accept(session)
+                continue
+            if _fuzzy_or_exact_match(normalized_stream, normalized_channel):
+                _accept(session)
+
     return matches
 
 
-def _session_matches(normalized_stream: str, session: EmbySession) -> bool:
-    """True iff this Emby session's now-playing name matches the stream.
+def _parse_pipe_suffix(normalized_item_name: str) -> str:
+    """Return the right-hand side of a ``"<number> | <name>"`` string.
 
-    Tries item_name first, then channel_name. An exact (normalized)
-    match on either short-circuits to True; otherwise we run
-    :func:`rapidfuzz.fuzz.token_set_ratio` and return True iff the
-    score normalized to [0, 1] meets ``FUZZY_MATCH_THRESHOLD``.
+    Emby renders live-TV ``NowPlayingItem.Name`` as e.g. ``"408 | ESPN"``;
+    the operator-visible channel name is the part after the pipe. When
+    there's no pipe (VOD / movies / episodes), return the empty string
+    so tier-1 cannot accidentally match the whole item_name through
+    this path (the caller still considers whole-string equality
+    separately).
+
+    Input is assumed already normalized (NFC + lowercase + strip) — the
+    caller pre-normalizes for the hot-path performance reason
+    documented in :func:`_find_matching_sessions`.
     """
-    for candidate_name in (session.now_playing_item_name, session.now_playing_channel_name):
-        if candidate_name is None:
-            continue
-        normalized_candidate = _normalize(candidate_name)
-        if not normalized_candidate:
-            continue
-        if normalized_stream == normalized_candidate:
-            return True
-        # token_set_ratio returns 0–100; normalize to 0–1 to match the
-        # threshold semantics in the bead spec.
-        score = fuzz.token_set_ratio(normalized_stream, normalized_candidate) / 100.0
-        if score >= FUZZY_MATCH_THRESHOLD:
-            return True
-    return False
+    if "|" not in normalized_item_name:
+        return ""
+    _prefix, _sep, suffix = normalized_item_name.partition("|")
+    return suffix.strip()
+
+
+def _fuzzy_or_exact_match(normalized_stream: str, normalized_candidate: str) -> bool:
+    """True iff the normalized stream and candidate exact-match OR fuzzy-score
+    above ``FUZZY_MATCH_THRESHOLD``.
+
+    Empty candidate (None coerced to "" upstream, or whitespace-only)
+    cannot match.
+    """
+    if not normalized_candidate:
+        return False
+    if normalized_stream == normalized_candidate:
+        return True
+    # token_set_ratio returns 0–100; normalize to 0–1 to match the
+    # threshold semantics in the bead spec.
+    score = fuzz.token_set_ratio(normalized_stream, normalized_candidate) / 100.0
+    return score >= FUZZY_MATCH_THRESHOLD
 
 
 def _tiebreak_most_recent(sessions: list[EmbySession]) -> EmbySession:

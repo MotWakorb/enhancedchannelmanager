@@ -527,6 +527,66 @@ async def test_realistic_scenario_one_emby_session_one_match(
 
 
 @pytest.mark.asyncio
+async def test_resolver_receives_channel_name_and_number_kwargs(
+    patched_session_local,
+    tracker,
+    mock_client,
+):
+    """bd-zldrq fix-forward (v0.17.1-0033 live test bug): the wiring
+    must forward ``ecm_channel_name`` and ``ecm_channel_number`` to the
+    resolver so the tiered match can resolve live-TV sessions where
+    the Dispatcharr stream name ("US: ESPN FHD") does not fuzzy match
+    Emby's item.Name ("408 | ESPN") above the 0.85 floor.
+
+    The resolver itself is the unit under test of bd-zldrq's tier
+    logic in ``test_emby_resolver.py``; this test pins the wiring
+    contract — the BandwidthTracker must pass the channel args, not
+    rely on stream_name alone.
+    """
+    mock_client.get_streams_by_ids.return_value = [
+        _stream_record(stream_id=9001, name="US: ESPN FHD")
+    ]
+    first = _channel_payload(
+        total_bytes=1_000_000,
+        client_ips=["192.168.1.50"],
+        name="ESPN",
+        channel_number=408,
+        stream_id=9001,
+    )
+    second = _channel_payload(
+        total_bytes=2_000_000,
+        client_ips=["192.168.1.50"],
+        name="ESPN",
+        channel_number=408,
+        stream_id=9001,
+    )
+
+    attribution = EmbyAttribution(user_id="uid-mw", user_name="MotWakorb")
+    resolver_mock = AsyncMock(return_value=attribution)
+    with patch("bandwidth_tracker.resolve_emby_user", resolver_mock), \
+         patch("config.get_settings", return_value=_enabled_settings()):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    # The resolver was called with (ip, stream_name) positional AND
+    # ecm_channel_name + ecm_channel_number kwargs.
+    assert resolver_mock.await_count >= 1
+    first_call = resolver_mock.await_args_list[0]
+    assert first_call.args[0] == "192.168.1.50"
+    assert first_call.args[1] == "US: ESPN FHD"
+    assert first_call.kwargs.get("ecm_channel_name") == "ESPN"
+    assert first_call.kwargs.get("ecm_channel_number") == 408
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    for row in rows:
+        assert row.emby_user_id == "uid-mw"
+        assert row.emby_user_name == "MotWakorb"
+
+
+@pytest.mark.asyncio
 async def test_per_ip_attribution_sparse_map(
     patched_session_local,
     tracker,
@@ -554,9 +614,13 @@ async def test_per_ip_attribution_sparse_map(
 
     attribution = EmbyAttribution(user_id="uid-dave", user_name="dave")
 
-    async def resolver_side_effect(ecm_session_ip, ecm_stream_name):
+    async def resolver_side_effect(ecm_session_ip, ecm_stream_name, **_kwargs):
         # Only the Emby-server IP resolves; the other IP returns None
         # (as the real resolver would once its IP-mismatch check fires).
+        # **_kwargs absorbs bd-zldrq's new ``ecm_channel_name`` /
+        # ``ecm_channel_number`` kwargs without forcing every test to
+        # exercise them — the tier logic is unit-tested in
+        # ``test_emby_resolver.py``.
         if ecm_session_ip == "192.168.1.50":
             return attribution
         return None
