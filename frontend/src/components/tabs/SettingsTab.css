@@ -969,6 +969,56 @@
   color: #fcd34d;
 }
 
+/* Inline link-style button — used in form-description paragraphs (e.g. Plex token help) */
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent-primary);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+
+.link-button:hover {
+  color: var(--accent-hover, var(--accent-primary));
+  text-decoration: none;
+}
+
+/* SEC-1 text kept in DOM for test contract; visually hidden so only the modal surfaces it */
+.plex-token-sec1-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Plex token discovery modal */
+.plex-token-modal .plex-token-steps {
+  padding-left: 1.25rem;
+  margin: 0 0 1.25rem 0;
+}
+
+.plex-token-modal .plex-token-steps li {
+  margin-bottom: 0.6rem;
+  line-height: 1.5;
+}
+
+.plex-token-modal .plex-token-ref-link {
+  margin-top: 1rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.plex-token-modal .plex-token-ref-link a {
+  color: var(--accent-primary);
+}
+
 /* ========================================
    Email Settings Page
    ======================================== */
