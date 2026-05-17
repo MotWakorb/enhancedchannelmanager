@@ -52,6 +52,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Bulk channel merge: pre-validate source IDs to return 422 instead of silently producing DELETE 404 noise on stale rows (bd-ozhkf — follow-up to bd-ct9wl).** The `bulk_merge_channels` endpoint had the same bare-`except` footgun as the single-channel `merge_channels` endpoint before bd-ct9wl: a `get_channel` 404 was swallowed and execution fell through to `delete_channel`, generating `[DISPATCHARR] API request failed: DELETE 404` log noise for every stale source ID. The fix mirrors the bd-ct9wl pattern exactly: catch `httpx.HTTPStatusError` with `status_code == 404`, collect missing IDs, raise HTTP 422 with the same detail string (`"Source channels [...] no longer exist — refresh the channels list and try again"`) before any mutations. Two regression tests in `TestBulkMergeChannelsStaleSourceIds` assert the 422 path and that `delete_channel` is not called on stale IDs.
 - **Channel merge UX: surface backend 422 detail to operator instead of swallowing into generic "Merge failed" error (bd-7j6v1 — follow-up to bd-ct9wl).** The `httpClient.ts` `fetchJson` function already extracts the FastAPI `detail` field from non-2xx responses and throws it as `HttpError.message`, so `MergeChannelsModal` and `FindDuplicatesModal` already propagate the 422 detail string to the error banner through their `setError` catch handlers — no code change required. Added regression tests to lock this contract: `MergeChannelsModal.test.tsx` and `FindDuplicatesModal.test.tsx` each assert 422 detail renders verbatim in the error banner, a non-422 `HttpError` renders its message, and a non-`Error` thrown value falls back to the generic copy.
 
+- **Plex user attribution (bd-r5f0c.2/r5f0c.4).** Connected Clients and User Stats now show Plex usernames for sessions routed through a Plex Media Server. Configure under Settings → Integrations → Plex Integration. Uses a server-local Plex token (not a plex.tv account token) scoped to a single server.
+- **Jellyfin user attribution (bd-r5f0c.3/r5f0c.4).** Connected Clients and User Stats now show Jellyfin usernames for sessions routed through a Jellyfin server. Configure under Settings → Integrations → Jellyfin Integration.
+- **Multi-viewer attribution display (bd-r5f0c.9).** When multiple users watch the same channel through the same media server simultaneously, all their names are listed in Connected Clients. The previous behaviour surfaced only the most-recent user's name; the new `*_viewers` JSON arrays capture every concurrent viewer. The legacy `*_user_name` singular fields remain for back-compat.
+- **`AttributionBadge` UI component (bd-r5f0c.5).** Renders "via Emby" / "via Plex" / "via Jellyfin" badges in the Connected Clients list, keying on the `attribution_source` field in the stats API response.
+- **Operator integrations documentation (bd-r5f0c.7).** `docs/user_guide/integrations/index.md` — side-by-side setup guide for all three media-server integrations, including Plex server-local token guidance, multi-viewer behaviour, privacy posture, and troubleshooting. Partially addresses bd-jn30g (Emby docs gap).
+
+### Security
+
+- **SSRF mitigation on test-connection endpoints (bd-r5f0c.4).** `POST /api/settings/test_emby_connection`, `POST /api/settings/test_plex_connection`, and `POST /api/settings/test_jellyfin_connection` now apply a scheme allowlist (`http`, `https`) and reconstruct URLs using netloc-only (no path interpolation), preventing SSRF via operator-supplied base URLs.
+
+### Changed
+
+- **`_resolve_emby_attributions` → `_resolve_attributions` (bd-r5f0c.4).** Multi-source `asyncio.gather` replacing the Emby-only implementation. The old name is preserved as an alias.
+- **`_enrich_channels_with_emby` → `_enrich_channels_with_attribution` (bd-r5f0c.4).** The Active Channels endpoint now calls the unified multi-source helper. Legacy alias `_enrich_channels_with_emby` preserved for any external callers.
+
 ## [0.17.0] — 2026-05-16
 
 ### Added
