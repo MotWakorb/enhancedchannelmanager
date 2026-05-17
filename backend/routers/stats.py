@@ -238,9 +238,18 @@ async def _enrich_channels_with_emby(channels: list) -> None:
     for ch in channels:
         ch.setdefault("emby_user_name", None)
         stream_name = ch.get("stream_name")
-        if not stream_name:
-            # Resolver matches on stream_name — without it there is
-            # nothing to look up. Skip cheaply.
+        # bd-zldrq (fix-forward for v0.17.1-0033): pull channel_name +
+        # channel_number off the Dispatcharr response so the tiered
+        # resolver can match Emby's live-TV "<number> | <name>" item
+        # surface even when the Dispatcharr stream name is provider-
+        # prefixed verbose (e.g. "US: ESPN FHD" vs Emby "408 | ESPN").
+        channel_name = ch.get("channel_name")
+        channel_number = ch.get("channel_number")
+        # Skip cheap when no tier could match: pre-bd-zldrq this gated
+        # on stream_name alone, which would silently drop live-TV
+        # matches whenever the bd-ox5q8 stream-name enrichment produced
+        # an empty value.
+        if not stream_name and not channel_name and channel_number is None:
             continue
         clients = ch.get("clients") or []
         client_ips = [c.get("ip_address") for c in clients if c.get("ip_address")]
@@ -248,7 +257,12 @@ async def _enrich_channels_with_emby(channels: list) -> None:
             continue
         for ip in client_ips:
             try:
-                attribution = await resolve_emby_user(ip, stream_name)
+                attribution = await resolve_emby_user(
+                    ip,
+                    stream_name or "",
+                    ecm_channel_name=channel_name,
+                    ecm_channel_number=channel_number,
+                )
             except Exception as exc:  # pragma: no cover — resolver never raises
                 logger.debug(
                     "[STATS] Emby resolver raised for ip=%s stream=%r: %s",

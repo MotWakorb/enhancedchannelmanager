@@ -52,8 +52,21 @@ class EmbySession:
             (``RemoteEndPoint``). Used as a sanity check in the resolver.
         now_playing_item_name: ``NowPlayingItem.Name`` if the session is
             actively playing something, else ``None`` (idle session).
+            For live-TV sessions Emby formats this as
+            ``"<channel_number> | <channel_name>"`` (e.g.
+            ``"408 | ESPN"``); for VOD it is the movie/episode title.
         now_playing_channel_name: ``NowPlayingItem.ChannelName`` for live
-            TV sessions, else ``None`` (VOD or idle).
+            TV sessions, else ``None`` (VOD or idle). NOTE: live observation
+            shows this is often ``None`` even on ``Type='TvChannel'`` items —
+            Emby uses ``Name`` for the live-TV display string. The resolver
+            therefore does not rely on this field for the primary live-TV
+            match (parses ``now_playing_item_name`` instead).
+        channel_number: ``NowPlayingItem.ChannelNumber`` for live-TV
+            sessions, else ``None``. String per the upstream payload
+            (Dispatcharr stores channel numbers as numeric but Emby
+            surfaces them as strings; the resolver string-compares so
+            preserving the raw type avoids an int-parse step that would
+            reject sub-channel numbers like ``"408.1"``).
         last_activity_date: ISO timestamp string of the last server-side
             activity for this session (``LastActivityDate``). Used to
             break ties when multiple Emby sessions match the same ECM
@@ -67,6 +80,7 @@ class EmbySession:
     now_playing_item_name: str | None
     now_playing_channel_name: str | None
     last_activity_date: str | None
+    channel_number: str | None = None
 
 
 class EmbyClientError(Exception):
@@ -213,6 +227,9 @@ def _map_session(item: dict) -> EmbySession:
     live-TV sessions (VOD playback has ``Name`` but no ``ChannelName``).
     """
     now_playing = item.get("NowPlayingItem") or {}
+    # ChannelNumber is a string in Emby's payload — preserve verbatim
+    # (do NOT int-cast) so sub-channel numbers like "408.1" survive.
+    channel_number_raw = now_playing.get("ChannelNumber")
     return EmbySession(
         session_id=item.get("Id", ""),
         user_id=item.get("UserId", ""),
@@ -221,4 +238,5 @@ def _map_session(item: dict) -> EmbySession:
         now_playing_item_name=now_playing.get("Name"),
         now_playing_channel_name=now_playing.get("ChannelName"),
         last_activity_date=item.get("LastActivityDate"),
+        channel_number=channel_number_raw if channel_number_raw is not None else None,
     )

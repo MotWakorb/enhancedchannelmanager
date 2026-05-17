@@ -52,6 +52,7 @@ def _make_session(
     user_name: str = "alice",
     item_name: str | None = "CNN HD",
     channel_name: str | None = None,
+    channel_number: str | None = None,
     last_activity: str | None = "2026-05-16T12:00:00Z",
 ) -> EmbySession:
     """Build a representative :class:`EmbySession` for assertions.
@@ -68,6 +69,7 @@ def _make_session(
         now_playing_item_name=item_name,
         now_playing_channel_name=channel_name,
         last_activity_date=last_activity,
+        channel_number=channel_number,
     )
 
 
@@ -423,6 +425,264 @@ class TestHostnameBaseUrl:
             await emby_resolver.resolve_emby_user("192.168.1.10", "CNN HD")
             await emby_resolver.resolve_emby_user("192.168.1.10", "CNN HD")
         assert gethost.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Behavior (bd-zldrq fix-forward for v0.17.1-0033): channel-name primary
+# match — Emby's live-TV item.Name is "<channel_number> | <channel_name>"
+# (e.g. "408 | ESPN"), and Dispatcharr stream names like "US: ESPN FHD" do
+# NOT fuzzy-match it above the 0.85 floor. The resolver now accepts
+# ``ecm_channel_name`` and ``ecm_channel_number`` and tries three tiers
+# before the legacy fuzzy stream-name fallback.
+# ---------------------------------------------------------------------------
+
+
+class TestChannelNamePrimaryMatch:
+    """Tier 1: parse Emby item.Name as ``"<number> | <name>"`` and match
+    the right-hand part against ``ecm_channel_name`` case-insensitively.
+    This is the load-bearing fix for v0.17.1-0033 — operators watching
+    live TV via Emby now resolve to the right user even when the
+    Dispatcharr stream name is provider-prefixed verbose.
+    """
+
+    async def test_channel_name_matches_pipe_suffix(self):
+        """Emby item.Name "408 | ESPN" matches ecm_channel_name "ESPN"
+        (the exact live-test scenario)."""
+        session = _make_session(
+            user_id="uid-mw", user_name="MotWakorb",
+            item_name="408 | ESPN", channel_name=None, channel_number="408",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="US: ESPN FHD",
+                ecm_channel_name="ESPN",
+                ecm_channel_number=408,
+            )
+        assert result == emby_resolver.EmbyAttribution(
+            user_id="uid-mw", user_name="MotWakorb",
+        )
+
+    async def test_channel_name_matches_whole_name_without_prefix(self):
+        """Some Emby installs may surface live-TV item.Name as just the
+        channel name with no "<number> | " prefix. Tier 1 matches the
+        whole string as well."""
+        session = _make_session(
+            user_id="uid-mw", user_name="MotWakorb",
+            item_name="ESPN", channel_number="408",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="US: ESPN FHD",
+                ecm_channel_name="ESPN",
+                ecm_channel_number=408,
+            )
+        assert result is not None
+        assert result.user_name == "MotWakorb"
+
+    async def test_channel_name_match_is_case_insensitive(self):
+        """``espn`` matches ``"408 | ESPN"`` — both halves are
+        normalized (NFC + lowercase + strip) before comparison."""
+        session = _make_session(
+            user_name="case_user",
+            item_name="408 | ESPN", channel_number="408",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="ignored — tier 1 wins first",
+                ecm_channel_name="espn",
+                ecm_channel_number=408,
+            )
+        assert result is not None
+        assert result.user_name == "case_user"
+
+
+class TestChannelNumberMatch:
+    """Tier 2: when both ecm_channel_number and the Emby session's
+    channel_number are present, string-compare wins regardless of the
+    item.Name's textual form. Defensive against installs where the
+    channel name diverges between ECM and Emby (e.g., operator renamed
+    one side without renaming the other)."""
+
+    async def test_channel_number_string_match(self):
+        """ecm_channel_number=408 matches Emby channel_number="408"
+        (string compare). The item.Name has nothing in common with the
+        ECM stream name, so the only path that can match is tier 2."""
+        session = _make_session(
+            user_id="uid-num", user_name="num_user",
+            item_name="Some unrelated text", channel_number="408",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="US: ESPN FHD",
+                ecm_channel_name="Sports Channel A",  # won't tier-1 match
+                ecm_channel_number=408,
+            )
+        assert result == emby_resolver.EmbyAttribution(
+            user_id="uid-num", user_name="num_user",
+        )
+
+    async def test_channel_number_missing_on_session_skips_tier(self):
+        """When the Emby session has ``channel_number=None`` (VOD or
+        idle), tier 2 cannot match — the resolver should fall through
+        to tier 3 (fuzzy stream_name)."""
+        session = _make_session(
+            user_id="uid-vod", user_name="vod_user",
+            item_name="The Matrix",  # no channel_number → tier 2 skip
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="US: ESPN FHD",
+                ecm_channel_name="ESPN",
+                ecm_channel_number=408,
+            )
+        # No tier matches — Matrix is unrelated.
+        assert result is None
+
+
+class TestFuzzyStreamNameFallback:
+    """Tier 3: the legacy RapidFuzz path on ``ecm_stream_name`` against
+    Emby item.Name OR channel_name. Still the right behavior for
+    non-live-TV Emby content (movies, episodes) where channel_name /
+    channel_number are both ``None``."""
+
+    async def test_fuzzy_match_on_movie_when_no_channel_args(self):
+        """Movie session: no channel_name/channel_number on either side
+        and the stream name fuzzy-matches the movie title above 0.85."""
+        session = _make_session(
+            user_name="movie_viewer",
+            item_name="The Matrix 1999",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="The Matrix",
+                # ecm_channel_name and ecm_channel_number deliberately
+                # omitted — back-compat call shape.
+            )
+        assert result is not None
+        assert result.user_name == "movie_viewer"
+
+    async def test_fuzzy_match_with_channel_args_still_falls_back(self):
+        """Even when channel args are passed, if neither tier 1 nor
+        tier 2 matches, the resolver should still try the fuzzy
+        stream_name fallback."""
+        session = _make_session(
+            user_name="fb_user",
+            item_name="The Matrix 1999",  # not "ESPN"
+            channel_number=None,            # not 408
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="The Matrix",
+                ecm_channel_name="ESPN",
+                ecm_channel_number=408,
+            )
+        assert result is not None
+        assert result.user_name == "fb_user"
+
+
+class TestMultiTierTiebreak:
+    """When multiple sessions match across tiers, the same most-recent
+    last_activity_date tie-break applies."""
+
+    async def test_two_channel_name_matches_pick_most_recent(self):
+        """Two Emby sessions both playing the same channel; the one
+        with the newer last_activity_date wins."""
+        older = _make_session(
+            user_id="uid-old", user_name="old_user",
+            item_name="408 | ESPN", channel_number="408",
+            last_activity="2026-05-16T10:00:00Z",
+        )
+        newer = _make_session(
+            user_id="uid-new", user_name="new_user",
+            item_name="408 | ESPN", channel_number="408",
+            last_activity="2026-05-16T14:00:00Z",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[older, newer])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="US: ESPN FHD",
+                ecm_channel_name="ESPN",
+                ecm_channel_number=408,
+            )
+        assert result == emby_resolver.EmbyAttribution(
+            user_id="uid-new", user_name="new_user",
+        )
+
+    async def test_debug_log_fires_when_multiple_candidates(self, caplog):
+        """When N > 1 candidates match, the resolver must log a DEBUG
+        line surfacing the disambiguation so operators can see the
+        tie-break in trace."""
+        older = _make_session(
+            user_id="uid-old", user_name="old_user",
+            item_name="408 | ESPN", channel_number="408",
+            last_activity="2026-05-16T10:00:00Z",
+        )
+        newer = _make_session(
+            user_id="uid-new", user_name="new_user",
+            item_name="408 | ESPN", channel_number="408",
+            last_activity="2026-05-16T14:00:00Z",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[older, newer])):
+            with caplog.at_level(logging.DEBUG, logger="services.emby_resolver"):
+                await emby_resolver.resolve_emby_user(
+                    ecm_session_ip="192.168.1.10",
+                    ecm_stream_name="US: ESPN FHD",
+                    ecm_channel_name="ESPN",
+                    ecm_channel_number=408,
+                )
+        # Look for the disambiguation DEBUG line — content per the spec
+        # mentions candidate count, ip, name, and picked user.
+        assert any(
+            "[EMBY]" in rec.getMessage()
+            and "resolver" in rec.getMessage()
+            and "candidates" in rec.getMessage()
+            and "new_user" in rec.getMessage()
+            for rec in caplog.records
+        ), f"expected disambiguation DEBUG; got {[r.getMessage() for r in caplog.records]}"
+
+
+class TestBackCompatStreamNameOnlyCallShape:
+    """Existing callers (and the existing test suite above) invoke
+    ``resolve_emby_user(ip, name)`` with no channel args — the new
+    signature must keep that call shape working for back-compat."""
+
+    async def test_two_positional_args_still_works(self):
+        """Pre-fix callers pass only (ip, stream_name) — must still
+        produce the same fuzzy-match result as before bd-zldrq."""
+        session = _make_session(user_name="alice", item_name="CNN HD")
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                "192.168.1.10", "CNN HD",
+            )
+        assert result is not None
+        assert result.user_name == "alice"
 
 
 # ---------------------------------------------------------------------------
