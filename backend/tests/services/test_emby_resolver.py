@@ -932,3 +932,184 @@ class TestMultiViewer:
             )
         assert len(users) == 3
         assert _get_counter_value("user_attribution_resolved_total", "emby") == 3.0
+
+
+# ---------------------------------------------------------------------------
+# bd-r5f0c.10: forensic no-match WARN. When the resolver has the
+# preconditions for a match (IP short-circuit passed + sessions present)
+# but no tier accepts any session, emit one WARN per (ip, channel) per
+# 60 s carrying enough raw + normalized data to see why the tiers missed.
+# Suppressed cases: empty cache, IP mismatch, successful match.
+# ---------------------------------------------------------------------------
+
+
+class TestNoMatchDiagnostic:
+    """The forensic WARN fires once per (ip, channel) per 60 s when the
+    resolver entered the matching path with non-empty sessions but no
+    tier produced a match. All other cases stay silent."""
+
+    @staticmethod
+    def _no_match_records(records):
+        """Filter caplog records to just our no-match diagnostic lines."""
+        return [
+            r for r in records
+            if "[EMBY-RESOLVER] no-match diagnostic" in r.getMessage()
+        ]
+
+    async def test_emits_warn_when_sessions_exist_and_no_tier_matches(self, caplog):
+        """Sessions in cache but no tier accepts any of them → one WARN."""
+        session = _make_session(
+            user_name="alice",
+            item_name="999 | NotTheChannel",
+            channel_name="NotTheChannel",
+            channel_number="999",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.WARNING, logger="services.emby_resolver"):
+                users = await emby_resolver.resolve_emby_users(
+                    ecm_session_ip="192.168.1.10",
+                    ecm_stream_name="US: CNN FHD",
+                    ecm_channel_name="CNN",
+                    ecm_channel_number=200,
+                )
+        assert users == []
+        warns = self._no_match_records(caplog.records)
+        assert len(warns) == 1, (
+            f"expected exactly one no-match WARN; got {len(warns)}: "
+            f"{[r.getMessage() for r in warns]}"
+        )
+        msg = warns[0].getMessage()
+        # Channel + session info must be present for forensic value.
+        assert "CNN" in msg
+        assert "NotTheChannel" in msg
+
+    async def test_no_emit_when_sessions_empty(self, caplog):
+        """Empty session cache (idle Emby) is the normal state — no WARN."""
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[])):
+            with caplog.at_level(logging.WARNING, logger="services.emby_resolver"):
+                users = await emby_resolver.resolve_emby_users(
+                    ecm_session_ip="192.168.1.10",
+                    ecm_stream_name="CNN",
+                    ecm_channel_name="CNN",
+                )
+        assert users == []
+        assert self._no_match_records(caplog.records) == []
+
+    async def test_no_emit_when_match_succeeds(self, caplog):
+        """A successful resolve must not emit the no-match WARN."""
+        session = _make_session(user_name="alice", item_name="CNN HD")
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.WARNING, logger="services.emby_resolver"):
+                users = await emby_resolver.resolve_emby_users(
+                    ecm_session_ip="192.168.1.10",
+                    ecm_stream_name="CNN HD",
+                )
+        assert len(users) == 1
+        assert self._no_match_records(caplog.records) == []
+
+    async def test_no_emit_when_ip_short_circuit_fails(self, caplog):
+        """IP mismatch short-circuits before the session compare → no WARN."""
+        session = _make_session(
+            item_name="NotTheChannel", channel_number="999",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.WARNING, logger="services.emby_resolver"):
+                users = await emby_resolver.resolve_emby_users(
+                    ecm_session_ip="10.0.0.99",  # NOT the Emby server
+                    ecm_stream_name="CNN",
+                    ecm_channel_name="CNN",
+                )
+        assert users == []
+        assert self._no_match_records(caplog.records) == []
+
+    async def test_rate_limit_within_window(self, caplog):
+        """Two no-match calls in quick succession for the same (ip, channel)
+        → one WARN only. The second call should be suppressed by the
+        60 s rate-limit."""
+        session = _make_session(item_name="UnrelatedShow")
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.WARNING, logger="services.emby_resolver"):
+                await emby_resolver.resolve_emby_users(
+                    ecm_session_ip="192.168.1.10",
+                    ecm_stream_name="CNN",
+                    ecm_channel_name="CNN",
+                )
+                await emby_resolver.resolve_emby_users(
+                    ecm_session_ip="192.168.1.10",
+                    ecm_stream_name="CNN",
+                    ecm_channel_name="CNN",
+                )
+        warns = self._no_match_records(caplog.records)
+        assert len(warns) == 1, (
+            f"rate-limit broken: expected 1 WARN, got {len(warns)}"
+        )
+
+    async def test_rate_limit_per_channel_independence(self, caplog):
+        """Two different problem channels for the same IP each get their
+        own WARN — the rate-limit is keyed by (ip, channel), not by ip
+        alone. This is the load-bearing assertion: one noisy channel
+        must NOT silence diagnosis for a sibling channel."""
+        session = _make_session(item_name="UnrelatedShow")
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.WARNING, logger="services.emby_resolver"):
+                await emby_resolver.resolve_emby_users(
+                    ecm_session_ip="192.168.1.10",
+                    ecm_stream_name="CBS",
+                    ecm_channel_name="CBS",
+                )
+                await emby_resolver.resolve_emby_users(
+                    ecm_session_ip="192.168.1.10",
+                    ecm_stream_name="CNN",
+                    ecm_channel_name="CNN",
+                )
+        warns = self._no_match_records(caplog.records)
+        assert len(warns) == 2, (
+            f"expected one WARN per channel; got {len(warns)}"
+        )
+        messages = " ".join(r.getMessage() for r in warns)
+        assert "CBS" in messages and "CNN" in messages
+
+    async def test_rate_limit_window_expiry(self, caplog, monkeypatch):
+        """Advance the monotonic clock past 60 s and a second call for
+        the same (ip, channel) emits a fresh WARN."""
+        session = _make_session(item_name="UnrelatedShow")
+        # Step the clock manually so we don't sleep in tests.
+        fake_now = [1000.0]
+
+        def fake_monotonic():
+            return fake_now[0]
+
+        monkeypatch.setattr(emby_resolver.time, "monotonic", fake_monotonic)
+
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.WARNING, logger="services.emby_resolver"):
+                await emby_resolver.resolve_emby_users(
+                    ecm_session_ip="192.168.1.10",
+                    ecm_stream_name="CNN",
+                    ecm_channel_name="CNN",
+                )
+                # Bump clock past the 60 s window.
+                fake_now[0] += 61.0
+                await emby_resolver.resolve_emby_users(
+                    ecm_session_ip="192.168.1.10",
+                    ecm_stream_name="CNN",
+                    ecm_channel_name="CNN",
+                )
+        warns = self._no_match_records(caplog.records)
+        assert len(warns) == 2, (
+            f"window-expiry broken: expected 2 WARNs, got {len(warns)}"
+        )
