@@ -84,6 +84,11 @@ def _mock_settings(**overrides):
         "auto_creation_excluded_groups": [],
         "auto_creation_exclude_auto_sync_groups": False,
         "mcp_api_key": "",
+        # Emby integration (bd-8wc6q, epic bd-2cenq). Defaults disabled so
+        # existing tests can ignore the fields entirely.
+        "emby_enabled": False,
+        "emby_base_url": "",
+        "emby_api_key": "",
     }
     defaults.update(overrides)
     mock = MagicMock()
@@ -913,3 +918,155 @@ class TestMCPStatusSanitization:
         assert body["error"] == "ConnectError"
         assert "10.0.5.42" not in body["error"]
         assert "network unreachable" not in body["error"]
+
+
+class TestEmbySettingsPersistence:
+    """bd-8wc6q: GET / POST plumbing for the Emby integration settings fields.
+
+    Covers the three new fields (``emby_enabled`` / ``emby_base_url`` /
+    ``emby_api_key``) appearing in the GET response (with the key masked),
+    a full POST persisting all three, defaults when the fields are absent
+    from the POST body, and the preserve-on-omit contract for the API key
+    so a partial POST cannot silently clear the stored secret (parity with
+    ``smtp_password`` and ``mcp_api_key``).
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_returns_emby_enabled_and_url(self, async_client):
+        """GET /api/settings exposes emby_enabled and emby_base_url verbatim."""
+        mock = _mock_settings(
+            emby_enabled=True,
+            emby_base_url="http://emby.local:8096",
+            emby_api_key="secret-token",
+        )
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["emby_enabled"] is True
+        assert data["emby_base_url"] == "http://emby.local:8096"
+
+    @pytest.mark.asyncio
+    async def test_get_masks_emby_api_key(self, async_client):
+        """The API key itself is never returned — only emby_api_key_configured."""
+        mock = _mock_settings(emby_api_key="secret-token")
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "emby_api_key" not in data
+        assert data["emby_api_key_configured"] is True
+
+    @pytest.mark.asyncio
+    async def test_get_reports_unconfigured_when_no_key(self, async_client):
+        """emby_api_key_configured=false when the key is empty."""
+        mock = _mock_settings(emby_api_key="")
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        assert response.json()["emby_api_key_configured"] is False
+
+    @pytest.mark.asyncio
+    async def test_post_persists_all_three_fields(self, async_client):
+        """POST /api/settings with the three Emby fields persists them via save_settings."""
+        current = _mock_settings()
+        captured: dict = {}
+
+        def capture_save(new_settings):
+            captured["emby_enabled"] = new_settings.emby_enabled
+            captured["emby_base_url"] = new_settings.emby_base_url
+            captured["emby_api_key"] = new_settings.emby_api_key
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+                "emby_enabled": True,
+                "emby_base_url": "http://emby.local:8096",
+                "emby_api_key": "fresh-emby-token",
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["emby_enabled"] is True
+        assert captured["emby_base_url"] == "http://emby.local:8096"
+        assert captured["emby_api_key"] == "fresh-emby-token"
+
+    @pytest.mark.asyncio
+    async def test_post_defaults_when_fields_absent(self, async_client):
+        """When the Emby fields are omitted from the POST body, defaults apply
+        (emby_enabled=False, emby_base_url="") — except the API key, which is
+        preserved per the preserve-on-omit contract below."""
+        current = _mock_settings(
+            emby_enabled=True,
+            emby_base_url="http://stale.example",
+            emby_api_key="",
+        )
+        captured: dict = {}
+
+        def capture_save(new_settings):
+            captured["emby_enabled"] = new_settings.emby_enabled
+            captured["emby_base_url"] = new_settings.emby_base_url
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+            })
+
+        assert response.status_code == 200, response.json()
+        # The Pydantic model defaults are applied when the fields are absent.
+        assert captured["emby_enabled"] is False
+        assert captured["emby_base_url"] == ""
+
+    @pytest.mark.asyncio
+    async def test_partial_post_preserves_stored_emby_api_key(self, async_client):
+        """bd-8wc6q: a POST that omits ``emby_api_key`` must NOT clear the
+        stored key. Same preserve-on-omit contract as ``smtp_password`` and
+        ``mcp_api_key`` (bd-vj8n9) — operators can save the toggle and base
+        URL without re-entering the secret on every save."""
+        current = _mock_settings(emby_api_key="stored-emby-key-xyz")
+        captured: dict = {}
+
+        def capture_save(new_settings):
+            captured["emby_api_key"] = new_settings.emby_api_key
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+                "emby_enabled": True,
+                "emby_base_url": "http://emby.local:8096",
+                # emby_api_key intentionally omitted
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["emby_api_key"] == "stored-emby-key-xyz", (
+            "Partial POST cleared emby_api_key — preserve-on-omit broken"
+        )

@@ -11,8 +11,10 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from auth import RequireAdminIfEnabled
 from config import get_settings, save_settings, clear_settings_cache, set_log_level, DispatcharrSettings
 from dispatcharr_client import get_client, reset_client
+from emby_client import EmbyClient, EmbyClientError
 from cache import get_cache
 from database import get_session
 from stream_prober import StreamProber, get_prober, set_prober
@@ -138,6 +140,16 @@ class SettingsRequest(BaseModel):
     # Default ON; honored by both the backend /api/client-errors endpoint
     # and the frontend clientErrorReporter.
     telemetry_client_errors_enabled: bool = True
+    # Emby integration (bd-8wc6q, epic bd-2cenq). Defaults match
+    # config.DispatcharrSettings so an older frontend bundle that doesn't
+    # send these fields persists the current value rather than getting
+    # nudged back to a hardcoded default on every save.
+    emby_enabled: bool = False
+    emby_base_url: str = ""
+    # ``emby_api_key`` is Optional so a partial POST that omits it preserves
+    # the stored value (same preserve-on-omit contract as ``smtp_password``
+    # and ``mcp_api_key`` — bd-vj8n9).
+    emby_api_key: Optional[str] = None
 
 
 class SettingsResponse(BaseModel):
@@ -231,6 +243,23 @@ class SettingsResponse(BaseModel):
     mcp_api_key_configured: bool  # Whether an MCP API key has been generated
     # Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m)
     telemetry_client_errors_enabled: bool
+    # Emby integration (bd-8wc6q, epic bd-2cenq). The API key itself is NOT
+    # returned — only a boolean indicator that one is stored, mirroring
+    # ``dispatcharr_api_key_configured`` and ``mcp_api_key_configured``.
+    emby_enabled: bool
+    emby_base_url: str
+    emby_api_key_configured: bool
+
+
+class EmbyTestConnectionRequest(BaseModel):
+    """Inline credentials for the Emby test-connection endpoint (bd-8wc6q).
+
+    The operator may be testing values BEFORE saving them, so we accept the
+    base URL and API key in the request body rather than reading from saved
+    settings. Mirrors the Dispatcharr ``TestConnectionRequest`` shape.
+    """
+    base_url: str
+    api_key: str
 
 
 class TestConnectionRequest(BaseModel):
@@ -383,6 +412,12 @@ async def get_current_settings():
         auto_creation_exclude_auto_sync_groups=settings.auto_creation_exclude_auto_sync_groups,
         mcp_api_key_configured=bool(settings.mcp_api_key),
         telemetry_client_errors_enabled=settings.telemetry_client_errors_enabled,
+        # Emby integration (bd-8wc6q). Surface the toggle + base URL so the
+        # operator sees what's configured; the API key itself is masked —
+        # only a boolean indicator is returned.
+        emby_enabled=settings.emby_enabled,
+        emby_base_url=settings.emby_base_url,
+        emby_api_key_configured=bool(settings.emby_api_key),
     )
 
 
@@ -424,6 +459,12 @@ async def update_settings(request: SettingsRequest):
 
     # Same for SMTP password - preserve existing if not provided
     smtp_password = request.smtp_password if request.smtp_password else current_settings.smtp_password
+
+    # Emby API key: preserve-on-omit (bd-8wc6q). A partial POST that doesn't
+    # send ``emby_api_key`` must keep the stored value — same contract as
+    # ``smtp_password`` and ``mcp_api_key`` so the Settings UI can save
+    # non-secret fields (toggle, base URL) without re-asking for the key.
+    emby_api_key = request.emby_api_key if request.emby_api_key else current_settings.emby_api_key
 
     # MCP API key is never accepted on this endpoint (it has dedicated
     # generate/revoke endpoints) — always preserve the stored value so a
@@ -560,6 +601,12 @@ async def update_settings(request: SettingsRequest):
         # where mcp_api_key is captured (bd-vj8n9).
         mcp_api_key=mcp_api_key,
         telemetry_client_errors_enabled=request.telemetry_client_errors_enabled,
+        # Emby integration (bd-8wc6q). emby_api_key uses the preserve-on-omit
+        # pattern resolved above so a partial POST cannot silently clear the
+        # stored key.
+        emby_enabled=request.emby_enabled,
+        emby_base_url=request.emby_base_url,
+        emby_api_key=emby_api_key,
     )
     save_settings(new_settings)
     clear_settings_cache()
@@ -978,6 +1025,55 @@ async def test_telegram_bot(request: TelegramTestRequest):
     except Exception as e:
         logger.exception("[SETTINGS-TEST] Telegram test failed - unexpected error: %s", e)
         return {"success": False, "message": "Unexpected error during Telegram test"}
+
+
+@router.post("/emby/test-connection")
+async def test_emby_connection(
+    request: EmbyTestConnectionRequest,
+    _admin=RequireAdminIfEnabled,
+):
+    """Test connectivity to an Emby server using operator-supplied credentials.
+
+    Wired into the Settings UI 'Test Connection' button (bd-8wc6q). The
+    operator may be testing values BEFORE saving them, so this endpoint
+    reads ``base_url`` + ``api_key`` from the request body — it does NOT
+    read from saved settings. Admin-only because the operator is providing
+    a secret on the wire (same posture as MCP key generation /
+    backup-restore writes).
+
+    Returns ``{ok: True}`` on success and ``{ok: False, error: <msg>}`` on
+    any auth / network / non-2xx failure. The endpoint deliberately does
+    NOT raise HTTPException on connection failure — the operator wants to
+    SEE the error message inline in the UI, not get a generic 500.
+    """
+    logger.debug(
+        "[SETTINGS-TEST] POST /api/settings/emby/test-connection - base_url=%s",
+        request.base_url,
+    )
+    client = EmbyClient(request.base_url, request.api_key)
+    try:
+        # ``test_connection()`` already swallows EmbyClientError → False, but
+        # we want the operator-actionable error STRING for the UI banner.
+        # Calling ``get_sessions()`` directly lets us surface that string.
+        await client.get_sessions()
+    except EmbyClientError as exc:
+        logger.info("[SETTINGS-TEST] Emby connection test failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:  # pylint: disable=broad-except
+        # Defensive: EmbyClient should wrap all known failures in
+        # EmbyClientError, but an unexpected exception class still needs
+        # to render inline rather than 500.
+        logger.exception("[SETTINGS-TEST] Emby connection test unexpected error: %s", exc)
+        return {"ok": False, "error": f"Unexpected error: {type(exc).__name__}"}
+    finally:
+        # Release the underlying httpx connection pool so the per-request
+        # client doesn't leak sockets.
+        await client.close()
+    logger.info(
+        "[SETTINGS-TEST] Emby connection test successful - base_url=%s",
+        request.base_url,
+    )
+    return {"ok": True}
 
 
 @router.post("/restart-services")
