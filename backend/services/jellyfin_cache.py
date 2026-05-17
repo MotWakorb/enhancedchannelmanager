@@ -46,6 +46,7 @@ from dataclasses import dataclass
 
 from config import get_settings
 from jellyfin_client import JellyfinClient, JellyfinClientError, JellyfinSession
+import observability
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +180,7 @@ async def get_cached_jellyfin_sessions() -> list[JellyfinSession]:
                 "[JELLYFIN] Cache hit for %s (age=%.2fs, ttl=%.1fs)",
                 CACHE_KEY, age, CACHE_TTL_SECONDS,
             )
+            observability.get_metric("media_session_cache_hits_total").labels(source="jellyfin").inc()
             return entry.sessions
 
     # Cache miss path. Acquire the lock so concurrent misses collapse to
@@ -200,19 +202,22 @@ async def get_cached_jellyfin_sessions() -> list[JellyfinSession]:
                     "another waiter populated it",
                     CACHE_KEY,
                 )
+                observability.get_metric("media_session_cache_hits_total").labels(source="jellyfin").inc()
                 return entry.sessions
 
         # Holder of the lock — do the upstream fetch.
         client = JellyfinClient(base_url=jellyfin_base_url, api_key=jellyfin_api_key)
         try:
             try:
-                sessions = await client.get_sessions()
+                with observability.get_metric("media_session_fetch_duration_seconds").labels(source="jellyfin").time():
+                    sessions = await client.get_sessions()
             finally:
                 # Always release the httpx connection pool even on
                 # error. Without this every failure leaks a socket pool
                 # for the lifetime of the process.
                 await client.close()
         except JellyfinClientError as exc:
+            observability.get_metric("media_session_fetch_errors_total").labels(source="jellyfin").inc()
             # Stale-fallback decision branches on whether a prior cache
             # value exists.
             if _cached_entry is not None:
@@ -222,6 +227,7 @@ async def get_cached_jellyfin_sessions() -> list[JellyfinSession]:
                     exc,
                     time.monotonic() - _cached_entry.cached_at,
                 )
+                observability.get_metric("media_session_stale_fallback_total").labels(source="jellyfin").inc()
                 return _cached_entry.sessions
             logger.warning(
                 "[JELLYFIN] Fetch failed with no prior cache (%s); "

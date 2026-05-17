@@ -1070,3 +1070,34 @@ groups:
             on-call. The runbook covers the half-merge recovery
             procedure and the half-state diagnostic query.
           runbook_url: docs/runbooks/dedup-merge-api-error-rate-high.md
+
+  # =====================================================================
+  # Media-session attribution observability (bd-r5f0c.6)
+  #
+  # Warn-only, no paging — attribution is best-effort (SLO-8 posture).
+  # These alerts surface degraded upstream connectivity so operators can
+  # investigate without being woken up. A source that is down for > 10m
+  # means attribution for that source is dark; > 30m stale-fallback
+  # means the operator's "who is watching" picture is stale.
+  # =====================================================================
+  - name: ecm_media_session_attribution
+    rules:
+      - alert: MediaSessionFetchErrorsSustained
+        expr: rate(ecm_media_session_fetch_errors_total[5m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: ecm
+        annotations:
+          summary: "Upstream {{ $labels.source }} session fetch failing sustained 10m"
+          description: "ECM has been unable to fetch sessions from {{ $labels.source }} for over 10 minutes. User attribution for this source is degraded."
+
+      - alert: MediaSessionStaleFallbackRising
+        expr: rate(ecm_media_session_stale_fallback_total[10m]) > 0.01
+        for: 30m
+        labels:
+          severity: warning
+          service: ecm
+        annotations:
+          summary: "{{ $labels.source }} session cache serving stale entries sustained 30m"
+          description: "ECM is serving stale {{ $labels.source }} session data because the upstream has been failing. Check upstream connectivity."
