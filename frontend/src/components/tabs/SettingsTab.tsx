@@ -3431,93 +3431,94 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </span>
         </div>
 
-        <p className="form-hint">
-          When enabled, ECM cross-references active stream sessions against the operator's Emby
-          <code> /Sessions </code>feed so Stats can attribute real Emby usernames instead of
-          collapsing every Emby-mediated pull to the proxy IP.
-        </p>
-
-        <div className="checkbox-group">
-          <input
-            id="embyEnabled"
-            type="checkbox"
-            checked={embyEnabled}
-            onChange={(e) => setEmbyEnabled(e.target.checked)}
-            data-testid="emby-enabled-checkbox"
-          />
-          <div className="checkbox-content">
-            <label htmlFor="embyEnabled">Enable Emby user attribution</label>
-            <p>Requires base URL and API key below. Disabling stops the cross-reference but does not clear stored values.</p>
+        <div className="settings-group">
+          <div className="form-group-vertical">
+            <span className="form-description">
+              When enabled, ECM cross-references active stream sessions against the operator's Emby
+              <code> /Sessions </code>feed so Stats can attribute real Emby usernames instead of
+              collapsing every Emby-mediated pull to the proxy IP.
+            </span>
           </div>
-        </div>
 
-        <div className="form-group-vertical">
-          <label htmlFor="embyBaseUrl">Emby base URL</label>
-          <span className="form-description">
-            Full URL to your Emby server (e.g. <code>http://emby.local:8096</code>). Sub-paths are
-            preserved for reverse-proxy setups.
-          </span>
-          <input
-            id="embyBaseUrl"
-            type="text"
-            value={embyBaseUrl}
-            onChange={(e) => setEmbyBaseUrl(e.target.value)}
-            placeholder="http://emby.local:8096"
-            data-testid="emby-base-url-input"
-            className="settings-text-input"
-          />
-        </div>
+          <div className="checkbox-group">
+            <input
+              id="embyEnabled"
+              type="checkbox"
+              checked={embyEnabled}
+              onChange={(e) => setEmbyEnabled(e.target.checked)}
+              data-testid="emby-enabled-checkbox"
+            />
+            <div className="checkbox-content">
+              <label htmlFor="embyEnabled">Enable Emby user attribution</label>
+              <p>Requires base URL and API key below. Disabling stops the cross-reference but does not clear stored values.</p>
+            </div>
+          </div>
 
-        <div className="form-group-vertical">
-          <label htmlFor="embyApiKey">Emby API key</label>
-          <span className="form-description">
-            Generate in Emby: Dashboard → API Keys → New API Key. Stored plaintext at rest, same as the
-            Dispatcharr API key. {embyApiKeyConfigured ? 'A key is currently stored — leave blank to keep it.' : 'No key stored.'}
-          </span>
-          <input
-            id="embyApiKey"
-            type="password"
-            value={embyApiKey}
-            onChange={(e) => setEmbyApiKey(e.target.value)}
-            placeholder={embyApiKeyConfigured ? '••••••••' : 'Paste your Emby API key'}
-            data-testid="emby-api-key-input"
-            className="settings-text-input"
-            autoComplete="new-password"
-          />
-        </div>
-
-        <div className="form-group-vertical">
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={handleTestEmbyConnection}
-            disabled={embyTestStatus === 'testing'}
-            data-testid="emby-test-connection-btn"
-            style={{ alignSelf: 'flex-start' }}
-          >
-            <span className="material-icons">
-              {embyTestStatus === 'testing' ? 'sync' : 'cable'}
+          <div className="form-group-vertical">
+            <label htmlFor="embyBaseUrl">Emby base URL</label>
+            <span className="form-description">
+              Full URL to your Emby server (e.g. <code>http://emby.local:8096</code>). Sub-paths are
+              preserved for reverse-proxy setups.
             </span>
-            {embyTestStatus === 'testing' ? 'Testing...' : 'Test Connection'}
-          </button>
-          {embyTestStatus === 'success' && (
-            <span
-              className="form-hint"
-              data-testid="emby-test-result-success"
-              style={{ color: 'var(--accent-success, #22C55E)' }}
+            <input
+              id="embyBaseUrl"
+              type="text"
+              value={embyBaseUrl}
+              onChange={(e) => setEmbyBaseUrl(e.target.value)}
+              placeholder="http://emby.local:8096"
+              data-testid="emby-base-url-input"
+              className="settings-text-input"
+            />
+          </div>
+
+          <div className="form-group-vertical">
+            <label htmlFor="embyApiKey">Emby API key</label>
+            <span className="form-description">
+              Generate in Emby: Dashboard → API Keys → New API Key. Stored plaintext at rest, same as the
+              Dispatcharr API key. {embyApiKeyConfigured ? 'A key is currently stored — leave blank to keep it.' : 'No key stored.'}
+            </span>
+            <input
+              id="embyApiKey"
+              type="password"
+              value={embyApiKey}
+              onChange={(e) => setEmbyApiKey(e.target.value)}
+              placeholder={embyApiKeyConfigured ? '••••••••' : 'Paste your Emby API key'}
+              data-testid="emby-api-key-input"
+              className="settings-text-input"
+              autoComplete="new-password"
+            />
+          </div>
+
+          <div className="integration-test-actions">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleTestEmbyConnection}
+              disabled={embyTestStatus === 'testing'}
+              data-testid="emby-test-connection-btn"
             >
-              ✓ {embyTestMessage}
-            </span>
-          )}
-          {embyTestStatus === 'error' && (
-            <span
-              className="form-hint"
-              data-testid="emby-test-result-error"
-              style={{ color: 'var(--accent-error, #ef4444)' }}
-            >
-              ✗ {embyTestMessage}
-            </span>
-          )}
+              <span className="material-icons">
+                {embyTestStatus === 'testing' ? 'sync' : 'cable'}
+              </span>
+              {embyTestStatus === 'testing' ? 'Testing...' : 'Test Connection'}
+            </button>
+            {embyTestStatus === 'success' && (
+              <span
+                className="integration-test-result integration-test-result--success"
+                data-testid="emby-test-result-success"
+              >
+                ✓ {embyTestMessage}
+              </span>
+            )}
+            {embyTestStatus === 'error' && (
+              <span
+                className="integration-test-result integration-test-result--error"
+                data-testid="emby-test-result-error"
+              >
+                ✗ {embyTestMessage}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -3531,97 +3532,98 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </span>
         </div>
 
-        <p className="form-hint">
-          When enabled, ECM cross-references active stream sessions against the operator's Plex
-          <code> /status/sessions </code>feed so Stats can attribute real Plex usernames.
-        </p>
-
-        <div className="checkbox-group">
-          <input
-            id="plexEnabled"
-            type="checkbox"
-            checked={plexEnabled}
-            onChange={(e) => setPlexEnabled(e.target.checked)}
-            data-testid="plex-enabled-checkbox"
-          />
-          <div className="checkbox-content">
-            <label htmlFor="plexEnabled">Enable Plex user attribution</label>
-            <p>Requires base URL and token below. Disabling stops the cross-reference but does not clear stored values.</p>
+        <div className="settings-group">
+          <div className="form-group-vertical">
+            <span className="form-description">
+              When enabled, ECM cross-references active stream sessions against the operator's Plex
+              <code> /status/sessions </code>feed so Stats can attribute real Plex usernames.
+            </span>
           </div>
-        </div>
 
-        <div className="form-group-vertical">
-          <label htmlFor="plexBaseUrl">Plex base URL</label>
-          <span className="form-description">
-            Full URL to your Plex Media Server (e.g. <code>http://plex.local:32400</code>). Sub-paths are
-            preserved for reverse-proxy setups.
-          </span>
-          <input
-            id="plexBaseUrl"
-            type="text"
-            value={plexBaseUrl}
-            onChange={(e) => setPlexBaseUrl(e.target.value)}
-            placeholder="http://plex.local:32400"
-            data-testid="plex-base-url-input"
-            className="settings-text-input"
-          />
-        </div>
+          <div className="checkbox-group">
+            <input
+              id="plexEnabled"
+              type="checkbox"
+              checked={plexEnabled}
+              onChange={(e) => setPlexEnabled(e.target.checked)}
+              data-testid="plex-enabled-checkbox"
+            />
+            <div className="checkbox-content">
+              <label htmlFor="plexEnabled">Enable Plex user attribution</label>
+              <p>Requires base URL and token below. Disabling stops the cross-reference but does not clear stored values.</p>
+            </div>
+          </div>
 
-        <div className="form-group-vertical">
-          <label htmlFor="plexToken">Plex token</label>
-          <span className="form-description">
-            {plexTokenConfigured ? 'A token is currently stored — leave blank to keep it.' : 'No token stored.'}
-          </span>
-          {/* SEC-1: Server-local Plex token warning. plex.tv account tokens have
-              full account scope; server-local tokens are scoped to the server.
-              This text is a security requirement — do not remove it. */}
-          <span className="form-description form-description--warning" data-testid="plex-token-helper-text">
-            Use a server-local Plex token, not your plex.tv account token. See Integrations docs for guidance.
-          </span>
-          <input
-            id="plexToken"
-            type="password"
-            value={plexToken}
-            onChange={(e) => setPlexToken(e.target.value)}
-            placeholder={plexTokenConfigured ? '••••••••' : 'Paste your server-local Plex token'}
-            data-testid="plex-token-input"
-            className="settings-text-input"
-            autoComplete="new-password"
-          />
-        </div>
-
-        <div className="form-group-vertical">
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={handleTestPlexConnection}
-            disabled={plexTestStatus === 'testing'}
-            data-testid="plex-test-connection-btn"
-            style={{ alignSelf: 'flex-start' }}
-          >
-            <span className="material-icons">
-              {plexTestStatus === 'testing' ? 'sync' : 'cable'}
+          <div className="form-group-vertical">
+            <label htmlFor="plexBaseUrl">Plex base URL</label>
+            <span className="form-description">
+              Full URL to your Plex Media Server (e.g. <code>http://plex.local:32400</code>). Sub-paths are
+              preserved for reverse-proxy setups.
             </span>
-            {plexTestStatus === 'testing' ? 'Testing...' : 'Test Connection'}
-          </button>
-          {plexTestStatus === 'success' && (
-            <span
-              className="form-hint"
-              data-testid="plex-test-result-success"
-              style={{ color: 'var(--accent-success, #22C55E)' }}
+            <input
+              id="plexBaseUrl"
+              type="text"
+              value={plexBaseUrl}
+              onChange={(e) => setPlexBaseUrl(e.target.value)}
+              placeholder="http://plex.local:32400"
+              data-testid="plex-base-url-input"
+              className="settings-text-input"
+            />
+          </div>
+
+          <div className="form-group-vertical">
+            <label htmlFor="plexToken">Plex token</label>
+            <span className="form-description">
+              {plexTokenConfigured ? 'A token is currently stored — leave blank to keep it.' : 'No token stored.'}
+            </span>
+            {/* SEC-1: Server-local Plex token warning. plex.tv account tokens have
+                full account scope; server-local tokens are scoped to the server.
+                This text is a security requirement — do not remove it. */}
+            <span className="form-description form-description--warning" data-testid="plex-token-helper-text">
+              Use a server-local Plex token, not your plex.tv account token. See Integrations docs for guidance.
+            </span>
+            <input
+              id="plexToken"
+              type="password"
+              value={plexToken}
+              onChange={(e) => setPlexToken(e.target.value)}
+              placeholder={plexTokenConfigured ? '••••••••' : 'Paste your server-local Plex token'}
+              data-testid="plex-token-input"
+              className="settings-text-input"
+              autoComplete="new-password"
+            />
+          </div>
+
+          <div className="integration-test-actions">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleTestPlexConnection}
+              disabled={plexTestStatus === 'testing'}
+              data-testid="plex-test-connection-btn"
             >
-              ✓ {plexTestMessage}
-            </span>
-          )}
-          {plexTestStatus === 'error' && (
-            <span
-              className="form-hint"
-              data-testid="plex-test-result-error"
-              style={{ color: 'var(--accent-error, #ef4444)' }}
-            >
-              ✗ {plexTestMessage}
-            </span>
-          )}
+              <span className="material-icons">
+                {plexTestStatus === 'testing' ? 'sync' : 'cable'}
+              </span>
+              {plexTestStatus === 'testing' ? 'Testing...' : 'Test Connection'}
+            </button>
+            {plexTestStatus === 'success' && (
+              <span
+                className="integration-test-result integration-test-result--success"
+                data-testid="plex-test-result-success"
+              >
+                ✓ {plexTestMessage}
+              </span>
+            )}
+            {plexTestStatus === 'error' && (
+              <span
+                className="integration-test-result integration-test-result--error"
+                data-testid="plex-test-result-error"
+              >
+                ✗ {plexTestMessage}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -3635,92 +3637,93 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </span>
         </div>
 
-        <p className="form-hint">
-          When enabled, ECM cross-references active stream sessions against the operator's Jellyfin
-          <code> /Sessions </code>feed so Stats can attribute real Jellyfin usernames.
-        </p>
-
-        <div className="checkbox-group">
-          <input
-            id="jellyfinEnabled"
-            type="checkbox"
-            checked={jellyfinEnabled}
-            onChange={(e) => setJellyfinEnabled(e.target.checked)}
-            data-testid="jellyfin-enabled-checkbox"
-          />
-          <div className="checkbox-content">
-            <label htmlFor="jellyfinEnabled">Enable Jellyfin user attribution</label>
-            <p>Requires base URL and API key below. Disabling stops the cross-reference but does not clear stored values.</p>
+        <div className="settings-group">
+          <div className="form-group-vertical">
+            <span className="form-description">
+              When enabled, ECM cross-references active stream sessions against the operator's Jellyfin
+              <code> /Sessions </code>feed so Stats can attribute real Jellyfin usernames.
+            </span>
           </div>
-        </div>
 
-        <div className="form-group-vertical">
-          <label htmlFor="jellyfinBaseUrl">Jellyfin base URL</label>
-          <span className="form-description">
-            Full URL to your Jellyfin server (e.g. <code>http://jellyfin.local:8096</code>). Sub-paths are
-            preserved for reverse-proxy setups.
-          </span>
-          <input
-            id="jellyfinBaseUrl"
-            type="text"
-            value={jellyfinBaseUrl}
-            onChange={(e) => setJellyfinBaseUrl(e.target.value)}
-            placeholder="http://jellyfin.local:8096"
-            data-testid="jellyfin-base-url-input"
-            className="settings-text-input"
-          />
-        </div>
+          <div className="checkbox-group">
+            <input
+              id="jellyfinEnabled"
+              type="checkbox"
+              checked={jellyfinEnabled}
+              onChange={(e) => setJellyfinEnabled(e.target.checked)}
+              data-testid="jellyfin-enabled-checkbox"
+            />
+            <div className="checkbox-content">
+              <label htmlFor="jellyfinEnabled">Enable Jellyfin user attribution</label>
+              <p>Requires base URL and API key below. Disabling stops the cross-reference but does not clear stored values.</p>
+            </div>
+          </div>
 
-        <div className="form-group-vertical">
-          <label htmlFor="jellyfinApiKey">Jellyfin API key</label>
-          <span className="form-description">
-            Generate in Jellyfin: Dashboard → API Keys → New API Key. Stored plaintext at rest.
-            {jellyfinApiKeyConfigured ? ' A key is currently stored — leave blank to keep it.' : ' No key stored.'}
-          </span>
-          <input
-            id="jellyfinApiKey"
-            type="password"
-            value={jellyfinApiKey}
-            onChange={(e) => setJellyfinApiKey(e.target.value)}
-            placeholder={jellyfinApiKeyConfigured ? '••••••••' : 'Paste your Jellyfin API key'}
-            data-testid="jellyfin-api-key-input"
-            className="settings-text-input"
-            autoComplete="new-password"
-          />
-        </div>
-
-        <div className="form-group-vertical">
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={handleTestJellyfinConnection}
-            disabled={jellyfinTestStatus === 'testing'}
-            data-testid="jellyfin-test-connection-btn"
-            style={{ alignSelf: 'flex-start' }}
-          >
-            <span className="material-icons">
-              {jellyfinTestStatus === 'testing' ? 'sync' : 'cable'}
+          <div className="form-group-vertical">
+            <label htmlFor="jellyfinBaseUrl">Jellyfin base URL</label>
+            <span className="form-description">
+              Full URL to your Jellyfin server (e.g. <code>http://jellyfin.local:8096</code>). Sub-paths are
+              preserved for reverse-proxy setups.
             </span>
-            {jellyfinTestStatus === 'testing' ? 'Testing...' : 'Test Connection'}
-          </button>
-          {jellyfinTestStatus === 'success' && (
-            <span
-              className="form-hint"
-              data-testid="jellyfin-test-result-success"
-              style={{ color: 'var(--accent-success, #22C55E)' }}
+            <input
+              id="jellyfinBaseUrl"
+              type="text"
+              value={jellyfinBaseUrl}
+              onChange={(e) => setJellyfinBaseUrl(e.target.value)}
+              placeholder="http://jellyfin.local:8096"
+              data-testid="jellyfin-base-url-input"
+              className="settings-text-input"
+            />
+          </div>
+
+          <div className="form-group-vertical">
+            <label htmlFor="jellyfinApiKey">Jellyfin API key</label>
+            <span className="form-description">
+              Generate in Jellyfin: Dashboard → API Keys → New API Key. Stored plaintext at rest.
+              {jellyfinApiKeyConfigured ? ' A key is currently stored — leave blank to keep it.' : ' No key stored.'}
+            </span>
+            <input
+              id="jellyfinApiKey"
+              type="password"
+              value={jellyfinApiKey}
+              onChange={(e) => setJellyfinApiKey(e.target.value)}
+              placeholder={jellyfinApiKeyConfigured ? '••••••••' : 'Paste your Jellyfin API key'}
+              data-testid="jellyfin-api-key-input"
+              className="settings-text-input"
+              autoComplete="new-password"
+            />
+          </div>
+
+          <div className="integration-test-actions">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleTestJellyfinConnection}
+              disabled={jellyfinTestStatus === 'testing'}
+              data-testid="jellyfin-test-connection-btn"
             >
-              ✓ {jellyfinTestMessage}
-            </span>
-          )}
-          {jellyfinTestStatus === 'error' && (
-            <span
-              className="form-hint"
-              data-testid="jellyfin-test-result-error"
-              style={{ color: 'var(--accent-error, #ef4444)' }}
-            >
-              ✗ {jellyfinTestMessage}
-            </span>
-          )}
+              <span className="material-icons">
+                {jellyfinTestStatus === 'testing' ? 'sync' : 'cable'}
+              </span>
+              {jellyfinTestStatus === 'testing' ? 'Testing...' : 'Test Connection'}
+            </button>
+            {jellyfinTestStatus === 'success' && (
+              <span
+                className="integration-test-result integration-test-result--success"
+                data-testid="jellyfin-test-result-success"
+              >
+                ✓ {jellyfinTestMessage}
+              </span>
+            )}
+            {jellyfinTestStatus === 'error' && (
+              <span
+                className="integration-test-result integration-test-result--error"
+                data-testid="jellyfin-test-result-error"
+              >
+                ✗ {jellyfinTestMessage}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
