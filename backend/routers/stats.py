@@ -133,6 +133,13 @@ def _distinct_poll_subquery(session: Session):
             func.max(SessionTelemetry.poll_interval_ms).label("poll_interval_ms"),
             func.max(SessionTelemetry.dispatcharr_username).label("dispatcharr_username"),
             func.max(SessionTelemetry.emby_user_name).label("emby_user_name"),
+            # bd-r5f0c.4: Plex + Jellyfin attribution surfaces alongside
+            # Emby on the same per-row aggregation. Same defensive MAX
+            # rationale as the Emby column — within one (user, channel,
+            # observed_at) tuple every row should agree, but MAX picks
+            # one deterministically without inflating the row count.
+            func.max(SessionTelemetry.plex_user_name).label("plex_user_name"),
+            func.max(SessionTelemetry.jellyfin_user_name).label("jellyfin_user_name"),
         )
         .group_by(
             SessionTelemetry.user_id,
@@ -178,45 +185,61 @@ def _channel_name_or_fallback(channel_id: str, name_map: dict) -> str:
     return f"Channel {channel_id[:8]}..."
 
 
-async def _enrich_channels_with_emby(channels: list) -> None:
-    """Populate ``emby_user_name`` per channel via the Emby resolver (bd-fm23o).
+def _seed_attribution_keys(channels: list) -> None:
+    """Seed every channel + client with the three ``*_user_name`` keys.
 
-    Mutates ``channels`` in place — adds ``emby_user_name`` (string or
-    None) to each entry. Mirrors the writer-side enrichment in
-    :meth:`BandwidthTracker._collect_emby_attributions` but operates on
-    the live ``/api/stats/channels`` snapshot rather than the per-poll
-    telemetry write path.
+    Idempotent — ``setdefault`` only writes when the key is missing.
+    Called from every short-circuit branch in
+    :func:`_enrich_channels_with_attribution` so the TypeScript shape
+    contract on the frontend stays stable (key present, value
+    ``None``) regardless of which sources are enabled or whether the
+    resolver call short-circuits.
+    """
+    for ch in channels:
+        ch.setdefault("emby_user_name", None)
+        ch.setdefault("plex_user_name", None)
+        ch.setdefault("jellyfin_user_name", None)
+        for client in ch.get("clients", []) or []:
+            client.setdefault("emby_user_name", None)
+            client.setdefault("plex_user_name", None)
+            client.setdefault("jellyfin_user_name", None)
+
+
+async def _enrich_channels_with_attribution(channels: list) -> None:
+    """Populate per-source ``*_user_name`` per channel + per client (bd-r5f0c.4).
+
+    Extends bd-fm23o (Emby-only) to Plex + Jellyfin. Mutates ``channels``
+    in place — adds three nullable fields (``emby_user_name``,
+    ``plex_user_name``, ``jellyfin_user_name``) to each channel entry
+    AND to each entry in the channel's ``clients`` list. The frontend
+    AttributionBadge keys on whichever of the three is non-null,
+    falling back to the Dispatcharr-side username if all three are
+    None.
 
     Gate
     ----
-    Reads ``settings.emby_enabled`` once at the top and short-circuits
-    when Emby is disabled. The resolver itself short-circuits on the
-    disabled state too (the cache returns ``[]``), but the per-channel
-    loop, the per-call settings access, and the import of
-    ``resolve_emby_user`` are unnecessary on the disabled hot path —
-    every operator without an Emby server pays the cost otherwise. The
-    short-circuit STILL sets ``emby_user_name`` to ``None`` on every
-    channel so the frontend can render against the documented shape
-    (presence of the key, value may be null).
+    Each source's enrichment branch checks its own ``<source>_enabled``
+    flag and short-circuits when disabled. Sources that are off
+    contribute ``None`` to every channel/client field — the keys are
+    still seeded via :func:`_seed_attribution_keys` so the shape
+    contract holds regardless of operator configuration.
 
-    Resolver call shape
-    -------------------
-    For each channel, walks the client list and tries
-    :func:`resolve_emby_user(client_ip, stream_name)` on each client in
-    turn. First non-``None`` attribution wins — the operator-visible
-    "(watching: <emby_user>)" badge represents the matched viewer for
-    that channel cell. ``stream_name`` is required (the resolver short-
-    circuits on empty / falsy stream names); channels missing
-    ``stream_name`` after bd-ox5q8 enrichment get ``emby_user_name =
-    None``.
+    Precedence
+    ----------
+    Each source's resolver is called independently — a channel may
+    surface attribution from multiple sources concurrently when an
+    operator runs multiple media servers. The frontend (and
+    :func:`_pick_display_name_and_source` on backend read paths)
+    decides which to display via the documented precedence:
+    Emby > Plex > Jellyfin > Dispatcharr.
 
-    Failure handling
-    ----------------
-    The resolver is documented to never raise, but this loop still
-    wraps each call defensively — an unforeseen runtime fault (cache
-    failure, exotic transient error) for one client must not poison
-    the rest of the channel snapshot. Per-call exceptions log a single
-    debug line and continue.
+    Back-compat
+    -----------
+    bd-fm23o (existing) keyed on ``emby_user_name`` and the
+    ``_enrich_channels_with_emby`` alias below preserves the old
+    name for any external caller. The Active Channels endpoint now
+    calls THIS helper instead so Plex + Jellyfin attribution
+    surfaces on the same response shape.
     """
     if not channels:
         return
@@ -224,78 +247,161 @@ async def _enrich_channels_with_emby(channels: list) -> None:
         from config import get_settings
         settings = get_settings()
     except Exception:  # pragma: no cover — settings access raise is exotic
-        for ch in channels:
-            ch.setdefault("emby_user_name", None)
-            for client in ch.get("clients", []) or []:
-                client.setdefault("emby_user_name", None)
+        _seed_attribution_keys(channels)
         return
 
-    if not getattr(settings, "emby_enabled", False):
-        for ch in channels:
-            ch.setdefault("emby_user_name", None)
-            for client in ch.get("clients", []) or []:
-                client.setdefault("emby_user_name", None)
+    _seed_attribution_keys(channels)
+
+    emby_enabled = bool(getattr(settings, "emby_enabled", False))
+    plex_enabled = bool(getattr(settings, "plex_enabled", False))
+    jellyfin_enabled = bool(getattr(settings, "jellyfin_enabled", False))
+
+    if not (emby_enabled or plex_enabled or jellyfin_enabled):
+        # Every source disabled — keys already seeded to None above.
         return
 
-    from services.emby_resolver import resolve_emby_user
+    # Lazy imports — when a source is disabled, we don't pay the import
+    # cost on the hot path. The disabled checks already short-circuited
+    # the disabled-everything case above; from here on at least one
+    # source is enabled.
+    resolve_emby_user = None
+    resolve_plex_user = None
+    resolve_jellyfin_user = None
+    if emby_enabled:
+        from services.emby_resolver import resolve_emby_user as resolve_emby_user
+    if plex_enabled:
+        from services.plex_resolver import resolve_plex_user as resolve_plex_user
+    if jellyfin_enabled:
+        from services.jellyfin_resolver import resolve_jellyfin_user as resolve_jellyfin_user
 
     for ch in channels:
-        ch.setdefault("emby_user_name", None)
         stream_name = ch.get("stream_name")
         # bd-zldrq (fix-forward for v0.17.1-0033): pull channel_name +
         # channel_number off the Dispatcharr response so the tiered
-        # resolver can match Emby's live-TV "<number> | <name>" item
-        # surface even when the Dispatcharr stream name is provider-
-        # prefixed verbose (e.g. "US: ESPN FHD" vs Emby "408 | ESPN").
+        # resolvers can match each source's live-TV
+        # "<number> | <name>" item surface even when the Dispatcharr
+        # stream name is provider-prefixed verbose.
         channel_name = ch.get("channel_name")
         channel_number = ch.get("channel_number")
-        # Skip cheap when no tier could match: pre-bd-zldrq this gated
-        # on stream_name alone, which would silently drop live-TV
-        # matches whenever the bd-ox5q8 stream-name enrichment produced
-        # an empty value.
+        # Skip cheap when no tier could match for any source.
         if not stream_name and not channel_name and channel_number is None:
-            # Still seed emby_user_name=None on each client so the
-            # TypeScript shape contract holds (field present, value null).
-            for client in ch.get("clients", []) or []:
-                client.setdefault("emby_user_name", None)
             continue
         clients = ch.get("clients") or []
         client_ips = [c.get("ip_address") for c in clients if c.get("ip_address")]
         if not client_ips:
-            # No IPs to resolve — still seed the client field.
-            for client in clients:
-                client.setdefault("emby_user_name", None)
             continue
-        for ip in client_ips:
-            try:
-                attribution = await resolve_emby_user(
-                    ip,
-                    stream_name or "",
-                    ecm_channel_name=channel_name,
-                    ecm_channel_number=channel_number,
-                )
-            except Exception as exc:  # pragma: no cover — resolver never raises
-                logger.debug(
-                    "[STATS] Emby resolver raised for ip=%s stream=%r: %s",
-                    ip, stream_name, exc,
-                )
-                continue
-            if attribution is not None:
-                ch["emby_user_name"] = attribution.user_name
-                # bd-5kbyf (fix-forward for v0.17.1-0035): propagate the
-                # resolved Emby username to every client on this channel.
-                # For Emby-mediated streams, all client connections share
-                # the Emby server's IP from Dispatcharr's perspective —
-                # the channel-level resolved viewer IS the per-client
-                # viewer. Same precision as the channel-level badge.
-                for client in clients:
-                    client["emby_user_name"] = attribution.user_name
-                break
-        else:
-            # Resolver returned None for every IP — seed null so the shape
-            # is consistent regardless of resolution outcome.
-            for client in clients:
-                client.setdefault("emby_user_name", None)
+
+        # Each source's enrichment is independent — a channel can
+        # surface attribution from multiple sources on the same poll
+        # if the operator runs multiple media servers (rare but
+        # supported).
+        if emby_enabled:
+            await _enrich_one_source(
+                ch=ch,
+                clients=clients,
+                client_ips=client_ips,
+                stream_name=stream_name,
+                channel_name=channel_name,
+                channel_number=channel_number,
+                resolver=resolve_emby_user,
+                source_label="emby",
+                user_name_key="emby_user_name",
+            )
+        if plex_enabled:
+            await _enrich_one_source(
+                ch=ch,
+                clients=clients,
+                client_ips=client_ips,
+                stream_name=stream_name,
+                channel_name=channel_name,
+                channel_number=channel_number,
+                resolver=resolve_plex_user,
+                source_label="plex",
+                user_name_key="plex_user_name",
+            )
+        if jellyfin_enabled:
+            await _enrich_one_source(
+                ch=ch,
+                clients=clients,
+                client_ips=client_ips,
+                stream_name=stream_name,
+                channel_name=channel_name,
+                channel_number=channel_number,
+                resolver=resolve_jellyfin_user,
+                source_label="jellyfin",
+                user_name_key="jellyfin_user_name",
+            )
+
+
+async def _enrich_one_source(
+    *,
+    ch: dict,
+    clients: list,
+    client_ips: list,
+    stream_name,
+    channel_name,
+    channel_number,
+    resolver,
+    source_label: str,
+    user_name_key: str,
+) -> None:
+    """Resolve one channel's clients against one media source.
+
+    Shared loop used by Emby / Plex / Jellyfin branches of
+    :func:`_enrich_channels_with_attribution`. ``resolver`` returns
+    either ``str | None`` (Plex shape — the resolver yields a
+    user_name string directly) or an object with a ``.user_name``
+    attribute (Emby / Jellyfin shape — the resolver yields a frozen
+    dataclass). The duck-typed extraction below covers both cases
+    without forcing the resolver modules to share a base class.
+    """
+    for ip in client_ips:
+        try:
+            result = await resolver(
+                ip,
+                stream_name or "",
+                ecm_channel_name=channel_name,
+                ecm_channel_number=channel_number,
+            )
+        except Exception as exc:  # pragma: no cover — resolver never raises
+            logger.debug(
+                "[STATS] %s resolver raised for ip=%s stream=%r: %s",
+                source_label.upper(), ip, stream_name, exc,
+            )
+            continue
+        if result is None:
+            continue
+        # Duck-typed extraction: Plex returns ``str``; Emby +
+        # Jellyfin return frozen dataclasses with ``.user_name``.
+        user_name = (
+            result if isinstance(result, str)
+            else getattr(result, "user_name", None)
+        )
+        if not user_name:
+            continue
+        ch[user_name_key] = user_name
+        # bd-5kbyf-style propagation: a source-mediated stream has
+        # every client coming from the source server's IP, so the
+        # channel-level resolved viewer IS the per-client viewer.
+        for client in clients:
+            client[user_name_key] = user_name
+        # First match wins — same precedent as bd-fm23o for the
+        # Emby-only flow. Operator-visible badge represents one
+        # viewer per channel cell per source.
+        return
+
+
+async def _enrich_channels_with_emby(channels: list) -> None:
+    """Back-compat alias for :func:`_enrich_channels_with_attribution` (bd-fm23o).
+
+    bd-r5f0c.4 superseded this Emby-only helper with the multi-source
+    enrichment. The alias is kept so external callers (and any older
+    tests that haven't migrated yet) continue working without a hard
+    break — the new helper produces a superset of the old's fields
+    (plex / jellyfin keys added; existing ``emby_user_name`` path
+    unchanged).
+    """
+    await _enrich_channels_with_attribution(channels)
 
 
 # =============================================================================
@@ -427,7 +533,14 @@ async def get_channel_stats():
             # produced no attribution. Never blocks the live view: any
             # resolver fault drops the field for that channel and
             # continues.
-            await _enrich_channels_with_emby(channels)
+            # bd-r5f0c.4: multi-source attribution. Same call shape as
+            # the bd-fm23o Emby-only enrichment — the function now
+            # populates emby_user_name + plex_user_name +
+            # jellyfin_user_name per channel and per client. Existing
+            # frontend consumers reading emby_user_name see no shape
+            # change; new consumers (W5 AttributionBadge) read the
+            # added keys.
+            await _enrich_channels_with_attribution(channels)
 
         return result
     except Exception as e:
@@ -878,6 +991,14 @@ async def get_watch_time_by_user(
                     # account); MAX picks one deterministically without
                     # inflating the row count.
                     func.max(inner.c.emby_user_name).label("emby_user_name"),
+                    # bd-r5f0c.4: Plex + Jellyfin attribution alongside
+                    # Emby. ``_pick_display_name_and_source`` applies the
+                    # precedence (Emby > Plex > Jellyfin > Dispatcharr)
+                    # to choose the user-facing display name.
+                    func.max(inner.c.plex_user_name).label("plex_user_name"),
+                    func.max(inner.c.jellyfin_user_name).label(
+                        "jellyfin_user_name"
+                    ),
                 )
                 .group_by(inner.c.user_id)
                 .all()
@@ -902,6 +1023,12 @@ async def get_watch_time_by_user(
                     ),
                     # bd-fm23o: same Emby denorm as the total branch.
                     func.max(inner.c.emby_user_name).label("emby_user_name"),
+                    # bd-r5f0c.4: Plex + Jellyfin denorm — same MAX
+                    # rationale as Emby.
+                    func.max(inner.c.plex_user_name).label("plex_user_name"),
+                    func.max(inner.c.jellyfin_user_name).label(
+                        "jellyfin_user_name"
+                    ),
                 )
                 .group_by(inner.c.user_id, day_expr)
                 .all()
@@ -1289,26 +1416,45 @@ def _pick_display_name_and_source(
     *,
     emby_user_name: Optional[str],
     dispatcharr_username: Optional[str],
+    plex_user_name: Optional[str] = None,
+    jellyfin_user_name: Optional[str] = None,
 ) -> tuple[Optional[str], str]:
-    """Pick the per-row display name + attribution source (bd-fm23o).
+    """Pick the per-row display name + attribution source (bd-r5f0c.4).
 
-    Emby wins over Dispatcharr when present. This mirrors the final-bead
-    spec of EPIC bd-2cenq: when a session_telemetry row was attributed
-    to an Emby user (via :meth:`BandwidthTracker._collect_emby_attributions`
-    → :func:`services.emby_resolver.resolve_emby_user`), the Emby
-    username is the true viewer identity — surfacing the Dispatcharr-side
-    username here would just reveal the proxy/API account, the exact
-    problem this epic exists to fix.
+    Extends bd-fm23o (Emby > Dispatcharr) to the full multi-source
+    precedence: Emby > Plex > Jellyfin > Dispatcharr. Each media
+    source's username, when present, represents the TRUE viewer
+    identity for that row — the Dispatcharr-side username is the
+    proxy/API account name, which is what the epic exists to replace.
+
+    Why Emby wins: every match guarantee is equivalent across sources
+    (single concurrent session on a matching item), so ordering is
+    historical (Emby shipped first in bd-fm23o) plus PO direction:
+    operators with both Emby and Plex configured almost always have
+    one as the primary surface and the other as a secondary.
+    Emby > Plex > Jellyfin keeps the W4 precedence simple to reason
+    about. W8 will exercise the spill behavior across all 7 ordered
+    sub-cases.
+
+    Args:
+        emby_user_name: Emby attribution from the row (or None).
+        dispatcharr_username: Dispatcharr proxy username from the row.
+        plex_user_name: Plex attribution from the row (bd-r5f0c.4).
+        jellyfin_user_name: Jellyfin attribution from the row (bd-r5f0c.4).
 
     Returns:
-        ``(display_name, attribution_source)`` where ``attribution_source``
-        is ``"emby"`` when ``emby_user_name`` is non-null, else
-        ``"dispatcharr"``. ``display_name`` may still be ``None`` when
-        neither source provided a name (legacy rows pre-bd-gsn3r) — the
-        frontend renders that as "Unknown viewer".
+        ``(display_name, attribution_source)`` — source is one of
+        ``"emby"``, ``"plex"``, ``"jellyfin"``, ``"dispatcharr"``.
+        ``display_name`` may still be ``None`` when no source provided
+        a name (legacy rows pre-bd-gsn3r); the frontend renders that
+        as "Unknown viewer".
     """
     if emby_user_name:
         return emby_user_name, "emby"
+    if plex_user_name:
+        return plex_user_name, "plex"
+    if jellyfin_user_name:
+        return jellyfin_user_name, "jellyfin"
     return dispatcharr_username, "dispatcharr"
 
 
@@ -1317,6 +1463,11 @@ def _build_watch_time_row_total(row) -> dict:
     display_name, source = _pick_display_name_and_source(
         emby_user_name=row.emby_user_name,
         dispatcharr_username=row.dispatcharr_username,
+        # bd-r5f0c.4: plex / jellyfin attribution feed the precedence.
+        # ``getattr`` defaults to ``None`` so older row objects (test
+        # seams that build rows without these labels) keep working.
+        plex_user_name=getattr(row, "plex_user_name", None),
+        jellyfin_user_name=getattr(row, "jellyfin_user_name", None),
     )
     return {
         "user_id": row.user_id,
@@ -1332,6 +1483,8 @@ def _build_watch_time_row_day(row) -> dict:
     display_name, source = _pick_display_name_and_source(
         emby_user_name=row.emby_user_name,
         dispatcharr_username=row.dispatcharr_username,
+        plex_user_name=getattr(row, "plex_user_name", None),
+        jellyfin_user_name=getattr(row, "jellyfin_user_name", None),
     )
     return {
         "user_id": row.user_id,

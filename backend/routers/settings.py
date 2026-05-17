@@ -10,11 +10,14 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from urllib.parse import urlparse, urlunparse
 
 from auth import RequireAdminIfEnabled
 from config import get_settings, save_settings, clear_settings_cache, set_log_level, DispatcharrSettings
 from dispatcharr_client import get_client, reset_client
 from emby_client import EmbyClient, EmbyClientError
+from jellyfin_client import JellyfinClient, JellyfinClientError
+from plex_client import PlexClient, PlexClientError
 from cache import get_cache
 from database import get_session
 from stream_prober import StreamProber, get_prober, set_prober
@@ -150,6 +153,21 @@ class SettingsRequest(BaseModel):
     # the stored value (same preserve-on-omit contract as ``smtp_password``
     # and ``mcp_api_key`` — bd-vj8n9).
     emby_api_key: Optional[str] = None
+    # Plex integration (bd-r5f0c.4, epic bd-r5f0c). Mirror the Emby
+    # contract: an older frontend bundle that omits these fields must
+    # NOT clobber stored values to defaults, so the saver applies the
+    # preserve-on-omit pattern for ``plex_token`` and the existing
+    # values for the toggle + base URL when the request key is absent.
+    plex_enabled: bool = False
+    plex_base_url: str = ""
+    # ``plex_token`` is Optional so a partial POST that omits it preserves
+    # the stored value (same posture as ``emby_api_key``).
+    plex_token: Optional[str] = None
+    # Jellyfin integration (bd-r5f0c.4, epic bd-r5f0c). Same posture
+    # as Emby + Plex.
+    jellyfin_enabled: bool = False
+    jellyfin_base_url: str = ""
+    jellyfin_api_key: Optional[str] = None
 
 
 class SettingsResponse(BaseModel):
@@ -249,6 +267,17 @@ class SettingsResponse(BaseModel):
     emby_enabled: bool
     emby_base_url: str
     emby_api_key_configured: bool
+    # Plex integration (bd-r5f0c.4, epic bd-r5f0c). The token itself is
+    # NOT returned — only a boolean indicator that one is stored, mirroring
+    # ``emby_api_key_configured``.
+    plex_enabled: bool
+    plex_base_url: str
+    plex_token_configured: bool
+    # Jellyfin integration (bd-r5f0c.4, epic bd-r5f0c). Same posture as
+    # Emby + Plex.
+    jellyfin_enabled: bool
+    jellyfin_base_url: str
+    jellyfin_api_key_configured: bool
 
 
 class EmbyTestConnectionRequest(BaseModel):
@@ -257,6 +286,27 @@ class EmbyTestConnectionRequest(BaseModel):
     The operator may be testing values BEFORE saving them, so we accept the
     base URL and API key in the request body rather than reading from saved
     settings. Mirrors the Dispatcharr ``TestConnectionRequest`` shape.
+    """
+    base_url: str
+    api_key: str
+
+
+class PlexTestConnectionRequest(BaseModel):
+    """Inline credentials for the Plex test-connection endpoint (bd-r5f0c.4).
+
+    Mirrors :class:`EmbyTestConnectionRequest`. The token field is named
+    ``token`` rather than ``api_key`` to match Plex ecosystem nomenclature
+    operators are used to (``X-Plex-Token``).
+    """
+    base_url: str
+    token: str
+
+
+class JellyfinTestConnectionRequest(BaseModel):
+    """Inline credentials for the Jellyfin test-connection endpoint (bd-r5f0c.4).
+
+    Mirrors :class:`EmbyTestConnectionRequest` exactly — Jellyfin uses a
+    server-issued API key (Dashboard > API Keys), same posture as Emby.
     """
     base_url: str
     api_key: str
@@ -418,6 +468,14 @@ async def get_current_settings():
         emby_enabled=settings.emby_enabled,
         emby_base_url=settings.emby_base_url,
         emby_api_key_configured=bool(settings.emby_api_key),
+        # Plex integration (bd-r5f0c.4). Same mask-secret posture as Emby.
+        plex_enabled=settings.plex_enabled,
+        plex_base_url=settings.plex_base_url,
+        plex_token_configured=bool(settings.plex_token),
+        # Jellyfin integration (bd-r5f0c.4). Same mask-secret posture.
+        jellyfin_enabled=settings.jellyfin_enabled,
+        jellyfin_base_url=settings.jellyfin_base_url,
+        jellyfin_api_key_configured=bool(settings.jellyfin_api_key),
     )
 
 
@@ -465,6 +523,17 @@ async def update_settings(request: SettingsRequest):
     # ``smtp_password`` and ``mcp_api_key`` so the Settings UI can save
     # non-secret fields (toggle, base URL) without re-asking for the key.
     emby_api_key = request.emby_api_key if request.emby_api_key else current_settings.emby_api_key
+
+    # Plex token + Jellyfin API key: same preserve-on-omit posture
+    # (bd-r5f0c.4). A partial POST (e.g. older frontend bundle that doesn't
+    # know about Plex / Jellyfin yet) must NOT silently clear stored secrets
+    # or flip toggles back to defaults.
+    plex_token = request.plex_token if request.plex_token else current_settings.plex_token
+    jellyfin_api_key = (
+        request.jellyfin_api_key
+        if request.jellyfin_api_key
+        else current_settings.jellyfin_api_key
+    )
 
     # MCP API key is never accepted on this endpoint (it has dedicated
     # generate/revoke endpoints) — always preserve the stored value so a
@@ -607,6 +676,14 @@ async def update_settings(request: SettingsRequest):
         emby_enabled=request.emby_enabled,
         emby_base_url=request.emby_base_url,
         emby_api_key=emby_api_key,
+        # Plex integration (bd-r5f0c.4). plex_token preserved above.
+        plex_enabled=request.plex_enabled,
+        plex_base_url=request.plex_base_url,
+        plex_token=plex_token,
+        # Jellyfin integration (bd-r5f0c.4). jellyfin_api_key preserved above.
+        jellyfin_enabled=request.jellyfin_enabled,
+        jellyfin_base_url=request.jellyfin_base_url,
+        jellyfin_api_key=jellyfin_api_key,
     )
     save_settings(new_settings)
     clear_settings_cache()
@@ -1027,6 +1104,52 @@ async def test_telegram_bot(request: TelegramTestRequest):
         return {"success": False, "message": "Unexpected error during Telegram test"}
 
 
+def _sanitize_base_url(raw_url: str) -> tuple[Optional[str], Optional[str]]:
+    """Sanitize an operator-supplied base URL for media-server test endpoints.
+
+    SSRF mitigation (security finding SEC-2 — bd-r5f0c.4 backfill).
+    Mirrors the Dispatcharr ``/test`` endpoint pattern (routers.settings.
+    test_connection, around the ``urlparse`` + scheme allowlist +
+    ``urlunparse((scheme, netloc, '', '', '', ''))`` reconstruction):
+
+    1. Reject any scheme outside {http, https}. ``file://`` /
+       ``gopher://`` / ``ftp://`` / etc. let an attacker pivot the
+       proxy-server request through unintended protocols (file
+       exfiltration, internal protocol smuggling).
+    2. Reject when no hostname is present — without a hostname the
+       client would either bind to a default loopback or raise late;
+       fail-closed at the entry edge instead.
+    3. Reconstruct the URL from scheme + netloc ONLY, stripping any
+       path / params / query / fragment the operator typed (or an
+       attacker tried to embed). The downstream client builds its own
+       paths off the base URL — preserving the operator's path would
+       let a crafted ``http://attacker.com/legit/path?bypass`` survive
+       to the HTTP probe.
+
+    Returns:
+        ``(sanitized_url, None)`` on success; ``(None, error_message)``
+        on rejection. Callers route the error message into the
+        ``{ok: False, error: <msg>}`` envelope so the UI surfaces an
+        inline banner rather than a 500.
+    """
+    if not raw_url:
+        return None, "Base URL is required"
+    try:
+        parsed = urlparse(raw_url)
+    except ValueError:
+        return None, "Invalid base URL — could not parse"
+    if parsed.scheme.lower() not in ("http", "https"):
+        return None, "Invalid URL scheme — must be http or https"
+    if not parsed.hostname:
+        return None, "Invalid base URL — no hostname provided"
+    # Reconstruct from (scheme, netloc, path='', params='', query='',
+    # fragment=''). netloc carries hostname + optional port + optional
+    # userinfo — the operator's port stays attached, but everything past
+    # the authority is dropped.
+    sanitized = urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
+    return sanitized, None
+
+
 @router.post("/emby/test-connection")
 async def test_emby_connection(
     request: EmbyTestConnectionRequest,
@@ -1045,12 +1168,21 @@ async def test_emby_connection(
     any auth / network / non-2xx failure. The endpoint deliberately does
     NOT raise HTTPException on connection failure — the operator wants to
     SEE the error message inline in the UI, not get a generic 500.
+
+    bd-r5f0c.4: SSRF mitigation via :func:`_sanitize_base_url`. Backfilled
+    on this previously-unsafe endpoint at the same time the new Plex +
+    Jellyfin endpoints landed with the helper from day one (security
+    finding SEC-2).
     """
     logger.debug(
         "[SETTINGS-TEST] POST /api/settings/emby/test-connection - base_url=%s",
         request.base_url,
     )
-    client = EmbyClient(request.base_url, request.api_key)
+    base_url, err = _sanitize_base_url(request.base_url)
+    if err is not None:
+        logger.info("[SETTINGS-TEST] Emby test rejected by SSRF guard: %s", err)
+        return {"ok": False, "error": err}
+    client = EmbyClient(base_url, request.api_key)
     try:
         # ``test_connection()`` already swallows EmbyClientError → False, but
         # we want the operator-actionable error STRING for the UI banner.
@@ -1071,7 +1203,96 @@ async def test_emby_connection(
         await client.close()
     logger.info(
         "[SETTINGS-TEST] Emby connection test successful - base_url=%s",
+        base_url,
+    )
+    return {"ok": True}
+
+
+@router.post("/plex/test-connection")
+async def test_plex_connection(
+    request: PlexTestConnectionRequest,
+    _admin=RequireAdminIfEnabled,
+):
+    """Test connectivity to a Plex server using operator-supplied credentials.
+
+    Wired into the Settings UI 'Test Connection' button (bd-r5f0c.4). Mirrors
+    :func:`test_emby_connection` exactly — operator may be testing values
+    BEFORE saving so request body credentials win over saved settings;
+    admin-only; inline ``{ok: False, error: <msg>}`` on failure (never a 500).
+
+    SSRF mitigation (security finding SEC-2): scheme allowlist
+    (``http`` / ``https`` only) + netloc-only URL reconstruction via
+    :func:`_sanitize_base_url`. ``file://`` / ``gopher://`` / paths /
+    queries / fragments are rejected or stripped before the HTTP probe.
+    """
+    logger.debug(
+        "[SETTINGS-TEST] POST /api/settings/plex/test-connection - base_url=%s",
         request.base_url,
+    )
+    base_url, err = _sanitize_base_url(request.base_url)
+    if err is not None:
+        logger.info("[SETTINGS-TEST] Plex test rejected by SSRF guard: %s", err)
+        return {"ok": False, "error": err}
+    client = PlexClient(base_url, request.token)
+    try:
+        await client.get_sessions()
+    except PlexClientError as exc:
+        logger.info("[SETTINGS-TEST] Plex connection test failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception(
+            "[SETTINGS-TEST] Plex connection test unexpected error: %s", exc,
+        )
+        return {"ok": False, "error": f"Unexpected error: {type(exc).__name__}"}
+    finally:
+        await client.close()
+    logger.info(
+        "[SETTINGS-TEST] Plex connection test successful - base_url=%s",
+        base_url,
+    )
+    return {"ok": True}
+
+
+@router.post("/jellyfin/test-connection")
+async def test_jellyfin_connection(
+    request: JellyfinTestConnectionRequest,
+    _admin=RequireAdminIfEnabled,
+):
+    """Test connectivity to a Jellyfin server using operator-supplied credentials.
+
+    Wired into the Settings UI 'Test Connection' button (bd-r5f0c.4). Mirrors
+    :func:`test_emby_connection` exactly — operator may be testing values
+    BEFORE saving so request body credentials win over saved settings;
+    admin-only; inline ``{ok: False, error: <msg>}`` on failure (never a 500).
+
+    SSRF mitigation (security finding SEC-2): scheme allowlist
+    (``http`` / ``https`` only) + netloc-only URL reconstruction via
+    :func:`_sanitize_base_url`.
+    """
+    logger.debug(
+        "[SETTINGS-TEST] POST /api/settings/jellyfin/test-connection - base_url=%s",
+        request.base_url,
+    )
+    base_url, err = _sanitize_base_url(request.base_url)
+    if err is not None:
+        logger.info("[SETTINGS-TEST] Jellyfin test rejected by SSRF guard: %s", err)
+        return {"ok": False, "error": err}
+    client = JellyfinClient(base_url, request.api_key)
+    try:
+        await client.get_sessions()
+    except JellyfinClientError as exc:
+        logger.info("[SETTINGS-TEST] Jellyfin connection test failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception(
+            "[SETTINGS-TEST] Jellyfin connection test unexpected error: %s", exc,
+        )
+        return {"ok": False, "error": f"Unexpected error: {type(exc).__name__}"}
+    finally:
+        await client.close()
+    logger.info(
+        "[SETTINGS-TEST] Jellyfin connection test successful - base_url=%s",
+        base_url,
     )
     return {"ok": True}
 
