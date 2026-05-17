@@ -246,7 +246,11 @@ class TestActiveChannelsEmbyEnrichment:
         ]
 
         # Patch the resolver to attribute the one client to "alice".
-        async def _fake_resolver(ip, stream_name):
+        # bd-zldrq: the resolver signature now accepts
+        # ``ecm_channel_name`` / ``ecm_channel_number`` kwargs — accept
+        # via ``**_kwargs`` so this test stays focused on the
+        # tier-3 fuzzy path's contract.
+        async def _fake_resolver(ip, stream_name, **_kwargs):
             assert ip == "10.0.0.42"
             assert stream_name == "TNT HD"
             return EmbyAttribution(user_id="uid-alice", user_name="alice")
@@ -270,6 +274,65 @@ class TestActiveChannelsEmbyEnrichment:
         assert ch["emby_user_name"] == "alice"
 
     @pytest.mark.asyncio
+    async def test_resolver_receives_channel_name_and_number_for_live_tv(
+        self, async_client
+    ):
+        """bd-zldrq fix-forward (v0.17.1-0033): the Active Channels
+        enrichment must forward ``ecm_channel_name`` and
+        ``ecm_channel_number`` to the resolver so live-TV sessions
+        resolve when the Dispatcharr stream name ("US: ESPN FHD")
+        does not fuzzy match Emby's "408 | ESPN" above the 0.85
+        threshold. Without this, the operator's live test on channel
+        408 shows "User #0" instead of the resolved Emby username.
+        """
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {
+                    "channel_id": "uuid-espn",
+                    "channel_name": "ESPN",
+                    "channel_number": 408,
+                    "stream_id": 9001,
+                    "clients": [{"ip_address": "10.0.0.42", "user_id": 7}],
+                },
+            ],
+        }
+        mock_client.get_streams_by_ids.return_value = [
+            {"id": 9001, "name": "US: ESPN FHD", "m3u_account": 6},
+        ]
+
+        captured_calls: list[tuple] = []
+
+        async def _capture_resolver(ip, stream_name, **kwargs):
+            captured_calls.append((ip, stream_name, kwargs))
+            return EmbyAttribution(user_id="uid-mw", user_name="MotWakorb")
+
+        with (
+            patch("routers.stats.get_client", return_value=mock_client),
+            patch(
+                "services.emby_resolver.resolve_emby_user",
+                side_effect=_capture_resolver,
+            ),
+            patch(
+                "config.get_settings",
+                return_value=type("S", (), {"emby_enabled": True, "emby_base_url": "http://emby"})(),
+            ),
+        ):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        ch = body["channels"][0]
+        assert ch["emby_user_name"] == "MotWakorb"
+
+        # Pin the wiring contract: stats.py must pass the live-TV
+        # tier args, not stream_name alone.
+        assert len(captured_calls) >= 1
+        _ip, _stream, kwargs = captured_calls[0]
+        assert kwargs.get("ecm_channel_name") == "ESPN"
+        assert kwargs.get("ecm_channel_number") == 408
+
+    @pytest.mark.asyncio
     async def test_emby_user_name_null_when_resolver_returns_none(
         self, async_client
     ):
@@ -290,7 +353,7 @@ class TestActiveChannelsEmbyEnrichment:
             {"id": 600, "name": "CNN", "m3u_account": 6},
         ]
 
-        async def _no_match(ip, stream_name):
+        async def _no_match(ip, stream_name, **_kwargs):
             return None
 
         with (
@@ -334,7 +397,7 @@ class TestActiveChannelsEmbyEnrichment:
 
         resolver_calls = []
 
-        async def _track_calls(ip, stream_name):
+        async def _track_calls(ip, stream_name, **_kwargs):
             resolver_calls.append((ip, stream_name))
             return None
 
