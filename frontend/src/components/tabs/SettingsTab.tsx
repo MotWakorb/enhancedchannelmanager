@@ -3409,18 +3409,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         <p>Configure third-party server integrations for cross-referenced data (Stats user attribution, etc.).</p>
       </div>
 
-      {/* Anchor jump nav (bd-r5f0c.5 / W5) */}
-      <nav className="settings-anchor-nav" aria-label="Integrations">
-        <a href="#dispatcharr-integration">Dispatcharr</a>
-        <a href="#emby-integration">Emby</a>
-        <a href="#plex-integration">Plex</a>
-        <a href="#jellyfin-integration">Jellyfin</a>
-      </nav>
-
-      {/* Dispatcharr anchor — the General page hosts the primary upstream
-          connection but operators may want to jump here from the nav. */}
-      <div id="dispatcharr-integration" />
-
       {/* Emby Integration */}
       <div id="emby-integration" className="settings-section" data-testid="emby-integration-section">
         <div className="settings-section-header">
