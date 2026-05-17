@@ -410,6 +410,10 @@ export const mockDataStore: MockDataStore = {
     epg_auto_match_threshold: 80,
     dedup_threshold: 0.80,
     dedup_m3u_toast_suppressed: false,
+    // Emby integration (bd-8wc6q). Defaults disabled.
+    emby_enabled: false,
+    emby_base_url: '',
+    emby_api_key_configured: false,
     include_channel_number_in_name: false,
     channel_number_separator: '-',
     remove_country_prefix: false,

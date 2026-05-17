@@ -152,3 +152,38 @@ def test_cache_clear_resets_warn_flag(caplog):
         if r.levelno == logging.WARNING and "integrity floor" in r.message
     ]
     assert len(warn_records) == 2
+
+
+# ---------------------------------------------------------------------------
+# Emby integration field defaults (bd-8wc6q, epic bd-2cenq)
+# ---------------------------------------------------------------------------
+
+
+def test_emby_enabled_default_is_false():
+    """Emby integration ships disabled by default — operator must opt in."""
+    s = DispatcharrSettings()
+    assert s.emby_enabled is False
+
+
+def test_emby_base_url_default_is_empty_string():
+    """No default URL — operator must enter their Emby server's address."""
+    s = DispatcharrSettings()
+    assert s.emby_base_url == ""
+
+
+def test_emby_api_key_default_is_empty_string():
+    """No default API key — operator must paste their Emby API token."""
+    s = DispatcharrSettings()
+    assert s.emby_api_key == ""
+
+
+def test_emby_fields_accept_operator_values():
+    """All three Emby fields persist whatever the operator sets."""
+    s = DispatcharrSettings(
+        emby_enabled=True,
+        emby_base_url="http://emby.local:8096",
+        emby_api_key="secret-token",
+    )
+    assert s.emby_enabled is True
+    assert s.emby_base_url == "http://emby.local:8096"
+    assert s.emby_api_key == "secret-token"

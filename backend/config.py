@@ -216,6 +216,22 @@ class DispatcharrSettings(BaseModel):
     # after M3U refresh is not shown to the operator.
     # Default False — the toast is shown by default.
     dedup_m3u_toast_suppressed: bool = False
+    # Emby integration settings (bd-8wc6q, epic bd-2cenq). When ``emby_enabled``
+    # is True and ``emby_base_url`` + ``emby_api_key`` are configured, the
+    # Stats v2 / BandwidthTracker pipeline cross-references active streams
+    # against the operator's Emby /Sessions feed to attribute real Emby
+    # usernames instead of collapsing every Emby-mediated pull to the proxy
+    # IP. ``emby_api_key`` is stored PLAINTEXT at rest — same approach as
+    # ``dispatcharr_api_key`` (no encryption-at-rest in this release).
+    emby_enabled: bool = False
+    # Base URL of the operator's Emby server, e.g. ``http://emby.local:8096``
+    # or ``http://proxy/emby`` for reverse-proxy setups. No validation —
+    # operator's responsibility to enter a reachable URL; the bd-8wc6q
+    # Settings UI 'Test Connection' button surfaces unreachable URLs.
+    emby_base_url: str = ""
+    # Emby API key (X-Emby-Token header value). Plaintext at rest, same
+    # approach as ``dispatcharr_api_key``.
+    emby_api_key: str = ""
 
     @field_validator("dedup_threshold")
     @classmethod
