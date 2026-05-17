@@ -20,3 +20,10 @@ export type {
   UseDedupOnDropOptions,
   UseDedupOnDropReturn,
 } from './useDedupOnDrop';
+export { useAddStreamDedup } from './useAddStreamDedup';
+export type {
+  AddStreamDedupModalState,
+  AddStreamRequestStream,
+  UseAddStreamDedupReturn,
+  OnProceedCreate,
+} from './useAddStreamDedup';

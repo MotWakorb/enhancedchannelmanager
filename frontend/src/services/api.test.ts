@@ -11,6 +11,7 @@ import {
   removeStreamFromChannel,
   reorderChannelStreams,
   deleteChannel,
+  getChannelMergeCandidates,
   // Compute sort
   computeSort,
   // Enhanced stats (v0.11.0)
@@ -144,6 +145,57 @@ describe('API Service', () => {
       const result = await updateChannel(1, { channel_number: 200 });
 
       expect(result.channel_number).toBe(200);
+    });
+  });
+
+  describe('getChannelMergeCandidates (BD-D / ADR-008 §D1)', () => {
+    it('returns the BD-D response envelope verbatim and forwards stream_name + group_id query params', async () => {
+      let requestUrl = '';
+      server.use(
+        http.get('/api/channel-merges/candidates', ({ request }) => {
+          requestUrl = request.url;
+          return HttpResponse.json({
+            stream_name: 'ESPN HD',
+            candidates: [
+              { channel_id: 'channel-uuid-abc', channel_name: 'ESPN HD', confidence: 0.92 },
+            ],
+            total: 1,
+            page: 1,
+            page_size: 50,
+            total_pages: 1,
+          });
+        })
+      );
+
+      const result = await getChannelMergeCandidates('ESPN HD', 7);
+
+      expect(requestUrl).toContain('stream_name=ESPN+HD');
+      expect(requestUrl).toContain('group_id=7');
+      expect(result.candidates).toHaveLength(1);
+      expect(result.candidates[0].channel_id).toBe('channel-uuid-abc');
+      expect(result.candidates[0].confidence).toBe(0.92);
+    });
+
+    it('omits group_id when null (search all groups)', async () => {
+      let requestUrl = '';
+      server.use(
+        http.get('/api/channel-merges/candidates', ({ request }) => {
+          requestUrl = request.url;
+          return HttpResponse.json({
+            stream_name: 'CNN',
+            candidates: [],
+            total: 0,
+            page: 1,
+            page_size: 50,
+            total_pages: 0,
+          });
+        })
+      );
+
+      await getChannelMergeCandidates('CNN', null);
+
+      expect(requestUrl).toContain('stream_name=CNN');
+      expect(requestUrl).not.toContain('group_id=');
     });
   });
 
