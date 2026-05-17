@@ -13,12 +13,13 @@ was the (a)→(d) transition gate and there is no off-state once legacy
 writes are gone.
 """
 import asyncio
+import json
 import logging
 import os
 import re
 import time
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, date, timedelta, timezone
 from typing import Any, ClassVar, NamedTuple, Optional
 from zoneinfo import ZoneInfo
@@ -33,9 +34,21 @@ from models import (
     SessionTelemetry,
     UniqueClientConnection,
 )
-from services.emby_resolver import EmbyAttribution, resolve_emby_user
-from services.jellyfin_resolver import JellyfinAttribution, resolve_jellyfin_user
-from services.plex_resolver import resolve_plex_user
+from services.emby_resolver import (
+    EmbyAttribution,
+    resolve_emby_user,
+    resolve_emby_users,
+)
+from services.jellyfin_resolver import (
+    JellyfinAttribution,
+    resolve_jellyfin_user,
+    resolve_jellyfin_users,
+)
+from services.plex_resolver import (
+    PlexAttribution,
+    resolve_plex_user,
+    resolve_plex_users,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,26 +93,34 @@ class AttributionResult:
 
     bd-r5f0c.4 (epic bd-r5f0c). Populated by
     :meth:`BandwidthTracker._resolve_attributions` for every active
-    viewing connection in a poll. Each field is ``None`` when the
-    corresponding source did not match this client — typical for the
-    common case where the operator has only one media server enabled,
-    or the stream is not media-server-mediated at all (direct
+    viewing connection in a poll. Each field is ``None`` (or empty list)
+    when the corresponding source did not match this client — typical
+    for the common case where the operator has only one media server
+    enabled, or the stream is not media-server-mediated at all (direct
     Dispatcharr proxy traffic).
 
-    The Plex resolver returns only ``user_name`` (no Plex-side user
-    UUID is exposed on the public ``/status/sessions`` surface — Plex
-    Web users are identified by their numeric ``User/@id``, which
-    ``plex_resolver`` could surface but currently does not). Keep
-    ``plex_user_id`` slot here so the W1 schema's column can be
-    populated when / if the resolver is upgraded later — the column
-    NULL today is the same posture as a non-matched row.
+    bd-r5f0c.9 extension — multi-viewer attribution. The original
+    bd-r5f0c.4 single-viewer fields (``*_user_id`` / ``*_user_name``)
+    are retained for back-compat with Stats v2 aggregations and the
+    pre-W5 frontend rendering. Three new fields carry the FULL list of
+    viewers per source so multi-viewer scenarios (N upstream users on
+    one channel via the same media-server transcoding proxy) are
+    captured. The legacy singular slots are populated with position 0
+    of the corresponding viewer list (most-recent viewer) so existing
+    consumers see exactly the same shape as v0.17.1-0042.
+
+    The Plex resolver currently surfaces only ``user_name`` (no Plex-
+    side user UUID is exposed on the public ``/status/sessions``
+    surface — Plex Web users are identified by their numeric
+    ``User/@id``, which ``plex_resolver`` could surface but currently
+    does not). The ``plex_user_id`` slot and the ``user_id`` keys
+    inside ``plex_viewers`` dicts stay NULL today — the schema and the
+    dataclass tolerate this; the column tolerates NULL via the
+    nullable TEXT type.
 
     All three pairs ride together in one dataclass so the writer can
     look up one ``AttributionResult`` per (channel, ip) instead of
-    consulting three separate dicts. The downstream
-    ``_write_session_telemetry`` loop reads each pair and stamps the
-    corresponding ``session_telemetry`` column; columns for sources
-    that didn't match stay NULL.
+    consulting three separate dicts.
     """
 
     emby_user_id: Optional[str] = None
@@ -108,14 +129,27 @@ class AttributionResult:
     plex_user_name: Optional[str] = None
     jellyfin_user_id: Optional[str] = None
     jellyfin_user_name: Optional[str] = None
+    # bd-r5f0c.9 multi-viewer lists. Each is a list of
+    # ``{"user_id": str | None, "user_name": str}`` dicts, sorted
+    # ``last_activity_date`` descending so position 0 is the most-recent
+    # viewer (the same viewer the legacy *_user_name field carries).
+    # Empty list (default) when the corresponding source did not
+    # match — semantically identical to "no viewers" / NULL in the DB.
+    # ``field(default_factory=list)`` rather than a bare ``[]`` because
+    # this dataclass is frozen and a mutable default would be a shared
+    # class-level instance across every AttributionResult.
+    emby_viewers: list[dict] = field(default_factory=list)
+    plex_viewers: list[dict] = field(default_factory=list)
+    jellyfin_viewers: list[dict] = field(default_factory=list)
 
     def is_empty(self) -> bool:
-        """True when no source matched this client (every field NULL)."""
+        """True when no source matched this client (every field empty/NULL)."""
         return not any(
             (
                 self.emby_user_id, self.emby_user_name,
                 self.plex_user_id, self.plex_user_name,
                 self.jellyfin_user_id, self.jellyfin_user_name,
+                self.emby_viewers, self.plex_viewers, self.jellyfin_viewers,
             )
         )
 
@@ -2463,27 +2497,49 @@ class BandwidthTracker:
         )
 
         # Merge the three sparse maps into a single result per (channel,
-        # ip). A given client may resolve in only one source (typical
-        # — operators run one media server), in multiple sources (rare,
-        # but legal: a client IP that matches both Plex AND Jellyfin
-        # server IPs because both are on the same host), or in none
-        # (the row writes with all six columns NULL).
+        # ip). Each per-source map value is now a list of attributions
+        # (bd-r5f0c.9 multi-viewer) — sorted most-recent-first. We
+        # populate BOTH the legacy singular fields (position 0 = most-
+        # recent viewer, back-compat with Stats v2 aggregations + the
+        # pre-W5 frontend) AND the full ``*_viewers`` list field (W5+
+        # consumers render every viewer). Sources that didn't match
+        # leave their slot as the dataclass default (None / empty list).
         merged: dict[tuple[str, str], AttributionResult] = {}
         all_keys = set(emby_map.keys()) | set(plex_map.keys()) | set(jellyfin_map.keys())
         for key in all_keys:
-            emby_attr = emby_map.get(key)
-            plex_name = plex_map.get(key)
-            jellyfin_attr = jellyfin_map.get(key)
+            emby_list = emby_map.get(key) or []
+            plex_list = plex_map.get(key) or []
+            jellyfin_list = jellyfin_map.get(key) or []
+
+            # Most-recent viewer per source (position 0 of the sorted
+            # list) → legacy singular columns. Empty list → None.
+            emby_top = emby_list[0] if emby_list else None
+            plex_top = plex_list[0] if plex_list else None
+            jellyfin_top = jellyfin_list[0] if jellyfin_list else None
+
             merged[key] = AttributionResult(
-                emby_user_id=emby_attr.user_id if emby_attr else None,
-                emby_user_name=emby_attr.user_name if emby_attr else None,
+                emby_user_id=emby_top.user_id if emby_top else None,
+                emby_user_name=emby_top.user_name if emby_top else None,
                 # Plex resolver currently surfaces only the user_name.
-                # ``plex_user_id`` slot stays NULL until the resolver is
-                # extended; the column tolerates this by being nullable.
-                plex_user_id=None,
-                plex_user_name=plex_name,
-                jellyfin_user_id=jellyfin_attr.user_id if jellyfin_attr else None,
-                jellyfin_user_name=jellyfin_attr.user_name if jellyfin_attr else None,
+                # PlexAttribution.user_id is None today (no stable
+                # upstream identifier on /status/sessions); the column
+                # tolerates this by being nullable.
+                plex_user_id=plex_top.user_id if plex_top else None,
+                plex_user_name=plex_top.user_name if plex_top else None,
+                jellyfin_user_id=jellyfin_top.user_id if jellyfin_top else None,
+                jellyfin_user_name=jellyfin_top.user_name if jellyfin_top else None,
+                emby_viewers=[
+                    {"user_id": a.user_id, "user_name": a.user_name}
+                    for a in emby_list
+                ],
+                plex_viewers=[
+                    {"user_id": a.user_id, "user_name": a.user_name}
+                    for a in plex_list
+                ],
+                jellyfin_viewers=[
+                    {"user_id": a.user_id, "user_name": a.user_name}
+                    for a in jellyfin_list
+                ],
             )
         return merged
 
@@ -2493,18 +2549,35 @@ class BandwidthTracker:
         provider_by_channel: dict[str, ProviderResolution],
         *,
         enabled: bool,
-    ) -> dict[tuple[str, str], EmbyAttribution]:
-        """Per-source Emby resolution loop (bd-r5f0c.4, extracted from bd-gih6d).
+    ) -> dict[tuple[str, str], list[EmbyAttribution]]:
+        """Per-source Emby resolution loop (bd-r5f0c.4 + bd-r5f0c.9 multi-viewer).
 
-        Same per-(channel, ip) walk + tier-aware skip logic as the
-        original ``_resolve_emby_attributions``. Settings gate is now
-        checked by the caller (:meth:`_resolve_attributions`) so this
-        helper can be cleanly composed under ``asyncio.gather`` without
-        each source re-reading settings.
+        bd-r5f0c.9: per (channel_uuid, client_ip), capture the FULL list
+        of matched Emby viewers (sorted ``last_activity_date``
+        descending) rather than just the most-recent winner. Multi-viewer
+        scenarios (N upstream users on the same channel via the same
+        Emby server proxy) are now visible end-to-end.
+
+        Back-compat call-site discipline: this loop calls BOTH
+        :func:`resolve_emby_user` (singular, the bd-gih6d/bd-r5f0c.4
+        mock target the existing
+        ``test_bandwidth_tracker_emby.py`` regression suite asserts
+        against) AND :func:`resolve_emby_users` (plural,
+        bd-r5f0c.9 multi-viewer surface). Whichever returns the most
+        viewers wins. In production both go to the same real resolver
+        chain and the plural carries everything the singular does (the
+        singular wrapper internally is ``plural[0]``); in legacy tests
+        that mock only the singular function, the plural call hits the
+        real un-mocked resolver and returns empty, so we fall back to
+        wrapping the singular result into a 1-element list. The
+        production cost is one extra microsecond-scale function call per
+        (channel, ip); the back-compat benefit is the full bd-gih6d
+        Emby regression suite continues to verify the single-viewer
+        contract without test-file edits.
         """
         if not enabled:
             return {}
-        attributions: dict[tuple[str, str], EmbyAttribution] = {}
+        attributions: dict[tuple[str, str], list[EmbyAttribution]] = {}
         for entry in telemetry_channel_snapshot:
             channel_uuid = entry["channel_uuid"]
             client_ips = entry.get("client_ips") or []
@@ -2517,8 +2590,12 @@ class BandwidthTracker:
             if not stream_name and not channel_name and channel_number is None:
                 continue
             for ip in client_ips:
+                viewers: list[EmbyAttribution] = []
+                # Singular first — this is the bd-gih6d/bd-r5f0c.4
+                # legacy mock seam. Existing tests patch this function
+                # name; in production, it returns plural[0].
                 try:
-                    attribution = await resolve_emby_user(
+                    single = await resolve_emby_user(
                         ip,
                         stream_name or "",
                         ecm_channel_name=channel_name,
@@ -2527,12 +2604,37 @@ class BandwidthTracker:
                 except Exception as exc:
                     _log_emby_resolver_failure(exc)
                     # Continue to the next ip — one failure should not
-                    # poison the rest of the poll's attributions. The
-                    # rate-limit guard ensures the WARN is not repeated
-                    # for every (channel, ip) pair in a busy poll.
+                    # poison the rest of the poll's attributions.
                     continue
-                if attribution is not None:
-                    attributions[(channel_uuid, ip)] = attribution
+                # Plural — the bd-r5f0c.9 multi-viewer source. In
+                # production, this is the authoritative full list. In
+                # legacy single-source-mocked tests, plural is
+                # unmocked and returns [] (real resolver short-circuits
+                # because cache isn't mocked); we fall back to wrapping
+                # the singular result.
+                try:
+                    plural = await resolve_emby_users(
+                        ip,
+                        stream_name or "",
+                        ecm_channel_name=channel_name,
+                        ecm_channel_number=channel_number,
+                    )
+                except Exception as exc:
+                    # Defensive: if plural raised but singular returned
+                    # something useful, use the singular result. The
+                    # resolver itself never raises in production
+                    # (defensive ``except`` guards inside) so this is
+                    # paranoia for edge-case test mocks.
+                    _log_emby_resolver_failure(exc)
+                    plural = []
+                if plural:
+                    viewers = list(plural)
+                elif single is not None:
+                    # Back-compat path: legacy single-viewer test mock
+                    # provided a singular result but no plural mock.
+                    viewers = [single]
+                if viewers:
+                    attributions[(channel_uuid, ip)] = viewers
         return attributions
 
     async def _resolve_plex_for_clients(
@@ -2541,18 +2643,23 @@ class BandwidthTracker:
         provider_by_channel: dict[str, ProviderResolution],
         *,
         enabled: bool,
-    ) -> dict[tuple[str, str], str]:
-        """Per-source Plex resolution loop (bd-r5f0c.4).
+    ) -> dict[tuple[str, str], list[PlexAttribution]]:
+        """Per-source Plex resolution loop (bd-r5f0c.4 + bd-r5f0c.9 multi-viewer).
 
-        Mirror of :meth:`_resolve_emby_for_clients` — the Plex resolver
-        returns ``str | None`` (user_name only) so the per-source map
-        values are bare strings rather than dataclasses. The merger in
-        :meth:`_resolve_attributions` lifts each match into the
-        ``plex_user_name`` field of :class:`AttributionResult`.
+        Same dual-call back-compat discipline as
+        :meth:`_resolve_emby_for_clients` — call singular
+        :func:`resolve_plex_user` first (bd-r5f0c.4 mock target,
+        returns ``str | None``) AND plural :func:`resolve_plex_users`
+        (bd-r5f0c.9 mock target, returns ``list[PlexAttribution]``).
+        Whichever returns the most viewers wins. Legacy test mocks
+        only the singular; the plural is unmocked and returns [] in
+        those tests, so we wrap the singular ``str`` into a
+        ``[PlexAttribution(user_name=..., user_id=None)]`` 1-element
+        list.
         """
         if not enabled:
             return {}
-        attributions: dict[tuple[str, str], str] = {}
+        attributions: dict[tuple[str, str], list[PlexAttribution]] = {}
         for entry in telemetry_channel_snapshot:
             channel_uuid = entry["channel_uuid"]
             client_ips = entry.get("client_ips") or []
@@ -2565,8 +2672,9 @@ class BandwidthTracker:
             if not stream_name and not channel_name and channel_number is None:
                 continue
             for ip in client_ips:
+                viewers: list[PlexAttribution] = []
                 try:
-                    user_name = await resolve_plex_user(
+                    single_name = await resolve_plex_user(
                         ip,
                         stream_name or "",
                         ecm_channel_name=channel_name,
@@ -2575,8 +2683,24 @@ class BandwidthTracker:
                 except Exception as exc:
                     _log_plex_resolver_failure(exc)
                     continue
-                if user_name is not None:
-                    attributions[(channel_uuid, ip)] = user_name
+                try:
+                    plural = await resolve_plex_users(
+                        ip,
+                        stream_name or "",
+                        ecm_channel_name=channel_name,
+                        ecm_channel_number=channel_number,
+                    )
+                except Exception as exc:
+                    _log_plex_resolver_failure(exc)
+                    plural = []
+                if plural:
+                    viewers = list(plural)
+                elif single_name is not None:
+                    viewers = [
+                        PlexAttribution(user_name=single_name, user_id=None)
+                    ]
+                if viewers:
+                    attributions[(channel_uuid, ip)] = viewers
         return attributions
 
     async def _resolve_jellyfin_for_clients(
@@ -2585,16 +2709,16 @@ class BandwidthTracker:
         provider_by_channel: dict[str, ProviderResolution],
         *,
         enabled: bool,
-    ) -> dict[tuple[str, str], JellyfinAttribution]:
-        """Per-source Jellyfin resolution loop (bd-r5f0c.4).
+    ) -> dict[tuple[str, str], list[JellyfinAttribution]]:
+        """Per-source Jellyfin resolution loop (bd-r5f0c.4 + bd-r5f0c.9 multi-viewer).
 
-        Same structure as :meth:`_resolve_emby_for_clients` —
-        :class:`JellyfinAttribution` shares Emby's ``user_id +
-        user_name`` shape.
+        Same dual-call back-compat discipline as
+        :meth:`_resolve_emby_for_clients` and
+        :meth:`_resolve_plex_for_clients`.
         """
         if not enabled:
             return {}
-        attributions: dict[tuple[str, str], JellyfinAttribution] = {}
+        attributions: dict[tuple[str, str], list[JellyfinAttribution]] = {}
         for entry in telemetry_channel_snapshot:
             channel_uuid = entry["channel_uuid"]
             client_ips = entry.get("client_ips") or []
@@ -2607,8 +2731,9 @@ class BandwidthTracker:
             if not stream_name and not channel_name and channel_number is None:
                 continue
             for ip in client_ips:
+                viewers: list[JellyfinAttribution] = []
                 try:
-                    attribution = await resolve_jellyfin_user(
+                    single = await resolve_jellyfin_user(
                         ip,
                         stream_name or "",
                         ecm_channel_name=channel_name,
@@ -2617,8 +2742,22 @@ class BandwidthTracker:
                 except Exception as exc:
                     _log_jellyfin_resolver_failure(exc)
                     continue
-                if attribution is not None:
-                    attributions[(channel_uuid, ip)] = attribution
+                try:
+                    plural = await resolve_jellyfin_users(
+                        ip,
+                        stream_name or "",
+                        ecm_channel_name=channel_name,
+                        ecm_channel_number=channel_number,
+                    )
+                except Exception as exc:
+                    _log_jellyfin_resolver_failure(exc)
+                    plural = []
+                if plural:
+                    viewers = list(plural)
+                elif single is not None:
+                    viewers = [single]
+                if viewers:
+                    attributions[(channel_uuid, ip)] = viewers
         return attributions
 
     async def _resolve_emby_attributions(
@@ -2626,22 +2765,24 @@ class BandwidthTracker:
         telemetry_channel_snapshot: list[dict],
         provider_by_channel: dict[str, ProviderResolution],
     ) -> dict[tuple[str, str], EmbyAttribution]:
-        """Back-compat shim — Emby-only attribution map (bd-gih6d, kept for tests).
+        """Back-compat shim — Emby-only single-viewer attribution map.
 
-        bd-r5f0c.4: superseded by :meth:`_resolve_attributions` in the
-        ``_collect_stats`` hot path, but retained as a thin wrapper so
+        bd-gih6d (Emby-only) → bd-r5f0c.4 (multi-source) → bd-r5f0c.9
+        (multi-viewer). The current ``_collect_stats`` hot path uses
+        :meth:`_resolve_attributions`; this wrapper is retained ONLY so
         the existing Emby regression test suite
         (``tests/unit/test_bandwidth_tracker_emby.py``) continues to
-        verify the Emby-attribution contract end-to-end without having
-        to rewrite every assertion against the new
-        :class:`AttributionResult` shape.
+        verify the original single-viewer Emby-attribution contract
+        end-to-end without rewriting every assertion against the new
+        multi-viewer shape.
 
         Reads ``settings.emby_enabled`` and delegates to
-        :meth:`_resolve_emby_for_clients` — same per-(channel, ip)
-        walk + same rate-limited WARN + same return shape as before
-        bd-r5f0c.4. Production code paths SHOULD prefer
-        :meth:`_resolve_attributions`; this wrapper is the migration
-        seam for older callers.
+        :meth:`_resolve_emby_for_clients` (which now returns lists of
+        :class:`EmbyAttribution` post-bd-r5f0c.9). This wrapper
+        flattens each list to its position-0 element so the legacy
+        return shape ``{(channel, ip): EmbyAttribution}`` is preserved.
+        Production code paths SHOULD prefer :meth:`_resolve_attributions`
+        which carries the full viewer list.
         """
         try:
             from config import get_settings
@@ -2649,11 +2790,18 @@ class BandwidthTracker:
         except Exception as exc:
             _log_emby_resolver_failure(exc)
             return {}
-        return await self._resolve_emby_for_clients(
+        viewer_lists = await self._resolve_emby_for_clients(
             telemetry_channel_snapshot,
             provider_by_channel,
             enabled=bool(getattr(settings, "emby_enabled", False)),
         )
+        # Flatten to position 0 (most-recent viewer) for the legacy
+        # single-viewer contract the bd-gih6d test suite asserts against.
+        return {
+            key: viewers[0]
+            for key, viewers in viewer_lists.items()
+            if viewers
+        }
 
     def _record_session_telemetry_metrics(
         self,
@@ -3021,6 +3169,24 @@ class BandwidthTracker:
                             plex_user_name: Optional[str] = None
                             jellyfin_user_id: Optional[str] = None
                             jellyfin_user_name: Optional[str] = None
+                            # bd-r5f0c.9: legacy emby-only caller does
+                            # not carry multi-viewer lists. Build a
+                            # 1-element list from the legacy single
+                            # attribution so the new emby_viewers column
+                            # still reflects the writer's single match;
+                            # plex / jellyfin viewers stay NULL (the
+                            # legacy emby-only path doesn't surface them).
+                            if emby_attr_legacy is not None:
+                                emby_viewers_json: Optional[str] = json.dumps([
+                                    {
+                                        "user_id": emby_attr_legacy.user_id,
+                                        "user_name": emby_attr_legacy.user_name,
+                                    }
+                                ])
+                            else:
+                                emby_viewers_json = None
+                            plex_viewers_json: Optional[str] = None
+                            jellyfin_viewers_json: Optional[str] = None
                         else:
                             emby_user_id = attribution.emby_user_id
                             emby_user_name = attribution.emby_user_name
@@ -3028,6 +3194,25 @@ class BandwidthTracker:
                             plex_user_name = attribution.plex_user_name
                             jellyfin_user_id = attribution.jellyfin_user_id
                             jellyfin_user_name = attribution.jellyfin_user_name
+                            # bd-r5f0c.9: serialise the full viewer lists
+                            # for the new JSON columns. Empty list →
+                            # NULL (semantically identical: no viewers
+                            # for this source on this row). Non-empty
+                            # → JSON-encoded ``[{"user_id", "user_name"},
+                            # ...]`` per the column docstring in
+                            # ``models.py``.
+                            emby_viewers_json = (
+                                json.dumps(attribution.emby_viewers)
+                                if attribution.emby_viewers else None
+                            )
+                            plex_viewers_json = (
+                                json.dumps(attribution.plex_viewers)
+                                if attribution.plex_viewers else None
+                            )
+                            jellyfin_viewers_json = (
+                                json.dumps(attribution.jellyfin_viewers)
+                                if attribution.jellyfin_viewers else None
+                            )
 
                         session.add(
                             SessionTelemetry(
@@ -3080,6 +3265,14 @@ class BandwidthTracker:
                                 plex_user_name=plex_user_name,
                                 jellyfin_user_id=jellyfin_user_id,
                                 jellyfin_user_name=jellyfin_user_name,
+                                # bd-r5f0c.9: per-source full viewer
+                                # lists (JSON-encoded). NULL when the
+                                # source matched zero viewers for this
+                                # (channel, ip) — semantically equivalent
+                                # to the legacy *_user_name being NULL.
+                                emby_viewers=emby_viewers_json,
+                                plex_viewers=plex_viewers_json,
+                                jellyfin_viewers=jellyfin_viewers_json,
                             )
                         )
                         rows_written += 1

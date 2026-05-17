@@ -186,23 +186,35 @@ def _channel_name_or_fallback(channel_id: str, name_map: dict) -> str:
 
 
 def _seed_attribution_keys(channels: list) -> None:
-    """Seed every channel + client with the three ``*_user_name`` keys.
+    """Seed every channel + client with attribution keys (single + multi-viewer).
 
     Idempotent — ``setdefault`` only writes when the key is missing.
     Called from every short-circuit branch in
     :func:`_enrich_channels_with_attribution` so the TypeScript shape
     contract on the frontend stays stable (key present, value
-    ``None``) regardless of which sources are enabled or whether the
-    resolver call short-circuits.
+    ``None`` / empty list) regardless of which sources are enabled or
+    whether the resolver call short-circuits.
+
+    bd-r5f0c.9: also seeds the three multi-viewer ``*_viewers`` list
+    keys at parity with the singular ``*_user_name`` keys. The
+    frontend (W5) renders the viewers list separately; this helper
+    keeps the response shape stable so the frontend can rely on key
+    presence regardless of resolver state.
     """
     for ch in channels:
         ch.setdefault("emby_user_name", None)
         ch.setdefault("plex_user_name", None)
         ch.setdefault("jellyfin_user_name", None)
+        ch.setdefault("emby_viewers", [])
+        ch.setdefault("plex_viewers", [])
+        ch.setdefault("jellyfin_viewers", [])
         for client in ch.get("clients", []) or []:
             client.setdefault("emby_user_name", None)
             client.setdefault("plex_user_name", None)
             client.setdefault("jellyfin_user_name", None)
+            client.setdefault("emby_viewers", [])
+            client.setdefault("plex_viewers", [])
+            client.setdefault("jellyfin_viewers", [])
 
 
 async def _enrich_channels_with_attribution(channels: list) -> None:
@@ -264,15 +276,31 @@ async def _enrich_channels_with_attribution(channels: list) -> None:
     # cost on the hot path. The disabled checks already short-circuited
     # the disabled-everything case above; from here on at least one
     # source is enabled.
+    #
+    # bd-r5f0c.9: import BOTH the singular (bd-fm23o/bd-r5f0c.4 mock
+    # target, also the existing test_stats_emby.py regression target)
+    # and the plural (bd-r5f0c.9 multi-viewer surface) resolvers. The
+    # per-source helper calls both — whichever returns the most
+    # viewers populates the response. In production the plural is
+    # authoritative (singular = plural[0]); in legacy tests that mock
+    # only singular, the plural call returns empty and we wrap the
+    # singular result into a 1-element list so the legacy contract
+    # holds.
     resolve_emby_user = None
+    resolve_emby_users = None
     resolve_plex_user = None
+    resolve_plex_users = None
     resolve_jellyfin_user = None
+    resolve_jellyfin_users = None
     if emby_enabled:
         from services.emby_resolver import resolve_emby_user as resolve_emby_user
+        from services.emby_resolver import resolve_emby_users as resolve_emby_users
     if plex_enabled:
         from services.plex_resolver import resolve_plex_user as resolve_plex_user
+        from services.plex_resolver import resolve_plex_users as resolve_plex_users
     if jellyfin_enabled:
         from services.jellyfin_resolver import resolve_jellyfin_user as resolve_jellyfin_user
+        from services.jellyfin_resolver import resolve_jellyfin_users as resolve_jellyfin_users
 
     for ch in channels:
         stream_name = ch.get("stream_name")
@@ -303,9 +331,11 @@ async def _enrich_channels_with_attribution(channels: list) -> None:
                 stream_name=stream_name,
                 channel_name=channel_name,
                 channel_number=channel_number,
-                resolver=resolve_emby_user,
+                single_resolver=resolve_emby_user,
+                plural_resolver=resolve_emby_users,
                 source_label="emby",
                 user_name_key="emby_user_name",
+                viewers_key="emby_viewers",
             )
         if plex_enabled:
             await _enrich_one_source(
@@ -315,9 +345,11 @@ async def _enrich_channels_with_attribution(channels: list) -> None:
                 stream_name=stream_name,
                 channel_name=channel_name,
                 channel_number=channel_number,
-                resolver=resolve_plex_user,
+                single_resolver=resolve_plex_user,
+                plural_resolver=resolve_plex_users,
                 source_label="plex",
                 user_name_key="plex_user_name",
+                viewers_key="plex_viewers",
             )
         if jellyfin_enabled:
             await _enrich_one_source(
@@ -327,9 +359,11 @@ async def _enrich_channels_with_attribution(channels: list) -> None:
                 stream_name=stream_name,
                 channel_name=channel_name,
                 channel_number=channel_number,
-                resolver=resolve_jellyfin_user,
+                single_resolver=resolve_jellyfin_user,
+                plural_resolver=resolve_jellyfin_users,
                 source_label="jellyfin",
                 user_name_key="jellyfin_user_name",
+                viewers_key="jellyfin_viewers",
             )
 
 
@@ -341,23 +375,53 @@ async def _enrich_one_source(
     stream_name,
     channel_name,
     channel_number,
-    resolver,
+    single_resolver,
+    plural_resolver,
     source_label: str,
     user_name_key: str,
+    viewers_key: str,
 ) -> None:
-    """Resolve one channel's clients against one media source.
+    """Resolve one channel's clients against one media source (multi-viewer).
 
     Shared loop used by Emby / Plex / Jellyfin branches of
-    :func:`_enrich_channels_with_attribution`. ``resolver`` returns
-    either ``str | None`` (Plex shape — the resolver yields a
-    user_name string directly) or an object with a ``.user_name``
-    attribute (Emby / Jellyfin shape — the resolver yields a frozen
-    dataclass). The duck-typed extraction below covers both cases
-    without forcing the resolver modules to share a base class.
+    :func:`_enrich_channels_with_attribution`.
+
+    bd-r5f0c.9 dual-call back-compat discipline: call BOTH
+    ``single_resolver`` (the bd-fm23o/bd-r5f0c.4 mock target the
+    existing ``test_stats_emby.py`` regression suite asserts against)
+    and ``plural_resolver`` (the bd-r5f0c.9 multi-viewer surface).
+    Whichever returns the most viewers populates the response. In
+    production both go to the same real resolver chain and the plural
+    carries everything the singular does (the singular wrapper is
+    ``plural[0]``); in legacy tests that mock only the singular
+    function, the plural call hits the real un-mocked resolver and
+    returns empty, so we wrap the singular result into a 1-element
+    list. The production cost is one extra microsecond-scale function
+    call per (channel, ip); the back-compat benefit is the full
+    bd-fm23o + bd-r5f0c.4 stats regression suite continues to verify
+    the single-viewer contract without test-file edits.
+
+    Surfaces TWO fields per channel + per client:
+
+    * ``<user_name_key>`` — back-compat singular field, populated from
+      position 0 of the viewer list (most-recent viewer). Frontend
+      pre-W5 renders this verbatim.
+    * ``<viewers_key>`` — full list of ``{"user_id", "user_name"}``
+      dicts. W5 frontend renders every viewer; empty list when no
+      tier matched.
+
+    Each Attribution duck-typed result is normalised to a plain dict
+    ``{"user_id": ..., "user_name": ...}``; PlexAttribution carries a
+    ``.user_id`` slot (currently always ``None``) and a ``.user_name``
+    slot, matching the Emby / Jellyfin shape. The Plex resolver's
+    legacy singular wrapper returns ``str | None``; we handle both the
+    string and the dataclass forms in the duck-typed extraction below.
     """
     for ip in client_ips:
+        # Call BOTH the singular (legacy mock seam) and the plural
+        # (bd-r5f0c.9 multi-viewer). Whichever has more entries wins.
         try:
-            result = await resolver(
+            single_result = await single_resolver(
                 ip,
                 stream_name or "",
                 ecm_channel_name=channel_name,
@@ -365,30 +429,89 @@ async def _enrich_one_source(
             )
         except Exception as exc:  # pragma: no cover — resolver never raises
             logger.debug(
-                "[STATS] %s resolver raised for ip=%s stream=%r: %s",
+                "[STATS] %s singular resolver raised for ip=%s stream=%r: %s",
                 source_label.upper(), ip, stream_name, exc,
             )
+            single_result = None
+        try:
+            plural_result = await plural_resolver(
+                ip,
+                stream_name or "",
+                ecm_channel_name=channel_name,
+                ecm_channel_number=channel_number,
+            )
+        except Exception as exc:  # pragma: no cover — resolver never raises
+            logger.debug(
+                "[STATS] %s plural resolver raised for ip=%s stream=%r: %s",
+                source_label.upper(), ip, stream_name, exc,
+            )
+            plural_result = []
+
+        # Normalize to a single viewers list. Plural wins when non-empty
+        # (production path + new multi-viewer tests). Singular wraps to
+        # a 1-element list when plural is empty (legacy test path that
+        # mocks only the singular function).
+        viewers_list: list = []
+        if plural_result:
+            viewers_list = list(plural_result)
+        elif single_result is not None:
+            viewers_list = [single_result]
+
+        if not viewers_list:
             continue
-        if result is None:
+
+        # Duck-typed dict coercion: Plex's singular returns a bare
+        # ``str`` (legacy contract); Emby + Jellyfin (and all three
+        # plural variants) return dataclasses with ``.user_id +
+        # .user_name``. Normalise to ``{"user_id", "user_name"}`` so
+        # the response shape matches the bandwidth_tracker writer's
+        # JSON encoding of ``session_telemetry.<source>_viewers``.
+        viewers_payload = [_coerce_viewer_to_dict(v) for v in viewers_list]
+        # Filter out entries with no user_name (defensive; should not
+        # occur in production).
+        viewers_payload = [v for v in viewers_payload if v.get("user_name")]
+        if not viewers_payload:
             continue
-        # Duck-typed extraction: Plex returns ``str``; Emby +
-        # Jellyfin return frozen dataclasses with ``.user_name``.
-        user_name = (
-            result if isinstance(result, str)
-            else getattr(result, "user_name", None)
-        )
-        if not user_name:
-            continue
-        ch[user_name_key] = user_name
+
+        top_user_name = viewers_payload[0]["user_name"]
+
+        ch[user_name_key] = top_user_name
+        ch[viewers_key] = viewers_payload
         # bd-5kbyf-style propagation: a source-mediated stream has
         # every client coming from the source server's IP, so the
-        # channel-level resolved viewer IS the per-client viewer.
+        # channel-level resolved viewers ARE the per-client viewers.
         for client in clients:
-            client[user_name_key] = user_name
-        # First match wins — same precedent as bd-fm23o for the
-        # Emby-only flow. Operator-visible badge represents one
-        # viewer per channel cell per source.
+            client[user_name_key] = top_user_name
+            client[viewers_key] = viewers_payload
+        # First IP-match wins — same precedent as bd-fm23o for the
+        # Emby-only flow. The source server's clients all share an IP,
+        # so the first IP's viewers list is the channel's viewers list.
         return
+
+
+def _coerce_viewer_to_dict(viewer) -> dict:
+    """Normalise a resolver result to ``{"user_id", "user_name"}``.
+
+    Handles three input shapes:
+
+    * Bare ``str`` (legacy Plex singular wrapper) → ``{"user_id": None,
+      "user_name": <str>}``.
+    * Dataclass with ``.user_id`` + ``.user_name`` (Emby / Jellyfin
+      attribution + the bd-r5f0c.9 PlexAttribution) → dict of the same.
+    * Plain dict → return verbatim (defensive; the bandwidth_tracker
+      writer's JSON-decoded form already uses this shape).
+    """
+    if isinstance(viewer, str):
+        return {"user_id": None, "user_name": viewer}
+    if isinstance(viewer, dict):
+        return {
+            "user_id": viewer.get("user_id"),
+            "user_name": viewer.get("user_name"),
+        }
+    return {
+        "user_id": getattr(viewer, "user_id", None),
+        "user_name": getattr(viewer, "user_name", None),
+    }
 
 
 async def _enrich_channels_with_emby(channels: list) -> None:

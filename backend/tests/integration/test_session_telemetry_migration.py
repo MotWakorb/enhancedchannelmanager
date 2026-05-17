@@ -156,8 +156,15 @@ class TestSessionTelemetryMigration:
             # migration 0017 (bd-r5f0c.1) — all four TEXT NULL,
             # denormalized Plex + Jellyfin attribution at parity with
             # the Emby pair (the W2/W3/W4 resolvers + writer in epic
-            # bd-r5f0c). Carry every column in the head-shape assertion
-            # so a future delete/rename surfaces here.
+            # bd-r5f0c). ``emby_viewers``, ``plex_viewers``, and
+            # ``jellyfin_viewers`` land in migration 0018 (bd-r5f0c.9) —
+            # all three TEXT NULL, JSON-encoded per-source viewer
+            # lists for the multi-viewer attribution model (N upstream
+            # viewers share one ECM-side media-server client; the
+            # legacy singular ``*_user_name`` carries position 0 of
+            # the list for back-compat). Carry every column in the
+            # head-shape assertion so a future delete/rename surfaces
+            # here.
             assert set(cols) == {
                 "id", "session_id", "observed_at", "user_id", "provider_id",
                 "channel_id", "bytes_delta", "buffer_event_count", "poll_interval_ms",
@@ -166,6 +173,7 @@ class TestSessionTelemetryMigration:
                 "emby_user_id", "emby_user_name",
                 "plex_user_id", "plex_user_name",
                 "jellyfin_user_id", "jellyfin_user_name",
+                "emby_viewers", "plex_viewers", "jellyfin_viewers",
             }
             assert cols["session_id"]["nullable"] is False
             assert cols["observed_at"]["nullable"] is False
@@ -211,6 +219,14 @@ class TestSessionTelemetryMigration:
             assert cols["plex_user_name"]["nullable"] is True
             assert cols["jellyfin_user_id"]["nullable"] is True
             assert cols["jellyfin_user_name"]["nullable"] is True
+            # bd-r5f0c.9: all three multi-viewer JSON columns are
+            # NULLABLE (NULL == "no viewers matched for this source on
+            # this row", semantically equivalent to the legacy
+            # *_user_name column being NULL; pre-0018 rows + non-
+            # source-mediated rows surface as NULL on read).
+            assert cols["emby_viewers"]["nullable"] is True
+            assert cols["plex_viewers"]["nullable"] is True
+            assert cols["jellyfin_viewers"]["nullable"] is True
 
             # bd-gsn3r: migration 0011 dropped the FK to ECM ``users.id``.
             # ECM and Dispatcharr ``users`` are different namespaces with

@@ -566,3 +566,236 @@ async def test_plex_only_match_leaves_other_sources_null(
         assert row.plex_user_name == "plex-charlie"
         assert row.jellyfin_user_id is None
         assert row.jellyfin_user_name is None
+
+
+# ---------------------------------------------------------------------------
+# bd-r5f0c.9 multi-viewer: the writer captures EVERY viewer per source.
+# The legacy singular *_user_name carries position 0 (most-recent); the
+# new *_viewers JSON column carries the full list. NULL semantics: empty
+# list → NULL on the JSON column.
+# ---------------------------------------------------------------------------
+
+
+import json as _json
+from services.plex_resolver import PlexAttribution
+
+
+@pytest.mark.asyncio
+async def test_two_emby_viewers_write_both_legacy_and_viewers_json(
+    patched_session_local, tracker, mock_client
+):
+    """Two Emby viewers on the same channel via the same Emby server proxy
+    → the written row carries BOTH the legacy emby_user_name (most-recent,
+    bob) AND the new emby_viewers JSON list with 2 entries.
+
+    This is the bug fix the bead exists for. Pre-bd-r5f0c.9 the writer
+    would discard alice (older) entirely.
+    """
+    mock_client.get_streams_by_ids.return_value = [_stream_record()]
+    first = _channel_payload(total_bytes=1_000_000)
+    second = _channel_payload(total_bytes=2_000_000)
+
+    # Position 0 = most-recent viewer (bob); position 1 = alice.
+    emby_viewers = [
+        EmbyAttribution(user_id="uid-bob", user_name="bob"),
+        EmbyAttribution(user_id="uid-alice", user_name="alice"),
+    ]
+    with patch(
+        "bandwidth_tracker.resolve_emby_users", AsyncMock(return_value=emby_viewers)
+    ), patch(
+        "bandwidth_tracker.resolve_emby_user",
+        AsyncMock(return_value=emby_viewers[0]),
+    ), patch(
+        "bandwidth_tracker.resolve_plex_users", AsyncMock(return_value=[])
+    ), patch(
+        "bandwidth_tracker.resolve_plex_user", AsyncMock(return_value=None)
+    ), patch(
+        "bandwidth_tracker.resolve_jellyfin_users", AsyncMock(return_value=[])
+    ), patch(
+        "bandwidth_tracker.resolve_jellyfin_user", AsyncMock(return_value=None)
+    ), patch("config.get_settings", return_value=_all_enabled_settings()):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows
+    for row in rows:
+        # Legacy column: most-recent viewer (back-compat for the pre-W5
+        # frontend + Stats v2 aggregations).
+        assert row.emby_user_id == "uid-bob"
+        assert row.emby_user_name == "bob"
+        # New multi-viewer column: full JSON-encoded list of both.
+        assert row.emby_viewers is not None, (
+            "emby_viewers must be populated when 2 viewers matched"
+        )
+        decoded = _json.loads(row.emby_viewers)
+        assert decoded == [
+            {"user_id": "uid-bob", "user_name": "bob"},
+            {"user_id": "uid-alice", "user_name": "alice"},
+        ]
+        # Plex + Jellyfin sources had no match — their viewer columns NULL.
+        assert row.plex_viewers is None
+        assert row.jellyfin_viewers is None
+
+
+@pytest.mark.asyncio
+async def test_mixed_multi_viewer_two_emby_one_plex_columns_independent(
+    patched_session_local, tracker, mock_client
+):
+    """Mixed scenario: 2 Emby viewers + 1 Plex viewer + 0 Jellyfin
+    viewers. emby_viewers carries 2 dicts, plex_viewers carries 1 dict,
+    jellyfin_viewers is NULL. Each source's column is independent —
+    a source with no match leaves its column NULL regardless of what
+    happened on the other sources.
+    """
+    mock_client.get_streams_by_ids.return_value = [_stream_record()]
+    first = _channel_payload(total_bytes=1_000_000)
+    second = _channel_payload(total_bytes=2_000_000)
+
+    emby_list = [
+        EmbyAttribution(user_id="emby-1", user_name="emby_alice"),
+        EmbyAttribution(user_id="emby-2", user_name="emby_bob"),
+    ]
+    plex_list = [PlexAttribution(user_name="plex_charlie", user_id=None)]
+    with patch(
+        "bandwidth_tracker.resolve_emby_users", AsyncMock(return_value=emby_list)
+    ), patch(
+        "bandwidth_tracker.resolve_emby_user", AsyncMock(return_value=emby_list[0])
+    ), patch(
+        "bandwidth_tracker.resolve_plex_users", AsyncMock(return_value=plex_list)
+    ), patch(
+        "bandwidth_tracker.resolve_plex_user", AsyncMock(return_value="plex_charlie")
+    ), patch(
+        "bandwidth_tracker.resolve_jellyfin_users", AsyncMock(return_value=[])
+    ), patch(
+        "bandwidth_tracker.resolve_jellyfin_user", AsyncMock(return_value=None)
+    ), patch("config.get_settings", return_value=_all_enabled_settings()):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows
+    for row in rows:
+        # emby_viewers: 2 entries
+        assert row.emby_viewers is not None
+        assert _json.loads(row.emby_viewers) == [
+            {"user_id": "emby-1", "user_name": "emby_alice"},
+            {"user_id": "emby-2", "user_name": "emby_bob"},
+        ]
+        # plex_viewers: 1 entry; user_id None today (Plex resolver
+        # doesn't surface stable upstream IDs).
+        assert row.plex_viewers is not None
+        assert _json.loads(row.plex_viewers) == [
+            {"user_id": None, "user_name": "plex_charlie"},
+        ]
+        # jellyfin_viewers: no match → NULL.
+        assert row.jellyfin_viewers is None
+
+
+@pytest.mark.asyncio
+async def test_no_viewers_writes_all_six_attribution_columns_null(
+    patched_session_local, tracker, mock_client
+):
+    """No source matched → all SIX attribution columns NULL on the row:
+    the three legacy *_user_name + the three new *_viewers JSON
+    columns. Same NULL posture as the pre-bd-r5f0c.9 single-viewer no-
+    match case, extended to the new columns."""
+    mock_client.get_streams_by_ids.return_value = [_stream_record()]
+    first = _channel_payload(total_bytes=1_000_000)
+    second = _channel_payload(total_bytes=2_000_000)
+
+    with patch(
+        "bandwidth_tracker.resolve_emby_users", AsyncMock(return_value=[])
+    ), patch(
+        "bandwidth_tracker.resolve_emby_user", AsyncMock(return_value=None)
+    ), patch(
+        "bandwidth_tracker.resolve_plex_users", AsyncMock(return_value=[])
+    ), patch(
+        "bandwidth_tracker.resolve_plex_user", AsyncMock(return_value=None)
+    ), patch(
+        "bandwidth_tracker.resolve_jellyfin_users", AsyncMock(return_value=[])
+    ), patch(
+        "bandwidth_tracker.resolve_jellyfin_user", AsyncMock(return_value=None)
+    ), patch("config.get_settings", return_value=_all_enabled_settings()):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows
+    for row in rows:
+        # Three legacy columns NULL (back-compat).
+        assert row.emby_user_id is None
+        assert row.emby_user_name is None
+        assert row.plex_user_name is None
+        assert row.jellyfin_user_name is None
+        # Three new viewer-list columns NULL.
+        assert row.emby_viewers is None
+        assert row.plex_viewers is None
+        assert row.jellyfin_viewers is None
+
+
+@pytest.mark.asyncio
+async def test_jellyfin_only_multi_viewer_other_sources_columns_null(
+    patched_session_local, tracker, mock_client
+):
+    """Source-specific multi-viewer: 3 Jellyfin viewers; Emby + Plex
+    have no match. Only jellyfin_viewers carries the list; emby_viewers
+    and plex_viewers stay NULL. The legacy jellyfin_user_name carries
+    position 0 for back-compat."""
+    mock_client.get_streams_by_ids.return_value = [_stream_record()]
+    first = _channel_payload(total_bytes=1_000_000)
+    second = _channel_payload(total_bytes=2_000_000)
+
+    jellyfin_list = [
+        JellyfinAttribution(user_id="jf-1", user_name="jf_charlie"),
+        JellyfinAttribution(user_id="jf-2", user_name="jf_bob"),
+        JellyfinAttribution(user_id="jf-3", user_name="jf_alice"),
+    ]
+    with patch(
+        "bandwidth_tracker.resolve_emby_users", AsyncMock(return_value=[])
+    ), patch(
+        "bandwidth_tracker.resolve_emby_user", AsyncMock(return_value=None)
+    ), patch(
+        "bandwidth_tracker.resolve_plex_users", AsyncMock(return_value=[])
+    ), patch(
+        "bandwidth_tracker.resolve_plex_user", AsyncMock(return_value=None)
+    ), patch(
+        "bandwidth_tracker.resolve_jellyfin_users",
+        AsyncMock(return_value=jellyfin_list),
+    ), patch(
+        "bandwidth_tracker.resolve_jellyfin_user",
+        AsyncMock(return_value=jellyfin_list[0]),
+    ), patch("config.get_settings", return_value=_all_enabled_settings()):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    session = patched_session_local()
+    try:
+        rows = session.query(SessionTelemetry).all()
+    finally:
+        session.close()
+    assert rows
+    for row in rows:
+        # Legacy jellyfin_user_name = position 0 (most-recent).
+        assert row.jellyfin_user_id == "jf-1"
+        assert row.jellyfin_user_name == "jf_charlie"
+        # Multi-viewer column has all 3.
+        assert row.jellyfin_viewers is not None
+        decoded = _json.loads(row.jellyfin_viewers)
+        assert len(decoded) == 3
+        assert [v["user_name"] for v in decoded] == [
+            "jf_charlie", "jf_bob", "jf_alice",
+        ]
+        # Other sources NULL.
+        assert row.emby_viewers is None
+        assert row.plex_viewers is None
+        assert row.emby_user_name is None
+        assert row.plex_user_name is None
