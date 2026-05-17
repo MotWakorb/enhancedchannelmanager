@@ -88,6 +88,47 @@ The required check names above are pulled from `gh api /repos/MotWakorb/enhanced
 
 Create beads for anything that needs follow-up.
 
+### Worktree quirks: npm and node_modules unavailable
+
+When an agent is spawned into `.claude/worktrees/agent-*/`, the git sparse-checkout
+does not carry `frontend/node_modules`, and the agent's shell environment does not
+have `fnm`/`nvm` on `PATH`. Running `npm run lint`, `npm test`, or `npm run build`
+fails immediately with "command not found".
+
+**Root cause:** git worktrees share the `.git` object store but each has its own
+working tree populated by the sparse-checkout filter. `node_modules` is gitignored
+and therefore absent in every fresh worktree. The agent harness does not run
+`npm install` on spawn, and the subagent shell does not inherit the parent session's
+`fnm`/`nvm` init.
+
+**Fix:** run the bootstrap script once from the worktree root:
+
+```bash
+bash scripts/worktree-bootstrap.sh
+```
+
+The script symlinks the main checkout's `frontend/node_modules` into the worktree and
+prints the `PATH` export line needed to put `node` and the `.bin` tools in scope.
+
+After bootstrapping, invoke frontend tooling via the `.bin` wrappers directly instead
+of `npm run`:
+
+```bash
+./frontend/node_modules/.bin/vitest run
+./frontend/node_modules/.bin/eslint frontend/src --max-warnings 0
+./frontend/node_modules/.bin/tsc --noEmit
+./frontend/node_modules/.bin/vite build
+```
+
+You also need `node` on `PATH`. Add it with fnm (adjust the version as needed):
+
+```bash
+export PATH="$HOME/.fnm/node-versions/v24.13.0/installation/bin:./frontend/node_modules/.bin:$PATH"
+```
+
+See `frontend/CLAUDE.md` → "Worktree workaround" for a quick-reference version of
+these steps.
+
 ## Critical Shipping Rules
 
 - Work is NOT complete until the PR merges into `dev`
