@@ -18,6 +18,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { useEffect } from 'react';
 
 vi.mock('../../services/api', () => ({
   getSettings: vi.fn(),
@@ -33,6 +34,11 @@ vi.mock('../../services/api', () => ({
   testEmbyConnection: vi.fn(),
   testPlexConnection: vi.fn(),
   testJellyfinConnection: vi.fn(),
+  // Added bd-r5f0c.15 / W15: SettingsTab mounts and calls these; without stubs the
+  // component throws during mount and ALL tests fail (pre-existing mock gap).
+  getStreams: vi.fn().mockResolvedValue({ streams: [], total: 0 }),
+  getProbeHistory: vi.fn().mockResolvedValue([]),
+  getProbeProgress: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('../../services/autoCreationApi', () => ({
@@ -93,7 +99,17 @@ vi.mock('../DeleteOrphanedGroupsModal', () => ({
   DeleteOrphanedGroupsModal: () => <div data-testid="stub-delete-orphaned" />,
 }));
 vi.mock('../ModalOverlay', () => ({
-  ModalOverlay: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  // Forward onClose on Escape so W15 modal escape-to-close test works (bd-r5f0c.15).
+  // The onClose prop was previously discarded; this is a transparent extension.
+  ModalOverlay: ({ children, onClose }: { children: React.ReactNode; onClose?: () => void }) => {
+    useEffect(() => {
+      if (!onClose) return;
+      const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+      document.addEventListener('keydown', handler);
+      return () => document.removeEventListener('keydown', handler);
+    }, [onClose]);
+    return <div>{children}</div>;
+  },
 }));
 vi.mock('../CustomSelect', () => ({
   CustomSelect: ({ value, onChange, options }: {
@@ -425,5 +441,84 @@ describe('PlexIntegrationSection (bd-r5f0c.5 / W5)', () => {
     const callArgs = vi.mocked(api.saveSettings).mock.calls[0][0];
     expect(callArgs.plex_base_url).toBe('http://new-plex:32400');
     expect(callArgs).not.toHaveProperty('plex_token');
+  });
+});
+
+// --- W15 (bd-r5f0c.15): Plex token discovery modal ---
+describe('Plex token discovery modal (bd-r5f0c.15 / W15)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings());
+    vi.mocked(api.saveSettings).mockResolvedValue({ status: 'ok', configured: true, server_changed: false });
+    vi.mocked(api.getChannelProfiles).mockResolvedValue([]);
+    vi.mocked(api.listAlertMethods).mockResolvedValue([]);
+    vi.mocked(api.getM3UAccounts).mockResolvedValue([]);
+  });
+
+  it('renders the "How to find your Plex token" trigger link', async () => {
+    renderOnIntegrations();
+    await waitFor(() => {
+      const link = screen.getByTestId('plex-token-help-link');
+      expect(link).toBeInTheDocument();
+      expect(link.textContent).toContain('How to find your Plex token');
+    });
+  });
+
+  it('opens the modal when the trigger is clicked', async () => {
+    renderOnIntegrations();
+    await waitFor(() => {
+      expect(screen.getByTestId('plex-token-help-link')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('plex-token-help-link'));
+    expect(screen.getByTestId('plex-token-help-modal')).toBeInTheDocument();
+    // Use the heading query to avoid ambiguity with the trigger button text
+    expect(screen.getByRole('heading', { name: 'How to find your Plex token' })).toBeInTheDocument();
+  });
+
+  it('modal contains 5 numbered steps and step 1 text is visible', async () => {
+    renderOnIntegrations();
+    await waitFor(() => {
+      expect(screen.getByTestId('plex-token-help-link')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('plex-token-help-link'));
+    expect(screen.getByText(/Open Plex Web/)).toBeInTheDocument();
+    expect(screen.getByText(/Play any media item/)).toBeInTheDocument();
+    expect(screen.getByText(/three-dot/)).toBeInTheDocument();
+    expect(screen.getByText(/View XML/)).toBeInTheDocument();
+    expect(screen.getByText(/X-Plex-Token=/)).toBeInTheDocument();
+  });
+
+  it('modal contains the SEC-1 security callout', async () => {
+    renderOnIntegrations();
+    await waitFor(() => {
+      expect(screen.getByTestId('plex-token-help-link')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('plex-token-help-link'));
+    const callout = screen.getByTestId('plex-token-security-callout');
+    expect(callout).toBeInTheDocument();
+    expect(callout.textContent).toContain('Important:');
+    expect(callout.textContent).toContain('server-local token');
+  });
+
+  it('closes the modal when the close button is clicked', async () => {
+    renderOnIntegrations();
+    await waitFor(() => {
+      expect(screen.getByTestId('plex-token-help-link')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('plex-token-help-link'));
+    expect(screen.getByTestId('plex-token-help-modal')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('plex-token-help-close'));
+    expect(screen.queryByTestId('plex-token-help-modal')).not.toBeInTheDocument();
+  });
+
+  it('closes the modal on Escape key', async () => {
+    renderOnIntegrations();
+    await waitFor(() => {
+      expect(screen.getByTestId('plex-token-help-link')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('plex-token-help-link'));
+    expect(screen.getByTestId('plex-token-help-modal')).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByTestId('plex-token-help-modal')).not.toBeInTheDocument();
   });
 });
