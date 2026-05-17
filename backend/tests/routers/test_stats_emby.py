@@ -421,6 +421,165 @@ class TestActiveChannelsEmbyEnrichment:
         # Resolver short-circuited on the disabled gate — never called.
         assert resolver_calls == []
 
+    # -----------------------------------------------------------------------
+    # bd-5kbyf (fix-forward for v0.17.1-0035): per-client emby_user_name
+    # -----------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_emby_user_name_propagated_to_each_client_when_resolver_matches(
+        self, async_client
+    ):
+        """When the resolver attributes a channel to an Emby user, every
+        client dict in ``clients[]`` receives ``emby_user_name`` set to the
+        same resolved value — not just the channel-level field."""
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {
+                    "channel_id": "uuid-propagate",
+                    "channel_name": "ESPN",
+                    "stream_id": 408,
+                    "clients": [
+                        {"ip_address": "10.0.0.42", "user_id": 0},
+                        {"ip_address": "10.0.0.43", "user_id": 0},
+                    ],
+                },
+            ],
+        }
+        mock_client.get_streams_by_ids.return_value = [
+            {"id": 408, "name": "US: ESPN FHD", "m3u_account": 6},
+        ]
+
+        async def _fake_resolver(ip, stream_name, **_kwargs):
+            return EmbyAttribution(user_id="uid-mw", user_name="MotWakorb")
+
+        with (
+            patch("routers.stats.get_client", return_value=mock_client),
+            patch(
+                "services.emby_resolver.resolve_emby_user",
+                side_effect=_fake_resolver,
+            ),
+            patch(
+                "config.get_settings",
+                return_value=type("S", (), {"emby_enabled": True, "emby_base_url": "http://emby"})(),
+            ),
+        ):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        ch = body["channels"][0]
+        # Channel-level field still set.
+        assert ch["emby_user_name"] == "MotWakorb"
+        # Each client dict carries the resolved name.
+        for client in ch["clients"]:
+            assert client["emby_user_name"] == "MotWakorb", (
+                f"Expected client to carry emby_user_name='MotWakorb', got: {client!r}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_emby_user_name_null_on_each_client_when_resolver_returns_none(
+        self, async_client
+    ):
+        """When the resolver returns None, each client dict receives
+        ``emby_user_name=None`` — field present, value null — so the
+        TypeScript shape contract is consistent regardless of resolution."""
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {
+                    "channel_id": "uuid-null-client",
+                    "channel_name": "CNN",
+                    "stream_id": 600,
+                    "clients": [
+                        {"ip_address": "10.0.0.99", "user_id": 8},
+                    ],
+                },
+            ],
+        }
+        mock_client.get_streams_by_ids.return_value = [
+            {"id": 600, "name": "CNN", "m3u_account": 6},
+        ]
+
+        async def _no_match(ip, stream_name, **_kwargs):
+            return None
+
+        with (
+            patch("routers.stats.get_client", return_value=mock_client),
+            patch(
+                "services.emby_resolver.resolve_emby_user",
+                side_effect=_no_match,
+            ),
+            patch(
+                "config.get_settings",
+                return_value=type("S", (), {"emby_enabled": True, "emby_base_url": "http://emby"})(),
+            ),
+        ):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        ch = body["channels"][0]
+        assert ch["emby_user_name"] is None
+        # Shape contract: field present but null on each client.
+        for client in ch["clients"]:
+            assert "emby_user_name" in client, (
+                f"emby_user_name key missing from client: {client!r}"
+            )
+            assert client["emby_user_name"] is None, (
+                f"Expected None, got: {client['emby_user_name']!r}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_channel_with_empty_clients_list_handles_cleanly(
+        self, async_client
+    ):
+        """A channel with ``clients=[]`` must not crash the enrichment
+        loop and must still surface ``emby_user_name`` at channel level."""
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {
+                    "channel_id": "uuid-no-clients",
+                    "channel_name": "HBO",
+                    "stream_id": 700,
+                    "clients": [],
+                },
+            ],
+        }
+        mock_client.get_streams_by_ids.return_value = [
+            {"id": 700, "name": "HBO", "m3u_account": 6},
+        ]
+
+        resolver_calls: list = []
+
+        async def _track(ip, stream_name, **_kwargs):
+            resolver_calls.append(ip)
+            return None
+
+        with (
+            patch("routers.stats.get_client", return_value=mock_client),
+            patch(
+                "services.emby_resolver.resolve_emby_user",
+                side_effect=_track,
+            ),
+            patch(
+                "config.get_settings",
+                return_value=type("S", (), {"emby_enabled": True, "emby_base_url": "http://emby"})(),
+            ),
+        ):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        ch = body["channels"][0]
+        # Channel-level field is set (null — no IPs to resolve).
+        assert ch["emby_user_name"] is None
+        # clients list stays empty — no crash.
+        assert ch["clients"] == []
+        # Resolver was never called (no IPs to attempt).
+        assert resolver_calls == []
+
 
 # ---------------------------------------------------------------------------
 # /api/stats/users/dispatcharr/{id} — renamed route, dispatcharr behavior

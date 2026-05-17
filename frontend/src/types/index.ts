@@ -370,6 +370,9 @@ export interface StreamClient {
   current_rate_KBps?: number;
   user_id?: string;
   username?: string;
+  /** bd-5kbyf: Emby user resolved via cross-reference when this channel is
+   * Emby-mediated. Null when Emby is disabled or no attribution matched. */
+  emby_user_name?: string | null;
 }
 
 // Active channel stats from /proxy/ts/status
