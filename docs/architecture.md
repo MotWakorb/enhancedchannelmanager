@@ -71,7 +71,7 @@ graph TB
             AuthProviders["Providers (Dispatcharr)"]
         end
 
-        subgraph Routers["20 Domain Routers (/api/*)"]
+        subgraph Routers["21 Domain Routers (/api/*)"]
             direction LR
             R_channels["/channels"]
             R_groups["/channel-groups"]
@@ -93,6 +93,7 @@ graph TB
             R_ffmpeg["/ffmpeg"]
             R_health["/health"]
             R_m3udigest["/m3u-digest"]
+            R_dedup["/channel-merges (dedup)"]
         end
 
         subgraph TaskSystem["Task Engine"]
@@ -251,6 +252,86 @@ AutoCreationEngine.run_pipeline() / run_rule()
 
 `AutoCreationEngine` has exactly three production collaborators: `ConditionEvaluator`, `ActionExecutor`, and `init_auto_creation_engine`. Everything else in its call graph is tests.
 
+## Stream Deduplication Pipeline (v0.17.1)
+
+The interactive stream-to-channel deduplication feature (ADR-008) intercepts three trigger paths — drag-drop, "Add Stream" button, and bulk M3U refresh — and offers the operator a choice to **merge into an existing channel** rather than creating a duplicate.
+
+### Database tables (migration 0014)
+
+Two tables land in `journal.db`:
+
+| Table | Purpose |
+|-|-|
+| `pending_merges` | Queue of pending dedup decisions. Rows carry `status` ∈ {`pending`, `merged`, `dismissed`}. Terminal rows are retained indefinitely as audit history. |
+| `pending_merge_journal` | Discrete audit trail. One row per accept / dismiss / enqueue action, with queryable columns for `actor_token_id`, `action_type`, `trigger_context`, `confidence_score`, and timestamps. Separate from the existing `journal_entries` table. |
+
+The `pending_merges` table uses a partial unique index on `(stream_name, candidate_channel_id) WHERE status='pending'` to prevent duplicate queue rows from repeat M3U imports of the same stream.
+
+### Matcher service
+
+`backend/services/dedup_matcher.py` implements `find_candidate(stream_name, candidates, threshold) -> MatchResult | None` using RapidFuzz `token_set_ratio`. A hard `CONFIDENCE_FLOOR = 0.60` is enforced in the matcher regardless of the operator-configured threshold — the matcher will never emit a candidate below 60% confidence (ADR-008 §D2). The Pydantic validator for `dedup_threshold` in `backend/config.py` imports this constant so the two layers stay locked to the same floor value.
+
+### API surface (`backend/routers/channel_merges.py`)
+
+Four endpoints under `/api/channel-merges/*` (ADR-008 §D1 D4-override, plural-noun path per the style guide):
+
+```
+GET  /api/channel-merges/candidates   — synchronous lookup (cacheable, idempotent)
+GET  /api/channel-merges              — paginated queue list (status filter: pending/merged/dismissed)
+POST /api/channel-merges/{id}/accept  — operator confirms merge (idempotent on terminal merged)
+POST /api/channel-merges/{id}/dismiss — operator rejects candidate (idempotent on terminal dismissed)
+```
+
+Response envelopes follow the ECM flat-outcome pattern (no top-level `data` wrapper), matching the precedent at `POST /api/channels/merge`.
+
+### Bulk M3U refresh hook (BD-F)
+
+`backend/services/m3u_dedup_hook.py` is wired into `AutoCreationEngine._process_streams()` when `triggered_by='m3u_refresh'`. After the executor's exact and normalized channel-name lookups fail and before a new-channel `create_channel` call, the hook:
+
+1. Calls `dedup_matcher.find_candidate()` with the operator-configured `dedup_threshold`.
+2. On a match above the threshold: INSERTs a `pending_merges` row with `trigger_context='m3u_refresh'` and signals the executor to SKIP the new-channel creation.
+3. On a collision with an existing pending row (§D5 partial unique index): logs at INFO and returns "skip creation" — the existing row stays authoritative.
+4. Increments the `ecm_pending_merges_queue_depth_added_total` counter (BD-M locked metric contract).
+
+The hook fires only on the M3U-refresh path. Scheduled / manual auto-creation runs are not affected.
+
+### Interactive trigger flow
+
+For drag-drop and Add Stream triggers:
+
+```
+Operator action (drag-drop / right-click)
+  └─ Frontend calls GET /api/channel-merges/candidates?stream_name=X&group_id=Y
+       └─ Router → dedup_matcher.find_candidate()
+            ├─ candidate found → StreamDedupModal displayed
+            │    ├─ operator clicks "Merge into existing channel"
+            │    │    └─ POST /api/channel-merges/{id}/accept
+            │    │         → Dispatcharr merge call → pending_merge_journal row
+            │    └─ operator clicks "Create new channel"
+            │         └─ POST /api/channel-merges/{id}/dismiss → pending_merge_journal row
+            └─ no candidate → new-channel creation proceeds as normal
+```
+
+### MCP tools (BD-O / BD-P)
+
+Three new tools in `mcp-server/tools/dedup.py` expose the dedup queue to AI agents (ADR-008 §D7):
+
+| Tool | Mirrors |
+|-|-|
+| `list_pending_channel_merges(group_id?, status?)` | `GET /api/channel-merges?status=…` |
+| `accept_channel_merge(merge_id)` | `POST /api/channel-merges/{id}/accept` |
+| `dismiss_channel_merge(merge_id)` | `POST /api/channel-merges/{id}/dismiss` |
+
+The existing `add_stream` MCP tool is extended (BD-P) with a `dedup_action` parameter: `prompt` (return candidates for agent decision), `force_new` (skip dedup), or `merge_if_found` (auto-accept if above threshold). MCP-driven actions record `trigger_context='mcp_tool'` in the audit journal.
+
+### Boundaries
+
+The interactive dedup pipeline and the auto-creation pipeline's own collision detection (`match_scope_target_group` / separate-not-merge, migration 0002 / bd-r9mtd) are **independent systems** that do not share a matcher. The interactive dedup path is the *attended* (operator-driven) surface; the auto-creation path is the *unattended* surface. A shared matcher service is a deferred backlog candidate.
+
+See also: ADR-008 (`docs/adr/ADR-008-interactive-stream-dedup.md`), API reference (`docs/api.md` → Channel Merges section), operator guide (`docs/user_guide/channels-streams/stream-dedup.md`).
+
+---
+
 ## Normalization ↔ Auto-Creation Coupling
 
 The normalization and auto-creation subsystems are architecturally independent and coupled only via a singleton factory:
@@ -322,7 +403,7 @@ graph LR
     Client -.reads.-> Settings
 ```
 
-**Tool modules (14 domains):** `channels`, `channel_groups`, `streams`, `m3u`, `epg`, `auto_creation`, `export`, `ffmpeg`, `tasks`, `stats`, `system`, `notifications`, `profiles`, `normalization`.
+**Tool modules (15 domains):** `channels`, `channel_groups`, `streams`, `m3u`, `epg`, `auto_creation`, `export`, `ffmpeg`, `tasks`, `stats`, `system`, `notifications`, `profiles`, `normalization`, `dedup`.
 
 **Resources (read-only):** `ecm://stats/overview`, `ecm://channels/summary`, `ecm://tasks/status`.
 
