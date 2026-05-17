@@ -1,0 +1,26 @@
+[
+  {
+    "Id": "jf-session-abc-002",
+    "UserId": "jf-user-uuid-2",
+    "UserName": "bob",
+    "RemoteEndPoint": "192.168.1.51",
+    "NowPlayingItem": {
+      "Name": "ESPN",
+      "Type": "TvChannel",
+      "ChannelNumber": "408"
+    },
+    "LastActivityDate": "2026-05-17T10:30:00.0000000Z"
+  },
+  {
+    "Id": "jf-session-abc-003",
+    "UserId": "jf-user-uuid-3",
+    "UserName": "carol",
+    "RemoteEndPoint": "192.168.1.52",
+    "NowPlayingItem": {
+      "Name": "ESPN",
+      "Type": "TvChannel",
+      "ChannelNumber": "408"
+    },
+    "LastActivityDate": "2026-05-17T10:32:45.0000000Z"
+  }
+]
