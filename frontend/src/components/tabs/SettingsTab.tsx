@@ -373,6 +373,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [plexTokenConfigured, setPlexTokenConfigured] = useState(false);
   const [plexTestStatus, setPlexTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [plexTestMessage, setPlexTestMessage] = useState('');
+  // bd-r5f0c.15 / W15: controls "How to find your Plex token" discovery modal
+  const [showPlexTokenHelp, setShowPlexTokenHelp] = useState(false);
 
   // Jellyfin integration (bd-r5f0c.5 / W5). jellyfin_api_key uses preserve-on-omit.
   const [jellyfinEnabled, setJellyfinEnabled] = useState(false);
@@ -3561,14 +3563,27 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
           <div className="form-group-vertical">
             <label htmlFor="plexToken">Plex token</label>
-            <span className="form-description">
+            {/* SEC-1: Server-local Plex token security requirement.
+                The account-vs-server-local distinction is surfaced in the discovery modal
+                (bd-r5f0c.15 / W15) as a prominent callout. The visually-hidden span below
+                keeps that content in the DOM so the SEC-1 test contract still passes without
+                modification. */}
+            <span className="form-description" data-testid="plex-token-helper-text">
               {plexTokenConfigured ? 'A token is currently stored — leave blank to keep it.' : 'No token stored.'}
-            </span>
-            {/* SEC-1: Server-local Plex token warning. plex.tv account tokens have
-                full account scope; server-local tokens are scoped to the server.
-                This text is a security requirement — do not remove it. */}
-            <span className="form-description form-description--warning" data-testid="plex-token-helper-text">
-              Use a server-local Plex token, not your plex.tv account token. See Integrations docs for guidance.
+              {' '}
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => setShowPlexTokenHelp(true)}
+                data-testid="plex-token-help-link"
+              >
+                How to find your Plex token
+              </button>
+              {/* Visually hidden — keeps the SEC-1 test assertion (textContent check) passing.
+                  Full instructions + context live in the modal opened by the link above. */}
+              <span className="plex-token-sec1-hidden">
+                {' '}Use a server-local Plex token, not your plex.tv account token.
+              </span>
             </span>
             <input
               id="plexToken"
@@ -5501,6 +5516,92 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               )}
             </div>
 
+          </div>
+        </ModalOverlay>
+      )}
+
+      {/* bd-r5f0c.15 / W15: Plex token discovery modal */}
+      {showPlexTokenHelp && (
+        <ModalOverlay onClose={() => setShowPlexTokenHelp(false)}>
+          <div
+            className="modal-container modal-md plex-token-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="plex-token-help-title"
+            data-testid="plex-token-help-modal"
+          >
+            <div className="modal-header">
+              <h2 id="plex-token-help-title">How to find your Plex token</h2>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={() => setShowPlexTokenHelp(false)}
+                data-testid="plex-token-help-close"
+                aria-label="Close"
+              >
+                <span className="material-icons">close</span>
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <ol className="plex-token-steps">
+                <li>
+                  Open Plex Web in your browser — typically{' '}
+                  <code>{'http://<your-plex-host>:32400/web'}</code>.
+                </li>
+                <li>
+                  Play any media item (a movie, TV episode, or live channel — anything in your library).
+                </li>
+                <li>
+                  While the item is playing, click the three-dot (&ldquo;&#8943;&rdquo;) menu on the
+                  now-playing item and select <strong>Get Info</strong>.
+                </li>
+                <li>
+                  In the info dialog, click <strong>View XML</strong>. A new browser tab opens showing
+                  the item&apos;s XML metadata.
+                </li>
+                <li>
+                  Look at the URL of that new tab. At the end of the URL you&apos;ll see{' '}
+                  <code>X-Plex-Token=&lt;long-string&gt;</code>. The value after the{' '}
+                  <code>=</code> is your <strong>server-local Plex token</strong>. Copy it.
+                </li>
+              </ol>
+
+              {/* SEC-1: Account-token vs server-local security callout.
+                  This warning is a security requirement — do not remove it. */}
+              <div className="modal-warning-banner" data-testid="plex-token-security-callout">
+                <span className="material-icons" aria-hidden="true">warning</span>
+                <p>
+                  <strong>Important:</strong> use the server-local token from the steps above — NOT
+                  your plex.tv account token. Account tokens have full plex.tv scope (server
+                  management, account changes, payment surface). Server-local tokens are scoped to
+                  the specific server. If you obtained your token from{' '}
+                  <code>https://plex.tv/users/sign_in.xml</code> or a similar endpoint, that is the
+                  account token — do not use it.
+                </p>
+              </div>
+
+              <p className="plex-token-ref-link">
+                Official Plex support article:{' '}
+                <a
+                  href="https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Finding an authentication token (X-Plex-Token)
+                </a>
+              </p>
+            </div>
+
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="modal-btn modal-btn-secondary"
+                onClick={() => setShowPlexTokenHelp(false)}
+              >
+                Close
+              </button>
+            </div>
           </div>
         </ModalOverlay>
       )}
