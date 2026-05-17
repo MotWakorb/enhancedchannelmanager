@@ -1,0 +1,13 @@
+[
+  {
+    "Id": "jf-session-abc-001",
+    "UserId": "jf-user-uuid-1",
+    "UserName": "alice",
+    "RemoteEndPoint": "192.168.1.50",
+    "NowPlayingItem": {
+      "Name": "ESPN",
+      "Type": "TvChannel"
+    },
+    "LastActivityDate": "2026-05-17T10:32:01.0000000Z"
+  }
+]
