@@ -897,6 +897,23 @@ export function StatsTab() {
                         {streamBadgeText}
                       </span>
                     )}
+                    {/* bd-fm23o (final bead of EPIC bd-2cenq — Emby user
+                        attribution): "(watching: <emby_user>)" badge for
+                        Emby-mediated streams. Backend's
+                        ``_enrich_channels_with_emby`` populates
+                        ``emby_user_name`` when the live resolver
+                        attributes any client of this channel to an Emby
+                        user. Rendered alongside the stream-name badge
+                        for visual continuity — operator can see
+                        provider + stream + Emby viewer in one line. */}
+                    {channel.emby_user_name && (
+                      <span
+                        className="stream-name-badge channel-emby-viewer"
+                        title={`Watching via Emby: ${channel.emby_user_name}`}
+                      >
+                        (watching: {channel.emby_user_name})
+                      </span>
+                    )}
                     {m3uSource && (
                       <span className="m3u-source" title={`M3U Source: ${m3uSource}`}>
                         {m3uSource}

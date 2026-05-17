@@ -250,3 +250,13 @@
   font-size: 14px;
   margin-bottom: 12px;
 }
+
+/* bd-fm23o (final bead of EPIC bd-2cenq): "via Emby" attribution badge.
+ * Builds on the shared `.badge` system in `shared/common.css` — this
+ * selector only adds horizontal spacing between the username and the
+ * badge. Visual style (color, border-radius, padding) is inherited from
+ * the shared class so the badge stays consistent with every other
+ * `.badge` instance in the app. */
+.user-stats-panel .attribution-source-badge {
+  margin-left: 8px;
+}
