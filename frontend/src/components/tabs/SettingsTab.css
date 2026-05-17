@@ -985,19 +985,6 @@
   text-decoration: none;
 }
 
-/* SEC-1 text kept in DOM for test contract; visually hidden so only the modal surfaces it */
-.plex-token-sec1-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
 /* Plex token discovery modal */
 .plex-token-modal .plex-token-steps {
   padding-left: 1.25rem;
