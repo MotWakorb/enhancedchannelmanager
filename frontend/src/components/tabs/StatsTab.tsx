@@ -22,6 +22,8 @@ import { WatchHistoryPanel } from './WatchHistoryPanel';
 import { BandwidthPanel } from './BandwidthPanel';
 import { UserStatsPanel } from './UserStatsPanel';
 import { ProvidersPanel } from './ProvidersPanel';
+import { AttributionBadge } from '../AttributionBadge';
+import type { Viewer } from '../../types';
 import './StatsTab.css';
 
 // Historical data point for charts
@@ -897,23 +899,67 @@ export function StatsTab() {
                         {streamBadgeText}
                       </span>
                     )}
-                    {/* bd-fm23o (final bead of EPIC bd-2cenq — Emby user
-                        attribution): "(watching: <emby_user>)" badge for
-                        Emby-mediated streams. Backend's
-                        ``_enrich_channels_with_emby`` populates
-                        ``emby_user_name`` when the live resolver
-                        attributes any client of this channel to an Emby
-                        user. Rendered alongside the stream-name badge
-                        for visual continuity — operator can see
-                        provider + stream + Emby viewer in one line. */}
-                    {channel.emby_user_name && (
-                      <span
-                        className="stream-name-badge channel-emby-viewer"
-                        title={`Watching via Emby: ${channel.emby_user_name}`}
-                      >
-                        (watching: {channel.emby_user_name})
-                      </span>
-                    )}
+                    {/* bd-r5f0c.5 / W5 (bd-g03fi): channel-header viewer
+                        rollup. Counts total viewers across all sources
+                        (emby + plex + jellyfin + dispatcharr fallback).
+                        - total == 1: show single name (back-compat)
+                        - total > 1: show "(N viewers)" rollup
+                        - total == 0: fall back to legacy emby_user_name
+                        singular for any old DB rows that pre-date W9.
+                        The per-client breakdown in the expanded section
+                        below shows the full breakdown by source. */}
+                    {(() => {
+                      const embyCount = channel.emby_viewers?.length ?? 0;
+                      const plexCount = channel.plex_viewers?.length ?? 0;
+                      const jellyfinCount = channel.jellyfin_viewers?.length ?? 0;
+                      const totalViewers = embyCount + plexCount + jellyfinCount;
+
+                      if (totalViewers > 1) {
+                        // bd-g03fi closure: rollup to "(N viewers)"
+                        return (
+                          <span
+                            className="stream-name-badge channel-emby-viewer"
+                            title={`${totalViewers} viewers across all media servers`}
+                            data-testid="channel-header-viewer-rollup"
+                          >
+                            ({totalViewers} viewers)
+                          </span>
+                        );
+                      }
+
+                      if (totalViewers === 1) {
+                        // Single viewer: show their name with badge
+                        const singleViewer =
+                          channel.emby_viewers?.[0] ??
+                          channel.plex_viewers?.[0] ??
+                          channel.jellyfin_viewers?.[0];
+                        if (singleViewer) {
+                          return (
+                            <span
+                              className="stream-name-badge channel-emby-viewer"
+                              title={`Watching: ${singleViewer.user_name}`}
+                              data-testid="channel-header-single-viewer"
+                            >
+                              (watching: {singleViewer.user_name})
+                            </span>
+                          );
+                        }
+                      }
+
+                      // Fallback: legacy emby_user_name for pre-W9 DB rows
+                      if (channel.emby_user_name) {
+                        return (
+                          <span
+                            className="stream-name-badge channel-emby-viewer"
+                            title={`Watching via Emby: ${channel.emby_user_name}`}
+                          >
+                            (watching: {channel.emby_user_name})
+                          </span>
+                        );
+                      }
+
+                      return null;
+                    })()}
                     {m3uSource && (
                       <span className="m3u-source" title={`M3U Source: ${m3uSource}`}>
                         {m3uSource}
@@ -1166,26 +1212,120 @@ export function StatsTab() {
                       {channel.clients.map((client, idx) => (
                         <div key={client.client_id || idx} className="client-item">
                           <div className="client-info">
-                            {/* bd-5kbyf: prefer emby_user_name (propagated
-                                from channel-level resolver) over dispatcharr
-                                username; fall back to User #id when neither
-                                is set. "via Emby" badge mirrors the
-                                attribution-source-badge from UserStatsPanel
-                                (bd-fm23o). */}
-                            {(client.emby_user_name || client.username || client.user_id) && (
-                              <span className="client-user">
-                                <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
-                                {client.emby_user_name || client.username || `User #${client.user_id}`}
-                                {client.emby_user_name && (
-                                  <span
-                                    className="badge attribution-source-badge"
-                                    title="Identity resolved via Emby /Sessions cross-reference"
-                                  >
-                                    via Emby
+                            {/* bd-r5f0c.5 (W5): Multi-viewer rendering.
+                                Priority order:
+                                  1. *_viewers[] (W9 multi-viewer lists)
+                                  2. *_user_name singular (back-compat fallback)
+                                  3. dispatcharr username / user_id
+                                For each source that has viewers, render an
+                                AttributionBadge row. If a client has viewers
+                                from multiple sources, each gets its own line. */}
+                            {/* bd-r5f0c.5 (W5): Multi-viewer rendering.
+                                Priority order per source:
+                                  1. *_viewers[] (W9 multi-viewer lists) → AttributionBadge
+                                  2. *_user_name singular (back-compat) → old inline badge
+                                     to preserve existing test contracts (bd-5kbyf)
+                                  3. dispatcharr username / user_id
+                                If a client has viewers from multiple sources,
+                                each gets its own <span className="client-user"> row. */}
+                            {(() => {
+                              // --- Multi-viewer path (W9 emby_viewers / plex_viewers / jellyfin_viewers) ---
+                              type ViewerRow = { source: 'emby' | 'plex' | 'jellyfin'; viewers: Viewer[] };
+                              const viewerRows: ViewerRow[] = [];
+
+                              if (client.emby_viewers && client.emby_viewers.length > 0) {
+                                viewerRows.push({ source: 'emby', viewers: client.emby_viewers });
+                              }
+                              if (client.plex_viewers && client.plex_viewers.length > 0) {
+                                viewerRows.push({ source: 'plex', viewers: client.plex_viewers });
+                              }
+                              if (client.jellyfin_viewers && client.jellyfin_viewers.length > 0) {
+                                viewerRows.push({ source: 'jellyfin', viewers: client.jellyfin_viewers });
+                              }
+
+                              if (viewerRows.length > 0) {
+                                return (
+                                  <div className="client-attribution-rows" data-testid="client-attribution-rows">
+                                    {viewerRows.map(row => {
+                                      const count = row.viewers.length;
+                                      let nameText: string;
+                                      if (count === 1) {
+                                        nameText = row.viewers[0].user_name;
+                                      } else if (count <= 3) {
+                                        nameText = row.viewers.map(v => v.user_name).join(', ');
+                                      } else {
+                                        nameText = `${count} viewers`;
+                                      }
+                                      return (
+                                        <span key={row.source} className="client-user">
+                                          <AttributionBadge source={row.source} />
+                                          {count > 3 ? (
+                                            <details className="viewer-details">
+                                              <summary>{nameText}</summary>
+                                              <ul className="viewer-list">
+                                                {row.viewers.map((v, i) => (
+                                                  <li key={i}>{v.user_name}</li>
+                                                ))}
+                                              </ul>
+                                            </details>
+                                          ) : (
+                                            <span className="viewer-names">{nameText}</span>
+                                          )}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                );
+                              }
+
+                              // --- Back-compat singular path (bd-5kbyf contract preserved) ---
+                              // When emby_viewers is absent/null but emby_user_name is set
+                              // (pre-W9 DB rows), render the original markup so existing
+                              // tests pass unmodified. Same for plex / jellyfin.
+                              if (client.emby_user_name) {
+                                return (
+                                  <span className="client-user">
+                                    <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
+                                    {client.emby_user_name}
+                                    <span
+                                      className="badge attribution-source-badge"
+                                      title="Identity resolved via Emby /Sessions cross-reference"
+                                    >
+                                      via Emby
+                                    </span>
                                   </span>
-                                )}
-                              </span>
-                            )}
+                                );
+                              }
+                              if (client.plex_user_name) {
+                                return (
+                                  <span className="client-user">
+                                    <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
+                                    {client.plex_user_name}
+                                    <span className="badge attribution-source-badge">via Plex</span>
+                                  </span>
+                                );
+                              }
+                              if (client.jellyfin_user_name) {
+                                return (
+                                  <span className="client-user">
+                                    <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
+                                    {client.jellyfin_user_name}
+                                    <span className="badge attribution-source-badge">via Jellyfin</span>
+                                  </span>
+                                );
+                              }
+
+                              // --- Dispatcharr username / user_id fallback ---
+                              if (client.username || client.user_id) {
+                                return (
+                                  <span className="client-user">
+                                    <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
+                                    {client.username || `User #${client.user_id}`}
+                                  </span>
+                                );
+                              }
+                              return null;
+                            })()}
                             <span className="client-ip">{client.ip_address || 'Unknown'}</span>
                             <span className="client-ua">{parseUserAgent(client.user_agent)}</span>
                           </div>

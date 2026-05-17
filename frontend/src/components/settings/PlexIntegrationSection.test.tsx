@@ -1,20 +1,24 @@
 /**
- * Tests for the Stream Deduplication settings controls (BD-K / bd-ugzn4).
+ * Tests for the Plex Integration Settings subsection (bd-r5f0c.5 / W5).
  *
- * The controls live directly in SettingsTab.tsx (Channel Defaults → Stream
- * Deduplication section). This test file exercises the dedup-specific
- * rendering, load, save, and clamping behaviour without full SettingsTab
- * integration — it mocks the api module and renders SettingsTab in isolation.
+ * Mirrors EmbyIntegrationSection.test.tsx. Additional contract:
+ *   - The token field MUST show the SEC-1 helper text ("Use a server-local
+ *     Plex token, not your plex.tv account token.") directly below the
+ *     input field. This is a security requirement — do not remove the test.
  *
- * ADR-008 §D2: dedup_threshold stored as float 0.60-1.00; UI displays and
- * edits as integer percent 60-100. Hard floor 60 (server enforces; UI
- * clamps as convenience).
+ * Contracts under test:
+ *   - Section renders with the three fields (enabled, base_url, token).
+ *   - Fields populate from loaded settings (token itself is masked —
+ *     only ``plex_token_configured`` is surfaced).
+ *   - "Test Connection" button calls api.testPlexConnection with form-state
+ *     values and renders ok/error inline.
+ *   - Save persists plex_enabled and plex_base_url always, and plex_token
+ *     only when the operator entered a fresh value (preserve-on-omit).
+ *   - Token helper text is present and visible (SEC-1).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
-// SettingsTab has many nested imports — mock the heavyweight ones so the
-// unit test stays fast and does not hit missing module boundaries.
 vi.mock('../../services/api', () => ({
   getSettings: vi.fn(),
   saveSettings: vi.fn(),
@@ -26,6 +30,9 @@ vi.mock('../../services/api', () => ({
   getM3UAccounts: vi.fn(),
   getExportSections: vi.fn(),
   listSavedBackups: vi.fn(),
+  testEmbyConnection: vi.fn(),
+  testPlexConnection: vi.fn(),
+  testJellyfinConnection: vi.fn(),
 }));
 
 vi.mock('../../services/autoCreationApi', () => ({
@@ -49,7 +56,6 @@ vi.mock('../../hooks/useAuth', () => ({
   useAuth: () => ({ user: { is_admin: true, username: 'admin' } }),
 }));
 
-// Stub sub-components that pull in DnD context or heavy deps
 vi.mock('../settings/NormalizationEngineSection', () => ({
   NormalizationEngineSection: () => <div data-testid="stub-normalization" />,
 }));
@@ -106,7 +112,6 @@ vi.mock('../CustomSelect', () => ({
 import * as api from '../../services/api';
 import { SettingsTab } from '../tabs/SettingsTab';
 
-// Minimal settings fixture — only the fields SettingsTab actually reads.
 function makeSettings(overrides: Partial<typeof settingsBase> = {}): Awaited<ReturnType<typeof api.getSettings>> {
   return { ...settingsBase, ...overrides } as Awaited<ReturnType<typeof api.getSettings>>;
 }
@@ -186,14 +191,12 @@ const settingsBase = {
   telegram_chat_id: '',
   mcp_api_key_configured: false,
   telemetry_client_errors_enabled: true,
-  // Dedup fields under test (BD-K / bd-ugzn4)
   dedup_threshold: 0.80,
   dedup_m3u_toast_suppressed: false,
-  // Emby integration (bd-8wc6q). Defaults disabled — not under test here.
   emby_enabled: false,
   emby_base_url: '',
   emby_api_key_configured: false,
-  // Plex/Jellyfin integration (bd-r5f0c.5). Defaults disabled — not under test here.
+  // Plex fields under test (bd-r5f0c.5 / W5)
   plex_enabled: false,
   plex_base_url: '',
   plex_token_configured: false,
@@ -202,16 +205,16 @@ const settingsBase = {
   jellyfin_api_key_configured: false,
 };
 
-function renderOnChannelDefaults() {
+function renderOnIntegrations() {
   return render(
     <SettingsTab
       onSaved={vi.fn()}
-      initialSettingsPage="channel-defaults"
+      initialSettingsPage="integrations"
     />
   );
 }
 
-describe('DeduplicationSettingsSection (BD-K / bd-ugzn4)', () => {
+describe('PlexIntegrationSection (bd-r5f0c.5 / W5)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.getSettings).mockResolvedValue(makeSettings());
@@ -223,174 +226,204 @@ describe('DeduplicationSettingsSection (BD-K / bd-ugzn4)', () => {
 
   // --- Rendering ---
 
-  it('renders the dedup threshold input with the operator\'s current value', async () => {
-    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({ dedup_threshold: 0.75 }));
-    renderOnChannelDefaults();
+  it('renders the Plex Integration section on the Integrations page', async () => {
+    renderOnIntegrations();
+    await waitFor(() => {
+      expect(screen.getByTestId('plex-integration-section')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('plex-enabled-checkbox')).toBeInTheDocument();
+    expect(screen.getByTestId('plex-base-url-input')).toBeInTheDocument();
+    expect(screen.getByTestId('plex-token-input')).toBeInTheDocument();
+    expect(screen.getByTestId('plex-test-connection-btn')).toBeInTheDocument();
+  });
+
+  it('populates form fields from loaded settings', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
+      plex_enabled: true,
+      plex_base_url: 'http://plex.local:32400',
+      plex_token_configured: true,
+    }));
+
+    renderOnIntegrations();
 
     await waitFor(() => {
-      const input = screen.getByTestId('dedup-threshold-input') as HTMLInputElement;
-      expect(input.value).toBe('75');
+      const enabled = screen.getByTestId('plex-enabled-checkbox') as HTMLInputElement;
+      const baseUrl = screen.getByTestId('plex-base-url-input') as HTMLInputElement;
+      const token = screen.getByTestId('plex-token-input') as HTMLInputElement;
+      expect(enabled.checked).toBe(true);
+      expect(baseUrl.value).toBe('http://plex.local:32400');
+      // Token field is intentionally blank on load
+      expect(token.value).toBe('');
+      expect(token.placeholder).toBe('••••••••');
     });
   });
 
-  it('renders the dedup threshold input with default 80 when field is absent from settings', async () => {
-    const withoutDedup = { ...settingsBase } as Partial<typeof settingsBase>;
-    delete (withoutDedup as Record<string, unknown>)['dedup_threshold'];
-    vi.mocked(api.getSettings).mockResolvedValue(withoutDedup as Awaited<ReturnType<typeof api.getSettings>>);
-
-    renderOnChannelDefaults();
-
+  it('uses a password-type input for the token field', async () => {
+    renderOnIntegrations();
     await waitFor(() => {
-      const input = screen.getByTestId('dedup-threshold-input') as HTMLInputElement;
-      expect(input.value).toBe('80');
+      const token = screen.getByTestId('plex-token-input') as HTMLInputElement;
+      expect(token.type).toBe('password');
     });
   });
 
-  it('renders the toast-suppressor checkbox reflecting the operator\'s current value (false)', async () => {
-    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({ dedup_m3u_toast_suppressed: false }));
-    renderOnChannelDefaults();
+  // --- SEC-1: Token helper text ---
 
+  it('shows server-local token helper text (SEC-1 requirement)', async () => {
+    renderOnIntegrations();
     await waitFor(() => {
-      const checkbox = screen.getByTestId('dedup-toast-suppressed-checkbox') as HTMLInputElement;
-      expect(checkbox.checked).toBe(false);
+      const helperEl = screen.getByTestId('plex-token-helper-text');
+      expect(helperEl).toBeInTheDocument();
+      expect(helperEl.textContent).toContain('server-local Plex token');
+      expect(helperEl.textContent).toContain('plex.tv account token');
     });
   });
 
-  it('renders the toast-suppressor checkbox as checked when operator has suppressed the toast', async () => {
-    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({ dedup_m3u_toast_suppressed: true }));
-    renderOnChannelDefaults();
+  // --- Test Connection ---
+
+  it('calls api.testPlexConnection with form-state values when Test is clicked', async () => {
+    vi.mocked(api.testPlexConnection).mockResolvedValue({ ok: true });
+    renderOnIntegrations();
 
     await waitFor(() => {
-      const checkbox = screen.getByTestId('dedup-toast-suppressed-checkbox') as HTMLInputElement;
-      expect(checkbox.checked).toBe(true);
+      expect(screen.getByTestId('plex-base-url-input')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByTestId('plex-base-url-input'), {
+      target: { value: 'http://plex.local:32400' },
+    });
+    fireEvent.change(screen.getByTestId('plex-token-input'), {
+      target: { value: 'my-plex-token' },
+    });
+
+    fireEvent.click(screen.getByTestId('plex-test-connection-btn'));
+
+    await waitFor(() => {
+      expect(api.testPlexConnection).toHaveBeenCalledWith(
+        'http://plex.local:32400',
+        'my-plex-token',
+      );
     });
   });
 
-  it('toast suppressor starts unchecked by default (field absent)', async () => {
-    const withoutToast = { ...settingsBase } as Partial<typeof settingsBase>;
-    delete (withoutToast as Record<string, unknown>)['dedup_m3u_toast_suppressed'];
-    vi.mocked(api.getSettings).mockResolvedValue(withoutToast as Awaited<ReturnType<typeof api.getSettings>>);
-
-    renderOnChannelDefaults();
+  it('shows a success message inline when the test succeeds', async () => {
+    vi.mocked(api.testPlexConnection).mockResolvedValue({ ok: true });
+    renderOnIntegrations();
 
     await waitFor(() => {
-      const checkbox = screen.getByTestId('dedup-toast-suppressed-checkbox') as HTMLInputElement;
-      expect(checkbox.checked).toBe(false);
+      expect(screen.getByTestId('plex-base-url-input')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByTestId('plex-base-url-input'), {
+      target: { value: 'http://plex.local:32400' },
+    });
+    fireEvent.change(screen.getByTestId('plex-token-input'), {
+      target: { value: 'my-plex-token' },
+    });
+    fireEvent.click(screen.getByTestId('plex-test-connection-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('plex-test-result-success')).toBeInTheDocument();
     });
   });
 
-  // --- Save: threshold ---
+  it('shows the backend error message inline when the test fails', async () => {
+    vi.mocked(api.testPlexConnection).mockResolvedValue({
+      ok: false,
+      error: 'Plex returned 401 unauthorized — check token',
+    });
+    renderOnIntegrations();
 
-  it('POSTs the new dedup_threshold as a float when the operator edits and saves', async () => {
-    renderOnChannelDefaults();
-
-    // Wait for the settings to load
     await waitFor(() => {
-      expect(screen.getByTestId('dedup-threshold-input')).toBeInTheDocument();
+      expect(screen.getByTestId('plex-base-url-input')).toBeInTheDocument();
     });
 
-    // Change the threshold from 80 to 90
-    const input = screen.getByTestId('dedup-threshold-input') as HTMLInputElement;
-    fireEvent.change(input, { target: { value: '90' } });
+    fireEvent.change(screen.getByTestId('plex-base-url-input'), {
+      target: { value: 'http://plex.local:32400' },
+    });
+    fireEvent.change(screen.getByTestId('plex-token-input'), {
+      target: { value: 'bad-token' },
+    });
+    fireEvent.click(screen.getByTestId('plex-test-connection-btn'));
 
-    // Click the Save button
+    await waitFor(() => {
+      const errEl = screen.getByTestId('plex-test-result-error');
+      expect(errEl).toBeInTheDocument();
+      expect(errEl.textContent).toContain('401');
+    });
+  });
+
+  it('rejects the test click with an inline error when base URL is empty', async () => {
+    renderOnIntegrations();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('plex-test-connection-btn')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('plex-test-connection-btn'));
+
+    await waitFor(() => {
+      const err = screen.getByTestId('plex-test-result-error');
+      expect(err.textContent?.toLowerCase()).toContain('base url');
+    });
+    expect(api.testPlexConnection).not.toHaveBeenCalled();
+  });
+
+  // --- Save ---
+
+  it('saves plex_enabled and plex_base_url on save', async () => {
+    renderOnIntegrations();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('plex-enabled-checkbox')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('plex-enabled-checkbox'));
+    fireEvent.change(screen.getByTestId('plex-base-url-input'), {
+      target: { value: 'http://plex.local:32400' },
+    });
+    fireEvent.change(screen.getByTestId('plex-token-input'), {
+      target: { value: 'fresh-token' },
+    });
+
     const saveBtn = screen.getByRole('button', { name: /save settings/i });
     fireEvent.click(saveBtn);
 
     await waitFor(() => {
       expect(api.saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({ dedup_threshold: 0.90 })
+        expect.objectContaining({
+          plex_enabled: true,
+          plex_base_url: 'http://plex.local:32400',
+          plex_token: 'fresh-token',
+        }),
       );
     });
   });
 
-  // --- Save: toast suppressor ---
+  it('omits plex_token from the save payload when the field is blank (preserve-on-omit)', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
+      plex_enabled: true,
+      plex_base_url: 'http://old-plex:32400',
+      plex_token_configured: true,
+    }));
 
-  it('POSTs the toggled dedup_m3u_toast_suppressed value when operator checks and saves', async () => {
-    renderOnChannelDefaults();
-
-    await waitFor(() => {
-      expect(screen.getByTestId('dedup-toast-suppressed-checkbox')).toBeInTheDocument();
-    });
-
-    const checkbox = screen.getByTestId('dedup-toast-suppressed-checkbox') as HTMLInputElement;
-    fireEvent.click(checkbox); // toggle from false → true
-
-    const saveBtn = screen.getByRole('button', { name: /save settings/i });
-    fireEvent.click(saveBtn);
+    renderOnIntegrations();
 
     await waitFor(() => {
-      expect(api.saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({ dedup_m3u_toast_suppressed: true })
-      );
+      expect(screen.getByTestId('plex-base-url-input')).toBeInTheDocument();
     });
-  });
 
-  // --- Clamping ---
+    fireEvent.change(screen.getByTestId('plex-base-url-input'), {
+      target: { value: 'http://new-plex:32400' },
+    });
 
-  it('clamps threshold to 60 when operator enters a value below the floor', async () => {
-    renderOnChannelDefaults();
+    fireEvent.click(screen.getByRole('button', { name: /save settings/i }));
 
     await waitFor(() => {
-      expect(screen.getByTestId('dedup-threshold-input')).toBeInTheDocument();
+      expect(api.saveSettings).toHaveBeenCalled();
     });
 
-    const input = screen.getByTestId('dedup-threshold-input') as HTMLInputElement;
-    fireEvent.change(input, { target: { value: '30' } });
-
-    // Value should be clamped to 60 immediately on change
-    expect(input.value).toBe('60');
-  });
-
-  it('clamps threshold to 100 when operator enters a value above the ceiling', async () => {
-    renderOnChannelDefaults();
-
-    await waitFor(() => {
-      expect(screen.getByTestId('dedup-threshold-input')).toBeInTheDocument();
-    });
-
-    const input = screen.getByTestId('dedup-threshold-input') as HTMLInputElement;
-    fireEvent.change(input, { target: { value: '150' } });
-
-    expect(input.value).toBe('100');
-  });
-
-  it('saves threshold clamped to 0.60 when operator somehow bypasses UI validation', async () => {
-    renderOnChannelDefaults();
-
-    await waitFor(() => {
-      expect(screen.getByTestId('dedup-threshold-input')).toBeInTheDocument();
-    });
-
-    // Simulate a value below floor reaching the onChange handler (e.g. direct prop manipulation)
-    const input = screen.getByTestId('dedup-threshold-input') as HTMLInputElement;
-    fireEvent.change(input, { target: { value: '10' } });
-    // After clamp, value is 60 → save sends 0.60
-    const saveBtn = screen.getByRole('button', { name: /save settings/i });
-    fireEvent.click(saveBtn);
-
-    await waitFor(() => {
-      expect(api.saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({ dedup_threshold: 0.60 })
-      );
-    });
-  });
-
-  // --- Hint text ---
-
-  it('shows the ADR-008 hard floor hint text below the threshold input', async () => {
-    renderOnChannelDefaults();
-
-    await waitFor(() => {
-      expect(screen.getByText(/ADR-008 hard floor/i)).toBeInTheDocument();
-    });
-  });
-
-  it('shows the hint that pending merges are still queued when toast is suppressed', async () => {
-    renderOnChannelDefaults();
-
-    await waitFor(() => {
-      expect(screen.getByText(/Pending merges are still queued/i)).toBeInTheDocument();
-    });
+    const callArgs = vi.mocked(api.saveSettings).mock.calls[0][0];
+    expect(callArgs.plex_base_url).toBe('http://new-plex:32400');
+    expect(callArgs).not.toHaveProperty('plex_token');
   });
 });
