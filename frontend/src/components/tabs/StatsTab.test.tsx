@@ -903,3 +903,162 @@ describe('StatsTab — channel-header viewer rollup (bd-g03fi)', () => {
     expect(screen.queryByTestId('channel-header-viewer-rollup')).not.toBeInTheDocument();
   });
 });
+
+// bd-r5f0c.12 (W12): Per-client viewer dedup — same-user multi-stream.
+// When a single user has multiple concurrent streams from the same source,
+// the per-client viewer list renders "name (N)" instead of repeating the name.
+// Grouping is by user_id (primary) with user_name fallback when user_id is null.
+
+describe('StatsTab — per-client viewer dedup display (bd-r5f0c.12 / W12)', () => {
+  // Helper to build a mock response with a single channel + single client
+  const makeViewerMockResponse = (
+    viewers: { user_id: string | null; user_name: string }[],
+  ) => ({
+    count: 1,
+    channels: [
+      {
+        ...baseMultiViewerChannel,
+        clients: [
+          {
+            client_id: 'cid-dedup',
+            ip_address: '10.0.1.1',
+            user_agent: 'Emby/1.0',
+            connected_at: '2026-05-17T00:00:00Z',
+            last_active: '2026-05-17T00:01:00Z',
+            emby_viewers: viewers,
+          },
+        ],
+      },
+    ],
+  });
+
+  // Test 1: same user_id → "name (N)" suffix
+  it('renders "name (N)" for same-user multi-stream', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue(
+      makeViewerMockResponse([
+        { user_id: '1', user_name: 'jkaisersoze' },
+        { user_id: '1', user_name: 'jkaisersoze' },
+      ]) as unknown as ChannelStatsResponse,
+    );
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('jkaisersoze (2)')).toBeInTheDocument();
+    });
+    // Must NOT repeat the plain name twice separated by a comma
+    expect(screen.queryByText('jkaisersoze, jkaisersoze')).not.toBeInTheDocument();
+  });
+
+  // Test 2: two same-user streams + one distinct user → "name (N), other"
+  it('renders mixed users with one duplicate as "name (N), other"', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue(
+      makeViewerMockResponse([
+        { user_id: '1', user_name: 'jkaisersoze' },
+        { user_id: '1', user_name: 'jkaisersoze' },
+        { user_id: '2', user_name: 'alice' },
+      ]) as unknown as ChannelStatsResponse,
+    );
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      // Map preserves insertion order, so jkaisersoze first
+      expect(screen.getByText('jkaisersoze (2), alice')).toBeInTheDocument();
+    });
+  });
+
+  // Test 3: distinct users → comma-separated, no count suffixes (W5 regression)
+  it('renders distinct users as comma-separated list without count suffixes', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue(
+      makeViewerMockResponse([
+        { user_id: '1', user_name: 'alice' },
+        { user_id: '2', user_name: 'bob' },
+      ]) as unknown as ChannelStatsResponse,
+    );
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('alice, bob')).toBeInTheDocument();
+    });
+  });
+
+  // Test 4: 4 unique users → "(N viewers)" rollup (W5 regression)
+  it('renders 4 unique users as "(N viewers)" rollup with details expansion', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue(
+      makeViewerMockResponse([
+        { user_id: '1', user_name: 'alice' },
+        { user_id: '2', user_name: 'bob' },
+        { user_id: '3', user_name: 'carol' },
+        { user_id: '4', user_name: 'dave' },
+      ]) as unknown as ChannelStatsResponse,
+    );
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('4 viewers')).toBeInTheDocument();
+    });
+    // Names hidden inside a <details> element
+    expect(container.querySelector('details.viewer-details')).toBeInTheDocument();
+  });
+
+  // Test 5: 4 streams from same user → "name (4)" inline, NOT rollup
+  // (group count = 1, below the rollup threshold of 4 groups)
+  it('renders 4 streams from the same user as "name (4)" inline (not rollup)', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue(
+      makeViewerMockResponse([
+        { user_id: '1', user_name: 'jkaisersoze' },
+        { user_id: '1', user_name: 'jkaisersoze' },
+        { user_id: '1', user_name: 'jkaisersoze' },
+        { user_id: '1', user_name: 'jkaisersoze' },
+      ]) as unknown as ChannelStatsResponse,
+    );
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('jkaisersoze (4)')).toBeInTheDocument();
+    });
+    // Only 1 group — must NOT use the rollup <details> element
+    expect(container.querySelector('details.viewer-details')).not.toBeInTheDocument();
+  });
+
+  // Test 6: user_id null → group by user_name fallback (Plex edge case from W9)
+  it('groups by user_name fallback when user_id is null', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue(
+      makeViewerMockResponse([
+        { user_id: null, user_name: 'alice' },
+        { user_id: null, user_name: 'alice' },
+      ]) as unknown as ChannelStatsResponse,
+    );
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('alice (2)')).toBeInTheDocument();
+    });
+  });
+
+  // Test 7: same user_id with differing user_name (e.g., Emby mid-session rename).
+  // Implementation choice: first-seen user_name wins (Map insertion order).
+  // The second entry increments the count but the first name is kept.
+  it('groups by user_id even when user_name differs (first-seen name wins)', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue(
+      makeViewerMockResponse([
+        { user_id: '1', user_name: 'jkaisersoze' },
+        { user_id: '1', user_name: 'jkaisersoze (alt)' }, // same user_id, different display name
+      ]) as unknown as ChannelStatsResponse,
+    );
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      // Only 1 group total — first-seen name 'jkaisersoze' kept, count = 2
+      expect(screen.getByText('jkaisersoze (2)')).toBeInTheDocument();
+    });
+    // The alternate name string must not appear as a standalone rendered item
+    expect(screen.queryByText('jkaisersoze (alt)')).not.toBeInTheDocument();
+  });
+});
