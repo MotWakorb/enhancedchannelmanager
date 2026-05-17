@@ -151,15 +151,21 @@ class TestSessionTelemetryMigration:
             # ``event_type`` to its own per-poll counter. ``emby_user_id``
             # and ``emby_user_name`` land in migration 0016 (bd-k026g) —
             # both TEXT NULL, denormalized Emby attribution from the
-            # bd-2cenq epic resolver. Carry every column in the
-            # head-shape assertion so a future delete/rename surfaces
-            # here.
+            # bd-2cenq epic resolver. ``plex_user_id``, ``plex_user_name``,
+            # ``jellyfin_user_id``, and ``jellyfin_user_name`` land in
+            # migration 0017 (bd-r5f0c.1) — all four TEXT NULL,
+            # denormalized Plex + Jellyfin attribution at parity with
+            # the Emby pair (the W2/W3/W4 resolvers + writer in epic
+            # bd-r5f0c). Carry every column in the head-shape assertion
+            # so a future delete/rename surfaces here.
             assert set(cols) == {
                 "id", "session_id", "observed_at", "user_id", "provider_id",
                 "channel_id", "bytes_delta", "buffer_event_count", "poll_interval_ms",
                 "stream_id", "stream_name", "dispatcharr_username",
                 "reconnect_event_count", "error_event_count", "switch_event_count",
                 "emby_user_id", "emby_user_name",
+                "plex_user_id", "plex_user_name",
+                "jellyfin_user_id", "jellyfin_user_name",
             }
             assert cols["session_id"]["nullable"] is False
             assert cols["observed_at"]["nullable"] is False
@@ -197,6 +203,14 @@ class TestSessionTelemetryMigration:
             # as NULL on read).
             assert cols["emby_user_id"]["nullable"] is True
             assert cols["emby_user_name"]["nullable"] is True
+            # bd-r5f0c.1: all four Plex + Jellyfin attribution columns
+            # are NULLABLE (non-Plex / non-Jellyfin viewers + rows where
+            # the resolver could not match the active stream + pre-0017
+            # rows surface as NULL on read).
+            assert cols["plex_user_id"]["nullable"] is True
+            assert cols["plex_user_name"]["nullable"] is True
+            assert cols["jellyfin_user_id"]["nullable"] is True
+            assert cols["jellyfin_user_name"]["nullable"] is True
 
             # bd-gsn3r: migration 0011 dropped the FK to ECM ``users.id``.
             # ECM and Dispatcharr ``users`` are different namespaces with
