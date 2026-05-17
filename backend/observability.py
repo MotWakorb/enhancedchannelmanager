@@ -388,12 +388,11 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
         # values; pushing them through a label would create a cardinality
         # contract this metric does not commit to.
         #
-        # The companion gauge ``ecm_pending_merges_queue_depth`` (current
-        # number of ``status='pending'`` rows) is NOT in the BD-M locked
-        # contract — gauge maintenance landed as a follow-up bead (see
-        # CHANGELOG) so BD-F is not blocked on the cross-cutting plumbing
-        # required to keep a gauge in sync across all four trigger
-        # surfaces + the operator-resolution paths.
+        # The companion gauge ``ecm_pending_merges_queue_depth`` (below) is
+        # NOT in the BD-M locked contract — gauge maintenance landed as a
+        # separate bead (bd-wvr1d) so BD-F was not blocked on the
+        # cross-cutting plumbing required to keep a gauge in sync across
+        # all four trigger surfaces + the operator-resolution paths.
         # ----------------------------------------------------------------
         "pending_merges_queue_depth_added_total": Counter(
             "ecm_pending_merges_queue_depth_added_total",
@@ -403,6 +402,45 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             "do not increment. Denominator for SLI-10b "
             "(pending merge resolution rate within 24h) per "
             "docs/sre/slos.md.",
+            registry=registry,
+        ),
+        # ----------------------------------------------------------------
+        # Companion gauge to the LOCKED CONTRACT counter above (bd-wvr1d).
+        #
+        # ``pending_merges_queue_depth`` is set to the CURRENT count of
+        # ``pending_merges`` rows with ``status='pending'`` after every
+        # transition that changes the queue depth:
+        #
+        #   * BD-F insert (fresh row added)              → set after commit
+        #   * BD-E accept (row flipped to 'merged')      → set after commit
+        #   * BD-E dismiss (row flipped to 'dismissed')  → set after commit
+        #   * Startup task                                → seeds on boot
+        #
+        # IMPORTANT — NOT A LOCKED CONTRACT. The counter
+        # ``ecm_pending_merges_queue_depth_added_total`` is the SLI-10b
+        # source (docs/sre/slos.md SLO-10). This gauge is a *diagnostic*
+        # complement — it answers "how big is the queue right now?" for
+        # dashboards and ad-hoc debugging. Alerts and runbooks MUST NOT
+        # take a dependency on this gauge without explicit cross-team
+        # review, because:
+        #
+        #   1. Gauge accuracy is best-effort. Every set-site wraps the
+        #      COUNT query in a try/except; a DB hiccup or startup race
+        #      leaves the gauge stale rather than crashing the write path.
+        #   2. The gauge reflects the queue depth *after* the transition
+        #      that triggered the set — there is no atomic "flip + read"
+        #      guarantee; a concurrent accept/dismiss can race the COUNT.
+        #
+        # Use the counter for SLI math; use this gauge for dashboards.
+        # ----------------------------------------------------------------
+        "pending_merges_queue_depth": Gauge(
+            "ecm_pending_merges_queue_depth",
+            "Current number of pending_merges rows in status='pending'. "
+            "Set after every BD-F insert and BD-E accept/dismiss commit, "
+            "and seeded on app startup. Diagnostic companion to the LOCKED "
+            "CONTRACT counter ecm_pending_merges_queue_depth_added_total — "
+            "NOT a contract SLI; see observability.py for dependency "
+            "restrictions (bd-wvr1d).",
             registry=registry,
         ),
         # ----------------------------------------------------------------
@@ -896,6 +934,47 @@ def get_metric(name: str) -> Any:
     if not _METRICS:
         install_metrics()
     return _METRICS[name]
+
+
+def set_pending_merges_queue_depth_gauge(db) -> None:
+    """Read the current pending_merges queue depth and update the gauge.
+
+    Queries ``SELECT COUNT(*) FROM pending_merges WHERE status='pending'``
+    via the supplied SQLAlchemy session and calls
+    ``ecm_pending_merges_queue_depth.set(count)``.
+
+    This helper is the single canonical implementation shared by all four
+    call sites that change the pending_merges queue depth:
+
+      * BD-F insert (``backend/services/m3u_dedup_hook.py``)
+      * BD-E accept  (``backend/routers/channel_merges.py``)
+      * BD-E dismiss (``backend/routers/channel_merges.py``)
+      * App startup  (``backend/main.py``)
+
+    The helper is intentionally best-effort: a failed COUNT or gauge-set
+    is logged at WARN with the ``[DEDUP]`` prefix and swallowed — gauge
+    accuracy is a diagnostic nicety, NOT a correctness requirement. The
+    caller's queue-state transition (insert / status flip / startup seed)
+    is never blocked by an observability failure.
+
+    Parameters
+    ----------
+    db:
+        An active SQLAlchemy ``Session`` that is already connected to the
+        ECM journal DB. The COUNT query is read-only and does NOT consume
+        a transaction slot or flush any pending state.
+    """
+    try:
+        from sqlalchemy import text as _sa_text
+        row = db.execute(_sa_text("SELECT COUNT(*) FROM pending_merges WHERE status='pending'")).fetchone()
+        count = row[0] if row is not None else 0
+        get_metric("pending_merges_queue_depth").set(float(count))
+    except Exception:  # pragma: no cover — gauge set is best-effort, never blocks callers
+        logging.getLogger(__name__).warning(
+            "[DEDUP] set_pending_merges_queue_depth_gauge: COUNT query or "
+            "gauge.set failed — gauge may be stale",
+            exc_info=True,
+        )
 
 
 def update_database_size_metrics(db_path: Optional[str] = None) -> None:
