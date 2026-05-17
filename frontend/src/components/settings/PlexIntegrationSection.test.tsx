@@ -1,10 +1,12 @@
 /**
  * Tests for the Plex Integration Settings subsection (bd-r5f0c.5 / W5).
  *
- * Mirrors EmbyIntegrationSection.test.tsx. Additional contract:
- *   - The token field MUST show the SEC-1 helper text ("Use a server-local
- *     Plex token, not your plex.tv account token.") directly below the
- *     input field. This is a security requirement — do not remove the test.
+ * Mirrors EmbyIntegrationSection.test.tsx. Additional contract (SEC-1):
+ *   - The Plex token help modal MUST surface the account-vs-server-local
+ *     security caveat ("use the server-local token … NOT your plex.tv
+ *     account token") via data-testid="plex-token-security-callout".
+ *     bd-r5f0c.16 / W16: test updated to assert on the modal callout;
+ *     the visually-hidden DOM span was removed.
  *
  * Contracts under test:
  *   - Section renders with the three fields (enabled, base_url, token).
@@ -14,7 +16,7 @@
  *     values and renders ok/error inline.
  *   - Save persists plex_enabled and plex_base_url always, and plex_token
  *     only when the operator entered a fresh value (preserve-on-omit).
- *   - Token helper text is present and visible (SEC-1).
+ *   - SEC-1 security callout is present in the help modal (SEC-1).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -282,16 +284,18 @@ describe('PlexIntegrationSection (bd-r5f0c.5 / W5)', () => {
     });
   });
 
-  // --- SEC-1: Token helper text ---
+  // --- SEC-1: Modal security callout ---
 
-  it('shows server-local token helper text (SEC-1 requirement)', async () => {
+  it('shows server-local-token security caveat inside the help modal (SEC-1 requirement)', async () => {
     renderOnIntegrations();
-    await waitFor(() => {
-      const helperEl = screen.getByTestId('plex-token-helper-text');
-      expect(helperEl).toBeInTheDocument();
-      expect(helperEl.textContent).toContain('server-local Plex token');
-      expect(helperEl.textContent).toContain('plex.tv account token');
-    });
+    await waitFor(() => screen.getByTestId('plex-token-help-link'));
+    fireEvent.click(screen.getByTestId('plex-token-help-link'));
+    await waitFor(() => screen.getByTestId('plex-token-security-callout'));
+    const callout = screen.getByTestId('plex-token-security-callout');
+    expect(callout).toBeInTheDocument();
+    expect(callout.textContent).toContain('use the server-local token');
+    expect(callout.textContent).toContain('NOT');
+    expect(callout.textContent).toContain('plex.tv account token');
   });
 
   // --- Test Connection ---
