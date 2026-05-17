@@ -32,8 +32,33 @@ from models import (
     SessionTelemetry,
     UniqueClientConnection,
 )
+from services.emby_resolver import EmbyAttribution, resolve_emby_user
 
 logger = logging.getLogger(__name__)
+
+
+# bd-gih6d: rate-limit window for the [BANDWIDTH] [EMBY] resolver-failure
+# WARN. The resolver itself documents that it "never raises" — every
+# upstream defensive path returns ``None`` and logs at the appropriate
+# level. This guard exists as a belt-and-braces wrapper around the
+# resolver call so a future refactor that lets an exception escape
+# (or any unforeseen runtime fault: cache failure, settings access
+# raise, etc.) cannot block the telemetry write. WARN-ONCE-PER-WINDOW
+# keeps the log honest: operators need a visible signal when Emby
+# attribution is silently failing, but not one line per (channel, ip)
+# pair per poll cycle (which on a busy install would drown the log).
+# 60 seconds matches the order-of-magnitude of the Emby cache TTL —
+# transient failures self-heal inside one window.
+_EMBY_WARN_WINDOW_SECONDS: float = 60.0
+
+
+# Module-level monotonic timestamp of the last [BANDWIDTH] [EMBY]
+# resolver-failure WARN. Initialised to ``None`` (never logged) so the
+# first failure in a fresh process always surfaces. Module-level rather
+# than instance-level so multi-tracker test seams (rare, but possible
+# in parallel test runs) share the same rate-limit clock — duplicating
+# the WARN across tracker instances would defeat the suppression.
+_emby_resolver_last_warn_at: float | None = None
 
 
 # Dispatcharr stream-URL convention: the last path segment before ``.ts`` is
@@ -763,6 +788,55 @@ def _is_excluded_telemetry_user(
     return False
 
 
+def _log_emby_resolver_failure(exc: BaseException) -> None:
+    """Emit a [BANDWIDTH] [EMBY] WARN at most once per ``_EMBY_WARN_WINDOW_SECONDS``.
+
+    Companion to the per-(channel, ip) resolver wrapper in
+    ``_resolve_emby_attributions`` (bd-gih6d). The resolver is documented
+    to "never raise" — every defensive path returns ``None`` and logs at
+    the appropriate level. This helper exists as a belt-and-braces guard
+    so that if a future refactor (or any unforeseen runtime fault: cache
+    failure, settings access raise, etc.) lets an exception escape, the
+    BandwidthTracker poll loop still produces telemetry rows AND the
+    operator sees a single visible signal per minute.
+
+    The rate-limit window is module-level (``_emby_resolver_last_warn_at``)
+    so multi-tracker test seams share the same clock — without that,
+    parallel tracker instances would each log their own WARN inside the
+    same window and drown the signal.
+
+    The exception is included in the log line so operators can grep for
+    the failure mode. ``exc_info`` is intentionally NOT passed: a full
+    traceback on every poll cycle (until the window expires) is too
+    noisy for the operational signal-to-noise ratio that motivated this
+    suppression in the first place.
+    """
+    global _emby_resolver_last_warn_at
+    now = time.monotonic()
+    last = _emby_resolver_last_warn_at
+    if last is not None and (now - last) < _EMBY_WARN_WINDOW_SECONDS:
+        return
+    _emby_resolver_last_warn_at = now
+    logger.warning(
+        "[BANDWIDTH] [EMBY] resolver failed; telemetry will be written "
+        "without Emby attribution this poll cycle (rate-limited to one "
+        "warning per %.0fs): %s",
+        _EMBY_WARN_WINDOW_SECONDS, exc,
+    )
+
+
+def _reset_emby_warn_state_for_tests() -> None:
+    """Clear the module-level WARN rate-limit timestamp — tests only.
+
+    The rate-limit module-global persists across test functions; without
+    this reset, a test that triggers the WARN once would suppress the
+    WARN in a subsequent test that wants to assert it surfaces again.
+    Production code paths do not call this.
+    """
+    global _emby_resolver_last_warn_at
+    _emby_resolver_last_warn_at = None
+
+
 def get_user_timezone() -> timezone:
     """Get the user's configured timezone, or UTC if not set/invalid."""
     try:
@@ -1384,6 +1458,17 @@ class BandwidthTracker:
         channel_events_by_channel = await self._collect_channel_events(
             telemetry_channel_snapshot
         )
+        # bd-gih6d: cross-reference each active (channel, ip) pair against
+        # the live Emby session list so the writer can stamp
+        # ``session_telemetry.emby_user_id`` / ``emby_user_name`` on
+        # Emby-mediated rows. The helper short-circuits cheaply when
+        # ``settings.emby_enabled`` is False (the common case on
+        # installs without Emby configured), and wraps each resolver
+        # call in try/except so a failure CAN NEVER block the telemetry
+        # write — the row still lands, just with NULL Emby columns.
+        emby_attributions = await self._resolve_emby_attributions(
+            telemetry_channel_snapshot, provider_by_channel,
+        )
         self._write_session_telemetry(
             telemetry_channel_snapshot,
             observed_at_ms,
@@ -1396,6 +1481,9 @@ class BandwidthTracker:
             # helper before any per-row work runs.
             dispatcharr_user_map=dispatcharr_user_map,
             exclude_user_tokens=exclude_user_tokens,
+            # bd-gih6d: sparse {(channel_uuid, ip): EmbyAttribution} map
+            # — empty when Emby is disabled or no pair resolved.
+            emby_attributions=emby_attributions,
         )
 
     def _update_daily_record(
@@ -2078,6 +2166,113 @@ class BandwidthTracker:
             attributed_by_type.get("stream_switch", 0),
         )
 
+    async def _resolve_emby_attributions(
+        self,
+        telemetry_channel_snapshot: list[dict],
+        provider_by_channel: dict[str, ProviderResolution],
+    ) -> dict[tuple[str, str], EmbyAttribution]:
+        """Cross-reference active (channel, ip) pairs against live Emby sessions.
+
+        bd-gih6d wiring for parent epic bd-2cenq. Builds a sparse map of
+        ``(channel_uuid, client_ip) → EmbyAttribution`` for every active
+        viewing connection this poll. The map populates
+        ``session_telemetry.emby_user_id`` / ``emby_user_name`` in the
+        downstream ``_write_session_telemetry`` call — Emby-mediated
+        streams get the real viewer's identity, every other session
+        leaves the columns NULL.
+
+        Settings gate
+        -------------
+        Reads ``settings.emby_enabled`` once at the top and short-circuits
+        with an empty map when Emby is disabled. The resolver itself
+        already short-circuits on the disabled state (the cache returns
+        ``[]``), but the per-(channel, ip) loop, the per-call settings
+        access, and the import of ``EmbyAttribution`` are all unnecessary
+        on the disabled hot path — every operator without an Emby server
+        configured pays the cost otherwise. This is the cheap
+        optimization the bead spec explicitly calls out.
+
+        Failure handling
+        ----------------
+        The resolver is documented to never raise. This wrapper still
+        wraps each call in try/except so any unforeseen runtime fault
+        (cache failure, settings access raise, transient import error
+        from a partial restart, etc.) cannot disturb the telemetry
+        write path. Failures log a single rate-limited WARN per minute
+        via :func:`_log_emby_resolver_failure` and produce an empty
+        attribution for the affected pair — the telemetry row still
+        writes, just without Emby columns populated. This is the
+        hot-path discipline the bead spec mandates: "Telemetry write
+        must NEVER block on Emby failure."
+
+        Stream name source
+        ------------------
+        Uses ``provider_by_channel[channel_uuid].stream_name`` (the
+        Dispatcharr stream record's ``name`` field, resolved by
+        :meth:`_resolve_provider_ids` for the same poll cycle). Skips
+        the resolver call when the stream name is missing — the cache
+        match is name-based and a NULL name would short-circuit inside
+        the resolver anyway, so the cheaper skip-here saves the
+        function-call overhead.
+
+        Args:
+            telemetry_channel_snapshot: Per-channel snapshot the
+                ``_collect_stats`` loop already built — ``channel_uuid``
+                + ``client_ips`` per entry are the only fields this
+                helper consumes.
+            provider_by_channel: Same map ``_write_session_telemetry``
+                already receives; used here to read the resolved
+                ``stream_name`` so the resolver can match against the
+                Emby now-playing surface.
+
+        Returns:
+            ``{(channel_uuid, client_ip): EmbyAttribution}``. Sparse —
+            entries are only present for (channel, ip) pairs the
+            resolver attributed to an Emby user. Empty dict when Emby
+            is disabled, when no pair resolved, or when every resolver
+            call failed.
+        """
+        try:
+            from config import get_settings
+            settings = get_settings()
+        except Exception as exc:
+            # Settings access raise is exotic but defensible — config
+            # is loaded at import in normal flow. Fail soft so the
+            # writer still runs.
+            _log_emby_resolver_failure(exc)
+            return {}
+
+        if not getattr(settings, "emby_enabled", False):
+            return {}
+
+        attributions: dict[tuple[str, str], EmbyAttribution] = {}
+        for entry in telemetry_channel_snapshot:
+            channel_uuid = entry["channel_uuid"]
+            client_ips = entry.get("client_ips") or []
+            if not client_ips:
+                continue
+            resolution = provider_by_channel.get(channel_uuid)
+            stream_name = resolution.stream_name if resolution else None
+            if not stream_name:
+                # Without a resolved stream name there is nothing the
+                # resolver can match against. Skip the call rather than
+                # pay for the cache fetch + IP check + name-loop only
+                # to have the resolver return None.
+                continue
+            for ip in client_ips:
+                try:
+                    attribution = await resolve_emby_user(ip, stream_name)
+                except Exception as exc:
+                    _log_emby_resolver_failure(exc)
+                    # Continue to the next ip — one failure should not
+                    # poison the rest of the poll's attributions. The
+                    # rate-limit guard ensures the WARN is not repeated
+                    # for every (channel, ip) pair in a busy poll.
+                    continue
+                if attribution is not None:
+                    attributions[(channel_uuid, ip)] = attribution
+        return attributions
+
     def _record_session_telemetry_metrics(
         self,
         *,
@@ -2139,6 +2334,7 @@ class BandwidthTracker:
         *,
         dispatcharr_user_map: Optional[dict[str, str]] = None,
         exclude_user_tokens: Optional[frozenset[str]] = None,
+        emby_attributions: Optional[dict[tuple[str, str], EmbyAttribution]] = None,
     ) -> None:
         """Write one row per active viewing connection into ``session_telemetry``.
 
@@ -2236,6 +2432,12 @@ class BandwidthTracker:
             dispatcharr_user_map = {}
         if exclude_user_tokens is None:
             exclude_user_tokens = frozenset()
+        if emby_attributions is None:
+            # bd-gih6d: empty map = no Emby attribution this poll
+            # (Emby disabled, no matches, or every resolver call failed).
+            # Default to empty so the older test seams that don't pass
+            # this kwarg continue working with NULL emby columns.
+            emby_attributions = {}
         # bd-skqln.12: time the entire write attempt and record success /
         # failure on the way out. ``rows_written`` is hoisted here so it is
         # visible to the metric-emission block in the ``finally`` (it is 0
@@ -2395,6 +2597,22 @@ class BandwidthTracker:
                             row_reconnect_count = 0
                             row_error_count = 0
                             row_switch_count = 0
+                        # bd-gih6d: look up the per-(channel, ip) Emby
+                        # attribution the caller resolved in
+                        # ``_resolve_emby_attributions`` for this poll
+                        # cycle. Sparse map — most pairs are NOT
+                        # Emby-mediated so the lookup returns ``None``,
+                        # which we collapse to NULL on the row. Both
+                        # columns move together: the resolver returns
+                        # the dataclass atomically (user_id + user_name
+                        # cannot diverge inside one poll), and they
+                        # ride together to the row so any later split
+                        # of the model into a separate Emby table can
+                        # migrate this writer in one place.
+                        emby_attr = emby_attributions.get((channel_uuid, ip))
+                        emby_user_id = emby_attr.user_id if emby_attr else None
+                        emby_user_name = emby_attr.user_name if emby_attr else None
+
                         session.add(
                             SessionTelemetry(
                                 session_id=f"conn-{conn_id}",
@@ -2431,6 +2649,15 @@ class BandwidthTracker:
                                 # provider_id.
                                 stream_id=stream_id,
                                 stream_name=stream_name,
+                                # bd-gih6d: Emby attribution populated
+                                # via the resolver when the ECM session's
+                                # client IP matches the configured Emby
+                                # server's IP AND a concurrent Emby
+                                # session is playing a matching item.
+                                # Both NULL for non-Emby-mediated rows
+                                # (most rows on most installs).
+                                emby_user_id=emby_user_id,
+                                emby_user_name=emby_user_name,
                             )
                         )
                         rows_written += 1
