@@ -690,6 +690,21 @@ async def startup_event():
     # Initialize journal database
     init_db()
 
+    # Seed the ecm_pending_merges_queue_depth gauge on startup (bd-wvr1d).
+    # This ensures the gauge reflects the actual queue depth immediately
+    # after boot — without this, the gauge starts at 0 until the first
+    # BD-F insert or BD-E accept/dismiss. Best-effort: a failed COUNT or
+    # gauge.set is logged at WARN and does NOT abort startup.
+    try:
+        from observability import set_pending_merges_queue_depth_gauge
+        _gauge_seed_sess = get_session()
+        try:
+            set_pending_merges_queue_depth_gauge(_gauge_seed_sess)
+        finally:
+            _gauge_seed_sess.close()
+    except Exception as _gauge_seed_err:
+        logger.warning("[MAIN] Failed to seed pending_merges queue-depth gauge: %s", _gauge_seed_err)
+
     # Purge all expired user sessions
     try:
         from models import UserSession
