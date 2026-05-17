@@ -3563,11 +3563,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
           <div className="form-group-vertical">
             <label htmlFor="plexToken">Plex token</label>
-            {/* SEC-1: Server-local Plex token security requirement.
-                The account-vs-server-local distinction is surfaced in the discovery modal
-                (bd-r5f0c.15 / W15) as a prominent callout. The visually-hidden span below
-                keeps that content in the DOM so the SEC-1 test contract still passes without
-                modification. */}
+            {/* SEC-1: The account-vs-server-local security requirement is surfaced in the
+                discovery modal (bd-r5f0c.15 / W15) as a prominent callout. The SEC-1 test
+                asserts on the modal callout directly (bd-r5f0c.16 / W16). */}
             <span className="form-description" data-testid="plex-token-helper-text">
               {plexTokenConfigured ? 'A token is currently stored — leave blank to keep it.' : 'No token stored.'}
               {' '}
@@ -3579,11 +3577,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               >
                 How to find your Plex token
               </button>
-              {/* Visually hidden — keeps the SEC-1 test assertion (textContent check) passing.
-                  Full instructions + context live in the modal opened by the link above. */}
-              <span className="plex-token-sec1-hidden">
-                {' '}Use a server-local Plex token, not your plex.tv account token.
-              </span>
             </span>
             <input
               id="plexToken"
