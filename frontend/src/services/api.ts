@@ -1024,6 +1024,14 @@ export interface SettingsResponse {
   emby_enabled: boolean;
   emby_base_url: string;
   emby_api_key_configured: boolean;
+  // Plex integration (bd-r5f0c.2 / W2). Token uses preserve-on-omit.
+  plex_enabled: boolean;
+  plex_base_url: string;
+  plex_token_configured: boolean;
+  // Jellyfin integration (bd-r5f0c.3 / W3). Key uses preserve-on-omit.
+  jellyfin_enabled: boolean;
+  jellyfin_base_url: string;
+  jellyfin_api_key_configured: boolean;
 }
 
 // Stream preview mode for browser playback
@@ -1128,6 +1136,14 @@ export async function saveSettings(settings: {
   emby_enabled?: boolean;
   emby_base_url?: string;
   emby_api_key?: string;
+  // Plex integration (bd-r5f0c.2 / W2). plex_token uses preserve-on-omit.
+  plex_enabled?: boolean;
+  plex_base_url?: string;
+  plex_token?: string;
+  // Jellyfin integration (bd-r5f0c.3 / W3). jellyfin_api_key uses preserve-on-omit.
+  jellyfin_enabled?: boolean;
+  jellyfin_base_url?: string;
+  jellyfin_api_key?: string;
 }): Promise<{ status: string; configured: boolean; server_changed: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
@@ -1152,6 +1168,38 @@ export async function testEmbyConnection(
   apiKey: string,
 ): Promise<EmbyTestConnectionResult> {
   return fetchJson(`${API_BASE}/settings/emby/test-connection`, {
+    method: 'POST',
+    body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
+  });
+}
+
+// Plex Settings UI test-connection (bd-r5f0c.5 / W5). Same shape as Emby.
+export interface PlexTestConnectionResult {
+  ok: boolean;
+  error?: string;
+}
+
+export async function testPlexConnection(
+  baseUrl: string,
+  plexToken: string,
+): Promise<PlexTestConnectionResult> {
+  return fetchJson(`${API_BASE}/settings/plex/test-connection`, {
+    method: 'POST',
+    body: JSON.stringify({ base_url: baseUrl, plex_token: plexToken }),
+  });
+}
+
+// Jellyfin Settings UI test-connection (bd-r5f0c.5 / W5). Same shape as Emby.
+export interface JellyfinTestConnectionResult {
+  ok: boolean;
+  error?: string;
+}
+
+export async function testJellyfinConnection(
+  baseUrl: string,
+  apiKey: string,
+): Promise<JellyfinTestConnectionResult> {
+  return fetchJson(`${API_BASE}/settings/jellyfin/test-connection`, {
     method: 'POST',
     body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
   });

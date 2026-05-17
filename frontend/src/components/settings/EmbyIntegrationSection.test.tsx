@@ -35,6 +35,8 @@ vi.mock('../../services/api', () => ({
   getExportSections: vi.fn(),
   listSavedBackups: vi.fn(),
   testEmbyConnection: vi.fn(),
+  testPlexConnection: vi.fn(),
+  testJellyfinConnection: vi.fn(),
 }));
 
 vi.mock('../../services/autoCreationApi', () => ({
@@ -201,6 +203,13 @@ const settingsBase = {
   emby_enabled: false,
   emby_base_url: '',
   emby_api_key_configured: false,
+  // Plex/Jellyfin fields (added by bd-r5f0c.5 / W5; SettingsTab reads them)
+  plex_enabled: false,
+  plex_base_url: '',
+  plex_token_configured: false,
+  jellyfin_enabled: false,
+  jellyfin_base_url: '',
+  jellyfin_api_key_configured: false,
 };
 
 function renderOnIntegrations() {
