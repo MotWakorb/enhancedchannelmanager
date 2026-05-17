@@ -1081,3 +1081,26 @@
   margin-bottom: 1rem;
   line-height: 1.5;
 }
+
+/* Integration test-connection action block (bd-r5f0c.13 / W13)
+   Replaces inline style={{ alignSelf: 'flex-start' }} on the button and
+   inline color styles on the result spans. Used identically in Emby,
+   Plex, and Jellyfin sections. */
+.integration-test-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.integration-test-result {
+  font-size: 0.875rem;
+}
+
+.integration-test-result--success {
+  color: var(--accent-success);
+}
+
+.integration-test-result--error {
+  color: var(--accent-error);
+}
