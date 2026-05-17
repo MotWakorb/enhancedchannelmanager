@@ -190,3 +190,162 @@ class TestEmbyTestConnection:
             )
 
         mock_client.close.assert_awaited_once()
+
+
+class TestEmbyTestConnectionSsrfMitigation:
+    """SSRF mitigation regression suite — security finding SEC-2.
+
+    bd-r5f0c.4 backfill: the bd-8wc6q-shipped endpoint was missing the
+    scheme allowlist + netloc-only reconstruction guard that the
+    Dispatcharr ``/test`` endpoint already had. This suite is the
+    regression target for the backfilled mitigation; the same guard
+    pattern is exercised on Plex + Jellyfin in their respective
+    test files.
+    """
+
+    @pytest.mark.asyncio
+    async def test_strips_path_query_and_fragment(self, async_client):
+        """An operator-supplied base URL with embedded path / query /
+        fragment must be reduced to scheme + netloc only before
+        EmbyClient sees it (security finding SEC-2)."""
+        mock_client = AsyncMock()
+        mock_client.get_sessions = AsyncMock(return_value=[])
+        mock_client.close = AsyncMock()
+
+        captured: dict = {}
+
+        def constructor_spy(base_url, api_key):
+            captured["base_url"] = base_url
+            return mock_client
+
+        with patch("routers.settings.EmbyClient", side_effect=constructor_spy):
+            response = await async_client.post(
+                "/api/settings/emby/test-connection",
+                json={
+                    "base_url": "http://attacker.com/foo?bar=baz#qux",
+                    "api_key": "k",
+                },
+            )
+
+        assert response.status_code == 200, response.json()
+        # The EmbyClient constructor must have received scheme +
+        # netloc ONLY — no path, no query, no fragment.
+        assert captured["base_url"] == "http://attacker.com"
+
+    @pytest.mark.asyncio
+    async def test_rejects_file_scheme(self, async_client):
+        """A ``file://`` URL must be rejected before EmbyClient is
+        constructed — the endpoint returns the SSRF error inline and
+        never makes an HTTP probe."""
+        emby_constructor = AsyncMock()
+        with patch("routers.settings.EmbyClient", side_effect=emby_constructor):
+            response = await async_client.post(
+                "/api/settings/emby/test-connection",
+                json={
+                    "base_url": "file:///etc/passwd",
+                    "api_key": "k",
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ok"] is False
+        assert "scheme" in body["error"].lower()
+        emby_constructor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejects_gopher_scheme(self, async_client):
+        emby_constructor = AsyncMock()
+        with patch("routers.settings.EmbyClient", side_effect=emby_constructor):
+            response = await async_client.post(
+                "/api/settings/emby/test-connection",
+                json={
+                    "base_url": "gopher://attacker.com",
+                    "api_key": "k",
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ok"] is False
+        assert "scheme" in body["error"].lower()
+        emby_constructor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejects_ftp_scheme(self, async_client):
+        emby_constructor = AsyncMock()
+        with patch("routers.settings.EmbyClient", side_effect=emby_constructor):
+            response = await async_client.post(
+                "/api/settings/emby/test-connection",
+                json={
+                    "base_url": "ftp://attacker.com",
+                    "api_key": "k",
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ok"] is False
+        assert "scheme" in body["error"].lower()
+        emby_constructor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejects_missing_hostname(self, async_client):
+        emby_constructor = AsyncMock()
+        with patch("routers.settings.EmbyClient", side_effect=emby_constructor):
+            response = await async_client.post(
+                "/api/settings/emby/test-connection",
+                json={
+                    "base_url": "http://",
+                    "api_key": "k",
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ok"] is False
+        assert "hostname" in body["error"].lower()
+        emby_constructor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejects_empty_base_url(self, async_client):
+        emby_constructor = AsyncMock()
+        with patch("routers.settings.EmbyClient", side_effect=emby_constructor):
+            response = await async_client.post(
+                "/api/settings/emby/test-connection",
+                json={
+                    "base_url": "",
+                    "api_key": "k",
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ok"] is False
+        emby_constructor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_https_scheme_allowed(self, async_client):
+        """Sanity: https is on the allowlist alongside http."""
+        mock_client = AsyncMock()
+        mock_client.get_sessions = AsyncMock(return_value=[])
+        mock_client.close = AsyncMock()
+
+        captured: dict = {}
+
+        def constructor_spy(base_url, api_key):
+            captured["base_url"] = base_url
+            return mock_client
+
+        with patch("routers.settings.EmbyClient", side_effect=constructor_spy):
+            response = await async_client.post(
+                "/api/settings/emby/test-connection",
+                json={
+                    "base_url": "https://emby.example.com:8920",
+                    "api_key": "k",
+                },
+            )
+
+        assert response.status_code == 200, response.json()
+        assert response.json() == {"ok": True}
+        assert captured["base_url"] == "https://emby.example.com:8920"

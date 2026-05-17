@@ -89,6 +89,17 @@ def _mock_settings(**overrides):
         "emby_enabled": False,
         "emby_base_url": "",
         "emby_api_key": "",
+        # Plex + Jellyfin integration (bd-r5f0c.4, epic bd-r5f0c). Same
+        # disabled-default posture as Emby so existing test cases continue
+        # ignoring these fields; the bd-r5f0c.4 suites in
+        # test_plex_settings.py / test_jellyfin_settings.py / the
+        # multi-source attribution suites cover the enabled paths.
+        "plex_enabled": False,
+        "plex_base_url": "",
+        "plex_token": "",
+        "jellyfin_enabled": False,
+        "jellyfin_base_url": "",
+        "jellyfin_api_key": "",
     }
     defaults.update(overrides)
     mock = MagicMock()

@@ -18,6 +18,7 @@ import os
 import re
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import datetime, date, timedelta, timezone
 from typing import Any, ClassVar, NamedTuple, Optional
 from zoneinfo import ZoneInfo
@@ -33,32 +34,103 @@ from models import (
     UniqueClientConnection,
 )
 from services.emby_resolver import EmbyAttribution, resolve_emby_user
+from services.jellyfin_resolver import JellyfinAttribution, resolve_jellyfin_user
+from services.plex_resolver import resolve_plex_user
 
 logger = logging.getLogger(__name__)
 
 
-# bd-gih6d: rate-limit window for the [BANDWIDTH] [EMBY] resolver-failure
-# WARN. The resolver itself documents that it "never raises" — every
-# upstream defensive path returns ``None`` and logs at the appropriate
-# level. This guard exists as a belt-and-braces wrapper around the
-# resolver call so a future refactor that lets an exception escape
-# (or any unforeseen runtime fault: cache failure, settings access
-# raise, etc.) cannot block the telemetry write. WARN-ONCE-PER-WINDOW
-# keeps the log honest: operators need a visible signal when Emby
-# attribution is silently failing, but not one line per (channel, ip)
-# pair per poll cycle (which on a busy install would drown the log).
-# 60 seconds matches the order-of-magnitude of the Emby cache TTL —
-# transient failures self-heal inside one window.
+# bd-gih6d: rate-limit window for the per-source resolver-failure WARN
+# lines. The resolvers themselves document that they "never raise" —
+# every upstream defensive path returns ``None`` and logs at the
+# appropriate level. The per-source guards exist as a belt-and-braces
+# wrapper around the resolver call so a future refactor that lets an
+# exception escape (or any unforeseen runtime fault: cache failure,
+# settings access raise, etc.) cannot block the telemetry write.
+# WARN-ONCE-PER-WINDOW keeps the log honest: operators need a visible
+# signal when attribution is silently failing, but not one line per
+# (channel, ip) pair per poll cycle (which on a busy install would
+# drown the log). 60 seconds matches the order-of-magnitude of the
+# resolver cache TTL — transient failures self-heal inside one window.
+#
+# bd-r5f0c.4: per-source clocks (separate ``_emby_*``, ``_plex_*``,
+# ``_jellyfin_*`` timestamps) so a sustained Plex outage cannot silence
+# Jellyfin failure WARNs — failure isolation across sources is the SRE
+# requirement that motivated the multi-resolver fan-out in
+# ``_resolve_attributions``.
 _EMBY_WARN_WINDOW_SECONDS: float = 60.0
+_PLEX_WARN_WINDOW_SECONDS: float = 60.0
+_JELLYFIN_WARN_WINDOW_SECONDS: float = 60.0
 
 
-# Module-level monotonic timestamp of the last [BANDWIDTH] [EMBY]
-# resolver-failure WARN. Initialised to ``None`` (never logged) so the
-# first failure in a fresh process always surfaces. Module-level rather
-# than instance-level so multi-tracker test seams (rare, but possible
-# in parallel test runs) share the same rate-limit clock — duplicating
-# the WARN across tracker instances would defeat the suppression.
+# Module-level monotonic timestamps of the last per-source resolver
+# failure WARN. Initialised to ``None`` (never logged) so the first
+# failure in a fresh process always surfaces. Module-level rather than
+# instance-level so multi-tracker test seams (rare, but possible in
+# parallel test runs) share the same rate-limit clock — duplicating the
+# WARN across tracker instances would defeat the suppression.
 _emby_resolver_last_warn_at: float | None = None
+_plex_resolver_last_warn_at: float | None = None
+_jellyfin_resolver_last_warn_at: float | None = None
+
+
+@dataclass(frozen=True)
+class AttributionResult:
+    """Sparse per-(channel, ip) attribution from all three media sources.
+
+    bd-r5f0c.4 (epic bd-r5f0c). Populated by
+    :meth:`BandwidthTracker._resolve_attributions` for every active
+    viewing connection in a poll. Each field is ``None`` when the
+    corresponding source did not match this client — typical for the
+    common case where the operator has only one media server enabled,
+    or the stream is not media-server-mediated at all (direct
+    Dispatcharr proxy traffic).
+
+    The Plex resolver returns only ``user_name`` (no Plex-side user
+    UUID is exposed on the public ``/status/sessions`` surface — Plex
+    Web users are identified by their numeric ``User/@id``, which
+    ``plex_resolver`` could surface but currently does not). Keep
+    ``plex_user_id`` slot here so the W1 schema's column can be
+    populated when / if the resolver is upgraded later — the column
+    NULL today is the same posture as a non-matched row.
+
+    All three pairs ride together in one dataclass so the writer can
+    look up one ``AttributionResult`` per (channel, ip) instead of
+    consulting three separate dicts. The downstream
+    ``_write_session_telemetry`` loop reads each pair and stamps the
+    corresponding ``session_telemetry`` column; columns for sources
+    that didn't match stay NULL.
+    """
+
+    emby_user_id: Optional[str] = None
+    emby_user_name: Optional[str] = None
+    plex_user_id: Optional[str] = None
+    plex_user_name: Optional[str] = None
+    jellyfin_user_id: Optional[str] = None
+    jellyfin_user_name: Optional[str] = None
+
+    def is_empty(self) -> bool:
+        """True when no source matched this client (every field NULL)."""
+        return not any(
+            (
+                self.emby_user_id, self.emby_user_name,
+                self.plex_user_id, self.plex_user_name,
+                self.jellyfin_user_id, self.jellyfin_user_name,
+            )
+        )
+
+
+# bd-r5f0c.4: per-source resolver timeout for the asyncio.gather fan-out
+# in ``_resolve_attributions``. SRE failure-isolation requirement —
+# a slow Plex server cannot block the per-poll telemetry write past
+# this threshold. 2.0 seconds is generous relative to the resolver's
+# cache-fast-path (which is microseconds), but tight enough that a
+# misconfigured server URL or a DNS hang fails forward to NULL
+# attribution within one poll interval. The resolvers themselves
+# already wrap their HTTP calls in shorter (5s/10s) timeouts; this is
+# the outer envelope so the whole-source attempt completes inside one
+# poll's budget.
+_RESOLVER_PER_SOURCE_TIMEOUT_SECONDS: float = 2.0
 
 
 # Dispatcharr stream-URL convention: the last path segment before ``.ts`` is
@@ -837,6 +909,72 @@ def _reset_emby_warn_state_for_tests() -> None:
     _emby_resolver_last_warn_at = None
 
 
+def _log_plex_resolver_failure(exc: BaseException) -> None:
+    """Per-source twin of :func:`_log_emby_resolver_failure` for Plex.
+
+    Independent rate-limit clock (``_plex_resolver_last_warn_at``) so a
+    sustained Emby or Jellyfin outage cannot silence Plex WARN lines —
+    failure isolation across sources (bd-r5f0c.4, SRE requirement).
+    """
+    global _plex_resolver_last_warn_at
+    now = time.monotonic()
+    last = _plex_resolver_last_warn_at
+    if last is not None and (now - last) < _PLEX_WARN_WINDOW_SECONDS:
+        return
+    _plex_resolver_last_warn_at = now
+    logger.warning(
+        "[BANDWIDTH] [PLEX] resolver failed; telemetry will be written "
+        "without Plex attribution this poll cycle (rate-limited to one "
+        "warning per %.0fs): %s",
+        _PLEX_WARN_WINDOW_SECONDS, exc,
+    )
+
+
+def _log_jellyfin_resolver_failure(exc: BaseException) -> None:
+    """Per-source twin of :func:`_log_emby_resolver_failure` for Jellyfin.
+
+    Independent rate-limit clock (``_jellyfin_resolver_last_warn_at``)
+    so a sustained Emby or Plex outage cannot silence Jellyfin WARN
+    lines (bd-r5f0c.4, SRE requirement).
+    """
+    global _jellyfin_resolver_last_warn_at
+    now = time.monotonic()
+    last = _jellyfin_resolver_last_warn_at
+    if last is not None and (now - last) < _JELLYFIN_WARN_WINDOW_SECONDS:
+        return
+    _jellyfin_resolver_last_warn_at = now
+    logger.warning(
+        "[BANDWIDTH] [JELLYFIN] resolver failed; telemetry will be written "
+        "without Jellyfin attribution this poll cycle (rate-limited to one "
+        "warning per %.0fs): %s",
+        _JELLYFIN_WARN_WINDOW_SECONDS, exc,
+    )
+
+
+def _reset_plex_warn_state_for_tests() -> None:
+    """Clear the module-level Plex WARN rate-limit timestamp — tests only."""
+    global _plex_resolver_last_warn_at
+    _plex_resolver_last_warn_at = None
+
+
+def _reset_jellyfin_warn_state_for_tests() -> None:
+    """Clear the module-level Jellyfin WARN rate-limit timestamp — tests only."""
+    global _jellyfin_resolver_last_warn_at
+    _jellyfin_resolver_last_warn_at = None
+
+
+def _reset_attribution_warn_state_for_tests() -> None:
+    """Clear all per-source resolver WARN rate-limit timestamps — tests only.
+
+    Convenience for the attribution test suite which wants every source
+    re-armed between cases. Sidesteps three separate reset calls in
+    every fixture.
+    """
+    _reset_emby_warn_state_for_tests()
+    _reset_plex_warn_state_for_tests()
+    _reset_jellyfin_warn_state_for_tests()
+
+
 def get_user_timezone() -> timezone:
     """Get the user's configured timezone, or UTC if not set/invalid."""
     try:
@@ -1466,15 +1604,17 @@ class BandwidthTracker:
         channel_events_by_channel = await self._collect_channel_events(
             telemetry_channel_snapshot
         )
-        # bd-gih6d: cross-reference each active (channel, ip) pair against
-        # the live Emby session list so the writer can stamp
-        # ``session_telemetry.emby_user_id`` / ``emby_user_name`` on
-        # Emby-mediated rows. The helper short-circuits cheaply when
-        # ``settings.emby_enabled`` is False (the common case on
-        # installs without Emby configured), and wraps each resolver
-        # call in try/except so a failure CAN NEVER block the telemetry
-        # write — the row still lands, just with NULL Emby columns.
-        emby_attributions = await self._resolve_emby_attributions(
+        # bd-r5f0c.4 (extends bd-gih6d): cross-reference each active
+        # (channel, ip) pair against ALL THREE media-source session
+        # lists (Emby + Plex + Jellyfin) so the writer can stamp the
+        # corresponding ``session_telemetry.*_user_id`` /
+        # ``*_user_name`` columns. The helper fans out via
+        # ``asyncio.gather`` with per-source timeout — one source's
+        # outage CANNOT block the telemetry write or the other
+        # sources' attributions. Returns a sparse
+        # ``{(channel, ip): AttributionResult}`` map; pairs not in the
+        # map land NULL across every source's column pair.
+        attributions = await self._resolve_attributions(
             telemetry_channel_snapshot, provider_by_channel,
         )
         self._write_session_telemetry(
@@ -1489,9 +1629,10 @@ class BandwidthTracker:
             # helper before any per-row work runs.
             dispatcharr_user_map=dispatcharr_user_map,
             exclude_user_tokens=exclude_user_tokens,
-            # bd-gih6d: sparse {(channel_uuid, ip): EmbyAttribution} map
-            # — empty when Emby is disabled or no pair resolved.
-            emby_attributions=emby_attributions,
+            # bd-r5f0c.4: sparse {(channel_uuid, ip): AttributionResult}
+            # map — empty when all sources are disabled or no pair
+            # resolved on any source.
+            attributions=attributions,
         )
 
     def _update_daily_record(
@@ -2174,71 +2315,68 @@ class BandwidthTracker:
             attributed_by_type.get("stream_switch", 0),
         )
 
-    async def _resolve_emby_attributions(
+    async def _resolve_attributions(
         self,
         telemetry_channel_snapshot: list[dict],
         provider_by_channel: dict[str, ProviderResolution],
-    ) -> dict[tuple[str, str], EmbyAttribution]:
-        """Cross-reference active (channel, ip) pairs against live Emby sessions.
+    ) -> dict[tuple[str, str], AttributionResult]:
+        """Cross-reference active (channel, ip) pairs against all three media sources.
 
-        bd-gih6d wiring for parent epic bd-2cenq. Builds a sparse map of
-        ``(channel_uuid, client_ip) → EmbyAttribution`` for every active
-        viewing connection this poll. The map populates
-        ``session_telemetry.emby_user_id`` / ``emby_user_name`` in the
-        downstream ``_write_session_telemetry`` call — Emby-mediated
-        streams get the real viewer's identity, every other session
-        leaves the columns NULL.
+        bd-r5f0c.4 (epic bd-r5f0c) — extends bd-gih6d (Emby-only) to
+        Plex + Jellyfin. Builds a sparse map of
+        ``(channel_uuid, client_ip) → AttributionResult`` for every
+        active viewing connection this poll. The result populates
+        ``session_telemetry.{emby,plex,jellyfin}_user_id`` /
+        ``..._user_name`` columns in the downstream
+        ``_write_session_telemetry`` call — each source's columns get
+        populated only when THAT source matched the (channel, ip) pair;
+        all six default to NULL otherwise.
+
+        Concurrency + failure isolation
+        --------------------------------
+        Each source's per-(channel, ip) resolution loop is wrapped in
+        :func:`asyncio.wait_for` against
+        ``_RESOLVER_PER_SOURCE_TIMEOUT_SECONDS``, then the three loops
+        run concurrently via :func:`asyncio.gather` (``return_exceptions=
+        True`` so one source's timeout / unexpected raise does NOT
+        poison the others' results). SRE failure-isolation requirement:
+        a slow Plex server cannot block Jellyfin attribution past one
+        timeout budget; an Emby cache fault cannot prevent the writer
+        from getting Plex matches.
 
         Settings gate
         -------------
-        Reads ``settings.emby_enabled`` once at the top and short-circuits
-        with an empty map when Emby is disabled. The resolver itself
-        already short-circuits on the disabled state (the cache returns
-        ``[]``), but the per-(channel, ip) loop, the per-call settings
-        access, and the import of ``EmbyAttribution`` are all unnecessary
-        on the disabled hot path — every operator without an Emby server
-        configured pays the cost otherwise. This is the cheap
-        optimization the bead spec explicitly calls out.
+        Each source's coroutine reads its own ``<source>_enabled`` flag
+        and short-circuits to an empty dict if the source is disabled.
+        On a single-source install (the common case today), only one
+        source's resolver actually walks the snapshot — the other two
+        coroutines return an empty dict in microseconds without
+        touching their resolvers.
 
-        Failure handling
-        ----------------
-        The resolver is documented to never raise. This wrapper still
-        wraps each call in try/except so any unforeseen runtime fault
-        (cache failure, settings access raise, transient import error
-        from a partial restart, etc.) cannot disturb the telemetry
-        write path. Failures log a single rate-limited WARN per minute
-        via :func:`_log_emby_resolver_failure` and produce an empty
-        attribution for the affected pair — the telemetry row still
-        writes, just without Emby columns populated. This is the
-        hot-path discipline the bead spec mandates: "Telemetry write
-        must NEVER block on Emby failure."
-
-        Stream name source
-        ------------------
-        Uses ``provider_by_channel[channel_uuid].stream_name`` (the
-        Dispatcharr stream record's ``name`` field, resolved by
-        :meth:`_resolve_provider_ids` for the same poll cycle). Skips
-        the resolver call when the stream name is missing — the cache
-        match is name-based and a NULL name would short-circuit inside
-        the resolver anyway, so the cheaper skip-here saves the
-        function-call overhead.
+        Per-source WARN rate-limiting
+        -----------------------------
+        Each source has its own module-level WARN clock
+        (:func:`_log_emby_resolver_failure` /
+        :func:`_log_plex_resolver_failure` /
+        :func:`_log_jellyfin_resolver_failure`) so a sustained Plex
+        outage cannot silence Emby or Jellyfin WARNs — failure
+        signals stay independent across sources.
 
         Args:
             telemetry_channel_snapshot: Per-channel snapshot the
                 ``_collect_stats`` loop already built — ``channel_uuid``
-                + ``client_ips`` per entry are the only fields this
-                helper consumes.
+                + ``client_ips`` + ``channel_name`` + ``channel_number``
+                per entry are the fields the resolvers consume.
             provider_by_channel: Same map ``_write_session_telemetry``
                 already receives; used here to read the resolved
-                ``stream_name`` so the resolver can match against the
-                Emby now-playing surface.
+                ``stream_name`` so each resolver can match against its
+                source's now-playing surface.
 
         Returns:
-            ``{(channel_uuid, client_ip): EmbyAttribution}``. Sparse —
-            entries are only present for (channel, ip) pairs the
-            resolver attributed to an Emby user. Empty dict when Emby
-            is disabled, when no pair resolved, or when every resolver
-            call failed.
+            ``{(channel_uuid, client_ip): AttributionResult}``. Sparse —
+            entries are only present for pairs at least one source
+            attributed. Empty dict when all sources are disabled, when
+            no pair resolved, or when every resolver call failed.
         """
         try:
             from config import get_settings
@@ -2246,13 +2384,126 @@ class BandwidthTracker:
         except Exception as exc:
             # Settings access raise is exotic but defensible — config
             # is loaded at import in normal flow. Fail soft so the
-            # writer still runs.
+            # writer still runs. Log against each source so the operator
+            # sees the failure in whatever source's monitoring they
+            # have wired up.
             _log_emby_resolver_failure(exc)
+            _log_plex_resolver_failure(exc)
+            _log_jellyfin_resolver_failure(exc)
             return {}
 
-        if not getattr(settings, "emby_enabled", False):
+        emby_enabled = bool(getattr(settings, "emby_enabled", False))
+        plex_enabled = bool(getattr(settings, "plex_enabled", False))
+        jellyfin_enabled = bool(getattr(settings, "jellyfin_enabled", False))
+
+        # Short-circuit: every source disabled (the common posture on
+        # installs without any media server configured). Skips three
+        # coroutine creations + the gather machinery on the hot path.
+        if not (emby_enabled or plex_enabled or jellyfin_enabled):
             return {}
 
+        async def _with_timeout(
+            coro,
+            source: str,
+            log_failure,
+        ) -> dict[tuple[str, str], Any]:
+            """Wrap one source's coroutine in a per-source timeout.
+
+            Returns an empty dict on TimeoutError or any unexpected
+            exception so ``gather`` can compose the source results
+            without inheriting a per-source failure into the merged
+            output.
+            """
+            try:
+                return await asyncio.wait_for(
+                    coro, timeout=_RESOLVER_PER_SOURCE_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                # Surface the timeout against the source's own WARN
+                # clock so SRE can see one source got slow without the
+                # other sources' clocks being affected. Synthesize a
+                # marker exception so the existing log helper's
+                # ``%s`` formatting reads naturally.
+                log_failure(asyncio.TimeoutError(
+                    f"{source} resolver exceeded "
+                    f"{_RESOLVER_PER_SOURCE_TIMEOUT_SECONDS:.1f}s budget"
+                ))
+                return {}
+            except Exception as exc:  # noqa: BLE001 — top-level failure isolation
+                log_failure(exc)
+                return {}
+
+        emby_task = _with_timeout(
+            self._resolve_emby_for_clients(
+                telemetry_channel_snapshot, provider_by_channel,
+                enabled=emby_enabled,
+            ),
+            "emby",
+            _log_emby_resolver_failure,
+        )
+        plex_task = _with_timeout(
+            self._resolve_plex_for_clients(
+                telemetry_channel_snapshot, provider_by_channel,
+                enabled=plex_enabled,
+            ),
+            "plex",
+            _log_plex_resolver_failure,
+        )
+        jellyfin_task = _with_timeout(
+            self._resolve_jellyfin_for_clients(
+                telemetry_channel_snapshot, provider_by_channel,
+                enabled=jellyfin_enabled,
+            ),
+            "jellyfin",
+            _log_jellyfin_resolver_failure,
+        )
+
+        emby_map, plex_map, jellyfin_map = await asyncio.gather(
+            emby_task, plex_task, jellyfin_task,
+        )
+
+        # Merge the three sparse maps into a single result per (channel,
+        # ip). A given client may resolve in only one source (typical
+        # — operators run one media server), in multiple sources (rare,
+        # but legal: a client IP that matches both Plex AND Jellyfin
+        # server IPs because both are on the same host), or in none
+        # (the row writes with all six columns NULL).
+        merged: dict[tuple[str, str], AttributionResult] = {}
+        all_keys = set(emby_map.keys()) | set(plex_map.keys()) | set(jellyfin_map.keys())
+        for key in all_keys:
+            emby_attr = emby_map.get(key)
+            plex_name = plex_map.get(key)
+            jellyfin_attr = jellyfin_map.get(key)
+            merged[key] = AttributionResult(
+                emby_user_id=emby_attr.user_id if emby_attr else None,
+                emby_user_name=emby_attr.user_name if emby_attr else None,
+                # Plex resolver currently surfaces only the user_name.
+                # ``plex_user_id`` slot stays NULL until the resolver is
+                # extended; the column tolerates this by being nullable.
+                plex_user_id=None,
+                plex_user_name=plex_name,
+                jellyfin_user_id=jellyfin_attr.user_id if jellyfin_attr else None,
+                jellyfin_user_name=jellyfin_attr.user_name if jellyfin_attr else None,
+            )
+        return merged
+
+    async def _resolve_emby_for_clients(
+        self,
+        telemetry_channel_snapshot: list[dict],
+        provider_by_channel: dict[str, ProviderResolution],
+        *,
+        enabled: bool,
+    ) -> dict[tuple[str, str], EmbyAttribution]:
+        """Per-source Emby resolution loop (bd-r5f0c.4, extracted from bd-gih6d).
+
+        Same per-(channel, ip) walk + tier-aware skip logic as the
+        original ``_resolve_emby_attributions``. Settings gate is now
+        checked by the caller (:meth:`_resolve_attributions`) so this
+        helper can be cleanly composed under ``asyncio.gather`` without
+        each source re-reading settings.
+        """
+        if not enabled:
+            return {}
         attributions: dict[tuple[str, str], EmbyAttribution] = {}
         for entry in telemetry_channel_snapshot:
             channel_uuid = entry["channel_uuid"]
@@ -2261,21 +2512,8 @@ class BandwidthTracker:
                 continue
             resolution = provider_by_channel.get(channel_uuid)
             stream_name = resolution.stream_name if resolution else None
-            # bd-zldrq (fix-forward for v0.17.1-0033): the resolver's
-            # tier-1 (channel_name) and tier-2 (channel_number) matches
-            # are the primary live-TV path now — pull them off the
-            # snapshot entry built in _collect_stats. Both may be None
-            # if the channel object was missing from ECM's channels map
-            # at snapshot time (race); the resolver tolerates that and
-            # falls through to its fuzzy tier-3 fallback on stream_name.
             channel_name = entry.get("channel_name")
             channel_number = entry.get("channel_number")
-            # Skip the resolver call only when every tier would be a
-            # no-op: no stream_name (tier 3 can't match) AND no
-            # channel_name (tier 1 can't match) AND no channel_number
-            # (tier 2 can't match). Pre-bd-zldrq this skipped on
-            # stream_name alone, which would now drop the live-TV
-            # match entirely on channels with empty stream_name.
             if not stream_name and not channel_name and channel_number is None:
                 continue
             for ip in client_ips:
@@ -2296,6 +2534,126 @@ class BandwidthTracker:
                 if attribution is not None:
                     attributions[(channel_uuid, ip)] = attribution
         return attributions
+
+    async def _resolve_plex_for_clients(
+        self,
+        telemetry_channel_snapshot: list[dict],
+        provider_by_channel: dict[str, ProviderResolution],
+        *,
+        enabled: bool,
+    ) -> dict[tuple[str, str], str]:
+        """Per-source Plex resolution loop (bd-r5f0c.4).
+
+        Mirror of :meth:`_resolve_emby_for_clients` — the Plex resolver
+        returns ``str | None`` (user_name only) so the per-source map
+        values are bare strings rather than dataclasses. The merger in
+        :meth:`_resolve_attributions` lifts each match into the
+        ``plex_user_name`` field of :class:`AttributionResult`.
+        """
+        if not enabled:
+            return {}
+        attributions: dict[tuple[str, str], str] = {}
+        for entry in telemetry_channel_snapshot:
+            channel_uuid = entry["channel_uuid"]
+            client_ips = entry.get("client_ips") or []
+            if not client_ips:
+                continue
+            resolution = provider_by_channel.get(channel_uuid)
+            stream_name = resolution.stream_name if resolution else None
+            channel_name = entry.get("channel_name")
+            channel_number = entry.get("channel_number")
+            if not stream_name and not channel_name and channel_number is None:
+                continue
+            for ip in client_ips:
+                try:
+                    user_name = await resolve_plex_user(
+                        ip,
+                        stream_name or "",
+                        ecm_channel_name=channel_name,
+                        ecm_channel_number=channel_number,
+                    )
+                except Exception as exc:
+                    _log_plex_resolver_failure(exc)
+                    continue
+                if user_name is not None:
+                    attributions[(channel_uuid, ip)] = user_name
+        return attributions
+
+    async def _resolve_jellyfin_for_clients(
+        self,
+        telemetry_channel_snapshot: list[dict],
+        provider_by_channel: dict[str, ProviderResolution],
+        *,
+        enabled: bool,
+    ) -> dict[tuple[str, str], JellyfinAttribution]:
+        """Per-source Jellyfin resolution loop (bd-r5f0c.4).
+
+        Same structure as :meth:`_resolve_emby_for_clients` —
+        :class:`JellyfinAttribution` shares Emby's ``user_id +
+        user_name`` shape.
+        """
+        if not enabled:
+            return {}
+        attributions: dict[tuple[str, str], JellyfinAttribution] = {}
+        for entry in telemetry_channel_snapshot:
+            channel_uuid = entry["channel_uuid"]
+            client_ips = entry.get("client_ips") or []
+            if not client_ips:
+                continue
+            resolution = provider_by_channel.get(channel_uuid)
+            stream_name = resolution.stream_name if resolution else None
+            channel_name = entry.get("channel_name")
+            channel_number = entry.get("channel_number")
+            if not stream_name and not channel_name and channel_number is None:
+                continue
+            for ip in client_ips:
+                try:
+                    attribution = await resolve_jellyfin_user(
+                        ip,
+                        stream_name or "",
+                        ecm_channel_name=channel_name,
+                        ecm_channel_number=channel_number,
+                    )
+                except Exception as exc:
+                    _log_jellyfin_resolver_failure(exc)
+                    continue
+                if attribution is not None:
+                    attributions[(channel_uuid, ip)] = attribution
+        return attributions
+
+    async def _resolve_emby_attributions(
+        self,
+        telemetry_channel_snapshot: list[dict],
+        provider_by_channel: dict[str, ProviderResolution],
+    ) -> dict[tuple[str, str], EmbyAttribution]:
+        """Back-compat shim — Emby-only attribution map (bd-gih6d, kept for tests).
+
+        bd-r5f0c.4: superseded by :meth:`_resolve_attributions` in the
+        ``_collect_stats`` hot path, but retained as a thin wrapper so
+        the existing Emby regression test suite
+        (``tests/unit/test_bandwidth_tracker_emby.py``) continues to
+        verify the Emby-attribution contract end-to-end without having
+        to rewrite every assertion against the new
+        :class:`AttributionResult` shape.
+
+        Reads ``settings.emby_enabled`` and delegates to
+        :meth:`_resolve_emby_for_clients` — same per-(channel, ip)
+        walk + same rate-limited WARN + same return shape as before
+        bd-r5f0c.4. Production code paths SHOULD prefer
+        :meth:`_resolve_attributions`; this wrapper is the migration
+        seam for older callers.
+        """
+        try:
+            from config import get_settings
+            settings = get_settings()
+        except Exception as exc:
+            _log_emby_resolver_failure(exc)
+            return {}
+        return await self._resolve_emby_for_clients(
+            telemetry_channel_snapshot,
+            provider_by_channel,
+            enabled=bool(getattr(settings, "emby_enabled", False)),
+        )
 
     def _record_session_telemetry_metrics(
         self,
@@ -2359,6 +2717,7 @@ class BandwidthTracker:
         dispatcharr_user_map: Optional[dict[str, str]] = None,
         exclude_user_tokens: Optional[frozenset[str]] = None,
         emby_attributions: Optional[dict[tuple[str, str], EmbyAttribution]] = None,
+        attributions: Optional[dict[tuple[str, str], AttributionResult]] = None,
     ) -> None:
         """Write one row per active viewing connection into ``session_telemetry``.
 
@@ -2462,6 +2821,17 @@ class BandwidthTracker:
             # Default to empty so the older test seams that don't pass
             # this kwarg continue working with NULL emby columns.
             emby_attributions = {}
+        if attributions is None:
+            # bd-r5f0c.4: empty map = no multi-source attribution this
+            # poll (every source disabled, no match across any source,
+            # or every resolver call failed). Default to empty so the
+            # older test seams that only pass ``emby_attributions``
+            # continue to work — the per-row merge below uses
+            # ``attributions`` as the primary lookup and falls back to
+            # ``emby_attributions`` when the merged map is missing a
+            # key, so an Emby-only caller still populates the Emby
+            # columns the old way.
+            attributions = {}
         # bd-skqln.12: time the entire write attempt and record success /
         # failure on the way out. ``rows_written`` is hoisted here so it is
         # visible to the metric-emission block in the ``finally`` (it is 0
@@ -2621,21 +2991,43 @@ class BandwidthTracker:
                             row_reconnect_count = 0
                             row_error_count = 0
                             row_switch_count = 0
-                        # bd-gih6d: look up the per-(channel, ip) Emby
-                        # attribution the caller resolved in
-                        # ``_resolve_emby_attributions`` for this poll
-                        # cycle. Sparse map — most pairs are NOT
-                        # Emby-mediated so the lookup returns ``None``,
-                        # which we collapse to NULL on the row. Both
-                        # columns move together: the resolver returns
-                        # the dataclass atomically (user_id + user_name
-                        # cannot diverge inside one poll), and they
-                        # ride together to the row so any later split
-                        # of the model into a separate Emby table can
+                        # bd-r5f0c.4 (extends bd-gih6d): look up the
+                        # per-(channel, ip) attribution the caller
+                        # resolved in ``_resolve_attributions`` for this
+                        # poll cycle. Sparse map — most pairs are NOT
+                        # media-server-mediated so the lookup returns
+                        # ``None``, which we collapse to NULL across
+                        # every source's column pair. All six fields
+                        # ride together on the row so any future split
+                        # of the model into per-source tables can
                         # migrate this writer in one place.
-                        emby_attr = emby_attributions.get((channel_uuid, ip))
-                        emby_user_id = emby_attr.user_id if emby_attr else None
-                        emby_user_name = emby_attr.user_name if emby_attr else None
+                        #
+                        # Back-compat: if the caller only passed the
+                        # legacy ``emby_attributions`` kwarg (older test
+                        # seams pre bd-r5f0c.4), the merged
+                        # ``attributions`` map will be missing this key
+                        # — fall back to the Emby-only lookup so the
+                        # legacy contract continues working.
+                        attribution = attributions.get((channel_uuid, ip))
+                        if attribution is None:
+                            emby_attr_legacy = emby_attributions.get((channel_uuid, ip))
+                            emby_user_id = (
+                                emby_attr_legacy.user_id if emby_attr_legacy else None
+                            )
+                            emby_user_name = (
+                                emby_attr_legacy.user_name if emby_attr_legacy else None
+                            )
+                            plex_user_id: Optional[str] = None
+                            plex_user_name: Optional[str] = None
+                            jellyfin_user_id: Optional[str] = None
+                            jellyfin_user_name: Optional[str] = None
+                        else:
+                            emby_user_id = attribution.emby_user_id
+                            emby_user_name = attribution.emby_user_name
+                            plex_user_id = attribution.plex_user_id
+                            plex_user_name = attribution.plex_user_name
+                            jellyfin_user_id = attribution.jellyfin_user_id
+                            jellyfin_user_name = attribution.jellyfin_user_name
 
                         session.add(
                             SessionTelemetry(
@@ -2673,15 +3065,21 @@ class BandwidthTracker:
                                 # provider_id.
                                 stream_id=stream_id,
                                 stream_name=stream_name,
-                                # bd-gih6d: Emby attribution populated
-                                # via the resolver when the ECM session's
-                                # client IP matches the configured Emby
-                                # server's IP AND a concurrent Emby
-                                # session is playing a matching item.
-                                # Both NULL for non-Emby-mediated rows
-                                # (most rows on most installs).
+                                # bd-gih6d (Emby) + bd-r5f0c.4 (Plex +
+                                # Jellyfin): per-source attribution
+                                # populated via the resolvers when the
+                                # ECM session's client IP matches the
+                                # configured source server's IP AND a
+                                # concurrent source session is playing
+                                # a matching item. All six NULL for
+                                # non-source-mediated rows (most rows
+                                # on most installs).
                                 emby_user_id=emby_user_id,
                                 emby_user_name=emby_user_name,
+                                plex_user_id=plex_user_id,
+                                plex_user_name=plex_user_name,
+                                jellyfin_user_id=jellyfin_user_id,
+                                jellyfin_user_name=jellyfin_user_name,
                             )
                         )
                         rows_written += 1
