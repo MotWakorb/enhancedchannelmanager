@@ -350,6 +350,22 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [dedupThreshold, setDedupThreshold] = useState(80);
   const [dedupM3uToastSuppressed, setDedupM3uToastSuppressed] = useState(false);
 
+  // Emby integration (bd-8wc6q, epic bd-2cenq). The api_key form-state is
+  // populated from operator input only — the backend never returns the key,
+  // only ``embyApiKeyConfigured``. On save, an empty key is omitted from
+  // the request body to honor the preserve-on-omit contract.
+  const [embyEnabled, setEmbyEnabled] = useState(false);
+  const [embyBaseUrl, setEmbyBaseUrl] = useState('');
+  const [embyApiKey, setEmbyApiKey] = useState('');
+  const [embyApiKeyConfigured, setEmbyApiKeyConfigured] = useState(false);
+  // Test-connection inline state. ``status`` controls the inline message:
+  //   'idle' — no test attempted this session
+  //   'testing' — request in flight
+  //   'success' — last test succeeded
+  //   'error' — last test failed; ``message`` carries the operator-facing string
+  const [embyTestStatus, setEmbyTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [embyTestMessage, setEmbyTestMessage] = useState('');
+
   const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels']);
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false });
   const [m3uAccountPriorities, setM3uAccountPriorities] = useState<Record<string, number>>({});
@@ -783,6 +799,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       // Dedup settings: server stores as float (0.60-1.00), UI shows as integer percent (60-100).
       setDedupThreshold(Math.round((settings.dedup_threshold ?? 0.80) * 100));
       setDedupM3uToastSuppressed(settings.dedup_m3u_toast_suppressed ?? false);
+      // Emby integration (bd-8wc6q). The API key itself is never returned —
+      // only the configured indicator — so we leave the embyApiKey form
+      // field blank on load. Operators re-enter the key only when rotating.
+      setEmbyEnabled(settings.emby_enabled ?? false);
+      setEmbyBaseUrl(settings.emby_base_url ?? '');
+      setEmbyApiKey('');
+      setEmbyApiKeyConfigured(settings.emby_api_key_configured ?? false);
+      setEmbyTestStatus('idle');
+      setEmbyTestMessage('');
       setStatsPollInterval(settings.stats_poll_interval ?? 10);
       setOriginalPollInterval(settings.stats_poll_interval ?? 10);
       setUserTimezone(settings.user_timezone ?? '');
@@ -963,6 +988,51 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     onThemeChange?.(newTheme);
   };
 
+  // Emby Settings UI 'Test Connection' button (bd-8wc6q). Sends the
+  // current form-state values (NOT saved settings) so operators can test
+  // BEFORE saving. The backend never raises on connection failure — it
+  // returns ``{ok: false, error: <msg>}`` so we render the message inline.
+  const handleTestEmbyConnection = async () => {
+    if (!embyBaseUrl) {
+      setEmbyTestStatus('error');
+      setEmbyTestMessage('Base URL is required');
+      return;
+    }
+    // If the operator hasn't entered a new key and there's no stored key,
+    // the test would fail with a useless 401 — flag it early.
+    if (!embyApiKey && !embyApiKeyConfigured) {
+      setEmbyTestStatus('error');
+      setEmbyTestMessage('API key is required');
+      return;
+    }
+    setEmbyTestStatus('testing');
+    setEmbyTestMessage('');
+    try {
+      // If the form has a fresh key, use it; otherwise the operator is
+      // testing the stored key — but the endpoint takes credentials inline
+      // per the spec, so we send what we have. An empty embyApiKey paired
+      // with an existing configured key means we cannot test without
+      // re-entering — surface that to the operator.
+      if (!embyApiKey) {
+        setEmbyTestStatus('error');
+        setEmbyTestMessage('Re-enter the API key to test the connection');
+        return;
+      }
+      const result = await api.testEmbyConnection(embyBaseUrl, embyApiKey);
+      if (result.ok) {
+        setEmbyTestStatus('success');
+        setEmbyTestMessage('Connection successful');
+      } else {
+        setEmbyTestStatus('error');
+        setEmbyTestMessage(result.error || 'Connection failed');
+      }
+    } catch (err) {
+      logger.error('Failed to test Emby connection', err);
+      setEmbyTestStatus('error');
+      setEmbyTestMessage(err instanceof Error ? err.message : 'Connection failed');
+    }
+  };
+
   const handleResetStats = async () => {
     if (!confirm('This will clear all channel/stream statistics, watch history, and hidden groups. Use this when switching Dispatcharr servers. Continue?')) {
       return;
@@ -1037,6 +1107,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         // Dedup: UI works in integer percent (60-100); backend stores float (0.60-1.00).
         dedup_threshold: dedupThreshold / 100,
         dedup_m3u_toast_suppressed: dedupM3uToastSuppressed,
+        // Emby integration (bd-8wc6q). Only send emby_api_key when the
+        // operator has entered a value — empty means "keep the stored
+        // key" per the preserve-on-omit contract on the backend.
+        emby_enabled: embyEnabled,
+        emby_base_url: embyBaseUrl,
+        ...(embyApiKey ? { emby_api_key: embyApiKey } : {}),
         stats_poll_interval: statsPollInterval,
         user_timezone: userTimezone,
         backend_log_level: backendLogLevel,
@@ -3213,6 +3289,127 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     </div>
   );
 
+  // Integrations page (bd-8wc6q, epic bd-2cenq). Third-party server
+  // integrations — Emby today, room for Plex/Jellyfin/etc. as the epic
+  // grows. Distinct from "Linked Accounts" (which is ECM-internal M3U
+  // account linking) and from the Dispatcharr connection on the General
+  // page (which is the primary upstream, not a side integration).
+  const renderIntegrationsPage = () => (
+    <div className="settings-page">
+      <div className="settings-page-header">
+        <h2>Integrations</h2>
+        <p>Configure third-party server integrations for cross-referenced data (Stats user attribution, etc.).</p>
+      </div>
+
+      <div className="settings-section" data-testid="emby-integration-section">
+        <div className="settings-section-header">
+          <span className="material-icons">live_tv</span>
+          <h3>Emby Integration</h3>
+          <span className={`badge badge-sm ${embyEnabled && embyApiKeyConfigured ? 'badge-success' : ''}`}>
+            {embyEnabled && embyApiKeyConfigured ? 'Configured' : 'Unconfigured'}
+          </span>
+        </div>
+
+        <p className="form-hint">
+          When enabled, ECM cross-references active stream sessions against the operator's Emby
+          <code> /Sessions </code>feed so Stats can attribute real Emby usernames instead of
+          collapsing every Emby-mediated pull to the proxy IP.
+        </p>
+
+        <div className="checkbox-group">
+          <input
+            id="embyEnabled"
+            type="checkbox"
+            checked={embyEnabled}
+            onChange={(e) => setEmbyEnabled(e.target.checked)}
+            data-testid="emby-enabled-checkbox"
+          />
+          <div className="checkbox-content">
+            <label htmlFor="embyEnabled">Enable Emby user attribution</label>
+            <p>Requires base URL and API key below. Disabling stops the cross-reference but does not clear stored values.</p>
+          </div>
+        </div>
+
+        <div className="form-group-vertical">
+          <label htmlFor="embyBaseUrl">Emby base URL</label>
+          <span className="form-description">
+            Full URL to your Emby server (e.g. <code>http://emby.local:8096</code>). Sub-paths are
+            preserved for reverse-proxy setups.
+          </span>
+          <input
+            id="embyBaseUrl"
+            type="text"
+            value={embyBaseUrl}
+            onChange={(e) => setEmbyBaseUrl(e.target.value)}
+            placeholder="http://emby.local:8096"
+            data-testid="emby-base-url-input"
+            className="settings-text-input"
+          />
+        </div>
+
+        <div className="form-group-vertical">
+          <label htmlFor="embyApiKey">Emby API key</label>
+          <span className="form-description">
+            Generate in Emby: Dashboard → API Keys → New API Key. Stored plaintext at rest, same as the
+            Dispatcharr API key. {embyApiKeyConfigured ? 'A key is currently stored — leave blank to keep it.' : 'No key stored.'}
+          </span>
+          <input
+            id="embyApiKey"
+            type="password"
+            value={embyApiKey}
+            onChange={(e) => setEmbyApiKey(e.target.value)}
+            placeholder={embyApiKeyConfigured ? '••••••••' : 'Paste your Emby API key'}
+            data-testid="emby-api-key-input"
+            className="settings-text-input"
+            autoComplete="new-password"
+          />
+        </div>
+
+        <div className="form-group-vertical">
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={handleTestEmbyConnection}
+            disabled={embyTestStatus === 'testing'}
+            data-testid="emby-test-connection-btn"
+            style={{ alignSelf: 'flex-start' }}
+          >
+            <span className="material-icons">
+              {embyTestStatus === 'testing' ? 'sync' : 'cable'}
+            </span>
+            {embyTestStatus === 'testing' ? 'Testing...' : 'Test Connection'}
+          </button>
+          {embyTestStatus === 'success' && (
+            <span
+              className="form-hint"
+              data-testid="emby-test-result-success"
+              style={{ color: 'var(--accent-success, #22C55E)' }}
+            >
+              ✓ {embyTestMessage}
+            </span>
+          )}
+          {embyTestStatus === 'error' && (
+            <span
+              className="form-hint"
+              data-testid="emby-test-result-error"
+              style={{ color: 'var(--accent-error, #ef4444)' }}
+            >
+              ✗ {embyTestMessage}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="settings-actions">
+        <div className="settings-actions-left" />
+        <button className="btn-primary" onClick={handleSave} disabled={loading}>
+          <span className="material-icons">save</span>
+          {loading ? 'Saving...' : 'Save Settings'}
+        </button>
+      </div>
+    </div>
+  );
+
   const renderM3UDigestPage = () => (
     <div className="settings-page">
       <div className="settings-page-header">
@@ -4575,6 +4772,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Notification Settings
           </li>
           <li
+            className={`settings-nav-item ${activePage === 'integrations' ? 'active' : ''}`}
+            onClick={() => setActivePage('integrations')}
+            data-testid="settings-nav-integrations"
+          >
+            <span className="material-icons">extension</span>
+            Integrations
+          </li>
+          <li
             className={`settings-nav-item ${activePage === 'scheduled-tasks' ? 'active' : ''}`}
             onClick={() => setActivePage('scheduled-tasks')}
           >
@@ -4660,6 +4865,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'lookup-tables' && <LookupTableSection />}
         {activePage === 'appearance' && renderAppearancePage()}
         {activePage === 'email' && renderEmailSettingsPage()}
+        {activePage === 'integrations' && renderIntegrationsPage()}
         {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}
         {activePage === 'auto-creation' && renderAutoCreationPage()}
         {activePage === 'm3u-digest' && renderM3UDigestPage()}

@@ -1,14 +1,22 @@
 /**
- * Tests for the Stream Deduplication settings controls (BD-K / bd-ugzn4).
+ * Tests for the Emby Integration Settings subsection (bd-8wc6q, epic bd-2cenq).
  *
- * The controls live directly in SettingsTab.tsx (Channel Defaults → Stream
- * Deduplication section). This test file exercises the dedup-specific
- * rendering, load, save, and clamping behaviour without full SettingsTab
- * integration — it mocks the api module and renders SettingsTab in isolation.
+ * The controls live in SettingsTab.tsx (Integrations page → Emby
+ * Integration section). This test file exercises the Emby-specific render,
+ * load-from-settings, test-connection button behavior, and save semantics
+ * without full SettingsTab integration — it mocks the api module and
+ * renders SettingsTab in isolation with initialSettingsPage="integrations".
  *
- * ADR-008 §D2: dedup_threshold stored as float 0.60-1.00; UI displays and
- * edits as integer percent 60-100. Hard floor 60 (server enforces; UI
- * clamps as convenience).
+ * Contracts under test:
+ *   - Section renders with the three fields (enabled, base_url, api_key).
+ *   - Fields populate from loaded settings (the API key itself is masked —
+ *     only ``emby_api_key_configured`` is surfaced).
+ *   - "Test Connection" button calls ``api.testEmbyConnection(baseUrl, apiKey)``
+ *     with the form-state values (NOT saved settings — operators test before
+ *     saving) and renders ok/error inline.
+ *   - Save persists ``emby_enabled`` and ``emby_base_url`` always, and
+ *     ``emby_api_key`` only when the operator entered a fresh value
+ *     (preserve-on-omit contract).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -26,6 +34,7 @@ vi.mock('../../services/api', () => ({
   getM3UAccounts: vi.fn(),
   getExportSections: vi.fn(),
   listSavedBackups: vi.fn(),
+  testEmbyConnection: vi.fn(),
 }));
 
 vi.mock('../../services/autoCreationApi', () => ({
@@ -186,25 +195,24 @@ const settingsBase = {
   telegram_chat_id: '',
   mcp_api_key_configured: false,
   telemetry_client_errors_enabled: true,
-  // Dedup fields under test (BD-K / bd-ugzn4)
   dedup_threshold: 0.80,
   dedup_m3u_toast_suppressed: false,
-  // Emby integration (bd-8wc6q). Defaults disabled — not under test here.
+  // Emby integration fields under test (bd-8wc6q)
   emby_enabled: false,
   emby_base_url: '',
   emby_api_key_configured: false,
 };
 
-function renderOnChannelDefaults() {
+function renderOnIntegrations() {
   return render(
     <SettingsTab
       onSaved={vi.fn()}
-      initialSettingsPage="channel-defaults"
+      initialSettingsPage="integrations"
     />
   );
 }
 
-describe('DeduplicationSettingsSection (BD-K / bd-ugzn4)', () => {
+describe('EmbyIntegrationSection (bd-8wc6q, epic bd-2cenq)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.getSettings).mockResolvedValue(makeSettings());
@@ -216,174 +224,201 @@ describe('DeduplicationSettingsSection (BD-K / bd-ugzn4)', () => {
 
   // --- Rendering ---
 
-  it('renders the dedup threshold input with the operator\'s current value', async () => {
-    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({ dedup_threshold: 0.75 }));
-    renderOnChannelDefaults();
+  it('renders the Emby Integration section on the Integrations page', async () => {
+    renderOnIntegrations();
+    await waitFor(() => {
+      expect(screen.getByTestId('emby-integration-section')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('emby-enabled-checkbox')).toBeInTheDocument();
+    expect(screen.getByTestId('emby-base-url-input')).toBeInTheDocument();
+    expect(screen.getByTestId('emby-api-key-input')).toBeInTheDocument();
+    expect(screen.getByTestId('emby-test-connection-btn')).toBeInTheDocument();
+  });
+
+  it('populates form fields from loaded settings', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
+      emby_enabled: true,
+      emby_base_url: 'http://emby.local:8096',
+      emby_api_key_configured: true,
+    }));
+
+    renderOnIntegrations();
 
     await waitFor(() => {
-      const input = screen.getByTestId('dedup-threshold-input') as HTMLInputElement;
-      expect(input.value).toBe('75');
+      const enabled = screen.getByTestId('emby-enabled-checkbox') as HTMLInputElement;
+      const baseUrl = screen.getByTestId('emby-base-url-input') as HTMLInputElement;
+      const apiKey = screen.getByTestId('emby-api-key-input') as HTMLInputElement;
+      expect(enabled.checked).toBe(true);
+      expect(baseUrl.value).toBe('http://emby.local:8096');
+      // The API key field is intentionally blank on load — only the
+      // ``emby_api_key_configured`` indicator was returned by the backend.
+      // The placeholder hint reflects the configured state.
+      expect(apiKey.value).toBe('');
+      expect(apiKey.placeholder).toBe('••••••••');
     });
   });
 
-  it('renders the dedup threshold input with default 80 when field is absent from settings', async () => {
-    const withoutDedup = { ...settingsBase } as Partial<typeof settingsBase>;
-    delete (withoutDedup as Record<string, unknown>)['dedup_threshold'];
-    vi.mocked(api.getSettings).mockResolvedValue(withoutDedup as Awaited<ReturnType<typeof api.getSettings>>);
-
-    renderOnChannelDefaults();
-
+  it('uses a password-type input for the API key field', async () => {
+    renderOnIntegrations();
     await waitFor(() => {
-      const input = screen.getByTestId('dedup-threshold-input') as HTMLInputElement;
-      expect(input.value).toBe('80');
+      const apiKey = screen.getByTestId('emby-api-key-input') as HTMLInputElement;
+      expect(apiKey.type).toBe('password');
     });
   });
 
-  it('renders the toast-suppressor checkbox reflecting the operator\'s current value (false)', async () => {
-    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({ dedup_m3u_toast_suppressed: false }));
-    renderOnChannelDefaults();
+  // --- Test Connection ---
+
+  it('calls api.testEmbyConnection with form-state values when Test is clicked', async () => {
+    vi.mocked(api.testEmbyConnection).mockResolvedValue({ ok: true });
+    renderOnIntegrations();
 
     await waitFor(() => {
-      const checkbox = screen.getByTestId('dedup-toast-suppressed-checkbox') as HTMLInputElement;
-      expect(checkbox.checked).toBe(false);
+      expect(screen.getByTestId('emby-base-url-input')).toBeInTheDocument();
+    });
+
+    // Enter operator credentials — NOT yet saved.
+    fireEvent.change(screen.getByTestId('emby-base-url-input'), {
+      target: { value: 'http://fresh.emby:8096' },
+    });
+    fireEvent.change(screen.getByTestId('emby-api-key-input'), {
+      target: { value: 'fresh-token' },
+    });
+
+    fireEvent.click(screen.getByTestId('emby-test-connection-btn'));
+
+    await waitFor(() => {
+      expect(api.testEmbyConnection).toHaveBeenCalledWith(
+        'http://fresh.emby:8096',
+        'fresh-token',
+      );
     });
   });
 
-  it('renders the toast-suppressor checkbox as checked when operator has suppressed the toast', async () => {
-    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({ dedup_m3u_toast_suppressed: true }));
-    renderOnChannelDefaults();
+  it('shows a success message inline when the test succeeds', async () => {
+    vi.mocked(api.testEmbyConnection).mockResolvedValue({ ok: true });
+    renderOnIntegrations();
 
     await waitFor(() => {
-      const checkbox = screen.getByTestId('dedup-toast-suppressed-checkbox') as HTMLInputElement;
-      expect(checkbox.checked).toBe(true);
+      expect(screen.getByTestId('emby-base-url-input')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByTestId('emby-base-url-input'), {
+      target: { value: 'http://emby.local:8096' },
+    });
+    fireEvent.change(screen.getByTestId('emby-api-key-input'), {
+      target: { value: 'token' },
+    });
+    fireEvent.click(screen.getByTestId('emby-test-connection-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('emby-test-result-success')).toBeInTheDocument();
     });
   });
 
-  it('toast suppressor starts unchecked by default (field absent)', async () => {
-    const withoutToast = { ...settingsBase } as Partial<typeof settingsBase>;
-    delete (withoutToast as Record<string, unknown>)['dedup_m3u_toast_suppressed'];
-    vi.mocked(api.getSettings).mockResolvedValue(withoutToast as Awaited<ReturnType<typeof api.getSettings>>);
-
-    renderOnChannelDefaults();
+  it('shows the backend error message inline when the test fails', async () => {
+    vi.mocked(api.testEmbyConnection).mockResolvedValue({
+      ok: false,
+      error: 'Emby /Sessions returned 401 unauthorized — check API key',
+    });
+    renderOnIntegrations();
 
     await waitFor(() => {
-      const checkbox = screen.getByTestId('dedup-toast-suppressed-checkbox') as HTMLInputElement;
-      expect(checkbox.checked).toBe(false);
+      expect(screen.getByTestId('emby-base-url-input')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByTestId('emby-base-url-input'), {
+      target: { value: 'http://emby.local:8096' },
+    });
+    fireEvent.change(screen.getByTestId('emby-api-key-input'), {
+      target: { value: 'bad-token' },
+    });
+    fireEvent.click(screen.getByTestId('emby-test-connection-btn'));
+
+    await waitFor(() => {
+      const errEl = screen.getByTestId('emby-test-result-error');
+      expect(errEl).toBeInTheDocument();
+      expect(errEl.textContent).toContain('401');
     });
   });
 
-  // --- Save: threshold ---
+  it('rejects the test click with an inline error when base URL is empty', async () => {
+    renderOnIntegrations();
 
-  it('POSTs the new dedup_threshold as a float when the operator edits and saves', async () => {
-    renderOnChannelDefaults();
-
-    // Wait for the settings to load
     await waitFor(() => {
-      expect(screen.getByTestId('dedup-threshold-input')).toBeInTheDocument();
+      expect(screen.getByTestId('emby-test-connection-btn')).toBeInTheDocument();
     });
 
-    // Change the threshold from 80 to 90
-    const input = screen.getByTestId('dedup-threshold-input') as HTMLInputElement;
-    fireEvent.change(input, { target: { value: '90' } });
+    fireEvent.click(screen.getByTestId('emby-test-connection-btn'));
 
-    // Click the Save button
+    await waitFor(() => {
+      const err = screen.getByTestId('emby-test-result-error');
+      expect(err.textContent?.toLowerCase()).toContain('base url');
+    });
+    // No network call should have been issued.
+    expect(api.testEmbyConnection).not.toHaveBeenCalled();
+  });
+
+  // --- Save ---
+
+  it('saves emby_enabled and emby_base_url on save', async () => {
+    renderOnIntegrations();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('emby-enabled-checkbox')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('emby-enabled-checkbox'));
+    fireEvent.change(screen.getByTestId('emby-base-url-input'), {
+      target: { value: 'http://emby.local:8096' },
+    });
+    fireEvent.change(screen.getByTestId('emby-api-key-input'), {
+      target: { value: 'fresh-token' },
+    });
+
     const saveBtn = screen.getByRole('button', { name: /save settings/i });
     fireEvent.click(saveBtn);
 
     await waitFor(() => {
       expect(api.saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({ dedup_threshold: 0.90 })
+        expect.objectContaining({
+          emby_enabled: true,
+          emby_base_url: 'http://emby.local:8096',
+          emby_api_key: 'fresh-token',
+        }),
       );
     });
   });
 
-  // --- Save: toast suppressor ---
+  it('omits emby_api_key from the save payload when the field is blank (preserve-on-omit)', async () => {
+    // A stored key already exists on the backend; operator edits the URL
+    // but does NOT re-enter the key.
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
+      emby_enabled: true,
+      emby_base_url: 'http://old.emby:8096',
+      emby_api_key_configured: true,
+    }));
 
-  it('POSTs the toggled dedup_m3u_toast_suppressed value when operator checks and saves', async () => {
-    renderOnChannelDefaults();
-
-    await waitFor(() => {
-      expect(screen.getByTestId('dedup-toast-suppressed-checkbox')).toBeInTheDocument();
-    });
-
-    const checkbox = screen.getByTestId('dedup-toast-suppressed-checkbox') as HTMLInputElement;
-    fireEvent.click(checkbox); // toggle from false → true
-
-    const saveBtn = screen.getByRole('button', { name: /save settings/i });
-    fireEvent.click(saveBtn);
+    renderOnIntegrations();
 
     await waitFor(() => {
-      expect(api.saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({ dedup_m3u_toast_suppressed: true })
-      );
+      expect(screen.getByTestId('emby-base-url-input')).toBeInTheDocument();
     });
-  });
 
-  // --- Clamping ---
+    fireEvent.change(screen.getByTestId('emby-base-url-input'), {
+      target: { value: 'http://new.emby:8096' },
+    });
 
-  it('clamps threshold to 60 when operator enters a value below the floor', async () => {
-    renderOnChannelDefaults();
+    fireEvent.click(screen.getByRole('button', { name: /save settings/i }));
 
     await waitFor(() => {
-      expect(screen.getByTestId('dedup-threshold-input')).toBeInTheDocument();
+      expect(api.saveSettings).toHaveBeenCalled();
     });
 
-    const input = screen.getByTestId('dedup-threshold-input') as HTMLInputElement;
-    fireEvent.change(input, { target: { value: '30' } });
-
-    // Value should be clamped to 60 immediately on change
-    expect(input.value).toBe('60');
-  });
-
-  it('clamps threshold to 100 when operator enters a value above the ceiling', async () => {
-    renderOnChannelDefaults();
-
-    await waitFor(() => {
-      expect(screen.getByTestId('dedup-threshold-input')).toBeInTheDocument();
-    });
-
-    const input = screen.getByTestId('dedup-threshold-input') as HTMLInputElement;
-    fireEvent.change(input, { target: { value: '150' } });
-
-    expect(input.value).toBe('100');
-  });
-
-  it('saves threshold clamped to 0.60 when operator somehow bypasses UI validation', async () => {
-    renderOnChannelDefaults();
-
-    await waitFor(() => {
-      expect(screen.getByTestId('dedup-threshold-input')).toBeInTheDocument();
-    });
-
-    // Simulate a value below floor reaching the onChange handler (e.g. direct prop manipulation)
-    const input = screen.getByTestId('dedup-threshold-input') as HTMLInputElement;
-    fireEvent.change(input, { target: { value: '10' } });
-    // After clamp, value is 60 → save sends 0.60
-    const saveBtn = screen.getByRole('button', { name: /save settings/i });
-    fireEvent.click(saveBtn);
-
-    await waitFor(() => {
-      expect(api.saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({ dedup_threshold: 0.60 })
-      );
-    });
-  });
-
-  // --- Hint text ---
-
-  it('shows the ADR-008 hard floor hint text below the threshold input', async () => {
-    renderOnChannelDefaults();
-
-    await waitFor(() => {
-      expect(screen.getByText(/ADR-008 hard floor/i)).toBeInTheDocument();
-    });
-  });
-
-  it('shows the hint that pending merges are still queued when toast is suppressed', async () => {
-    renderOnChannelDefaults();
-
-    await waitFor(() => {
-      expect(screen.getByText(/Pending merges are still queued/i)).toBeInTheDocument();
-    });
+    const callArgs = vi.mocked(api.saveSettings).mock.calls[0][0];
+    expect(callArgs.emby_base_url).toBe('http://new.emby:8096');
+    // The blank password input must NOT be sent as an empty string — the
+    // preserve-on-omit contract on the backend treats absence as "keep
+    // the stored value" and an empty string as "clear it".
+    expect(callArgs).not.toHaveProperty('emby_api_key');
   });
 });

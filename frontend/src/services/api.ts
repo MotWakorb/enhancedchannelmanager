@@ -1016,6 +1016,14 @@ export interface SettingsResponse {
   // Dedup settings (BD-B / BD-K). Server-side clamped to [CONFIDENCE_FLOOR=0.60, 1.00].
   dedup_threshold: number;  // 0.60-1.00 float; UI shows as integer percent 60-100
   dedup_m3u_toast_suppressed: boolean;  // When true, suppress the toast after M3U refresh queues dedup items
+  // Emby integration (bd-8wc6q, epic bd-2cenq). When ``emby_enabled`` is
+  // true and ``emby_base_url`` + ``emby_api_key`` are configured, the
+  // Stats v2 pipeline cross-references active streams against the
+  // operator's Emby /Sessions feed to attribute real Emby usernames.
+  // The API key itself is NEVER returned — only ``emby_api_key_configured``.
+  emby_enabled: boolean;
+  emby_base_url: string;
+  emby_api_key_configured: boolean;
 }
 
 // Stream preview mode for browser playback
@@ -1114,10 +1122,38 @@ export async function saveSettings(settings: {
   // Dedup settings (BD-B / BD-K, ADR-008 §D2). Float 0.60-1.00; server clamps to floor.
   dedup_threshold?: number;
   dedup_m3u_toast_suppressed?: boolean;
+  // Emby integration (bd-8wc6q, epic bd-2cenq). emby_api_key uses
+  // preserve-on-omit on the backend — sending undefined keeps the stored
+  // value, same as smtp_password and mcp_api_key.
+  emby_enabled?: boolean;
+  emby_base_url?: string;
+  emby_api_key?: string;
 }): Promise<{ status: string; configured: boolean; server_changed: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
     body: JSON.stringify(settings),
+  });
+}
+
+// Emby Settings UI (bd-8wc6q, epic bd-2cenq). The "Test Connection" button
+// sends the operator-entered (potentially unsaved) credentials to the
+// backend, which constructs an EmbyClient inline and renders the outcome.
+// Returns ``{ok: true}`` on a successful /Sessions probe or
+// ``{ok: false, error: <msg>}`` on any auth / network / non-2xx failure.
+// The backend deliberately does NOT raise — the operator wants the error
+// message inline in the UI, not as a generic HTTP failure.
+export interface EmbyTestConnectionResult {
+  ok: boolean;
+  error?: string;
+}
+
+export async function testEmbyConnection(
+  baseUrl: string,
+  apiKey: string,
+): Promise<EmbyTestConnectionResult> {
+  return fetchJson(`${API_BASE}/settings/emby/test-connection`, {
+    method: 'POST',
+    body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
   });
 }
 
