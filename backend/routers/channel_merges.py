@@ -799,6 +799,14 @@ async def accept_pending_merge(
         )
 
     _bump_metric("success")
+    # Update the companion queue-depth gauge (bd-wvr1d). Best-effort:
+    # a failed COUNT or gauge.set is logged at WARN inside the helper and
+    # never blocks the accept response — the DB commit is the source of truth.
+    try:
+        from observability import set_pending_merges_queue_depth_gauge
+        set_pending_merges_queue_depth_gauge(db)
+    except Exception:  # pragma: no cover — defensive import guard
+        logger.warning("[DEDUP] gauge update failed after accept commit")
     logger.info(
         "[DEDUP] accept ok: pending_merges.id=%s merged into "
         "candidate=%s journal_entry_id=%s actor=%s",
@@ -908,6 +916,14 @@ async def dismiss_pending_merge(
         )
 
     _bump_metric("dismissed")
+    # Update the companion queue-depth gauge (bd-wvr1d). Best-effort:
+    # a failed COUNT or gauge.set is logged at WARN inside the helper and
+    # never blocks the dismiss response — the DB commit is the source of truth.
+    try:
+        from observability import set_pending_merges_queue_depth_gauge
+        set_pending_merges_queue_depth_gauge(db)
+    except Exception:  # pragma: no cover — defensive import guard
+        logger.warning("[DEDUP] gauge update failed after dismiss commit")
     logger.info(
         "[DEDUP] dismiss ok: pending_merges.id=%s "
         "journal_entry_id=%s actor=%s",
