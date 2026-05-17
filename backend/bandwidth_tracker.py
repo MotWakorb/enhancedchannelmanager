@@ -1312,6 +1312,14 @@ class BandwidthTracker:
                 telemetry_channel_snapshot.append({
                     "channel_uuid": channel_id,
                     "channel_number": channel_number,
+                    # bd-zldrq (fix-forward for v0.17.1-0033): pass the
+                    # ECM-resolved channel name into _resolve_emby_attributions
+                    # so the tiered resolver can match Emby's live-TV
+                    # item.Name "<number> | <name>" against the channel
+                    # name (the Dispatcharr stream name does not fuzzy
+                    # match it above 0.85 for provider-prefixed verbose
+                    # names like "US: ESPN FHD").
+                    "channel_name": channel_name,
                     "client_ips": list(client_ips),
                     "client_user_map": dict(client_user_map),
                     "channel_bytes_delta": channel_bytes_delta,
@@ -2253,15 +2261,31 @@ class BandwidthTracker:
                 continue
             resolution = provider_by_channel.get(channel_uuid)
             stream_name = resolution.stream_name if resolution else None
-            if not stream_name:
-                # Without a resolved stream name there is nothing the
-                # resolver can match against. Skip the call rather than
-                # pay for the cache fetch + IP check + name-loop only
-                # to have the resolver return None.
+            # bd-zldrq (fix-forward for v0.17.1-0033): the resolver's
+            # tier-1 (channel_name) and tier-2 (channel_number) matches
+            # are the primary live-TV path now — pull them off the
+            # snapshot entry built in _collect_stats. Both may be None
+            # if the channel object was missing from ECM's channels map
+            # at snapshot time (race); the resolver tolerates that and
+            # falls through to its fuzzy tier-3 fallback on stream_name.
+            channel_name = entry.get("channel_name")
+            channel_number = entry.get("channel_number")
+            # Skip the resolver call only when every tier would be a
+            # no-op: no stream_name (tier 3 can't match) AND no
+            # channel_name (tier 1 can't match) AND no channel_number
+            # (tier 2 can't match). Pre-bd-zldrq this skipped on
+            # stream_name alone, which would now drop the live-TV
+            # match entirely on channels with empty stream_name.
+            if not stream_name and not channel_name and channel_number is None:
                 continue
             for ip in client_ips:
                 try:
-                    attribution = await resolve_emby_user(ip, stream_name)
+                    attribution = await resolve_emby_user(
+                        ip,
+                        stream_name or "",
+                        ecm_channel_name=channel_name,
+                        ecm_channel_number=channel_number,
+                    )
                 except Exception as exc:
                     _log_emby_resolver_failure(exc)
                     # Continue to the next ip — one failure should not
