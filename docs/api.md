@@ -90,6 +90,202 @@ Response: `{ success, operationsApplied, operationsFailed, errors, tempIdMap, gr
 | `GET /api/channel-groups/auto-created` | List groups with auto-created channels |
 | `GET /api/channel-groups/with-streams` | List groups that have channels with streams |
 
+## Channel Merges (Stream Deduplication)
+
+The `/api/channel-merges/*` family is the API surface for the v0.17.1 interactive stream-to-channel deduplication feature (ADR-008). It exposes the pending merges queue, the synchronous candidate lookup, and the accept/dismiss decision endpoints.
+
+See [`docs/user_guide/channels-streams/stream-dedup.md`](user_guide/channels-streams/stream-dedup.md) for the operator-facing workflow.
+
+| Endpoint | Description |
+|-|-|
+| `GET /api/channel-merges/candidates` | Synchronous candidate lookup — find the best matching channel for an incoming stream name |
+| `GET /api/channel-merges` | List pending (or resolved) merge rows, paginated |
+| `POST /api/channel-merges/{id}/accept` | Accept the dedup candidate — merge the stream into the candidate channel |
+| `POST /api/channel-merges/{id}/dismiss` | Dismiss the dedup candidate — signal that a new channel should be created |
+
+All endpoints require JWT Bearer token authentication. `GET /api/channel-merges/candidates` and `GET /api/channel-merges` require `RequireAuthIfEnabled`. The `POST` mutation endpoints (`/accept`, `/dismiss`) require `RequireAdminIfEnabled`.
+
+---
+
+### `GET /api/channel-merges/candidates`
+
+Synchronous lookup: given an incoming stream name and optional group scope, returns the best matching candidate channel from Dispatcharr. Used by the interactive drag-drop and "Add Stream" surfaces to decide whether to show the dedup modal.
+
+**Query parameters:**
+
+| Parameter | Type | Required | Description |
+|-|-|-|-|
+| `stream_name` | string | Yes | The incoming stream name to score against existing channels |
+| `group_id` | integer | No | Dispatcharr group ID; restricts the candidate pool to channels in this group |
+| `page` | integer | No | Page number (default: 1) |
+| `page_size` | integer | No | Results per page (default: 50) |
+
+ECM fetches channels from Dispatcharr, runs them through the dedup matcher with the operator-configured `dedup_threshold` (clamped to the ADR-008 §D2 hard floor of 60%), and returns the top-1 candidate or an empty list if no candidate meets the threshold.
+
+**Response: `200 OK`**
+
+```json
+{
+  "stream_name": "ESPN HD",
+  "candidates": [
+    {
+      "channel_id": "a1b2c3d4-e5f6-...",
+      "channel_name": "ESPN",
+      "confidence": 0.87
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "page_size": 50,
+  "total_pages": 1
+}
+```
+
+`candidates` contains at most one entry — the best match above the threshold. An empty `candidates` list means no channel met the threshold; the caller should proceed with creating a new channel. Confidence is expressed as a decimal (0.0–1.0); the configured `dedup_threshold` is the minimum value that will appear.
+
+**Metric emitted:** `ecm_dedup_candidate_lookup_duration_seconds` Histogram (SLO-10a).
+
+**Example:**
+
+```bash
+curl -X GET "http://localhost:6100/api/channel-merges/candidates?stream_name=ESPN+HD&group_id=12" \
+  -H "Authorization: Bearer TOKEN"
+```
+
+---
+
+### `GET /api/channel-merges`
+
+Returns the paginated list of channel merge rows. Use the `status` query parameter to view the live queue (`pending`), accepted rows (`merged`), or dismissed rows (`dismissed`).
+
+**Query parameters:**
+
+| Parameter | Type | Required | Description |
+|-|-|-|-|
+| `status` | string | No | Filter by row state: `pending` (default), `merged`, or `dismissed` |
+| `group_id` | integer | No | Filter by Dispatcharr group ID |
+| `page` | integer | No | Page number (default: 1) |
+| `page_size` | integer | No | Results per page (default: 50) |
+
+**Response: `200 OK`**
+
+```json
+{
+  "items": [
+    {
+      "id": 42,
+      "stream_name": "ESPN HD",
+      "group_id": 12,
+      "candidate_channel_id": "a1b2c3d4-e5f6-...",
+      "confidence": 0.87,
+      "status": "pending",
+      "trigger_context": "m3u_refresh",
+      "created_at": 1747497600000,
+      "resolved_at": null,
+      "resolution_source": null
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "page_size": 50,
+  "total_pages": 1
+}
+```
+
+`trigger_context` is one of `drag_drop`, `add_stream`, `m3u_refresh`, `mcp_tool`. `created_at` and `resolved_at` are epoch milliseconds (UTC). Terminal-state rows (`merged`, `dismissed`) have `resolved_at` populated and `resolution_source` set to `operator`, `auto`, `bulk_m3u_hook`, or `mcp_tool`.
+
+---
+
+### `POST /api/channel-merges/{id}/accept`
+
+Accept the dedup candidate: merge the incoming stream into the candidate channel in Dispatcharr. Writes an audit row to `pending_merge_journal` (ADR-008 §D6). The `id` is the `pending_merges.id` integer from the list endpoint.
+
+**Authentication:** `RequireAdminIfEnabled`
+
+**Path parameter:** `id` (integer) — the pending merge row ID.
+
+**Request body:** none.
+
+**Response: `200 OK`** — flat outcome envelope.
+
+```json
+{
+  "merged_into_channel_id": "a1b2c3d4-e5f6-...",
+  "journal_entry_id": 307,
+  "source_stream_id": "s9k2m1p7-...",
+  "confidence": 0.87,
+  "status": "merged"
+}
+```
+
+`source_stream_id` is the resolved Dispatcharr stream ID when the name lookup is unambiguous; falls back to the raw `stream_name` string when the lookup is ambiguous (audit-first contract per ADR-008 §D6). `journal_entry_id` is the `pending_merge_journal` row ID.
+
+This endpoint is **idempotent** on the `merged` terminal state: calling `/accept` on a row already in `merged` returns `200` with the prior outcome envelope. Calling `/accept` on a `dismissed` row returns `409 INVALID_STATE`.
+
+**Audit fields:** the `pending_merge_journal` row records `actor_token_id` (the JWT session's underlying API token ID), `action_type='merge_confirmed'`, `trigger_context` carried from the queue row, and `confidence_score` captured at action time.
+
+**Error responses:**
+
+| Status | Code | Description | When |
+|-|-|-|-|
+| 404 | `TARGET_NOT_FOUND` | Candidate channel no longer exists in Dispatcharr | The candidate channel was deleted after the pending row was queued; dismiss this row and re-run the original trigger |
+| 409 | `INVALID_STATE` | Row is in a terminal state that cannot accept this transition | Calling `/accept` on a `dismissed` row |
+
+**Example:**
+
+```bash
+curl -X POST "http://localhost:6100/api/channel-merges/42/accept" \
+  -H "Authorization: Bearer TOKEN"
+```
+
+---
+
+### `POST /api/channel-merges/{id}/dismiss`
+
+Dismiss the dedup candidate: signal that a new channel should be created for this stream. Writes an audit row to `pending_merge_journal`. Does not call Dispatcharr — this is a pure ECM-side state flip.
+
+**Authentication:** `RequireAdminIfEnabled`
+
+**Path parameter:** `id` (integer) — the pending merge row ID.
+
+**Request body:** none.
+
+**Response: `200 OK`** — flat outcome envelope.
+
+```json
+{
+  "journal_entry_id": 308,
+  "status": "dismissed"
+}
+```
+
+This endpoint is **idempotent** on the `dismissed` terminal state: calling `/dismiss` on a row already in `dismissed` returns `200`. Calling `/dismiss` on a `merged` row returns `409 INVALID_STATE`.
+
+**Error responses:**
+
+| Status | Code | Description | When |
+|-|-|-|-|
+| 404 | Not Found | Row ID does not exist | Invalid or already-purged row ID |
+| 409 | `INVALID_STATE` | Row is in a terminal state that cannot accept this transition | Calling `/dismiss` on a `merged` row |
+
+**Example:**
+
+```bash
+curl -X POST "http://localhost:6100/api/channel-merges/42/dismiss" \
+  -H "Authorization: Bearer TOKEN"
+```
+
+---
+
+### Error codes
+
+| Code | HTTP status | Description |
+|-|-|-|
+| `TARGET_NOT_FOUND` | 404 | The candidate channel no longer exists in Dispatcharr. The operator path is to dismiss this pending merge row and re-run the original trigger (drag-drop, Add Stream, or M3U refresh) — the refreshed run will find a current candidate if one exists, or fall through to new-channel creation if none does. |
+| `INVALID_STATE` | 409 | The row is already in a terminal state that makes the requested transition invalid: `/accept` on a `dismissed` row, or `/dismiss` on a `merged` row. Both terminal states are idempotent for their own action (accept-on-merged → 200 with prior envelope; dismiss-on-dismissed → 200). |
+
+---
+
 ## Logos
 
 | Endpoint | Description |

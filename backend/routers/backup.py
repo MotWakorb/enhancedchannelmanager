@@ -62,9 +62,9 @@ def _resolve_backup_normalization_group_ids(item: dict, session) -> str | None:
 BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 
 # App version for manifest (imported at call time to avoid circular imports)
-APP_VERSION = "0.17.1-0023"
-APP_VERSION = "0.17.1-0023"
-APP_VERSION = "0.17.1-0023"
+APP_VERSION = "0.17.1-0024"
+APP_VERSION = "0.17.1-0024"
+APP_VERSION = "0.17.1-0024"
 
 REDACTED = "***REDACTED***"
 
