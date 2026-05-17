@@ -1419,6 +1419,24 @@ class SessionTelemetry(Base):
     plex_user_name = Column(Text, nullable=True)
     jellyfin_user_id = Column(Text, nullable=True)
     jellyfin_user_name = Column(Text, nullable=True)
+    # bd-r5f0c.9 (migration 0018): multi-viewer attribution. Media servers
+    # are transcoding proxies — N upstream viewers share ONE ECM client
+    # (the server itself). The single-viewer columns above retain the
+    # most-recent viewer for back-compat (Stats v2 aggregations, frontend
+    # rendering pre-W5); these three new TEXT columns hold the FULL list
+    # of viewers as JSON-encoded ``[{"user_id": "...", "user_name":
+    # "..."}, ...]`` strings (or NULL when the source matched zero
+    # viewers). Application-layer JSON serialization (``json.dumps`` at
+    # write time, ``json.loads`` on read) — not SQLAlchemy's JSON type —
+    # because SQLite stores JSON as TEXT either way and the in-row
+    # serialization keeps the column shape identical to the other TEXT
+    # attribution columns above (no driver-specific type adapter coupling
+    # for the W5 frontend reader to know about). Order in the list is
+    # ``last_activity_date`` descending so position 0 is the most-recent
+    # viewer (matches the legacy *_user_name column's content).
+    emby_viewers = Column(Text, nullable=True)
+    plex_viewers = Column(Text, nullable=True)
+    jellyfin_viewers = Column(Text, nullable=True)
 
     __table_args__ = (
         CheckConstraint(

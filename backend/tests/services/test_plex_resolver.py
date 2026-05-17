@@ -688,3 +688,158 @@ class TestMultiTierDedup:
             )
         # Single match — no tiebreak needed, and result is the user_name.
         assert result == "dedup_user"
+
+
+# ---------------------------------------------------------------------------
+# bd-r5f0c.9 multi-viewer: resolve_plex_users returns the FULL list of
+# matched sessions sorted most-recent first, NOT just the tiebreak winner.
+# Fixes the PO-reported bug where ECM showed only one user when multiple
+# Plex viewers were watching the same channel via the Plex server proxy.
+# ---------------------------------------------------------------------------
+
+
+class TestMultiViewer:
+    """Plural :func:`resolve_plex_users` captures every viewer that matched
+    any tier. The singular wrapper :func:`resolve_plex_user` continues
+    to return the most-recent viewer's user_name (str) for back-compat.
+    """
+
+    async def test_two_viewers_same_channel_returns_both(self):
+        """Two Plex sessions on the same channel → resolve_plex_users
+        returns BOTH attributions, most-recent first."""
+        older = _make_session(
+            session_id="sess-old",
+            user_id="uid-alice", user_name="alice",
+            item_name="408 | ESPN",
+            last_activity=datetime(2026, 5, 16, 10, 0, 0, tzinfo=timezone.utc),
+        )
+        newer = _make_session(
+            session_id="sess-new",
+            user_id="uid-bob", user_name="bob",
+            item_name="408 | ESPN",
+            last_activity=datetime(2026, 5, 16, 14, 0, 0, tzinfo=timezone.utc),
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[older, newer])):
+            users = await plex_resolver.resolve_plex_users(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="US: ESPN FHD",
+                ecm_channel_name="ESPN",
+                ecm_channel_number=408,
+            )
+        assert len(users) == 2, f"expected 2 viewers; got {len(users)}"
+        assert users[0].user_name == "bob"
+        assert users[1].user_name == "alice"
+
+    async def test_three_viewers_same_channel_returns_all_three(self):
+        """Three Plex sessions on the same channel."""
+        s1 = _make_session(
+            session_id="s1", user_id="u1", user_name="alice",
+            item_name="408 | ESPN",
+            last_activity=datetime(2026, 5, 16, 10, 0, 0, tzinfo=timezone.utc),
+        )
+        s2 = _make_session(
+            session_id="s2", user_id="u2", user_name="bob",
+            item_name="408 | ESPN",
+            last_activity=datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc),
+        )
+        s3 = _make_session(
+            session_id="s3", user_id="u3", user_name="charlie",
+            item_name="408 | ESPN",
+            last_activity=datetime(2026, 5, 16, 14, 0, 0, tzinfo=timezone.utc),
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[s1, s2, s3])):
+            users = await plex_resolver.resolve_plex_users(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ESPN",
+                ecm_channel_name="ESPN",
+            )
+        assert [u.user_name for u in users] == ["charlie", "bob", "alice"]
+
+    async def test_single_viewer_returns_one_element_list(self):
+        """The common case: one viewer on the channel → list of 1."""
+        only = _make_session(
+            user_id="uid-only", user_name="solo",
+            item_name="408 | ESPN",
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[only])):
+            users = await plex_resolver.resolve_plex_users(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="US: ESPN",
+                ecm_channel_name="ESPN",
+            )
+        assert len(users) == 1
+        assert users[0].user_name == "solo"
+
+    async def test_no_match_returns_empty_list(self):
+        """No tier matches → empty list (NOT None, NOT exception)."""
+        irrelevant = _make_session(
+            user_name="x", item_name="Unrelated Show",
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[irrelevant])):
+            users = await plex_resolver.resolve_plex_users(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="CNN HD",
+                ecm_channel_name="ESPN",
+            )
+        assert users == []
+
+    async def test_ip_mismatch_returns_empty_list_without_cache_call(self):
+        """IP short-circuit also applies to the plural variant."""
+        cache_mock = AsyncMock(return_value=[_make_session()])
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions", cache_mock):
+            users = await plex_resolver.resolve_plex_users(
+                ecm_session_ip="10.0.0.5",  # NOT the Plex server
+                ecm_stream_name="ESPN",
+            )
+        assert users == []
+        cache_mock.assert_not_awaited()
+
+    async def test_singular_wrapper_returns_most_recent_user_name(self):
+        """Back-compat target: the legacy singular wrapper still returns
+        the most-recent viewer's user_name (string)."""
+        older = _make_session(
+            session_id="sess-old", user_id="uid-old", user_name="old_user",
+            item_name="408 | ESPN",
+            last_activity=datetime(2026, 5, 16, 10, 0, 0, tzinfo=timezone.utc),
+        )
+        newer = _make_session(
+            session_id="sess-new", user_id="uid-new", user_name="new_user",
+            item_name="408 | ESPN",
+            last_activity=datetime(2026, 5, 16, 14, 0, 0, tzinfo=timezone.utc),
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[older, newer])):
+            singular = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ESPN",
+                ecm_channel_name="ESPN",
+            )
+        assert singular == "new_user"
+
+    async def test_metric_counter_increments_per_viewer(self):
+        """bd-r5f0c.9 + W6 semantic: the
+        ``user_attribution_resolved_total{source="plex"}`` counter
+        increments PER VIEWER. 3 matched viewers = 3 increments."""
+        s1 = _make_session(session_id="s1", user_id="u1", user_name="a", item_name="408 | ESPN")
+        s2 = _make_session(session_id="s2", user_id="u2", user_name="b", item_name="408 | ESPN")
+        s3 = _make_session(session_id="s3", user_id="u3", user_name="c", item_name="408 | ESPN")
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[s1, s2, s3])):
+            users = await plex_resolver.resolve_plex_users(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ESPN",
+                ecm_channel_name="ESPN",
+            )
+        assert len(users) == 3
+        assert _get_counter_value("user_attribution_resolved_total", "plex") == 3.0

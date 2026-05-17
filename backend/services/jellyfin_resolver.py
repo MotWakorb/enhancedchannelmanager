@@ -153,69 +153,59 @@ class JellyfinAttribution:
 # ---------------------------------------------------------------------------
 
 
-async def resolve_jellyfin_user(
+async def resolve_jellyfin_users(
     ecm_session_ip: str,
     ecm_stream_name: str,
     ecm_channel_name: str | None = None,
     ecm_channel_number: str | int | None = None,
-) -> JellyfinAttribution | None:
-    """Cross-reference one ECM stream against the live Jellyfin session list.
+) -> list[JellyfinAttribution]:
+    """Cross-reference one ECM stream against the live Jellyfin session list (multi-viewer).
 
-    Returns the matching Jellyfin user's attribution when exactly one
-    Jellyfin session is playing this stream, else ``None``. Multiple
-    matches (rare — same channel on multiple Jellyfin clients) tie-break on
-    most-recent ``last_activity_date``.
+    bd-r5f0c.9 (parent epic bd-r5f0c). Jellyfin is a transcoding proxy
+    — N upstream viewers share one ECM client (the Jellyfin server
+    itself), so the resolver was matching all N sessions across the
+    tiers but ``_tiebreak_most_recent`` was collapsing the list to a
+    single winner. This plural variant returns the FULL list so every
+    viewer is captured.
 
-    Matching is tiered:
+    Returns the list of every Jellyfin session that matched any tier,
+    sorted ``last_activity_date`` descending so position 0 is the
+    most-recent viewer. Empty list when:
 
-    1. **Tier 1 — channel_name.** Parse each Jellyfin session's
-       ``now_playing_item_name`` as ``"<number> | <name>"``; compare the
-       right-hand part (or the whole string if no pipe) case-insensitively
-       to ``ecm_channel_name``. Jellyfin often omits the pipe prefix so
-       the whole-string comparison is the primary Jellyfin live-TV path.
-    2. **Tier 2 — channel_number exact.** When both sides present, string
-       compare. Defensive against name divergence.
-    3. **Tier 3 — fuzzy stream_name fallback.** Legacy path for VOD /
-       movies where no channel args are available.
+    * The ECM session's client IP does NOT match the Jellyfin server IP,
+    * No Jellyfin sessions are playing,
+    * No tier matched,
+    * Any defensive failure (DNS resolution failure, malformed base URL).
 
-    Args:
-        ecm_session_ip: The client IP of the Dispatcharr stream session
-            ECM is trying to attribute.
-        ecm_stream_name: The Dispatcharr stream name — matched in tier-3.
-            Required for back-compat.
-        ecm_channel_name: ECM channel name (e.g. "ESPN"). When populated,
-            the resolver tries tier 1 first.
-        ecm_channel_number: ECM channel number. When populated, the
-            resolver tries tier 2. Accepts ``int`` or ``str``.
+    Tier semantics (live-TV-tolerant, Jellyfin's bare-channel-name path):
 
-    Returns:
-        ``JellyfinAttribution`` with the resolved user_id + user_name, or
-        ``None`` when the IP does not match the Jellyfin server, no
-        Jellyfin session matches across any tier, or any defensive failure
-        (DNS resolution failure, malformed base URL).
+    1. **Tier 1 — channel_name** (with bare-name tolerance).
+    2. **Tier 2 — channel_number exact** (defensive fallback).
+    3. **Tier 3 — fuzzy stream_name** (legacy VOD path).
 
-    Notes:
-        Never raises. The BandwidthTracker poll loop calls this on every
-        active session every ~5 seconds; raising would kill the loop or
-        force the caller to wrap every call.
+    Metric semantics (W6 observability work):
+
+    * ``ecm_user_attribution_resolved_total{source="jellyfin"}`` fires
+      PER VIEWER — if N viewers matched, the counter increments by N.
+    * ``ecm_user_attribution_unresolved_total{source="jellyfin"}`` fires
+      ONLY when the resolver entered (IP matched the Jellyfin server)
+      AND produced an empty list.
+
+    Never raises. Defensive failures return ``[]``.
     """
     settings = get_settings()
     base_url = getattr(settings, "jellyfin_base_url", "") or ""
 
     jellyfin_server_ip = _resolve_jellyfin_server_ip(base_url)
     if jellyfin_server_ip is None:
-        # Could not determine the Jellyfin server IP (empty/malformed URL or
-        # DNS failure). Fail safe — no attribution possible.
-        return None
+        return []
 
     if ecm_session_ip != jellyfin_server_ip:
-        # Hot path: the vast majority of ECM sessions are NOT
-        # Jellyfin-mediated. Short-circuit before the cache call.
-        return None
+        return []
 
     sessions = await get_cached_jellyfin_sessions()
     if not sessions:
-        return None
+        return []
 
     matches = _find_matching_sessions(
         ecm_stream_name=ecm_stream_name,
@@ -231,31 +221,71 @@ async def resolve_jellyfin_user(
             len(sessions),
         )
         observability.get_metric("user_attribution_unresolved_total").labels(source="jellyfin").inc()
-        return None
+        return []
 
-    winner = _tiebreak_most_recent(matches)
-    if len(matches) > 1:
-        # Rate-limited WARN for disambiguation so operators can see the
-        # tie-break in logs without flooding. DEBUG on every call.
+    sorted_matches = _sort_by_recency_descending(matches)
+
+    if len(sorted_matches) > 1:
         _maybe_warn_disambiguation(
-            len(matches), ecm_session_ip,
+            len(sorted_matches), ecm_session_ip,
             ecm_channel_name or ecm_stream_name,
-            winner.user_name,
+            sorted_matches[0].user_name,
         )
         logger.debug(
             "[JELLYFIN] resolver: %d candidates for ip=%s name=%s, "
-            "picked %s by recency",
-            len(matches), ecm_session_ip,
+            "all returned (multi-viewer; most-recent first: %s)",
+            len(sorted_matches), ecm_session_ip,
             ecm_channel_name or ecm_stream_name,
-            winner.user_name,
+            sorted_matches[0].user_name,
         )
     else:
         logger.debug(
             "[JELLYFIN] Resolved stream=%r → user=%s (uid=%s) from 1 match",
-            ecm_stream_name, winner.user_name, winner.user_id,
+            ecm_stream_name,
+            sorted_matches[0].user_name,
+            sorted_matches[0].user_id,
         )
-    observability.get_metric("user_attribution_resolved_total").labels(source="jellyfin").inc()
-    return JellyfinAttribution(user_id=winner.user_id, user_name=winner.user_name)
+
+    metric = observability.get_metric("user_attribution_resolved_total")
+    for _ in sorted_matches:
+        metric.labels(source="jellyfin").inc()
+
+    return [
+        JellyfinAttribution(user_id=session.user_id, user_name=session.user_name)
+        for session in sorted_matches
+    ]
+
+
+async def resolve_jellyfin_user(
+    ecm_session_ip: str,
+    ecm_stream_name: str,
+    ecm_channel_name: str | None = None,
+    ecm_channel_number: str | int | None = None,
+) -> JellyfinAttribution | None:
+    """Back-compat wrapper — return the most-recent matching Jellyfin user.
+
+    Pre-bd-r5f0c.9 callers (W4 ``BandwidthTracker`` shim, stats.py
+    ``_enrich_one_source``, and the existing test surface) call this
+    function expecting at most one attribution. bd-r5f0c.9 split the
+    multi-viewer plural variant out as :func:`resolve_jellyfin_users`;
+    this wrapper returns position 0 of that list (most-recent viewer)
+    to preserve every existing caller's contract verbatim.
+
+    Returns the matching Jellyfin user's attribution when one or more
+    Jellyfin sessions are playing this stream, else ``None``. Multiple
+    matches (multi-viewer scenarios — same channel on multiple Jellyfin
+    clients) tie-break on most-recent ``last_activity_date`` exactly as
+    before bd-r5f0c.9.
+
+    Never raises. Defensive failures return ``None``.
+    """
+    users = await resolve_jellyfin_users(
+        ecm_session_ip,
+        ecm_stream_name,
+        ecm_channel_name=ecm_channel_name,
+        ecm_channel_number=ecm_channel_number,
+    )
+    return users[0] if users else None
 
 
 # ---------------------------------------------------------------------------
@@ -474,10 +504,32 @@ def _tiebreak_most_recent(sessions: list[JellyfinSession]) -> JellyfinSession:
     populated timestamp (mapped to "" for comparison).
 
     Returns the input verbatim when there is only one session.
+
+    bd-r5f0c.9: retained as the one-winner helper for legacy paths
+    that still want a single match.
     """
     if len(sessions) == 1:
         return sessions[0]
     return max(sessions, key=lambda s: s.last_activity_date or "")
+
+
+def _sort_by_recency_descending(
+    sessions: list[JellyfinSession],
+) -> list[JellyfinSession]:
+    """Return ``sessions`` sorted by ``last_activity_date`` descending.
+
+    bd-r5f0c.9 multi-viewer attribution: the plural resolver returns
+    every matched session so every viewer is captured, with position 0
+    being the most-recent viewer. Same ``None``-loses semantic as
+    :func:`_tiebreak_most_recent`.
+
+    Stable across equal timestamps.
+    """
+    return sorted(
+        sessions,
+        key=lambda s: s.last_activity_date or "",
+        reverse=True,
+    )
 
 
 def _maybe_warn_disambiguation(
