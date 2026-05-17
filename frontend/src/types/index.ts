@@ -425,6 +425,15 @@ export interface ChannelStats {
   // additional /api round-trip per row. Null when the resolver could
   // not attribute the active stream to a provider.
   m3u_account_id?: number | null;
+
+  // Emby attribution enrichment (bd-fm23o, final bead of EPIC bd-2cenq):
+  // backend calls the Emby resolver per-client at request time and
+  // surfaces the matched viewer's Emby username here when at least one
+  // client resolves. Null when Emby is disabled, no client came from
+  // the configured Emby server IP, or no live Emby session matched the
+  // stream name. The Active Channels view renders this as a
+  // "(watching: <emby_user>)" suffix on the stream-identity badge.
+  emby_user_name?: string | null;
 }
 
 // Response from /proxy/ts/status
@@ -1141,10 +1150,20 @@ export interface WatchHistoryResponse {
 // { data, meta: { from_iso, to_iso, group_by, total_rows }, pagination: null }.
 // Both are admin-only — non-admin callers receive 403.
 
+// bd-fm23o (final bead of EPIC bd-2cenq — Emby user attribution):
+// ``attribution_source`` discriminates between Dispatcharr-side and
+// Emby-side attribution chains. When ``"emby"``, the ``username`` field
+// is the resolved Emby username (rather than the Dispatcharr-side proxy
+// account that ECM would otherwise see) and the UI renders a "via Emby"
+// badge so the operator knows the attribution path. ``"dispatcharr"`` is
+// the pre-bd-fm23o default for sessions with no Emby attribution.
+export type AttributionSource = 'emby' | 'dispatcharr';
+
 // Row shape for /watch-time with group_by=total
 export interface WatchTimeUserTotalRow {
   user_id: number;
   username: string | null;
+  attribution_source: AttributionSource;
   total_watch_seconds: number;
   last_watched: string | null;  // ISO-8601 UTC, e.g. "2026-05-13T12:34:56Z"
 }
@@ -1153,6 +1172,7 @@ export interface WatchTimeUserTotalRow {
 export interface WatchTimeUserDayRow {
   user_id: number;
   username: string | null;
+  attribution_source: AttributionSource;
   day: string;  // "YYYY-MM-DD" (UTC)
   watch_seconds: number;
 }

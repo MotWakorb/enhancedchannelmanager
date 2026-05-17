@@ -143,6 +143,7 @@ function buildChannelStatsResponse(
     stream_name: string | null;
     m3u_account_id: number | null;
     stream_id: number;
+    emby_user_name: string | null;
   }>,
 ): ChannelStatsResponse {
   return {
@@ -265,6 +266,57 @@ describe('StatsTab — Active Channels stream-identity badge (bd-ox5q8)', () => 
       expect(container.querySelector('.channel-card')).toBeInTheDocument();
     });
     expect(container.querySelector('.stream-name-badge')).toBeNull();
+  });
+});
+
+// bd-fm23o (final bead of EPIC bd-2cenq — Emby user attribution): the
+// Active Channels card renders ``(watching: <emby_user>)`` next to the
+// stream-name badge when the backend's
+// ``_enrich_channels_with_emby`` populated the field. The badge is
+// purely additive — it appears alongside the existing stream-name
+// badge — so the test verifies presence/absence without disturbing the
+// pre-existing badge rendering.
+
+describe('StatsTab — Active Channels Emby attribution badge (bd-fm23o)', () => {
+  it('renders "(watching: <emby_user>)" next to the stream badge when emby_user_name is present', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue(
+      buildChannelStatsResponse({
+        stream_name: 'US: TNT',
+        m3u_account_id: 6,
+        stream_id: 555,
+        emby_user_name: 'alice',
+      }),
+    );
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      // The stream identity badge still renders normally.
+      expect(screen.getByText('[Infinity] - US: TNT')).toBeInTheDocument();
+    });
+    // The emby viewer suffix appears as its own badge.
+    expect(screen.getByText('(watching: alice)')).toBeInTheDocument();
+  });
+
+  it('does NOT render the Emby viewer badge when emby_user_name is null', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue(
+      buildChannelStatsResponse({
+        stream_name: 'US: TNT',
+        m3u_account_id: 6,
+        stream_id: 555,
+        emby_user_name: null,
+      }),
+    );
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector('.channel-card')).toBeInTheDocument();
+    });
+    // Stream-identity badge still rendered as a regression-lock that the
+    // panel produced a card; the emby badge specifically must not appear.
+    expect(screen.queryByText(/watching:/)).not.toBeInTheDocument();
+    expect(container.querySelector('.channel-emby-viewer')).toBeNull();
   });
 });
 
