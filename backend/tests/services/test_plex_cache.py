@@ -28,6 +28,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import observability
 from plex_client import PlexClientError, PlexSession
 from services import plex_cache
 
@@ -66,8 +67,42 @@ def reset_cache_state():
     into the next test and produce false cache-hit assertions.
     """
     plex_cache._reset_for_tests()
+    observability.reset_for_tests()
+    observability.install_metrics()
     yield
     plex_cache._reset_for_tests()
+    observability.reset_for_tests()
+
+
+def _get_counter_value(metric_key: str, source: str) -> float:
+    """Return the current value of a labeled counter from the live registry.
+
+    ``metric_key`` is the key in observability._METRICS (e.g.
+    ``"media_session_cache_hits_total"``). The prometheus metric name is
+    ``"ecm_" + metric_key``.
+    """
+    metric = observability.get_metric(metric_key)
+    prom_name = f"ecm_{metric_key}"
+    for mf in metric.collect():
+        for sample in mf.samples:
+            if sample.name == prom_name and sample.labels.get("source") == source:
+                return sample.value
+    return 0.0
+
+
+def _get_histogram_count(metric_key: str, source: str) -> float:
+    """Return the _count value of a labeled histogram from the live registry.
+
+    ``metric_key`` is the key in observability._METRICS (e.g.
+    ``"media_session_fetch_duration_seconds"``).
+    """
+    metric = observability.get_metric(metric_key)
+    prom_count_name = f"ecm_{metric_key}_count"
+    for mf in metric.collect():
+        for sample in mf.samples:
+            if sample.name == prom_count_name and sample.labels.get("source") == source:
+                return sample.value
+    return 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +147,21 @@ class TestCacheHitAndMiss:
         # Exactly one client constructed and one fetch fired across two calls.
         assert client_cls.call_count == 1
         mock_client.get_sessions.assert_awaited_once()
+        # The second call was a cache hit — counter must be 1.
+        assert _get_counter_value("media_session_cache_hits_total", "plex") == 1.0
+
+    async def test_first_call_records_fetch_duration(self):
+        """Cache miss path records exactly one histogram observation."""
+        session = _make_session()
+        mock_client = AsyncMock()
+        mock_client.get_sessions = AsyncMock(return_value=[session])
+        mock_client.close = AsyncMock()
+
+        with patch.object(plex_cache, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_cache, "PlexClient", return_value=mock_client):
+            await plex_cache.get_cached_plex_sessions()
+
+        assert _get_histogram_count("media_session_fetch_duration_seconds", "plex") >= 1.0
 
     async def test_call_after_ttl_expiry_refetches(self):
         """After the TTL elapses, the next call hits Plex again.
@@ -177,6 +227,9 @@ class TestStaleFallback:
         assert second == [session]
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert any("stale" in r.getMessage().lower() for r in warnings), warnings
+        # Metric assertions: fetch error and stale fallback both incremented.
+        assert _get_counter_value("media_session_fetch_errors_total", "plex") == 1.0
+        assert _get_counter_value("media_session_stale_fallback_total", "plex") == 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +255,9 @@ class TestColdStartFailure:
         assert result == []
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert any("no prior cache" in r.getMessage().lower() for r in warnings), warnings
+        # Metric assertion: fetch error incremented; stale fallback NOT (no prior cache).
+        assert _get_counter_value("media_session_fetch_errors_total", "plex") == 1.0
+        assert _get_counter_value("media_session_stale_fallback_total", "plex") == 0.0
 
     async def test_cold_start_failure_does_not_populate_cache(self):
         """A failed cold-start fetch must not poison the cache with [].

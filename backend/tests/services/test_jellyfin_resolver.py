@@ -36,6 +36,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import observability
 from jellyfin_client import JellyfinSession
 from services import jellyfin_resolver
 
@@ -84,8 +85,27 @@ def _enabled_settings(base_url: str = "http://192.168.1.20:8096") -> MagicMock:
 def reset_resolver_state():
     """Reset the module-level DNS cache and warn timestamp around every test."""
     jellyfin_resolver._reset_for_tests()
+    observability.reset_for_tests()
+    observability.install_metrics()
     yield
     jellyfin_resolver._reset_for_tests()
+    observability.reset_for_tests()
+
+
+def _get_counter_value(metric_key: str, source: str) -> float:
+    """Return the current value of a labeled counter from the live registry.
+
+    ``metric_key`` is the key in observability._METRICS (e.g.
+    ``"user_attribution_resolved_total"``). The prometheus metric name is
+    ``"ecm_" + metric_key``.
+    """
+    metric = observability.get_metric(metric_key)
+    prom_name = f"ecm_{metric_key}"
+    for mf in metric.collect():
+        for sample in mf.samples:
+            if sample.name == prom_name and sample.labels.get("source") == source:
+                return sample.value
+    return 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +165,9 @@ class TestNoPipeSuffixTolerance:
         assert result == jellyfin_resolver.JellyfinAttribution(
             user_id="jf-uid-mw", user_name="MotWakorb",
         )
+        # Metric assertion: resolved counter incremented; unresolved is zero.
+        assert _get_counter_value("user_attribution_resolved_total", "jellyfin") == 1.0
+        assert _get_counter_value("user_attribution_unresolved_total", "jellyfin") == 0.0
 
     async def test_pipe_format_also_works(self):
         """Jellyfin installs that DO use the pipe format (e.g. Emby-migrated
@@ -199,6 +222,9 @@ class TestNoPipeSuffixTolerance:
                 ecm_channel_name="CNN",
             )
         assert result is None
+        # IP matched but no session matched — unresolved counter incremented.
+        assert _get_counter_value("user_attribution_unresolved_total", "jellyfin") == 1.0
+        assert _get_counter_value("user_attribution_resolved_total", "jellyfin") == 0.0
 
 
 # ---------------------------------------------------------------------------

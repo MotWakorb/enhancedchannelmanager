@@ -34,6 +34,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import observability
 from plex_client import PlexSession
 from services import plex_resolver
 
@@ -90,8 +91,27 @@ def _enabled_settings(base_url: str = "http://192.168.1.20:32400") -> MagicMock:
 def reset_resolver_state():
     """Reset the module-level DNS cache around every test."""
     plex_resolver._reset_for_tests()
+    observability.reset_for_tests()
+    observability.install_metrics()
     yield
     plex_resolver._reset_for_tests()
+    observability.reset_for_tests()
+
+
+def _get_counter_value(metric_key: str, source: str) -> float:
+    """Return the current value of a labeled counter from the live registry.
+
+    ``metric_key`` is the key in observability._METRICS (e.g.
+    ``"user_attribution_resolved_total"``). The prometheus metric name is
+    ``"ecm_" + metric_key``.
+    """
+    metric = observability.get_metric(metric_key)
+    prom_name = f"ecm_{metric_key}"
+    for mf in metric.collect():
+        for sample in mf.samples:
+            if sample.name == prom_name and sample.labels.get("source") == source:
+                return sample.value
+    return 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +172,9 @@ class TestTier1ChannelNameMatch:
                 ecm_channel_number=408,
             )
         assert result == "MotWakorb"
+        # Metric assertion: resolved counter incremented; unresolved is zero.
+        assert _get_counter_value("user_attribution_resolved_total", "plex") == 1.0
+        assert _get_counter_value("user_attribution_unresolved_total", "plex") == 0.0
 
     async def test_channel_name_matches_whole_name_without_prefix(self):
         """item_name is just "ESPN" (no pipe prefix) — whole-string match."""
@@ -359,6 +382,9 @@ class TestNoMatch:
                 ecm_stream_name="CNN HD",
             )
         assert result is None
+        # IP matched but no session matched — unresolved counter incremented.
+        assert _get_counter_value("user_attribution_unresolved_total", "plex") == 1.0
+        assert _get_counter_value("user_attribution_resolved_total", "plex") == 0.0
 
 
 # ---------------------------------------------------------------------------

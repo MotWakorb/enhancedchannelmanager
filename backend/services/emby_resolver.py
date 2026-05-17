@@ -67,6 +67,7 @@ from rapidfuzz import fuzz
 from config import get_settings
 from emby_client import EmbySession
 from services.emby_cache import get_cached_emby_sessions
+import observability
 
 logger = logging.getLogger(__name__)
 
@@ -249,6 +250,7 @@ async def resolve_emby_user(
             ecm_stream_name, ecm_channel_name, ecm_channel_number,
             len(sessions),
         )
+        observability.get_metric("user_attribution_unresolved_total").labels(source="emby").inc()
         return None
 
     winner = _tiebreak_most_recent(matches)
@@ -267,6 +269,7 @@ async def resolve_emby_user(
             "[EMBY] Resolved stream=%r → user=%s (uid=%s) from 1 match",
             ecm_stream_name, winner.user_name, winner.user_id,
         )
+    observability.get_metric("user_attribution_resolved_total").labels(source="emby").inc()
     return EmbyAttribution(user_id=winner.user_id, user_name=winner.user_name)
 
 

@@ -67,6 +67,7 @@ from rapidfuzz import fuzz
 from config import get_settings
 from plex_client import PlexSession
 from services.plex_cache import get_cached_plex_sessions
+import observability
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +247,7 @@ async def _resolve_plex_user_inner(
             ecm_stream_name, ecm_channel_name, ecm_channel_number,
             len(sessions),
         )
+        observability.get_metric("user_attribution_unresolved_total").labels(source="plex").inc()
         return None
 
     winner = _tiebreak_most_recent(matches)
@@ -263,6 +265,7 @@ async def _resolve_plex_user_inner(
             "[PLEX] Resolved stream=%r → user=%s from 1 match",
             ecm_stream_name, winner.user_name,
         )
+    observability.get_metric("user_attribution_resolved_total").labels(source="plex").inc()
     return winner.user_name
 
 
