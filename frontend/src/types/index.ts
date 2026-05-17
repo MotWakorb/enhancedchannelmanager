@@ -357,6 +357,19 @@ export * from './journal';
 // Stats & Monitoring Types
 // =============================================================================
 
+// Multi-viewer attribution (bd-r5f0c.9 / W9). Each entry represents one
+// upstream user observed in a media-server session that corresponds to an
+// ECM stream. The ``user_id`` may be null when the resolver doesn't surface
+// a stable server-side identifier (e.g. Plex today).
+export interface Viewer {
+  user_id: string | null;
+  user_name: string;
+}
+
+// Attribution source for a given client or channel. Drives badge icon +
+// label in <AttributionBadge>. Null = no source resolved.
+export type AttributionSource = 'emby' | 'plex' | 'jellyfin' | 'dispatcharr' | null;
+
 // Client connection info for an active stream
 export interface StreamClient {
   client_id: string;
@@ -370,9 +383,19 @@ export interface StreamClient {
   current_rate_KBps?: number;
   user_id?: string;
   username?: string;
-  /** bd-5kbyf: Emby user resolved via cross-reference when this channel is
+  /** Legacy singular attribution (back-compat; most-recent viewer's name).
+   * bd-5kbyf: Emby user resolved via cross-reference when this channel is
    * Emby-mediated. Null when Emby is disabled or no attribution matched. */
   emby_user_name?: string | null;
+  // Plex/Jellyfin legacy singular (W4 / bd-r5f0c.4)
+  plex_user_name?: string | null;
+  jellyfin_user_name?: string | null;
+  // Multi-viewer lists (W9 / bd-r5f0c.9). Null = no attribution from that source.
+  emby_viewers?: Viewer[] | null;
+  plex_viewers?: Viewer[] | null;
+  jellyfin_viewers?: Viewer[] | null;
+  // Most-recent viewer's attribution source (drives badge selection)
+  attribution_source?: AttributionSource;
 }
 
 // Active channel stats from /proxy/ts/status
@@ -437,6 +460,15 @@ export interface ChannelStats {
   // stream name. The Active Channels view renders this as a
   // "(watching: <emby_user>)" suffix on the stream-identity badge.
   emby_user_name?: string | null;
+  // Plex / Jellyfin legacy singular (W4 / bd-r5f0c.4)
+  plex_user_name?: string | null;
+  jellyfin_user_name?: string | null;
+  // Multi-viewer lists (W9 / bd-r5f0c.9). Null = no attribution from that source.
+  emby_viewers?: Viewer[] | null;
+  plex_viewers?: Viewer[] | null;
+  jellyfin_viewers?: Viewer[] | null;
+  // Most-recent viewer's attribution source (drives badge selection)
+  attribution_source?: AttributionSource;
 }
 
 // Response from /proxy/ts/status
@@ -1160,7 +1192,8 @@ export interface WatchHistoryResponse {
 // account that ECM would otherwise see) and the UI renders a "via Emby"
 // badge so the operator knows the attribution path. ``"dispatcharr"`` is
 // the pre-bd-fm23o default for sessions with no Emby attribution.
-export type AttributionSource = 'emby' | 'dispatcharr';
+// Extended by bd-r5f0c.5 to include 'plex' and 'jellyfin' variants.
+// The canonical definition is at the top of this file (line ~371).
 
 // Row shape for /watch-time with group_by=total
 export interface WatchTimeUserTotalRow {

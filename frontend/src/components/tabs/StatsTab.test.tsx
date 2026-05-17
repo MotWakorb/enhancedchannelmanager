@@ -572,3 +572,334 @@ describe('StatsTab — per-client Emby attribution badge (bd-5kbyf)', () => {
     expect(screen.queryByText('via Emby')).not.toBeInTheDocument();
   });
 });
+
+// bd-r5f0c.5 (W5): Multi-viewer rendering in Connected Clients.
+// The W9 backend now surfaces *_viewers[] lists per source on each client.
+// These tests verify the new rendering paths WITHOUT disturbing the
+// existing bd-5kbyf back-compat tests above.
+
+const baseMultiViewerChannel = {
+  channel_id: 'uuid-mv',
+  channel_name: '200 | CNN',
+  channel_number: 200,
+  state: 'streaming',
+  client_count: 1,
+  stream_name: 'US: CNN FHD',
+  m3u_account_id: 6,
+  stream_id: 9002,
+  emby_user_name: null,
+  plex_user_name: null,
+  jellyfin_user_name: null,
+};
+
+describe('StatsTab — multi-viewer per-client rendering (bd-r5f0c.5 / W5)', () => {
+  // --- Single viewer via emby_viewers[] (W9 path) ---
+
+  it('renders a single Emby viewer from emby_viewers[] list', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseMultiViewerChannel,
+          clients: [
+            {
+              client_id: 'cid-mv1',
+              ip_address: '10.0.0.1',
+              user_agent: 'Emby/1.0',
+              connected_at: '2026-05-17T00:00:00Z',
+              last_active: '2026-05-17T00:01:00Z',
+              emby_viewers: [{ user_id: 'emby-uid-1', user_name: 'Alice' }],
+            },
+          ],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      // Name from the viewers list
+      expect(screen.getByText('Alice')).toBeInTheDocument();
+    });
+    // AttributionBadge renders "via Emby"
+    expect(screen.getByText('via Emby')).toBeInTheDocument();
+  });
+
+  // --- 2 viewers comma-separated ---
+
+  it('renders two Emby viewers as comma-separated names', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseMultiViewerChannel,
+          clients: [
+            {
+              client_id: 'cid-mv2',
+              ip_address: '10.0.0.2',
+              user_agent: 'Emby/1.0',
+              connected_at: '2026-05-17T00:00:00Z',
+              last_active: '2026-05-17T00:01:00Z',
+              emby_viewers: [
+                { user_id: null, user_name: 'Alice' },
+                { user_id: null, user_name: 'Bob' },
+              ],
+            },
+          ],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice, Bob')).toBeInTheDocument();
+    });
+    expect(screen.getByText('via Emby')).toBeInTheDocument();
+  });
+
+  // --- 3 viewers comma-separated (up to 3 shown inline per spec) ---
+
+  it('renders three Emby viewers as comma-separated names', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseMultiViewerChannel,
+          clients: [
+            {
+              client_id: 'cid-mv3',
+              ip_address: '10.0.0.3',
+              user_agent: 'Emby/1.0',
+              connected_at: '2026-05-17T00:00:00Z',
+              last_active: '2026-05-17T00:01:00Z',
+              emby_viewers: [
+                { user_id: null, user_name: 'Alice' },
+                { user_id: null, user_name: 'Bob' },
+                { user_id: null, user_name: 'Carol' },
+              ],
+            },
+          ],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice, Bob, Carol')).toBeInTheDocument();
+    });
+  });
+
+  // --- 4+ viewers → rollup summary ---
+
+  it('renders "(N viewers)" summary for 4+ Emby viewers in a details element', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseMultiViewerChannel,
+          clients: [
+            {
+              client_id: 'cid-mv4',
+              ip_address: '10.0.0.4',
+              user_agent: 'Emby/1.0',
+              connected_at: '2026-05-17T00:00:00Z',
+              last_active: '2026-05-17T00:01:00Z',
+              emby_viewers: [
+                { user_id: null, user_name: 'Alice' },
+                { user_id: null, user_name: 'Bob' },
+                { user_id: null, user_name: 'Carol' },
+                { user_id: null, user_name: 'Dave' },
+              ],
+            },
+          ],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      // The summary element shows "(4 viewers)"
+      expect(screen.getByText('4 viewers')).toBeInTheDocument();
+    });
+    // Names hidden inside a <details> element
+    expect(container.querySelector('details.viewer-details')).toBeInTheDocument();
+  });
+
+  // --- Plex single viewer ---
+
+  it('renders a single Plex viewer from plex_viewers[] list', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseMultiViewerChannel,
+          clients: [
+            {
+              client_id: 'cid-plex1',
+              ip_address: '10.0.0.5',
+              user_agent: 'Plex/2.0',
+              connected_at: '2026-05-17T00:00:00Z',
+              last_active: '2026-05-17T00:01:00Z',
+              plex_viewers: [{ user_id: null, user_name: 'PlexUser' }],
+            },
+          ],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('PlexUser')).toBeInTheDocument();
+    });
+    expect(screen.getByText('via Plex')).toBeInTheDocument();
+  });
+
+  // --- Jellyfin single viewer ---
+
+  it('renders a single Jellyfin viewer from jellyfin_viewers[] list', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseMultiViewerChannel,
+          clients: [
+            {
+              client_id: 'cid-jf1',
+              ip_address: '10.0.0.6',
+              user_agent: 'Jellyfin/10.0',
+              connected_at: '2026-05-17T00:00:00Z',
+              last_active: '2026-05-17T00:01:00Z',
+              jellyfin_viewers: [{ user_id: 'jf-uid-1', user_name: 'JellyUser' }],
+            },
+          ],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('JellyUser')).toBeInTheDocument();
+    });
+    expect(screen.getByText('via Jellyfin')).toBeInTheDocument();
+  });
+
+  // --- Mixed-source rendering ---
+
+  it('renders separate attribution rows for Emby and Plex viewers on the same client', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseMultiViewerChannel,
+          clients: [
+            {
+              client_id: 'cid-mixed',
+              ip_address: '10.0.0.7',
+              user_agent: 'Proxy/1.0',
+              connected_at: '2026-05-17T00:00:00Z',
+              last_active: '2026-05-17T00:01:00Z',
+              emby_viewers: [{ user_id: null, user_name: 'EmbyUser' }],
+              plex_viewers: [{ user_id: null, user_name: 'PlexUser' }],
+            },
+          ],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('EmbyUser')).toBeInTheDocument();
+    });
+    expect(screen.getByText('PlexUser')).toBeInTheDocument();
+    // Both badges present
+    expect(screen.getByText('via Emby')).toBeInTheDocument();
+    expect(screen.getByText('via Plex')).toBeInTheDocument();
+    // Attribution rows wrapper
+    const { container } = render(<StatsTab />);
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="client-attribution-rows"]')).toBeInTheDocument();
+    });
+  });
+});
+
+// bd-r5f0c.5 (W5) / bd-g03fi: Channel-header viewer rollup.
+// When total_viewers > 1 across all sources, the header shows "(N viewers)"
+// instead of a single user's name.
+
+describe('StatsTab — channel-header viewer rollup (bd-g03fi)', () => {
+  it('shows "(2 viewers)" rollup when emby_viewers has 2 entries', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseMultiViewerChannel,
+          emby_viewers: [
+            { user_id: null, user_name: 'Alice' },
+            { user_id: null, user_name: 'Bob' },
+          ],
+          clients: [],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="channel-header-viewer-rollup"]')).toBeInTheDocument();
+    });
+    expect(screen.getByText('(2 viewers)')).toBeInTheDocument();
+  });
+
+  it('shows "(3 viewers)" rollup when viewers span Emby and Plex', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseMultiViewerChannel,
+          emby_viewers: [
+            { user_id: null, user_name: 'Alice' },
+            { user_id: null, user_name: 'Bob' },
+          ],
+          plex_viewers: [
+            { user_id: null, user_name: 'Carol' },
+          ],
+          clients: [],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('(3 viewers)')).toBeInTheDocument();
+    });
+  });
+
+  it('shows single viewer name when only 1 viewer total (back-compat)', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseMultiViewerChannel,
+          emby_viewers: [{ user_id: null, user_name: 'OnlyUser' }],
+          clients: [],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="channel-header-single-viewer"]')).toBeInTheDocument();
+    });
+    expect(screen.getByText('(watching: OnlyUser)')).toBeInTheDocument();
+    // Should NOT show rollup
+    expect(screen.queryByTestId('channel-header-viewer-rollup')).not.toBeInTheDocument();
+  });
+});

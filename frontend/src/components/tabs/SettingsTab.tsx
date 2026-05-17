@@ -366,6 +366,22 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [embyTestStatus, setEmbyTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [embyTestMessage, setEmbyTestMessage] = useState('');
 
+  // Plex integration (bd-r5f0c.5 / W5). plex_token uses preserve-on-omit.
+  const [plexEnabled, setPlexEnabled] = useState(false);
+  const [plexBaseUrl, setPlexBaseUrl] = useState('');
+  const [plexToken, setPlexToken] = useState('');
+  const [plexTokenConfigured, setPlexTokenConfigured] = useState(false);
+  const [plexTestStatus, setPlexTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [plexTestMessage, setPlexTestMessage] = useState('');
+
+  // Jellyfin integration (bd-r5f0c.5 / W5). jellyfin_api_key uses preserve-on-omit.
+  const [jellyfinEnabled, setJellyfinEnabled] = useState(false);
+  const [jellyfinBaseUrl, setJellyfinBaseUrl] = useState('');
+  const [jellyfinApiKey, setJellyfinApiKey] = useState('');
+  const [jellyfinApiKeyConfigured, setJellyfinApiKeyConfigured] = useState(false);
+  const [jellyfinTestStatus, setJellyfinTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [jellyfinTestMessage, setJellyfinTestMessage] = useState('');
+
   const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels']);
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false });
   const [m3uAccountPriorities, setM3uAccountPriorities] = useState<Record<string, number>>({});
@@ -808,6 +824,20 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setEmbyApiKeyConfigured(settings.emby_api_key_configured ?? false);
       setEmbyTestStatus('idle');
       setEmbyTestMessage('');
+      // Plex integration (bd-r5f0c.5 / W5)
+      setPlexEnabled(settings.plex_enabled ?? false);
+      setPlexBaseUrl(settings.plex_base_url ?? '');
+      setPlexToken('');
+      setPlexTokenConfigured(settings.plex_token_configured ?? false);
+      setPlexTestStatus('idle');
+      setPlexTestMessage('');
+      // Jellyfin integration (bd-r5f0c.5 / W5)
+      setJellyfinEnabled(settings.jellyfin_enabled ?? false);
+      setJellyfinBaseUrl(settings.jellyfin_base_url ?? '');
+      setJellyfinApiKey('');
+      setJellyfinApiKeyConfigured(settings.jellyfin_api_key_configured ?? false);
+      setJellyfinTestStatus('idle');
+      setJellyfinTestMessage('');
       setStatsPollInterval(settings.stats_poll_interval ?? 10);
       setOriginalPollInterval(settings.stats_poll_interval ?? 10);
       setUserTimezone(settings.user_timezone ?? '');
@@ -1033,6 +1063,77 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
+  // Plex test-connection (bd-r5f0c.5 / W5). Mirrors Emby pattern.
+  // SEC-1: uses server-local Plex token (operator-entered), not plex.tv account token.
+  const handleTestPlexConnection = async () => {
+    if (!plexBaseUrl) {
+      setPlexTestStatus('error');
+      setPlexTestMessage('Base URL is required');
+      return;
+    }
+    if (!plexToken && !plexTokenConfigured) {
+      setPlexTestStatus('error');
+      setPlexTestMessage('Plex token is required');
+      return;
+    }
+    if (!plexToken) {
+      setPlexTestStatus('error');
+      setPlexTestMessage('Re-enter the token to test the connection');
+      return;
+    }
+    setPlexTestStatus('testing');
+    setPlexTestMessage('');
+    try {
+      const result = await api.testPlexConnection(plexBaseUrl, plexToken);
+      if (result.ok) {
+        setPlexTestStatus('success');
+        setPlexTestMessage('Connection successful');
+      } else {
+        setPlexTestStatus('error');
+        setPlexTestMessage(result.error || 'Connection failed');
+      }
+    } catch (err) {
+      logger.error('Failed to test Plex connection', err);
+      setPlexTestStatus('error');
+      setPlexTestMessage(err instanceof Error ? err.message : 'Connection failed');
+    }
+  };
+
+  // Jellyfin test-connection (bd-r5f0c.5 / W5). Mirrors Emby pattern.
+  const handleTestJellyfinConnection = async () => {
+    if (!jellyfinBaseUrl) {
+      setJellyfinTestStatus('error');
+      setJellyfinTestMessage('Base URL is required');
+      return;
+    }
+    if (!jellyfinApiKey && !jellyfinApiKeyConfigured) {
+      setJellyfinTestStatus('error');
+      setJellyfinTestMessage('API key is required');
+      return;
+    }
+    if (!jellyfinApiKey) {
+      setJellyfinTestStatus('error');
+      setJellyfinTestMessage('Re-enter the API key to test the connection');
+      return;
+    }
+    setJellyfinTestStatus('testing');
+    setJellyfinTestMessage('');
+    try {
+      const result = await api.testJellyfinConnection(jellyfinBaseUrl, jellyfinApiKey);
+      if (result.ok) {
+        setJellyfinTestStatus('success');
+        setJellyfinTestMessage('Connection successful');
+      } else {
+        setJellyfinTestStatus('error');
+        setJellyfinTestMessage(result.error || 'Connection failed');
+      }
+    } catch (err) {
+      logger.error('Failed to test Jellyfin connection', err);
+      setJellyfinTestStatus('error');
+      setJellyfinTestMessage(err instanceof Error ? err.message : 'Connection failed');
+    }
+  };
+
   const handleResetStats = async () => {
     if (!confirm('This will clear all channel/stream statistics, watch history, and hidden groups. Use this when switching Dispatcharr servers. Continue?')) {
       return;
@@ -1113,6 +1214,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         emby_enabled: embyEnabled,
         emby_base_url: embyBaseUrl,
         ...(embyApiKey ? { emby_api_key: embyApiKey } : {}),
+        // Plex integration (bd-r5f0c.5 / W5). preserve-on-omit for token.
+        plex_enabled: plexEnabled,
+        plex_base_url: plexBaseUrl,
+        ...(plexToken ? { plex_token: plexToken } : {}),
+        // Jellyfin integration (bd-r5f0c.5 / W5). preserve-on-omit for key.
+        jellyfin_enabled: jellyfinEnabled,
+        jellyfin_base_url: jellyfinBaseUrl,
+        ...(jellyfinApiKey ? { jellyfin_api_key: jellyfinApiKey } : {}),
         stats_poll_interval: statsPollInterval,
         user_timezone: userTimezone,
         backend_log_level: backendLogLevel,
@@ -3289,11 +3398,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     </div>
   );
 
-  // Integrations page (bd-8wc6q, epic bd-2cenq). Third-party server
-  // integrations — Emby today, room for Plex/Jellyfin/etc. as the epic
-  // grows. Distinct from "Linked Accounts" (which is ECM-internal M3U
-  // account linking) and from the Dispatcharr connection on the General
-  // page (which is the primary upstream, not a side integration).
+  // Integrations page (bd-8wc6q / bd-r5f0c.5, epic bd-2cenq). Third-party
+  // server integrations: Emby, Plex, Jellyfin. Distinct from "Linked
+  // Accounts" (ECM-internal M3U account linking) and from the Dispatcharr
+  // connection on the General page (the primary upstream).
   const renderIntegrationsPage = () => (
     <div className="settings-page">
       <div className="settings-page-header">
@@ -3301,7 +3409,20 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         <p>Configure third-party server integrations for cross-referenced data (Stats user attribution, etc.).</p>
       </div>
 
-      <div className="settings-section" data-testid="emby-integration-section">
+      {/* Anchor jump nav (bd-r5f0c.5 / W5) */}
+      <nav className="settings-anchor-nav" aria-label="Integrations">
+        <a href="#dispatcharr-integration">Dispatcharr</a>
+        <a href="#emby-integration">Emby</a>
+        <a href="#plex-integration">Plex</a>
+        <a href="#jellyfin-integration">Jellyfin</a>
+      </nav>
+
+      {/* Dispatcharr anchor — the General page hosts the primary upstream
+          connection but operators may want to jump here from the nav. */}
+      <div id="dispatcharr-integration" />
+
+      {/* Emby Integration */}
+      <div id="emby-integration" className="settings-section" data-testid="emby-integration-section">
         <div className="settings-section-header">
           <span className="material-icons">live_tv</span>
           <h3>Emby Integration</h3>
@@ -3395,6 +3516,209 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               style={{ color: 'var(--accent-error, #ef4444)' }}
             >
               ✗ {embyTestMessage}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Plex Integration (bd-r5f0c.5 / W5) */}
+      <div id="plex-integration" className="settings-section" data-testid="plex-integration-section">
+        <div className="settings-section-header">
+          <span className="material-icons">smart_display</span>
+          <h3>Plex Integration</h3>
+          <span className={`badge badge-sm ${plexEnabled && plexTokenConfigured ? 'badge-success' : ''}`}>
+            {plexEnabled && plexTokenConfigured ? 'Configured' : 'Unconfigured'}
+          </span>
+        </div>
+
+        <p className="form-hint">
+          When enabled, ECM cross-references active stream sessions against the operator's Plex
+          <code> /status/sessions </code>feed so Stats can attribute real Plex usernames.
+        </p>
+
+        <div className="checkbox-group">
+          <input
+            id="plexEnabled"
+            type="checkbox"
+            checked={plexEnabled}
+            onChange={(e) => setPlexEnabled(e.target.checked)}
+            data-testid="plex-enabled-checkbox"
+          />
+          <div className="checkbox-content">
+            <label htmlFor="plexEnabled">Enable Plex user attribution</label>
+            <p>Requires base URL and token below. Disabling stops the cross-reference but does not clear stored values.</p>
+          </div>
+        </div>
+
+        <div className="form-group-vertical">
+          <label htmlFor="plexBaseUrl">Plex base URL</label>
+          <span className="form-description">
+            Full URL to your Plex Media Server (e.g. <code>http://plex.local:32400</code>). Sub-paths are
+            preserved for reverse-proxy setups.
+          </span>
+          <input
+            id="plexBaseUrl"
+            type="text"
+            value={plexBaseUrl}
+            onChange={(e) => setPlexBaseUrl(e.target.value)}
+            placeholder="http://plex.local:32400"
+            data-testid="plex-base-url-input"
+            className="settings-text-input"
+          />
+        </div>
+
+        <div className="form-group-vertical">
+          <label htmlFor="plexToken">Plex token</label>
+          <span className="form-description">
+            {plexTokenConfigured ? 'A token is currently stored — leave blank to keep it.' : 'No token stored.'}
+          </span>
+          {/* SEC-1: Server-local Plex token warning. plex.tv account tokens have
+              full account scope; server-local tokens are scoped to the server.
+              This text is a security requirement — do not remove it. */}
+          <span className="form-description form-description--warning" data-testid="plex-token-helper-text">
+            Use a server-local Plex token, not your plex.tv account token. See Integrations docs for guidance.
+          </span>
+          <input
+            id="plexToken"
+            type="password"
+            value={plexToken}
+            onChange={(e) => setPlexToken(e.target.value)}
+            placeholder={plexTokenConfigured ? '••••••••' : 'Paste your server-local Plex token'}
+            data-testid="plex-token-input"
+            className="settings-text-input"
+            autoComplete="new-password"
+          />
+        </div>
+
+        <div className="form-group-vertical">
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={handleTestPlexConnection}
+            disabled={plexTestStatus === 'testing'}
+            data-testid="plex-test-connection-btn"
+            style={{ alignSelf: 'flex-start' }}
+          >
+            <span className="material-icons">
+              {plexTestStatus === 'testing' ? 'sync' : 'cable'}
+            </span>
+            {plexTestStatus === 'testing' ? 'Testing...' : 'Test Connection'}
+          </button>
+          {plexTestStatus === 'success' && (
+            <span
+              className="form-hint"
+              data-testid="plex-test-result-success"
+              style={{ color: 'var(--accent-success, #22C55E)' }}
+            >
+              ✓ {plexTestMessage}
+            </span>
+          )}
+          {plexTestStatus === 'error' && (
+            <span
+              className="form-hint"
+              data-testid="plex-test-result-error"
+              style={{ color: 'var(--accent-error, #ef4444)' }}
+            >
+              ✗ {plexTestMessage}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Jellyfin Integration (bd-r5f0c.5 / W5) */}
+      <div id="jellyfin-integration" className="settings-section" data-testid="jellyfin-integration-section">
+        <div className="settings-section-header">
+          <span className="material-icons">play_circle</span>
+          <h3>Jellyfin Integration</h3>
+          <span className={`badge badge-sm ${jellyfinEnabled && jellyfinApiKeyConfigured ? 'badge-success' : ''}`}>
+            {jellyfinEnabled && jellyfinApiKeyConfigured ? 'Configured' : 'Unconfigured'}
+          </span>
+        </div>
+
+        <p className="form-hint">
+          When enabled, ECM cross-references active stream sessions against the operator's Jellyfin
+          <code> /Sessions </code>feed so Stats can attribute real Jellyfin usernames.
+        </p>
+
+        <div className="checkbox-group">
+          <input
+            id="jellyfinEnabled"
+            type="checkbox"
+            checked={jellyfinEnabled}
+            onChange={(e) => setJellyfinEnabled(e.target.checked)}
+            data-testid="jellyfin-enabled-checkbox"
+          />
+          <div className="checkbox-content">
+            <label htmlFor="jellyfinEnabled">Enable Jellyfin user attribution</label>
+            <p>Requires base URL and API key below. Disabling stops the cross-reference but does not clear stored values.</p>
+          </div>
+        </div>
+
+        <div className="form-group-vertical">
+          <label htmlFor="jellyfinBaseUrl">Jellyfin base URL</label>
+          <span className="form-description">
+            Full URL to your Jellyfin server (e.g. <code>http://jellyfin.local:8096</code>). Sub-paths are
+            preserved for reverse-proxy setups.
+          </span>
+          <input
+            id="jellyfinBaseUrl"
+            type="text"
+            value={jellyfinBaseUrl}
+            onChange={(e) => setJellyfinBaseUrl(e.target.value)}
+            placeholder="http://jellyfin.local:8096"
+            data-testid="jellyfin-base-url-input"
+            className="settings-text-input"
+          />
+        </div>
+
+        <div className="form-group-vertical">
+          <label htmlFor="jellyfinApiKey">Jellyfin API key</label>
+          <span className="form-description">
+            Generate in Jellyfin: Dashboard → API Keys → New API Key. Stored plaintext at rest.
+            {jellyfinApiKeyConfigured ? ' A key is currently stored — leave blank to keep it.' : ' No key stored.'}
+          </span>
+          <input
+            id="jellyfinApiKey"
+            type="password"
+            value={jellyfinApiKey}
+            onChange={(e) => setJellyfinApiKey(e.target.value)}
+            placeholder={jellyfinApiKeyConfigured ? '••••••••' : 'Paste your Jellyfin API key'}
+            data-testid="jellyfin-api-key-input"
+            className="settings-text-input"
+            autoComplete="new-password"
+          />
+        </div>
+
+        <div className="form-group-vertical">
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={handleTestJellyfinConnection}
+            disabled={jellyfinTestStatus === 'testing'}
+            data-testid="jellyfin-test-connection-btn"
+            style={{ alignSelf: 'flex-start' }}
+          >
+            <span className="material-icons">
+              {jellyfinTestStatus === 'testing' ? 'sync' : 'cable'}
+            </span>
+            {jellyfinTestStatus === 'testing' ? 'Testing...' : 'Test Connection'}
+          </button>
+          {jellyfinTestStatus === 'success' && (
+            <span
+              className="form-hint"
+              data-testid="jellyfin-test-result-success"
+              style={{ color: 'var(--accent-success, #22C55E)' }}
+            >
+              ✓ {jellyfinTestMessage}
+            </span>
+          )}
+          {jellyfinTestStatus === 'error' && (
+            <span
+              className="form-hint"
+              data-testid="jellyfin-test-result-error"
+              style={{ color: 'var(--accent-error, #ef4444)' }}
+            >
+              ✗ {jellyfinTestMessage}
             </span>
           )}
         </div>
