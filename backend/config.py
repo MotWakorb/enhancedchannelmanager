@@ -232,6 +232,25 @@ class DispatcharrSettings(BaseModel):
     # Emby API key (X-Emby-Token header value). Plaintext at rest, same
     # approach as ``dispatcharr_api_key``.
     emby_api_key: str = ""
+    # Jellyfin integration settings (bd-r5f0c.3, epic bd-r5f0c). When
+    # ``jellyfin_enabled`` is True and ``jellyfin_base_url`` +
+    # ``jellyfin_api_key`` are configured, the Stats v2 / BandwidthTracker
+    # pipeline cross-references active streams against the operator's Jellyfin
+    # /Sessions feed to attribute real Jellyfin usernames. W4 wires the
+    # Settings UI 'Test Connection' button and the stats endpoint.
+    # ``jellyfin_api_key`` is stored PLAINTEXT at rest — same approach as
+    # ``emby_api_key`` (no encryption-at-rest in this release).
+    # Auth uses ``Authorization: MediaBrowser Token="<key>"`` (Jellyfin's
+    # header format — differs from Emby's X-Emby-Token).
+    jellyfin_enabled: bool = False
+    # Base URL of the operator's Jellyfin server, e.g.
+    # ``http://jellyfin.local:8096``. No validation — operator's
+    # responsibility to enter a reachable URL; W4's Settings UI 'Test
+    # Connection' button surfaces unreachable URLs.
+    jellyfin_base_url: str = ""
+    # Jellyfin API key. Server-issued via Dashboard > API Keys. Plaintext
+    # at rest, same approach as ``emby_api_key``.
+    jellyfin_api_key: str = ""
 
     @field_validator("dedup_threshold")
     @classmethod
