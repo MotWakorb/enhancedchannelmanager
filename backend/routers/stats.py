@@ -113,6 +113,17 @@ def _distinct_poll_subquery(session: Session):
     carry the same username (one human, one poll). MAX picks one
     deterministically without inflating the row count, so the outer
     GROUP-BY-user can read the username back without a second join.
+
+    bd-fm23o (final bead of epic bd-2cenq): ``MAX(emby_user_name)`` is
+    surfaced for the same reason — the writer
+    (``BandwidthTracker._collect_emby_attributions``) populates this
+    when the stream pull originates from the configured Emby server IP
+    AND the resolver attributes the session to exactly one Emby user.
+    The watch-time endpoint denormalizes it onto the per-user
+    aggregation as the preferred display name (Emby wins over
+    Dispatcharr when present) with a discriminator
+    ``attribution_source`` field so the frontend can render a "via
+    Emby" badge.
     """
     return (
         session.query(
@@ -121,6 +132,7 @@ def _distinct_poll_subquery(session: Session):
             SessionTelemetry.observed_at.label("observed_at"),
             func.max(SessionTelemetry.poll_interval_ms).label("poll_interval_ms"),
             func.max(SessionTelemetry.dispatcharr_username).label("dispatcharr_username"),
+            func.max(SessionTelemetry.emby_user_name).label("emby_user_name"),
         )
         .group_by(
             SessionTelemetry.user_id,
@@ -166,6 +178,88 @@ def _channel_name_or_fallback(channel_id: str, name_map: dict) -> str:
     return f"Channel {channel_id[:8]}..."
 
 
+async def _enrich_channels_with_emby(channels: list) -> None:
+    """Populate ``emby_user_name`` per channel via the Emby resolver (bd-fm23o).
+
+    Mutates ``channels`` in place — adds ``emby_user_name`` (string or
+    None) to each entry. Mirrors the writer-side enrichment in
+    :meth:`BandwidthTracker._collect_emby_attributions` but operates on
+    the live ``/api/stats/channels`` snapshot rather than the per-poll
+    telemetry write path.
+
+    Gate
+    ----
+    Reads ``settings.emby_enabled`` once at the top and short-circuits
+    when Emby is disabled. The resolver itself short-circuits on the
+    disabled state too (the cache returns ``[]``), but the per-channel
+    loop, the per-call settings access, and the import of
+    ``resolve_emby_user`` are unnecessary on the disabled hot path —
+    every operator without an Emby server pays the cost otherwise. The
+    short-circuit STILL sets ``emby_user_name`` to ``None`` on every
+    channel so the frontend can render against the documented shape
+    (presence of the key, value may be null).
+
+    Resolver call shape
+    -------------------
+    For each channel, walks the client list and tries
+    :func:`resolve_emby_user(client_ip, stream_name)` on each client in
+    turn. First non-``None`` attribution wins — the operator-visible
+    "(watching: <emby_user>)" badge represents the matched viewer for
+    that channel cell. ``stream_name`` is required (the resolver short-
+    circuits on empty / falsy stream names); channels missing
+    ``stream_name`` after bd-ox5q8 enrichment get ``emby_user_name =
+    None``.
+
+    Failure handling
+    ----------------
+    The resolver is documented to never raise, but this loop still
+    wraps each call defensively — an unforeseen runtime fault (cache
+    failure, exotic transient error) for one client must not poison
+    the rest of the channel snapshot. Per-call exceptions log a single
+    debug line and continue.
+    """
+    if not channels:
+        return
+    try:
+        from config import get_settings
+        settings = get_settings()
+    except Exception:  # pragma: no cover — settings access raise is exotic
+        for ch in channels:
+            ch.setdefault("emby_user_name", None)
+        return
+
+    if not getattr(settings, "emby_enabled", False):
+        for ch in channels:
+            ch.setdefault("emby_user_name", None)
+        return
+
+    from services.emby_resolver import resolve_emby_user
+
+    for ch in channels:
+        ch.setdefault("emby_user_name", None)
+        stream_name = ch.get("stream_name")
+        if not stream_name:
+            # Resolver matches on stream_name — without it there is
+            # nothing to look up. Skip cheaply.
+            continue
+        clients = ch.get("clients") or []
+        client_ips = [c.get("ip_address") for c in clients if c.get("ip_address")]
+        if not client_ips:
+            continue
+        for ip in client_ips:
+            try:
+                attribution = await resolve_emby_user(ip, stream_name)
+            except Exception as exc:  # pragma: no cover — resolver never raises
+                logger.debug(
+                    "[STATS] Emby resolver raised for ip=%s stream=%r: %s",
+                    ip, stream_name, exc,
+                )
+                continue
+            if attribution is not None:
+                ch["emby_user_name"] = attribution.user_name
+                break
+
+
 # =============================================================================
 # Stats & Monitoring
 # =============================================================================
@@ -188,6 +282,16 @@ async def get_channel_stats():
     Resolver failure leaves both fields ``None`` and the row still
     surfaces (best-effort enrichment — never block the live view on a
     Dispatcharr lookup hiccup).
+
+    bd-fm23o (final bead of EPIC bd-2cenq — Emby user attribution): each
+    channel additionally surfaces ``emby_user_name`` when at least one
+    of its clients resolves to an Emby session via
+    :func:`services.emby_resolver.resolve_emby_user` (gated on
+    ``settings.emby_enabled``). The field is ``None`` when Emby is
+    disabled, the resolver couldn't attribute any client, or no client
+    came from the configured Emby server IP. This drives the Active
+    Channels "(watching: <emby_user>)" badge — the operator-visible
+    surface that completes the Emby attribution chain in the live view.
     """
     logger.debug("[STATS] GET /api/stats/channels")
     client = get_client()
@@ -271,6 +375,21 @@ async def get_channel_stats():
                 if resolution.stream_id is not None and not ch.get("stream_id"):
                     ch["stream_id"] = resolution.stream_id
                 ch["m3u_account_id"] = resolution.provider_id
+
+            # bd-fm23o: Emby attribution enrichment for the Active
+            # Channels live view. Mirrors the writer-side enrichment
+            # (``BandwidthTracker._collect_emby_attributions``) but
+            # operates per-channel on the request-time stream_name and
+            # the live client IPs surfaced by Dispatcharr's
+            # ``/proxy/ts/status`` response. ``emby_user_name`` is
+            # populated on the channel when AT LEAST ONE client resolves
+            # to a single Emby user — the frontend renders the
+            # "(watching: <emby_user>)" badge from this field. ``None``
+            # when Emby is disabled, no client matched, or the resolver
+            # produced no attribution. Never blocks the live view: any
+            # resolver fault drops the field for that channel and
+            # continues.
+            await _enrich_channels_with_emby(channels)
 
         return result
     except Exception as e:
@@ -635,10 +754,22 @@ async def get_watch_time_by_user(
            pagination: null}``
 
     Row shape for ``group_by=total``:
-        ``{user_id, username, total_watch_seconds, last_watched}``
+        ``{user_id, username, attribution_source, total_watch_seconds,
+           last_watched}``
 
     Row shape for ``group_by=day``:
-        ``{user_id, username, day, watch_seconds}``
+        ``{user_id, username, attribution_source, day, watch_seconds}``
+
+    bd-fm23o (final bead of EPIC bd-2cenq — Emby user attribution): the
+    ``username`` field prefers ``emby_user_name`` (denormalized at write
+    time on rows attributed to an Emby user by
+    ``BandwidthTracker._collect_emby_attributions``) over the
+    Dispatcharr-side ``dispatcharr_username`` for users with ANY
+    Emby-attributed row. The ``attribution_source`` discriminator
+    (``"emby"`` or ``"dispatcharr"``) lets the frontend render a "via
+    Emby" badge so the operator knows the attribution chain. When neither
+    name is present the row still surfaces with ``username = null``
+    (the legacy "Unknown viewer" case).
     """
     logger.debug(
         "[STATS] GET /api/stats/watch-time from=%s to=%s user_id=%s group_by=%s",
@@ -698,18 +829,23 @@ async def get_watch_time_by_user(
                     # account) and gives stable behavior even if a
                     # Dispatcharr-side rename mid-window left both old
                     # and new values in the table.
-                    func.max(inner.c.dispatcharr_username).label("username"),
+                    func.max(inner.c.dispatcharr_username).label(
+                        "dispatcharr_username"
+                    ),
+                    # bd-fm23o: also pull the denormalized Emby username
+                    # so we can prefer it over the Dispatcharr-side name
+                    # when present. MAX is again defensive — multiple
+                    # Emby-attributed rows for one ECM user_id should
+                    # carry the same emby_user_name (one viewer, one Emby
+                    # account); MAX picks one deterministically without
+                    # inflating the row count.
+                    func.max(inner.c.emby_user_name).label("emby_user_name"),
                 )
                 .group_by(inner.c.user_id)
                 .all()
             )
             data = [
-                {
-                    "user_id": r.user_id,
-                    "username": r.username,
-                    "total_watch_seconds": int((r.total_ms or 0) // 1000),
-                    "last_watched": _ms_to_iso_z(r.last_observed_at),
-                }
+                _build_watch_time_row_total(r)
                 for r in rows
             ]
             # Stable ordering: highest total first, then user_id ASC.
@@ -723,18 +859,17 @@ async def get_watch_time_by_user(
                     day_expr,
                     func.sum(inner.c.poll_interval_ms).label("total_ms"),
                     # bd-gsn3r: same denormalized read as the total branch.
-                    func.max(inner.c.dispatcharr_username).label("username"),
+                    func.max(inner.c.dispatcharr_username).label(
+                        "dispatcharr_username"
+                    ),
+                    # bd-fm23o: same Emby denorm as the total branch.
+                    func.max(inner.c.emby_user_name).label("emby_user_name"),
                 )
                 .group_by(inner.c.user_id, day_expr)
                 .all()
             )
             data = [
-                {
-                    "user_id": r.user_id,
-                    "username": r.username,
-                    "day": r.day,
-                    "watch_seconds": int((r.total_ms or 0) // 1000),
-                }
+                _build_watch_time_row_day(r)
                 for r in rows
             ]
             data.sort(key=lambda d: (d["user_id"], d["day"]))
@@ -798,6 +933,51 @@ async def get_watch_time_for_user(
             detail="Watch-time stats are admin-only",
         )
 
+    return _per_user_breakdown_by_channel(
+        db,
+        source="dispatcharr",
+        identifier=user_id,
+        from_=from_,
+        to=to,
+    )
+
+
+def _per_user_breakdown_by_channel(
+    db: Session,
+    *,
+    source: str,
+    identifier,
+    from_: Optional[str],
+    to: Optional[str],
+):
+    """Build the per-channel watch-time breakdown for one user (any source).
+
+    bd-fm23o (final bead of EPIC bd-2cenq): factored out of
+    :func:`get_watch_time_for_user` so the dispatcharr-keyed and
+    emby-keyed endpoints can share aggregation logic without each
+    sprouting its own copy.
+
+    Args:
+        db: SQLAlchemy session (caller-provided so tests can override).
+        source: ``"dispatcharr"`` (filter by ``session_telemetry.user_id ==
+            identifier``) or ``"emby"`` (filter by
+            ``session_telemetry.emby_user_id == identifier``). Any other
+            value is a programmer error and raises ``ValueError`` — the
+            caller validates before reaching this helper.
+        identifier: For ``source="dispatcharr"`` this is the integer ECM
+            user_id. For ``source="emby"`` this is the Emby user GUID
+            (string). Both column types are nullable in the schema, so a
+            no-match identifier returns an empty data list rather than
+            an error.
+        from_, to: ISO-8601 UTC range bounds (forwarded from the route).
+    """
+    if source == "dispatcharr":
+        user_filter_col = SessionTelemetry.user_id
+    elif source == "emby":
+        user_filter_col = SessionTelemetry.emby_user_id
+    else:  # pragma: no cover — guarded at route layer
+        raise ValueError(f"unknown attribution source: {source!r}")
+
     from_ms = _parse_iso_utc(from_, param="from") if from_ else None
     to_ms = _parse_iso_utc(to, param="to") if to else None
     if from_ms is not None and to_ms is not None and from_ms >= to_ms:
@@ -805,17 +985,47 @@ async def get_watch_time_for_user(
 
     try:
         distinct = _distinct_poll_subquery(db)
-        base_q = db.query(distinct).filter(distinct.c.user_id == user_id)
+        # The distinct subquery groups by (user_id, channel_id,
+        # observed_at) and surfaces emby_user_name but not emby_user_id.
+        # For source="emby" we need to filter on the raw column, so we
+        # apply the filter against ``SessionTelemetry`` directly via a
+        # correlated inner-join surface. Cheap because SQLite folds the
+        # subquery into the outer filter.
+        if source == "dispatcharr":
+            base_q = db.query(distinct).filter(distinct.c.user_id == identifier)
+        else:
+            # Correlate the (user_id, channel_id, observed_at) tuple back
+            # against session_telemetry rows whose emby_user_id matches.
+            # An EXISTS subquery keeps the row population the same as the
+            # dispatcharr path (one row per distinct (user, channel,
+            # observed_at) tuple) while restricting to Emby-attributed
+            # ticks. The exists targets the same poll tick the distinct
+            # subquery already collapsed, so multi-client overcount is
+            # preserved.
+            from sqlalchemy import and_, exists
+            emby_marker = (
+                exists()
+                .where(
+                    and_(
+                        SessionTelemetry.user_id == distinct.c.user_id,
+                        SessionTelemetry.channel_id == distinct.c.channel_id,
+                        SessionTelemetry.observed_at == distinct.c.observed_at,
+                        SessionTelemetry.emby_user_id == identifier,
+                    )
+                )
+                .correlate(distinct)
+            )
+            base_q = db.query(distinct).filter(emby_marker)
         if from_ms is not None:
             base_q = base_q.filter(distinct.c.observed_at >= from_ms)
         if to_ms is not None:
             base_q = base_q.filter(distinct.c.observed_at < to_ms)
         inner = base_q.subquery()
 
-        # session_count: count distinct session_ids per channel (informational
-        # only — not the legacy ``watch_count`` state-transition counter,
-        # which is not derivable from per-poll rows; see migration 0008
-        # docstring).
+        # session_count: count distinct session_ids per channel
+        # (informational only — not the legacy ``watch_count``
+        # state-transition counter, which is not derivable from per-poll
+        # rows; see migration 0008 docstring).
         sess_q = (
             db.query(
                 SessionTelemetry.channel_id.label("channel_id"),
@@ -823,7 +1033,7 @@ async def get_watch_time_for_user(
                     "session_count"
                 ),
             )
-            .filter(SessionTelemetry.user_id == user_id)
+            .filter(user_filter_col == identifier)
         )
         if from_ms is not None:
             sess_q = sess_q.filter(SessionTelemetry.observed_at >= from_ms)
@@ -842,26 +1052,33 @@ async def get_watch_time_for_user(
             .all()
         )
 
-        # Side-load channel names from UniqueClientConnection. One query per
-        # request — the in-range channel_id set is bounded by the user's
-        # viewing footprint (typically O(10) channels), so an IN-list lookup
-        # is fine without a join.
+        # Side-load channel names from UniqueClientConnection. One query
+        # per request — the in-range channel_id set is bounded by the
+        # user's viewing footprint (typically O(10) channels), so an
+        # IN-list lookup is fine without a join.
         channel_ids = [r.channel_id for r in agg_rows]
         name_map = _load_channel_names(db, channel_ids)
         # bd-kh23e: side-load the latest stream identity per channel.
-        # Aggregation choice — ``MAX(observed_at)`` per channel: one row
-        # per channel, stream identity reflects the MOST RECENT stream
-        # watched on that channel within the window. Picking the latest
-        # is intentional: the frontend label
-        # ``[<provider>] - <stream_name>`` represents what the user most
-        # recently watched, not an arbitrary sample.
-        latest_stream_map = _load_latest_stream_identity_per_channel(
-            db,
-            channel_ids,
-            user_id=user_id,
-            from_ms=from_ms,
-            to_ms=to_ms,
-        )
+        # The helper filters by ECM user_id, which is only meaningful for
+        # source="dispatcharr". For source="emby" we re-implement the
+        # MAX(observed_at) join here with the emby_user_id filter — same
+        # aggregation rule, different identity axis.
+        if source == "dispatcharr":
+            latest_stream_map = _load_latest_stream_identity_per_channel(
+                db,
+                channel_ids,
+                user_id=identifier,
+                from_ms=from_ms,
+                to_ms=to_ms,
+            )
+        else:
+            latest_stream_map = _load_latest_stream_identity_per_emby_user(
+                db,
+                channel_ids,
+                emby_user_id=identifier,
+                from_ms=from_ms,
+                to_ms=to_ms,
+            )
 
         data = [
             {
@@ -884,8 +1101,207 @@ async def get_watch_time_for_user(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("[STATS] Failed to get per-user watch-time breakdown")
+        logger.exception(
+            "[STATS] Failed to get per-user watch-time breakdown (source=%s)",
+            source,
+        )
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# ---------------------------------------------------------------------------
+# bd-fm23o: per-user channel breakdown routes split by attribution source
+# (final bead of EPIC bd-2cenq — Emby user attribution).
+# ---------------------------------------------------------------------------
+#
+# URL shape rationale (PO decision, recorded in the bead):
+#
+#   * ``/api/stats/users/dispatcharr/{id}`` keys on the ECM user_id
+#     (integer) — same as the legacy ``/api/stats/watch-time/{user_id}``
+#     endpoint, just under a source-prefixed URL so the operator can
+#     tell from the URL which identity space the id belongs to.
+#   * ``/api/stats/users/emby/{id}`` keys on the Emby user GUID
+#     (string). This is the new surface that fulfills the epic's
+#     acceptance: stats can be reached BY EMBY USER, not just by
+#     Dispatcharr-side user.
+#   * ``/api/stats/users/{user_id}`` is a deprecated alias that routes
+#     to the dispatcharr behavior. Kept for back-compat with any
+#     consumer that started wiring against the natural URL before the
+#     source split landed. Logs a WARN per call so operators / log
+#     analysis can see when consumers still use it.
+#
+# Deprecation removal date: not scheduled yet. The alias is a
+# comment-only marker until we see whether any consumer actually
+# depends on it.
+
+
+@router.get("/users/dispatcharr/{user_id}")
+async def get_user_breakdown_by_dispatcharr_id(
+    user_id: int,
+    db: Session = Depends(get_session),
+    caller: Optional[User] = Depends(get_watch_time_caller),
+    from_: Optional[str] = Query(None, alias="from"),
+    to: Optional[str] = None,
+):
+    """Per-channel watch-time breakdown keyed by ECM (Dispatcharr) user_id.
+
+    bd-fm23o: source-prefixed sibling of ``/api/stats/watch-time/{user_id}``
+    introduced as the final bead of EPIC bd-2cenq. Same response shape,
+    same auth posture (admin-only), same aggregation rules — the only
+    behavioral difference vs. the legacy endpoint is the URL shape.
+
+    See :func:`_per_user_breakdown_by_channel` for the row contract and
+    side-load behavior. ``user_id`` is the integer ECM user identifier
+    (same key as ``session_telemetry.user_id``).
+    """
+    logger.debug(
+        "[STATS] GET /api/stats/users/dispatcharr/%s from=%s to=%s",
+        user_id, from_, to,
+    )
+    if caller is not None and not caller.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Watch-time stats are admin-only",
+        )
+    return _per_user_breakdown_by_channel(
+        db,
+        source="dispatcharr",
+        identifier=user_id,
+        from_=from_,
+        to=to,
+    )
+
+
+@router.get("/users/emby/{emby_user_id}")
+async def get_user_breakdown_by_emby_id(
+    emby_user_id: str,
+    db: Session = Depends(get_session),
+    caller: Optional[User] = Depends(get_watch_time_caller),
+    from_: Optional[str] = Query(None, alias="from"),
+    to: Optional[str] = None,
+):
+    """Per-channel watch-time breakdown keyed by Emby user GUID.
+
+    bd-fm23o (final bead of EPIC bd-2cenq — Emby user attribution):
+    surfaces watch-time aggregations for sessions ECM attributed to
+    one specific Emby user. The ``emby_user_id`` path parameter is the
+    Emby ``UserId`` field (a GUID-shaped string like
+    ``b5c2a1e8-...``) persisted to ``session_telemetry.emby_user_id``
+    by :meth:`BandwidthTracker._collect_emby_attributions`.
+
+    Same response shape and admin-only auth as the dispatcharr-keyed
+    sibling — see :func:`_per_user_breakdown_by_channel`.
+    """
+    logger.debug(
+        "[STATS] GET /api/stats/users/emby/%s from=%s to=%s",
+        emby_user_id, from_, to,
+    )
+    if caller is not None and not caller.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Watch-time stats are admin-only",
+        )
+    return _per_user_breakdown_by_channel(
+        db,
+        source="emby",
+        identifier=emby_user_id,
+        from_=from_,
+        to=to,
+    )
+
+
+@router.get("/users/{user_id}")
+async def get_user_breakdown_deprecated_alias(
+    user_id: int,
+    db: Session = Depends(get_session),
+    caller: Optional[User] = Depends(get_watch_time_caller),
+    from_: Optional[str] = Query(None, alias="from"),
+    to: Optional[str] = None,
+):
+    """DEPRECATED alias for ``/api/stats/users/dispatcharr/{user_id}``.
+
+    bd-fm23o: kept for back-compat with any consumer that wired against
+    the natural URL before the source split landed. Defaults to the
+    Dispatcharr-source behavior (the pre-bd-fm23o contract).
+
+    Each call logs a WARN with the URL so operators / log analysis can
+    see whether any consumer is still using it. Removal is not yet
+    scheduled — the deprecation marker stays comment-only until usage
+    data shows it's safe to drop.
+    """
+    logger.warning(
+        "[STATS] Deprecated alias /api/stats/users/%s called — "
+        "use /api/stats/users/dispatcharr/%s instead (bd-fm23o)",
+        user_id, user_id,
+    )
+    if caller is not None and not caller.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Watch-time stats are admin-only",
+        )
+    return _per_user_breakdown_by_channel(
+        db,
+        source="dispatcharr",
+        identifier=user_id,
+        from_=from_,
+        to=to,
+    )
+
+
+def _pick_display_name_and_source(
+    *,
+    emby_user_name: Optional[str],
+    dispatcharr_username: Optional[str],
+) -> tuple[Optional[str], str]:
+    """Pick the per-row display name + attribution source (bd-fm23o).
+
+    Emby wins over Dispatcharr when present. This mirrors the final-bead
+    spec of EPIC bd-2cenq: when a session_telemetry row was attributed
+    to an Emby user (via :meth:`BandwidthTracker._collect_emby_attributions`
+    → :func:`services.emby_resolver.resolve_emby_user`), the Emby
+    username is the true viewer identity — surfacing the Dispatcharr-side
+    username here would just reveal the proxy/API account, the exact
+    problem this epic exists to fix.
+
+    Returns:
+        ``(display_name, attribution_source)`` where ``attribution_source``
+        is ``"emby"`` when ``emby_user_name`` is non-null, else
+        ``"dispatcharr"``. ``display_name`` may still be ``None`` when
+        neither source provided a name (legacy rows pre-bd-gsn3r) — the
+        frontend renders that as "Unknown viewer".
+    """
+    if emby_user_name:
+        return emby_user_name, "emby"
+    return dispatcharr_username, "dispatcharr"
+
+
+def _build_watch_time_row_total(row) -> dict:
+    """Render one ``/api/stats/watch-time?group_by=total`` row."""
+    display_name, source = _pick_display_name_and_source(
+        emby_user_name=row.emby_user_name,
+        dispatcharr_username=row.dispatcharr_username,
+    )
+    return {
+        "user_id": row.user_id,
+        "username": display_name,
+        "attribution_source": source,
+        "total_watch_seconds": int((row.total_ms or 0) // 1000),
+        "last_watched": _ms_to_iso_z(row.last_observed_at),
+    }
+
+
+def _build_watch_time_row_day(row) -> dict:
+    """Render one ``/api/stats/watch-time?group_by=day`` row."""
+    display_name, source = _pick_display_name_and_source(
+        emby_user_name=row.emby_user_name,
+        dispatcharr_username=row.dispatcharr_username,
+    )
+    return {
+        "user_id": row.user_id,
+        "username": display_name,
+        "attribution_source": source,
+        "day": row.day,
+        "watch_seconds": int((row.total_ms or 0) // 1000),
+    }
 
 
 def _load_channel_names(db: Session, channel_ids):
@@ -976,6 +1392,58 @@ def _load_latest_stream_identity_per_channel(
             & (SessionTelemetry.observed_at == latest_sq.c.max_observed_at),
         )
         .filter(SessionTelemetry.user_id == user_id)
+        .group_by(SessionTelemetry.channel_id)
+        .all()
+    )
+    return {r.channel_id: (r.stream_id, r.stream_name) for r in rows}
+
+
+def _load_latest_stream_identity_per_emby_user(
+    db: Session,
+    channel_ids,
+    *,
+    emby_user_id: str,
+    from_ms: Optional[int],
+    to_ms: Optional[int],
+):
+    """Same as :func:`_load_latest_stream_identity_per_channel` but keyed by Emby user.
+
+    bd-fm23o: side-loader for the ``/api/stats/users/emby/{id}`` endpoint
+    (final bead of EPIC bd-2cenq). Returns the latest stream identity
+    per channel for rows whose ``emby_user_id`` matches — same
+    MAX(observed_at)-per-channel aggregation rule as the
+    Dispatcharr-source helper so the two endpoints render identical
+    label semantics on the frontend.
+    """
+    if not channel_ids:
+        return {}
+
+    latest_q = (
+        db.query(
+            SessionTelemetry.channel_id.label("channel_id"),
+            func.max(SessionTelemetry.observed_at).label("max_observed_at"),
+        )
+        .filter(SessionTelemetry.emby_user_id == emby_user_id)
+        .filter(SessionTelemetry.channel_id.in_(channel_ids))
+    )
+    if from_ms is not None:
+        latest_q = latest_q.filter(SessionTelemetry.observed_at >= from_ms)
+    if to_ms is not None:
+        latest_q = latest_q.filter(SessionTelemetry.observed_at < to_ms)
+    latest_sq = latest_q.group_by(SessionTelemetry.channel_id).subquery()
+
+    rows = (
+        db.query(
+            SessionTelemetry.channel_id.label("channel_id"),
+            func.max(SessionTelemetry.stream_id).label("stream_id"),
+            func.max(SessionTelemetry.stream_name).label("stream_name"),
+        )
+        .join(
+            latest_sq,
+            (SessionTelemetry.channel_id == latest_sq.c.channel_id)
+            & (SessionTelemetry.observed_at == latest_sq.c.max_observed_at),
+        )
+        .filter(SessionTelemetry.emby_user_id == emby_user_id)
         .group_by(SessionTelemetry.channel_id)
         .all()
     )

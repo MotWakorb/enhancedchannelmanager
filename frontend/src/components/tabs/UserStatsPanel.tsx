@@ -450,7 +450,23 @@ export function UserStatsPanel() {
             <tbody>
               {totals.map(row => (
                 <tr key={row.user_id} className={selectedUser?.user_id === row.user_id ? 'selected' : ''}>
-                  <td>{row.username ?? `User #${row.user_id}`}</td>
+                  <td>
+                    {row.username ?? `User #${row.user_id}`}
+                    {/* bd-fm23o (final bead of EPIC bd-2cenq): "via Emby"
+                        badge surfaces the Emby attribution chain so
+                        operators know the username came from the
+                        cross-referenced Emby session list, not the
+                        Dispatcharr-side proxy account. Rendered only
+                        when ``attribution_source === "emby"``. */}
+                    {row.attribution_source === 'emby' && (
+                      <span
+                        className="badge attribution-source-badge"
+                        title="Identity resolved via Emby /Sessions cross-reference"
+                      >
+                        via Emby
+                      </span>
+                    )}
+                  </td>
                   <td>{secondsToMinutes(row.total_watch_seconds)} min</td>
                   <td>{formatLastWatched(row.last_watched)}</td>
                   <td>
