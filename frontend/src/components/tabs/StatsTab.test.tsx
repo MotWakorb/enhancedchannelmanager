@@ -456,3 +456,119 @@ describe('StatsTab — provider badge sum invariant (bd-lhxfu)', () => {
     expect(badges['Unknown']).toBe('1');
   });
 });
+
+// bd-5kbyf (fix-forward for v0.17.1-0035): per-client Emby attribution in
+// the Connected Clients list. The backend propagates emby_user_name to each
+// client dict; StatsTab must render it with a "via Emby" badge and fall back
+// gracefully when the field is null or absent.
+
+const baseClientChannel = {
+  channel_id: 'uuid-client',
+  channel_name: '408 | ESPN',
+  channel_number: 408,
+  state: 'streaming',
+  client_count: 1,
+  stream_name: 'US: ESPN FHD',
+  m3u_account_id: 6,
+  stream_id: 9001,
+  emby_user_name: null,
+};
+
+describe('StatsTab — per-client Emby attribution badge (bd-5kbyf)', () => {
+  it('renders emby_user_name and "via Emby" badge when client.emby_user_name is set', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseClientChannel,
+          emby_user_name: 'MotWakorb',
+          clients: [
+            {
+              client_id: 'cid-1',
+              ip_address: '10.0.0.42',
+              user_agent: 'Emby/1.0',
+              connected_at: '2026-05-17T00:00:00Z',
+              last_active: '2026-05-17T00:01:00Z',
+              user_id: '0',
+              username: null,
+              emby_user_name: 'MotWakorb',
+            },
+          ],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      // The resolved Emby username surfaces in the client row.
+      expect(screen.getByText('MotWakorb')).toBeInTheDocument();
+    });
+    // The "via Emby" attribution badge is present.
+    expect(screen.getByTitle('Identity resolved via Emby /Sessions cross-reference')).toBeInTheDocument();
+    expect(screen.getByText('via Emby')).toBeInTheDocument();
+    // The raw "User #0" fallback must NOT appear.
+    expect(screen.queryByText('User #0')).not.toBeInTheDocument();
+  });
+
+  it('falls back to username (no via Emby badge) when emby_user_name is null', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseClientChannel,
+          clients: [
+            {
+              client_id: 'cid-2',
+              ip_address: '10.0.0.10',
+              user_agent: 'VLC/3.0',
+              connected_at: '2026-05-17T00:00:00Z',
+              last_active: '2026-05-17T00:01:00Z',
+              user_id: '5',
+              username: 'dispatcharr_user',
+              emby_user_name: null,
+            },
+          ],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('dispatcharr_user')).toBeInTheDocument();
+    });
+    // No badge — this is a Dispatcharr-side username, not Emby.
+    expect(screen.queryByText('via Emby')).not.toBeInTheDocument();
+  });
+
+  it('falls back to User #<id> when both username and emby_user_name are null', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseClientChannel,
+          clients: [
+            {
+              client_id: 'cid-3',
+              ip_address: '192.168.1.5',
+              user_agent: 'Plex/2.0',
+              connected_at: '2026-05-17T00:00:00Z',
+              last_active: '2026-05-17T00:01:00Z',
+              user_id: '7',
+              username: null,
+              emby_user_name: null,
+            },
+          ],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('User #7')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('via Emby')).not.toBeInTheDocument();
+  });
+});
