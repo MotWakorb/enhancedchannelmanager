@@ -877,6 +877,127 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             ["status"],
             registry=registry,
         ),
+        # ----------------------------------------------------------------
+        # Media-session attribution observability (bd-r5f0c.6).
+        #
+        # Six metrics cover the cache + resolver hot path for Emby /
+        # Plex / Jellyfin user attribution. All share a single bounded
+        # ``source`` label with three values: "emby", "plex",
+        # "jellyfin". Attribution is best-effort (SLO-8 posture) — the
+        # alert rules that wire on these are warn-only, never paging.
+        #
+        # Cache metrics (incremented by services/<source>_cache.py):
+        #
+        #   * ``media_session_cache_hits_total`` — cache hit before any
+        #     upstream call (fast-path and under-lock re-check). One
+        #     increment per cache-hit return, not per caller if multiple
+        #     waiters share a just-populated entry.
+        #   * ``media_session_fetch_duration_seconds`` — wall time of
+        #     the upstream ``get_sessions()`` HTTP call. Cache hits are
+        #     NOT counted — the histogram tracks upstream latency only.
+        #     Buckets match ``_HTTP_LATENCY_BUCKETS`` (LAN requests, the
+        #     same regime as other ECM upstream calls).
+        #   * ``media_session_fetch_errors_total`` — upstream fetch raised
+        #     an exception (network error, auth failure, server error).
+        #     The stale-fallback and cold-start paths both increment this
+        #     counter so the denominator is "all failed fetch attempts",
+        #     not just the ones that had a stale entry to fall back on.
+        #   * ``media_session_stale_fallback_total`` — stale cache entry
+        #     returned after a fetch failure. Subset of fetch_errors_total
+        #     (only those where a prior cache existed). Non-zero rate means
+        #     ECM is serving stale data to the resolver.
+        #
+        # Resolver metrics (incremented by services/<source>_resolver.py):
+        #
+        #   * ``user_attribution_resolved_total`` — resolver matched a
+        #     session to a user (returned a non-None attribution).
+        #     Incremented AFTER the IP match succeeds and a session match
+        #     is found — the IP short-circuit (not our session) does NOT
+        #     increment this counter.
+        #   * ``user_attribution_unresolved_total`` — resolver had an IP
+        #     match (the session came from the right source server) but
+        #     found no matching Emby/Plex/Jellyfin session. Incremented
+        #     after the IP-match succeeds and the session match loop
+        #     returns empty. The IP short-circuit does NOT increment.
+        #
+        # The ratio resolved / (resolved + unresolved) is the attribution
+        # quality SLI for the r5f0c epic — target ≥ 80% steady state
+        # (operators who configure all three sources should see most
+        # sessions attributed). Below 50% for > 30m → investigate.
+        # ----------------------------------------------------------------
+        "media_session_cache_hits_total": Counter(
+            "ecm_media_session_cache_hits_total",
+            "Count of per-source session-cache hits (returned without an "
+            "upstream fetch). source ∈ {emby, plex, jellyfin}. "
+            "Incremented on both the fast-path hit (before lock) and the "
+            "under-lock re-check hit (another waiter populated the cache "
+            "while we waited). Does NOT count cache misses that went to "
+            "the upstream and succeeded.",
+            ["source"],
+            registry=registry,
+        ),
+        "media_session_fetch_duration_seconds": Histogram(
+            "ecm_media_session_fetch_duration_seconds",
+            "Wall time of the upstream get_sessions() HTTP call, in "
+            "seconds. source ∈ {emby, plex, jellyfin}. Cache hits are "
+            "NOT counted — this histogram tracks upstream latency only. "
+            "Recorded on every fetch attempt regardless of outcome "
+            "(success or exception); the _count gives total fetch "
+            "attempts, the _sum gives total latency across all fetches.",
+            ["source"],
+            buckets=_HTTP_LATENCY_BUCKETS,
+            registry=registry,
+        ),
+        "media_session_fetch_errors_total": Counter(
+            "ecm_media_session_fetch_errors_total",
+            "Count of upstream session-fetch failures (exception raised "
+            "by the upstream client). source ∈ {emby, plex, jellyfin}. "
+            "Incremented on every exception from get_sessions(), "
+            "regardless of whether a stale cache exists to fall back on. "
+            "Alert rule MediaSessionFetchErrorsSustained fires when this "
+            "counter has a non-zero rate for > 10m (warn-only, SLO-8 "
+            "posture — attribution is best-effort).",
+            ["source"],
+            registry=registry,
+        ),
+        "media_session_stale_fallback_total": Counter(
+            "ecm_media_session_stale_fallback_total",
+            "Count of stale-cache returns after an upstream fetch failure. "
+            "source ∈ {emby, plex, jellyfin}. Incremented when "
+            "fetch_errors_total fires AND a prior cache entry exists to "
+            "return. A non-zero rate means ECM is serving stale session "
+            "data to resolvers; attribution quality degrades but does not "
+            "go dark (the stale entry is still returned). Alert rule "
+            "MediaSessionStaleFallbackRising fires when rate > 0.01 for "
+            "> 30m (warn-only, SLO-8 posture).",
+            ["source"],
+            registry=registry,
+        ),
+        "user_attribution_resolved_total": Counter(
+            "ecm_user_attribution_resolved_total",
+            "Count of successful user-attribution resolutions per source. "
+            "source ∈ {emby, plex, jellyfin}. Incremented by the "
+            "resolver when the ECM session IP matches the source server IP "
+            "AND a session match is found across the three match tiers. "
+            "The IP-short-circuit case (session is not from this source's "
+            "server) is NOT counted. Numerator of the attribution quality "
+            "SLI: resolved / (resolved + unresolved).",
+            ["source"],
+            registry=registry,
+        ),
+        "user_attribution_unresolved_total": Counter(
+            "ecm_user_attribution_unresolved_total",
+            "Count of attribution failures for sessions whose IP matched "
+            "the source server but no session match was found. "
+            "source ∈ {emby, plex, jellyfin}. Incremented when the IP "
+            "matches the configured source server but the three-tier "
+            "session-match loop returns empty. Does NOT increment on "
+            "IP-short-circuit (session is not from this source). "
+            "Denominator complement: resolved / (resolved + unresolved) "
+            "is the attribution quality SLI.",
+            ["source"],
+            registry=registry,
+        ),
     }
 
 

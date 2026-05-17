@@ -51,6 +51,7 @@ from dataclasses import dataclass
 
 from config import get_settings
 from plex_client import PlexClient, PlexClientError, PlexSession
+import observability
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +185,7 @@ async def get_cached_plex_sessions() -> list[PlexSession]:
                 "[PLEX] Cache hit for %s (age=%.2fs, ttl=%.1fs)",
                 CACHE_KEY, age, CACHE_TTL_SECONDS,
             )
+            observability.get_metric("media_session_cache_hits_total").labels(source="plex").inc()
             return entry.sessions
 
     # Cache miss path. Acquire the lock so concurrent misses collapse to
@@ -205,19 +207,22 @@ async def get_cached_plex_sessions() -> list[PlexSession]:
                     "another waiter populated it",
                     CACHE_KEY,
                 )
+                observability.get_metric("media_session_cache_hits_total").labels(source="plex").inc()
                 return entry.sessions
 
         # Holder of the lock — do the upstream fetch.
         client = PlexClient(base_url=plex_base_url, api_key=plex_token)
         try:
             try:
-                sessions = await client.get_sessions()
+                with observability.get_metric("media_session_fetch_duration_seconds").labels(source="plex").time():
+                    sessions = await client.get_sessions()
             finally:
                 # Always release the httpx connection pool even on
                 # error. Without this every failure leaks a socket pool
                 # for the lifetime of the process.
                 await client.close()
         except PlexClientError as exc:
+            observability.get_metric("media_session_fetch_errors_total").labels(source="plex").inc()
             # Stale-fallback decision branches on whether a prior cache
             # value exists. Re-read ``_cached_entry`` here (not the
             # ``entry`` local from above) so we see the latest module
@@ -230,6 +235,7 @@ async def get_cached_plex_sessions() -> list[PlexSession]:
                     exc,
                     time.monotonic() - _cached_entry.cached_at,
                 )
+                observability.get_metric("media_session_stale_fallback_total").labels(source="plex").inc()
                 return _cached_entry.sessions
             logger.warning(
                 "[PLEX] Fetch failed with no prior cache (%s); "
