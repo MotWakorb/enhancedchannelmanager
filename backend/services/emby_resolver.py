@@ -121,11 +121,14 @@ _emby_resolver_no_match_last_warn_at: dict[tuple[str, str], float] = {}
 _EMBY_NO_MATCH_WARN_INTERVAL: float = 60.0
 
 
-# Max number of sessions to enumerate in the forensic log line. Operators
-# with 50+ active Emby sessions would otherwise blow out the WARN line;
-# 10 is enough to surface the candidates that actually matter without
-# log-bloat.
-_EMBY_NO_MATCH_MAX_SESSIONS: int = 10
+# Max number of sessions to enumerate in the forensic log line.
+# bd-r5f0c.11: bumped 10 → 30 after the PO-reported v0.17.1 cut-blocker
+# (CBS vs CNN attribution asymmetry) showed an instance with 17 live
+# sessions where the cap of 10 truncated the CNN session out of the
+# forensic payload. 30 covers typical operator scale without log-bloat;
+# operators with >30 sessions are exceptional and the head 30 still
+# carries enough signal for diagnosis.
+_EMBY_NO_MATCH_MAX_SESSIONS: int = 30
 
 
 def _reset_for_tests() -> None:
@@ -514,6 +517,13 @@ def _find_matching_sessions(
 
     # ----- Tier 1: channel name primary match
     normalized_ecm_channel = _normalize(ecm_channel_name or "")
+    # bd-r5f0c.11: when an operator imports channels with the Emby/M3U
+    # pipe-prefix display format leaked into the ECM channel_name itself
+    # (e.g. "109 | CNN"), tier-1 must also parse the ECM side so the
+    # right-hand suffix can be compared against the session forms.
+    # Reuses _parse_pipe_suffix as-is — it returns "" when the input
+    # has no pipe, so this is a no-op for clean ECM names.
+    ecm_channel_suffix = _parse_pipe_suffix(normalized_ecm_channel)
     if normalized_ecm_channel:
         for session, normalized_item, _ch, suffix in prepared:
             # Right-hand side of "<number> | <name>" matches (the
@@ -524,6 +534,19 @@ def _find_matching_sessions(
                 continue
             if normalized_item and normalized_item == normalized_ecm_channel:
                 _accept(session)
+                continue
+            # bd-r5f0c.11: ECM-side pipe-prefix tolerance. When ECM's
+            # channel_name itself carries "<number> | <name>" (M3U
+            # import leak), compare the parsed ECM suffix against the
+            # session's parsed suffix and its whole item_name. Two new
+            # compares; additive — gated on ecm_channel_suffix being
+            # non-empty so clean ECM names are unaffected.
+            if ecm_channel_suffix:
+                if suffix and suffix == ecm_channel_suffix:
+                    _accept(session)
+                    continue
+                if normalized_item and normalized_item == ecm_channel_suffix:
+                    _accept(session)
 
     # ----- Tier 2: channel number exact (string compare)
     if ecm_channel_number is not None:
@@ -635,7 +658,7 @@ def _log_emby_resolver_no_match(
     those guards would flood the log.
 
     The session list in the payload is truncated at
-    ``_EMBY_NO_MATCH_MAX_SESSIONS`` (10) entries — defensive against
+    ``_EMBY_NO_MATCH_MAX_SESSIONS`` (30) entries — defensive against
     operators with very large Emby session counts.
     """
     rate_key = (client_ip, _normalize(ecm_channel_name or ""))

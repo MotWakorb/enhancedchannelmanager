@@ -1003,3 +1003,160 @@ class TestNoMatchDiagnostic:
                 )
         warns = self._no_match_records(caplog.records)
         assert len(warns) == 2
+
+    async def test_truncation_cap_thirty(self, caplog):
+        """bd-r5f0c.11: 35 sessions in cache → forensic payload includes
+        exactly 30 entries (the bumped cap), not the original 10 and
+        not the full 35.
+        """
+        sessions = [
+            _make_session(
+                session_id=f"sess-{idx:02d}",
+                user_id=f"uid-{idx:02d}",
+                user_name=f"user{idx:02d}",
+                item_name=f"{900 + idx} | NotTheChannel{idx}",
+            )
+            for idx in range(35)
+        ]
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=sessions)):
+            with caplog.at_level(logging.WARNING, logger="services.plex_resolver"):
+                users = await plex_resolver.resolve_plex_users(
+                    ecm_session_ip="192.168.1.20",
+                    ecm_stream_name="US: CNN FHD",
+                    ecm_channel_name="CNN",
+                    ecm_channel_number=200,
+                )
+        assert users == []
+        warns = self._no_match_records(caplog.records)
+        assert len(warns) == 1
+        msg = warns[0].getMessage()
+        assert msg.count("'session_id':") == 30, (
+            f"expected truncation cap of 30 session entries, "
+            f"got {msg.count(chr(39) + 'session_id' + chr(39) + ':')}"
+        )
+        assert "sessions_count=35" in msg
+
+
+# ---------------------------------------------------------------------------
+# Behavior: bd-r5f0c.11 — ECM-side pipe-prefix tolerance in Tier-1
+# ---------------------------------------------------------------------------
+
+
+class TestECMPipePrefixTolerance:
+    """bd-r5f0c.11: when an operator imports channels with the pipe-prefix
+    display format leaked into the ECM channel_name itself (e.g.
+    "109 | CNN"), tier-1 must match against Plex sessions even though
+    ECM is carrying the upstream's display format. The fix adds two
+    compares against the parsed ECM suffix (alongside the existing
+    compares against ecm_channel_name as a whole), gated on the ECM
+    name actually containing a pipe so clean ECM names are unaffected.
+    """
+
+    async def test_ecm_prefix_plex_prefix(self):
+        """ECM channel_name "109 | CNN" vs Plex item_name "109 | CNN"."""
+        session = _make_session(
+            user_id="uid-mw", user_name="MotWakorb",
+            item_name="109 | CNN",
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="US: CNN HD",
+                ecm_channel_name="109 | CNN",
+            )
+        assert result == "MotWakorb"
+
+    async def test_ecm_prefix_plex_clean(self):
+        """ECM channel_name "109 | CNN" vs Plex item_name "CNN".
+        Only the new compare (ecm_suffix vs whole item_name) reaches
+        this case.
+        """
+        session = _make_session(
+            user_name="MotWakorb",
+            item_name="CNN",
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="US: CNN HD",
+                ecm_channel_name="109 | CNN",
+            )
+        assert result == "MotWakorb"
+
+    async def test_ecm_clean_plex_prefix(self):
+        """ECM channel_name "CNN" vs Plex item_name "109 | CNN".
+        Regression — existing pre-bd-r5f0c.11 path.
+        """
+        session = _make_session(
+            user_name="MotWakorb",
+            item_name="109 | CNN",
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="US: CNN HD",
+                ecm_channel_name="CNN",
+            )
+        assert result == "MotWakorb"
+
+    async def test_ecm_clean_plex_clean(self):
+        """ECM channel_name "CNN" vs Plex item_name "CNN". Trivial
+        whole-string regression check.
+        """
+        session = _make_session(
+            user_name="MotWakorb",
+            item_name="CNN",
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="US: CNN HD",
+                ecm_channel_name="CNN",
+            )
+        assert result == "MotWakorb"
+
+    async def test_ecm_prefix_no_match(self):
+        """ECM channel_name "109 | CNN" vs Plex item_name "NESN".
+        Tolerance must NOT cause false positives.
+        """
+        session = _make_session(
+            user_name="alice",
+            item_name="NESN",
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="totally unrelated stream name",
+                ecm_channel_name="109 | CNN",
+            )
+        assert result is None
+
+    async def test_ecm_prefix_case_insensitive(self):
+        """ECM channel_name "109 | cnn" (lowercase) vs Plex item_name
+        "109 | CNN". NFC + lower + strip normalization on both sides.
+        """
+        session = _make_session(
+            user_name="case_user",
+            item_name="109 | CNN",
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ignored — tier 1 wins",
+                ecm_channel_name="109 | cnn",
+            )
+        assert result == "case_user"
