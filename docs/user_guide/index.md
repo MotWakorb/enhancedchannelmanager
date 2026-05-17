@@ -42,11 +42,18 @@ The Stats tab, including the Stats v2 features shipped in v0.17.0.
 - **[Metric glossary](stats/metric-glossary.md)** — definitions for every Stats v2 number: watch time, session count, last watched, buffer events, provider attribution, bytes delta, and bitrate.
 - **[History cutover note](stats/stats-v2-history-cutover.md)** — what happens to historical stats data at the v0.17.0 cutover; why metrics start on deploy day.
 
-### 8. [Backup & Restore](backup-restore/index.md) — Placeholder
+### 8. [Integrations](integrations/index.md) — Media Server Integrations (v0.17.1)
+
+Connect ECM to Emby, Plex, and/or Jellyfin so the Stats tab shows viewer
+usernames instead of raw IP addresses. Covers setup for all three sources,
+the Plex server-local token (vs. plex.tv account token), multi-viewer
+behaviour, and troubleshooting.
+
+### 9. [Backup & Restore](backup-restore/index.md) — Placeholder
 
 Backing up your ECM configuration and restoring it on a new install. Currently a placeholder; the v0.18.0 epic (bd-0i2vt) and the immediate import work (bd-gb5r5.3) will fill in the operator workflow.
 
-### 9. [Troubleshooting](troubleshooting/index.md) — Stub
+### 10. [Troubleshooting](troubleshooting/index.md) — Stub
 
 Common problems, how to read ECM's logs, and what to gather before asking for help.
 
