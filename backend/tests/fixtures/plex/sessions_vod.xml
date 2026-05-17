@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- VOD (movie) session — no channel number, no pipe-suffix format.
+     User carol is watching The Matrix.
+     lastViewedAt: 1747400400 = 2025-05-16T13:00:00Z -->
+<MediaContainer size="1">
+  <Video ratingKey="99999" title="The Matrix" type="movie"
+         year="1999" lastViewedAt="1747400400">
+    <User id="user-carol-3" title="carol"/>
+    <Player address="192.168.1.52" state="playing" platform="Plex for Android"/>
+  </Video>
+</MediaContainer>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Two users watching the same live TV channel (ESPN, channel 408).
+     Regression target for bd-g03fi (multiple-match tiebreak).
+     alice has a more recent lastViewedAt and should win in a tiebreak.
+     lastViewedAt epoch values:
+       alice: 1747396800 = 2025-05-16T12:00:00Z  (more recent)
+       bob:   1747393200 = 2025-05-16T11:00:00Z  (older) -->
+<MediaContainer size="2">
+  <Video ratingKey="12345" title="408 | ESPN" type="episode"
+         grandparentTitle="ESPN" lastViewedAt="1747396800">
+    <User id="user-alice-1" title="alice"/>
+    <Player address="192.168.1.50" state="playing" platform="Plex for iOS"/>
+  </Video>
+  <Video ratingKey="12346" title="408 | ESPN" type="episode"
+         grandparentTitle="ESPN" lastViewedAt="1747393200">
+    <User id="user-bob-2" title="bob"/>
+    <Player address="192.168.1.51" state="playing" platform="Plex Web"/>
+  </Video>
+</MediaContainer>
