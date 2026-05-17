@@ -429,6 +429,67 @@ The rename in v0.17.1 (`api_key` → `dispatcharr_api_key`) eliminates the field
 
 **Deployment:** `ECM_URL=http://ecm:6100` (internal Docker network); shares the `/config/` volume with the ECM backend for the API key file. The key is generated in ECM's UI under *Settings → MCP Integration*.
 
+## User Attribution Pipeline
+
+On each bandwidth poll (~5s cadence), the `BandwidthTracker`
+cross-references active stream sessions against the live-sessions API of
+each configured media server (Emby, Plex, Jellyfin). For each
+`(channel, client_ip)` pair, the per-source resolver:
+
+1. Short-circuits if the client IP doesn't match the upstream media
+   server's IP — non-Emby/Plex/Jellyfin sessions bypass the resolver
+   entirely.
+2. Calls a tiered match against the cached session list: channel-name
+   match → channel-number match → fuzzy stream-name match. All sessions
+   that match across the tiers are pooled into the viewer list.
+3. Returns the viewer list sorted most-recent first.
+
+The bandwidth tracker writes the viewer list (JSON-encoded) to
+`session_telemetry.<source>_viewers`, and the most-recent viewer's name
+to the legacy `session_telemetry.<source>_user_name` column. The
+`/api/stats/channels` endpoint surfaces both; prefer the array form.
+
+Caching: each source has a 5-second TTL cache of upstream sessions with
+thundering-herd lock + stale-fallback on upstream failure. The resolver
+never raises — upstream failures degrade the row's attribution to NULL
+without affecting the telemetry write.
+
+Failure isolation: the three resolvers run via `asyncio.gather` with
+per-source 2s timeouts. A slow Plex does not stall Emby or Jellyfin
+attribution.
+
+Multi-viewer model: ECM media-server integrations are transcoding
+proxies — N upstream users share one ECM-client (the media server's
+IP). The viewer list captures all matched users; the legacy singular
+`*_user_name` column captures the most-recent for back-compat.
+
+```
+BandwidthTracker (poll ~5s)
+  ├─ _enrich_channels_with_attribution()
+  │    ├─ emby_enabled?  → services/emby_resolver.py
+  │    │    └─ resolve_emby_users(ip, stream_name, channel_name, channel_number)
+  │    │         → [{user_id, user_name}, ...] (tiered match, sorted recent-first)
+  │    ├─ plex_enabled?  → services/plex_resolver.py  (same shape)
+  │    └─ jellyfin_enabled? → services/jellyfin_resolver.py  (same shape)
+  │
+  └─ writes to session_telemetry:
+       emby_viewers     (TEXT, JSON-encoded list)
+       plex_viewers     (TEXT, JSON-encoded list)
+       jellyfin_viewers (TEXT, JSON-encoded list)
+       emby_user_name   (TEXT, legacy — most-recent viewer)
+       plex_user_name   (TEXT, legacy)
+       jellyfin_user_name (TEXT, legacy)
+
+GET /api/stats/channels  →  _enrich_channels_with_attribution (live, on-demand)
+                         →  surfaces *_viewers arrays + *_user_name fields
+                         →  attribution_source: Emby > Plex > Jellyfin > Dispatcharr
+```
+
+Operator setup: see [`docs/user_guide/integrations/index.md`](user_guide/integrations/index.md).
+API field reference: see [Enhanced Stats § Per-channel attribution fields](api.md).
+
+---
+
 ## External API Contract — Dispatcharr
 
 `backend/dispatcharr_client.py` makes **73 named calls** into Dispatcharr's HTTP API, covering **4 of Dispatcharr's 13 Django apps**. The table below maps each ECM domain to the Dispatcharr app that serves it.

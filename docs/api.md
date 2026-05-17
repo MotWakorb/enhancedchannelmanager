@@ -441,6 +441,24 @@ curl -X POST "http://localhost:6100/api/channel-merges/42/dismiss" \
 | `GET /api/stats/unique-viewers-by-channel` | Get unique viewers per channel |
 | `GET /api/stats/watch-history` | Get watch history log (paginated, filterable by channel/IP/days, includes user attribution) |
 
+**Per-channel attribution fields**:
+
+Each channel object — and each entry in `channel.clients[]` — carries
+per-source attribution fields when an integration is enabled and the
+session matches:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `emby_viewers` | `[{user_id, user_name}] \| null` | All Emby users watching this channel via this client. Null if Emby integration disabled or no match. |
+| `plex_viewers` | `[{user_id, user_name}] \| null` | All Plex users watching this channel via this client. Null if Plex integration disabled or no match. |
+| `jellyfin_viewers` | `[{user_id, user_name}] \| null` | All Jellyfin users watching this channel via this client. Null if Jellyfin integration disabled or no match. |
+| `emby_user_name` | `string \| null` | The most-recent Emby user's name. Provided for back-compat; prefer `emby_viewers`. |
+| `plex_user_name` | `string \| null` | Most-recent Plex user. Prefer `plex_viewers`. |
+| `jellyfin_user_name` | `string \| null` | Most-recent Jellyfin user. Prefer `jellyfin_viewers`. |
+| `attribution_source` | `'emby' \| 'plex' \| 'jellyfin' \| 'dispatcharr' \| null` | The source that wins display precedence (Emby > Plex > Jellyfin > Dispatcharr). |
+
+Operator setup: see [`docs/user_guide/integrations/index.md`](user_guide/integrations/index.md).
+
 ## Popularity
 
 | Endpoint | Description |
