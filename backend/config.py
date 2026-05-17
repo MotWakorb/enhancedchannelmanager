@@ -251,6 +251,26 @@ class DispatcharrSettings(BaseModel):
     # Jellyfin API key. Server-issued via Dashboard > API Keys. Plaintext
     # at rest, same approach as ``emby_api_key``.
     jellyfin_api_key: str = ""
+    # Plex integration settings (bd-r5f0c.4, epic bd-r5f0c). When
+    # ``plex_enabled`` is True and ``plex_base_url`` + ``plex_token`` are
+    # configured, the Stats v2 / BandwidthTracker pipeline
+    # cross-references active streams against the operator's Plex
+    # ``/status/sessions`` feed to attribute real Plex usernames. Auth
+    # uses ``X-Plex-Token: <token>`` — issued via Plex Web (Account >
+    # Authorized Devices > Get Token). Plaintext at rest, same approach
+    # as ``emby_api_key`` / ``jellyfin_api_key`` (no encryption-at-rest
+    # in this release). The field is named ``plex_token`` rather than
+    # ``plex_api_key`` to match the Plex ecosystem nomenclature operators
+    # are used to.
+    plex_enabled: bool = False
+    # Base URL of the operator's Plex server, e.g.
+    # ``http://plex.local:32400``. No validation — operator's
+    # responsibility to enter a reachable URL; W4's Settings UI 'Test
+    # Connection' button surfaces unreachable URLs.
+    plex_base_url: str = ""
+    # Plex auth token (``X-Plex-Token`` header value). Plaintext at rest,
+    # same approach as ``emby_api_key``.
+    plex_token: str = ""
 
     @field_validator("dedup_threshold")
     @classmethod
