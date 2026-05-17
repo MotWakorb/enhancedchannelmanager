@@ -127,7 +127,7 @@ handle authentication automatically when accessed through the web UI.
 ## Rate Limiting
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
-    version="0.17.1-0022",
+    version="0.17.1-0023",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -197,9 +197,7 @@ async def security_headers_middleware(request: Request, call_next):
     return response
 
 
-# ============================================================================
 # Observability Middleware — trace-id correlation + Prometheus instrumentation
-# ============================================================================
 # The trace-id middleware must run first so every downstream handler (and
 # every log line) can pick up the id from the contextvar. The metrics
 # middleware piggy-backs on the same request cycle to emit counter/histogram
@@ -377,9 +375,7 @@ async def metrics_endpoint():
     )
 
 
-# ============================================================================
 # Request Timeout Middleware (bd-w3z4h)
-# ============================================================================
 # Wraps every request in asyncio.wait_for(..., timeout=ECM_REQUEST_TIMEOUT_SECONDS).
 # If a handler exceeds the timeout, returns 504 Gateway Timeout and cancels the
 # handler coroutine. This is a secondary line of defense behind the thread-pool
@@ -434,9 +430,7 @@ async def request_timeout_middleware(request: Request, call_next):
         )
 
 
-# ============================================================================
 # Global Auth Middleware — secure-by-default for all /api/* endpoints
-# ============================================================================
 # Paths that are intentionally public (no auth required even when auth is enabled)
 AUTH_EXEMPT_PATHS = {
     # Health check (Docker, load balancers)
@@ -532,9 +526,7 @@ for _router in all_routers:
     app.include_router(_router)
 
 
-# ============================================================================
 # Request Timing and Rate Tracking Middleware (for CPU diagnostics)
-# ============================================================================
 # Track request rates per endpoint to detect rapid polling
 _request_rate_tracker: dict[str, list[float]] = defaultdict(list)
 _rate_window_seconds = 10  # Track requests over 10-second window
@@ -596,9 +588,7 @@ async def request_timing_middleware(request: Request, call_next):
     return response
 
 
-# ============================================================================
 # Diagnostic Endpoint for Request Rate Stats
-# ============================================================================
 @app.get("/api/debug/request-rates", tags=["Health"])
 async def get_request_rates():
     """Get current request rate statistics for all endpoints.

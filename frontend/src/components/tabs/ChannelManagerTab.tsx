@@ -165,6 +165,10 @@ export interface ChannelManagerTabProps {
   // (bd-u6ftw / BD-H). Empty Set when no animation is active.
   dedupReturningStreamIds?: Set<number>;
 
+  // Refresh channels after BD-I dedup merge appends a stream to an existing
+  // channel (bd-1lznl), so the mapped-streams set reflects the new binding.
+  onChannelsChanged?: () => void;
+
   // Bulk Create
   channelDefaults?: ChannelDefaults;
   // Stream group drop (for opening bulk create modal) - supports multiple groups
@@ -349,8 +353,11 @@ export function ChannelManagerTab({
   // Refresh streams
   onRefreshStreams,
 
-  // Dedup cancel-pulse highlight
+  // Dedup cancel-pulse highlight (bd-u6ftw / BD-H)
   dedupReturningStreamIds,
+
+  // Refresh channels after BD-I dedup merge (bd-1lznl)
+  onChannelsChanged,
 
   // Bulk Create
   channelDefaults,
@@ -595,6 +602,7 @@ export function ChannelManagerTab({
           strikeThreshold={strikeThreshold}
           hideUngroupedStreams={hideUngroupedStreams}
           onRefreshStreams={onRefreshStreams}
+          onChannelsChanged={onChannelsChanged}
           mappedStreamIds={mappedStreamIds}
           onGroupExpand={onStreamGroupExpand}
           defaultNormalizeOnCreate={defaultNormalizeOnCreate}

@@ -282,6 +282,61 @@ export async function mergeChannels(request: MergeChannelsRequest): Promise<Chan
   });
 }
 
+// -----------------------------------------------------------------------------
+// Channel-merges dedup lookup (ADR-008 §D1 / BD-D)
+// -----------------------------------------------------------------------------
+
+/**
+ * Single dedup candidate returned by GET /api/channel-merges/candidates.
+ *
+ * `channel_id` is a string because `pending_merges.candidate_channel_id` is
+ * TEXT (ADR-008 §D8 channel-id-type note). The backend casts the Dispatcharr
+ * channel id to string before returning; the modal and consumers must do the
+ * same when comparing or passing it back.
+ */
+export interface ChannelMergeCandidate {
+  channel_id: string;
+  channel_name: string;
+  /** Normalized confidence score, 0.0–1.0. Always >= 0.60 per §D2 floor. */
+  confidence: number;
+}
+
+export interface ChannelMergeCandidatesResponse {
+  stream_name: string;
+  candidates: ChannelMergeCandidate[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+/**
+ * Synchronous top-1 dedup candidate lookup (BD-D / ADR-008 §D1).
+ *
+ * Used by the BD-H drag-drop and BD-I "Add Stream" flows to decide whether to
+ * prompt the operator with `StreamDedupModal` before creating a new channel.
+ * Returns the response envelope verbatim; callers consult `candidates[0]` for
+ * the top-1 match (the v0.17.1 matcher returns at most one) and fall through
+ * to the original create-channel path when the array is empty.
+ *
+ * The matcher's §D2 hard floor (60%) is enforced server-side, so a candidate
+ * present in the response is always above the floor — the client never has to
+ * filter sub-floor matches itself.
+ *
+ * @param streamName Raw incoming stream name; required, non-blank.
+ * @param groupId Optional target channel-group filter. Omit to search all groups.
+ */
+export async function getChannelMergeCandidates(
+  streamName: string,
+  groupId?: number | null,
+): Promise<ChannelMergeCandidatesResponse> {
+  const query = buildQuery({
+    stream_name: streamName,
+    group_id: groupId ?? undefined,
+  });
+  return fetchJson(`${API_BASE}/channel-merges/candidates${query}`);
+}
+
 // Find & merge duplicate channels
 export interface DuplicateGroup {
   normalized_name: string;
