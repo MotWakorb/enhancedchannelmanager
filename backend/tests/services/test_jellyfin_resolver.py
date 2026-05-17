@@ -880,3 +880,164 @@ class TestMultiViewer:
             )
         assert len(users) == 3
         assert _get_counter_value("user_attribution_resolved_total", "jellyfin") == 3.0
+
+
+# ---------------------------------------------------------------------------
+# bd-r5f0c.10: forensic no-match WARN. Same shape as the Emby resolver
+# helper — see TestNoMatchDiagnostic in test_emby_resolver.py for the
+# rationale. Fires once per (ip, channel) per 60 s when sessions exist
+# and the IP short-circuit passed but no tier accepted any session.
+# ---------------------------------------------------------------------------
+
+
+class TestNoMatchDiagnostic:
+    """Jellyfin forensic no-match WARN. Same suppression semantics as
+    the Emby helper — only fires when IP matched + sessions non-empty +
+    no tier matched."""
+
+    @staticmethod
+    def _no_match_records(records):
+        return [
+            r for r in records
+            if "[JELLYFIN-RESOLVER] no-match diagnostic" in r.getMessage()
+        ]
+
+    async def test_emits_warn_when_sessions_exist_and_no_tier_matches(self, caplog):
+        """Sessions in cache but no tier accepts any of them → one WARN."""
+        session = _make_session(
+            user_name="alice",
+            item_name="NotTheChannel",  # bare Jellyfin style
+            channel_number="999",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.WARNING, logger="services.jellyfin_resolver"):
+                users = await jellyfin_resolver.resolve_jellyfin_users(
+                    ecm_session_ip="192.168.1.20",
+                    ecm_stream_name="US: CNN FHD",
+                    ecm_channel_name="CNN",
+                    ecm_channel_number=200,
+                )
+        assert users == []
+        warns = self._no_match_records(caplog.records)
+        assert len(warns) == 1, (
+            f"expected exactly one no-match WARN; got {len(warns)}: "
+            f"{[r.getMessage() for r in warns]}"
+        )
+        msg = warns[0].getMessage()
+        assert "CNN" in msg
+        assert "NotTheChannel" in msg
+
+    async def test_no_emit_when_sessions_empty(self, caplog):
+        """Empty session cache is the normal state — no WARN."""
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[])):
+            with caplog.at_level(logging.WARNING, logger="services.jellyfin_resolver"):
+                users = await jellyfin_resolver.resolve_jellyfin_users(
+                    ecm_session_ip="192.168.1.20",
+                    ecm_stream_name="CNN",
+                    ecm_channel_name="CNN",
+                )
+        assert users == []
+        assert self._no_match_records(caplog.records) == []
+
+    async def test_no_emit_when_match_succeeds(self, caplog):
+        """A successful resolve must not emit the no-match WARN."""
+        session = _make_session(user_name="alice", item_name="CNN HD")
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.WARNING, logger="services.jellyfin_resolver"):
+                users = await jellyfin_resolver.resolve_jellyfin_users(
+                    ecm_session_ip="192.168.1.20",
+                    ecm_stream_name="CNN HD",
+                )
+        assert len(users) == 1
+        assert self._no_match_records(caplog.records) == []
+
+    async def test_no_emit_when_ip_short_circuit_fails(self, caplog):
+        """IP mismatch short-circuits before the session compare → no WARN."""
+        session = _make_session(item_name="UnrelatedShow")
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.WARNING, logger="services.jellyfin_resolver"):
+                users = await jellyfin_resolver.resolve_jellyfin_users(
+                    ecm_session_ip="10.0.0.99",  # NOT the Jellyfin server
+                    ecm_stream_name="CNN",
+                    ecm_channel_name="CNN",
+                )
+        assert users == []
+        assert self._no_match_records(caplog.records) == []
+
+    async def test_rate_limit_within_window(self, caplog):
+        """Two no-match calls for same (ip, channel) within 60 s → one WARN."""
+        session = _make_session(item_name="UnrelatedShow")
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.WARNING, logger="services.jellyfin_resolver"):
+                await jellyfin_resolver.resolve_jellyfin_users(
+                    ecm_session_ip="192.168.1.20",
+                    ecm_stream_name="CNN",
+                    ecm_channel_name="CNN",
+                )
+                await jellyfin_resolver.resolve_jellyfin_users(
+                    ecm_session_ip="192.168.1.20",
+                    ecm_stream_name="CNN",
+                    ecm_channel_name="CNN",
+                )
+        warns = self._no_match_records(caplog.records)
+        assert len(warns) == 1
+
+    async def test_rate_limit_per_channel_independence(self, caplog):
+        """Different channels for the same IP each get their own WARN."""
+        session = _make_session(item_name="UnrelatedShow")
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.WARNING, logger="services.jellyfin_resolver"):
+                await jellyfin_resolver.resolve_jellyfin_users(
+                    ecm_session_ip="192.168.1.20",
+                    ecm_stream_name="CBS",
+                    ecm_channel_name="CBS",
+                )
+                await jellyfin_resolver.resolve_jellyfin_users(
+                    ecm_session_ip="192.168.1.20",
+                    ecm_stream_name="CNN",
+                    ecm_channel_name="CNN",
+                )
+        warns = self._no_match_records(caplog.records)
+        assert len(warns) == 2
+        messages = " ".join(r.getMessage() for r in warns)
+        assert "CBS" in messages and "CNN" in messages
+
+    async def test_rate_limit_window_expiry(self, caplog, monkeypatch):
+        """Advancing the monotonic clock past 60 s permits a fresh WARN."""
+        session = _make_session(item_name="UnrelatedShow")
+        fake_now = [1000.0]
+
+        def fake_monotonic():
+            return fake_now[0]
+
+        monkeypatch.setattr(jellyfin_resolver.time, "monotonic", fake_monotonic)
+
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.WARNING, logger="services.jellyfin_resolver"):
+                await jellyfin_resolver.resolve_jellyfin_users(
+                    ecm_session_ip="192.168.1.20",
+                    ecm_stream_name="CNN",
+                    ecm_channel_name="CNN",
+                )
+                fake_now[0] += 61.0
+                await jellyfin_resolver.resolve_jellyfin_users(
+                    ecm_session_ip="192.168.1.20",
+                    ecm_stream_name="CNN",
+                    ecm_channel_name="CNN",
+                )
+        warns = self._no_match_records(caplog.records)
+        assert len(warns) == 2
