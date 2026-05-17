@@ -1041,3 +1041,166 @@ class TestNoMatchDiagnostic:
                 )
         warns = self._no_match_records(caplog.records)
         assert len(warns) == 2
+
+    async def test_truncation_cap_thirty(self, caplog):
+        """bd-r5f0c.11: 35 sessions in cache → forensic payload includes
+        exactly 30 entries (the bumped cap), not the original 10 and
+        not the full 35.
+        """
+        sessions = [
+            _make_session(
+                user_id=f"jf-uid-{idx:02d}",
+                user_name=f"user{idx:02d}",
+                item_name=f"{900 + idx} | NotTheChannel{idx}",
+                channel_number=str(900 + idx),
+            )
+            for idx in range(35)
+        ]
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=sessions)):
+            with caplog.at_level(logging.WARNING, logger="services.jellyfin_resolver"):
+                users = await jellyfin_resolver.resolve_jellyfin_users(
+                    ecm_session_ip="192.168.1.20",
+                    ecm_stream_name="US: CNN FHD",
+                    ecm_channel_name="CNN",
+                    ecm_channel_number=200,
+                )
+        assert users == []
+        warns = self._no_match_records(caplog.records)
+        assert len(warns) == 1
+        msg = warns[0].getMessage()
+        assert msg.count("'session_id':") == 30, (
+            f"expected truncation cap of 30 session entries, "
+            f"got {msg.count(chr(39) + 'session_id' + chr(39) + ':')}"
+        )
+        assert "sessions_count=35" in msg
+
+
+# ---------------------------------------------------------------------------
+# Behavior: bd-r5f0c.11 — ECM-side pipe-prefix tolerance in Tier-1
+# ---------------------------------------------------------------------------
+
+
+class TestECMPipePrefixTolerance:
+    """bd-r5f0c.11: when an operator imports channels with the pipe-prefix
+    display format leaked into the ECM channel_name itself (e.g.
+    "109 | CNN"), tier-1 must match against Jellyfin sessions even
+    though ECM is carrying the upstream's display format. The fix adds
+    two compares against the parsed ECM suffix (alongside the existing
+    compares against ecm_channel_name as a whole), gated on the ECM
+    name actually containing a pipe so clean ECM names are unaffected.
+    """
+
+    async def test_ecm_prefix_jellyfin_prefix(self):
+        """ECM channel_name "109 | CNN" vs Jellyfin item_name "109 | CNN"."""
+        session = _make_session(
+            user_id="jf-uid-mw", user_name="MotWakorb",
+            item_name="109 | CNN", channel_number="109",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="US: CNN HD",
+                ecm_channel_name="109 | CNN",
+            )
+        assert result == jellyfin_resolver.JellyfinAttribution(
+            user_id="jf-uid-mw", user_name="MotWakorb",
+        )
+
+    async def test_ecm_prefix_jellyfin_clean(self):
+        """ECM channel_name "109 | CNN" vs Jellyfin item_name "CNN"
+        (the canonical Jellyfin-style bare channel name). Only the new
+        compare (ecm_suffix vs whole item_name) reaches this case.
+        """
+        session = _make_session(
+            user_id="jf-uid-mw", user_name="MotWakorb",
+            item_name="CNN",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="US: CNN HD",
+                ecm_channel_name="109 | CNN",
+            )
+        assert result is not None
+        assert result.user_name == "MotWakorb"
+
+    async def test_ecm_clean_jellyfin_prefix(self):
+        """ECM channel_name "CNN" vs Jellyfin item_name "109 | CNN".
+        Regression — existing pre-bd-r5f0c.11 path.
+        """
+        session = _make_session(
+            user_id="jf-uid-mw", user_name="MotWakorb",
+            item_name="109 | CNN", channel_number="109",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="US: CNN HD",
+                ecm_channel_name="CNN",
+            )
+        assert result is not None
+        assert result.user_name == "MotWakorb"
+
+    async def test_ecm_clean_jellyfin_clean(self):
+        """ECM channel_name "CNN" vs Jellyfin item_name "CNN".
+        Trivial whole-string regression check.
+        """
+        session = _make_session(
+            user_id="jf-uid-mw", user_name="MotWakorb",
+            item_name="CNN",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="US: CNN HD",
+                ecm_channel_name="CNN",
+            )
+        assert result is not None
+        assert result.user_name == "MotWakorb"
+
+    async def test_ecm_prefix_no_match(self):
+        """ECM channel_name "109 | CNN" vs Jellyfin item_name "NESN".
+        Tolerance must NOT cause false positives.
+        """
+        session = _make_session(
+            user_name="alice",
+            item_name="NESN",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="totally unrelated stream name",
+                ecm_channel_name="109 | CNN",
+            )
+        assert result is None
+
+    async def test_ecm_prefix_case_insensitive(self):
+        """ECM channel_name "109 | cnn" (lowercase) vs Jellyfin
+        item_name "109 | CNN". NFC + lower + strip on both sides.
+        """
+        session = _make_session(
+            user_name="case_user",
+            item_name="109 | CNN",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ignored — tier 1 wins",
+                ecm_channel_name="109 | cnn",
+            )
+        assert result is not None
+        assert result.user_name == "case_user"
