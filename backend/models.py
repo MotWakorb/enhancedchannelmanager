@@ -1376,6 +1376,30 @@ class SessionTelemetry(Base):
     # ``[<provider_name>] - <stream_name>`` (PO directive 2026-05-14).
     # Added in migration 0010 (bd-kh23e).
     stream_name = Column(Text, nullable=True)
+    # bd-k026g (migration 0016): Emby user attribution columns. ECM only
+    # sees the Dispatcharr stream session's IP, and when users watch via
+    # an Emby server ALL stream pulls share that one IP — Stats can't
+    # distinguish individual Emby viewers without enrichment. The Emby
+    # integration (parent epic bd-2cenq) cross-references each live Emby
+    # session against ECM's active streams; when a match is resolved at
+    # write time the ``BandwidthTracker`` writer (bd-gih6d) populates
+    # these two columns from the per-poll Emby ``/Sessions`` lookup the
+    # resolver maintains. Both columns are NULL for non-Emby rows (most
+    # rows on most installs — only sessions whose client IP matches the
+    # configured Emby server IP AND has a concurrent matching Emby
+    # session are enriched). ``emby_user_id`` is TEXT because Emby user
+    # IDs are GUIDs, NOT integers like the Dispatcharr ``user_id``
+    # column. Denormalized on this table rather than split into a
+    # separate ``emby_users`` table to keep Stats v2 query patterns
+    # flat — same rationale as the bd-gsn3r ``dispatcharr_username``
+    # denormalization. Read paths surface these columns verbatim;
+    # there are no read-side joins against any Emby endpoint or local
+    # table. Plain nullable columns, NOT FKs — Emby's user table is
+    # upstream and not an ECM table, mirroring the established pattern
+    # for every other upstream identifier on this row (``user_id``,
+    # ``provider_id``, ``channel_id``, ``stream_id``).
+    emby_user_id = Column(Text, nullable=True)
+    emby_user_name = Column(Text, nullable=True)
 
     __table_args__ = (
         CheckConstraint(
