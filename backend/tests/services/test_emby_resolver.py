@@ -1113,3 +1113,185 @@ class TestNoMatchDiagnostic:
         assert len(warns) == 2, (
             f"window-expiry broken: expected 2 WARNs, got {len(warns)}"
         )
+
+    async def test_truncation_cap_thirty(self, caplog):
+        """bd-r5f0c.11: 35 sessions in cache → forensic payload includes
+        exactly 30 entries (the bumped cap), not the original 10 and
+        not the full 35. The cap protects log size on operators with
+        very large session counts while still capturing enough breadth
+        for diagnosis.
+        """
+        sessions = [
+            _make_session(
+                user_id=f"uid-{idx:02d}",
+                user_name=f"user{idx:02d}",
+                item_name=f"{900 + idx} | NotTheChannel{idx}",
+                channel_number=str(900 + idx),
+            )
+            for idx in range(35)
+        ]
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=sessions)):
+            with caplog.at_level(logging.WARNING, logger="services.emby_resolver"):
+                users = await emby_resolver.resolve_emby_users(
+                    ecm_session_ip="192.168.1.10",
+                    ecm_stream_name="US: CNN FHD",
+                    ecm_channel_name="CNN",
+                    ecm_channel_number=200,
+                )
+        assert users == []
+        warns = self._no_match_records(caplog.records)
+        assert len(warns) == 1
+        # Count distinct session_id markers in the payload. Each entry
+        # carries an 8-char session_id prefix derived from "sess-userNN".
+        msg = warns[0].getMessage()
+        # The payload renders dicts with "'session_id':" — count occurrences.
+        assert msg.count("'session_id':") == 30, (
+            f"expected truncation cap of 30 session entries, "
+            f"got {msg.count(chr(39) + 'session_id' + chr(39) + ':')}"
+        )
+        # The header sessions_count reports the full 35 (untruncated).
+        assert "sessions_count=35" in msg
+
+
+# ---------------------------------------------------------------------------
+# Behavior: bd-r5f0c.11 — ECM-side pipe-prefix tolerance in Tier-1
+# ---------------------------------------------------------------------------
+
+
+class TestECMPipePrefixTolerance:
+    """bd-r5f0c.11: when an operator imports channels with the Emby/M3U
+    pipe-prefix display format leaked into the ECM channel_name itself
+    (e.g. "109 | CNN"), tier-1 must match against Emby sessions even
+    though ECM is carrying the upstream's display format. The fix adds
+    two compares against the parsed ECM suffix (alongside the existing
+    compares against ecm_channel_name as a whole), gated on the ECM
+    name actually containing a pipe so clean ECM names are unaffected.
+    """
+
+    async def test_ecm_prefix_emby_prefix(self):
+        """ECM channel_name "109 | CNN" vs Emby item_name "109 | CNN".
+        Existing tier-1 (ecm_full vs item_name) would have matched this
+        already; the new compares (ecm_suffix vs pipe_suffix) also
+        succeed. Either path is acceptable — the assertion is that the
+        session resolves.
+        """
+        session = _make_session(
+            user_id="uid-mw", user_name="MotWakorb",
+            item_name="109 | CNN", channel_number="109",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="US: CNN HD",
+                ecm_channel_name="109 | CNN",
+                ecm_channel_number=None,
+            )
+        assert result == emby_resolver.EmbyAttribution(
+            user_id="uid-mw", user_name="MotWakorb",
+        )
+
+    async def test_ecm_prefix_emby_clean(self):
+        """ECM channel_name "109 | CNN" vs Emby item_name "CNN" (no
+        pipe prefix on the Emby side). This is the case neither existing
+        compare can reach — only the new compare (ecm_suffix vs whole
+        item_name) succeeds.
+        """
+        session = _make_session(
+            user_id="uid-mw", user_name="MotWakorb",
+            item_name="CNN",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="US: CNN HD",
+                ecm_channel_name="109 | CNN",
+            )
+        assert result is not None
+        assert result.user_name == "MotWakorb"
+
+    async def test_ecm_clean_emby_prefix(self):
+        """ECM channel_name "CNN" (clean) vs Emby item_name "109 | CNN".
+        Regression check — this is the original CBS-style case that
+        worked before bd-r5f0c.11 (matched via existing ecm_full vs
+        pipe_suffix) and must continue to work after.
+        """
+        session = _make_session(
+            user_id="uid-mw", user_name="MotWakorb",
+            item_name="109 | CNN", channel_number="109",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="US: CNN HD",
+                ecm_channel_name="CNN",
+            )
+        assert result is not None
+        assert result.user_name == "MotWakorb"
+
+    async def test_ecm_clean_emby_clean(self):
+        """ECM channel_name "CNN" vs Emby item_name "CNN". The trivial
+        whole-string match path (existing) — regression check that the
+        new compares don't perturb it.
+        """
+        session = _make_session(
+            user_id="uid-mw", user_name="MotWakorb",
+            item_name="CNN",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="US: CNN HD",
+                ecm_channel_name="CNN",
+            )
+        assert result is not None
+        assert result.user_name == "MotWakorb"
+
+    async def test_ecm_prefix_no_match(self):
+        """ECM channel_name "109 | CNN" vs Emby item_name "NESN".
+        Tolerance must NOT cause false positives — the ECM suffix
+        "cnn" does not equal "nesn", no tier matches. The stream_name
+        is unrelated so tier-3 fuzzy also cannot rescue.
+        """
+        session = _make_session(
+            user_name="alice",
+            item_name="NESN",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="totally unrelated stream name",
+                ecm_channel_name="109 | CNN",
+            )
+        assert result is None
+
+    async def test_ecm_prefix_case_insensitive(self):
+        """ECM channel_name "109 | cnn" (lowercased prefix form) vs
+        Emby item_name "109 | CNN". Normalization (NFC + lower + strip)
+        applies to both sides before the new compares fire.
+        """
+        session = _make_session(
+            user_name="case_user",
+            item_name="109 | CNN",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="ignored — tier 1 wins",
+                ecm_channel_name="109 | cnn",
+            )
+        assert result is not None
+        assert result.user_name == "case_user"
