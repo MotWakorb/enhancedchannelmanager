@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import logging
 import socket
+import time
 import unicodedata
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -104,17 +105,43 @@ _UNRESOLVED = object()
 _dns_cache: dict[str, str | object] = {}
 
 
+# bd-r5f0c.10: per-(client_ip, normalized_channel_name) rate-limit
+# timestamps for the no-match forensic WARN. A dict (not a single global
+# timestamp) so a noisy problem channel does not silence diagnosis for
+# other channels the same operator is also having trouble with. Keys are
+# ``(client_ip, normalized_ecm_channel_name)`` and values are
+# ``time.monotonic()`` snapshots of the last emission for that pair.
+_emby_resolver_no_match_last_warn_at: dict[tuple[str, str], float] = {}
+
+
+# Minimum interval between WARN emissions for the same (ip, channel)
+# pair. 60 s is short enough that an operator actively diagnosing sees
+# fresh data on every reload but long enough to keep the log readable
+# under sustained polling at ~5 s cadence.
+_EMBY_NO_MATCH_WARN_INTERVAL: float = 60.0
+
+
+# Max number of sessions to enumerate in the forensic log line. Operators
+# with 50+ active Emby sessions would otherwise blow out the WARN line;
+# 10 is enough to surface the candidates that actually matter without
+# log-bloat.
+_EMBY_NO_MATCH_MAX_SESSIONS: int = 10
+
+
 def _reset_for_tests() -> None:
-    """Clear the DNS cache — tests only.
+    """Clear the DNS cache and the no-match WARN rate-limit state — tests only.
 
     Tests share the same module instance across test functions; without
     this reset, a hostname-resolution result from one test would leak
     into the next and produce false matches (e.g. a test that mocks
     ``gethostbyname`` to return one IP would still see that IP in a
-    later test that expects to fail). Production code paths do not call
-    this.
+    later test that expects to fail). The bd-r5f0c.10 no-match WARN
+    timestamps also leak across tests if not cleared — a test exercising
+    rate-limit behaviour would prevent the next test from seeing its own
+    WARN. Production code paths do not call this.
     """
     _dns_cache.clear()
+    _emby_resolver_no_match_last_warn_at.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +255,18 @@ async def resolve_emby_users(
             ecm_stream_name, ecm_channel_name, ecm_channel_number,
             len(sessions),
         )
+        # bd-r5f0c.10: forensic logging — IP matched, sessions exist,
+        # but no tier produced a match. Rate-limited per (ip, channel)
+        # per 60 s. Guarded on ``sessions`` so an empty session cache
+        # (the normal idle state) does NOT generate noise.
+        if sessions:
+            _log_emby_resolver_no_match(
+                client_ip=ecm_session_ip,
+                ecm_channel_name=ecm_channel_name,
+                ecm_channel_number=ecm_channel_number,
+                ecm_stream_name=ecm_stream_name,
+                sessions=sessions,
+            )
         observability.get_metric("user_attribution_unresolved_total").labels(source="emby").inc()
         return []
 
@@ -567,6 +606,74 @@ def _tiebreak_most_recent(sessions: list[EmbySession]) -> EmbySession:
     if len(sessions) == 1:
         return sessions[0]
     return max(sessions, key=lambda s: s.last_activity_date or "")
+
+
+def _log_emby_resolver_no_match(
+    *,
+    client_ip: str,
+    ecm_channel_name: str | None,
+    ecm_channel_number: str | int | None,
+    ecm_stream_name: str,
+    sessions: list[EmbySession],
+) -> None:
+    """Emit a structured WARN once per (client_ip, channel_name) per 60 s
+    when the resolver had sessions to compare against and the IP
+    short-circuit passed, but no tier produced a match.
+
+    bd-r5f0c.10 forensic logging for the PO-reported v0.17.1 cut-blocker:
+    two Emby viewers watching different channels (CBS resolves, CNN
+    surfaces as ``"User #0"``) configured identically in ECM. We cannot
+    fix the resolver mismatch without forensic data on what each tier
+    compared and rejected; this helper emits one WARN per problem
+    (ip, channel) per 60 s carrying raw and NFC-lower-stripped forms of
+    every comparison input plus every cached session so the mismatch is
+    visible at a glance in the operator's log.
+
+    The helper is intentionally suppressive: callers MUST only invoke it
+    when ``sessions`` is non-empty (an empty cache is a normal idle
+    state) and no tier matched. Calling on every poll cycle without
+    those guards would flood the log.
+
+    The session list in the payload is truncated at
+    ``_EMBY_NO_MATCH_MAX_SESSIONS`` (10) entries — defensive against
+    operators with very large Emby session counts.
+    """
+    rate_key = (client_ip, _normalize(ecm_channel_name or ""))
+    now = time.monotonic()
+    last = _emby_resolver_no_match_last_warn_at.get(rate_key, 0.0)
+    if now - last < _EMBY_NO_MATCH_WARN_INTERVAL:
+        return
+    _emby_resolver_no_match_last_warn_at[rate_key] = now
+
+    truncated = sessions[:_EMBY_NO_MATCH_MAX_SESSIONS]
+    session_payload = [
+        {
+            "session_id": (s.session_id[:8] if s.session_id else None),
+            "item_name": s.now_playing_item_name,
+            "item_name_norm": _normalize(s.now_playing_item_name or ""),
+            "item_name_pipe_suffix": _parse_pipe_suffix(
+                _normalize(s.now_playing_item_name or "")
+            ),
+            "channel_name": s.now_playing_channel_name,
+            "channel_name_norm": _normalize(s.now_playing_channel_name or ""),
+            "channel_number": s.channel_number,
+            "last_activity": s.last_activity_date,
+        }
+        for s in truncated
+    ]
+    logger.warning(
+        "[EMBY-RESOLVER] no-match diagnostic: ip=%s ecm_channel=%r "
+        "ecm_channel_norm=%r ecm_channel_number=%r ecm_stream=%r "
+        "ecm_stream_norm=%r sessions_count=%d sessions=%s",
+        client_ip,
+        ecm_channel_name,
+        _normalize(ecm_channel_name or ""),
+        ecm_channel_number,
+        ecm_stream_name,
+        _normalize(ecm_stream_name or ""),
+        len(sessions),
+        session_payload,
+    )
 
 
 def _sort_by_recency_descending(sessions: list[EmbySession]) -> list[EmbySession]:

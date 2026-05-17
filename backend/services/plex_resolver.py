@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import logging
 import socket
+import time
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
@@ -134,17 +135,37 @@ _WARN_RATE_LIMIT_SECONDS: float = 60.0
 _dns_cache: dict[str, str | object] = {}
 
 
+# bd-r5f0c.10: per-(client_ip, normalized_channel_name) rate-limit
+# timestamps for the no-match forensic WARN. A dict (not a single global
+# timestamp) so a noisy problem channel does not silence diagnosis for
+# other channels the same operator is also having trouble with.
+_plex_resolver_no_match_last_warn_at: dict[tuple[str, str], float] = {}
+
+
+# Minimum interval between WARN emissions for the same (ip, channel)
+# pair. 60 s mirrors the Emby resolver helper for shape symmetry.
+_PLEX_NO_MATCH_WARN_INTERVAL: float = 60.0
+
+
+# Max sessions in the forensic log line — defensive against log-bloat
+# on operators with very large Plex session counts.
+_PLEX_NO_MATCH_MAX_SESSIONS: int = 10
+
+
 def _reset_for_tests() -> None:
-    """Clear the DNS cache and warn rate-limit — tests only.
+    """Clear the DNS cache, warn rate-limit, and no-match rate-limit — tests only.
 
     Tests share the same module instance across test functions; without
     this reset, a hostname-resolution result from one test would leak
-    into the next and produce false matches. Production code paths do
-    not call this.
+    into the next and produce false matches. bd-r5f0c.10 also added a
+    per-(ip, channel) no-match WARN timestamp dict that must be cleared
+    so rate-limit tests are isolated. Production code paths do not call
+    this.
     """
     global _plex_resolver_last_warn_at
     _dns_cache.clear()
     _plex_resolver_last_warn_at = None
+    _plex_resolver_no_match_last_warn_at.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +272,17 @@ async def _resolve_plex_users_inner(
             ecm_stream_name, ecm_channel_name, ecm_channel_number,
             len(sessions),
         )
+        # bd-r5f0c.10: forensic WARN — IP matched, sessions exist, no
+        # tier produced a match. Guarded on ``sessions`` non-empty so
+        # the normal idle state stays silent.
+        if sessions:
+            _log_plex_resolver_no_match(
+                client_ip=ecm_session_ip,
+                ecm_channel_name=ecm_channel_name,
+                ecm_channel_number=ecm_channel_number,
+                ecm_stream_name=ecm_stream_name,
+                sessions=sessions,
+            )
         observability.get_metric("user_attribution_unresolved_total").labels(source="plex").inc()
         return []
 
@@ -579,6 +611,73 @@ def _sort_by_recency_descending(sessions: list[PlexSession]) -> list[PlexSession
     the input order is preserved for ties.
     """
     return sorted(sessions, key=_plex_recency_key, reverse=True)
+
+
+def _log_plex_resolver_no_match(
+    *,
+    client_ip: str,
+    ecm_channel_name: str | None,
+    ecm_channel_number: str | int | None,
+    ecm_stream_name: str,
+    sessions: list[PlexSession],
+) -> None:
+    """Emit a structured WARN once per (client_ip, channel_name) per 60 s
+    when the Plex resolver had sessions to compare against and the IP
+    short-circuit passed, but no tier produced a match.
+
+    bd-r5f0c.10 forensic logging — mirrors the Emby resolver helper.
+    See :func:`emby_resolver._log_emby_resolver_no_match` for the full
+    rationale. PlexSession exposes a smaller field set
+    (no separate ``now_playing_channel_name`` or ``channel_number`` — Plex
+    encodes both as the ``<number> | <name>`` pipe form on
+    ``now_playing_item_name``) so the per-session payload surfaces the
+    parsed pipe prefix and suffix alongside the raw item name. The
+    ``last_activity_date`` is a ``datetime`` here (vs an ISO string for
+    Emby/Jellyfin), serialized as ``isoformat()`` for readability.
+
+    Callers MUST guard on non-empty ``sessions`` — an empty session list
+    is a normal state and would spam the log with useless lines.
+    """
+    rate_key = (client_ip, _normalize(ecm_channel_name or ""))
+    now = time.monotonic()
+    last = _plex_resolver_no_match_last_warn_at.get(rate_key, 0.0)
+    if now - last < _PLEX_NO_MATCH_WARN_INTERVAL:
+        return
+    _plex_resolver_no_match_last_warn_at[rate_key] = now
+
+    truncated = sessions[:_PLEX_NO_MATCH_MAX_SESSIONS]
+    session_payload = [
+        {
+            "session_id": (s.session_id[:8] if s.session_id else None),
+            "item_name": s.now_playing_item_name,
+            "item_name_norm": _normalize(s.now_playing_item_name or ""),
+            "item_name_pipe_prefix": _parse_pipe_prefix(
+                _normalize(s.now_playing_item_name or "")
+            ),
+            "item_name_pipe_suffix": _parse_pipe_suffix(
+                _normalize(s.now_playing_item_name or "")
+            ),
+            "last_activity": (
+                s.last_activity_date.isoformat()
+                if s.last_activity_date is not None
+                else None
+            ),
+        }
+        for s in truncated
+    ]
+    logger.warning(
+        "[PLEX-RESOLVER] no-match diagnostic: ip=%s ecm_channel=%r "
+        "ecm_channel_norm=%r ecm_channel_number=%r ecm_stream=%r "
+        "ecm_stream_norm=%r sessions_count=%d sessions=%s",
+        client_ip,
+        ecm_channel_name,
+        _normalize(ecm_channel_name or ""),
+        ecm_channel_number,
+        ecm_stream_name,
+        _normalize(ecm_stream_name or ""),
+        len(sessions),
+        session_payload,
+    )
 
 
 def _log_disambiguation_warn(

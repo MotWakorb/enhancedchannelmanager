@@ -110,16 +110,37 @@ _dns_cache: dict[str, str | object] = {}
 _jellyfin_resolver_last_warn_at: float | None = None
 
 
+# bd-r5f0c.10: per-(client_ip, normalized_channel_name) rate-limit
+# timestamps for the no-match forensic WARN. A dict (not a single global
+# timestamp) so a noisy problem channel does not silence diagnosis for
+# other channels the same operator is also having trouble with.
+_jellyfin_resolver_no_match_last_warn_at: dict[tuple[str, str], float] = {}
+
+
+# Minimum interval between WARN emissions for the same (ip, channel)
+# pair. Same 60 s as the existing disambiguation WARN above and as the
+# Emby/Plex no-match WARNs.
+_JELLYFIN_NO_MATCH_WARN_INTERVAL: float = 60.0
+
+
+# Max sessions in the forensic log line — defensive against log-bloat
+# on operators with very large Jellyfin session counts.
+_JELLYFIN_NO_MATCH_MAX_SESSIONS: int = 10
+
+
 def _reset_for_tests() -> None:
-    """Clear the DNS cache and warn timestamp — tests only.
+    """Clear the DNS cache, warn timestamp, and no-match rate-limit — tests only.
 
     Tests share the same module instance across test functions; without
     this reset, a hostname-resolution result from one test would leak
-    into the next and produce false matches.
+    into the next and produce false matches. bd-r5f0c.10 also added a
+    per-(ip, channel) no-match WARN timestamp dict that must be cleared
+    so rate-limit tests are isolated.
     """
     global _jellyfin_resolver_last_warn_at
     _dns_cache.clear()
     _jellyfin_resolver_last_warn_at = None
+    _jellyfin_resolver_no_match_last_warn_at.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +241,17 @@ async def resolve_jellyfin_users(
             ecm_stream_name, ecm_channel_name, ecm_channel_number,
             len(sessions),
         )
+        # bd-r5f0c.10: forensic WARN — IP matched, sessions exist, no
+        # tier produced a match. Guarded on ``sessions`` non-empty so
+        # the normal idle state stays silent.
+        if sessions:
+            _log_jellyfin_resolver_no_match(
+                client_ip=ecm_session_ip,
+                ecm_channel_name=ecm_channel_name,
+                ecm_channel_number=ecm_channel_number,
+                ecm_stream_name=ecm_stream_name,
+                sessions=sessions,
+            )
         observability.get_metric("user_attribution_unresolved_total").labels(source="jellyfin").inc()
         return []
 
@@ -529,6 +561,66 @@ def _sort_by_recency_descending(
         sessions,
         key=lambda s: s.last_activity_date or "",
         reverse=True,
+    )
+
+
+def _log_jellyfin_resolver_no_match(
+    *,
+    client_ip: str,
+    ecm_channel_name: str | None,
+    ecm_channel_number: str | int | None,
+    ecm_stream_name: str,
+    sessions: list[JellyfinSession],
+) -> None:
+    """Emit a structured WARN once per (client_ip, channel_name) per 60 s
+    when the Jellyfin resolver had sessions to compare against and the
+    IP short-circuit passed, but no tier produced a match.
+
+    bd-r5f0c.10 forensic logging — mirrors the Emby resolver helper.
+    See :func:`emby_resolver._log_emby_resolver_no_match` for the full
+    rationale. JellyfinSession's field shape matches EmbySession (same
+    upstream Sessions API ancestry), so the per-session payload is
+    identical: raw + normalized item_name, parsed pipe suffix,
+    channel_name (raw + normalized), channel_number, last_activity.
+
+    Callers MUST guard on non-empty ``sessions`` — an empty session list
+    is a normal state and would spam the log with useless lines.
+    """
+    rate_key = (client_ip, _normalize(ecm_channel_name or ""))
+    now = time.monotonic()
+    last = _jellyfin_resolver_no_match_last_warn_at.get(rate_key, 0.0)
+    if now - last < _JELLYFIN_NO_MATCH_WARN_INTERVAL:
+        return
+    _jellyfin_resolver_no_match_last_warn_at[rate_key] = now
+
+    truncated = sessions[:_JELLYFIN_NO_MATCH_MAX_SESSIONS]
+    session_payload = [
+        {
+            "session_id": (s.session_id[:8] if s.session_id else None),
+            "item_name": s.now_playing_item_name,
+            "item_name_norm": _normalize(s.now_playing_item_name or ""),
+            "item_name_pipe_suffix": _parse_pipe_suffix(
+                _normalize(s.now_playing_item_name or "")
+            ),
+            "channel_name": s.now_playing_channel_name,
+            "channel_name_norm": _normalize(s.now_playing_channel_name or ""),
+            "channel_number": s.channel_number,
+            "last_activity": s.last_activity_date,
+        }
+        for s in truncated
+    ]
+    logger.warning(
+        "[JELLYFIN-RESOLVER] no-match diagnostic: ip=%s ecm_channel=%r "
+        "ecm_channel_norm=%r ecm_channel_number=%r ecm_stream=%r "
+        "ecm_stream_norm=%r sessions_count=%d sessions=%s",
+        client_ip,
+        ecm_channel_name,
+        _normalize(ecm_channel_name or ""),
+        ecm_channel_number,
+        ecm_stream_name,
+        _normalize(ecm_stream_name or ""),
+        len(sessions),
+        session_payload,
     )
 
 
