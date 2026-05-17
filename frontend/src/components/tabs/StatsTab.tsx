@@ -1213,14 +1213,6 @@ export function StatsTab() {
                         <div key={client.client_id || idx} className="client-item">
                           <div className="client-info">
                             {/* bd-r5f0c.5 (W5): Multi-viewer rendering.
-                                Priority order:
-                                  1. *_viewers[] (W9 multi-viewer lists)
-                                  2. *_user_name singular (back-compat fallback)
-                                  3. dispatcharr username / user_id
-                                For each source that has viewers, render an
-                                AttributionBadge row. If a client has viewers
-                                from multiple sources, each gets its own line. */}
-                            {/* bd-r5f0c.5 (W5): Multi-viewer rendering.
                                 Priority order per source:
                                   1. *_viewers[] (W9 multi-viewer lists) → AttributionBadge
                                   2. *_user_name singular (back-compat) → old inline badge
@@ -1228,6 +1220,10 @@ export function StatsTab() {
                                   3. dispatcharr username / user_id
                                 If a client has viewers from multiple sources,
                                 each gets its own <span className="client-user"> row. */}
+                            {/* bd-r5f0c.12: per-client display groups same-user multi-stream into
+                                "name (N)". The channel-header viewer rollup intentionally still
+                                counts raw streams (each concurrent stream is its own operational
+                                event at the channel level). */}
                             {(() => {
                               // --- Multi-viewer path (W9 emby_viewers / plex_viewers / jellyfin_viewers) ---
                               type ViewerRow = { source: 'emby' | 'plex' | 'jellyfin'; viewers: Viewer[] };
@@ -1247,19 +1243,46 @@ export function StatsTab() {
                                 return (
                                   <div className="client-attribution-rows" data-testid="client-attribution-rows">
                                     {viewerRows.map(row => {
-                                      const count = row.viewers.length;
+                                      // bd-r5f0c.12: Group viewers by (user_id, user_name) — same user
+                                      // with multiple concurrent streams collapses into "name (N)"
+                                      // instead of repeating the name. user_id is the primary key;
+                                      // user_name is the fallback when user_id is null (e.g., Plex's
+                                      // PlexAttribution.user_id can be None per W9 report — same-name
+                                      // viewers still group via name fallback).
+                                      type ViewerGroup = { user_id: string | null; user_name: string; count: number };
+                                      const groupKey = (v: Viewer): string =>
+                                        v.user_id != null ? `id:${v.user_id}` : `name:${v.user_name}`;
+
+                                      const groupMap = new Map<string, ViewerGroup>();
+                                      for (const v of row.viewers) {
+                                        const key = groupKey(v);
+                                        const existing = groupMap.get(key);
+                                        if (existing) {
+                                          existing.count += 1;
+                                        } else {
+                                          groupMap.set(key, { user_id: v.user_id, user_name: v.user_name, count: 1 });
+                                        }
+                                      }
+                                      const groups = Array.from(groupMap.values());
+
+                                      // Format each group: "<name>" when count==1, "<name> (<count>)" otherwise
+                                      const formatGroup = (g: ViewerGroup): string =>
+                                        g.count === 1 ? g.user_name : `${g.user_name} (${g.count})`;
+
+                                      // Threshold for rollup is now group count, not raw viewer count
+                                      const isRollup = groups.length > 3;
                                       let nameText: string;
-                                      if (count === 1) {
-                                        nameText = row.viewers[0].user_name;
-                                      } else if (count <= 3) {
-                                        nameText = row.viewers.map(v => v.user_name).join(', ');
+                                      if (groups.length === 1) {
+                                        nameText = formatGroup(groups[0]);
+                                      } else if (groups.length <= 3) {
+                                        nameText = groups.map(formatGroup).join(', ');
                                       } else {
-                                        nameText = `${count} viewers`;
+                                        nameText = `${row.viewers.length} viewers`;
                                       }
                                       return (
                                         <span key={row.source} className="client-user">
                                           <AttributionBadge source={row.source} />
-                                          {count > 3 ? (
+                                          {isRollup ? (
                                             <details className="viewer-details">
                                               <summary>{nameText}</summary>
                                               <ul className="viewer-list">
