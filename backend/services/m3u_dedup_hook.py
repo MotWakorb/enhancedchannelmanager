@@ -223,10 +223,7 @@ def check_and_enqueue_pending_merge(
         )
         return DedupHookResult(enqueued=True, candidate=None)
 
-    # Fresh insert — emit the LOCKED-CONTRACT counter per BD-M. The
-    # gauge ``ecm_pending_merges_queue_depth`` is NOT in the BD-M
-    # contract (only the *_added_total counter is); gauge maintenance
-    # is a follow-up bead, not BD-F's scope.
+    # Fresh insert — emit the LOCKED-CONTRACT counter per BD-M.
     try:
         from observability import get_metric
         get_metric("pending_merges_queue_depth_added_total").inc()
@@ -237,6 +234,18 @@ def check_and_enqueue_pending_merge(
         logger.debug(
             "[DEDUP] metric increment failed for "
             "ecm_pending_merges_queue_depth_added_total",
+            exc_info=True,
+        )
+
+    # Update the companion gauge (bd-wvr1d). Best-effort: a failed COUNT
+    # or gauge.set is logged at WARN inside the helper and never blocks
+    # the enqueue path — the pending row is the source of truth.
+    try:
+        from observability import set_pending_merges_queue_depth_gauge
+        set_pending_merges_queue_depth_gauge(db_session)
+    except Exception:  # pragma: no cover — defensive import guard
+        logger.warning(
+            "[DEDUP] gauge update failed after pending_merges insert",
             exc_info=True,
         )
 

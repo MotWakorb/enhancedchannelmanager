@@ -468,6 +468,10 @@ sum(rate(ecm_dedup_merge_requests_total[5m]))
 - `ecm_dedup_merge_requests_total{status}`: `status` bounded to ~4 values (`success`, `error`, `dismissed`, `cancelled`).
 - `ecm_pending_merges_queue_depth_added_total`: label-free counter. Per-source attribution belongs in structured logs (`[DEDUP] merge_request_queued source=drag_drop target_channel=...`), not the metric.
 
+**Companion gauge (bd-wvr1d) — NOT a contract SLI:**
+
+`ecm_pending_merges_queue_depth` is a diagnostic gauge that reflects the current number of `pending_merges` rows with `status='pending'`. It is set after every BD-F insert and BD-E accept/dismiss commit, and seeded on app startup. This gauge is **not** a contract SLI — the counter `ecm_pending_merges_queue_depth_added_total` remains the SLI-10b source. Alerts and runbooks **must not** take a dependency on the gauge without explicit cross-team review: gauge accuracy is best-effort (failed DB reads leave it stale rather than crashing the write path) and there is no atomic "flip + read" guarantee against concurrent transitions. Use the counter for SLI math; use the gauge for dashboard visualization.
+
 **Runbooks:**
 
 - [`docs/runbooks/dedup-candidate-lookup-latency.md`](../runbooks/dedup-candidate-lookup-latency.md) — SLI-10a / `ECMDedupCandidateLookupLatencyHigh`
