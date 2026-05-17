@@ -1400,6 +1400,25 @@ class SessionTelemetry(Base):
     # ``provider_id``, ``channel_id``, ``stream_id``).
     emby_user_id = Column(Text, nullable=True)
     emby_user_name = Column(Text, nullable=True)
+    # bd-r5f0c.1 (migration 0017): Plex + Jellyfin user attribution
+    # columns, at parity with the Emby pair above. Identical rationale —
+    # ECM only sees the Dispatcharr stream session's IP, so when users
+    # watch via a Plex or Jellyfin server all stream pulls collapse to
+    # the media server's IP. The Plex (W2) and Jellyfin (W3) resolvers
+    # cross-reference each live upstream session against ECM's active
+    # streams and the W4 ``BandwidthTracker`` writer populates these
+    # four columns from the per-poll upstream lookup. Both ID columns
+    # are TEXT — Plex serves user IDs as strings in its ``/sessions``
+    # payload, and Jellyfin (Emby fork) uses GUID-string IDs — staying
+    # aligned with the ``emby_user_id`` TEXT choice. All four are NULL
+    # for non-Plex / non-Jellyfin rows. Plain nullable columns, NOT
+    # FKs — Plex's and Jellyfin's user tables are upstream and not ECM
+    # tables, mirroring the established pattern for every other
+    # upstream identifier on this row.
+    plex_user_id = Column(Text, nullable=True)
+    plex_user_name = Column(Text, nullable=True)
+    jellyfin_user_id = Column(Text, nullable=True)
+    jellyfin_user_name = Column(Text, nullable=True)
 
     __table_args__ = (
         CheckConstraint(
