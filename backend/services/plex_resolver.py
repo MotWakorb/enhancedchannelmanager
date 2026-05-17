@@ -59,6 +59,7 @@ from __future__ import annotations
 import logging
 import socket
 import unicodedata
+from dataclasses import dataclass
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -70,6 +71,32 @@ from services.plex_cache import get_cached_plex_sessions
 import observability
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Public types
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PlexAttribution:
+    """The resolved Plex identity for one ECM stream session.
+
+    bd-r5f0c.9 multi-viewer addition. Pre-bd-r5f0c.9 the Plex resolver
+    surfaced only ``user_name`` (Plex's ``/status/sessions`` exposes a
+    numeric ``User/@id`` but the resolver didn't surface it). This
+    dataclass mirrors :class:`EmbyAttribution` /
+    :class:`JellyfinAttribution` for shape symmetry across the three
+    resolvers' plural variants.
+
+    The ``user_id`` slot is ``None`` when the Plex resolver does not
+    expose a stable upstream identifier — the bandwidth_tracker writer
+    tolerates this by writing ``None`` to ``plex_user_id`` (and to the
+    ``user_id`` key in the encoded ``plex_viewers`` JSON list).
+    """
+
+    user_name: str
+    user_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -125,69 +152,50 @@ def _reset_for_tests() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def resolve_plex_user(
+async def resolve_plex_users(
     ecm_session_ip: str,
     ecm_stream_name: str,
     ecm_channel_name: str | None = None,
     ecm_channel_number: str | int | None = None,
-) -> str | None:
-    """Cross-reference one ECM stream against the live Plex session list.
+) -> list[PlexAttribution]:
+    """Cross-reference one ECM stream against the live Plex session list (multi-viewer).
 
-    Returns the matching Plex user's name when exactly one Plex session
-    is playing this stream, else ``None``. Multiple matches (rare — same
-    channel on multiple Plex clients) tie-break on most-recent
-    ``last_activity_date``.
+    bd-r5f0c.9 (parent epic bd-r5f0c). Plex is a transcoding proxy — N
+    upstream viewers share one ECM client (the Plex server itself), so
+    the resolver was matching all N sessions across the tiers but
+    ``_tiebreak_most_recent`` was collapsing the list to a single
+    winner. This plural variant returns the FULL list so every viewer
+    is captured.
 
-    Matching is tiered (mirrors the Emby resolver's bd-zldrq fix-forward
-    approach for live TV where Dispatcharr stream names like
-    ``"US: ESPN FHD"`` do not fuzzy-match Plex now-playing names like
-    ``"408 | ESPN"`` at the 0.85 floor):
+    Returns the list of every Plex session that matched any tier,
+    sorted ``last_activity_date`` descending so position 0 is the
+    most-recent viewer. Empty list when:
 
-    1. **Tier 1 — channel_name exact.** Parse each Plex session's
-       ``now_playing_item_name`` as ``"<number> | <name>"`` and compare
-       the right-hand part case-insensitively to ``ecm_channel_name``.
-       Whole-string equal also counts (some Plex installs surface live
-       TV without the ``"<number> | "`` prefix).
-    2. **Tier 2 — channel_number exact.** When both ``ecm_channel_number``
-       and the session's item name prefix are present, string-compare.
-       Defensive against name divergence between ECM and Plex.
-    3. **Tier 3 — fuzzy stream_name fallback.** Score
-       ``ecm_stream_name`` against ``now_playing_item_name`` via
-       RapidFuzz ``token_set_ratio / 100`` against
-       ``FUZZY_MATCH_THRESHOLD``. Still the right behavior for
-       non-live-TV Plex content (movies, episodes, music).
+    * The ECM session's client IP does NOT match the Plex server IP,
+    * No Plex sessions are playing,
+    * No tier matched,
+    * Any defensive failure (DNS resolution failure, malformed base URL).
 
-    Args:
-        ecm_session_ip: The client IP of the Dispatcharr stream session
-            ECM is trying to attribute. For Plex-mediated streams this
-            will be the Plex server's IP; for everything else it will
-            not, and the resolver short-circuits.
-        ecm_stream_name: The Dispatcharr stream name (e.g. "CNN HD") —
-            matched case-insensitively against each Plex session's
-            ``now_playing_item_name`` in the tier-3 fallback. Required
-            for back-compat.
-        ecm_channel_name: ECM channel name (e.g. "ESPN"). When
-            populated, the resolver tries tier 1 first. Optional.
-        ecm_channel_number: ECM channel number (e.g. ``408`` or
-            ``"408"``). When populated, the resolver tries tier 2.
-            Accepts ``int`` or ``str`` and casts to ``str`` for compare.
+    Tier semantics, hot-path discipline, and DNS caching are identical
+    to the pre-bd-r5f0c.9 single-viewer path — see
+    :func:`_find_matching_sessions` for the per-tier scoring.
 
-    Returns:
-        The resolved Plex user_name string, or ``None`` when the IP
-        does not match the Plex server, no Plex session matches across
-        any tier, or any defensive failure (DNS resolution failure,
-        malformed base URL).
+    Metric semantics (W6 observability work):
 
-    Notes:
-        Never raises. The BandwidthTracker poll loop calls this on every
-        active session every ~5 seconds; raising would either kill the
-        loop or force the caller to wrap every call. A top-level
-        ``except Exception`` guard backstops any unexpected failure path
-        and returns ``None`` with a DEBUG log so the caller always gets
-        a result.
+    * ``ecm_user_attribution_resolved_total{source="plex"}`` fires
+      PER VIEWER — if N viewers matched, the counter increments by N.
+    * ``ecm_user_attribution_unresolved_total{source="plex"}`` fires
+      ONLY when the resolver entered (IP matched the Plex server) AND
+      produced an empty list.
+
+    Never raises. The BandwidthTracker poll loop calls this on every
+    active session every ~5 seconds; the top-level ``except Exception``
+    in :func:`_resolve_plex_users_inner` backstops any unexpected
+    failure path and returns ``[]`` with a DEBUG log so the caller
+    always gets a result.
     """
     try:
-        return await _resolve_plex_user_inner(
+        return await _resolve_plex_users_inner(
             ecm_session_ip=ecm_session_ip,
             ecm_stream_name=ecm_stream_name,
             ecm_channel_name=ecm_channel_name,
@@ -195,44 +203,40 @@ async def resolve_plex_user(
         )
     except Exception as exc:  # noqa: BLE001
         logger.debug("[PLEX] Unexpected resolver error: %s", exc)
-        return None
+        return []
 
 
-async def _resolve_plex_user_inner(
+async def _resolve_plex_users_inner(
     ecm_session_ip: str,
     ecm_stream_name: str,
     ecm_channel_name: str | None,
     ecm_channel_number: str | int | None,
-) -> str | None:
-    """Inner implementation of :func:`resolve_plex_user` — may raise.
+) -> list[PlexAttribution]:
+    """Inner implementation of :func:`resolve_plex_users` — may raise.
 
-    Wrapped by ``resolve_plex_user`` which catches all exceptions so the
-    BandwidthTracker poll loop never sees a raised exception from this path.
+    Wrapped by ``resolve_plex_users`` which catches all exceptions so
+    the BandwidthTracker poll loop never sees a raised exception from
+    this path.
     """
     settings = get_settings()
     base_url = getattr(settings, "plex_base_url", "") or ""
 
     plex_server_ip = _resolve_plex_server_ip(base_url)
     if plex_server_ip is None:
-        # Could not determine the Plex server IP (empty/malformed URL or
-        # DNS failure). Fail safe — no attribution possible.
-        return None
+        return []
 
     if ecm_session_ip != plex_server_ip:
-        # Hot path: the vast majority of ECM sessions are NOT
-        # Plex-mediated. Short-circuit before the cache call.
-        return None
+        # Hot path short-circuit.
+        return []
 
     try:
         sessions = await get_cached_plex_sessions()
     except Exception as exc:  # noqa: BLE001
         logger.debug("[PLEX] Unexpected error fetching cached sessions: %s", exc)
-        return None
+        return []
 
     if not sessions:
-        # Cache empty (Plex disabled, idle server, or fetch failure with
-        # no prior cache). Nothing to match.
-        return None
+        return []
 
     matches = _find_matching_sessions(
         ecm_stream_name=ecm_stream_name,
@@ -248,25 +252,69 @@ async def _resolve_plex_user_inner(
             len(sessions),
         )
         observability.get_metric("user_attribution_unresolved_total").labels(source="plex").inc()
-        return None
+        return []
 
-    winner = _tiebreak_most_recent(matches)
-    if len(matches) > 1:
-        # Surface disambiguation so operators can see the tie-break in
-        # trace. Warn-rate-limited so noisy setups don't flood the log.
+    sorted_matches = _sort_by_recency_descending(matches)
+
+    if len(sorted_matches) > 1:
         _log_disambiguation_warn(
-            count=len(matches),
+            count=len(sorted_matches),
             ecm_session_ip=ecm_session_ip,
             name=ecm_channel_name or ecm_stream_name,
-            winner_name=winner.user_name,
+            winner_name=sorted_matches[0].user_name,
         )
     else:
         logger.debug(
             "[PLEX] Resolved stream=%r → user=%s from 1 match",
-            ecm_stream_name, winner.user_name,
+            ecm_stream_name, sorted_matches[0].user_name,
         )
-    observability.get_metric("user_attribution_resolved_total").labels(source="plex").inc()
-    return winner.user_name
+
+    metric = observability.get_metric("user_attribution_resolved_total")
+    for _ in sorted_matches:
+        metric.labels(source="plex").inc()
+
+    # Plex's PlexSession does not expose a stable upstream user identifier
+    # on the public ``/status/sessions`` surface today. The Attribution
+    # carries ``user_id=None``; the column tolerates it (NULL).
+    return [
+        PlexAttribution(user_name=session.user_name, user_id=None)
+        for session in sorted_matches
+    ]
+
+
+async def resolve_plex_user(
+    ecm_session_ip: str,
+    ecm_stream_name: str,
+    ecm_channel_name: str | None = None,
+    ecm_channel_number: str | int | None = None,
+) -> str | None:
+    """Back-compat wrapper — return the most-recent matching Plex user_name.
+
+    Pre-bd-r5f0c.9 callers (W4 ``BandwidthTracker`` shim, stats.py
+    ``_enrich_one_source``, and the existing test surface) call this
+    function expecting at most one user_name string (the pre-bd-r5f0c.9
+    contract: ``str | None``). bd-r5f0c.9 split the multi-viewer plural
+    variant out as :func:`resolve_plex_users`; this wrapper returns
+    position 0's user_name to preserve the existing contract verbatim.
+
+    Returns the matching Plex user's name when one or more Plex sessions
+    are playing this stream, else ``None``. Multiple matches (multi-
+    viewer scenarios — same channel on multiple Plex clients) tie-break
+    on most-recent ``last_activity_date`` exactly as before bd-r5f0c.9.
+
+    The tiered matching algorithm is documented on
+    :func:`resolve_plex_users`; this wrapper inherits the same tiering,
+    short-circuits, and metric semantics.
+
+    Never raises. Defensive failures return ``None``.
+    """
+    users = await resolve_plex_users(
+        ecm_session_ip,
+        ecm_stream_name,
+        ecm_channel_name=ecm_channel_name,
+        ecm_channel_number=ecm_channel_number,
+    )
+    return users[0].user_name if users else None
 
 
 # ---------------------------------------------------------------------------
@@ -489,31 +537,48 @@ def _fuzzy_or_exact_match(normalized_stream: str, normalized_candidate: str) -> 
     return score >= FUZZY_MATCH_THRESHOLD
 
 
+def _plex_recency_key(s: PlexSession) -> float:
+    """Return a comparable recency score for one Plex session.
+
+    Plex timestamps are ``datetime`` objects. ``None`` always loses to
+    any populated datetime — mapped to ``float("-inf")`` so populated
+    timestamps sort higher regardless of timezone awareness. The
+    ``.timestamp()`` conversion handles both timezone-aware and naive
+    datetimes uniformly.
+    """
+    if s.last_activity_date is None:
+        return float("-inf")
+    try:
+        return s.last_activity_date.timestamp()
+    except (OSError, OverflowError, ValueError):
+        return float("-inf")
+
+
 def _tiebreak_most_recent(sessions: list[PlexSession]) -> PlexSession:
     """Pick the session with the most-recent ``last_activity_date``.
 
-    Plex timestamps are ``datetime`` objects. A session with
-    ``last_activity_date is None`` should never beat one with a real
-    datetime — we map ``None`` to ``float("-inf")`` (epoch seconds) so
-    populated timestamps always sort higher regardless of timezone
-    awareness.
-
-    Returns the input verbatim when there is only one session.
+    bd-r5f0c.9: retained as the one-winner helper for legacy paths
+    that still want a single match. The multi-viewer path uses
+    :func:`_sort_by_recency_descending` which returns the FULL sorted
+    list.
     """
     if len(sessions) == 1:
         return sessions[0]
+    return max(sessions, key=_plex_recency_key)
 
-    def _sort_key(s: PlexSession) -> float:
-        if s.last_activity_date is None:
-            return float("-inf")
-        # Use POSIX timestamp (float seconds since epoch) for comparison
-        # so both timezone-aware and naive datetimes are handled uniformly.
-        try:
-            return s.last_activity_date.timestamp()
-        except (OSError, OverflowError, ValueError):
-            return float("-inf")
 
-    return max(sessions, key=_sort_key)
+def _sort_by_recency_descending(sessions: list[PlexSession]) -> list[PlexSession]:
+    """Return ``sessions`` sorted by ``last_activity_date`` descending.
+
+    bd-r5f0c.9 multi-viewer attribution: the plural resolver returns
+    every matched session so every viewer is captured, with position 0
+    being the most-recent viewer. Same ``None``-loses semantic as
+    :func:`_tiebreak_most_recent`.
+
+    Stable across equal timestamps (Python's ``sorted`` is stable) so
+    the input order is preserved for ties.
+    """
+    return sorted(sessions, key=_plex_recency_key, reverse=True)
 
 
 def _log_disambiguation_warn(

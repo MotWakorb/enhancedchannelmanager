@@ -701,3 +701,182 @@ class TestDisambiguationLogging:
             and rec.levelno == logging.WARNING
             for rec in caplog.records
         ), f"expected WARN; got {[r.getMessage() for r in caplog.records]}"
+
+
+# ---------------------------------------------------------------------------
+# bd-r5f0c.9 multi-viewer: resolve_jellyfin_users returns the FULL list of
+# matched sessions sorted most-recent first, NOT just the tiebreak winner.
+# Fixes the PO-reported bug where ECM showed only one user when multiple
+# Jellyfin viewers were watching the same channel via the Jellyfin server proxy.
+# ---------------------------------------------------------------------------
+
+
+class TestMultiViewer:
+    """Plural :func:`resolve_jellyfin_users` captures every viewer that
+    matched any tier. The singular wrapper :func:`resolve_jellyfin_user`
+    continues to return the most-recent viewer for back-compat.
+    """
+
+    async def test_two_viewers_same_channel_returns_both(self):
+        """Two Jellyfin sessions on the same channel → resolve_jellyfin_users
+        returns BOTH attributions, most-recent first."""
+        older = _make_session(
+            user_id="uid-alice", user_name="alice",
+            item_name="ESPN",  # bare channel name (Jellyfin tolerance)
+            last_activity="2026-05-16T10:00:00Z",
+        )
+        newer = _make_session(
+            user_id="uid-bob", user_name="bob",
+            item_name="ESPN",
+            last_activity="2026-05-16T14:00:00Z",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[older, newer])):
+            users = await jellyfin_resolver.resolve_jellyfin_users(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="US: ESPN FHD",
+                ecm_channel_name="ESPN",
+            )
+        assert len(users) == 2, f"expected 2 viewers; got {len(users)}"
+        assert users[0].user_id == "uid-bob"
+        assert users[0].user_name == "bob"
+        assert users[1].user_id == "uid-alice"
+        assert users[1].user_name == "alice"
+
+    async def test_three_viewers_same_channel_returns_all_three(self):
+        """Three Jellyfin sessions on the same channel."""
+        s1 = _make_session(
+            user_id="u1", user_name="alice",
+            item_name="ESPN", last_activity="2026-05-16T10:00:00Z",
+        )
+        s2 = _make_session(
+            user_id="u2", user_name="bob",
+            item_name="ESPN", last_activity="2026-05-16T12:00:00Z",
+        )
+        s3 = _make_session(
+            user_id="u3", user_name="charlie",
+            item_name="ESPN", last_activity="2026-05-16T14:00:00Z",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[s1, s2, s3])):
+            users = await jellyfin_resolver.resolve_jellyfin_users(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ESPN",
+                ecm_channel_name="ESPN",
+            )
+        assert [u.user_name for u in users] == ["charlie", "bob", "alice"]
+
+    async def test_single_viewer_returns_one_element_list(self):
+        """The common case: one viewer on the channel → list of 1."""
+        only = _make_session(
+            user_id="uid-only", user_name="solo",
+            item_name="CNN HD",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[only])):
+            users = await jellyfin_resolver.resolve_jellyfin_users(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="CNN HD",
+            )
+        assert len(users) == 1
+        assert users[0].user_name == "solo"
+
+    async def test_no_match_returns_empty_list(self):
+        """No tier matches → empty list."""
+        irrelevant = _make_session(
+            user_id="u", user_name="u", item_name="Unrelated Show",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[irrelevant])):
+            users = await jellyfin_resolver.resolve_jellyfin_users(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="CNN HD",
+            )
+        assert users == []
+
+    async def test_ip_mismatch_returns_empty_list_without_cache_call(self):
+        """IP short-circuit also applies to the plural variant."""
+        cache_mock = AsyncMock(return_value=[_make_session()])
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions", cache_mock):
+            users = await jellyfin_resolver.resolve_jellyfin_users(
+                ecm_session_ip="10.0.0.5",  # NOT the Jellyfin server
+                ecm_stream_name="CNN HD",
+            )
+        assert users == []
+        cache_mock.assert_not_awaited()
+
+    async def test_singular_wrapper_returns_most_recent_viewer(self):
+        """Back-compat target: the legacy singular wrapper still returns
+        the most-recent viewer (position 0 of the plural list)."""
+        older = _make_session(
+            user_id="uid-old", user_name="old_viewer",
+            item_name="CNN HD",
+            last_activity="2026-05-16T10:00:00Z",
+        )
+        newer = _make_session(
+            user_id="uid-new", user_name="new_viewer",
+            item_name="CNN HD",
+            last_activity="2026-05-16T14:00:00Z",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[older, newer])):
+            singular = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="CNN HD",
+            )
+        assert singular is not None
+        assert singular.user_name == "new_viewer"
+
+    async def test_tier_2_match_contributes_to_list(self):
+        """A viewer matched via Tier-2 (channel_number) is included in
+        the list alongside Tier-1 matches."""
+        # Tier-1 match: bare item_name == ecm_channel_name
+        t1 = _make_session(
+            user_id="t1", user_name="t1_user",
+            item_name="ESPN", channel_number="408",
+            last_activity="2026-05-16T14:00:00Z",
+        )
+        # Tier-2 match: channel_number matches but item_name does not
+        t2 = _make_session(
+            user_id="t2", user_name="t2_user",
+            item_name="Some Other Title", channel_number="408",
+            last_activity="2026-05-16T12:00:00Z",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[t1, t2])):
+            users = await jellyfin_resolver.resolve_jellyfin_users(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="US: ESPN FHD",
+                ecm_channel_name="ESPN",
+                ecm_channel_number=408,
+            )
+        names = {u.user_name for u in users}
+        assert names == {"t1_user", "t2_user"}, (
+            f"expected both Tier-1 and Tier-2 matches in viewer list; "
+            f"got {names}"
+        )
+
+    async def test_metric_counter_increments_per_viewer(self):
+        """bd-r5f0c.9 + W6 semantic: the
+        ``user_attribution_resolved_total{source="jellyfin"}`` counter
+        increments PER VIEWER. 3 matched viewers = 3 increments."""
+        s1 = _make_session(user_id="u1", user_name="a", item_name="CNN")
+        s2 = _make_session(user_id="u2", user_name="b", item_name="CNN")
+        s3 = _make_session(user_id="u3", user_name="c", item_name="CNN")
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[s1, s2, s3])):
+            users = await jellyfin_resolver.resolve_jellyfin_users(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="CNN",
+                ecm_channel_name="CNN",
+            )
+        assert len(users) == 3
+        assert _get_counter_value("user_attribution_resolved_total", "jellyfin") == 3.0

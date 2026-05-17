@@ -148,94 +148,72 @@ class EmbyAttribution:
 # ---------------------------------------------------------------------------
 
 
-async def resolve_emby_user(
+async def resolve_emby_users(
     ecm_session_ip: str,
     ecm_stream_name: str,
     ecm_channel_name: str | None = None,
     ecm_channel_number: str | int | None = None,
-) -> EmbyAttribution | None:
-    """Cross-reference one ECM stream against the live Emby session list.
+) -> list[EmbyAttribution]:
+    """Cross-reference one ECM stream against the live Emby session list (multi-viewer).
 
-    Returns the matching Emby user's attribution when exactly one Emby
-    session is playing this stream, else ``None``. Multiple matches
-    (rare — same channel on multiple Emby clients) tie-break on
-    most-recent ``last_activity_date``.
+    bd-r5f0c.9 (parent epic bd-r5f0c). The PO reported that ECM showed
+    only ONE user when N users were watching the same channel via Emby.
+    Root cause: Emby is a transcoding proxy — N upstream viewers share
+    one ECM client (the Emby server itself), so the resolver was
+    matching all N sessions across the tiers but ``_tiebreak_most_recent``
+    was collapsing the list to a single winner. This plural variant
+    returns the FULL list so every viewer is captured.
 
-    Matching is tiered (bd-zldrq fix-forward for v0.17.1-0033 — live
-    test surfaced that Dispatcharr stream names like ``"US: ESPN FHD"``
-    do not fuzzy-match Emby live-TV item names like ``"408 | ESPN"`` at
-    the 0.85 floor, because the only token in common is "ESPN"):
+    Returns the list of every Emby session that matched any tier,
+    sorted ``last_activity_date`` descending so position 0 is the
+    most-recent viewer (the same one the legacy singular
+    :func:`resolve_emby_user` wrapper returns). Empty list when:
 
-    1. **Tier 1 — channel_name exact.** Parse each Emby session's
-       ``now_playing_item_name`` as ``"<number> | <name>"`` and compare
-       the right-hand part case-insensitively to ``ecm_channel_name``.
-       Whole-string equal also counts (some Emby installs surface live
-       TV without the ``"<number> | "`` prefix).
-    2. **Tier 2 — channel_number exact.** When both ``ecm_channel_number``
-       and the session's ``channel_number`` are present, string-compare
-       (cast ECM input to str). Defensive against name divergence
-       between ECM and Emby.
-    3. **Tier 3 — fuzzy stream_name fallback.** The legacy path: score
-       ``ecm_stream_name`` against ``now_playing_item_name`` and
-       ``now_playing_channel_name`` via RapidFuzz ``token_set_ratio /
-       100`` against ``FUZZY_MATCH_THRESHOLD``. Still the right behavior
-       for non-live-TV Emby content (movies, episodes).
+    * The ECM session's client IP does NOT match the Emby server IP,
+    * No Emby sessions are playing,
+    * No tier matched,
+    * Any defensive failure (DNS resolution failure, malformed base URL).
 
-    Matches across tiers are pooled into one disambiguation set; the
-    most-recent ``last_activity_date`` wins. When the candidate set has
-    N > 1 entries, a ``[EMBY] resolver:`` DEBUG line names the count,
-    ip, name, and picked user so operators can see the disambiguation
-    in trace.
+    Matching is tiered (bd-zldrq fix-forward for v0.17.1-0033):
 
-    Args:
-        ecm_session_ip: The client IP of the Dispatcharr stream session
-            ECM is trying to attribute. For Emby-mediated streams this
-            will be the Emby server's IP; for everything else it will
-            not, and the resolver short-circuits.
-        ecm_stream_name: The Dispatcharr stream name (e.g. "CNN HD") —
-            matched case-insensitively against each Emby session's
-            ``now_playing_item_name`` and ``now_playing_channel_name``
-            in the tier-3 fallback. Required for back-compat (the
-            pre-bd-zldrq signature was ``(ip, stream_name)``).
-        ecm_channel_name: ECM channel name (e.g. "ESPN"). When
-            populated, the resolver tries tier 1 first. Optional so
-            non-live-TV callers do not need to pass it.
-        ecm_channel_number: ECM channel number (e.g. ``408`` or
-            ``"408"``). When populated, the resolver tries tier 2.
-            Optional — accepts ``int`` or ``str`` and casts to ``str``
-            for compare.
+    1. **Tier 1 — channel_name exact** (live-TV primary path).
+    2. **Tier 2 — channel_number exact** (defensive fallback).
+    3. **Tier 3 — fuzzy stream_name** (legacy VOD path).
 
-    Returns:
-        ``EmbyAttribution`` with the resolved user_id + user_name, or
-        ``None`` when the IP does not match the Emby server, no Emby
-        session matches across any tier, or any defensive failure
-        (DNS resolution failure, malformed base URL).
+    Sessions matched by multiple tiers are de-duped by session identity
+    so the same physical session is not double-counted in the list.
 
-    Notes:
-        Never raises. The BandwidthTracker poll loop calls this on every
-        active session every ~5 seconds; raising would either kill the
-        loop or force the caller to wrap every call. Defensive failures
-        (bad URL, DNS failure) return ``None`` after logging.
+    Metric semantics (W6 observability work):
+
+    * ``ecm_user_attribution_resolved_total{source="emby"}`` fires
+      PER VIEWER — if N viewers matched, the counter increments by N.
+      A poll with 3 concurrent viewers on the same channel adds 3 to
+      the counter.
+    * ``ecm_user_attribution_unresolved_total{source="emby"}`` fires
+      ONLY when the resolver entered (IP matched the Emby server) AND
+      produced an empty list — i.e. ECM thought this was an Emby-
+      mediated session but no Emby session matched.
+
+    Never raises. The BandwidthTracker poll loop calls this on every
+    active session every ~5 seconds; raising would either kill the
+    loop or force the caller to wrap every call. Defensive failures
+    (bad URL, DNS failure) return ``[]``.
     """
     settings = get_settings()
     base_url = getattr(settings, "emby_base_url", "") or ""
 
     emby_server_ip = _resolve_emby_server_ip(base_url)
     if emby_server_ip is None:
-        # Could not determine the Emby server IP (empty/malformed URL or
-        # DNS failure). Fail safe — no attribution possible.
-        return None
+        return []
 
     if ecm_session_ip != emby_server_ip:
         # Hot path: the vast majority of ECM sessions are NOT
         # Emby-mediated. Short-circuit before the cache call.
-        return None
+        return []
 
     sessions = await get_cached_emby_sessions()
     if not sessions:
-        # Cache empty (Emby disabled, idle server, or fetch failure with
-        # no prior cache). Nothing to match.
-        return None
+        return []
 
     matches = _find_matching_sessions(
         ecm_stream_name=ecm_stream_name,
@@ -251,26 +229,84 @@ async def resolve_emby_user(
             len(sessions),
         )
         observability.get_metric("user_attribution_unresolved_total").labels(source="emby").inc()
-        return None
+        return []
 
-    winner = _tiebreak_most_recent(matches)
-    if len(matches) > 1:
-        # Surface disambiguation so operators can see the tie-break in
-        # trace. Hot path — keep at DEBUG.
+    # bd-r5f0c.9: sort the full match list by recency (descending) so
+    # position 0 is the most-recent viewer. The legacy singular wrapper
+    # (:func:`resolve_emby_user`) returns this position-0 element for
+    # back-compat with pre-multi-viewer callers.
+    sorted_matches = _sort_by_recency_descending(matches)
+
+    if len(sorted_matches) > 1:
         logger.debug(
             "[EMBY] resolver: %d candidates for ip=%s name=%s, "
-            "picked %s by recency",
-            len(matches), ecm_session_ip,
+            "all returned (multi-viewer; most-recent first: %s)",
+            len(sorted_matches), ecm_session_ip,
             ecm_channel_name or ecm_stream_name,
-            winner.user_name,
+            sorted_matches[0].user_name,
         )
     else:
         logger.debug(
             "[EMBY] Resolved stream=%r → user=%s (uid=%s) from 1 match",
-            ecm_stream_name, winner.user_name, winner.user_id,
+            ecm_stream_name,
+            sorted_matches[0].user_name,
+            sorted_matches[0].user_id,
         )
-    observability.get_metric("user_attribution_resolved_total").labels(source="emby").inc()
-    return EmbyAttribution(user_id=winner.user_id, user_name=winner.user_name)
+
+    # Per-viewer increment — the W6 metric reflects every captured viewer.
+    metric = observability.get_metric("user_attribution_resolved_total")
+    for _ in sorted_matches:
+        metric.labels(source="emby").inc()
+
+    return [
+        EmbyAttribution(user_id=session.user_id, user_name=session.user_name)
+        for session in sorted_matches
+    ]
+
+
+async def resolve_emby_user(
+    ecm_session_ip: str,
+    ecm_stream_name: str,
+    ecm_channel_name: str | None = None,
+    ecm_channel_number: str | int | None = None,
+) -> EmbyAttribution | None:
+    """Back-compat wrapper — return the most-recent matching Emby user (singular).
+
+    Pre-bd-r5f0c.9 callers (W4 ``BandwidthTracker`` shims, stats.py
+    ``_enrich_one_source``, and the existing test surface) call this
+    function expecting at most one attribution. bd-r5f0c.9 split the
+    multi-viewer plural variant out as :func:`resolve_emby_users`; this
+    wrapper returns position 0 of that list (most-recent viewer) to
+    preserve every existing caller's contract verbatim.
+
+    Returns the matching Emby user's attribution when one or more Emby
+    sessions are playing this stream, else ``None``. Multiple matches
+    (multi-viewer scenarios — same channel on multiple Emby clients)
+    tie-break on most-recent ``last_activity_date`` exactly as before
+    bd-r5f0c.9.
+
+    The tiered matching algorithm is documented on
+    :func:`resolve_emby_users`; this wrapper inherits the same tiering,
+    short-circuits, and metric semantics. The W6 metric counters fire
+    inside the plural function — calling THIS wrapper still increments
+    once per call (since the wrapper just slices the plural result down
+    to one), but with the plural function counters that's the same
+    semantics as before bd-r5f0c.9 (one viewer = one increment).
+
+    Notes:
+        Never raises. Defensive failures return ``None``. The
+        BandwidthTracker shim and stats.py enrichment helpers continue
+        to call this wrapper directly post-bd-r5f0c.9 (with the
+        bandwidth_tracker write path having migrated to the plural
+        variant for multi-viewer capture).
+    """
+    users = await resolve_emby_users(
+        ecm_session_ip,
+        ecm_stream_name,
+        ecm_channel_name=ecm_channel_name,
+        ecm_channel_number=ecm_channel_number,
+    )
+    return users[0] if users else None
 
 
 # ---------------------------------------------------------------------------
@@ -522,7 +558,32 @@ def _tiebreak_most_recent(sessions: list[EmbySession]) -> EmbySession:
 
     Returns the input verbatim when there is only one session, so the
     caller does not need to special-case the common one-match path.
+
+    bd-r5f0c.9: retained as the one-winner helper for legacy paths that
+    still want a single match. The multi-viewer path uses
+    :func:`_sort_by_recency_descending` which returns the FULL sorted
+    list.
     """
     if len(sessions) == 1:
         return sessions[0]
     return max(sessions, key=lambda s: s.last_activity_date or "")
+
+
+def _sort_by_recency_descending(sessions: list[EmbySession]) -> list[EmbySession]:
+    """Return ``sessions`` sorted by ``last_activity_date`` descending.
+
+    bd-r5f0c.9 multi-viewer attribution: the plural resolver returns
+    every matched session so every viewer is captured, with position 0
+    being the most-recent viewer. Same ``None``-loses semantic as
+    :func:`_tiebreak_most_recent` — sessions without a populated
+    ``last_activity_date`` sink to the bottom.
+
+    Stable across equal timestamps (Python's ``sorted`` is stable) so
+    the input order is preserved for ties — useful for reproducible
+    test fixtures.
+    """
+    return sorted(
+        sessions,
+        key=lambda s: s.last_activity_date or "",
+        reverse=True,
+    )
