@@ -226,11 +226,15 @@ async def _enrich_channels_with_emby(channels: list) -> None:
     except Exception:  # pragma: no cover — settings access raise is exotic
         for ch in channels:
             ch.setdefault("emby_user_name", None)
+            for client in ch.get("clients", []) or []:
+                client.setdefault("emby_user_name", None)
         return
 
     if not getattr(settings, "emby_enabled", False):
         for ch in channels:
             ch.setdefault("emby_user_name", None)
+            for client in ch.get("clients", []) or []:
+                client.setdefault("emby_user_name", None)
         return
 
     from services.emby_resolver import resolve_emby_user
@@ -250,10 +254,17 @@ async def _enrich_channels_with_emby(channels: list) -> None:
         # matches whenever the bd-ox5q8 stream-name enrichment produced
         # an empty value.
         if not stream_name and not channel_name and channel_number is None:
+            # Still seed emby_user_name=None on each client so the
+            # TypeScript shape contract holds (field present, value null).
+            for client in ch.get("clients", []) or []:
+                client.setdefault("emby_user_name", None)
             continue
         clients = ch.get("clients") or []
         client_ips = [c.get("ip_address") for c in clients if c.get("ip_address")]
         if not client_ips:
+            # No IPs to resolve — still seed the client field.
+            for client in clients:
+                client.setdefault("emby_user_name", None)
             continue
         for ip in client_ips:
             try:
@@ -271,7 +282,20 @@ async def _enrich_channels_with_emby(channels: list) -> None:
                 continue
             if attribution is not None:
                 ch["emby_user_name"] = attribution.user_name
+                # bd-5kbyf (fix-forward for v0.17.1-0035): propagate the
+                # resolved Emby username to every client on this channel.
+                # For Emby-mediated streams, all client connections share
+                # the Emby server's IP from Dispatcharr's perspective —
+                # the channel-level resolved viewer IS the per-client
+                # viewer. Same precision as the channel-level badge.
+                for client in clients:
+                    client["emby_user_name"] = attribution.user_name
                 break
+        else:
+            # Resolver returned None for every IP — seed null so the shape
+            # is consistent regardless of resolution outcome.
+            for client in clients:
+                client.setdefault("emby_user_name", None)
 
 
 # =============================================================================

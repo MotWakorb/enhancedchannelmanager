@@ -1166,10 +1166,24 @@ export function StatsTab() {
                       {channel.clients.map((client, idx) => (
                         <div key={client.client_id || idx} className="client-item">
                           <div className="client-info">
-                            {(client.username || client.user_id) && (
+                            {/* bd-5kbyf: prefer emby_user_name (propagated
+                                from channel-level resolver) over dispatcharr
+                                username; fall back to User #id when neither
+                                is set. "via Emby" badge mirrors the
+                                attribution-source-badge from UserStatsPanel
+                                (bd-fm23o). */}
+                            {(client.emby_user_name || client.username || client.user_id) && (
                               <span className="client-user">
                                 <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
-                                {client.username || `User #${client.user_id}`}
+                                {client.emby_user_name || client.username || `User #${client.user_id}`}
+                                {client.emby_user_name && (
+                                  <span
+                                    className="badge attribution-source-badge"
+                                    title="Identity resolved via Emby /Sessions cross-reference"
+                                  >
+                                    via Emby
+                                  </span>
+                                )}
                               </span>
                             )}
                             <span className="client-ip">{client.ip_address || 'Unknown'}</span>
