@@ -52,3 +52,27 @@
 - ⚡ Performance
 - 🔒 Security
 - 💥 Breaking changes
+
+---
+
+## Pending release notes (copy-paste to Discord when cutting the release)
+
+### v0.17.1
+
+```
+@here
+
+## 🚀 ECM v0.17.1
+
+**🆕 Plex + Jellyfin User Attribution + Multi-Viewer**
+• Connected Clients now shows usernames for Plex and Jellyfin streams (was: Emby only)
+• When multiple users watch the same channel through the same media server, all their names are listed (was: only the most-recent user's name)
+• Configure under Settings → Integrations → Plex Integration / Jellyfin Integration
+• No re-migration required; new columns in session_telemetry are populated as new sessions arrive
+
+**🔒 Security**
+• SSRF mitigation on test-connection endpoints for Emby, Plex, and Jellyfin (scheme allowlist + netloc-only URL reconstruction)
+
+**📝 Documentation**
+• New Integrations operator guide covering Emby, Plex, and Jellyfin side-by-side (Settings → Integrations)
+```
