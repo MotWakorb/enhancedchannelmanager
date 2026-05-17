@@ -2773,3 +2773,318 @@ class TestMigration0015Idempotent:
                 )
         finally:
             engine.dispose()
+
+
+# Migration 0016 — session_telemetry Emby user attribution columns (bd-k026g)
+
+@pytest.mark.integration
+class TestMigration0016:
+    """Migration 0016 — Emby user attribution columns on ``session_telemetry``.
+
+    bd-k026g is the schema substrate for the Emby user attribution epic
+    (parent ``enhancedchannelmanager-2cenq``). ECM only sees the
+    Dispatcharr stream session's IP; when users watch via an Emby server
+    all stream pulls collapse to a single "Emby server" identity in
+    Stats. The Emby integration cross-references each live Emby session
+    against ECM's active streams and persists the resolved user via two
+    new NULLABLE TEXT columns on ``session_telemetry``:
+
+      - ``emby_user_id`` (TEXT NULL — Emby user IDs are GUIDs, not ints)
+      - ``emby_user_name`` (TEXT NULL — denormalized at write time)
+
+    Pre-existing columns (``user_id``, ``dispatcharr_username``,
+    ``provider_id``, ``channel_id``, ``buffer_event_count``, the three
+    per-type event counters from migration 0013, ``stream_id``,
+    ``stream_name``) are preserved verbatim — this migration is
+    additive only.
+
+    Coverage:
+      - Fresh upgrade through 0016 — both new columns exist as TEXT NULL;
+        ``dispatcharr_username`` is untouched.
+      - Fresh downgrade — both new columns are gone;
+        ``dispatcharr_username`` is still present.
+    """
+
+    NEW_COLUMNS = ("emby_user_id", "emby_user_name")
+
+    def test_fresh_sqlite_upgrade_through_0016(self, tmp_path):
+        """Fresh DB: ``alembic upgrade 0016`` adds the two new columns."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0016_fresh.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0016")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            for new_col in self.NEW_COLUMNS:
+                assert new_col in cols, (
+                    f"{new_col} missing after upgrade 0016 — migration "
+                    f"0016 did not run correctly."
+                )
+            # dispatcharr_username is preserved — pre-bd-k026g back-compat
+            # (the per-row writer maintains both Dispatcharr and Emby
+            # attribution side-by-side; both columns are populated for
+            # Emby-mediated streams and surface independently in Stats).
+            assert "dispatcharr_username" in cols, (
+                "dispatcharr_username must be preserved by 0016 — the "
+                "Emby attribution columns are additive, not a rename."
+            )
+            # Verify NULLABLE TEXT via PRAGMA.
+            with engine.connect() as conn:
+                rows = conn.execute(text(
+                    "PRAGMA table_info(session_telemetry)"
+                )).fetchall()
+            col_info = {r[1]: r for r in rows}
+            for new_col in self.NEW_COLUMNS:
+                _, name, col_type, notnull, dflt, _pk = col_info[new_col]
+                assert notnull == 0, (
+                    f"{name} must be NULLABLE (notnull=0); got notnull={notnull}"
+                )
+                # SQLAlchemy ``sa.Text()`` renders as ``TEXT`` in SQLite.
+                assert col_type == "TEXT", (
+                    f"{name} must be TEXT; got type={col_type!r}"
+                )
+                # No DEFAULT for nullable text columns.
+                assert dflt is None, (
+                    f"{name} must have no DEFAULT; got dflt={dflt!r}"
+                )
+        finally:
+            engine.dispose()
+
+    def test_fresh_sqlite_downgrade_from_0016(self, tmp_path):
+        """Downgrade 0016 -> 0015: the two new columns are dropped."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0016_downgrade.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0016")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            for new_col in self.NEW_COLUMNS:
+                assert new_col in cols, (
+                    f"test setup is wrong — {new_col} missing post-upgrade"
+                )
+        finally:
+            engine.dispose()
+
+        command.downgrade(cfg, "0015")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            for new_col in self.NEW_COLUMNS:
+                assert new_col not in cols, (
+                    f"{new_col} still present after downgrade — 0016's "
+                    f"downgrade() did not drop the column."
+                )
+            # dispatcharr_username must survive the downgrade.
+            assert "dispatcharr_username" in cols, (
+                "dispatcharr_username must survive downgrade — it was never "
+                "added or dropped by 0016."
+            )
+        finally:
+            engine.dispose()
+
+
+@pytest.mark.integration
+class TestMigration0016Idempotent:
+    """Regression lock for bd-5w6jz idempotency on migration 0016.
+
+    Three drift scenarios mirror the 0013 / 0015 idempotency tests
+    scaled to the two-column shape:
+
+    1. Both new columns already present via ``create_all()`` from the
+       post-0016 ORM model (long-running install, alembic_version still
+       at 0015). The upgrade must early-return without raising
+       ``OperationalError: duplicate column name``.
+
+    2. ONE of the two columns already present (partial drift — e.g.
+       the migration crashed mid-run after one ADD COLUMN succeeded,
+       or a manual ALTER added one column ahead of the migration).
+       The upgrade must add the remaining one without raising on the
+       already-present one.
+
+    Each column's ADD is independently guarded so any subset of
+    drifted columns is safe to re-encounter.
+    """
+
+    NEW_COLUMNS = ("emby_user_id", "emby_user_name")
+
+    def test_drifted_both_columns_already_added(self, tmp_path):
+        """create_all()-style drift: both columns present pre-0016."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0016_full_drift.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0015")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            for new_col in self.NEW_COLUMNS:
+                assert new_col not in cols, (
+                    f"test setup is wrong — {new_col} already at 0015"
+                )
+            # Inject both columns via raw SQL — matches what
+            # create_all() would emit from the post-0016 ORM model.
+            with engine.begin() as conn:
+                for new_col in self.NEW_COLUMNS:
+                    conn.execute(text(
+                        f"ALTER TABLE session_telemetry ADD COLUMN "
+                        f"{new_col} TEXT"
+                    ))
+            cols = _column_names(engine, "session_telemetry")
+            for new_col in self.NEW_COLUMNS:
+                assert new_col in cols
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == "0015"
+        finally:
+            engine.dispose()
+
+        # Pre-fix this would raise:
+        #   OperationalError: duplicate column name: emby_user_id
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            for new_col in self.NEW_COLUMNS:
+                assert new_col in cols
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == database.get_alembic_head_revision()
+        finally:
+            engine.dispose()
+
+    def test_drifted_partial_emby_user_id_present(self, tmp_path):
+        """Partial drift: only ``emby_user_id`` already present."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0016_partial_id.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0015")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE session_telemetry ADD COLUMN "
+                    "emby_user_id TEXT"
+                ))
+        finally:
+            engine.dispose()
+
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            for new_col in self.NEW_COLUMNS:
+                assert new_col in cols, (
+                    f"{new_col} missing after partial-drift upgrade — "
+                    f"the per-column guard must add absent columns even "
+                    f"when other targets are already present."
+                )
+        finally:
+            engine.dispose()
+
+    def test_drifted_partial_emby_user_name_present(self, tmp_path):
+        """Partial drift: only ``emby_user_name`` already present."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0016_partial_name.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0015")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE session_telemetry ADD COLUMN "
+                    "emby_user_name TEXT"
+                ))
+        finally:
+            engine.dispose()
+
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            for new_col in self.NEW_COLUMNS:
+                assert new_col in cols, (
+                    f"{new_col} missing after partial-drift upgrade — "
+                    f"the per-column guard must add absent columns even "
+                    f"when other targets are already present."
+                )
+        finally:
+            engine.dispose()
+
+    def test_round_trip_up_down_up(self, tmp_path):
+        """Round-trip: upgrade 0016, downgrade to 0015, re-upgrade to 0016.
+
+        Covers the rollback/re-apply path: a migration that breaks on
+        re-apply after a downgrade is the hardest mistake to catch in
+        a fresh-DB test. Both columns must reappear after the second
+        upgrade with their NULLABLE TEXT shape intact.
+        """
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0016_round_trip.db'}"
+        cfg = _make_alembic_config(db_url)
+
+        # Up.
+        command.upgrade(cfg, "0016")
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            for new_col in self.NEW_COLUMNS:
+                assert new_col in cols
+        finally:
+            engine.dispose()
+
+        # Down.
+        command.downgrade(cfg, "0015")
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            for new_col in self.NEW_COLUMNS:
+                assert new_col not in cols
+        finally:
+            engine.dispose()
+
+        # Up again — re-apply after downgrade must work.
+        command.upgrade(cfg, "0016")
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "session_telemetry")
+            for new_col in self.NEW_COLUMNS:
+                assert new_col in cols, (
+                    f"{new_col} missing after re-upgrade — the migration "
+                    f"must be re-appliable after a downgrade."
+                )
+            # Verify the shape held across the round-trip.
+            with engine.connect() as conn:
+                rows = conn.execute(text(
+                    "PRAGMA table_info(session_telemetry)"
+                )).fetchall()
+            col_info = {r[1]: r for r in rows}
+            for new_col in self.NEW_COLUMNS:
+                _, name, col_type, notnull, _dflt, _pk = col_info[new_col]
+                assert notnull == 0, (
+                    f"{name} must be NULLABLE after round-trip"
+                )
+                assert col_type == "TEXT", (
+                    f"{name} must be TEXT after round-trip"
+                )
+        finally:
+            engine.dispose()
