@@ -59,9 +59,28 @@ class PlexSession:
             to ``session_telemetry.plex_user_name``.
         remote_endpoint: Client IP the Plex session originated from
             (``Player/@address``). Used as a sanity check in the resolver.
-        now_playing_item_name: The ``Video/@title`` attribute — for live TV
-            this is often ``"<number> | <channel_name>"`` or just the channel
-            name. ``None`` if unparseable.
+        now_playing_item_name: The ``Video/@title`` attribute. For Plex Live
+            TV from a DVR/Tuner this is the PROGRAM currently airing (e.g.,
+            ``"Saturday Night Live"``) — NOT the channel. Some operator setups
+            still produce ``"<number> | <channel_name>"`` here when the upstream
+            tuner injects the pipe-prefix shape directly. ``None`` if
+            unparseable.
+        now_playing_channel_name: The ``Video/@grandparentTitle`` attribute.
+            For Plex Live TV this carries the CHANNEL name (e.g., ``"ESPN HD"``
+            or ``"NBC"``) and is what the operator's ECM channel_name needs
+            to match against. ``None`` for VOD / movies (no grandparent) and
+            when the attribute is absent. bd-2zcvf: this field exists so the
+            Plex resolver can match by channel just like the Emby and
+            Jellyfin resolvers do via their own dedicated ``ChannelName``
+            field. Without this, Plex Live TV attribution would fail whenever
+            ``@title`` carried the program rather than the channel.
+        now_playing_parent_title: The ``Video/@parentTitle`` attribute.
+            Carries a secondary channel-name surface in some Plex setups
+            (e.g., season title where Plex DVR organizes Live TV episodes
+            under a per-channel "show" with the channel name on the parent).
+            Kept as a third candidate so the resolver tier-1 can match the
+            broadest range of Plex Live TV shapes without bloating the
+            extraction code. ``None`` when absent.
         last_activity_date: ``datetime`` parsed from ``Video/@lastViewedAt``
             (epoch seconds). Used to break ties when multiple Plex sessions
             match the same ECM stream (most-recent-wins). ``None`` when the
@@ -73,6 +92,8 @@ class PlexSession:
     user_name: str
     remote_endpoint: str
     now_playing_item_name: str | None
+    now_playing_channel_name: str | None
+    now_playing_parent_title: str | None
     last_activity_date: datetime | None
 
 
@@ -266,11 +287,21 @@ def _map_item(item: ET.Element) -> PlexSession | None:
             # Malformed timestamp — treat as absent rather than raise.
             pass
 
+    # bd-2zcvf: Plex Live TV puts the channel name in ``@grandparentTitle``
+    # while ``@title`` carries the PROGRAM currently airing (e.g., the show
+    # episode title). Without extracting ``@grandparentTitle``, the resolver
+    # has nothing to compare an operator's ECM channel_name against and
+    # falls all the way through to "User #N" in Stats. ``@parentTitle`` is
+    # captured as a secondary channel surface — some Plex DVR setups put
+    # the channel name on the parent (the "show" that groups all Live TV
+    # episodes by channel) rather than the grandparent.
     return PlexSession(
         session_id=item.get("ratingKey", ""),
         user_id=user_el.get("id", ""),
         user_name=user_el.get("title", ""),
         remote_endpoint=remote_endpoint,
         now_playing_item_name=item.get("title"),
+        now_playing_channel_name=item.get("grandparentTitle"),
+        now_playing_parent_title=item.get("parentTitle"),
         last_activity_date=last_activity,
     )

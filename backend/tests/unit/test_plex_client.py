@@ -92,9 +92,84 @@ async def test_get_sessions_maps_xml_to_dataclass():
         assert alice.user_name == "alice"
         assert alice.remote_endpoint == "192.168.1.50"
         assert alice.now_playing_item_name == "408 | ESPN"
+        # bd-2zcvf: ``@grandparentTitle`` carries the Plex Live TV channel
+        # surface; the fixture's grandparentTitle="ESPN" must land on
+        # ``now_playing_channel_name``. ``@parentTitle`` is absent in this
+        # fixture so the parent_title field is None.
+        assert alice.now_playing_channel_name == "ESPN"
+        assert alice.now_playing_parent_title is None
         # lastViewedAt epoch 1747396800 → 2025-05-16T12:00:00+00:00
         assert isinstance(alice.last_activity_date, datetime)
         assert alice.last_activity_date == datetime(2025, 5, 16, 12, 0, 0, tzinfo=timezone.utc)
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_sessions_live_tv_program_in_title_with_channel_in_grandparent():
+    """bd-2zcvf regression target: Plex Live TV from a DVR/Tuner reports
+    the PROGRAM currently airing in ``Video/@title`` and the CHANNEL name
+    in ``Video/@grandparentTitle``. Without extracting ``@grandparentTitle``,
+    the downstream resolver has nothing to compare an operator's ECM
+    ``channel_name`` against and falls through to "User #N" in Stats.
+
+    This regression target locks in the extraction shape: the program
+    title lands on ``now_playing_item_name`` (back-compat), the channel
+    name lands on ``now_playing_channel_name`` (new), and the parent
+    title lands on ``now_playing_parent_title`` (new). Subsequent
+    resolver tests (``TestTier1ChannelNameMatch`` /
+    ``TestTier3FuzzyMatch``) exercise the matching against the new
+    fields directly.
+    """
+    client = PlexClient(base_url="http://plex.local:32400", api_key="token")
+    # Live TV from Plex DVR: title is the program, grandparentTitle is
+    # the channel name as Plex sees it. parentTitle in some setups is
+    # the "season" Plex synthesizes for Live TV grouping, often the
+    # channel name again — included here so the test covers both
+    # candidate channel-name surfaces.
+    xml = (
+        '<MediaContainer size="1">'
+        '<Video ratingKey="55555" type="episode" '
+        'title="Saturday Night Live" '
+        'grandparentTitle="NBC" '
+        'parentTitle="Season 50" '
+        'lastViewedAt="1747396800">'
+        '<User id="user-bob-2" title="bob"/>'
+        '<Player address="192.168.1.51" state="playing"/>'
+        '</Video>'
+        '</MediaContainer>'
+    )
+    try:
+        fake_resp = _xml_response(200, xml)
+        request_mock = AsyncMock(return_value=fake_resp)
+        with patch.object(client._client, "request", request_mock):
+            sessions = await client.get_sessions()
+        assert len(sessions) == 1
+        session = sessions[0]
+        assert session.now_playing_item_name == "Saturday Night Live"
+        assert session.now_playing_channel_name == "NBC"
+        assert session.now_playing_parent_title == "Season 50"
+        assert session.user_name == "bob"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_sessions_vod_has_no_grandparent_or_parent_titles():
+    """VOD (movies) lack ``@grandparentTitle`` / ``@parentTitle`` —
+    confirm the extraction lands ``None`` for both rather than
+    raising on a missing attribute."""
+    client = PlexClient(base_url="http://plex.local:32400", api_key="token")
+    xml = _load_fixture("sessions_vod.xml")
+    try:
+        fake_resp = _xml_response(200, xml)
+        request_mock = AsyncMock(return_value=fake_resp)
+        with patch.object(client._client, "request", request_mock):
+            sessions = await client.get_sessions()
+        assert len(sessions) == 1
+        assert sessions[0].now_playing_item_name == "The Matrix"
+        assert sessions[0].now_playing_channel_name is None
+        assert sessions[0].now_playing_parent_title is None
     finally:
         await client.close()
 

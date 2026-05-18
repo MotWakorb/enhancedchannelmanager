@@ -63,7 +63,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 
 # App version for manifest (imported at call time to avoid circular imports)
 
-APP_VERSION = "0.17.1-0055"
+APP_VERSION = "0.17.1-0056"
 
 REDACTED = "***REDACTED***"
 
