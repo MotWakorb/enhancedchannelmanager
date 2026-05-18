@@ -39,13 +39,23 @@ from services import plex_cache
 
 
 def _make_session(user_name: str = "alice") -> PlexSession:
-    """Build a representative :class:`PlexSession` for assertions."""
+    """Build a representative :class:`PlexSession` for assertions.
+
+    bd-2zcvf: PlexSession gained ``now_playing_channel_name`` and
+    ``now_playing_parent_title`` to surface Plex Live TV's
+    ``@grandparentTitle`` / ``@parentTitle`` channel-name fields.
+    Both default to ``None`` here — cache tests exercise cache
+    behavior, not name-field shape, so leaving them ``None``
+    preserves the test intent.
+    """
     return PlexSession(
         session_id=f"sess-{user_name}",
         user_id=f"uid-{user_name}",
         user_name=user_name,
         remote_endpoint="10.0.0.5",
         now_playing_item_name="408 | ESPN",
+        now_playing_channel_name=None,
+        now_playing_parent_title=None,
         last_activity_date=datetime(2025, 5, 16, 12, 0, 0, tzinfo=timezone.utc),
     )
 
