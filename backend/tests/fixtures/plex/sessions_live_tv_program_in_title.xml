@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- bd-2zcvf regression fixture: Plex Live TV from a DVR/Tuner reports
+     the PROGRAM currently airing in @title and the CHANNEL name in
+     @grandparentTitle. The operator's ECM channel_name ("2.1 | NBC" or
+     just "NBC") must match against @grandparentTitle since @title
+     carries the program ("Saturday Night Live"), not the channel.
+
+     Pre-bd-2zcvf this session would never resolve — the plex_client
+     only extracted @title and the resolver had no channel-name field
+     to compare. With bd-2zcvf the channel name lands on
+     PlexSession.now_playing_channel_name and tier-1 catches it.
+
+     lastViewedAt: 1747400400 = 2025-05-16T13:00:00Z -->
+<MediaContainer size="1">
+  <Video ratingKey="55555" type="episode"
+         title="Saturday Night Live"
+         grandparentTitle="NBC"
+         parentTitle="Season 50"
+         lastViewedAt="1747400400">
+    <User id="user-bob-2" title="bob"/>
+    <Player address="192.168.1.51" state="playing" platform="Plex for Apple TV"/>
+  </Video>
+</MediaContainer>

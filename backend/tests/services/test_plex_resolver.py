@@ -53,6 +53,8 @@ def _make_session(
     user_id: str = "uid-alice",
     user_name: str = "alice",
     item_name: str | None = "408 | ESPN",
+    channel_name: str | None = None,
+    parent_title: str | None = None,
     last_activity: object = _SENTINEL,
     remote_endpoint: str = "10.0.0.99",
 ) -> PlexSession:
@@ -61,6 +63,12 @@ def _make_session(
     Pass ``last_activity=None`` explicitly to get ``last_activity_date=None``.
     Omit the argument to get a sensible default datetime (avoids accidental
     None tiebreak in tests that don't care about the timestamp).
+
+    bd-2zcvf: ``channel_name`` (Plex ``@grandparentTitle``) and
+    ``parent_title`` (Plex ``@parentTitle``) default to ``None`` to keep
+    existing tests unmodified — every pre-bd-2zcvf assertion stands
+    against sessions where ``item_name`` is the only populated name
+    surface. New Live TV tests pass them explicitly.
     """
     if last_activity is _SENTINEL:
         last_activity = datetime(2025, 5, 16, 12, 0, 0, tzinfo=timezone.utc)
@@ -70,6 +78,8 @@ def _make_session(
         user_name=user_name,
         remote_endpoint=remote_endpoint,
         now_playing_item_name=item_name,
+        now_playing_channel_name=channel_name,
+        now_playing_parent_title=parent_title,
         last_activity_date=last_activity,  # type: ignore[arg-type]
     )
 
@@ -227,6 +237,200 @@ class TestTier1ChannelNameMatch:
                 ecm_stream_name="CNN HD",
             )
         assert result == "sports_fan"
+
+
+# ---------------------------------------------------------------------------
+# bd-2zcvf: Tier 1 channel_name / parent_title matching (Plex Live TV)
+# ---------------------------------------------------------------------------
+
+
+class TestTier1LiveTvChannelMatch:
+    """bd-2zcvf: Plex Live TV reports the PROGRAM in ``@title`` and the
+    CHANNEL in ``@grandparentTitle`` (and sometimes ``@parentTitle``).
+    The resolver's tier-1 must compare ``ecm_channel_name`` against all
+    three candidate session fields — without this, an operator's
+    "User #N" symptom in Stats is unfixable because the program title
+    never matches the channel name.
+
+    These tests parallel ``TestTier1ChannelNameMatch`` above, replacing
+    the assumed ``item_name="<number> | <channel>"`` shape with the
+    real Plex Live TV shape ``item_name="<program>"`` /
+    ``channel_name="<channel>"``.
+    """
+
+    async def test_channel_name_matches_grandparent_title_whole(self):
+        """Plex Live TV: ``item_name="Saturday Night Live"`` (the program),
+        ``channel_name="NBC"`` (the channel). ECM channel_name="NBC" must
+        match the grandparent_title (channel_name field on PlexSession).
+        Pre-bd-2zcvf this returned None — the channel never got
+        compared.
+        """
+        session = _make_session(
+            user_id="uid-bob", user_name="bob",
+            item_name="Saturday Night Live",
+            channel_name="NBC",
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="US: NBC East",
+                ecm_channel_name="NBC",
+            )
+        assert result == "bob"
+
+    async def test_channel_name_matches_grandparent_title_with_pipe_prefix(self):
+        """ECM channel_name="2.1 | NBC" (operator's pipe-prefix shape) vs
+        Plex ``channel_name="NBC"``. bd-r5f0c.11's ECM-side suffix parse
+        carries over to the new channel_name candidate."""
+        session = _make_session(
+            user_name="alice",
+            item_name="Anderson Cooper 360",
+            channel_name="NBC",
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="US: NBC East",
+                ecm_channel_name="2.1 | NBC",
+            )
+        assert result == "alice"
+
+    async def test_channel_name_matches_parent_title(self):
+        """Some Plex DVR setups put the channel name on ``@parentTitle``
+        (e.g., when the grandparent is a generic "Live TV" entity).
+        bd-2zcvf includes parent_title as the third candidate field so
+        these setups still resolve."""
+        session = _make_session(
+            user_name="dave",
+            item_name="The Tonight Show",
+            channel_name=None,
+            parent_title="NBC",
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ignored",
+                ecm_channel_name="NBC",
+            )
+        assert result == "dave"
+
+    async def test_channel_name_grandparent_pipe_suffix_match(self):
+        """``channel_name="408 | ESPN"`` carries the pipe-prefix on
+        Plex's side (some upstream tuners do this); ECM channel_name
+        ``"ESPN"`` must still match by parsing the suffix."""
+        session = _make_session(
+            user_name="eve",
+            item_name="SportsCenter",
+            channel_name="408 | ESPN",
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="US: ESPN FHD",
+                ecm_channel_name="ESPN",
+            )
+        assert result == "eve"
+
+    async def test_clean_session_with_empty_new_fields_unchanged(self):
+        """Sessions with ``channel_name=None`` and ``parent_title=None``
+        (the pre-bd-2zcvf shape — VOD or older Plex setups) still match
+        via ``item_name`` exactly as before. Regression target: no
+        existing match path regresses when the new fields are absent.
+        """
+        session = _make_session(
+            user_name="frank",
+            item_name="408 | CBS",
+            channel_name=None,
+            parent_title=None,
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ignored",
+                ecm_channel_name="CBS",
+            )
+        assert result == "frank"
+
+    async def test_channel_name_matches_none_of_three_fields_returns_none(self):
+        """Defensive: when ECM channel_name doesn't match item, channel,
+        OR parent, tier-1 fails and (with no number / fuzzy match)
+        the resolver returns None."""
+        session = _make_session(
+            user_name="grace",
+            item_name="The Daily Show",
+            channel_name="Comedy Central",
+            parent_title="Late Night",
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="completely unrelated",
+                ecm_channel_name="ESPN",
+            )
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# bd-2zcvf: Tier 3 fuzzy fallback on channel_name / parent_title
+# ---------------------------------------------------------------------------
+
+
+class TestTier3FuzzyFallbackLiveTv:
+    """bd-2zcvf: tier-3 fuzzy matching now considers ``channel_name`` and
+    ``parent_title`` in addition to ``item_name``. This parallels the
+    Emby resolver's tier-3 which already compares stream_name against
+    both ``now_playing_item_name`` and ``now_playing_channel_name``.
+    Without this, a Live TV session whose ``@title`` is the program
+    would fall through tier 3 entirely when the operator's stream_name
+    fuzzy-matches the channel but not the program."""
+
+    async def test_fuzzy_stream_name_matches_grandparent_title(self):
+        """Stream name "CNN HD 1080p" fuzzy-matches grandparent "CNN HD"
+        well above the 0.85 threshold; ``item_name="Anderson Cooper 360"``
+        does not. Pre-bd-2zcvf this returned None."""
+        session = _make_session(
+            user_name="harvey",
+            item_name="Anderson Cooper 360",
+            channel_name="CNN HD",
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="CNN HD 1080p",
+            )
+        assert result == "harvey"
+
+    async def test_fuzzy_stream_name_matches_parent_title(self):
+        """Same as above but the channel name landed on
+        ``@parentTitle`` (alternate Plex DVR shape)."""
+        session = _make_session(
+            user_name="irene",
+            item_name="Some Talk Show",
+            channel_name=None,
+            parent_title="FOX News HD",
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="FOX News HD 720",
+            )
+        assert result == "irene"
 
 
 # ---------------------------------------------------------------------------
@@ -1003,6 +1207,46 @@ class TestNoMatchDiagnostic:
                 )
         warns = self._no_match_records(caplog.records)
         assert len(warns) == 2
+
+    async def test_diagnostic_payload_carries_channel_name_and_parent_title(self, caplog):
+        """bd-2zcvf: the no-match diagnostic must surface the new Plex
+        Live TV channel-name fields (``channel_name`` from
+        ``@grandparentTitle``, ``parent_title`` from ``@parentTitle``)
+        alongside the existing ``item_name`` fields. Without these in
+        the forensic payload, an operator inspecting a no-match log
+        line for a Live TV session would only see the PROGRAM title in
+        ``item_name`` and have no way to verify which session
+        corresponds to which ECM channel.
+        """
+        session = _make_session(
+            user_name="alice",
+            item_name="Saturday Night Live",
+            channel_name="NBC",
+            parent_title="Season 50",
+        )
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.WARNING, logger="services.plex_resolver"):
+                users = await plex_resolver.resolve_plex_users(
+                    ecm_session_ip="192.168.1.20",
+                    ecm_stream_name="ESPN HD",
+                    ecm_channel_name="ESPN",
+                )
+        assert users == []
+        warns = self._no_match_records(caplog.records)
+        assert len(warns) == 1
+        msg = warns[0].getMessage()
+        # bd-2zcvf: the new fields must appear in the payload.
+        assert "'channel_name': 'NBC'" in msg, (
+            f"expected channel_name in payload, got: {msg}"
+        )
+        assert "'channel_name_norm': 'nbc'" in msg
+        assert "'parent_title': 'Season 50'" in msg, (
+            f"expected parent_title in payload, got: {msg}"
+        )
+        # And the existing item_name fields still surface.
+        assert "'item_name': 'Saturday Night Live'" in msg
 
     async def test_truncation_cap_thirty(self, caplog):
         """bd-r5f0c.11: 35 sessions in cache → forensic payload includes
