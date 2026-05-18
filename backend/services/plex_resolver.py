@@ -457,32 +457,67 @@ def _find_matching_sessions(
 
     Tiered match (mirrors emby_resolver's bd-zldrq approach):
 
-    * **Tier 1** — channel name primary. Parse ``item_name`` as
-      ``"<number> | <name>"``; the right-hand part (or the whole
-      string when there's no ``"|"`` separator) must equal
-      ``ecm_channel_name`` after normalization.
+    * **Tier 1** — channel name primary. Compare ``ecm_channel_name``
+      against THREE candidate fields per session: ``item_name``,
+      ``channel_name`` (Plex's ``@grandparentTitle``), and
+      ``parent_title`` (Plex's ``@parentTitle``). Each candidate is
+      considered both whole and as the right-hand part of a
+      ``"<number> | <name>"`` pipe-prefix. ECM-side pipe-prefix
+      tolerance (bd-r5f0c.11) also applies symmetrically. bd-2zcvf
+      added the channel_name + parent_title candidates after the PO
+      reported Plex Live TV "User #0" — Plex's ``@title`` carries the
+      PROGRAM currently airing (e.g., ``"Saturday Night Live"``) while
+      the operator-visible channel name lives on ``@grandparentTitle``.
     * **Tier 2** — channel number exact (string compare against the
-      left-hand side of ``"<number> | <name>"``). Skipped when either
-      side is missing.
+      left-hand side of ``"<number> | <name>"`` on ``item_name``).
+      Skipped when either side is missing.
     * **Tier 3** — RapidFuzz ``token_set_ratio`` on
-      ``ecm_stream_name`` against ``item_name`` with the bead-spec
-      0.85 floor. Back-compat for movies / VOD where neither channel
-      argument is available.
+      ``ecm_stream_name`` against ``item_name``, ``channel_name``,
+      and ``parent_title`` with the bead-spec 0.85 floor. Back-compat
+      for movies / VOD where neither channel argument is available;
+      bd-2zcvf added the channel_name + parent_title candidates so
+      Live TV fuzzy fallback parallels the Emby resolver shape (which
+      compares ``ecm_stream_name`` against both Emby item_name and
+      Emby channel_name).
 
     A session matches if ANY tier accepts it. The list is the union of
     tier hits — duplicates are de-duped by session identity so the same
     physical session is not double-counted in the tie-break.
     """
     # Pre-normalize Plex session strings ONCE — hot-path performance.
-    prepared: list[tuple[PlexSession, str, str, str]] = []
+    # bd-2zcvf: the per-session tuple now carries three name surfaces
+    # (item_name, channel_name, parent_title) plus their pipe-suffix
+    # forms. The size of the prepared tuple grows from 4 to 7 elements;
+    # the per-session allocation cost is one tuple per session per poll
+    # (negligible) and the readability win is the tier loops see clearly
+    # named fields rather than positional indices.
+    prepared: list[tuple[PlexSession, str, str, str, str, str, str]] = []
     for session in sessions:
         normalized_item = _normalize(session.now_playing_item_name or "")
+        normalized_channel = _normalize(session.now_playing_channel_name or "")
+        normalized_parent = _normalize(session.now_playing_parent_title or "")
         # The right-hand side of "<number> | <name>" (or empty when
         # there's no pipe). Tier 1 compares this to ecm_channel_name.
-        suffix = _parse_pipe_suffix(normalized_item)
-        # The left-hand side of "<number> | <name>" — used for tier 2.
+        item_suffix = _parse_pipe_suffix(normalized_item)
+        channel_suffix = _parse_pipe_suffix(normalized_channel)
+        parent_suffix = _parse_pipe_suffix(normalized_parent)
+        # The left-hand side of "<number> | <name>" on item_name — used
+        # for tier 2. We only prefix-parse item_name because Plex's
+        # ``@grandparentTitle`` / ``@parentTitle`` Live TV surfaces are
+        # typically clean channel names without the numeric prefix.
         prefix = _parse_pipe_prefix(normalized_item)
-        prepared.append((session, normalized_item, suffix, prefix))
+        prepared.append((
+            session,
+            normalized_item,
+            normalized_channel,
+            normalized_parent,
+            item_suffix,
+            channel_suffix,
+            parent_suffix,
+        ))
+        # ``prefix`` is consumed only by tier 2 below — kept out of the
+        # tuple to keep the per-tuple shape under the readability ceiling.
+        # Tier 2 re-derives it from normalized_item via _parse_pipe_prefix.
 
     # Track matched sessions by identity to avoid double-counting when
     # two tiers both accept the same physical session.
@@ -505,46 +540,119 @@ def _find_matching_sessions(
     # has no pipe, so this is a no-op for clean ECM names.
     ecm_channel_suffix = _parse_pipe_suffix(normalized_ecm_channel)
     if normalized_ecm_channel:
-        for session, normalized_item, suffix, _prefix in prepared:
-            # Right-hand side of "<number> | <name>" matches (the
-            # primary live-TV path), OR the whole item_name matches
-            # (some Plex installs have no "<number> | " prefix).
-            if suffix and suffix == normalized_ecm_channel:
+        for (
+            session,
+            normalized_item,
+            normalized_channel,
+            normalized_parent,
+            item_suffix,
+            channel_suffix,
+            parent_suffix,
+        ) in prepared:
+            # bd-2zcvf: build the list of candidate (whole, suffix)
+            # pairs for this session — item, channel, parent. Each pair
+            # is checked against both the raw ECM channel_name and the
+            # ECM-side pipe-suffix form (bd-r5f0c.11 tolerance).
+            # ``_match_against_candidates`` returns True on the first
+            # successful comparison.
+            candidates: tuple[tuple[str, str], ...] = (
+                (normalized_item, item_suffix),
+                (normalized_channel, channel_suffix),
+                (normalized_parent, parent_suffix),
+            )
+            if _match_against_candidates(
+                normalized_ecm_channel,
+                ecm_channel_suffix,
+                candidates,
+            ):
                 _accept(session)
-                continue
-            if normalized_item and normalized_item == normalized_ecm_channel:
-                _accept(session)
-                continue
-            # bd-r5f0c.11: ECM-side pipe-prefix tolerance. When ECM's
-            # channel_name itself carries "<number> | <name>" (M3U
-            # import leak), compare the parsed ECM suffix against the
-            # session's parsed suffix and its whole item_name. Two new
-            # compares; additive — gated on ecm_channel_suffix being
-            # non-empty so clean ECM names are unaffected.
-            if ecm_channel_suffix:
-                if suffix and suffix == ecm_channel_suffix:
-                    _accept(session)
-                    continue
-                if normalized_item and normalized_item == ecm_channel_suffix:
-                    _accept(session)
 
     # ----- Tier 2: channel number exact (string compare against prefix)
+    # Plex's ``@grandparentTitle`` / ``@parentTitle`` typically carry
+    # clean channel names (no pipe prefix), so tier 2 still only
+    # examines the ``item_name`` pipe-prefix — matches Emby's tier 2
+    # which examines ``session.channel_number`` (a dedicated field).
     if ecm_channel_number is not None:
         ecm_number_str = str(ecm_channel_number).strip()
         if ecm_number_str:
-            for session, _it, _sfx, prefix in prepared:
+            for entry in prepared:
+                session = entry[0]
+                normalized_item = entry[1]
+                prefix = _parse_pipe_prefix(normalized_item)
                 # Match the numeric prefix of "<number> | <name>"
                 if prefix and prefix.strip() == ecm_number_str:
                     _accept(session)
 
     # ----- Tier 3: legacy fuzzy fallback on stream_name
+    # bd-2zcvf: compare ``ecm_stream_name`` against all three Plex name
+    # surfaces (item, channel, parent), mirroring the Emby resolver
+    # which compares stream_name against both ``item_name`` and
+    # ``channel_name``. Without the channel/parent compare, Live TV
+    # whose ``@title`` is the program would fall through tier 3 too.
     normalized_stream = _normalize(ecm_stream_name or "")
     if normalized_stream:
-        for session, normalized_item, _sfx, _pfx in prepared:
+        for (
+            session,
+            normalized_item,
+            normalized_channel,
+            normalized_parent,
+            _it_sfx,
+            _ch_sfx,
+            _pt_sfx,
+        ) in prepared:
             if _fuzzy_or_exact_match(normalized_stream, normalized_item):
+                _accept(session)
+                continue
+            if _fuzzy_or_exact_match(normalized_stream, normalized_channel):
+                _accept(session)
+                continue
+            if _fuzzy_or_exact_match(normalized_stream, normalized_parent):
                 _accept(session)
 
     return matches
+
+
+def _match_against_candidates(
+    normalized_ecm_channel: str,
+    ecm_channel_suffix: str,
+    candidates: tuple[tuple[str, str], ...],
+) -> bool:
+    """Return True iff any candidate (whole, suffix) pair matches the ECM channel.
+
+    bd-2zcvf: extracted from tier-1 so the three Plex name surfaces
+    (item, channel, parent) share one comparison block rather than
+    triplicating the whole/suffix/ECM-side-suffix logic. Each
+    ``(whole, suffix)`` pair represents one session field — ``whole``
+    is the full normalized value (e.g., ``"408 | espn"``), ``suffix``
+    is the parsed right-hand pipe-suffix (e.g., ``"espn"``) or empty
+    when there's no pipe.
+
+    The comparison matrix per candidate:
+
+    1. ``suffix == normalized_ecm_channel`` — Plex side has pipe,
+       ECM side is clean (the primary live-TV path).
+    2. ``whole == normalized_ecm_channel`` — neither side has a pipe.
+    3. ECM-side pipe tolerance (bd-r5f0c.11): when ECM's channel_name
+       itself carries the pipe-prefix, also compare against
+       ``ecm_channel_suffix`` — both ``suffix == ecm_channel_suffix``
+       (both sides pipe) and ``whole == ecm_channel_suffix`` (Plex side
+       clean, ECM side pipe).
+
+    Empty fields (whole == "" AND suffix == "") cannot match.
+    """
+    for whole, suffix in candidates:
+        if not whole and not suffix:
+            continue
+        if suffix and suffix == normalized_ecm_channel:
+            return True
+        if whole and whole == normalized_ecm_channel:
+            return True
+        if ecm_channel_suffix:
+            if suffix and suffix == ecm_channel_suffix:
+                return True
+            if whole and whole == ecm_channel_suffix:
+                return True
+    return False
 
 
 def _parse_pipe_suffix(normalized_item_name: str) -> str:
@@ -669,6 +777,13 @@ def _log_plex_resolver_no_match(
     _plex_resolver_no_match_last_warn_at[rate_key] = now
 
     truncated = sessions[:_PLEX_NO_MATCH_MAX_SESSIONS]
+    # bd-2zcvf: also surface the Plex Live TV channel-name fields
+    # (``@grandparentTitle`` → ``channel_name``; ``@parentTitle`` →
+    # ``parent_title``). The original payload only carried
+    # ``item_name`` which for Plex Live TV is the PROGRAM currently
+    # airing — without these two extra fields a PO inspecting the
+    # forensic log would see only the program titles and have no way
+    # to verify which session corresponds to which ECM channel.
     session_payload = [
         {
             "session_id": (s.session_id[:8] if s.session_id else None),
@@ -679,6 +794,16 @@ def _log_plex_resolver_no_match(
             ),
             "item_name_pipe_suffix": _parse_pipe_suffix(
                 _normalize(s.now_playing_item_name or "")
+            ),
+            "channel_name": s.now_playing_channel_name,
+            "channel_name_norm": _normalize(s.now_playing_channel_name or ""),
+            "channel_name_pipe_suffix": _parse_pipe_suffix(
+                _normalize(s.now_playing_channel_name or "")
+            ),
+            "parent_title": s.now_playing_parent_title,
+            "parent_title_norm": _normalize(s.now_playing_parent_title or ""),
+            "parent_title_pipe_suffix": _parse_pipe_suffix(
+                _normalize(s.now_playing_parent_title or "")
             ),
             "last_activity": (
                 s.last_activity_date.isoformat()
