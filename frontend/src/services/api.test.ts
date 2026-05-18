@@ -36,6 +36,10 @@ import {
   updateAlertMethod,
   // Logos (bd-nh50y debug-logging contract)
   getAllLogos,
+  // Integration test-connection wire-format guards (bd-8zi93)
+  testEmbyConnection,
+  testPlexConnection,
+  testJellyfinConnection,
 } from './api';
 import { logger } from '../utils/logger';
 
@@ -1291,6 +1295,68 @@ describe('API Service', () => {
         errSpy.mockRestore();
         logger.setLevel(prevLevel);
       }
+    });
+  });
+
+  // Wire-format guards for the Settings → Integrations test-connection
+  // endpoints (bd-8zi93). The backend Pydantic schemas pick specific field
+  // names per integration:
+  //   - Emby:     { base_url, api_key }
+  //   - Plex:     { base_url, token }       — X-Plex-Token nomenclature
+  //   - Jellyfin: { base_url, api_key }
+  // A mismatch surfaces as a 422 "Field required" inline error in the UI
+  // (the original Plex symptom). These tests lock the exact JSON shape sent
+  // over the wire so a future rename can't silently break it again.
+  describe('integration test-connection wire format', () => {
+    it('testEmbyConnection sends { base_url, api_key }', async () => {
+      let requestBody: unknown;
+      server.use(
+        http.post('/api/settings/emby/test-connection', async ({ request }) => {
+          requestBody = await request.json();
+          return HttpResponse.json({ ok: true });
+        }),
+      );
+
+      await testEmbyConnection('http://emby.local:8096', 'emby-api-key');
+
+      expect(requestBody).toEqual({
+        base_url: 'http://emby.local:8096',
+        api_key: 'emby-api-key',
+      });
+    });
+
+    it('testPlexConnection sends { base_url, token }', async () => {
+      let requestBody: unknown;
+      server.use(
+        http.post('/api/settings/plex/test-connection', async ({ request }) => {
+          requestBody = await request.json();
+          return HttpResponse.json({ ok: true });
+        }),
+      );
+
+      await testPlexConnection('http://plex.local:32400', 'plex-token-value');
+
+      expect(requestBody).toEqual({
+        base_url: 'http://plex.local:32400',
+        token: 'plex-token-value',
+      });
+    });
+
+    it('testJellyfinConnection sends { base_url, api_key }', async () => {
+      let requestBody: unknown;
+      server.use(
+        http.post('/api/settings/jellyfin/test-connection', async ({ request }) => {
+          requestBody = await request.json();
+          return HttpResponse.json({ ok: true });
+        }),
+      );
+
+      await testJellyfinConnection('http://jellyfin.local:8096', 'jellyfin-api-key');
+
+      expect(requestBody).toEqual({
+        base_url: 'http://jellyfin.local:8096',
+        api_key: 'jellyfin-api-key',
+      });
     });
   });
 });
