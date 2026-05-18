@@ -1183,9 +1183,12 @@ export async function testPlexConnection(
   baseUrl: string,
   plexToken: string,
 ): Promise<PlexTestConnectionResult> {
+  // Wire key is `token` to match the backend PlexTestConnectionRequest schema
+  // (X-Plex-Token ecosystem nomenclature). The JS parameter stays `plexToken`
+  // for readability at call sites. See bd-8zi93.
   return fetchJson(`${API_BASE}/settings/plex/test-connection`, {
     method: 'POST',
-    body: JSON.stringify({ base_url: baseUrl, plex_token: plexToken }),
+    body: JSON.stringify({ base_url: baseUrl, token: plexToken }),
   });
 }
 
