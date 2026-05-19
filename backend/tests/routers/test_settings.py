@@ -1081,3 +1081,60 @@ class TestEmbySettingsPersistence:
         assert captured["emby_api_key"] == "stored-emby-key-xyz", (
             "Partial POST cleared emby_api_key — preserve-on-omit broken"
         )
+
+
+class TestMCPStatusHostResolution:
+    """bd-d2171: GET /api/settings/mcp-status must target the MCP container
+    via MCP_HOST (default 'ecm-mcp' for canonical Docker bridge networking),
+    not 'localhost' (which resolves to the ECM container itself under bridge
+    networking). Operators using network_mode: host can set MCP_HOST=localhost.
+    """
+
+    def _make_captor_client(self, captured):
+        """Build a stub AsyncClient that records the URL passed to .get()."""
+        class _CaptorClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc_info):
+                return False
+
+            async def get(self, url, *args, **kwargs):
+                captured["url"] = url
+                response = MagicMock()
+                response.raise_for_status = MagicMock()
+                response.json = MagicMock(return_value={"status": "ok"})
+                return response
+
+        return _CaptorClient
+
+    @pytest.mark.asyncio
+    async def test_default_host_is_ecm_mcp(self, async_client, monkeypatch):
+        """Unset MCP_HOST -> URL targets the canonical compose service name."""
+        monkeypatch.delenv("MCP_HOST", raising=False)
+        monkeypatch.delenv("MCP_PORT", raising=False)
+
+        captured = {}
+        with patch("httpx.AsyncClient", self._make_captor_client(captured)):
+            response = await async_client.get("/api/settings/mcp-status")
+
+        assert response.status_code == 200
+        assert response.json()["reachable"] is True
+        assert captured["url"] == "http://ecm-mcp:6101/health"
+
+    @pytest.mark.asyncio
+    async def test_mcp_host_override_localhost(self, async_client, monkeypatch):
+        """MCP_HOST=localhost restores host-networking back-compat shape."""
+        monkeypatch.setenv("MCP_HOST", "localhost")
+        monkeypatch.delenv("MCP_PORT", raising=False)
+
+        captured = {}
+        with patch("httpx.AsyncClient", self._make_captor_client(captured)):
+            response = await async_client.get("/api/settings/mcp-status")
+
+        assert response.status_code == 200
+        assert response.json()["reachable"] is True
+        assert captured["url"] == "http://localhost:6101/health"

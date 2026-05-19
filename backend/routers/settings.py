@@ -1463,12 +1463,19 @@ async def revoke_mcp_api_key():
 
 @router.get("/mcp-status")
 async def get_mcp_status():
-    """Check MCP server health by calling its /health endpoint."""
+    """Check MCP server health by calling its /health endpoint.
+
+    Resolves the MCP host from MCP_HOST (default 'ecm-mcp'), matching the
+    canonical docker-compose.mcp.yml service name. Operators running both
+    ECM and MCP under network_mode: host should set MCP_HOST=localhost.
+    (bd-d2171)
+    """
     import os
     import httpx
 
+    mcp_host = os.environ.get("MCP_HOST", "ecm-mcp")
     mcp_port = os.environ.get("MCP_PORT", "6101")
-    mcp_url = f"http://localhost:{mcp_port}/health"
+    mcp_url = f"http://{mcp_host}:{mcp_port}/health"
 
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
