@@ -71,6 +71,8 @@ docker compose -f docker-compose.yml -f docker-compose.mcp.yml up -d
 
 **Reaching the MCP container from ECM** — ECM's Settings > MCP Integration status badge probes the MCP server's `/health` endpoint. By default it targets `ecm-mcp:6101`, which Docker DNS resolves to the MCP container on the canonical compose network — no extra configuration needed. If you run both containers with `network_mode: host` (host network namespace shared), set `MCP_HOST=localhost` on the ECM service so the probe targets the host loopback instead of the (non-existent on that topology) `ecm-mcp` DNS name.
 
+> **Upgrade note (v0.17.1-0066+):** If you previously ran ECM and ecm-mcp with `network_mode: host` and never set `MCP_HOST`, you need to act. Earlier versions hardcoded `localhost` as the probe target; v0.17.1-0064 changed the default to `ecm-mcp` (the canonical compose service name). On a host-networking deploy, `ecm-mcp` does not resolve — so after pulling `dev`, your Settings > MCP Integration badge will show "MCP server not reachable" even when MCP is healthy. Fix: add `MCP_HOST=localhost` to the ECM service's `environment` block in your compose file and restart the container.
+
 See [MCP Server (Claude Integration)](#mcp-server-claude-integration) for setup instructions.
 
 **User / Group Identifiers:**
