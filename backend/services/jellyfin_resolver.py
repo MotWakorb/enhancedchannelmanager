@@ -222,12 +222,50 @@ async def resolve_jellyfin_users(
 
     jellyfin_server_ip = _resolve_jellyfin_server_ip(base_url)
     if jellyfin_server_ip is None:
+        logger.info(
+            "[JELLYFIN-RESOLVER] resolver_call ip=%s ecm_channel=%r "
+            "result=no_server_ip (bd-dok7u)",
+            ecm_session_ip, ecm_channel_name,
+        )
         return []
 
     if ecm_session_ip != jellyfin_server_ip:
+        # Hot path on every non-Jellyfin IP; DEBUG-level to avoid log
+        # flood. INFO entries fire below for the IP-matched callers
+        # which are the ones operators care about.
+        logger.debug(
+            "[JELLYFIN-RESOLVER] resolver_call ip=%s ecm_channel=%r "
+            "result=ip_mismatch (server=%s)",
+            ecm_session_ip, ecm_channel_name, jellyfin_server_ip,
+        )
         return []
 
     sessions = await get_cached_jellyfin_sessions()
+    sessions_with_now_playing = sum(
+        1 for s in sessions
+        if s.now_playing_item_name or s.now_playing_channel_name or s.channel_number
+    )
+    logger.info(
+        "[JELLYFIN-RESOLVER] resolver_call ip=%s ecm_channel=%r "
+        "ecm_channel_number=%r ecm_stream=%r sessions_count=%d "
+        "sessions_with_now_playing=%d (bd-dok7u)",
+        ecm_session_ip, ecm_channel_name, ecm_channel_number,
+        ecm_stream_name, len(sessions), sessions_with_now_playing,
+    )
+    for session in sessions:
+        logger.info(
+            "[JELLYFIN-RESOLVER] session_inspect user=%s active_session_id=%s "
+            "has_now_playing=%s item_name=%r channel_name=%r "
+            "channel_number=%r last_activity=%s queue_item_id=%s",
+            session.user_name,
+            (session.session_id[:8] if session.session_id else None),
+            bool(session.now_playing_item_name),
+            session.now_playing_item_name,
+            session.now_playing_channel_name,
+            session.channel_number,
+            session.last_activity_date,
+            session.now_playing_queue_item_id,
+        )
     if not sessions:
         return []
 
@@ -259,6 +297,18 @@ async def resolve_jellyfin_users(
         return []
 
     sorted_matches = _sort_by_recency_descending(matches)
+
+    # bd-dok7u: INFO-level success log so operators can verify
+    # attribution from production logs without needing DEBUG turned on.
+    # Symmetric with the no-match WARN — both paths produce a line.
+    logger.info(
+        "[JELLYFIN-RESOLVER] tier_match ecm_channel=%r ecm_stream=%r "
+        "match_count=%d top_user=%s top_user_id=%s (bd-dok7u)",
+        ecm_channel_name, ecm_stream_name,
+        len(sorted_matches),
+        sorted_matches[0].user_name,
+        sorted_matches[0].user_id,
+    )
 
     if len(sorted_matches) > 1:
         _maybe_warn_disambiguation(

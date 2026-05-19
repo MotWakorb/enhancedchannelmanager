@@ -234,14 +234,51 @@ async def resolve_emby_users(
 
     emby_server_ip = _resolve_emby_server_ip(base_url)
     if emby_server_ip is None:
+        logger.info(
+            "[EMBY-RESOLVER] resolver_call ip=%s ecm_channel=%r "
+            "result=no_server_ip (bd-dok7u)",
+            ecm_session_ip, ecm_channel_name,
+        )
         return []
 
     if ecm_session_ip != emby_server_ip:
         # Hot path: the vast majority of ECM sessions are NOT
         # Emby-mediated. Short-circuit before the cache call.
+        logger.debug(
+            "[EMBY-RESOLVER] resolver_call ip=%s ecm_channel=%r "
+            "result=ip_mismatch (server=%s)",
+            ecm_session_ip, ecm_channel_name, emby_server_ip,
+        )
         return []
 
     sessions = await get_cached_emby_sessions()
+    sessions_with_now_playing = sum(
+        1 for s in sessions
+        if s.now_playing_item_name or s.now_playing_channel_name or s.channel_number
+    )
+    # bd-dok7u: forensic INFO log so future "Emby shows User #0"
+    # incidents have the same diagnostic surface as the new Jellyfin
+    # logging. Symmetric across all three resolvers.
+    logger.info(
+        "[EMBY-RESOLVER] resolver_call ip=%s ecm_channel=%r "
+        "ecm_channel_number=%r ecm_stream=%r sessions_count=%d "
+        "sessions_with_now_playing=%d (bd-dok7u)",
+        ecm_session_ip, ecm_channel_name, ecm_channel_number,
+        ecm_stream_name, len(sessions), sessions_with_now_playing,
+    )
+    for session in sessions:
+        logger.info(
+            "[EMBY-RESOLVER] session_inspect user=%s session_id=%s "
+            "has_now_playing=%s item_name=%r channel_name=%r "
+            "channel_number=%r last_activity=%s",
+            session.user_name,
+            (session.session_id[:8] if session.session_id else None),
+            bool(session.now_playing_item_name),
+            session.now_playing_item_name,
+            session.now_playing_channel_name,
+            session.channel_number,
+            session.last_activity_date,
+        )
     if not sessions:
         return []
 
@@ -278,6 +315,17 @@ async def resolve_emby_users(
     # (:func:`resolve_emby_user`) returns this position-0 element for
     # back-compat with pre-multi-viewer callers.
     sorted_matches = _sort_by_recency_descending(matches)
+
+    # bd-dok7u: INFO-level success log so operators can confirm
+    # attribution from production logs without DEBUG.
+    logger.info(
+        "[EMBY-RESOLVER] tier_match ecm_channel=%r ecm_stream=%r "
+        "match_count=%d top_user=%s top_user_id=%s (bd-dok7u)",
+        ecm_channel_name, ecm_stream_name,
+        len(sorted_matches),
+        sorted_matches[0].user_name,
+        sorted_matches[0].user_id,
+    )
 
     if len(sorted_matches) > 1:
         logger.debug(

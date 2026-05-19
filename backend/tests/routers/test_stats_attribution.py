@@ -25,6 +25,7 @@ Synthetic identities only — ``docs/security/threat_model_stats_v2.md``
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -672,3 +673,162 @@ class TestEnrichChannelsBackCompatPreserved:
         # Legacy contract: emby_user_name is the most-recent viewer.
         assert ch["emby_user_name"] == "newest"
         assert ch["clients"][0]["emby_user_name"] == "newest"
+
+
+# ---------------------------------------------------------------------------
+# bd-dok7u: per-channel + per-source forensic INFO trace at the enrichment
+# layer. Tests lock the log payload format so future "User #0" can be
+# diagnosed in one log read.
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichmentForensicLogging:
+    """The enrichment helper emits one ``[STATS-ENRICH] channel_trace`` line
+    per channel and one ``[STATS-ENRICH] source_dispatch`` line per channel
+    that reaches the per-source loop (i.e. didn't short-circuit on
+    no_data or no_clients)."""
+
+    @staticmethod
+    def _enrich_records(records, marker):
+        return [r for r in records if marker in r.getMessage()]
+
+    @pytest.mark.asyncio
+    async def test_channel_trace_emitted_with_proceed_decision(self, caplog):
+        from routers.stats import _enrich_channels_with_attribution
+
+        channels = [
+            {
+                "channel_id": "ch-proceed",
+                "channel_name": "ESPN",
+                "channel_number": 408,
+                "stream_name": "US: ESPN FHD",
+                "clients": [{"ip_address": "192.168.1.50"}],
+            }
+        ]
+        with patch("config.get_settings",
+                   return_value=_enabled_all_sources_settings()), \
+             patch("services.emby_resolver.resolve_emby_user",
+                   AsyncMock(return_value=None)), \
+             patch("services.plex_resolver.resolve_plex_user",
+                   AsyncMock(return_value=None)), \
+             patch("services.jellyfin_resolver.resolve_jellyfin_user",
+                   AsyncMock(return_value=None)):
+            with caplog.at_level(logging.INFO, logger="routers.stats"):
+                await _enrich_channels_with_attribution(channels)
+
+        traces = self._enrich_records(caplog.records,
+                                      "[STATS-ENRICH] channel_trace")
+        assert len(traces) == 1
+        msg = traces[0].getMessage()
+        assert "ch_id='ch-proceed'" in msg or "ch_id=ch-proceed" in msg
+        assert "channel_name='ESPN'" in msg
+        assert "channel_number=408" in msg
+        assert "client_ips=['192.168.1.50']" in msg
+        assert "decision=proceed" in msg
+
+    @pytest.mark.asyncio
+    async def test_channel_trace_skip_no_data(self, caplog):
+        """A channel with neither stream_name nor channel_name nor
+        channel_number short-circuits with ``decision=skip:no_data``."""
+        from routers.stats import _enrich_channels_with_attribution
+
+        channels = [
+            {
+                "channel_id": "ch-no-data",
+                "channel_name": None,
+                "channel_number": None,
+                "stream_name": None,
+                "clients": [{"ip_address": "192.168.1.50"}],
+            }
+        ]
+        with patch("config.get_settings",
+                   return_value=_enabled_all_sources_settings()):
+            with caplog.at_level(logging.INFO, logger="routers.stats"):
+                await _enrich_channels_with_attribution(channels)
+
+        traces = self._enrich_records(caplog.records,
+                                      "[STATS-ENRICH] channel_trace")
+        assert len(traces) == 1
+        assert "decision=skip:no_data" in traces[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_channel_trace_skip_no_clients(self, caplog):
+        """A channel with no client IPs short-circuits with
+        ``decision=skip:no_clients`` — no resolver call is possible
+        without an IP to evaluate against the source-server gate."""
+        from routers.stats import _enrich_channels_with_attribution
+
+        channels = [
+            {
+                "channel_id": "ch-no-clients",
+                "channel_name": "ESPN",
+                "channel_number": 408,
+                "stream_name": "ESPN",
+                "clients": [],
+            }
+        ]
+        with patch("config.get_settings",
+                   return_value=_enabled_all_sources_settings()):
+            with caplog.at_level(logging.INFO, logger="routers.stats"):
+                await _enrich_channels_with_attribution(channels)
+
+        traces = self._enrich_records(caplog.records,
+                                      "[STATS-ENRICH] channel_trace")
+        assert len(traces) == 1
+        assert "decision=skip:no_clients" in traces[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_source_dispatch_emitted_on_proceed(self, caplog):
+        """When the channel proceeds, the per-source dispatch INFO
+        captures which sources are enabled. Operators can tell at a
+        glance whether attribution failure was 'disabled' vs 'enabled
+        but didn't match'."""
+        from routers.stats import _enrich_channels_with_attribution
+
+        channels = [
+            {
+                "channel_id": "ch-dispatch",
+                "channel_name": "ESPN",
+                "stream_name": "ESPN",
+                "clients": [{"ip_address": "192.168.1.50"}],
+            }
+        ]
+        with patch("config.get_settings",
+                   return_value=_enabled_plex_only_settings()), \
+             patch("services.plex_resolver.resolve_plex_user",
+                   AsyncMock(return_value=None)):
+            with caplog.at_level(logging.INFO, logger="routers.stats"):
+                await _enrich_channels_with_attribution(channels)
+
+        dispatches = self._enrich_records(caplog.records,
+                                          "[STATS-ENRICH] source_dispatch")
+        assert len(dispatches) == 1
+        msg = dispatches[0].getMessage()
+        assert "emby_enabled=False" in msg
+        assert "plex_enabled=True" in msg
+        assert "jellyfin_enabled=False" in msg
+
+    @pytest.mark.asyncio
+    async def test_source_dispatch_absent_on_skip(self, caplog):
+        """Channels that short-circuit on no_data / no_clients do NOT
+        emit the source_dispatch line — the trace is single-source-of
+        truth: if you see channel_trace decision=skip, expect no
+        source_dispatch follow-up."""
+        from routers.stats import _enrich_channels_with_attribution
+
+        channels = [
+            {
+                "channel_id": "ch-skip",
+                "channel_name": "ESPN",
+                "stream_name": "ESPN",
+                "clients": [],  # no clients
+            }
+        ]
+        with patch("config.get_settings",
+                   return_value=_enabled_all_sources_settings()):
+            with caplog.at_level(logging.INFO, logger="routers.stats"):
+                await _enrich_channels_with_attribution(channels)
+
+        dispatches = self._enrich_records(caplog.records,
+                                          "[STATS-ENRICH] source_dispatch")
+        assert dispatches == []

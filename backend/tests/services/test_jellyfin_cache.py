@@ -413,3 +413,200 @@ class TestModuleInternals:
         assert jellyfin_cache._fetch_lock is not None
         jellyfin_cache._reset_for_tests()
         assert jellyfin_cache._fetch_lock is None
+
+
+# ---------------------------------------------------------------------------
+# bd-dok7u: NowPlayingQueue fallback for sessions with absent NowPlayingItem
+# ---------------------------------------------------------------------------
+
+
+def _queued_session(
+    *,
+    user_id: str = "jf-user-mw",
+    user_name: str = "MotWakorb",
+    queue_item_id: str | None = "queue-channel-2-1",
+    item_name: str | None = None,
+) -> JellyfinSession:
+    """Build a JellyfinSession where NowPlayingItem is absent but
+    NowPlayingQueue surfaces an item ID — the bd-dok7u scenario."""
+    return JellyfinSession(
+        session_id=f"jf-sess-{user_name}",
+        user_id=user_id,
+        user_name=user_name,
+        remote_endpoint="192.168.1.61",
+        now_playing_item_name=item_name,
+        now_playing_channel_name=None,
+        last_activity_date="2026-05-19T02:33:36Z",
+        channel_number=None,
+        now_playing_queue_item_id=queue_item_id,
+    )
+
+
+class TestNowPlayingQueueFallback:
+    """bd-dok7u: when a session's NowPlayingItem is absent but its
+    NowPlayingQueue[0].Id is populated, the cache calls
+    /Users/{user_id}/Items/{item_id} to back-fill the now-playing
+    fields so the resolver can match against the real channel name."""
+
+    async def test_resolves_queue_item_when_now_playing_absent(self):
+        """The PO's exact production shape: session has no
+        NowPlayingItem but NowPlayingQueue[0].Id points to channel 2.1."""
+        session = _queued_session()
+        mock_client = AsyncMock()
+        mock_client.get_sessions = AsyncMock(return_value=[session])
+        mock_client.get_user_item = AsyncMock(return_value={
+            "Name": "| ABC: WBAY Green Bay",
+            "ChannelNumber": "2.1",
+            "Number": "2.1",
+            "Type": "TvChannel",
+        })
+        mock_client.close = AsyncMock()
+
+        with patch.object(jellyfin_cache, "get_settings",
+                          return_value=_make_jellyfin_enabled_settings()), \
+             patch.object(jellyfin_cache, "JellyfinClient",
+                          return_value=mock_client):
+            result = await jellyfin_cache.get_cached_jellyfin_sessions()
+
+        assert len(result) == 1
+        out = result[0]
+        # Original identifying fields preserved.
+        assert out.user_name == "MotWakorb"
+        assert out.session_id == "jf-sess-MotWakorb"
+        # Back-filled from the item lookup.
+        assert out.now_playing_item_name == "| ABC: WBAY Green Bay"
+        assert out.channel_number == "2.1"
+        # The resolve call was made with the expected scope.
+        mock_client.get_user_item.assert_awaited_once_with(
+            user_id="jf-user-mw", item_id="queue-channel-2-1",
+        )
+
+    async def test_skips_lookup_when_now_playing_already_present(self):
+        """Sessions that already have NowPlayingItem.Name must NOT trigger
+        an extra /Users/{user}/Items/{id} round-trip."""
+        session = JellyfinSession(
+            session_id="jf-sess-already",
+            user_id="jf-user-already",
+            user_name="already",
+            remote_endpoint="192.168.1.50",
+            now_playing_item_name="ESPN",  # already populated
+            now_playing_channel_name=None,
+            last_activity_date="2026-05-19T02:00:00Z",
+            channel_number="408",
+            now_playing_queue_item_id="queue-no-need",
+        )
+        mock_client = AsyncMock()
+        mock_client.get_sessions = AsyncMock(return_value=[session])
+        mock_client.get_user_item = AsyncMock()
+        mock_client.close = AsyncMock()
+
+        with patch.object(jellyfin_cache, "get_settings",
+                          return_value=_make_jellyfin_enabled_settings()), \
+             patch.object(jellyfin_cache, "JellyfinClient",
+                          return_value=mock_client):
+            result = await jellyfin_cache.get_cached_jellyfin_sessions()
+
+        assert result == [session]
+        mock_client.get_user_item.assert_not_called()
+
+    async def test_skips_lookup_when_no_queue_item_id(self):
+        """A truly idle session (no queue, no NowPlayingItem) must pass
+        through unchanged with no extra API calls."""
+        session = JellyfinSession(
+            session_id="jf-sess-idle",
+            user_id="jf-user-idle",
+            user_name="idle_user",
+            remote_endpoint="192.168.1.50",
+            now_playing_item_name=None,
+            now_playing_channel_name=None,
+            last_activity_date="2026-05-19T00:00:00Z",
+            channel_number=None,
+            now_playing_queue_item_id=None,  # truly idle
+        )
+        mock_client = AsyncMock()
+        mock_client.get_sessions = AsyncMock(return_value=[session])
+        mock_client.get_user_item = AsyncMock()
+        mock_client.close = AsyncMock()
+
+        with patch.object(jellyfin_cache, "get_settings",
+                          return_value=_make_jellyfin_enabled_settings()), \
+             patch.object(jellyfin_cache, "JellyfinClient",
+                          return_value=mock_client):
+            result = await jellyfin_cache.get_cached_jellyfin_sessions()
+
+        assert result == [session]
+        mock_client.get_user_item.assert_not_called()
+
+    async def test_lookup_failure_passes_through_unchanged(self):
+        """When get_user_item returns None (network error / 4xx / 5xx),
+        the session must pass through with the empty now-playing fields
+        — the resolver's normal no-match path then handles it."""
+        session = _queued_session()
+        mock_client = AsyncMock()
+        mock_client.get_sessions = AsyncMock(return_value=[session])
+        mock_client.get_user_item = AsyncMock(return_value=None)  # lookup failed
+        mock_client.close = AsyncMock()
+
+        with patch.object(jellyfin_cache, "get_settings",
+                          return_value=_make_jellyfin_enabled_settings()), \
+             patch.object(jellyfin_cache, "JellyfinClient",
+                          return_value=mock_client):
+            result = await jellyfin_cache.get_cached_jellyfin_sessions()
+
+        assert len(result) == 1
+        # Session passes through unchanged — failure mode of the
+        # fallback path is "behave like pre-bd-dok7u" not "raise".
+        assert result[0].now_playing_item_name is None
+        assert result[0].user_name == "MotWakorb"
+
+    async def test_multiple_sessions_resolve_independently(self):
+        """Two queued sessions resolve independently — one success, one
+        failure does not prevent the other from being filled."""
+        s1 = _queued_session(user_id="jf-1", user_name="alice",
+                             queue_item_id="ch-a")
+        s2 = _queued_session(user_id="jf-2", user_name="bob",
+                             queue_item_id="ch-b")
+        mock_client = AsyncMock()
+        mock_client.get_sessions = AsyncMock(return_value=[s1, s2])
+        mock_client.get_user_item = AsyncMock(side_effect=[
+            {"Name": "CNN", "ChannelNumber": "200"},
+            None,  # bob's lookup fails
+        ])
+        mock_client.close = AsyncMock()
+
+        with patch.object(jellyfin_cache, "get_settings",
+                          return_value=_make_jellyfin_enabled_settings()), \
+             patch.object(jellyfin_cache, "JellyfinClient",
+                          return_value=mock_client):
+            result = await jellyfin_cache.get_cached_jellyfin_sessions()
+
+        assert len(result) == 2
+        alice = next(s for s in result if s.user_name == "alice")
+        bob = next(s for s in result if s.user_name == "bob")
+        assert alice.now_playing_item_name == "CNN"
+        assert alice.channel_number == "200"
+        assert bob.now_playing_item_name is None
+        assert bob.channel_number is None
+
+    async def test_fallback_emits_info_log(self, caplog):
+        """The fallback path emits an INFO summary so operators can
+        verify queue-resolution happened from production logs."""
+        session = _queued_session()
+        mock_client = AsyncMock()
+        mock_client.get_sessions = AsyncMock(return_value=[session])
+        mock_client.get_user_item = AsyncMock(return_value={
+            "Name": "CNN", "ChannelNumber": "200",
+        })
+        mock_client.close = AsyncMock()
+
+        with patch.object(jellyfin_cache, "get_settings",
+                          return_value=_make_jellyfin_enabled_settings()), \
+             patch.object(jellyfin_cache, "JellyfinClient",
+                          return_value=mock_client):
+            with caplog.at_level(logging.INFO,
+                                 logger=jellyfin_cache.logger.name):
+                await jellyfin_cache.get_cached_jellyfin_sessions()
+
+        infos = [r for r in caplog.records if r.levelno == logging.INFO]
+        assert any("NowPlayingQueue fallback resolved 1/1" in r.getMessage()
+                   for r in infos), [r.getMessage() for r in infos]
