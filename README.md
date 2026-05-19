@@ -212,6 +212,9 @@ Things you can ask Claude to do:
 3. **Connect Claude** using one of the methods below (replace `YOUR_ECM_HOST` and `YOUR_API_KEY` with the value from step 1):
 
 **Claude Desktop** — Claude Desktop talks to remote MCP servers through the `mcp-remote` bridge, so add this to your `claude_desktop_config.json`:
+
+> **Prerequisite:** Claude Desktop does **not** bundle Node.js. The `mcp-remote` bridge below is an npm package that Claude Desktop runs via `npx`, so you need Node.js installed on the same machine as Claude Desktop (any current LTS — Node 18+ — is fine). Install it from [nodejs.org](https://nodejs.org/) (or via a package manager: `winget install OpenJS.NodeJS.LTS` on Windows, `brew install node` on macOS, `apt install nodejs npm` on Debian/Ubuntu). Without Node on PATH, Claude Desktop fails to launch the MCP server with a `spawn npx ENOENT` error in its logs.
+
 ```json
 {
   "mcpServers": {
@@ -226,7 +229,9 @@ Things you can ask Claude to do:
   }
 }
 ```
-(`--allow-http` is needed because the endpoint is plain HTTP. If your Claude Desktop build supports a direct remote URL, `{ "mcpServers": { "ecm": { "url": "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_API_KEY" } } }` also works — the `mcp-remote` form is the most broadly compatible.)
+(`--allow-http` is needed because the endpoint is plain HTTP.)
+
+> **Why not Claude Desktop's Custom Connectors (no-Node path)?** Claude Desktop's built-in "Custom Connectors" UI (Settings → Connectors → Add custom connector) would let you skip Node entirely, but it requires OAuth 2.1 with PKCE per the MCP spec — it rejects URL-embedded `?api_key=` auth. ECM's MCP server currently uses a static API key, so the Custom Connector path is **not supported yet**. Adding OAuth is tracked separately. For Claude Desktop today, the `mcp-remote` bridge above (with Node installed) is the only path. **Claude Code is unaffected** — it talks Streamable HTTP directly, so the API-key URL works without Node (see below).
 
 > **Note:** the `?api_key=` query parameter in these URLs is your `mcp_api_key` value from `settings.json` — the key generated in ECM Settings > MCP Integration. It is **not** your Dispatcharr `api_key`.
 
