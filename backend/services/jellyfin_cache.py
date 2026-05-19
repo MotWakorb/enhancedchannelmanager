@@ -40,6 +40,7 @@ across all callers (BandwidthTracker, resolver, future surfaces).
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import time
 from dataclasses import dataclass
@@ -211,6 +212,12 @@ async def get_cached_jellyfin_sessions() -> list[JellyfinSession]:
             try:
                 with observability.get_metric("media_session_fetch_duration_seconds").labels(source="jellyfin").time():
                     sessions = await client.get_sessions()
+                # bd-dok7u: back-fill NowPlayingItem fields for sessions
+                # whose server-side payload omitted NowPlayingItem but
+                # carries a NowPlayingQueue[0].Id. The lookup is
+                # best-effort and per-session — see
+                # ``_resolve_queue_items`` for the failure semantics.
+                sessions = await _resolve_queue_items(client, sessions)
             finally:
                 # Always release the httpx connection pool even on
                 # error. Without this every failure leaks a socket pool
@@ -253,3 +260,92 @@ def _store_entry(sessions: list[JellyfinSession]) -> None:
     """
     global _cached_entry
     _cached_entry = _Entry(sessions=sessions, cached_at=time.monotonic())
+
+
+async def _resolve_queue_items(
+    client: JellyfinClient,
+    sessions: list[JellyfinSession],
+) -> list[JellyfinSession]:
+    """Back-fill now-playing fields from ``NowPlayingQueue[0].Id`` lookups.
+
+    bd-dok7u: certain Jellyfin clients — observed on the PO's
+    ``Jellyfin Web`` 10.11.8 sessions for Live TV playback — never
+    publish ``NowPlayingItem`` to the server-side ``/Sessions`` feed.
+    The session reports ``IsActive=True`` and carries
+    ``NowPlayingQueue[0].Id`` but the resolver had nothing to match
+    against, producing "User #0" attribution for every Jellyfin-mediated
+    stream from those clients.
+
+    For each session whose ``now_playing_item_name`` is empty AND
+    ``now_playing_queue_item_id`` is populated, this helper calls
+    ``/Users/{user_id}/Items/{item_id}`` to fetch the item details
+    and rebuilds the session with the fetched fields populated. The
+    item endpoint surfaces ``Name``, ``ChannelName``, and
+    ``ChannelNumber`` for Live TV channel items in the same shape the
+    resolver already understands.
+
+    The lookup is best-effort:
+    * Empty ``user_id`` or ``item_id`` → session passes through unchanged.
+    * Network / non-2xx error → session passes through unchanged; the
+      :meth:`JellyfinClient.get_user_item` helper logs once at WARN.
+    * Successful lookup with empty ``Name`` → session passes through
+      unchanged (defensive; should not happen for Live TV items).
+
+    Returns a NEW list — the input session list is not mutated. Sessions
+    that already had ``NowPlayingItem`` populated are returned verbatim
+    (no extra API call); only the previously-empty sessions are rebuilt.
+
+    Failure mode by design: if every queue lookup fails, the resolver
+    falls back to its existing "no match → User #0" behavior. The
+    pre-bd-dok7u behavior is the worst-case here, not a regression.
+    """
+    if not sessions:
+        return sessions
+
+    resolved: list[JellyfinSession] = []
+    fallback_attempted = 0
+    fallback_succeeded = 0
+    for session in sessions:
+        # Only consider sessions whose top-level NowPlayingItem was absent
+        # but whose NowPlayingQueue surfaced an item ID.
+        if session.now_playing_item_name or not session.now_playing_queue_item_id:
+            resolved.append(session)
+            continue
+        fallback_attempted += 1
+        item = await client.get_user_item(
+            user_id=session.user_id,
+            item_id=session.now_playing_queue_item_id,
+        )
+        if not item:
+            # Per failure-mode contract above: pass through unchanged
+            # so the resolver's no-match path takes over.
+            resolved.append(session)
+            continue
+        name = item.get("Name")
+        channel_name = item.get("ChannelName")
+        channel_number_raw = item.get("ChannelNumber") or item.get("Number")
+        channel_number = (
+            str(channel_number_raw).strip()
+            if channel_number_raw is not None
+            else None
+        )
+        if not name and not channel_name and not channel_number:
+            # No usable signal — pass through unchanged.
+            resolved.append(session)
+            continue
+        rebuilt = dataclasses.replace(
+            session,
+            now_playing_item_name=name or session.now_playing_item_name,
+            now_playing_channel_name=channel_name or session.now_playing_channel_name,
+            channel_number=channel_number or session.channel_number,
+        )
+        resolved.append(rebuilt)
+        fallback_succeeded += 1
+
+    if fallback_attempted:
+        logger.info(
+            "[JELLYFIN] NowPlayingQueue fallback resolved %d/%d sessions "
+            "(bd-dok7u)",
+            fallback_succeeded, fallback_attempted,
+        )
+    return resolved

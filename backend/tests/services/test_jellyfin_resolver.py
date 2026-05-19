@@ -1078,6 +1078,182 @@ class TestNoMatchDiagnostic:
 
 
 # ---------------------------------------------------------------------------
+# bd-dok7u: forensic INFO logging at every decision point on the resolver
+# chain. Tests lock the log payload format so future "User #0" incidents
+# can be diagnosed in one log read.
+# ---------------------------------------------------------------------------
+
+
+class TestForensicInfoLogging:
+    """Every resolver call must emit:
+    * One [JELLYFIN-RESOLVER] resolver_call line with sessions_count and
+      sessions_with_now_playing counts so an operator can see at a glance
+      whether the upstream session feed actually carried playback data.
+    * One [JELLYFIN-RESOLVER] session_inspect line per session, exposing
+      has_now_playing + item_name + channel_name + channel_number +
+      last_activity + queue_item_id so the resolver's input is visible.
+    * One [JELLYFIN-RESOLVER] tier_match line on a successful match
+      (parallel to the existing no-match WARN)."""
+
+    @staticmethod
+    def _info_records(records, marker):
+        return [r for r in records if marker in r.getMessage()]
+
+    async def test_resolver_call_log_emitted_on_match_path(self, caplog):
+        """On the IP-matched + sessions-available path, the resolver
+        emits ONE resolver_call INFO with the input snapshot."""
+        session = _make_session(user_name="alice", item_name="ESPN")
+        with patch.object(jellyfin_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.INFO,
+                                 logger="services.jellyfin_resolver"):
+                await jellyfin_resolver.resolve_jellyfin_users(
+                    ecm_session_ip="192.168.1.20",
+                    ecm_stream_name="ESPN",
+                    ecm_channel_name="ESPN",
+                    ecm_channel_number=408,
+                )
+        calls = self._info_records(caplog.records,
+                                   "[JELLYFIN-RESOLVER] resolver_call")
+        assert len(calls) == 1, [r.getMessage() for r in calls]
+        msg = calls[0].getMessage()
+        assert "sessions_count=1" in msg
+        assert "sessions_with_now_playing=1" in msg
+        assert "ecm_channel='ESPN'" in msg
+        assert "ecm_channel_number=408" in msg
+
+    async def test_session_inspect_log_emitted_per_session(self, caplog):
+        """Each cached session produces one session_inspect line whose
+        payload exposes the fields the matcher operates on. The PO's
+        production case (NowPlayingItem absent) surfaces here as
+        has_now_playing=False."""
+        s1 = _make_session(user_name="alice", item_name="ESPN")
+        s2 = _make_session(user_name="bob", item_name=None,
+                           channel_number=None,
+                           last_activity="2026-05-19T02:00:00Z")
+        with patch.object(jellyfin_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[s1, s2])):
+            with caplog.at_level(logging.INFO,
+                                 logger="services.jellyfin_resolver"):
+                await jellyfin_resolver.resolve_jellyfin_users(
+                    ecm_session_ip="192.168.1.20",
+                    ecm_stream_name="ESPN",
+                    ecm_channel_name="ESPN",
+                )
+        inspects = self._info_records(caplog.records,
+                                      "[JELLYFIN-RESOLVER] session_inspect")
+        assert len(inspects) == 2
+        msgs = " ".join(r.getMessage() for r in inspects)
+        # Alice's row has item_name; bob has None.
+        assert "user=alice" in msgs
+        assert "user=bob" in msgs
+        assert "has_now_playing=True" in msgs
+        assert "has_now_playing=False" in msgs
+
+    async def test_tier_match_log_emitted_on_success(self, caplog):
+        """A successful match emits a single tier_match INFO line so
+        operators can confirm attribution without enabling DEBUG."""
+        session = _make_session(user_id="jf-mw-uid", user_name="MotWakorb",
+                                item_name="ESPN")
+        with patch.object(jellyfin_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.INFO,
+                                 logger="services.jellyfin_resolver"):
+                result = await jellyfin_resolver.resolve_jellyfin_user(
+                    ecm_session_ip="192.168.1.20",
+                    ecm_stream_name="ESPN",
+                    ecm_channel_name="ESPN",
+                )
+        assert result is not None
+        matches = self._info_records(caplog.records,
+                                     "[JELLYFIN-RESOLVER] tier_match")
+        assert len(matches) == 1
+        msg = matches[0].getMessage()
+        assert "top_user=MotWakorb" in msg
+        assert "top_user_id=jf-mw-uid" in msg
+        assert "match_count=1" in msg
+
+    async def test_no_tier_match_log_on_no_match(self, caplog):
+        """When the resolver returns empty (no tier matched), no
+        tier_match INFO line fires — the no-match WARN handles that
+        case so the success-side INFO is unambiguous."""
+        session = _make_session(item_name="NotTheChannel")
+        with patch.object(jellyfin_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.INFO,
+                                 logger="services.jellyfin_resolver"):
+                result = await jellyfin_resolver.resolve_jellyfin_user(
+                    ecm_session_ip="192.168.1.20",
+                    ecm_stream_name="CNN",
+                    ecm_channel_name="CNN",
+                )
+        assert result is None
+        matches = self._info_records(caplog.records,
+                                     "[JELLYFIN-RESOLVER] tier_match")
+        assert matches == []
+
+    async def test_queue_item_id_surfaced_in_session_inspect(self, caplog):
+        """When the session carries a NowPlayingQueue item ID (bd-dok7u),
+        it surfaces in the session_inspect log so the cache's fallback
+        path is observable from the resolver's perspective."""
+        session = JellyfinSession(
+            session_id="jf-q-sess",
+            user_id="jf-q-uid",
+            user_name="queued_user",
+            remote_endpoint="192.168.1.61",
+            now_playing_item_name=None,
+            now_playing_channel_name=None,
+            last_activity_date="2026-05-19T02:33:36Z",
+            channel_number=None,
+            now_playing_queue_item_id="2b0159285ef4370ec3c8c91534bc076d",
+        )
+        with patch.object(jellyfin_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.INFO,
+                                 logger="services.jellyfin_resolver"):
+                await jellyfin_resolver.resolve_jellyfin_user(
+                    ecm_session_ip="192.168.1.20",
+                    ecm_stream_name="CNN",
+                    ecm_channel_name="CNN",
+                )
+        inspects = self._info_records(caplog.records,
+                                      "[JELLYFIN-RESOLVER] session_inspect")
+        assert len(inspects) == 1
+        msg = inspects[0].getMessage()
+        assert "queue_item_id=2b0159285ef4370ec3c8c91534bc076d" in msg
+
+    async def test_ip_mismatch_emits_no_info(self, caplog):
+        """IP-mismatch short-circuit must NOT emit the resolver_call INFO
+        — it's a hot path called on every non-Jellyfin IP and would
+        flood the log. DEBUG only."""
+        with patch.object(jellyfin_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[])) as cache_mock:
+            with caplog.at_level(logging.INFO,
+                                 logger="services.jellyfin_resolver"):
+                await jellyfin_resolver.resolve_jellyfin_user(
+                    ecm_session_ip="10.0.0.99",  # NOT the Jellyfin server
+                    ecm_stream_name="CNN",
+                )
+        cache_mock.assert_not_awaited()
+        calls = self._info_records(caplog.records,
+                                   "[JELLYFIN-RESOLVER] resolver_call")
+        # No INFO log on the ip-mismatch hot path.
+        assert calls == []
+
+
+# ---------------------------------------------------------------------------
 # Behavior: bd-r5f0c.11 — ECM-side pipe-prefix tolerance in Tier-1
 # ---------------------------------------------------------------------------
 

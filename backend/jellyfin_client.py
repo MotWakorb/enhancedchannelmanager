@@ -95,6 +95,17 @@ class JellyfinSession:
             activity for this session (``LastActivityDate``). Used to
             break ties when multiple Jellyfin sessions match the same ECM
             stream (most-recent-wins).
+        now_playing_queue_item_id: ``NowPlayingQueue[0].Id`` when the
+            session has an active playback queue but the top-level
+            ``NowPlayingItem`` is absent (bd-dok7u). Some Jellyfin
+            clients — observed on the PO's ``Jellyfin Web`` 10.11.8
+            sessions — never publish ``NowPlayingItem`` to the
+            server-side ``/Sessions`` feed for Live TV playback, but
+            DO populate ``NowPlayingQueue`` with the channel's item
+            ID. The cache layer uses this ID to resolve
+            ``/Users/{user_id}/Items/{itemId}`` and back-fill the
+            now-playing fields above. ``None`` when no queue is
+            present (truly idle session).
     """
 
     session_id: str
@@ -105,6 +116,7 @@ class JellyfinSession:
     now_playing_channel_name: str | None
     last_activity_date: str | None
     channel_number: str | None = None
+    now_playing_queue_item_id: str | None = None
 
 
 class JellyfinClientError(Exception):
@@ -216,6 +228,60 @@ class JellyfinClient:
         logger.debug("[JELLYFIN] /Sessions returned %d sessions", len(sessions))
         return sessions
 
+    async def get_user_item(self, user_id: str, item_id: str) -> dict | None:
+        """Fetch one Jellyfin item by ID, scoped to a user (bd-dok7u).
+
+        Resolves ``/Users/{user_id}/Items/{item_id}`` and returns the raw
+        JSON dict. Used as the "what is this session actually playing?"
+        lookup when a session's ``NowPlayingItem`` is absent but its
+        ``NowPlayingQueue[0].Id`` is populated — a behavior observed on
+        Jellyfin Web 10.11.8 Live TV sessions where the server-side
+        session feed never carries the now-playing payload but the queue
+        does carry the item ID. The user-scoped endpoint is required for
+        Live TV channel items (the unscoped ``/Items/{id}`` returns 400
+        for ``Type=TvChannel`` items).
+
+        Returns the raw item dict on success, or ``None`` on any failure
+        (non-2xx, network error, empty user_id/item_id). Never raises —
+        the queue-resolution fallback is best-effort; if it fails we
+        simply return a session with empty now-playing fields and the
+        resolver's normal "no match" path takes over.
+
+        Args:
+            user_id: Jellyfin user UUID (``UserId`` from the session). The
+                Live TV item endpoint requires this scope.
+            item_id: ``NowPlayingQueue[0].Id`` from the session payload.
+
+        Returns:
+            The raw Jellyfin item dict (PascalCase keys), or ``None``.
+        """
+        if not user_id or not item_id:
+            return None
+        url = f"{self.base_url}/Users/{user_id}/Items/{item_id}"
+        logger.debug("[JELLYFIN] GET %s", url)
+        try:
+            response = await self._client.request("GET", url)
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "[JELLYFIN] /Users/%s/Items/%s request failed: %s",
+                user_id, item_id, exc,
+            )
+            return None
+        if response.status_code != 200:
+            logger.debug(
+                "[JELLYFIN] /Users/%s/Items/%s returned non-200: status=%s",
+                user_id, item_id, response.status_code,
+            )
+            return None
+        try:
+            return response.json()
+        except Exception as exc:  # pragma: no cover — Jellyfin always sends JSON
+            logger.warning(
+                "[JELLYFIN] /Users/%s/Items/%s JSON decode failed: %s",
+                user_id, item_id, exc,
+            )
+            return None
+
     async def test_connection(self) -> bool:
         """Verify the configured URL + API key reach a working Jellyfin server.
 
@@ -258,11 +324,28 @@ def _map_session(item: dict) -> JellyfinSession:
     Defensive on the ``NowPlayingItem`` sub-object — an idle session
     omits the field entirely, and ``ChannelName`` is only present for
     live-TV sessions (VOD playback has ``Name`` but no ``ChannelName``).
+
+    bd-dok7u: also captures ``NowPlayingQueue[0].Id`` when present so
+    the cache layer can resolve the queue item ID against
+    ``/Users/{user_id}/Items/{itemId}`` for sessions whose top-level
+    ``NowPlayingItem`` is absent. Observed on the PO's
+    ``Jellyfin Web`` 10.11.8 Live TV sessions: ``IsActive=True``,
+    ``NowPlayingItem`` absent, ``NowPlayingQueue`` populated with the
+    Live TV channel's item ID.
     """
     now_playing = item.get("NowPlayingItem") or {}
     # ChannelNumber is a string in Jellyfin's payload — preserve verbatim
     # (do NOT int-cast) so sub-channel numbers like "408.1" survive.
     channel_number_raw = now_playing.get("ChannelNumber")
+    queue = item.get("NowPlayingQueue") or []
+    queue_item_id: str | None = None
+    if queue and isinstance(queue, list):
+        first = queue[0]
+        if isinstance(first, dict):
+            qid = first.get("Id")
+            # Empty string is not a usable item ID — coerce to None so
+            # the cache's "should we resolve?" branch is single-predicate.
+            queue_item_id = qid if qid else None
     return JellyfinSession(
         session_id=item.get("Id", ""),
         user_id=item.get("UserId", ""),
@@ -272,4 +355,5 @@ def _map_session(item: dict) -> JellyfinSession:
         now_playing_channel_name=now_playing.get("ChannelName"),
         last_activity_date=item.get("LastActivityDate"),
         channel_number=channel_number_raw if channel_number_raw is not None else None,
+        now_playing_queue_item_id=queue_item_id,
     )
