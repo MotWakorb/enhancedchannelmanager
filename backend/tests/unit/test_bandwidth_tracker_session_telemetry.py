@@ -77,6 +77,13 @@ def mock_client():
     client.get_channel_stats = AsyncMock(return_value={"channels": []})
     client.get_channels = AsyncMock(return_value={"results": [], "next": None})
     client.get_users = AsyncMock(return_value=[])
+    # bd-gy5nd: resolver fetches the M3U account list once per call to
+    # support URL-hostname → provider matching. Default to an empty list
+    # so tests not interested in this path degrade to "no M3U match"
+    # (which surfaces the bare hostname as ``provider_name``). Tests
+    # that want to exercise the match path override this on the
+    # specific test.
+    client.get_m3u_accounts = AsyncMock(return_value=[])
     client.get_system_events = AsyncMock(
         return_value={
             "events": [],
@@ -601,9 +608,12 @@ async def test_resolver_returns_null_when_no_stream_id(
     mock_client,
     caplog,
 ):
-    """No ``stream_id`` on the channel payload — resolver cannot identify
-    an active stream. Row is still written with ``provider_id=NULL`` and
-    a structured ``[STATS_V2] provider_resolution_failed`` log is emitted.
+    """No ``stream_id`` on the channel payload AND no URL — resolver
+    cannot identify an active stream. Row is still written with
+    ``provider_id=NULL``. bd-gy5nd: the previous
+    ``[STATS_V2] provider_resolution_failed`` WARN is gone — the
+    legitimate "no stream id, no URL" case is normal data, not an
+    error. The SLI summary line still carries the unresolved count.
     """
     import logging as _logging
 
@@ -627,7 +637,8 @@ async def test_resolver_returns_null_when_no_stream_id(
         session.close()
     assert rows, "session_telemetry rows must still be written"
     assert all(r.provider_id is None for r in rows)
-    assert any(
+    # bd-gy5nd: WARN-level "provider_resolution_failed" is retired.
+    assert not any(
         "[STATS_V2] provider_resolution_failed" in record.message
         for record in caplog.records
     ), [r.message for r in caplog.records]
@@ -641,10 +652,13 @@ async def test_resolver_returns_null_when_stream_lookup_returns_empty(
     mock_client,
     caplog,
 ):
-    """``get_streams_by_ids`` returns an empty list (Dispatcharr 404'd or
-    the stream was deleted). Resolver returns NULL for every channel; the
-    row is still written and ``[STATS_V2] provider_resolution_failed``
-    fires once per unresolved channel."""
+    """``get_streams_by_ids`` returns an empty list (Dispatcharr 404'd
+    or the stream was deleted). Resolver returns NULL for every channel
+    that has no URL-hostname fallback; the row is still written.
+    bd-gy5nd: the per-channel ``stream_not_found`` WARN is retired
+    (now DEBUG ``provider_unresolved``). The legitimate "stream id
+    pointed to a deleted record" case is no longer noisy.
+    """
     import logging as _logging
 
     mock_client.get_streams_by_ids = AsyncMock(return_value=[])
@@ -669,7 +683,11 @@ async def test_resolver_returns_null_when_stream_lookup_returns_empty(
     finally:
         session.close()
     assert rows and all(r.provider_id is None for r in rows)
-    assert any(
+    # bd-gy5nd: WARN-level "provider_resolution_failed" is retired
+    # for per-channel reasons (stream_not_found / stream_has_no_provider
+    # / no_stream_id). Only the bulk lookup_raised path still WARNs
+    # (one line per call, not per channel).
+    assert not any(
         "[STATS_V2] provider_resolution_failed" in record.message
         for record in caplog.records
     )
@@ -958,9 +976,11 @@ async def test_resolver_handles_null_m3u_account_on_stream(
     mock_client,
     caplog,
 ):
-    """Stream exists in Dispatcharr but ``m3u_account`` is None (orphaned
-    stream — provider was deleted). ``provider_id`` stays NULL, failure
-    log fires.
+    """Stream exists in Dispatcharr but ``m3u_account`` is None
+    (orphaned stream — provider was deleted). ``provider_id`` stays
+    NULL. bd-gy5nd: the WARN this previously emitted is retired
+    (legitimate "stream has no provider" is normal data; only the
+    bulk lookup-raised path still WARNs).
     """
     import logging as _logging
 
@@ -988,10 +1008,11 @@ async def test_resolver_handles_null_m3u_account_on_stream(
     finally:
         session.close()
     assert rows and all(r.provider_id is None for r in rows)
-    assert any(
+    # bd-gy5nd: the per-channel WARN is retired.
+    assert not any(
         "[STATS_V2] provider_resolution_failed" in r.message
         for r in caplog.records
-    )
+    ), [r.message for r in caplog.records]
 
 
 # ---------------------------------------------------------------------------
@@ -1060,13 +1081,17 @@ async def test_resolver_url_fallback_malformed_url_falls_through_to_null(
     mock_client,
     caplog,
 ):
-    """URL present but missing the trailing ``<n>.ts`` segment — resolver
-    has no stream id to look up and falls through to NULL with a
-    ``no_stream_id`` reason log. The row is still written.
+    """URL present but missing the trailing ``<n>.ts`` segment — the
+    stream-id direct path can't run. bd-gy5nd: the resolver still
+    parses the URL hostname for ``provider_name`` enrichment, and
+    session_telemetry rows write with ``provider_id=None`` because no
+    M3U account is configured. No WARN fires (the legitimate
+    "no-stream-id, no-M3U-match" case is normal data, not an error).
     """
     import logging as _logging
 
     mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+    mock_client.get_m3u_accounts = AsyncMock(return_value=[])
     first = _channel_payload(
         total_bytes=1_000_000,
         client_user_ids={"10.0.0.1": seed_synthetic_user},
@@ -1089,9 +1114,10 @@ async def test_resolver_url_fallback_malformed_url_falls_through_to_null(
         session.close()
     assert rows, "session_telemetry rows must still be written"
     assert all(r.provider_id is None for r in rows)
-    assert any(
+    # bd-gy5nd: the WARN spam this test used to lock is the primary
+    # symptom this bead fixes. The structured failure log is gone.
+    assert not any(
         "[STATS_V2] provider_resolution_failed" in r.message
-        and "reason=no_stream_id" in r.message
         for r in caplog.records
     ), [r.message for r in caplog.records]
 
@@ -1214,7 +1240,7 @@ async def test_resolver_mixed_batch_url_and_stream_id_share_one_lookup(
 
 
 @pytest.mark.asyncio
-async def test_resolver_url_derived_stream_not_found_falls_back_to_channel_streams(
+async def test_resolver_url_derived_stream_not_found_falls_back_to_url_hostname_match(
     patched_session_local,
     seed_synthetic_user,
     tracker,
@@ -1222,21 +1248,30 @@ async def test_resolver_url_derived_stream_not_found_falls_back_to_channel_strea
     caplog,
 ):
     """When the URL-derived id is not a Dispatcharr stream id (the
-    upstream-provider-id case bd-5g7kx fixes), the resolver no longer
-    terminates with ``stream_not_found_url_derived``. Instead it falls
-    back to ``GET /channels/<uuid>/streams``. When THAT also returns no
-    URL match, the terminal WARNING is ``reason=channel_streams_no_match``.
+    upstream-provider-id case), the resolver falls back to bd-gy5nd's
+    URL-hostname match against configured M3U accounts. Retargeted
+    from the bd-5g7kx ``channel_streams_no_match`` flow — that path
+    called ``get_channel_streams(<channel_uuid>)`` with a
+    proxy-session UUID, which Dispatcharr served as the SPA HTML
+    rather than 404, generating the 10s WARN spam this bead fixes.
+    The replacement: parse the URL hostname and match against
+    ``m3u_accounts[*].server_url`` hostnames.
 
-    Pinned here so the kbgey-era ``stream_not_found_url_derived`` WARNING
-    code doesn't leak back in — operators triaging the Stats v2 Providers
-    panel need a single, stable set of failure-reason codes.
+    Pinned here so the kbgey-era ``stream_not_found_url_derived``
+    WARNING code doesn't leak back in — operators triaging the Stats
+    v2 Providers panel need a single, stable set of failure-reason
+    codes.
     """
     import logging as _logging
 
     mock_client.get_streams_by_ids = AsyncMock(return_value=[])
-    # Channel-streams fallback also returns nothing matching — the
-    # terminal reason becomes ``channel_streams_no_match``.
-    mock_client.get_channel_streams = AsyncMock(return_value=[])
+    # M3U account configured with the URL's hostname — bd-gy5nd
+    # URL-hostname match resolves to the M3U account id + name.
+    mock_client.get_m3u_accounts = AsyncMock(
+        return_value=[
+            {"id": 17, "name": "Infinity TV", "server_url": "https://infinity.gives/list.m3u"},
+        ]
+    )
     first = _channel_payload(
         total_bytes=1_000_000,
         client_user_ids={"10.0.0.1": seed_synthetic_user},
@@ -1257,17 +1292,22 @@ async def test_resolver_url_derived_stream_not_found_falls_back_to_channel_strea
         rows = session.query(SessionTelemetry).all()
     finally:
         session.close()
-    assert rows and all(r.provider_id is None for r in rows)
-    assert any(
-        "[STATS_V2] provider_resolution_failed" in r.message
-        and "reason=channel_streams_no_match" in r.message
-        for r in caplog.records
-    ), [r.message for r in caplog.records]
-    # Conversely: the deprecated WARNING code must not appear.
+    assert rows and all(r.provider_id == 17 for r in rows), [
+        (r.id, r.provider_id) for r in rows
+    ]
+    # The kbgey-era warning code must not appear (preserved
+    # invariant — the failure-reason taxonomy must stay stable).
     assert not any(
         "reason=stream_not_found_url_derived" in r.message
         for r in caplog.records
-    ), "stream_not_found_url_derived is replaced by the channel-streams fallback"
+    ), "stream_not_found_url_derived must remain retired"
+    # The bd-5g7kx ``channel_streams_no_match`` WARN must not appear
+    # — bd-gy5nd removed the path that emitted it and the 10s WARN
+    # spam was the primary symptom this bead fixed.
+    assert not any(
+        "reason=channel_streams_no_match" in r.message
+        for r in caplog.records
+    ), "channel_streams_no_match WARN should no longer fire under bd-gy5nd"
 
 
 @pytest.mark.asyncio
@@ -1378,38 +1418,35 @@ async def test_resolver_integration_three_providers_distribution(
 
 
 @pytest.mark.asyncio
-async def test_resolver_channel_streams_fallback_when_url_derived_id_misses(
+async def test_resolver_url_hostname_match_when_url_derived_id_misses(
     patched_session_local,
     seed_synthetic_user,
     tracker,
     mock_client,
 ):
-    """The dev-reproducer: stream_id absent, URL carries upstream provider
-    id (85796), ``get_streams_by_ids([85796])`` returns nothing because
-    85796 is Infinity's id, not Dispatcharr's. The channel-streams
-    fallback fetches ``/channels/<uuid>/streams``, finds the stream whose
-    ``url`` matches the active URL, and writes its ``m3u_account_id``.
+    """The PO-reproducer (bd-gy5nd): stream_id absent, URL carries the
+    upstream-provider id (85796), ``get_streams_by_ids([85796])``
+    returns nothing because 85796 is Infinity's id, not Dispatcharr's.
+    The bd-gy5nd URL-hostname-match fallback parses the URL's
+    ``infinity.gives`` hostname and matches it to the configured M3U
+    account's ``server_url`` hostname, writing the matched account's
+    id as ``provider_id`` and its name as ``provider_name``.
+
+    Retargeted from the bd-5g7kx ``channel-streams`` fallback test —
+    that path called ``GET /channels/<channel_uuid>/streams/`` with a
+    proxy-session UUID, which never resolved correctly.
     """
     channel_uuid = "0b433f49-channel"
     active_url = "https://infinity.gives/live/mot/16118141/85796.ts"
-    dispatcharr_stream_id = 97000
     provider_id = 17
 
     mock_client.get_streams_by_ids = AsyncMock(return_value=[])
-    mock_client.get_channel_streams = AsyncMock(
+    mock_client.get_m3u_accounts = AsyncMock(
         return_value=[
-            {
-                "id": dispatcharr_stream_id,
-                "url": active_url,
-                "m3u_account": provider_id,
-            },
-            # A second stream on the same channel (failover slot) — its
-            # URL does not match, so the resolver must NOT pick it.
-            {
-                "id": 97001,
-                "url": "https://other.example/live/99999.ts",
-                "m3u_account": 99,
-            },
+            {"id": provider_id, "name": "Infinity TV", "server_url": "https://infinity.gives/list.m3u"},
+            # A second M3U account whose hostname doesn't match — the
+            # resolver must NOT pick it.
+            {"id": 99, "name": "Other Provider", "server_url": "https://other.example/list.m3u"},
         ]
     )
 
@@ -1440,40 +1477,36 @@ async def test_resolver_channel_streams_fallback_when_url_derived_id_misses(
 
 
 @pytest.mark.asyncio
-async def test_resolver_channel_streams_fallback_per_poll_cache(
+async def test_resolver_url_hostname_match_zero_per_channel_http_calls(
     patched_session_local,
     seed_synthetic_user,
     tracker,
     mock_client,
 ):
-    """Two channels sharing the same channel_uuid both need the
-    channel-streams fallback in a single poll. ``get_channel_streams``
-    must be called ONCE — the per-poll cache short-circuits the second
-    lookup.
+    """bd-gy5nd contract: the URL-hostname-match fallback issues ZERO
+    per-channel HTTP calls — it consults the once-per-poll M3U
+    accounts list in memory. Replaces the bd-5g7kx per-channel-streams
+    cache test (which existed because that fallback did one HTTP call
+    per channel and needed cache layers to avoid blowing the
+    Dispatcharr budget). bd-gy5nd issues one ``get_m3u_accounts`` call
+    per poll regardless of how many channels need the hostname match.
 
-    This is artificial (one channel_uuid per channel in production), but
-    it pins the per-poll cache semantic so the resolver doesn't blow the
-    Dispatcharr API budget when several channels need the fallback in the
-    same poll.
+    Two channels with different uuids both fall through to the
+    hostname-match path; assert ``get_channel_streams`` is never
+    called (the broken endpoint) and ``get_m3u_accounts`` is called
+    exactly once per poll.
     """
-    # Both channels parse the same URL → same derived stream id → both
-    # miss in get_streams_by_ids. Both then go to channel-streams. The
-    # second one should hit the per-invocation cache.
     channel_uuid_a = "uuid-a"
     channel_uuid_b = "uuid-b"
     active_url = "https://infinity.gives/live/mot/16118141/85796.ts"
 
     mock_client.get_streams_by_ids = AsyncMock(return_value=[])
-
-    call_log: list[str] = []
-
-    async def streams_side_effect(channel_id):
-        call_log.append(channel_id)
-        return [
-            {"id": 97000, "url": active_url, "m3u_account": 17},
+    mock_client.get_channel_streams = AsyncMock(return_value=[])
+    mock_client.get_m3u_accounts = AsyncMock(
+        return_value=[
+            {"id": 17, "name": "Infinity TV", "server_url": "https://infinity.gives/list.m3u"},
         ]
-
-    mock_client.get_channel_streams = AsyncMock(side_effect=streams_side_effect)
+    )
 
     ch_a_first = _channel_payload(
         channel_uuid=channel_uuid_a,
@@ -1483,21 +1516,19 @@ async def test_resolver_channel_streams_fallback_per_poll_cache(
         client_user_ids={"10.0.0.1": seed_synthetic_user},
         url=active_url,
     )
+    ch_b_first = _channel_payload(
+        channel_uuid=channel_uuid_b,
+        channel_number=102,
+        total_bytes=1_000_000,
+        client_ips=["10.0.0.2"],
+        url=active_url,
+    )
     ch_a_second = _channel_payload(
         channel_uuid=channel_uuid_a,
         channel_number=101,
         total_bytes=2_000_000,
         client_ips=["10.0.0.1"],
         client_user_ids={"10.0.0.1": seed_synthetic_user},
-        url=active_url,
-    )
-    # Two channels with DIFFERENT uuids — both need the fallback. The
-    # per-poll cache is keyed by channel_uuid; each uuid gets one call.
-    ch_b_first = _channel_payload(
-        channel_uuid=channel_uuid_b,
-        channel_number=102,
-        total_bytes=1_000_000,
-        client_ips=["10.0.0.2"],
         url=active_url,
     )
     ch_b_second = _channel_payload(
@@ -1517,32 +1548,39 @@ async def test_resolver_channel_streams_fallback_per_poll_cache(
     }
     await tracker._collect_stats()
 
-    # Across the two polls there are TWO distinct channel uuids. Without
-    # the cross-poll cache that'd be 2 channels × 2 polls = 4 calls. With
-    # the cross-poll cache: 2 calls in poll 1 (cold), 0 calls in poll 2
-    # (cache hits). Both layers compose.
-    assert len(call_log) == 2, call_log
-    assert set(call_log) == {channel_uuid_a, channel_uuid_b}
+    # bd-gy5nd: the broken per-channel endpoint is never called.
+    assert mock_client.get_channel_streams.call_count == 0, (
+        "get_channel_streams must not be called with proxy-session UUIDs — "
+        "the endpoint returns SPA HTML for that identifier shape"
+    )
+    # One M3U accounts fetch per poll, regardless of channel count.
+    assert mock_client.get_m3u_accounts.call_count == 2, (
+        "expected one get_m3u_accounts call per poll (2 polls = 2 calls), got %d"
+        % mock_client.get_m3u_accounts.call_count
+    )
 
 
 @pytest.mark.asyncio
-async def test_resolver_channel_streams_fallback_cross_poll_cache_hit(
+async def test_resolver_url_hostname_match_per_poll_fetch(
     patched_session_local,
     seed_synthetic_user,
     tracker,
     mock_client,
 ):
-    """Same channel queried via the channel-streams fallback on two
-    consecutive polls. Poll 1 fetches from Dispatcharr and caches; poll 2
-    reuses the cached list without a network call.
+    """bd-gy5nd: the M3U accounts list is fetched once per poll (not
+    cached cross-poll). The polling cycle is 10s so freshness is built
+    in — a freshly-added M3U account becomes visible to the resolver
+    on the next poll without bespoke invalidation logic.
     """
     channel_uuid = "stable-channel"
     active_url = "https://infinity.gives/live/mot/16118141/85796.ts"
     provider_id = 17
 
     mock_client.get_streams_by_ids = AsyncMock(return_value=[])
-    mock_client.get_channel_streams = AsyncMock(
-        return_value=[{"id": 97000, "url": active_url, "m3u_account": provider_id}]
+    mock_client.get_m3u_accounts = AsyncMock(
+        return_value=[
+            {"id": provider_id, "name": "Infinity TV", "server_url": "https://infinity.gives/list.m3u"},
+        ]
     )
 
     first = _channel_payload(
@@ -1560,13 +1598,9 @@ async def test_resolver_channel_streams_fallback_cross_poll_cache_hit(
 
     await _drive_two_polls(tracker, mock_client, first, second)
 
-    # Exactly one Dispatcharr call across both polls — poll 2 hits the
-    # cross-poll cache.
-    assert mock_client.get_channel_streams.call_count == 1, (
-        "expected 1 channel-streams call across 2 polls (cross-poll cache "
-        "should serve poll 2), got %d"
-        % mock_client.get_channel_streams.call_count
-    )
+    # 2 polls = 2 get_m3u_accounts calls. No per-channel HTTP fan-out.
+    assert mock_client.get_m3u_accounts.call_count == 2
+    assert mock_client.get_channel_streams.call_count == 0
 
     session = patched_session_local()
     try:
@@ -1577,95 +1611,35 @@ async def test_resolver_channel_streams_fallback_cross_poll_cache_hit(
 
 
 @pytest.mark.asyncio
-async def test_resolver_channel_streams_fallback_cross_poll_cache_ttl_expired(
-    patched_session_local,
-    seed_synthetic_user,
-    tracker,
-    mock_client,
-):
-    """After the cross-poll TTL elapses (default 30 polls), the next
-    access for the same channel re-fetches. Caps cache staleness so a
-    failover or stream-list edit gets picked up within ~5 minutes at the
-    10s poll cadence.
-    """
-    channel_uuid = "stale-channel"
-    active_url = "https://infinity.gives/live/mot/16118141/85796.ts"
-
-    mock_client.get_streams_by_ids = AsyncMock(return_value=[])
-    mock_client.get_channel_streams = AsyncMock(
-        return_value=[{"id": 97000, "url": active_url, "m3u_account": 17}]
-    )
-
-    # Read the configured TTL off the tracker — keeps the test stable if
-    # the TTL value is tuned. The cap of 200 is unrelated.
-    ttl_polls = tracker._channel_streams_cache_ttl_polls
-
-    payload = _channel_payload(
-        channel_uuid=channel_uuid,
-        total_bytes=1_000_000,
-        client_user_ids={"10.0.0.1": seed_synthetic_user},
-        url=active_url,
-    )
-
-    # Poll 1: cold — fetches and caches at poll_count=1.
-    mock_client.get_channel_stats.return_value = {"channels": [payload]}
-    await tracker._collect_stats()
-    assert mock_client.get_channel_streams.call_count == 1
-
-    # Polls 2..(ttl_polls + 1): each poll the cache age is
-    # poll_count - 1, which ranges 1..ttl_polls. All within TTL (TTL =
-    # "stale when age > ttl_polls"), so no re-fetch.
-    for _ in range(ttl_polls):
-        payload = _channel_payload(
-            channel_uuid=channel_uuid,
-            total_bytes=payload["total_bytes"] + 1_000_000,
-            client_user_ids={"10.0.0.1": seed_synthetic_user},
-            url=active_url,
-        )
-        mock_client.get_channel_stats.return_value = {"channels": [payload]}
-        await tracker._collect_stats()
-    assert mock_client.get_channel_streams.call_count == 1, (
-        "cache should serve all polls within the TTL window"
-    )
-
-    # One more poll — cache age now exceeds TTL. Re-fetch required.
-    payload = _channel_payload(
-        channel_uuid=channel_uuid,
-        total_bytes=payload["total_bytes"] + 1_000_000,
-        client_user_ids={"10.0.0.1": seed_synthetic_user},
-        url=active_url,
-    )
-    mock_client.get_channel_stats.return_value = {"channels": [payload]}
-    await tracker._collect_stats()
-    assert mock_client.get_channel_streams.call_count == 2, (
-        "expected re-fetch after TTL expiry"
-    )
-
-
-@pytest.mark.asyncio
-async def test_resolver_channel_streams_fallback_no_url_match(
+async def test_resolver_url_hostname_no_match_returns_bare_hostname(
     patched_session_local,
     seed_synthetic_user,
     tracker,
     mock_client,
     caplog,
 ):
-    """The channel-streams response contains streams but none of their
-    URLs match the active URL. Resolver returns NULL and logs
-    ``reason=channel_streams_no_match`` — distinct from
-    ``stream_not_found`` (which is for direct stream_id misses) so
-    operators can tell the two failure paths apart.
+    """No M3U account hostname matches the active URL's hostname (the
+    operator hasn't configured an M3U source for the upstream
+    provider). bd-gy5nd contract: the resolver still surfaces the bare
+    hostname as ``provider_name`` so the operator sees ``infinity.gives``
+    instead of "Unknown". ``provider_id`` stays NULL (no M3U id to
+    write); ``session_telemetry.provider_id`` lands NULL — analytics
+    consumers continue to treat that as the Unknown bucket.
+
+    Retargeted from the bd-5g7kx ``channel_streams_no_match`` test —
+    the WARN spam this generated is the primary symptom bd-gy5nd
+    fixes, so the new path no longer emits it.
     """
     import logging as _logging
 
-    channel_uuid = "no-match-channel"
+    channel_uuid = "no-m3u-match"
     active_url = "https://infinity.gives/live/mot/16118141/85796.ts"
 
     mock_client.get_streams_by_ids = AsyncMock(return_value=[])
-    mock_client.get_channel_streams = AsyncMock(
+    # No M3U account configured for ``infinity.gives``.
+    mock_client.get_m3u_accounts = AsyncMock(
         return_value=[
-            {"id": 97000, "url": "https://other.example/totally-different.ts", "m3u_account": 1},
-            {"id": 97001, "url": "https://yetanother.example/99999.ts", "m3u_account": 2},
+            {"id": 1, "name": "Other Provider", "server_url": "https://other.example/list.m3u"},
         ]
     )
 
@@ -1691,35 +1665,39 @@ async def test_resolver_channel_streams_fallback_no_url_match(
         rows = session.query(SessionTelemetry).all()
     finally:
         session.close()
+    # No M3U match → provider_id stays NULL on session_telemetry rows.
     assert rows and all(r.provider_id is None for r in rows)
-    assert any(
+    # bd-gy5nd: the 10s WARN spam is gone. The legitimate "no M3U
+    # match" case is NOT an error condition — the bare hostname is
+    # still a meaningful provider label.
+    assert not any(
         "[STATS_V2] provider_resolution_failed" in r.message
-        and "reason=channel_streams_no_match" in r.message
         for r in caplog.records
     ), [r.message for r in caplog.records]
 
 
 @pytest.mark.asyncio
-async def test_resolver_channel_streams_fallback_lookup_raises(
+async def test_resolver_url_hostname_match_m3u_accounts_fetch_raises(
     patched_session_local,
     seed_synthetic_user,
     tracker,
     mock_client,
     caplog,
 ):
-    """``get_channel_streams`` raises (network, 5xx, timeout). Resolver
-    returns NULL for the affected channel, logs
-    ``reason=channel_streams_lookup_raised``, and the polling cycle
-    continues — a single channel's fallback failure must not propagate.
+    """``get_m3u_accounts`` raises (network, 5xx, timeout). bd-gy5nd
+    contract: the polling cycle continues, every channel falls back to
+    bare-hostname ``provider_name``, session_telemetry rows still
+    write — a single Dispatcharr endpoint outage cannot block the
+    telemetry path.
     """
     import logging as _logging
 
-    channel_uuid = "fallback-raise"
+    channel_uuid = "fetch-raises"
     active_url = "https://infinity.gives/live/mot/16118141/85796.ts"
 
     mock_client.get_streams_by_ids = AsyncMock(return_value=[])
-    mock_client.get_channel_streams = AsyncMock(
-        side_effect=RuntimeError("dispatcharr 503 channel streams")
+    mock_client.get_m3u_accounts = AsyncMock(
+        side_effect=RuntimeError("dispatcharr 503 m3u accounts")
     )
 
     first = _channel_payload(
@@ -1744,35 +1722,38 @@ async def test_resolver_channel_streams_fallback_lookup_raises(
         rows = session.query(SessionTelemetry).all()
     finally:
         session.close()
-    assert rows, "polling cycle must continue despite fallback raise"
+    # Polling cycle continues, rows write with NULL provider_id (no
+    # M3U list available to match against).
+    assert rows, "polling cycle must continue despite m3u_accounts fetch raise"
     assert all(r.provider_id is None for r in rows)
-    assert any(
-        "[STATS_V2] provider_resolution_failed" in r.message
-        and "reason=channel_streams_lookup_raised" in r.message
-        for r in caplog.records
-    ), [r.message for r in caplog.records]
 
 
 @pytest.mark.asyncio
-async def test_resolver_channel_streams_fallback_url_match_with_query_string(
+async def test_resolver_url_hostname_match_with_query_string(
     patched_session_local,
     seed_synthetic_user,
     tracker,
     mock_client,
 ):
     """Active URL carries a session/transcode query suffix
-    (``.ts?session=abc``). The stream record's stored URL is the bare
-    ``.ts``. The URL matcher must normalize query strings off both sides
-    before comparing, so the match succeeds.
+    (``.ts?session=abc``). The URL-hostname match must normalize the
+    query off before extracting the hostname, so the match succeeds
+    against the configured M3U account's ``server_url``.
+
+    Retargeted from the bd-5g7kx ``channel_streams_url_match_with_
+    query_string`` test — the underlying matcher is now URL-hostname
+    rather than stream-URL exact-match, but query-string tolerance is
+    still load-bearing.
     """
     channel_uuid = "qs-channel"
     active_url = "https://infinity.gives/live/mot/16118141/85796.ts?session=tok123&transcode=h264"
-    stored_url = "https://infinity.gives/live/mot/16118141/85796.ts"
     provider_id = 17
 
     mock_client.get_streams_by_ids = AsyncMock(return_value=[])
-    mock_client.get_channel_streams = AsyncMock(
-        return_value=[{"id": 97000, "url": stored_url, "m3u_account": provider_id}]
+    mock_client.get_m3u_accounts = AsyncMock(
+        return_value=[
+            {"id": provider_id, "name": "Infinity TV", "server_url": "https://infinity.gives/list.m3u"},
+        ]
     )
 
     first = _channel_payload(
@@ -1812,8 +1793,8 @@ async def test_resolver_three_paths_resolve_in_one_poll(
     * ``ch-url`` — no ``stream_id``, URL parses to a Dispatcharr-known
       id; resolves via ``get_streams_by_ids``.
     * ``ch-fallback`` — no ``stream_id``, URL parses to an upstream id
-      Dispatcharr doesn't have; resolves via ``get_channel_streams``
-      URL match.
+      Dispatcharr doesn't have; resolves via bd-gy5nd URL-hostname
+      match against configured M3U accounts.
 
     All three must produce session_telemetry rows with the correct
     ``provider_id``.
@@ -1833,13 +1814,13 @@ async def test_resolver_three_paths_resolve_in_one_poll(
             # the whole point of the fallback test.
         ]
     )
-    mock_client.get_channel_streams = AsyncMock(
+    # bd-gy5nd: third path resolves via URL-hostname match against
+    # configured M3U accounts (formerly the bd-5g7kx
+    # ``get_channel_streams`` URL match, which was broken for
+    # proxy-session UUIDs).
+    mock_client.get_m3u_accounts = AsyncMock(
         return_value=[
-            {
-                "id": 97000,
-                "url": fallback_active_url,
-                "m3u_account": 3,
-            }
+            {"id": 3, "name": "Infinity TV", "server_url": "https://infinity.gives/list.m3u"},
         ]
     )
 
