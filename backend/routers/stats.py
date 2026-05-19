@@ -671,6 +671,13 @@ async def get_channel_stats():
                 if resolution is None:
                     ch["stream_name"] = ch.get("stream_name")
                     ch["m3u_account_id"] = None
+                    # bd-gy5nd: ensure the provider_name / hostname keys
+                    # are always present on the response (the frontend
+                    # uses ``in`` checks to detect the resolver-ran-but-
+                    # returned-null contract from key-absent — see
+                    # bd-lhxfu's badge-sum invariant).
+                    ch.setdefault("provider_name", None)
+                    ch.setdefault("provider_hostname", None)
                     continue
                 # Only override the existing stream_name when the
                 # resolver actually produced one (preserve whatever
@@ -682,6 +689,14 @@ async def get_channel_stats():
                 if resolution.stream_id is not None and not ch.get("stream_id"):
                     ch["stream_id"] = resolution.stream_id
                 ch["m3u_account_id"] = resolution.provider_id
+                # bd-gy5nd: operator-visible provider label (M3U source
+                # name OR bare URL hostname OR ``None`` only when the
+                # active URL itself is absent/unparsable). The frontend
+                # surfaces this string verbatim in the per-channel
+                # badge so the PO sees ``"Infinity TV"`` or
+                # ``"infinity.gives"`` instead of "Unknown".
+                ch["provider_name"] = resolution.provider_name
+                ch["provider_hostname"] = resolution.hostname
 
             # bd-fm23o: Emby attribution enrichment for the Active
             # Channels live view. Mirrors the writer-side enrichment
