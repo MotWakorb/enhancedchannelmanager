@@ -1069,3 +1069,178 @@ describe('StatsTab — per-client viewer dedup display (bd-r5f0c.12 / W12)', () 
     expect(screen.queryByText('jkaisersoze (alt)')).not.toBeInTheDocument();
   });
 });
+
+// bd-w9c2a: Connected Clients section header must count actual upstream
+// viewers, not ECM-side proxy connections. A media-server transcoding
+// proxy (Emby / Plex / Jellyfin) is ONE ECM connection but can carry N
+// upstream humans via the *_viewers[] lists. Counting raw clients.length
+// undercounts in the deduped-upstream case.
+
+describe('StatsTab — Connected Clients header viewer count (bd-w9c2a)', () => {
+  // Read the rendered text out of the `.clients-header` element. The
+  // header mixes a Material Icons <span> with a text node, so plain
+  // getByText('Connected Clients (3)') wouldn't match — but the
+  // node's textContent does.
+  const readClientsHeaderText = (container: HTMLElement): string => {
+    const header = container.querySelector('.clients-header');
+    expect(header).not.toBeNull();
+    // Trim and collapse whitespace so the test isn't sensitive to JSX
+    // indentation in the source.
+    return (header!.textContent || '').replace(/\s+/g, ' ').trim();
+  };
+
+  // PO's exact scenario (bd-w9c2a): 1 Dispatcharr + 1 Emby-proxy carrying
+  // 2 upstream viewers. Pre-fix shows "(2)"; post-fix shows "(3)".
+  it('counts 1 dispatcharr + 1 emby-proxy with 2 viewers as 3 humans', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseMultiViewerChannel,
+          client_count: 2,
+          clients: [
+            {
+              client_id: 'cid-dispatcharr',
+              ip_address: '10.0.2.1',
+              user_agent: 'Dispatcharr/XC',
+              connected_at: '2026-05-18T00:00:00Z',
+              last_active: '2026-05-18T00:01:00Z',
+              username: 'Hap',
+            },
+            {
+              client_id: 'cid-emby-proxy',
+              ip_address: '10.0.2.2',
+              user_agent: 'Emby/1.0',
+              connected_at: '2026-05-18T00:00:00Z',
+              last_active: '2026-05-18T00:01:00Z',
+              emby_viewers: [
+                { user_id: 'emby-uid-1', user_name: 'MotWakorb' },
+                { user_id: 'emby-uid-2', user_name: 'jkaisersoze' },
+              ],
+            },
+          ],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector('.clients-header')).toBeInTheDocument();
+    });
+    expect(readClientsHeaderText(container)).toContain('Connected Clients (3)');
+  });
+
+  // Boundary: single proxy connection with 5 emby viewers reads "(5)".
+  it('counts 1 client with 5 emby_viewers as 5', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseMultiViewerChannel,
+          client_count: 1,
+          clients: [
+            {
+              client_id: 'cid-emby-fanout',
+              ip_address: '10.0.2.3',
+              user_agent: 'Emby/1.0',
+              connected_at: '2026-05-18T00:00:00Z',
+              last_active: '2026-05-18T00:01:00Z',
+              emby_viewers: [
+                { user_id: 'u1', user_name: 'alice' },
+                { user_id: 'u2', user_name: 'bob' },
+                { user_id: 'u3', user_name: 'carol' },
+                { user_id: 'u4', user_name: 'dave' },
+                { user_id: 'u5', user_name: 'eve' },
+              ],
+            },
+          ],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector('.clients-header')).toBeInTheDocument();
+    });
+    expect(readClientsHeaderText(container)).toContain('Connected Clients (5)');
+  });
+
+  // Regression: pure-Dispatcharr case (no viewer lists) preserves the
+  // existing "1 client = 1 human" semantic.
+  it('counts 2 dispatcharr-only clients (no viewers) as 2', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseMultiViewerChannel,
+          client_count: 2,
+          clients: [
+            {
+              client_id: 'cid-d1',
+              ip_address: '10.0.2.4',
+              user_agent: 'VLC/3.0',
+              connected_at: '2026-05-18T00:00:00Z',
+              last_active: '2026-05-18T00:01:00Z',
+              username: 'alice',
+            },
+            {
+              client_id: 'cid-d2',
+              ip_address: '10.0.2.5',
+              user_agent: 'VLC/3.0',
+              connected_at: '2026-05-18T00:00:00Z',
+              last_active: '2026-05-18T00:01:00Z',
+              username: 'bob',
+            },
+          ],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector('.clients-header')).toBeInTheDocument();
+    });
+    expect(readClientsHeaderText(container)).toContain('Connected Clients (2)');
+  });
+
+  // Mixed sources on a single client (rare): MAX across sources, not sum.
+  // This matches the per-client renderer's source-precedence semantic
+  // and avoids double-counting the same humans visible to multiple
+  // resolvers concurrently.
+  it('takes MAX across source viewer lists when a single client has both emby and plex viewers', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseMultiViewerChannel,
+          client_count: 1,
+          clients: [
+            {
+              client_id: 'cid-mixed-src',
+              ip_address: '10.0.2.6',
+              user_agent: 'Proxy/1.0',
+              connected_at: '2026-05-18T00:00:00Z',
+              last_active: '2026-05-18T00:01:00Z',
+              // 2 emby viewers + 1 plex viewer on same client → MAX=2 (not 3).
+              emby_viewers: [
+                { user_id: 'e1', user_name: 'alice' },
+                { user_id: 'e2', user_name: 'bob' },
+              ],
+              plex_viewers: [{ user_id: 'p1', user_name: 'alice' }],
+            },
+          ],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector('.clients-header')).toBeInTheDocument();
+    });
+    expect(readClientsHeaderText(container)).toContain('Connected Clients (2)');
+  });
+});
