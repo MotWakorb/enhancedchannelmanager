@@ -67,8 +67,9 @@ from urllib.parse import urlparse
 from rapidfuzz import fuzz
 
 from config import get_settings
-from plex_client import PlexSession
+from plex_client import PlexEpgEntry, PlexSession
 from services.plex_cache import get_cached_plex_sessions
+from services.plex_epg_cache import maybe_get_cached_plex_epg
 import observability
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,37 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Public types
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _EpgAttempt:
+    """bd-ma6r3 diagnostic record of an EPG-tier resolution attempt.
+
+    Carries the per-session candidate set the EPG tier built and the
+    subset of sessions it ultimately matched. Surfaced to
+    :func:`_log_plex_resolver_no_match` so a no-match forensic log line
+    can attribute "the EPG tier ran and matched nothing because
+    ``channelCallSign`` was ``foo`` and ECM channel was ``bar``" rather
+    than reporting only the bare session list.
+
+    ``snapshot_count`` is the size of the EPG snapshot the tier
+    consulted (across all DVRs / sections, already time-window
+    filtered). ``snapshot_count == 0`` distinguishes "fetched but
+    nothing currently airing" (operator's Plex EPG is stale or empty)
+    from "tier did not run" (handled by ``epg_attempt is None`` at the
+    call site).
+
+    ``candidates_by_session`` maps the unmatched live session's
+    ``session_id`` to the list of ``channel_call_sign`` strings the EPG
+    tier discovered for that session via ``grandparent_title`` lookup.
+    Empty list means "no EPG entry's grandparent matched this session's
+    grandparentTitle" — usually means the session is playing something
+    not in the current EPG snapshot.
+    """
+
+    snapshot_count: int
+    candidates_by_session: dict[str, list[str]]
+    matched_sessions: list["PlexSession"]
 
 
 @dataclass(frozen=True)
@@ -268,6 +300,53 @@ async def _resolve_plex_users_inner(
         ecm_channel_number=ecm_channel_number,
         sessions=sessions,
     )
+
+    # bd-ma6r3 EPG cross-reference tier. After Tier 1/2/3 in
+    # :func:`_find_matching_sessions` have done their work, check
+    # whether any LIVE TV session went unmatched. Plex's
+    # ``/status/sessions`` does NOT carry the channel name for Live TV
+    # — ``@grandparentTitle`` is the program currently airing, and
+    # ``@title`` is the episode. The channel ``channelCallSign`` lives
+    # only on the Plex EPG endpoints' ``<Media>`` element. The EPG
+    # tier:
+    #
+    # 1. Collects every unmatched live session (``is_live=True``).
+    # 2. Gates on (a) at least one such session AND (b) an
+    #    ``ecm_channel_name`` to match against. No live sessions or no
+    #    channel-name input → skip the EPG fetch entirely (this is the
+    #    bead's "rate-limit short-circuits when no Plex live sessions
+    #    exist" acceptance criterion). Skipping when channel_name is
+    #    absent matches Tier 1's own gate.
+    # 3. Fetches the current EPG snapshot (cached, 30 s TTL).
+    # 4. For each unmatched live session, looks up the EPG entry whose
+    #    ``grandparent_title`` matches the session's
+    #    ``now_playing_channel_name`` and whose time window covers
+    #    "now" (already filtered upstream by
+    #    :meth:`PlexClient.get_current_live_epg_channels`).
+    # 5. Adds the EPG entry's ``channel_call_sign`` as an additional
+    #    Tier-1 candidate for that session and re-tests the same
+    #    pipe-suffix tolerance Tier 1 uses against the existing
+    #    candidates.
+    #
+    # Sessions matched here are unioned into ``matches``. Diagnostic
+    # information about the EPG attempt is fed into
+    # ``_log_plex_resolver_no_match`` so the forensic log captures
+    # whether the EPG tier ran, what it found, and why it didn't help.
+    epg_attempt: _EpgAttempt | None = None
+    if ecm_channel_name and sessions:
+        unmatched_live_sessions = [
+            s for s in sessions
+            if s.is_live and s not in matches
+        ]
+        if unmatched_live_sessions:
+            epg_attempt = await _attempt_epg_match(
+                ecm_channel_name=ecm_channel_name,
+                unmatched_live_sessions=unmatched_live_sessions,
+            )
+            for session in epg_attempt.matched_sessions:
+                if session not in matches:
+                    matches.append(session)
+
     if not matches:
         logger.debug(
             "[PLEX] No match for stream=%r channel=%r number=%r "
@@ -278,6 +357,10 @@ async def _resolve_plex_users_inner(
         # bd-r5f0c.10: forensic WARN — IP matched, sessions exist, no
         # tier produced a match. Guarded on ``sessions`` non-empty so
         # the normal idle state stays silent.
+        # bd-ma6r3: pass through the ``epg_attempt`` so the diagnostic
+        # captures whether the EPG tier ran and what it saw — debugging
+        # a no-match on a Live TV channel needs the EPG snapshot, not
+        # just the session list.
         if sessions:
             _log_plex_resolver_no_match(
                 client_ip=ecm_session_ip,
@@ -285,6 +368,7 @@ async def _resolve_plex_users_inner(
                 ecm_channel_number=ecm_channel_number,
                 ecm_stream_name=ecm_stream_name,
                 sessions=sessions,
+                epg_attempt=epg_attempt,
             )
         observability.get_metric("user_attribution_unresolved_total").labels(source="plex").inc()
         return []
@@ -612,6 +696,119 @@ def _find_matching_sessions(
     return matches
 
 
+async def _attempt_epg_match(
+    *,
+    ecm_channel_name: str,
+    unmatched_live_sessions: list[PlexSession],
+) -> _EpgAttempt:
+    """Run the bd-ma6r3 EPG cross-reference tier.
+
+    For each unmatched live session, look up the current EPG entries
+    whose ``grandparent_title`` matches the session's
+    ``now_playing_channel_name`` (both come from Plex's
+    ``@grandparentTitle`` attribute on different endpoints). For each
+    such entry, treat its ``channel_call_sign`` as an additional
+    Tier-1 candidate and re-test the same pipe-suffix tolerance
+    Tier 1 uses.
+
+    Returns an :class:`_EpgAttempt` describing what the tier did:
+
+    * ``snapshot_count`` — the EPG snapshot size.
+    * ``candidates_by_session`` — per-session list of
+      ``channelCallSign`` values the tier considered.
+    * ``matched_sessions`` — sessions the tier accepted (subset of
+      ``unmatched_live_sessions``).
+
+    Never raises. The cache layer absorbs upstream failures; if the
+    cache returns ``[]``, the tier matches nothing and the diagnostic
+    records ``snapshot_count=0``.
+    """
+    try:
+        epg_entries = await maybe_get_cached_plex_epg()
+    except Exception as exc:  # noqa: BLE001
+        # Defensive: the cache layer is designed never to raise, but
+        # surface any unexpected error as "no EPG available" rather
+        # than letting it propagate up the resolver hot path.
+        logger.debug("[PLEX-EPG] Unexpected error fetching cached EPG: %s", exc)
+        epg_entries = []
+
+    snapshot_count = len(epg_entries)
+    if not epg_entries:
+        return _EpgAttempt(
+            snapshot_count=0,
+            candidates_by_session={},
+            matched_sessions=[],
+        )
+
+    # Index EPG entries by normalized grandparent_title for O(N) lookup
+    # rather than O(N*M) per-session scan. Multiple EPG entries can
+    # share a grandparent_title (same program on different channels —
+    # e.g. ``"MLB Baseball"`` airs on multiple regional sports
+    # networks); we keep all of them as candidates and let the
+    # Tier-1-style comparator pick the one whose ``channel_call_sign``
+    # matches ``ecm_channel_name``.
+    by_grandparent: dict[str, list[PlexEpgEntry]] = {}
+    for entry in epg_entries:
+        key = _normalize(entry.grandparent_title)
+        if not key:
+            continue
+        by_grandparent.setdefault(key, []).append(entry)
+
+    normalized_ecm_channel = _normalize(ecm_channel_name)
+    ecm_channel_suffix = _parse_pipe_suffix(normalized_ecm_channel)
+
+    candidates_by_session: dict[str, list[str]] = {}
+    matched: list[PlexSession] = []
+    for session in unmatched_live_sessions:
+        session_grandparent_norm = _normalize(
+            session.now_playing_channel_name or "",
+        )
+        if not session_grandparent_norm:
+            # bd-ma6r3: when ``@grandparentTitle`` is absent, fall back
+            # to ``@title`` for the EPG lookup — some Plex Live TV
+            # surfaces only populate the title with the program name
+            # and leave the grandparent blank. This is the most-likely
+            # alternate shape; if neither is set we have nothing to
+            # cross-reference.
+            session_grandparent_norm = _normalize(
+                session.now_playing_item_name or "",
+            )
+        if not session_grandparent_norm:
+            candidates_by_session[session.session_id] = []
+            continue
+        matching_epg = by_grandparent.get(session_grandparent_norm, [])
+        # Build the per-session candidate list of ``channelCallSign``
+        # values for diagnostic logging AND comparison.
+        call_signs = [
+            entry.channel_call_sign for entry in matching_epg
+            if entry.channel_call_sign
+        ]
+        candidates_by_session[session.session_id] = list(call_signs)
+        if not call_signs:
+            continue
+        # Tier-1-style comparison: each ``channelCallSign`` becomes a
+        # candidate. Reuse the existing :func:`_match_against_candidates`
+        # so the pipe-suffix / pipe-prefix / ECM-suffix tolerance is
+        # IDENTICAL to the live Tier 1.
+        candidates: list[tuple[str, str]] = []
+        for call_sign in call_signs:
+            normalized_call = _normalize(call_sign)
+            call_suffix = _parse_pipe_suffix(normalized_call)
+            candidates.append((normalized_call, call_suffix))
+        if _match_against_candidates(
+            normalized_ecm_channel,
+            ecm_channel_suffix,
+            tuple(candidates),
+        ):
+            matched.append(session)
+
+    return _EpgAttempt(
+        snapshot_count=snapshot_count,
+        candidates_by_session=candidates_by_session,
+        matched_sessions=matched,
+    )
+
+
 def _match_against_candidates(
     normalized_ecm_channel: str,
     ecm_channel_suffix: str,
@@ -751,6 +948,7 @@ def _log_plex_resolver_no_match(
     ecm_channel_number: str | int | None,
     ecm_stream_name: str,
     sessions: list[PlexSession],
+    epg_attempt: _EpgAttempt | None = None,
 ) -> None:
     """Emit a structured WARN once per (client_ip, channel_name) per 60 s
     when the Plex resolver had sessions to compare against and the IP
@@ -765,6 +963,14 @@ def _log_plex_resolver_no_match(
     parsed pipe prefix and suffix alongside the raw item name. The
     ``last_activity_date`` is a ``datetime`` here (vs an ISO string for
     Emby/Jellyfin), serialized as ``isoformat()`` for readability.
+
+    bd-ma6r3: when the EPG cross-reference tier ran (``epg_attempt`` is
+    not None), include its diagnostic payload so the operator can see
+    whether the EPG snapshot had any current airings, which channelCallSign
+    values the tier considered for each unmatched live session, and why
+    none of them passed the Tier-1-style comparator. Without this
+    surfaced, debugging a Live TV "User #N" symptom requires re-running
+    the EPG probe by hand against the operator's Plex server.
 
     Callers MUST guard on non-empty ``sessions`` — an empty session list
     is a normal state and would spam the log with useless lines.
@@ -813,10 +1019,29 @@ def _log_plex_resolver_no_match(
         }
         for s in truncated
     ]
+    # bd-ma6r3 EPG-tier payload. When the tier ran, surface the snapshot
+    # size and the per-session list of channel callsigns it considered.
+    # When the tier did not run (no live sessions OR no ecm_channel_name)
+    # the value is ``None`` so the log line clearly distinguishes
+    # "tier skipped" from "tier ran and found nothing".
+    if epg_attempt is None:
+        epg_payload: dict | None = None
+    else:
+        epg_payload = {
+            "snapshot_count": epg_attempt.snapshot_count,
+            "candidates_by_session": {
+                # Truncate keys to first 8 chars for log readability — same
+                # discipline as ``session_id`` in ``session_payload``.
+                (sid[:8] if sid else ""): cands
+                for sid, cands in epg_attempt.candidates_by_session.items()
+            },
+            "matched_count": len(epg_attempt.matched_sessions),
+        }
+
     logger.warning(
         "[PLEX-RESOLVER] no-match diagnostic: ip=%s ecm_channel=%r "
         "ecm_channel_norm=%r ecm_channel_number=%r ecm_stream=%r "
-        "ecm_stream_norm=%r sessions_count=%d sessions=%s",
+        "ecm_stream_norm=%r sessions_count=%d sessions=%s epg=%s",
         client_ip,
         ecm_channel_name,
         _normalize(ecm_channel_name or ""),
@@ -825,6 +1050,7 @@ def _log_plex_resolver_no_match(
         _normalize(ecm_stream_name or ""),
         len(sessions),
         session_payload,
+        epg_payload,
     )
 
 
