@@ -1295,3 +1295,120 @@ class TestECMPipePrefixTolerance:
             )
         assert result is not None
         assert result.user_name == "case_user"
+
+
+# ---------------------------------------------------------------------------
+# Behavior: bd-f68c8 — ECM pipe-prefix parsed as channel_number candidate
+# ---------------------------------------------------------------------------
+
+
+class TestEcmPipePrefixAsChannelNumber:
+    """bd-f68c8: when ``ecm_channel_number`` is ``None`` AND
+    ``ecm_channel_name`` starts with a numeric pipe-prefix (e.g.
+    ``"2.1 | ABC: WBAY Green Bay"`` — common for ATSC sub-channels
+    where Dispatcharr does not push a separate channel_number), the
+    resolver must parse the prefix and use it as a Tier-2 candidate
+    against ``session.channel_number``.
+
+    Mirrors the Jellyfin tests with one shape difference: Emby's
+    session ``channel_number`` is a dedicated field (same as Jellyfin),
+    so the Tier-2 comparator is identical. The fix lives in the same
+    helper across all three resolvers.
+    """
+
+    async def test_ecm_prefix_numeric_matches_session_channel_number(self):
+        """ECM ``"2.1 | ABC: WBAY Green Bay"`` + ``channel_number=None``
+        + Emby session ``channel_number="2.1"`` → match the user."""
+        session = _make_session(
+            user_id="emby-uid-mw", user_name="MotWakorb",
+            item_name="Saturday Night Live",
+            channel_number="2.1",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="WI | Green Bay | ABC 2 WBAY",
+                ecm_channel_name="2.1 | ABC: WBAY Green Bay",
+                ecm_channel_number=None,
+            )
+        assert result == emby_resolver.EmbyAttribution(
+            user_id="emby-uid-mw", user_name="MotWakorb",
+        )
+
+    async def test_ecm_prefix_non_numeric_does_not_false_match(self):
+        """ECM channel_name ``"News | CNN"`` + ``channel_number=None`` +
+        session ``channel_number="news"`` must NOT match — only numeric
+        prefixes are accepted as channel-number candidates."""
+        session = _make_session(
+            user_name="ghost",
+            item_name="Some Show",
+            channel_number="news",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="something_unrelated",
+                ecm_channel_name="News | CNN",
+                ecm_channel_number=None,
+            )
+        assert result is None
+
+    async def test_ecm_prefix_does_not_match_when_session_number_differs(self):
+        """Prefix is numeric but the values differ — must not match."""
+        session = _make_session(
+            user_name="ghost",
+            item_name="Some Show",
+            channel_number="6",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="something_unrelated",
+                ecm_channel_name="5 | Foo",
+                ecm_channel_number=None,
+            )
+        assert result is None
+
+    async def test_no_pipe_prefix_in_ecm_name_skips_prefix_path(self):
+        """ECM channel_name ``"ESPN"`` (no pipe) leaves Tier-2 disabled."""
+        session = _make_session(
+            user_name="ghost",
+            item_name="Some Show",
+            channel_number="408",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="something_unrelated",
+                ecm_channel_name="ESPN",
+                ecm_channel_number=None,
+            )
+        assert result is None
+
+    async def test_explicit_ecm_channel_number_takes_precedence_over_prefix(self):
+        """Caller-supplied ``ecm_channel_number`` wins — the prefix is
+        not consulted when an explicit number is present."""
+        session = _make_session(
+            user_name="explicit_num_user",
+            item_name="Some Show",
+            channel_number="408",
+        )
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="something_unrelated",
+                ecm_channel_name="99 | NotESPN",
+                ecm_channel_number=408,
+            )
+        assert result is not None
+        assert result.user_name == "explicit_num_user"
