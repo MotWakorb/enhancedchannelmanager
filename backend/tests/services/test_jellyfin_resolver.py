@@ -1204,3 +1204,204 @@ class TestECMPipePrefixTolerance:
             )
         assert result is not None
         assert result.user_name == "case_user"
+
+
+# ---------------------------------------------------------------------------
+# Behavior: bd-f68c8 — ECM pipe-prefix parsed as channel_number candidate
+# (Tier-2 reinforcement for the Jellyfin "User #0" Live TV symptom)
+# ---------------------------------------------------------------------------
+
+
+class TestEcmPipePrefixAsChannelNumber:
+    """bd-f68c8: Jellyfin Live TV ECM channels often carry the channel
+    number in the ECM channel_name as a "<number> | <rest>" pipe-prefix
+    (e.g. Dispatcharr does not push a separate channel_number for sub-
+    channels like "2.1"). When ``ecm_channel_number`` is ``None`` AND
+    ``ecm_channel_name`` starts with a numeric pipe-prefix, the resolver
+    must parse that prefix as a Tier-2 channel_number candidate and
+    match it against the session's separately-reported ``channel_number``.
+
+    This complements the existing bd-r5f0c.11 Tier-1 ECM-side pipe-suffix
+    tolerance with a Tier-2-equivalent path so the resolver still
+    attributes correctly when (a) ECM's name does not match the
+    session's name surface (e.g. Jellyfin strips the channel-number
+    prefix from ``NowPlayingItem.Name``, leaving a bare-pipe form like
+    ``"| ABC: WBAY Green Bay"`` whose suffix matches the ECM suffix —
+    Tier-1 covers that), AND (b) — equally — when the names don't line
+    up at all but the channel numbers do.
+
+    The PO's symptom: channel ``"2.1 | ABC: WBAY Green Bay"`` watched
+    via Jellyfin, reported as "User #0" because attribution rows had
+    ``jellyfin_user_name = NULL``.
+    """
+
+    async def test_ecm_prefix_numeric_matches_session_channel_number(self):
+        """ECM ``"2.1 | ABC: WBAY Green Bay"`` + ``channel_number=None``
+        + Jellyfin session ``channel_number="2.1"`` → match the user."""
+        session = _make_session(
+            user_id="72be7fac4ca046cf8198573ad285c963",
+            user_name="MotWakorb",
+            # Different name surface — Tier-1 pipe-suffix tolerance does
+            # NOT save this case; only Tier-2 channel-number-from-prefix
+            # can produce a match.
+            item_name="Saturday Night Live",
+            channel_number="2.1",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip="192.168.1.20",
+                # The Dispatcharr stream_name is unrelated to the
+                # Jellyfin item_name — Tier-3 fuzzy must not save this.
+                ecm_stream_name="WI | Green Bay | ABC 2 WBAY",
+                ecm_channel_name="2.1 | ABC: WBAY Green Bay",
+                ecm_channel_number=None,
+            )
+        assert result == jellyfin_resolver.JellyfinAttribution(
+            user_id="72be7fac4ca046cf8198573ad285c963",
+            user_name="MotWakorb",
+        )
+
+    async def test_po_symptom_full_data_shape(self):
+        """PO's exact symptom: ECM channel ``"2.1 | ABC: WBAY Green Bay"``,
+        Jellyfin session with ``item_name="| ABC: WBAY Green Bay"`` and
+        ``channel_number="2.1"``. With this shape Tier-1 already matches
+        via bd-r5f0c.11 ECM-side suffix tolerance (the session suffix
+        ``"abc: wbay green bay"`` equals the ECM suffix), AND Tier-2
+        independently matches via the bd-f68c8 prefix-as-number tolerance.
+        Either path is sufficient — the assertion just confirms the
+        resolver returns the user.
+        """
+        session = _make_session(
+            user_id="72be7fac4ca046cf8198573ad285c963",
+            user_name="MotWakorb",
+            # Jellyfin strips the "2.1 " prefix and emits "| ABC: WBAY..."
+            item_name="| ABC: WBAY Green Bay",
+            channel_number="2.1",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="WI | Green Bay | ABC 2 WBAY",
+                ecm_channel_name="2.1 | ABC: WBAY Green Bay",
+                ecm_channel_number=None,
+            )
+        assert result is not None
+        assert result.user_name == "MotWakorb"
+
+    async def test_ecm_prefix_non_numeric_does_not_false_match(self):
+        """ECM channel_name ``"News | CNN"`` (non-numeric pipe-prefix)
+        + ``channel_number=None`` + session ``channel_number="news"``
+        must NOT match via the new Tier-2 path — only numeric prefixes
+        are accepted as channel-number candidates so word-prefixed
+        channel names cannot collide with arbitrary session
+        ``channel_number`` strings."""
+        session = _make_session(
+            user_name="ghost",
+            # Tier-1 must not match — pick an item_name that doesn't
+            # match either ECM whole or ECM suffix.
+            item_name="Some Show",
+            # Intentionally set channel_number to the non-numeric prefix
+            # to verify we DO NOT compare non-numeric prefixes against it.
+            channel_number="news",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="something_unrelated",
+                ecm_channel_name="News | CNN",
+                ecm_channel_number=None,
+            )
+        assert result is None
+
+    async def test_ecm_prefix_does_not_match_when_session_number_differs(self):
+        """ECM ``"5 | Foo"`` + ``channel_number=None`` + session
+        ``channel_number="6"``: prefix is numeric but the values differ,
+        so Tier-2 must NOT match (and no other tier should false-match)."""
+        session = _make_session(
+            user_name="ghost",
+            item_name="Some Show",
+            channel_number="6",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="something_unrelated",
+                ecm_channel_name="5 | Foo",
+                ecm_channel_number=None,
+            )
+        assert result is None
+
+    async def test_no_pipe_prefix_in_ecm_name_skips_prefix_path(self):
+        """ECM channel_name ``"ESPN"`` (no pipe) + ``channel_number=None``
+        + session ``channel_number="408"``: no numeric prefix to parse,
+        so the new Tier-2 prefix path does NOT contribute, and the
+        unrelated session is not matched."""
+        session = _make_session(
+            user_name="ghost",
+            item_name="Some Show",
+            channel_number="408",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="something_unrelated",
+                ecm_channel_name="ESPN",
+                ecm_channel_number=None,
+            )
+        assert result is None
+
+    async def test_explicit_ecm_channel_number_takes_precedence_over_prefix(self):
+        """When ``ecm_channel_number`` is explicitly provided, the
+        prefix-parsing path is NOT consulted — the caller-supplied
+        number is the authoritative Tier-2 value. ECM
+        ``"99 | NotESPN"`` + ``channel_number=408`` + session
+        ``channel_number="408"`` matches via the explicit number, NOT
+        via the (rejected) "99" prefix."""
+        session = _make_session(
+            user_name="explicit_num_user",
+            item_name="Some Show",
+            channel_number="408",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="something_unrelated",
+                ecm_channel_name="99 | NotESPN",
+                ecm_channel_number=408,
+            )
+        assert result is not None
+        assert result.user_name == "explicit_num_user"
+
+    async def test_subchannel_decimal_prefix_2_1(self):
+        """Sub-channel numbers (e.g. ATSC ``"2.1"``) are common in
+        broadcast TV — verify the prefix parser accepts a single dot
+        and treats ``"2.1"`` as a valid numeric channel-number
+        candidate."""
+        session = _make_session(
+            user_name="subchannel_user",
+            item_name="Local News",
+            channel_number="2.1",
+        )
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="WI | Green Bay | ABC 2 WBAY",
+                ecm_channel_name="2.1 | ABC: WBAY Green Bay",
+                ecm_channel_number=None,
+            )
+        assert result is not None
+        assert result.user_name == "subchannel_user"
