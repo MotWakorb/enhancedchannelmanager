@@ -530,6 +530,141 @@ class TestActiveChannelsEmbyEnrichment:
                 f"Expected None, got: {client['emby_user_name']!r}"
             )
 
+    # -----------------------------------------------------------------------
+    # bd-cat70 (fix-forward for v0.17.1-0056): per-IP attribution — the
+    # resolver hit for one IP must NOT broadcast to other clients with
+    # different IPs (the mixed-source case: one Emby-mediated client at
+    # the Emby server IP + one direct Dispatcharr client at a different
+    # IP). The bd-5kbyf assumption that all clients share the Emby server
+    # IP holds only when the channel is purely Emby-mediated.
+    # -----------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_resolver_hit_does_not_broadcast_to_unmatched_ip_clients(
+        self, async_client
+    ):
+        """Two clients on the same channel at DIFFERENT IPs: client A at the
+        Emby server IP resolves to ``MotWakorb``; client B at a non-Emby IP
+        gets no match. Client A must carry ``emby_user_name='MotWakorb'``
+        while client B must carry ``emby_user_name=None`` — the resolver
+        hit must NOT broadcast onto the unmatched client (bd-cat70).
+        """
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {
+                    "channel_id": "uuid-mixed",
+                    "channel_name": "Milwaukee Brewers",
+                    "channel_number": 679,
+                    "stream_id": 679,
+                    "clients": [
+                        # client A — connecting from the Emby server IP
+                        # (the bd-5kbyf "Emby-mediated" path).
+                        {"ip_address": "172.16.0.19", "user_id": 1, "username": "po"},
+                        # client B — direct Dispatcharr XC connection at
+                        # an unrelated IP (kmfelmer in the PO's repro).
+                        {"ip_address": "172.16.0.50", "user_id": 2, "username": "kmfelmer"},
+                    ],
+                },
+            ],
+        }
+        mock_client.get_streams_by_ids.return_value = [
+            {"id": 679, "name": "US: Milwaukee Brewers", "m3u_account": 6},
+        ]
+
+        async def _per_ip_resolver(ip, stream_name, **_kwargs):
+            if ip == "172.16.0.19":
+                return EmbyAttribution(user_id="uid-mw", user_name="MotWakorb")
+            return None
+
+        with (
+            patch("routers.stats.get_client", return_value=mock_client),
+            patch(
+                "services.emby_resolver.resolve_emby_user",
+                side_effect=_per_ip_resolver,
+            ),
+            patch(
+                "config.get_settings",
+                return_value=type("S", (), {"emby_enabled": True, "emby_base_url": "http://emby"})(),
+            ),
+        ):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        ch = body["channels"][0]
+        # Channel-level field: still set from the IP that matched.
+        assert ch["emby_user_name"] == "MotWakorb"
+
+        # Resolve clients by IP — order in the response is not
+        # contractually pinned, so look them up.
+        clients_by_ip = {c["ip_address"]: c for c in ch["clients"]}
+        assert (
+            clients_by_ip["172.16.0.19"]["emby_user_name"] == "MotWakorb"
+        ), (
+            "Expected the Emby-server-IP client to carry the resolved "
+            f"username, got: {clients_by_ip['172.16.0.19']!r}"
+        )
+        assert clients_by_ip["172.16.0.50"]["emby_user_name"] is None, (
+            "Expected the non-Emby IP client's emby_user_name to remain "
+            f"None (no broadcast), got: {clients_by_ip['172.16.0.50']!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_resolver_hit_does_not_broadcast_via_viewers_list(
+        self, async_client
+    ):
+        """Same per-IP scoping rule applies to the W5 multi-viewer
+        ``emby_viewers`` list — only the matched client carries the
+        per-client viewers payload; non-matched clients keep ``[]``."""
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {
+                    "channel_id": "uuid-mixed-viewers",
+                    "channel_name": "Milwaukee Brewers",
+                    "channel_number": 679,
+                    "stream_id": 679,
+                    "clients": [
+                        {"ip_address": "172.16.0.19", "user_id": 1},
+                        {"ip_address": "172.16.0.50", "user_id": 2},
+                    ],
+                },
+            ],
+        }
+        mock_client.get_streams_by_ids.return_value = [
+            {"id": 679, "name": "US: Milwaukee Brewers", "m3u_account": 6},
+        ]
+
+        async def _per_ip_plural(ip, stream_name, **_kwargs):
+            if ip == "172.16.0.19":
+                return [EmbyAttribution(user_id="uid-mw", user_name="MotWakorb")]
+            return []
+
+        with (
+            patch("routers.stats.get_client", return_value=mock_client),
+            patch(
+                "services.emby_resolver.resolve_emby_users",
+                side_effect=_per_ip_plural,
+            ),
+            patch(
+                "config.get_settings",
+                return_value=type("S", (), {"emby_enabled": True, "emby_base_url": "http://emby"})(),
+            ),
+        ):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        ch = body["channels"][0]
+        clients_by_ip = {c["ip_address"]: c for c in ch["clients"]}
+        # Matched client carries the viewers payload.
+        assert clients_by_ip["172.16.0.19"]["emby_viewers"] == [
+            {"user_id": "uid-mw", "user_name": "MotWakorb"}
+        ]
+        # Non-matched client's viewers list stays empty — no broadcast.
+        assert clients_by_ip["172.16.0.50"]["emby_viewers"] == []
+
     @pytest.mark.asyncio
     async def test_channel_with_empty_clients_list_handles_cleanly(
         self, async_client

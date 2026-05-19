@@ -457,8 +457,11 @@ export interface ChannelStats {
   // surfaces the matched viewer's Emby username here when at least one
   // client resolves. Null when Emby is disabled, no client came from
   // the configured Emby server IP, or no live Emby session matched the
-  // stream name. The Active Channels view renders this as a
-  // "(watching: <emby_user>)" suffix on the stream-identity badge.
+  // stream name. bd-cat70 (v0.17.1-0057): the Active Channels card no
+  // longer renders this in the channel header — the single-viewer name
+  // is shown only in the per-client Connected Clients section (with
+  // the AttributionBadge). The channel header shows the multi-viewer
+  // "(N viewers)" rollup only when N > 1.
   emby_user_name?: string | null;
   // Plex / Jellyfin legacy singular (W4 / bd-r5f0c.4)
   plex_user_name?: string | null;

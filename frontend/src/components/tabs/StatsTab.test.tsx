@@ -269,16 +269,15 @@ describe('StatsTab — Active Channels stream-identity badge (bd-ox5q8)', () => 
   });
 });
 
-// bd-fm23o (final bead of EPIC bd-2cenq — Emby user attribution): the
-// Active Channels card renders ``(watching: <emby_user>)`` next to the
-// stream-name badge when the backend's
-// ``_enrich_channels_with_emby`` populated the field. The badge is
-// purely additive — it appears alongside the existing stream-name
-// badge — so the test verifies presence/absence without disturbing the
-// pre-existing badge rendering.
+// bd-fm23o → bd-cat70 (fix-forward for v0.17.1-0056): the original
+// bd-fm23o single-viewer "(watching: <emby_user>)" badge in the channel
+// header was REMOVED in bd-cat70 because it duplicated the name already
+// rendered (with the AttributionBadge) in the Connected Clients
+// section below. The channel header now shows the "(N viewers)" rollup
+// only when N > 1; single-viewer cases rely on the per-client display.
 
-describe('StatsTab — Active Channels Emby attribution badge (bd-fm23o)', () => {
-  it('renders "(watching: <emby_user>)" next to the stream badge when emby_user_name is present', async () => {
+describe('StatsTab — Active Channels Emby attribution badge (bd-fm23o → bd-cat70)', () => {
+  it('does NOT render a "(watching: ...)" suffix in the header when only one Emby viewer is present (bd-cat70: dedup with Connected Clients)', async () => {
     vi.mocked(api.getChannelStats).mockResolvedValue(
       buildChannelStatsResponse({
         stream_name: 'US: TNT',
@@ -288,14 +287,17 @@ describe('StatsTab — Active Channels Emby attribution badge (bd-fm23o)', () =>
       }),
     );
 
-    render(<StatsTab />);
+    const { container } = render(<StatsTab />);
 
     await waitFor(() => {
       // The stream identity badge still renders normally.
       expect(screen.getByText('[Infinity] - US: TNT')).toBeInTheDocument();
     });
-    // The emby viewer suffix appears as its own badge.
-    expect(screen.getByText('(watching: alice)')).toBeInTheDocument();
+    // bd-cat70: the channel-header "(watching: alice)" suffix is gone —
+    // single-viewer name is shown only in the Connected Clients section
+    // (with the AttributionBadge), not duplicated in the header.
+    expect(screen.queryByText(/watching:/)).not.toBeInTheDocument();
+    expect(container.querySelector('.channel-emby-viewer')).toBeNull();
   });
 
   it('does NOT render the Emby viewer badge when emby_user_name is null', async () => {
@@ -881,7 +883,7 @@ describe('StatsTab — channel-header viewer rollup (bd-g03fi)', () => {
     });
   });
 
-  it('shows single viewer name when only 1 viewer total (back-compat)', async () => {
+  it('shows NO header viewer suffix when only 1 viewer total (bd-cat70: dedup with Connected Clients)', async () => {
     vi.mocked(api.getChannelStats).mockResolvedValue({
       count: 1,
       channels: [
@@ -896,10 +898,15 @@ describe('StatsTab — channel-header viewer rollup (bd-g03fi)', () => {
     const { container } = render(<StatsTab />);
 
     await waitFor(() => {
-      expect(container.querySelector('[data-testid="channel-header-single-viewer"]')).toBeInTheDocument();
+      expect(container.querySelector('.channel-card')).toBeInTheDocument();
     });
-    expect(screen.getByText('(watching: OnlyUser)')).toBeInTheDocument();
-    // Should NOT show rollup
+    // bd-cat70: single-viewer name is rendered in the Connected Clients
+    // section (with AttributionBadge), NOT duplicated in the channel
+    // header. The legacy "channel-header-single-viewer" testid was
+    // removed along with that markup.
+    expect(container.querySelector('[data-testid="channel-header-single-viewer"]')).toBeNull();
+    expect(screen.queryByText('(watching: OnlyUser)')).not.toBeInTheDocument();
+    // Rollup also absent when totalViewers === 1.
     expect(screen.queryByTestId('channel-header-viewer-rollup')).not.toBeInTheDocument();
   });
 });
