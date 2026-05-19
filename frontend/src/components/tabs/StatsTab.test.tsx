@@ -144,6 +144,8 @@ function buildChannelStatsResponse(
     m3u_account_id: number | null;
     stream_id: number;
     emby_user_name: string | null;
+    provider_name: string | null;
+    provider_hostname: string | null;
   }>,
 ): ChannelStatsResponse {
   return {
@@ -266,6 +268,107 @@ describe('StatsTab — Active Channels stream-identity badge (bd-ox5q8)', () => 
       expect(container.querySelector('.channel-card')).toBeInTheDocument();
     });
     expect(container.querySelector('.stream-name-badge')).toBeNull();
+  });
+});
+
+// bd-gy5nd: backend now surfaces ``provider_name`` (M3U source name OR
+// bare URL hostname) so the badge has a meaningful label even when the
+// stream-id direct lookup misses. The Stats Tab prefers the
+// backend-derived ``provider_name`` over the side-load
+// ``m3uAccountNameMap`` lookup so the PO sees the actual upstream
+// provider instead of "Unknown" on the channel badge.
+
+describe('StatsTab — Active Channels provider badge (bd-gy5nd)', () => {
+  it('renders backend-derived provider_name + stream_name when both resolve', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue(
+      buildChannelStatsResponse({
+        stream_name: 'TSN 5',
+        m3u_account_id: 6,
+        provider_name: 'Infinity TV',
+        provider_hostname: 'infinity.gives',
+        stream_id: 555,
+      }),
+    );
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      // Backend provider_name overrides the side-load name lookup
+      // (mockM3UAccounts has id 6 → "Infinity"; backend says
+      // "Infinity TV"). The backend wins.
+      expect(screen.getByText('[Infinity TV] - TSN 5')).toBeInTheDocument();
+    });
+  });
+
+  it('renders bare-hostname provider when no M3U match exists (the PO scenario)', async () => {
+    // The PO's exact case: stream_id resolution missed (no
+    // m3u_account_id) but the backend surfaces the URL hostname as
+    // the provider so the badge label is meaningful. Pre-bd-gy5nd
+    // this rendered no provider prefix → operator couldn't tell the
+    // upstream from the badge.
+    vi.mocked(api.getChannelStats).mockResolvedValue(
+      buildChannelStatsResponse({
+        stream_name: 'TSN 5',  // Dispatcharr's stream label.
+        m3u_account_id: null,  // No M3U account matched.
+        provider_name: 'infinity.gives',  // Bare hostname from URL.
+        provider_hostname: 'infinity.gives',
+      }),
+    );
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      // Badge shows the bare hostname as the bracketed provider
+      // prefix — the PO's exact "provider should not be Unknown"
+      // contract.
+      expect(screen.getByText('[infinity.gives] - TSN 5')).toBeInTheDocument();
+    });
+  });
+
+  it('prefers backend provider_name over side-load m3uAccountNameMap lookup', async () => {
+    // Backend resolves "Infinity TV"; side-load has id 6 mapped to
+    // "Infinity" (older name). Backend wins so the operator sees the
+    // current canonical name.
+    vi.mocked(api.getChannelStats).mockResolvedValue(
+      buildChannelStatsResponse({
+        stream_name: 'Discovery',
+        m3u_account_id: 6,
+        provider_name: 'Infinity TV',
+        provider_hostname: 'infinity.gives',
+        stream_id: 200,
+      }),
+    );
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      // "Infinity TV" is backend-derived; "Infinity" is the side-load
+      // name. The backend value wins.
+      expect(screen.getByText('[Infinity TV] - Discovery')).toBeInTheDocument();
+    });
+    // Side-load name should NOT leak into the rendered badge text.
+    expect(screen.queryByText('[Infinity] - Discovery')).not.toBeInTheDocument();
+  });
+
+  it('falls back to side-load lookup when backend omits provider_name (pre-bd-gy5nd backend)', async () => {
+    // Defensive: when the response is from a pre-bd-gy5nd backend
+    // (no provider_name field), the existing m3uAccountNameMap
+    // lookup still resolves the badge.
+    vi.mocked(api.getChannelStats).mockResolvedValue(
+      buildChannelStatsResponse({
+        stream_name: 'TSN 5',
+        m3u_account_id: 6,
+        // provider_name and provider_hostname intentionally omitted.
+        stream_id: 555,
+      }),
+    );
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      // Side-load lookup: id 6 → "Infinity".
+      expect(screen.getByText('[Infinity] - TSN 5')).toBeInTheDocument();
+    });
   });
 });
 

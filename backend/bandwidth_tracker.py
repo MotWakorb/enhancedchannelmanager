@@ -22,6 +22,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, date, timedelta, timezone
 from typing import Any, ClassVar, NamedTuple, Optional
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import distinct, func
@@ -254,20 +255,24 @@ def _extract_stream_id_from_url(url: Optional[str]) -> Optional[int]:
 
 
 class ProviderResolution(NamedTuple):
-    """Per-channel resolver output (bd-kh23e).
+    """Per-channel resolver output (bd-kh23e, extended by bd-gy5nd).
 
     ``BandwidthTracker._resolve_provider_ids`` returns one
     ``ProviderResolution`` per channel in the snapshot. The three
-    fields move together as a unit because they all come from the same
-    ``get_streams_by_ids`` batch response and they all fail (NULL)
-    together when resolution can't complete (same failure modes as the
-    pre-kh23e provider-only path: ``no_stream_id`` /
-    ``stream_not_found`` / ``stream_has_no_provider`` / ``lookup_raised``
-    / channel-streams fallback raise/miss).
+    legacy fields (``provider_id``/``stream_id``/``stream_name``) move
+    together as a unit because they come from the ``get_streams_by_ids``
+    batch response and they all fail (NULL) together when stream-id
+    resolution can't complete. The two trailing fields (``provider_name``
+    and ``hostname``) populate from the bd-gy5nd URL-hostname-match
+    path, which derives provider identity from the ``url`` field on the
+    ``/proxy/ts/status`` snapshot — independent of stream-id
+    resolution, so a channel can carry ``hostname="infinity.gives"``
+    even when ``stream_id``/``stream_name`` are NULL.
 
     * ``provider_id`` — the M3U-account id of the stream's upstream
-      provider (``streams.m3u_account_id``). NULL when the resolver
-      could not identify the stream's owner.
+      provider (``streams.m3u_account_id`` from the stream-id direct
+      lookup OR ``m3u_accounts[*].id`` from the bd-gy5nd URL-hostname
+      match). NULL when neither path attributes the stream.
     * ``stream_id`` — the Dispatcharr stream row id (``streams.id``).
       NULL when the resolver could not identify the active stream at
       all (no stream id on the snapshot, no URL-derived match, etc.).
@@ -275,25 +280,127 @@ class ProviderResolution(NamedTuple):
       record (e.g. ``"US: TNT"``). NULL when the stream record had no
       ``name`` field, or when the resolver could not identify the
       stream.
+    * ``provider_name`` (bd-gy5nd) — operator-visible provider label.
+      The M3U account ``name`` when the URL hostname matched one of
+      Dispatcharr's configured M3U accounts; the bare hostname (e.g.
+      ``"infinity.gives"``) when the URL parses but no M3U match
+      exists; NULL when the URL itself is unparsable or absent.
+    * ``hostname`` (bd-gy5nd) — the bare hostname parsed from the
+      active stream URL. Populated whenever the URL parses to a
+      hostname (independent of whether the M3U match succeeded), so
+      downstream consumers always have a stable provider-identity
+      string when a URL is available.
 
-    Zero runtime overhead vs. a 3-tuple — ``typing.NamedTuple`` is a
+    Zero runtime overhead vs. a 5-tuple — ``typing.NamedTuple`` is a
     plain ``tuple`` subclass. Field access (``.provider_id``) is
     callsite documentation; iteration / equality / hashing behave
-    identically to a tuple.
+    identically to a tuple. The two trailing fields default to ``None``
+    so existing 3-arg constructions stay backward-compatible.
 
-    The all-NULL sentinel is ``ProviderResolution(None, None, None)`` —
-    use ``EMPTY_RESOLUTION`` below to avoid re-allocating it.
+    The all-NULL sentinel is ``ProviderResolution(None, None, None,
+    None, None)`` — use ``EMPTY_RESOLUTION`` below to avoid
+    re-allocating it.
     """
 
     provider_id: Optional[int]
     stream_id: Optional[int]
     stream_name: Optional[str]
+    provider_name: Optional[str] = None
+    hostname: Optional[str] = None
 
 
 # Sentinel for the "resolution failed" case — same object reused across
 # call sites so the dict[channel_uuid, ProviderResolution] map doesn't
 # allocate a fresh tuple for every NULL row.
-EMPTY_RESOLUTION = ProviderResolution(None, None, None)
+EMPTY_RESOLUTION = ProviderResolution(None, None, None, None, None)
+
+
+def _parse_url_hostname(url: Optional[str]) -> Optional[str]:
+    """Extract the bare hostname from a stream URL (bd-gy5nd).
+
+    Returns the lowercased host component (no port, no userinfo) when
+    parsing succeeds, otherwise ``None``. Defensive against malformed
+    input — non-string, empty, missing scheme, no host.
+
+    The hostname becomes the M3U-account match key (compared against
+    each account's ``server_url`` hostname) AND, when no M3U match
+    exists, the bare-hostname provider-name fallback so the operator
+    always sees something concrete instead of "Unknown".
+    """
+    if not url or not isinstance(url, str):
+        return None
+    try:
+        parsed = urlparse(url)
+    except (ValueError, TypeError):
+        return None
+    host = parsed.hostname
+    if not host:
+        return None
+    return host.lower()
+
+
+def _match_provider_from_url(
+    url: Optional[str],
+    m3u_accounts: list[dict],
+) -> tuple[Optional[int], Optional[str], Optional[str]]:
+    """Derive provider identity from the active stream URL (bd-gy5nd).
+
+    The replacement for the bd-5g7kx channel-streams URL-match
+    fallback, which depended on
+    ``GET /api/channels/channels/<channel_uuid>/streams/`` — that path
+    never worked for the proxy-session UUIDs ECM gets from
+    ``/proxy/ts/status`` (wrong identifier space — Dispatcharr returns
+    the SPA ``index.html`` rather than 404).
+
+    Parse the URL hostname, then match against each M3U account's
+    ``server_url`` hostname (case-insensitive). When the match succeeds,
+    return ``(account_id, account_name, hostname)``. When the URL
+    parses but no account matches, return ``(None, hostname, hostname)``
+    — the bare hostname becomes the operator-visible provider label
+    instead of "Unknown". When the URL is unparsable or missing, return
+    the all-``None`` triple.
+
+    The ``m3u_accounts`` argument is the list returned by
+    ``DispatcharrClient.get_m3u_accounts()`` — each entry is a dict
+    with ``id``, ``name``, and ``server_url`` keys. Defensive against
+    missing/non-string fields per entry: a malformed account is
+    skipped, not raised on.
+
+    Returns ``(provider_id, provider_name, hostname)`` — three optional
+    values populated independently per the match outcome above.
+    """
+    hostname = _parse_url_hostname(url)
+    if hostname is None:
+        return (None, None, None)
+    for account in m3u_accounts:
+        if not isinstance(account, dict):
+            continue
+        server_url = account.get("server_url")
+        account_host = _parse_url_hostname(server_url)
+        if account_host is None:
+            continue
+        if account_host == hostname:
+            account_id = account.get("id")
+            account_name = account.get("name")
+            try:
+                provider_id: Optional[int] = (
+                    int(account_id) if account_id is not None else None
+                )
+            except (TypeError, ValueError):
+                provider_id = None
+            provider_name = (
+                str(account_name)
+                if isinstance(account_name, str) and account_name
+                else None
+            )
+            # Prefer the M3U account name when present; fall back to the
+            # bare hostname so the operator always sees something concrete.
+            return (provider_id, provider_name or hostname, hostname)
+    # URL parsed but no M3U account hostname matched. Surface the bare
+    # hostname so the frontend renders ``infinity.gives`` instead of
+    # "Unknown" — the upstream provider is identified even when the
+    # operator hasn't configured an M3U account for it.
+    return (None, hostname, hostname)
 
 
 # Default LRU sizing for the cross-poll channel-streams cache. Matches
@@ -383,64 +490,110 @@ async def resolve_active_channel_streams(
     Free-function entry point shared by:
 
     * ``BandwidthTracker._resolve_provider_ids`` — the polling cycle's
-      hot path. Passes its instance ``ChannelStreamsCache`` so successive
-      polls reuse channel-streams responses (bd-5g7kx) within TTL.
+      hot path.
     * ``routers.stats.get_channel_stats`` — the live Stats v2 Active
-      Channels endpoint (bd-ox5q8). Passes a fresh cache per request so
-      operator-facing data is at most one Dispatcharr round-trip behind
-      reality (no cross-request caching of channel-streams lookups —
-      operators expect immediate accuracy).
+      Channels endpoint (bd-ox5q8).
 
     Snapshot entry shape (the union both callers feed in):
 
-    * ``channel_uuid`` (str, required) — Dispatcharr channel UUID.
+    * ``channel_uuid`` (str, required) — Dispatcharr proxy-session UUID
+      (the ``channel_id`` field on ``/proxy/ts/status``).
     * ``stream_id`` (int | None) — Dispatcharr stream row id from
-      ``/proxy/ts/status``. Resolved first; absence triggers the
-      URL-derived fallback below.
-    * ``url`` (str | None) — Active stream URL. Used for the URL-derived
-      stream-id parse (bd-kbgey) and for the channel-streams URL-match
-      fallback (bd-5g7kx).
+      ``/proxy/ts/status``. Resolved first when present; absence
+      triggers the URL-derived fallbacks below.
+    * ``url`` (str | None) — Active stream URL (e.g.
+      ``https://infinity.gives/live/.../<id>.ts``). Used for both the
+      URL-derived stream-id parse (bd-kbgey) and the bd-gy5nd URL
+      hostname match against configured M3U accounts.
 
     Returns ``{channel_uuid: ProviderResolution}``. Resolution failures
-    land ``EMPTY_RESOLUTION`` (the all-None NamedTuple) — same row still
-    surfaces, all three identity fields NULL.
+    land ``EMPTY_RESOLUTION`` (the all-None NamedTuple) — same row
+    still surfaces, all five identity fields NULL.
 
     Resolution paths (tried in order, first hit wins per channel):
 
-    1. **Direct stream_id**: snapshot's ``stream_id`` → batched
-       ``get_streams_by_ids`` → stream's ``m3u_account_id``.
-    2. **URL-derived stream_id** (bd-kbgey): when ``stream_id`` is
+    1. **Direct stream_id** — snapshot's ``stream_id`` → batched
+       ``get_streams_by_ids`` → stream's ``m3u_account_id`` /
+       ``name``. Also populates ``provider_name`` from the matched
+       M3U account when ``m3u_account_id`` resolves to a known
+       account.
+    2. **URL-derived stream_id** (bd-kbgey) — when ``stream_id`` is
        absent, parse the trailing ``<id>.ts`` integer from the active
        URL and route it through the SAME batched call. Wins when the
        URL's trailing id coincidentally collides with a Dispatcharr
        stream row id.
-    3. **Channel-streams URL match** (bd-5g7kx): when path 2 misses —
-       the URL's trailing id is the *upstream* M3U provider's id, not
-       Dispatcharr's — fetch ``/api/channels/channels/<uuid>/streams/``
-       and find the stream whose persisted ``url`` matches the active
-       URL. Results cached (when a cache is provided) cross-call in a
-       bounded LRU.
+    3. **URL-hostname match** (bd-gy5nd, replaces bd-5g7kx's broken
+       channel-streams fallback) — when neither stream-id path
+       attributes the stream, derive provider identity from the URL
+       hostname directly: match against each configured M3U account's
+       ``server_url`` hostname; on no M3U match, surface the bare
+       hostname as the provider name so operators see ``infinity.gives``
+       instead of "Unknown".
 
-    Failure modes — all surface as ``EMPTY_RESOLUTION`` with a
-    structured ``[STATS_V2] provider_resolution_failed`` log line.
-    See ``BandwidthTracker._resolve_provider_ids`` docstring for the
-    full reason taxonomy.
+    The bd-5g7kx channel-streams fallback (which called
+    ``GET /api/channels/channels/<channel_uuid>/streams/`` with the
+    proxy-session UUID) was removed in bd-gy5nd because the endpoint
+    expects a Dispatcharr REST channel id — different identifier space
+    than proxy-session UUIDs. Dispatcharr returned the SPA
+    ``index.html`` rather than 404, which fed an HTML body into the
+    JSON parser and produced the 10s ``provider_resolution_failed``
+    WARN spam. The URL-hostname match is the structural replacement.
 
-    Metrics: when ``emit_metrics`` is True (the default — the polling
-    hot path) a per-call SLI line and Prometheus counter increment are
-    emitted via ``_log_provider_resolution_sli``. When False (the
-    on-demand endpoint path) the SLI line is suppressed so it doesn't
-    drown the cyclic poll signal.
+    Metrics: when ``emit_metrics`` is True (the polling hot path) a
+    per-call SLI line and Prometheus counter increment are emitted via
+    ``_log_provider_resolution_sli``. When False (the on-demand
+    endpoint path) the SLI line is suppressed so it doesn't drown the
+    cyclic poll signal.
+
+    The ``channel_streams_cache`` and ``poll_count`` parameters are
+    retained as no-op kwargs for back-compat with existing call sites;
+    bd-gy5nd no longer issues per-channel HTTP calls so neither cache
+    is needed in the URL-hostname-match path. The fields will be
+    removed in a follow-up that retires the back-compat shims.
     """
     from stream_prober import extract_m3u_account_id
+
+    # bd-gy5nd: pre-fetch the M3U accounts list once per resolver call.
+    # Used as the lookup table for URL-hostname matching when stream-id
+    # resolution misses (path 3 above) AND for ``provider_name``
+    # enrichment when the direct stream-id path succeeds. Best-effort:
+    # on Dispatcharr error we degrade to an empty list — every channel
+    # falls back to bare-hostname ``provider_name`` so the operator
+    # still sees a meaningful string.
+    m3u_accounts: list[dict] = []
+    try:
+        raw_accounts = await client.get_m3u_accounts()
+        if isinstance(raw_accounts, list):
+            m3u_accounts = raw_accounts
+    except Exception as e:
+        logger.debug(
+            "[STATS_V2] m3u_accounts_fetch_failed error=%s — degrading to "
+            "bare-hostname provider_name (bd-gy5nd)",
+            e,
+        )
+    # Build {account_id: account_name} once for ``provider_name``
+    # enrichment on the direct stream-id path.
+    m3u_name_by_id: dict[int, str] = {}
+    for account in m3u_accounts:
+        if not isinstance(account, dict):
+            continue
+        account_id = account.get("id")
+        account_name = account.get("name")
+        if account_id is None or not isinstance(account_name, str) or not account_name:
+            continue
+        try:
+            m3u_name_by_id[int(account_id)] = account_name
+        except (TypeError, ValueError):
+            continue
 
     provider_by_channel: dict[str, ProviderResolution] = {}
     unresolvable_channels: list[str] = []
     stream_id_by_channel: dict[str, int] = {}
-    # Channels whose stream_id came from URL parsing (bd-kbgey fallback)
-    # rather than the direct ``stream_id`` field. These are the
-    # candidates for the channel-streams URL-match fallback (bd-5g7kx)
-    # if the direct lookup misses.
+    # Channels whose stream_id came from URL parsing (bd-kbgey
+    # fallback) rather than the direct ``stream_id`` field. These are
+    # the candidates for the URL-hostname-match fallback (bd-gy5nd) if
+    # the direct lookup misses — the same gate the bd-5g7kx fallback
+    # used.
     url_derived_channels: set[str] = set()
     url_by_channel: dict[str, str] = {}
     for entry in channel_snapshot:
@@ -452,12 +605,19 @@ async def resolve_active_channel_streams(
         if stream_id is None:
             derived = _extract_stream_id_from_url(url) if url else None
             if derived is None:
+                # No stream id AND no URL-derived id — try URL-hostname
+                # match directly. When the URL parses to a hostname, we
+                # can still surface the provider identity for the
+                # operator even though the stream-row identity stays
+                # NULL.
+                hostname_resolution = _resolution_from_url_hostname(
+                    url_by_channel.get(channel_uuid), m3u_accounts
+                )
+                if hostname_resolution is not None:
+                    provider_by_channel[channel_uuid] = hostname_resolution
+                    continue
                 unresolvable_channels.append(channel_uuid)
                 provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
-                logger.warning(
-                    "[STATS_V2] provider_resolution_failed channel=%s reason=no_stream_id",
-                    channel_uuid,
-                )
                 continue
             stream_id_by_channel[channel_uuid] = derived
             url_derived_channels.add(channel_uuid)
@@ -466,7 +626,14 @@ async def resolve_active_channel_streams(
 
     if not stream_id_by_channel:
         if emit_metrics:
-            _log_provider_resolution_sli(0, len(unresolvable_channels))
+            resolved_so_far = sum(
+                1
+                for resolution in provider_by_channel.values()
+                if resolution is not EMPTY_RESOLUTION
+            )
+            _log_provider_resolution_sli(
+                resolved_so_far, len(unresolvable_channels)
+            )
         return provider_by_channel
 
     unique_stream_ids = sorted(set(stream_id_by_channel.values()))
@@ -477,16 +644,31 @@ async def resolve_active_channel_streams(
             "[STATS_V2] provider_resolution_failed reason=lookup_raised error=%s",
             e,
         )
+        # Stream-id lookup failed — try URL-hostname match for every
+        # affected channel so the operator still sees a provider name
+        # when possible.
+        unresolved_after_url = 0
+        url_resolved = 0
         for channel_uuid in stream_id_by_channel:
-            provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
-            logger.warning(
-                "[STATS_V2] provider_resolution_failed channel=%s stream=%s reason=lookup_raised",
-                channel_uuid,
-                stream_id_by_channel[channel_uuid],
+            hostname_resolution = _resolution_from_url_hostname(
+                url_by_channel.get(channel_uuid), m3u_accounts
             )
+            if hostname_resolution is not None:
+                provider_by_channel[channel_uuid] = hostname_resolution
+                url_resolved += 1
+                continue
+            provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
+            unresolved_after_url += 1
         if emit_metrics:
+            already_resolved_via_hostname = sum(
+                1
+                for ch, resolution in provider_by_channel.items()
+                if ch not in stream_id_by_channel
+                and resolution is not EMPTY_RESOLUTION
+            )
             _log_provider_resolution_sli(
-                0, len(unresolvable_channels) + len(stream_id_by_channel)
+                url_resolved + already_resolved_via_hostname,
+                len(unresolvable_channels) + unresolved_after_url,
             )
         return provider_by_channel
 
@@ -505,62 +687,117 @@ async def resolve_active_channel_streams(
             str(raw_name) if isinstance(raw_name, str) and raw_name else None
         )
 
-    # Per-invocation cache for the channel-streams fallback. Multiple
-    # unresolved channels sharing a channel_uuid in one call consult
-    # Dispatcharr ONCE. Distinct from the cross-call LRU passed in;
-    # this map drops when the function returns.
-    per_call_channel_streams_cache: dict[str, Optional[list[dict]]] = {}
-
-    resolved_count = 0
+    resolved_count = sum(
+        1
+        for resolution in provider_by_channel.values()
+        if resolution is not EMPTY_RESOLUTION
+    )
     unresolved_count = len(unresolvable_channels)
     for channel_uuid, stream_id in stream_id_by_channel.items():
         provider_id = provider_by_stream.get(stream_id)
         stream_in_response = stream_id in provider_by_stream
         stream_name = name_by_stream.get(stream_id)
-        if (
-            provider_id is None
-            and not stream_in_response
-            and channel_uuid in url_derived_channels
-        ):
-            fallback_result = await _resolve_via_channel_streams(
-                client,
-                channel_uuid,
-                url_by_channel.get(channel_uuid),
-                per_call_channel_streams_cache,
-                channel_streams_cache,
-                poll_count,
-            )
-            if fallback_result is not None:
-                provider_by_channel[channel_uuid] = fallback_result
-                resolved_count += 1
-                continue
-            provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
-            unresolved_count += 1
-            continue
-        if provider_id is None:
-            provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
-            unresolved_count += 1
-            if not stream_in_response:
-                reason = "stream_not_found"
-            else:
-                reason = "stream_has_no_provider"
-            logger.warning(
-                "[STATS_V2] provider_resolution_failed channel=%s stream=%s reason=%s",
-                channel_uuid,
-                stream_id,
-                reason,
-            )
-        else:
+        # Direct stream-id path succeeded → build the resolution and
+        # enrich ``provider_name`` from the M3U accounts lookup. The
+        # URL is also parsed here so ``hostname`` is consistently
+        # populated whenever a URL is available, irrespective of which
+        # resolution path won.
+        active_url = url_by_channel.get(channel_uuid)
+        active_hostname = _parse_url_hostname(active_url)
+        if provider_id is not None:
+            provider_name = m3u_name_by_id.get(int(provider_id))
+            # When the M3U account name is not in the side-load (e.g.
+            # the account list is stale and we got back an account id
+            # for a freshly-added account), fall back to the bare
+            # hostname so the operator still sees a label.
+            if provider_name is None:
+                provider_name = active_hostname
             provider_by_channel[channel_uuid] = ProviderResolution(
                 provider_id=provider_id,
                 stream_id=stream_id,
                 stream_name=stream_name,
+                provider_name=provider_name,
+                hostname=active_hostname,
             )
             resolved_count += 1
+            continue
+
+        # Direct stream-id path missed (URL-derived id didn't land in
+        # Dispatcharr's stream table, or the stream has no
+        # m3u_account). Fall back to URL-hostname match — bd-gy5nd's
+        # replacement for the bd-5g7kx channel-streams fallback.
+        if channel_uuid in url_derived_channels or not stream_in_response:
+            hostname_resolution = _resolution_from_url_hostname(
+                active_url, m3u_accounts, stream_id=None, stream_name=None
+            )
+            if hostname_resolution is not None:
+                provider_by_channel[channel_uuid] = hostname_resolution
+                resolved_count += 1
+                continue
+        # Neither stream-id direct nor URL-hostname match attributed
+        # the channel — surface the empty resolution and continue.
+        # Logged at DEBUG (not WARN) because the legitimate "no URL
+        # available" case is a normal data shape, not an error
+        # condition; the SLI summary line above carries the
+        # unresolved-count signal operators monitor.
+        provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
+        unresolved_count += 1
+        if not stream_in_response:
+            reason = "stream_not_found"
+        else:
+            reason = "stream_has_no_provider"
+        logger.debug(
+            "[STATS_V2] provider_unresolved channel=%s stream=%s reason=%s",
+            channel_uuid,
+            stream_id,
+            reason,
+        )
 
     if emit_metrics:
         _log_provider_resolution_sli(resolved_count, unresolved_count)
     return provider_by_channel
+
+
+def _resolution_from_url_hostname(
+    url: Optional[str],
+    m3u_accounts: list[dict],
+    *,
+    stream_id: Optional[int] = None,
+    stream_name: Optional[str] = None,
+) -> Optional[ProviderResolution]:
+    """Build a ``ProviderResolution`` from URL hostname match (bd-gy5nd).
+
+    Returns ``None`` when the URL is missing/unparsable so callers can
+    fall through to the empty-resolution path. Otherwise returns a
+    populated ``ProviderResolution`` carrying the matched M3U account
+    id + name when an M3U account's hostname equals the URL's
+    hostname, OR the bare hostname as ``provider_name`` when no M3U
+    match exists. Emits the structured INFO trace operators grep for.
+
+    ``stream_id`` / ``stream_name`` carry forward when a stream-row
+    identity was resolved upstream (rare for this path — bd-gy5nd is
+    primarily the fallback when the stream-id chain misses, so usually
+    these are ``None``).
+    """
+    provider_id, provider_name, hostname = _match_provider_from_url(
+        url, m3u_accounts
+    )
+    if hostname is None:
+        return None
+    logger.info(
+        "[STATS_V2] provider_resolved host=%s source=%r m3u_account_id=%s "
+        "(bd-gy5nd)",
+        hostname,
+        provider_name,
+        provider_id,
+    )
+    return ProviderResolution(
+        provider_id=provider_id,
+        stream_id=stream_id,
+        stream_name=stream_name,
+        provider_name=provider_name,
+        hostname=hostname,
+    )
 
 
 async def _resolve_via_channel_streams(

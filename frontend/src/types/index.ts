@@ -452,6 +452,21 @@ export interface ChannelStats {
   // not attribute the active stream to a provider.
   m3u_account_id?: number | null;
 
+  // bd-gy5nd: backend-derived operator-visible provider label. The M3U
+  // source ``name`` when the URL hostname matched a configured M3U
+  // account, OR the bare URL hostname (e.g. ``"infinity.gives"``) when
+  // no M3U account match exists. ``null`` only when the active URL
+  // itself is absent/unparsable. The Stats Tab badge prefers this
+  // string over the side-load ``m3uAccounts`` lookup so the PO sees
+  // the actual upstream provider instead of "Unknown".
+  provider_name?: string | null;
+  // bd-gy5nd: bare URL hostname parsed from the active stream URL.
+  // Populated whenever the URL is well-formed (independent of M3U
+  // match). Mainly diagnostic — the operator-visible badge uses
+  // ``provider_name`` (which already falls back to the hostname when
+  // no M3U match exists).
+  provider_hostname?: string | null;
+
   // Emby attribution enrichment (bd-fm23o, final bead of EPIC bd-2cenq):
   // backend calls the Emby resolver per-client at request time and
   // surfaces the matched viewer's Emby username here when at least one

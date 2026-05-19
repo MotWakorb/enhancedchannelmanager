@@ -107,10 +107,14 @@ class TestChannelStatsStreamEnrichment:
         assert ch["m3u_account_id"] == 6
 
     @pytest.mark.asyncio
-    async def test_enriches_channel_streams_fallback_channel(self, async_client):
-        """URL-derived id misses the batched lookup → resolver falls back
-        to ``/channels/<uuid>/streams`` URL matching (bd-5g7kx). The
-        endpoint surfaces the matched stream's identity."""
+    async def test_enriches_url_hostname_match_channel(self, async_client):
+        """URL-derived id misses the batched lookup → bd-gy5nd
+        URL-hostname-match path resolves the provider id from the
+        configured M3U account's ``server_url`` hostname. Retargeted
+        from the bd-5g7kx ``channel-streams`` fallback test — that
+        path called ``GET /channels/<channel_uuid>/streams/`` with a
+        proxy-session UUID, which never resolved correctly.
+        """
         mock_client = AsyncMock()
         active_url = "https://infinity.gives/live/mot/16118141/85796.ts"
         mock_client.get_channel_stats.return_value = {
@@ -124,15 +128,11 @@ class TestChannelStatsStreamEnrichment:
             ],
         }
         # URL-derived id is the upstream provider id, not in the batch
-        # response. The channel-streams fallback finds the matching URL.
+        # response. The bd-gy5nd URL-hostname match attributes via the
+        # configured M3U account.
         mock_client.get_streams_by_ids.return_value = []
-        mock_client.get_channel_streams.return_value = [
-            {
-                "id": 97205,
-                "name": "US: TNT",
-                "m3u_account": 6,
-                "url": active_url,
-            },
+        mock_client.get_m3u_accounts.return_value = [
+            {"id": 6, "name": "Infinity TV", "server_url": "https://infinity.gives/list.m3u"},
         ]
 
         with patch("routers.stats.get_client", return_value=mock_client):
@@ -140,14 +140,21 @@ class TestChannelStatsStreamEnrichment:
 
         assert response.status_code == 200
         ch = response.json()["channels"][0]
-        assert ch["stream_name"] == "US: TNT"
         assert ch["m3u_account_id"] == 6
+        # bd-gy5nd: ``provider_name`` carries the M3U account name and
+        # ``provider_hostname`` the URL hostname.
+        assert ch["provider_name"] == "Infinity TV"
+        assert ch["provider_hostname"] == "infinity.gives"
 
     @pytest.mark.asyncio
     async def test_enriches_multiple_channels_in_one_response(self, async_client):
         """All three resolver paths in one endpoint response (the
         operator's reality: heterogeneous active channels). Each row's
-        identity is populated correctly without cross-contamination."""
+        identity is populated correctly without cross-contamination.
+        bd-gy5nd: the third path is now URL-hostname match against
+        configured M3U accounts (replaced the bd-5g7kx
+        channel-streams fallback).
+        """
         mock_client = AsyncMock()
         active_url_c3 = "https://infinity.gives/live/mot/16118141/85796.ts"
         mock_client.get_channel_stats.return_value = {
@@ -173,8 +180,11 @@ class TestChannelStatsStreamEnrichment:
             {"id": 555, "name": "ESPN", "m3u_account": 1},
             {"id": 777, "name": "Discovery", "m3u_account": 2},
         ]
-        mock_client.get_channel_streams.return_value = [
-            {"id": 97205, "name": "US: TNT", "m3u_account": 6, "url": active_url_c3},
+        # bd-gy5nd: uuid-3's URL parses to upstream id 85796 (not in
+        # Dispatcharr's stream table); the URL-hostname match attributes
+        # via the configured M3U account.
+        mock_client.get_m3u_accounts.return_value = [
+            {"id": 6, "name": "Infinity TV", "server_url": "https://infinity.gives/list.m3u"},
         ]
 
         with patch("routers.stats.get_client", return_value=mock_client):
@@ -186,8 +196,12 @@ class TestChannelStatsStreamEnrichment:
         assert by_uuid["uuid-1"]["m3u_account_id"] == 1
         assert by_uuid["uuid-2"]["stream_name"] == "Discovery"
         assert by_uuid["uuid-2"]["m3u_account_id"] == 2
-        assert by_uuid["uuid-3"]["stream_name"] == "US: TNT"
+        # uuid-3 resolves via URL-hostname match — provider_name is the
+        # M3U account name, m3u_account_id is the matched account's id.
+        # stream_name stays None (no Dispatcharr stream row matched).
         assert by_uuid["uuid-3"]["m3u_account_id"] == 6
+        assert by_uuid["uuid-3"]["provider_name"] == "Infinity TV"
+        assert by_uuid["uuid-3"]["provider_hostname"] == "infinity.gives"
 
     @pytest.mark.asyncio
     async def test_unresolvable_channel_writes_nulls(self, async_client):
@@ -350,6 +364,178 @@ class TestChannelStatsBadgeSumInvariant:
             # bucket-sorts both rows into Unknown so the badge sum
             # still equals the active-channel count.
             assert ch["m3u_account_id"] is None
+
+
+class TestChannelStatsUrlProvider:
+    """Tests for bd-gy5nd URL-hostname provider resolution contract on
+    ``GET /api/stats/channels``.
+
+    The Stats page showed "Unknown" for the provider on the channel the
+    PO was watching. Root cause: ECM's resolver was calling the wrong
+    Dispatcharr endpoint with a proxy-session UUID — Dispatcharr returned
+    the SPA ``index.html`` rather than 404, generating ``provider_
+    resolution_failed`` WARN spam every 10s and never resolving the
+    provider. bd-gy5nd replaces that path with URL-hostname matching
+    against configured M3U accounts.
+
+    These tests lock the endpoint contract:
+
+    1. ``provider_name`` is the matched M3U account's ``name`` when the
+       URL's hostname equals one of the configured accounts' ``server_
+       url`` hostnames.
+    2. ``provider_name`` is the bare URL hostname when no M3U account
+       matches the URL's hostname (operator hasn't configured a source
+       for this upstream).
+    3. ``stream_name`` still resolves via the stream-id direct path
+       (the M3U URL match is a fallback, not a replacement).
+    4. The broken ``get_channel_streams(<channel_uuid>)`` call site is
+       gone — the endpoint is never invoked from the stats resolver
+       hot path.
+    """
+
+    @pytest.mark.asyncio
+    async def test_provider_name_from_m3u_account_match(self, async_client):
+        """URL hostname matches a configured M3U account's ``server_url``
+        hostname → ``provider_name`` is the M3U account's ``name``,
+        ``m3u_account_id`` is the matched account's ``id``,
+        ``provider_hostname`` is the parsed URL hostname.
+        """
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {
+                    "channel_id": "uuid-1",
+                    "channel_name": "494 | TSN 5",
+                    "url": "https://infinity.gives/live/mot/16118141/108495.ts",
+                    "clients": [],
+                },
+            ],
+        }
+        mock_client.get_streams_by_ids.return_value = []
+        mock_client.get_m3u_accounts.return_value = [
+            {"id": 6, "name": "Infinity TV", "server_url": "https://infinity.gives/list.m3u"},
+        ]
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200
+        ch = response.json()["channels"][0]
+        assert ch["m3u_account_id"] == 6
+        assert ch["provider_name"] == "Infinity TV"
+        assert ch["provider_hostname"] == "infinity.gives"
+        # bd-gy5nd: the broken endpoint is never called.
+        mock_client.get_channel_streams.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_provider_name_falls_back_to_bare_hostname(self, async_client):
+        """URL parses to a hostname but no M3U account is configured for
+        it (operator hasn't connected the upstream provider to ECM).
+        bd-gy5nd contract: ``provider_name`` is the bare hostname so
+        the operator sees ``infinity.gives`` in the badge instead of
+        "Unknown". ``m3u_account_id`` stays NULL.
+        """
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {
+                    "channel_id": "uuid-1",
+                    "channel_name": "494 | TSN 5",
+                    "url": "https://infinity.gives/live/mot/16118141/108495.ts",
+                    "clients": [],
+                },
+            ],
+        }
+        mock_client.get_streams_by_ids.return_value = []
+        # No M3U account configured for ``infinity.gives``.
+        mock_client.get_m3u_accounts.return_value = []
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200
+        ch = response.json()["channels"][0]
+        assert ch["m3u_account_id"] is None
+        assert ch["provider_name"] == "infinity.gives"
+        assert ch["provider_hostname"] == "infinity.gives"
+
+    @pytest.mark.asyncio
+    async def test_stream_name_still_resolves_via_stream_id_direct_path(self, async_client):
+        """The stream-id direct path is not affected by bd-gy5nd —
+        ``stream_name`` still resolves from ``get_streams_by_ids`` when
+        a valid integer ``stream_id`` is present. ``provider_name``
+        enriches from the M3U accounts side-load when ``m3u_account_id``
+        resolves to a known account.
+        """
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {
+                    "channel_id": "uuid-1",
+                    "stream_id": 12345,
+                    "url": "https://infinity.gives/live/mot/16118141/12345.ts",
+                    "clients": [],
+                },
+            ],
+        }
+        mock_client.get_streams_by_ids.return_value = [
+            {"id": 12345, "name": "TSN 5", "m3u_account": 6},
+        ]
+        mock_client.get_m3u_accounts.return_value = [
+            {"id": 6, "name": "Infinity TV", "server_url": "https://infinity.gives/list.m3u"},
+        ]
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200
+        ch = response.json()["channels"][0]
+        # Stream-id direct path: stream_name + m3u_account_id from the
+        # batched lookup.
+        assert ch["stream_name"] == "TSN 5"
+        assert ch["m3u_account_id"] == 6
+        # bd-gy5nd: provider_name enriches from the m3u_accounts side-load.
+        assert ch["provider_name"] == "Infinity TV"
+        assert ch["provider_hostname"] == "infinity.gives"
+
+    @pytest.mark.asyncio
+    async def test_no_resolution_failed_warn_for_url_hostname_path(
+        self, async_client, caplog
+    ):
+        """bd-gy5nd: the 10s ``[STATS_V2] provider_resolution_failed``
+        WARN spam is the primary symptom this bead fixes. Triggering
+        the PO's exact data shape (URL-derived stream id absent from
+        Dispatcharr, no M3U match) must NOT emit the WARN — the
+        legitimate "no M3U source configured for this hostname" case
+        is normal data, not an error.
+        """
+        import logging as _logging
+
+        mock_client = AsyncMock()
+        mock_client.get_channel_stats.return_value = {
+            "channels": [
+                {
+                    "channel_id": "uuid-1",
+                    "url": "https://infinity.gives/live/mot/16118141/85796.ts",
+                    "clients": [],
+                },
+            ],
+        }
+        mock_client.get_streams_by_ids.return_value = []
+        mock_client.get_m3u_accounts.return_value = []
+
+        caplog.clear()
+        with patch("routers.stats.get_client", return_value=mock_client):
+            with caplog.at_level(_logging.WARNING, logger="bandwidth_tracker"):
+                response = await async_client.get("/api/stats/channels")
+
+        assert response.status_code == 200
+        assert not any(
+            "[STATS_V2] provider_resolution_failed" in record.message
+            for record in caplog.records
+        ), [r.message for r in caplog.records]
+        # And the broken endpoint must not have been called.
+        mock_client.get_channel_streams.assert_not_called()
 
 
 class TestChannelStatsDetail:
