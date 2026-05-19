@@ -859,21 +859,34 @@ export function StatsTab() {
               // helper for consistency with kh23e's data-table render
               // in ProvidersPanel / UserStatsPanel.
               //
+              // bd-gy5nd: backend also surfaces ``provider_name`` —
+              // the M3U source name when the URL hostname matched a
+              // configured M3U account, or the bare URL hostname
+              // (e.g. ``"infinity.gives"``) when no M3U match exists.
+              // Prefer the backend-derived ``provider_name`` so the
+              // PO sees the actual upstream provider on the badge
+              // instead of "Unknown". Fall back to the side-load
+              // ``m3uAccountNameMap`` lookup for backward-compat when
+              // a pre-bd-gy5nd backend doesn't include the field.
+              //
               // Edge cases:
-              //   * No stream_name AND no m3u_account_id → no badge.
-              //   * stream_name === channel name → no badge (legacy
-              //     behaviour — the badge is meant to surface info NOT
-              //     already in the channel label).
+              //   * No stream_name AND no m3u_account_id AND no
+              //     provider_name → no badge.
+              //   * stream_name === channel name AND no provider_name
+              //     → no badge (legacy: the badge is meant to surface
+              //     info NOT already in the channel label).
               //   * m3u_account_id present but not in m3uAccounts map
-              //     → ``providerName`` is null; ``streamLabel`` omits
-              //     the bracketed prefix and renders the bare stream
-              //     name (no leaked ``[Provider 6] - X``).
+              //     AND no provider_name → ``providerName`` is null;
+              //     ``streamLabel`` omits the bracketed prefix and
+              //     renders the bare stream name.
               const hasStreamIdentity =
                 (channel.stream_name && channel.stream_name !== displayName)
-                || (channel.m3u_account_id != null);
-              const providerName = (channel.m3u_account_id != null)
-                ? (m3uAccountNameMap.get(channel.m3u_account_id) ?? null)
-                : null;
+                || (channel.m3u_account_id != null)
+                || (channel.provider_name != null);
+              const providerName = channel.provider_name
+                ?? (channel.m3u_account_id != null
+                  ? (m3uAccountNameMap.get(channel.m3u_account_id) ?? null)
+                  : null);
               const streamBadgeText = hasStreamIdentity
                 ? streamLabel(
                     providerName,
