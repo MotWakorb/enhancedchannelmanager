@@ -417,6 +417,7 @@ async def _enrich_one_source(
     legacy singular wrapper returns ``str | None``; we handle both the
     string and the dataclass forms in the duck-typed extraction below.
     """
+    channel_level_set = False
     for ip in client_ips:
         # Call BOTH the singular (legacy mock seam) and the plural
         # (bd-r5f0c.9 multi-viewer). Whichever has more entries wins.
@@ -475,18 +476,32 @@ async def _enrich_one_source(
 
         top_user_name = viewers_payload[0]["user_name"]
 
-        ch[user_name_key] = top_user_name
-        ch[viewers_key] = viewers_payload
-        # bd-5kbyf-style propagation: a source-mediated stream has
-        # every client coming from the source server's IP, so the
-        # channel-level resolved viewers ARE the per-client viewers.
+        # Channel-level: first matching IP wins (back-compat with
+        # bd-fm23o single-source contract). Subsequent IPs at the same
+        # channel keep their own per-client attribution but do not
+        # overwrite the channel-level singular field.
+        if not channel_level_set:
+            ch[user_name_key] = top_user_name
+            ch[viewers_key] = viewers_payload
+            channel_level_set = True
+
+        # bd-cat70 (fix-forward for v0.17.1-0056): per-IP attribution.
+        # Only stamp client dicts whose ip_address matches THIS loop
+        # iteration's IP. The bd-5kbyf assumption — "every client comes
+        # from the source server's IP, so the channel-level resolved
+        # viewers ARE the per-client viewers" — holds only when the
+        # channel is purely source-mediated. For mixed channels (one
+        # Emby-mediated client + one direct Dispatcharr XC client at a
+        # different IP), broadcasting the source resolver hit to the
+        # non-matching client mis-attributes the second viewer.
         for client in clients:
-            client[user_name_key] = top_user_name
-            client[viewers_key] = viewers_payload
-        # First IP-match wins — same precedent as bd-fm23o for the
-        # Emby-only flow. The source server's clients all share an IP,
-        # so the first IP's viewers list is the channel's viewers list.
-        return
+            if client.get("ip_address") == ip:
+                client[user_name_key] = top_user_name
+                client[viewers_key] = viewers_payload
+        # NB: do NOT return — keep iterating so each IP gets its own
+        # per-client stamp. The channel-level fields are set on the
+        # first match only (above); subsequent matches only affect
+        # their own IP's client(s).
 
 
 def _coerce_viewer_to_dict(viewer) -> dict:
