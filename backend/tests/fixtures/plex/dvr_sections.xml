@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- bd-ma6r3 fixture for GET /tv.plex.providers.epg.xmltv:7/sections.
+     The typical Dispatcharr-HDHomeRun-fronted EPG provider exposes
+     four library sections: Movies (1), Shows (2), Sports (3), News (4).
+     Captured from PO's running Plex 2026-05-18. -->
+<MediaContainer size="4" title1="Plex Library">
+  <Directory key="1" type="movie" title="Movies" />
+  <Directory key="4" type="show" title="News" />
+  <Directory key="2" type="show" title="Shows" />
+  <Directory key="3" type="show" title="Sports" />
+</MediaContainer>

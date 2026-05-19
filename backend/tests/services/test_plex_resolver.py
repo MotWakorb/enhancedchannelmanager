@@ -1404,3 +1404,437 @@ class TestECMPipePrefixTolerance:
                 ecm_channel_name="109 | cnn",
             )
         assert result == "case_user"
+
+
+# ---------------------------------------------------------------------------
+# bd-ma6r3: EPG cross-reference tier
+# ---------------------------------------------------------------------------
+
+
+from plex_client import PlexEpgEntry  # noqa: E402 — group bd-ma6r3 additions
+
+
+def _epg_entry(
+    *,
+    grandparent_title: str,
+    channel_call_sign: str,
+) -> PlexEpgEntry:
+    """Build a representative EPG entry covering "now" with livetv protocol.
+
+    The time window is intentionally wide so window-filter mechanics
+    don't interfere with the matcher tests — those are exercised in
+    :mod:`tests.unit.test_plex_client`.
+    """
+    return PlexEpgEntry(
+        grandparent_title=grandparent_title,
+        channel_call_sign=channel_call_sign,
+        channel_identifier="x",
+        channel_title="x",
+        channel_vcn="x",
+        begins_at=datetime(2026, 5, 18, 0, 0, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 5, 20, 0, 0, 0, tzinfo=timezone.utc),
+        protocol="livetv",
+    )
+
+
+def _make_live_session(
+    *,
+    session_id: str | None = None,
+    user_name: str = "MotWakorb",
+    grandparent_title: str | None = None,
+    item_name: str | None = None,
+) -> PlexSession:
+    """Build a Plex Live TV session — ``is_live=True`` is the EPG-tier gate."""
+    if last_activity := datetime(2026, 5, 18, 19, 0, 0, tzinfo=timezone.utc):
+        pass
+    return PlexSession(
+        session_id=session_id or f"sess-{user_name}",
+        user_id="uid-x",
+        user_name=user_name,
+        remote_endpoint="10.0.0.99",
+        now_playing_item_name=item_name,
+        now_playing_channel_name=grandparent_title,
+        now_playing_parent_title=None,
+        last_activity_date=last_activity,
+        is_live=True,
+    )
+
+
+class TestEpgTierLiveTvChannelMatch:
+    """bd-ma6r3: when Plex Live TV's ``/status/sessions`` surfaces the
+    program in ``grandparentTitle`` but the channel is NOT carried on
+    any session field, the EPG tier cross-references the EPG snapshot
+    to recover the channel ``channelCallSign``.
+
+    PO's actual symptom from v0.17.1-0056: ECM channel
+    ``'8.1 | NBC: KGW Portland'``, Plex Live TV session with
+    ``grandparentTitle='MLB Baseball'``, EPG entry mapping
+    ``MLB Baseball`` → ``channelCallSign='8.1 | NBC: KGW Portland'`` →
+    must resolve to ``MotWakorb``.
+    """
+
+    async def test_po_symptom_resolves_via_epg(self):
+        """The exact PO symptom: program-only session + EPG carries the
+        channel callsign → resolver picks up MotWakorb."""
+        session = _make_live_session(
+            user_name="MotWakorb",
+            item_name="Brewers at Cubs",
+            grandparent_title="MLB Baseball",
+        )
+        epg = [
+            _epg_entry(
+                grandparent_title="MLB Baseball",
+                channel_call_sign="8.1 | NBC: KGW Portland",
+            ),
+        ]
+        with patch.object(plex_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])), \
+             patch.object(plex_resolver, "maybe_get_cached_plex_epg",
+                          AsyncMock(return_value=epg)):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="US: 8.1 NBC",
+                ecm_channel_name="8.1 | NBC: KGW Portland",
+            )
+        assert result == "MotWakorb"
+        # Per-viewer metric incremented exactly once.
+        assert _get_counter_value(
+            "user_attribution_resolved_total", "plex",
+        ) == 1.0
+
+    async def test_epg_tier_matches_pipe_suffix_against_clean_ecm(self):
+        """EPG channelCallSign has pipe-prefix, ECM channel_name is the
+        clean right-hand part — same pipe-suffix tolerance as Tier 1."""
+        session = _make_live_session(
+            user_name="alice",
+            item_name="Brewers at Cubs",
+            grandparent_title="MLB Baseball",
+        )
+        epg = [
+            _epg_entry(
+                grandparent_title="MLB Baseball",
+                channel_call_sign="8.1 | NBC: KGW Portland",
+            ),
+        ]
+        with patch.object(plex_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])), \
+             patch.object(plex_resolver, "maybe_get_cached_plex_epg",
+                          AsyncMock(return_value=epg)):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ignored",
+                ecm_channel_name="NBC: KGW Portland",
+            )
+        assert result == "alice"
+
+    async def test_epg_tier_returns_none_when_no_epg_grandparent_match(self):
+        """EPG snapshot contains airings but none match the session's
+        ``grandparent_title`` — resolver returns None."""
+        session = _make_live_session(
+            user_name="bob",
+            item_name="Some Episode",
+            grandparent_title="Unknown Show",
+        )
+        epg = [
+            _epg_entry(
+                grandparent_title="MLB Baseball",
+                channel_call_sign="8.1 | NBC: KGW Portland",
+            ),
+        ]
+        with patch.object(plex_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])), \
+             patch.object(plex_resolver, "maybe_get_cached_plex_epg",
+                          AsyncMock(return_value=epg)):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="totally unrelated",
+                ecm_channel_name="8.1 | NBC: KGW Portland",
+            )
+        assert result is None
+
+    async def test_epg_tier_returns_none_when_callsign_does_not_match(self):
+        """EPG entry's grandparent matches the session, but its
+        ``channelCallSign`` is for a different ECM channel — returns
+        None. Defends against false positives when the same program
+        airs on multiple channels in the EPG."""
+        session = _make_live_session(
+            user_name="carol",
+            item_name="Brewers at Cubs",
+            grandparent_title="MLB Baseball",
+        )
+        epg = [
+            _epg_entry(
+                grandparent_title="MLB Baseball",
+                channel_call_sign="3.2 | TVW",  # different channel
+            ),
+        ]
+        with patch.object(plex_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])), \
+             patch.object(plex_resolver, "maybe_get_cached_plex_epg",
+                          AsyncMock(return_value=epg)):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ignored",
+                ecm_channel_name="8.1 | NBC: KGW Portland",
+            )
+        assert result is None
+
+    async def test_epg_tier_does_not_run_when_no_live_sessions(self):
+        """Bead acceptance criterion: resolver MUST NOT fetch EPG when
+        there are zero live sessions to disambiguate. Idle Plex
+        deployments must not incur an EPG fetch storm."""
+        session = _make_session(  # not live — VOD
+            user_name="alice",
+            item_name="Dune",
+        )
+        epg_mock = AsyncMock(return_value=[])
+        with patch.object(plex_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])), \
+             patch.object(plex_resolver, "maybe_get_cached_plex_epg",
+                          epg_mock):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ignored",
+                ecm_channel_name="8.1 | NBC: KGW Portland",
+            )
+        assert result is None
+        # The EPG cache was NEVER consulted because no live session
+        # needed disambiguation.
+        epg_mock.assert_not_awaited()
+
+    async def test_epg_tier_does_not_run_when_no_ecm_channel_name(self):
+        """When the resolver is invoked without ``ecm_channel_name``,
+        the EPG tier has no candidate to test against — must not fetch
+        EPG."""
+        session = _make_live_session(
+            user_name="bob",
+            item_name="Brewers at Cubs",
+            grandparent_title="MLB Baseball",
+        )
+        epg_mock = AsyncMock(return_value=[])
+        with patch.object(plex_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])), \
+             patch.object(plex_resolver, "maybe_get_cached_plex_epg",
+                          epg_mock):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="unrelated",
+                # No ecm_channel_name supplied.
+            )
+        assert result is None
+        epg_mock.assert_not_awaited()
+
+    async def test_epg_tier_does_not_run_when_tier1_already_matched(self):
+        """If Tier 1 already matched (e.g. session.now_playing_channel_name
+        is itself the channel), the EPG tier has no unmatched session
+        to look up and must not fetch EPG — avoids redundant upstream
+        load on the steady-state happy path."""
+        session = _make_live_session(
+            user_name="MotWakorb",
+            item_name="Some Program",
+            # grandparent_title IS the channel here (typical NBC, ESPN
+            # straight-up channel name) — Tier 1 will match.
+            grandparent_title="NBC",
+        )
+        epg_mock = AsyncMock(return_value=[])
+        with patch.object(plex_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])), \
+             patch.object(plex_resolver, "maybe_get_cached_plex_epg",
+                          epg_mock):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ignored",
+                ecm_channel_name="NBC",
+            )
+        assert result == "MotWakorb"
+        epg_mock.assert_not_awaited()
+
+    async def test_epg_tier_skipped_for_non_live_sessions(self):
+        """A VOD session whose grandparent happens to match an EPG entry
+        must not trigger the EPG tier — only ``is_live=True`` sessions
+        opt in. Defends against accidental cross-attribution where a
+        Plex user is watching a recording of an episode whose show
+        title coincidentally airs on a channel."""
+        # VOD session (is_live=False) playing an episode named
+        # "MLB Baseball" — the EPG carries a real Live TV "MLB Baseball"
+        # entry on 8.1, but the VOD session must NOT be matched against
+        # ECM's 8.1 channel.
+        session = _make_session(
+            user_name="dave",
+            item_name="Brewers Documentary",
+            channel_name="MLB Baseball",  # grandparentTitle present
+        )
+        # Force is_live=False — _make_session defaults to that.
+        assert session.is_live is False
+        epg = [
+            _epg_entry(
+                grandparent_title="MLB Baseball",
+                channel_call_sign="8.1 | NBC: KGW Portland",
+            ),
+        ]
+        epg_mock = AsyncMock(return_value=epg)
+        with patch.object(plex_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])), \
+             patch.object(plex_resolver, "maybe_get_cached_plex_epg",
+                          epg_mock):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ignored",
+                ecm_channel_name="8.1 | NBC: KGW Portland",
+            )
+        # VOD session must NOT match via the EPG tier; the EPG cache
+        # is never consulted because the only session in the list is
+        # not live.
+        assert result is None
+        epg_mock.assert_not_awaited()
+
+    async def test_epg_tier_handles_empty_snapshot(self):
+        """When the EPG cache returns ``[]`` (Plex idle / cold-start
+        fetch failure), the tier matches nothing — no exception, no
+        attribution change."""
+        session = _make_live_session(
+            user_name="alice",
+            item_name="Some Episode",
+            grandparent_title="MLB Baseball",
+        )
+        with patch.object(plex_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])), \
+             patch.object(plex_resolver, "maybe_get_cached_plex_epg",
+                          AsyncMock(return_value=[])):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ignored",
+                ecm_channel_name="8.1 | NBC: KGW Portland",
+            )
+        assert result is None
+
+    async def test_epg_tier_picks_correct_callsign_when_multiple_share_grandparent(self):
+        """The same program (e.g., "MLB Baseball") can air on multiple
+        channels in the EPG snapshot. The tier must pick the entry whose
+        ``channelCallSign`` matches the operator's ECM channel_name and
+        ignore the others."""
+        session = _make_live_session(
+            user_name="ed",
+            item_name="Brewers at Cubs",
+            grandparent_title="MLB Baseball",
+        )
+        epg = [
+            _epg_entry(
+                grandparent_title="MLB Baseball",
+                channel_call_sign="3.2 | TVW",
+            ),
+            _epg_entry(
+                grandparent_title="MLB Baseball",
+                channel_call_sign="8.1 | NBC: KGW Portland",
+            ),
+            _epg_entry(
+                grandparent_title="MLB Baseball",
+                channel_call_sign="679 | Milwaukee Brewers",
+            ),
+        ]
+        with patch.object(plex_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])), \
+             patch.object(plex_resolver, "maybe_get_cached_plex_epg",
+                          AsyncMock(return_value=epg)):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ignored",
+                ecm_channel_name="679 | Milwaukee Brewers",
+            )
+        assert result == "ed"
+
+    async def test_epg_tier_diagnostic_logged_when_no_match(
+        self, caplog,
+    ):
+        """The no-match WARN diagnostic must include the EPG attempt
+        payload so a PO can see why the tier didn't help. The line
+        carries ``epg=`` with snapshot_count + candidates_by_session."""
+        import logging
+        session = _make_live_session(
+            user_name="frank",
+            item_name="Brewers at Cubs",
+            grandparent_title="MLB Baseball",
+        )
+        epg = [
+            _epg_entry(
+                grandparent_title="MLB Baseball",
+                channel_call_sign="3.2 | TVW",  # wrong channel
+            ),
+        ]
+        with caplog.at_level(logging.WARNING), \
+             patch.object(plex_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])), \
+             patch.object(plex_resolver, "maybe_get_cached_plex_epg",
+                          AsyncMock(return_value=epg)):
+            await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ignored",
+                ecm_channel_name="8.1 | NBC: KGW Portland",
+            )
+        warn_lines = [
+            r.getMessage() for r in caplog.records
+            if "[PLEX-RESOLVER] no-match" in r.getMessage()
+        ]
+        assert len(warn_lines) == 1
+        # The diagnostic must surface the EPG attempt so a PO can see
+        # which channelCallSigns the tier considered.
+        assert "epg=" in warn_lines[0]
+        assert "snapshot_count" in warn_lines[0]
+        assert "3.2 | TVW" in warn_lines[0]
+
+    async def test_epg_tier_handles_session_with_grandparent_falls_back_to_title(self):
+        """When ``now_playing_channel_name`` is None but
+        ``now_playing_item_name`` carries the program (some Plex Live
+        TV surfaces leave grandparent blank), the EPG tier falls back
+        to looking up by title."""
+        session = PlexSession(
+            session_id="sess-grace",
+            user_id="uid-grace",
+            user_name="grace",
+            remote_endpoint="10.0.0.99",
+            now_playing_item_name="MLB Baseball",
+            now_playing_channel_name=None,  # grandparent absent
+            now_playing_parent_title=None,
+            last_activity_date=datetime(2026, 5, 18, 19, 0, 0, tzinfo=timezone.utc),
+            is_live=True,
+        )
+        epg = [
+            _epg_entry(
+                grandparent_title="MLB Baseball",
+                channel_call_sign="8.1 | NBC: KGW Portland",
+            ),
+        ]
+        with patch.object(plex_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])), \
+             patch.object(plex_resolver, "maybe_get_cached_plex_epg",
+                          AsyncMock(return_value=epg)):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ignored",
+                ecm_channel_name="8.1 | NBC: KGW Portland",
+            )
+        assert result == "grace"
