@@ -114,20 +114,29 @@ def _get_counter_value(metric_key: str, source: str) -> float:
 
 
 class TestIpMismatch:
-    """When the ECM session's IP is not the Jellyfin server's IP, the resolver
-    must return ``None`` without ever touching the cache."""
+    """bd-ost8o two-mode dispatch — when the ECM session's IP does NOT
+    equal the Jellyfin server's IP (the "browser-direct-play" case), the
+    resolver no longer short-circuits. Instead it enters Mode B and runs
+    Tier 1/2 strict matching against the cached session list. Without a
+    Tier-1/2 match the result is still ``None``, but the cache IS
+    consulted now — the assert_not_awaited semantic from the pre-bd-ost8o
+    strict IP-gate path is intentionally obsolete."""
 
-    async def test_ip_mismatch_returns_none_without_cache_call(self):
-        """IP mismatch on an IP-literal base URL skips the cache entirely."""
+    async def test_ip_mismatch_with_no_tier_match_returns_none(self):
+        """Mode B (browser-direct fallback): IP mismatch, no stream-name
+        candidates, no channel-name input → Tier 1/2 both skipped, no
+        match, result is ``None``. Cache IS awaited (mode-B dispatch
+        fetches sessions to attempt the strict match)."""
         cache_mock = AsyncMock(return_value=[_make_session()])
         with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
              patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions", cache_mock):
             result = await jellyfin_resolver.resolve_jellyfin_user(
                 ecm_session_ip="10.0.0.5",  # NOT the Jellyfin server (192.168.1.20)
-                ecm_stream_name="CNN HD",
+                ecm_stream_name="totally unrelated stream",
+                # No ecm_channel_name / ecm_channel_number → Tier 1/2 skip.
             )
         assert result is None
-        cache_mock.assert_not_awaited()
+        cache_mock.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -522,9 +531,13 @@ class TestHostnameBaseUrl:
         assert result is not None
         assert result.user_name == "eve"
 
-    async def test_hostname_resolves_to_non_matching_ip_returns_none(self):
-        """``jf.local`` resolves to ``10.0.0.1`` — does NOT match the ECM
-        session IP and the resolver short-circuits before the cache."""
+    async def test_hostname_resolves_to_non_matching_ip_enters_mode_b(self):
+        """bd-ost8o: ``jf.local`` resolves to ``10.0.0.1`` while the ECM
+        session IP is ``192.168.1.20``. Pre-bd-ost8o this short-circuited
+        without consulting the cache; post-bd-ost8o it enters Mode B and
+        runs Tier 1/2 strict matching. With no ECM channel input and a
+        non-matching stream name, no tier matches and the result is
+        ``None`` — but the cache IS awaited."""
         cache_mock = AsyncMock(return_value=[_make_session(item_name="CNN HD")])
         settings = _enabled_settings(base_url="https://jf.local:8920")
 
@@ -534,10 +547,11 @@ class TestHostnameBaseUrl:
                           return_value="10.0.0.1"):
             result = await jellyfin_resolver.resolve_jellyfin_user(
                 ecm_session_ip="192.168.1.20",
-                ecm_stream_name="CNN HD",
+                ecm_stream_name="totally unrelated stream",
+                # No ecm_channel_name → Mode B Tier 1/2 cannot match.
             )
         assert result is None
-        cache_mock.assert_not_awaited()
+        cache_mock.assert_awaited_once()
 
     async def test_hostname_resolution_failure_logs_warn_and_returns_none(self, caplog):
         """``socket.gethostbyname`` raises ``socket.gaierror`` for an
@@ -798,17 +812,19 @@ class TestMultiViewer:
             )
         assert users == []
 
-    async def test_ip_mismatch_returns_empty_list_without_cache_call(self):
-        """IP short-circuit also applies to the plural variant."""
+    async def test_ip_mismatch_enters_mode_b_for_plural_variant(self):
+        """bd-ost8o: the plural variant respects two-mode dispatch
+        identically to the singular wrapper. IP mismatch + no usable
+        ECM channel input → empty list, but the cache IS consulted."""
         cache_mock = AsyncMock(return_value=[_make_session()])
         with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
              patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions", cache_mock):
             users = await jellyfin_resolver.resolve_jellyfin_users(
                 ecm_session_ip="10.0.0.5",  # NOT the Jellyfin server
-                ecm_stream_name="CNN HD",
+                ecm_stream_name="completely different stream",
             )
         assert users == []
-        cache_mock.assert_not_awaited()
+        cache_mock.assert_awaited_once()
 
     async def test_singular_wrapper_returns_most_recent_viewer(self):
         """Back-compat target: the legacy singular wrapper still returns
@@ -957,8 +973,12 @@ class TestNoMatchDiagnostic:
         assert len(users) == 1
         assert self._no_match_records(caplog.records) == []
 
-    async def test_no_emit_when_ip_short_circuit_fails(self, caplog):
-        """IP mismatch short-circuits before the session compare → no WARN."""
+    async def test_emits_when_ip_mismatch_mode_b_finds_no_match(self, caplog):
+        """bd-ost8o: post-fix, IP mismatch enters Mode B instead of
+        short-circuiting. Mode B fetches sessions and runs Tier 1/2; a
+        no-tier-match outcome emits the same forensic WARN as Mode A.
+        This is the new behavior — the pre-bd-ost8o "short-circuit
+        silences the WARN" contract no longer holds for IP mismatch."""
         session = _make_session(item_name="UnrelatedShow")
         with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
              patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
@@ -970,7 +990,9 @@ class TestNoMatchDiagnostic:
                     ecm_channel_name="CNN",
                 )
         assert users == []
-        assert self._no_match_records(caplog.records) == []
+        # Mode B no-match still emits the diagnostic WARN — that's
+        # the desired surface for debugging direct-play attribution.
+        assert len(self._no_match_records(caplog.records)) == 1
 
     async def test_rate_limit_within_window(self, caplog):
         """Two no-match calls for same (ip, channel) within 60 s → one WARN."""
@@ -1123,6 +1145,8 @@ class TestForensicInfoLogging:
         assert "sessions_with_now_playing=1" in msg
         assert "ecm_channel='ESPN'" in msg
         assert "ecm_channel_number=408" in msg
+        # bd-ost8o: Mode A (IP matches Jellyfin server) → mode=server_ip.
+        assert "mode=server_ip" in msg
 
     async def test_session_inspect_log_emitted_per_session(self, caplog):
         """Each cached session produces one session_inspect line whose
@@ -1232,10 +1256,11 @@ class TestForensicInfoLogging:
         msg = inspects[0].getMessage()
         assert "queue_item_id=2b0159285ef4370ec3c8c91534bc076d" in msg
 
-    async def test_ip_mismatch_emits_no_info(self, caplog):
-        """IP-mismatch short-circuit must NOT emit the resolver_call INFO
-        — it's a hot path called on every non-Jellyfin IP and would
-        flood the log. DEBUG only."""
+    async def test_ip_mismatch_emits_resolver_call_info_with_direct_fallback_mode(self, caplog):
+        """bd-ost8o: IP mismatch no longer short-circuits silently. It
+        emits the resolver_call INFO with ``mode=direct_fallback`` so the
+        operator can confirm Mode B ran. The cache IS awaited (Mode B
+        fetches sessions to attempt the strict match)."""
         with patch.object(jellyfin_resolver, "get_settings",
                           return_value=_enabled_settings()), \
              patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
@@ -1246,11 +1271,11 @@ class TestForensicInfoLogging:
                     ecm_session_ip="10.0.0.99",  # NOT the Jellyfin server
                     ecm_stream_name="CNN",
                 )
-        cache_mock.assert_not_awaited()
+        cache_mock.assert_awaited_once()
         calls = self._info_records(caplog.records,
                                    "[JELLYFIN-RESOLVER] resolver_call")
-        # No INFO log on the ip-mismatch hot path.
-        assert calls == []
+        assert len(calls) == 1
+        assert "mode=direct_fallback" in calls[0].getMessage()
 
 
 # ---------------------------------------------------------------------------
@@ -1581,3 +1606,243 @@ class TestEcmPipePrefixAsChannelNumber:
             )
         assert result is not None
         assert result.user_name == "subchannel_user"
+
+
+# ---------------------------------------------------------------------------
+# bd-ost8o: two-mode dispatch — Mode B (browser-direct fallback). The PO
+# opens Jellyfin Web at http://172.16.0.19:18096 in a browser; the
+# browser fetches the IPTV channel URL directly from Dispatcharr. The
+# ECM client IP is the browser's egress, NOT the Jellyfin server IP, so
+# the pre-bd-ost8o strict IP-gate would silently skip attribution. Mode
+# B fetches sessions and runs Tier 1/2 only (Tier 3 fuzzy disabled).
+# ---------------------------------------------------------------------------
+
+
+class TestModeBDirectFallback:
+    """Browser-direct-play attribution path. The ECM session IP is some
+    non-Jellyfin egress (Docker bridge, NAT, public IP) and the Jellyfin
+    server is at a different address. Mode B fetches the cached sessions
+    and runs strict Tier-1 / Tier-2 matching; Tier-3 fuzzy is skipped so
+    a multi-user setup cannot cross-attribute on a generic stream name."""
+
+    _BROWSER_IP = "172.18.0.1"  # Docker bridge gateway — PO's exact symptom
+    _JELLYFIN_IP = "192.168.1.20"
+
+    async def test_mode_b_tier1_channel_name_match(self):
+        """One session has item_name="ESPN" matching ecm_channel_name="ESPN"
+        → Mode B Tier-1 attributes the session."""
+        session = _make_session(
+            user_id="jf-uid-mw", user_name="MotWakorb",
+            item_name="ESPN",  # bare — Jellyfin-style
+        )
+        with patch.object(jellyfin_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip=self._BROWSER_IP,
+                ecm_stream_name="US: ESPN HD",
+                ecm_channel_name="ESPN",
+            )
+        assert result == jellyfin_resolver.JellyfinAttribution(
+            user_id="jf-uid-mw", user_name="MotWakorb",
+        )
+
+    async def test_mode_b_tier2_channel_number_match(self):
+        """One session has channel_number="408" matching
+        ecm_channel_number=408 → Mode B Tier-2 attributes the session.
+        Tier-1 deliberately doesn't match (different channel name) so
+        only Tier-2 can carry the match."""
+        session = _make_session(
+            user_id="jf-uid-mw", user_name="MotWakorb",
+            item_name="Some Show",  # Tier-1 cannot match
+            channel_number="408",
+        )
+        with patch.object(jellyfin_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip=self._BROWSER_IP,
+                ecm_stream_name="ESPN",
+                ecm_channel_name="ESPN",
+                ecm_channel_number=408,
+            )
+        assert result is not None
+        assert result.user_name == "MotWakorb"
+
+    async def test_mode_b_no_match_emits_no_match_diagnostic(self, caplog):
+        """Mode B with zero Tier-1/2 matches → returns ``None`` and
+        emits the structured no-match WARN (same diagnostic surface as
+        Mode A's no-match path)."""
+        session = _make_session(
+            user_name="alice", item_name="UnrelatedShow",
+        )
+        with patch.object(jellyfin_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.WARNING,
+                                 logger="services.jellyfin_resolver"):
+                result = await jellyfin_resolver.resolve_jellyfin_user(
+                    ecm_session_ip=self._BROWSER_IP,
+                    ecm_stream_name="ESPN",
+                    ecm_channel_name="ESPN",
+                )
+        assert result is None
+        no_match = [r for r in caplog.records
+                    if "[JELLYFIN-RESOLVER] no-match diagnostic" in r.getMessage()]
+        assert len(no_match) == 1
+
+    async def test_mode_b_ambiguous_skip_returns_empty(self, caplog):
+        """Mode B with two Tier-1 matches → ambiguous_skip; no
+        attribution returned (because there is no IP-gate tiebreaker)
+        and an INFO ambiguous_skip diagnostic fires."""
+        s1 = _make_session(
+            user_id="jf-uid-alice", user_name="alice", item_name="ESPN",
+            last_activity="2026-05-19T12:00:00Z",
+        )
+        s2 = _make_session(
+            user_id="jf-uid-bob", user_name="bob", item_name="ESPN",
+            last_activity="2026-05-19T12:01:00Z",
+        )
+        # Distinct session_ids so both are accepted by _find_matching_sessions.
+        s1 = JellyfinSession(
+            session_id="jf-sess-a", user_id="jf-uid-alice", user_name="alice",
+            remote_endpoint="10.0.0.99",
+            now_playing_item_name="ESPN", now_playing_channel_name=None,
+            channel_number=None,
+            last_activity_date="2026-05-19T12:00:00Z",
+        )
+        s2 = JellyfinSession(
+            session_id="jf-sess-b", user_id="jf-uid-bob", user_name="bob",
+            remote_endpoint="10.0.0.99",
+            now_playing_item_name="ESPN", now_playing_channel_name=None,
+            channel_number=None,
+            last_activity_date="2026-05-19T12:01:00Z",
+        )
+        with patch.object(jellyfin_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[s1, s2])):
+            with caplog.at_level(logging.INFO,
+                                 logger="services.jellyfin_resolver"):
+                result = await jellyfin_resolver.resolve_jellyfin_user(
+                    ecm_session_ip=self._BROWSER_IP,
+                    ecm_stream_name="ESPN",
+                    ecm_channel_name="ESPN",
+                )
+        assert result is None
+        ambig = [r for r in caplog.records
+                 if "result=ambiguous_skip" in r.getMessage()]
+        assert len(ambig) == 1
+        assert "matched_sessions=2" in ambig[0].getMessage()
+
+    async def test_mode_b_skips_tier3_fuzzy(self):
+        """Mode B must NOT use the Tier-3 fuzzy stream-name fallback. A
+        session whose item_name only fuzzy-matches the stream_name (with
+        no tier-1/2 path open) would attribute in Mode A; in Mode B it
+        must NOT match."""
+        # Fuzzy-only match: item_name "ESPN Sports Channel" against
+        # stream_name "ESPN HD" would token-set-ratio ≥ 0.85 in Mode A.
+        # Mode B should reject this — no Tier-1 (different channel
+        # names) and no Tier-2 (no channel_number on either side).
+        session = _make_session(
+            user_name="fuzzy_user", item_name="ESPN Sports Channel",
+        )
+        with patch.object(jellyfin_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            # Sanity check: in Mode A this WOULD match via tier-3 fuzzy.
+            mode_a_result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip=self._JELLYFIN_IP,
+                ecm_stream_name="ESPN Sports Channel",
+            )
+            assert mode_a_result is not None
+            assert mode_a_result.user_name == "fuzzy_user"
+        # Now Mode B with the same fuzzy-only case must NOT match.
+        with patch.object(jellyfin_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            mode_b_result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip=self._BROWSER_IP,
+                ecm_stream_name="ESPN Sports Channel",
+                # No ecm_channel_name → tier-1 skipped; tier-2 also no-op.
+            )
+        assert mode_b_result is None
+
+    async def test_mode_b_emits_resolver_call_with_mode_marker(self, caplog):
+        """The resolver_call INFO log carries ``mode=direct_fallback`` so
+        operators can confirm Mode B ran. Bonus check: log line carries
+        the ecm_channel input."""
+        session = _make_session(user_name="alice", item_name="ESPN")
+        with patch.object(jellyfin_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.INFO,
+                                 logger="services.jellyfin_resolver"):
+                await jellyfin_resolver.resolve_jellyfin_user(
+                    ecm_session_ip=self._BROWSER_IP,
+                    ecm_stream_name="ESPN",
+                    ecm_channel_name="ESPN",
+                )
+        calls = [r for r in caplog.records
+                 if "[JELLYFIN-RESOLVER] resolver_call" in r.getMessage()]
+        assert len(calls) == 1
+        msg = calls[0].getMessage()
+        assert "mode=direct_fallback" in msg
+        assert "ecm_channel='ESPN'" in msg
+
+    async def test_mode_b_po_tennis_channel_attribution(self, caplog):
+        """End-to-end translation of the PO's exact symptom (bd-ost8o).
+
+        PO opens Jellyfin Web at 172.16.0.19:18096 in a browser. Browser
+        plays channel ``"430 | Tennis Channel"`` from Dispatcharr. The
+        ECM client IP is the browser's egress (172.18.0.1 — Docker bridge
+        gateway), NOT the Jellyfin server. The cached Jellyfin session
+        has been queue-resolved by bd-dok7u so its item_name carries the
+        Live TV channel data (here "430 | Tennis Channel"). Mode B
+        Tier-1 attributes MotWakorb and emits the tier_match INFO."""
+        # bd-dok7u queue-resolved session shape: NowPlayingItem was
+        # originally absent but the cache fallback populated item_name
+        # and channel_number from the GET /Users/{uid}/Items/{id} lookup.
+        session = JellyfinSession(
+            session_id="jf-tennis-sess",
+            user_id="jf-uid-mw",
+            user_name="MotWakorb",
+            remote_endpoint="172.16.0.61",
+            now_playing_item_name="430 | Tennis Channel",
+            now_playing_channel_name=None,
+            channel_number="430",
+            last_activity_date="2026-05-19T02:33:36Z",
+            now_playing_queue_item_id="2b0159285ef4370ec3c8c91534bc076d",
+        )
+        with patch.object(jellyfin_resolver, "get_settings",
+                          return_value=_enabled_settings(
+                              base_url="http://172.16.0.19:18096")), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.INFO,
+                                 logger="services.jellyfin_resolver"):
+                result = await jellyfin_resolver.resolve_jellyfin_user(
+                    ecm_session_ip="172.18.0.1",
+                    ecm_stream_name="US: Tennis Channel HD",
+                    ecm_channel_name="430 | Tennis Channel",
+                )
+        assert result == jellyfin_resolver.JellyfinAttribution(
+            user_id="jf-uid-mw", user_name="MotWakorb",
+        )
+        # The mode marker must be present so operators can confirm Mode B
+        # ran.
+        calls = [r for r in caplog.records
+                 if "[JELLYFIN-RESOLVER] resolver_call" in r.getMessage()]
+        assert len(calls) == 1
+        assert "mode=direct_fallback" in calls[0].getMessage()
+        # tier_match log fires on success.
+        matches = [r for r in caplog.records
+                   if "[JELLYFIN-RESOLVER] tier_match" in r.getMessage()]
+        assert len(matches) == 1
+        assert "top_user=MotWakorb" in matches[0].getMessage()
