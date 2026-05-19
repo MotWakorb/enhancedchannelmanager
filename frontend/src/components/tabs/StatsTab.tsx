@@ -899,15 +899,14 @@ export function StatsTab() {
                         {streamBadgeText}
                       </span>
                     )}
-                    {/* bd-r5f0c.5 / W5 (bd-g03fi): channel-header viewer
-                        rollup. Counts total viewers across all sources
-                        (emby + plex + jellyfin + dispatcharr fallback).
-                        - total == 1: show single name (back-compat)
-                        - total > 1: show "(N viewers)" rollup
-                        - total == 0: fall back to legacy emby_user_name
-                        singular for any old DB rows that pre-date W9.
-                        The per-client breakdown in the expanded section
-                        below shows the full breakdown by source. */}
+                    {/* bd-cat70 (fix-forward for v0.17.1-0056): channel-header
+                        shows ONLY the multi-viewer "(N viewers)" rollup. The
+                        single-viewer name + the legacy emby_user_name singular
+                        fallback were removed because they duplicated the name
+                        already rendered (with AttributionBadge) in the
+                        Connected Clients section below — visual noise the PO
+                        explicitly asked to drop. The expanded section keeps
+                        the full per-client + per-source breakdown. */}
                     {(() => {
                       const embyCount = channel.emby_viewers?.length ?? 0;
                       const plexCount = channel.plex_viewers?.length ?? 0;
@@ -915,7 +914,6 @@ export function StatsTab() {
                       const totalViewers = embyCount + plexCount + jellyfinCount;
 
                       if (totalViewers > 1) {
-                        // bd-g03fi closure: rollup to "(N viewers)"
                         return (
                           <span
                             className="stream-name-badge channel-emby-viewer"
@@ -923,37 +921,6 @@ export function StatsTab() {
                             data-testid="channel-header-viewer-rollup"
                           >
                             ({totalViewers} viewers)
-                          </span>
-                        );
-                      }
-
-                      if (totalViewers === 1) {
-                        // Single viewer: show their name with badge
-                        const singleViewer =
-                          channel.emby_viewers?.[0] ??
-                          channel.plex_viewers?.[0] ??
-                          channel.jellyfin_viewers?.[0];
-                        if (singleViewer) {
-                          return (
-                            <span
-                              className="stream-name-badge channel-emby-viewer"
-                              title={`Watching: ${singleViewer.user_name}`}
-                              data-testid="channel-header-single-viewer"
-                            >
-                              (watching: {singleViewer.user_name})
-                            </span>
-                          );
-                        }
-                      }
-
-                      // Fallback: legacy emby_user_name for pre-W9 DB rows
-                      if (channel.emby_user_name) {
-                        return (
-                          <span
-                            className="stream-name-badge channel-emby-viewer"
-                            title={`Watching via Emby: ${channel.emby_user_name}`}
-                          >
-                            (watching: {channel.emby_user_name})
                           </span>
                         );
                       }
