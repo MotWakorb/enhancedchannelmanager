@@ -1838,3 +1838,105 @@ class TestEpgTierLiveTvChannelMatch:
                 ecm_channel_name="8.1 | NBC: KGW Portland",
             )
         assert result == "grace"
+
+
+# ---------------------------------------------------------------------------
+# Behavior: bd-f68c8 — ECM pipe-prefix parsed as Tier-2 channel-number
+# ---------------------------------------------------------------------------
+
+
+class TestEcmPipePrefixAsChannelNumber:
+    """bd-f68c8: when ``ecm_channel_number`` is ``None`` AND
+    ``ecm_channel_name`` starts with a numeric pipe-prefix, the resolver
+    must parse the prefix and use it as a Tier-2 candidate against the
+    session's ``item_name`` pipe-prefix (Plex's session-side numeric
+    channel surface).
+
+    Plex's Tier-2 differs from Emby/Jellyfin only in shape: Plex
+    sessions carry the number as the left-hand side of the ``item_name``
+    pipe-prefix (e.g. ``"2.1 | ABC: WBAY Green Bay"``), not as a
+    dedicated ``channel_number`` field. The candidate-resolution helper
+    is shared across all three resolvers.
+    """
+
+    async def test_ecm_prefix_numeric_matches_session_item_prefix(self):
+        """ECM ``"2.1 | ABC: WBAY Green Bay"`` + ``channel_number=None``
+        + Plex session ``item_name="2.1 | Saturday Night Live"``: the
+        ECM-side prefix ``"2.1"`` matches the Plex item-name prefix
+        ``"2.1"`` even though the suffix names diverge."""
+        session = _make_session(
+            user_id="plex-uid-mw", user_name="MotWakorb",
+            item_name="2.1 | Saturday Night Live",
+        )
+        with patch.object(plex_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="WI | Green Bay | ABC 2 WBAY",
+                ecm_channel_name="2.1 | ABC: WBAY Green Bay",
+                ecm_channel_number=None,
+            )
+        assert result == "MotWakorb"
+
+    async def test_ecm_prefix_non_numeric_does_not_false_match(self):
+        """Word-prefixed ECM channel names ("News | CNN") must not act
+        as Tier-2 candidates against arbitrary session pipe-prefixes."""
+        session = _make_session(
+            user_name="ghost",
+            # Pick a session item whose pipe-prefix is "news" so that
+            # a non-numeric ECM prefix WOULD match if the gate were
+            # missing. With the gate, no match.
+            item_name="news | CNN",
+        )
+        with patch.object(plex_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="something_unrelated",
+                ecm_channel_name="News | NotCNN",
+                ecm_channel_number=None,
+            )
+        # Tier-1 also won't match — "notcnn" vs "cnn" — and Tier-2 is
+        # gated, so no false attribution.
+        assert result is None
+
+    async def test_no_pipe_prefix_in_ecm_name_skips_prefix_path(self):
+        """ECM channel_name ``"ESPN"`` (no pipe) leaves Tier-2 disabled."""
+        session = _make_session(
+            user_name="ghost",
+            item_name="408 | NotESPN",
+        )
+        with patch.object(plex_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="something_unrelated",
+                ecm_channel_name="ESPN",
+                ecm_channel_number=None,
+            )
+        assert result is None
+
+    async def test_explicit_ecm_channel_number_takes_precedence_over_prefix(self):
+        """Caller-supplied ``ecm_channel_number`` wins — the parsed
+        prefix is not consulted when an explicit number is present."""
+        session = _make_session(
+            user_name="explicit_num_user",
+            item_name="408 | NotESPN",
+        )
+        with patch.object(plex_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="something_unrelated",
+                ecm_channel_name="99 | NotESPN",
+                ecm_channel_number=408,
+            )
+        assert result == "explicit_num_user"

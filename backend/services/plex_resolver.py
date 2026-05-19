@@ -656,16 +656,21 @@ def _find_matching_sessions(
     # clean channel names (no pipe prefix), so tier 2 still only
     # examines the ``item_name`` pipe-prefix — matches Emby's tier 2
     # which examines ``session.channel_number`` (a dedicated field).
-    if ecm_channel_number is not None:
-        ecm_number_str = str(ecm_channel_number).strip()
-        if ecm_number_str:
-            for entry in prepared:
-                session = entry[0]
-                normalized_item = entry[1]
-                prefix = _parse_pipe_prefix(normalized_item)
-                # Match the numeric prefix of "<number> | <name>"
-                if prefix and prefix.strip() == ecm_number_str:
-                    _accept(session)
+    # bd-f68c8: when the caller did not supply an ``ecm_channel_number``
+    # (Dispatcharr does not always push a separate channel_number for
+    # sub-channels like ATSC ``"2.1"``), parse the pipe-prefix off
+    # ``ecm_channel_name`` and use it as a Tier-2 candidate. Numeric-
+    # only prefixes are accepted. Caller-supplied number wins when
+    # present.
+    ecm_number_str = _coerce_tier2_number(ecm_channel_number, ecm_channel_name)
+    if ecm_number_str:
+        for entry in prepared:
+            session = entry[0]
+            normalized_item = entry[1]
+            prefix = _parse_pipe_prefix(normalized_item)
+            # Match the numeric prefix of "<number> | <name>"
+            if prefix and prefix.strip() == ecm_number_str:
+                _accept(session)
 
     # ----- Tier 3: legacy fuzzy fallback on stream_name
     # bd-2zcvf: compare ``ecm_stream_name`` against all three Plex name
@@ -879,6 +884,54 @@ def _parse_pipe_prefix(normalized_item_name: str) -> str:
         return ""
     prefix, _sep, _suffix = normalized_item_name.partition("|")
     return prefix.strip()
+
+
+def _parse_numeric_pipe_prefix(ecm_channel_name: str | None) -> str:
+    """Return the left-hand side of ``"<number> | <rest>"`` when numeric.
+
+    bd-f68c8: ECM channel names often carry the channel number as a
+    pipe-prefix (e.g. ``"2.1 | ABC: WBAY Green Bay"``) when Dispatcharr
+    does not push a separate ``channel_number`` field — common for ATSC
+    sub-channels whose numbers (``"2.1"``, ``"7.2"``) are not pure
+    integers. This helper extracts that prefix for use as a Tier-2
+    channel-number candidate.
+
+    Returns the trimmed prefix when it parses as a non-negative number
+    (integer or single-decimal — ATSC major.sub form). Returns ``""``
+    when ``ecm_channel_name`` is empty, has no pipe, or the prefix
+    contains non-numeric characters (so word-prefixed channel names
+    like ``"News | CNN"`` cannot accidentally collide with arbitrary
+    session pipe-prefixes).
+
+    Input is the RAW ECM channel_name (not pre-normalized).
+    """
+    if not ecm_channel_name or "|" not in ecm_channel_name:
+        return ""
+    prefix, _sep, _suffix = ecm_channel_name.partition("|")
+    prefix = prefix.strip()
+    if not prefix:
+        return ""
+    if prefix.replace(".", "", 1).isdigit():
+        return prefix
+    return ""
+
+
+def _coerce_tier2_number(
+    ecm_channel_number: str | int | None,
+    ecm_channel_name: str | None,
+) -> str:
+    """Resolve the Tier-2 channel-number candidate for the current call.
+
+    bd-f68c8: caller-supplied ``ecm_channel_number`` always wins; when
+    ``None``, fall back to a numeric pipe-prefix parsed from
+    ``ecm_channel_name``. Returns ``""`` when neither path yields a
+    usable candidate — callers treat that as "skip Tier-2".
+    """
+    if ecm_channel_number is not None:
+        explicit = str(ecm_channel_number).strip()
+        if explicit:
+            return explicit
+    return _parse_numeric_pipe_prefix(ecm_channel_name)
 
 
 def _fuzzy_or_exact_match(normalized_stream: str, normalized_candidate: str) -> bool:
