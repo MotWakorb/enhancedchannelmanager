@@ -8,6 +8,7 @@ import { logger } from '../../utils/logger';
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
+import { copyToClipboard } from '../../utils/clipboard';
 import './MCPSettingsSection.css';
 
 interface Props {
@@ -91,9 +92,13 @@ export function MCPSettingsSection({ isAdmin }: Props) {
     }
   };
 
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    notifications.success('Copied to clipboard');
+  const handleCopy = async (text: string, label: string) => {
+    const ok = await copyToClipboard(text, label);
+    if (ok) {
+      notifications.success('Copied to clipboard');
+    } else {
+      notifications.error('Failed to copy to clipboard');
+    }
   };
 
   const mcpPort = '6101';
@@ -216,7 +221,7 @@ export function MCPSettingsSection({ isAdmin }: Props) {
                   <code>{apiKey}</code>
                   <button
                     className="mcp-copy-btn"
-                    onClick={() => handleCopy(apiKey)}
+                    onClick={() => handleCopy(apiKey, 'API key')}
                     title="Copy API key"
                   >
                     <span className="material-icons">content_copy</span>
@@ -282,7 +287,7 @@ export function MCPSettingsSection({ isAdmin }: Props) {
               <code>http://YOUR_ECM_HOST:{mcpPort}/mcp?api_key=YOUR_API_KEY</code>
               <button
                 className="mcp-copy-btn"
-                onClick={() => handleCopy(mcpEndpoint)}
+                onClick={() => handleCopy(mcpEndpoint, 'MCP endpoint URL')}
                 title="Copy URL"
               >
                 <span className="material-icons">content_copy</span>
@@ -293,11 +298,19 @@ export function MCPSettingsSection({ isAdmin }: Props) {
             <p className="form-description">
               Add this to your Claude Desktop settings. Replace <code>YOUR_ECM_HOST</code> with your server's IP or hostname and <code>YOUR_API_KEY</code> with the key above. (Claude Desktop reaches remote MCP servers through the <code>mcp-remote</code> bridge; <code>--allow-http</code> is needed for plain-HTTP endpoints.)
             </p>
+            <p className="form-description mcp-prereq-note">
+              <span className="material-icons" aria-hidden="true">info</span>
+              <span>
+                <strong>Prerequisite:</strong> Claude Desktop does not bundle Node.js. The <code>mcp-remote</code> bridge below runs via <code>npx</code>, so Node.js (LTS, 18+) must be installed on the same machine as Claude Desktop. Install from <a href="https://nodejs.org/" target="_blank" rel="noopener noreferrer">nodejs.org</a> or via a package manager (<code>winget install OpenJS.NodeJS.LTS</code>, <code>brew install node</code>, <code>apt install nodejs npm</code>). Without Node on PATH, Claude Desktop's logs show <code>spawn npx ENOENT</code>.
+                <br /><br />
+                <strong>Why not Custom Connectors?</strong> Claude Desktop's Settings &gt; Connectors UI requires OAuth 2.1; ECM's MCP server uses a static API key, so the no-Node Custom Connector path is not supported yet. Claude Code (below) talks to the server directly and does not need Node.
+              </span>
+            </p>
             <div className="mcp-config-block">
               <pre>{claudeDesktopConfig}</pre>
               <button
                 className="mcp-copy-btn"
-                onClick={() => handleCopy(claudeDesktopConfig)}
+                onClick={() => handleCopy(claudeDesktopConfig, 'Claude Desktop config')}
                 title="Copy config"
               >
                 <span className="material-icons">content_copy</span>
@@ -312,7 +325,7 @@ export function MCPSettingsSection({ isAdmin }: Props) {
               <pre>{claudeCodeConfig}</pre>
               <button
                 className="mcp-copy-btn"
-                onClick={() => handleCopy(claudeCodeConfig)}
+                onClick={() => handleCopy(claudeCodeConfig, 'Claude Code config')}
                 title="Copy config"
               >
                 <span className="material-icons">content_copy</span>
