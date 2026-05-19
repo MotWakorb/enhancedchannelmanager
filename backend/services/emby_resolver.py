@@ -549,15 +549,22 @@ def _find_matching_sessions(
                     _accept(session)
 
     # ----- Tier 2: channel number exact (string compare)
-    if ecm_channel_number is not None:
-        ecm_number_str = str(ecm_channel_number).strip()
-        if ecm_number_str:
-            for session, _it, _ch, _sfx in prepared:
-                session_number = session.channel_number
-                if session_number is None:
-                    continue
-                if str(session_number).strip() == ecm_number_str:
-                    _accept(session)
+    # bd-f68c8: when the caller did not supply an ``ecm_channel_number``
+    # (Dispatcharr does not always push a separate channel_number for
+    # sub-channels like ATSC ``"2.1"`` — the operator's channel_name
+    # often carries the number as a ``"<number> | <rest>"`` pipe-prefix
+    # instead), parse the pipe-prefix off ``ecm_channel_name`` and use
+    # it as a Tier-2 candidate. See :func:`_parse_numeric_pipe_prefix`
+    # for the accept criteria. Caller-supplied ``ecm_channel_number``
+    # wins when present — the parser never overrides an explicit signal.
+    ecm_number_str = _coerce_tier2_number(ecm_channel_number, ecm_channel_name)
+    if ecm_number_str:
+        for session, _it, _ch, _sfx in prepared:
+            session_number = session.channel_number
+            if session_number is None:
+                continue
+            if str(session_number).strip() == ecm_number_str:
+                _accept(session)
 
     # ----- Tier 3: legacy fuzzy fallback on stream_name
     normalized_stream = _normalize(ecm_stream_name or "")
@@ -590,6 +597,61 @@ def _parse_pipe_suffix(normalized_item_name: str) -> str:
         return ""
     _prefix, _sep, suffix = normalized_item_name.partition("|")
     return suffix.strip()
+
+
+def _parse_numeric_pipe_prefix(ecm_channel_name: str | None) -> str:
+    """Return the left-hand side of ``"<number> | <rest>"`` when numeric.
+
+    bd-f68c8: ECM channel names often carry the channel number as a
+    pipe-prefix (e.g. ``"2.1 | ABC: WBAY Green Bay"``) when Dispatcharr
+    does not push a separate ``channel_number`` field — common for ATSC
+    sub-channels whose numbers (``"2.1"``, ``"7.2"``) are not pure
+    integers. This helper extracts that prefix for use as a Tier-2
+    channel-number candidate.
+
+    Returns the trimmed prefix when it parses as a non-negative number
+    (integer or single-decimal — ATSC major.sub form). Returns ``""``
+    when ``ecm_channel_name`` is empty, has no pipe, or the prefix
+    contains non-numeric characters (so word-prefixed channel names
+    like ``"News | CNN"`` cannot accidentally collide with arbitrary
+    session ``channel_number`` strings).
+
+    Input is the RAW ECM channel_name (not pre-normalized); the helper
+    handles its own trimming so callers can pass through whatever they
+    received from upstream.
+    """
+    if not ecm_channel_name or "|" not in ecm_channel_name:
+        return ""
+    prefix, _sep, _suffix = ecm_channel_name.partition("|")
+    prefix = prefix.strip()
+    if not prefix:
+        return ""
+    # Accept integers ("408") and ATSC major.sub form ("2.1") only.
+    if prefix.replace(".", "", 1).isdigit():
+        return prefix
+    return ""
+
+
+def _coerce_tier2_number(
+    ecm_channel_number: str | int | None,
+    ecm_channel_name: str | None,
+) -> str:
+    """Resolve the Tier-2 channel-number candidate for the current call.
+
+    bd-f68c8: caller-supplied ``ecm_channel_number`` always wins — when
+    present (and non-empty after string-coerce + strip), the resolver
+    compares only that value. When it is ``None``, the helper falls
+    back to ``_parse_numeric_pipe_prefix(ecm_channel_name)`` so a
+    numeric pipe-prefix in the ECM channel_name acts as the candidate.
+
+    Returns the empty string when no Tier-2 comparison is possible;
+    callers treat ``""`` as "skip Tier-2".
+    """
+    if ecm_channel_number is not None:
+        explicit = str(ecm_channel_number).strip()
+        if explicit:
+            return explicit
+    return _parse_numeric_pipe_prefix(ecm_channel_name)
 
 
 def _fuzzy_or_exact_match(normalized_stream: str, normalized_candidate: str) -> bool:
