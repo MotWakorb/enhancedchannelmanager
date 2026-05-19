@@ -126,22 +126,25 @@ def _get_counter_value(metric_key: str, source: str) -> float:
 
 
 class TestIpMismatch:
-    """When the ECM session's IP is not the Emby server's IP, the resolver
-    must return ``None`` without ever touching the cache — every poll
-    cycle hits this path for every non-Emby session, so the short-circuit
-    is the load-bearing optimization."""
+    """bd-ost8o two-mode dispatch — when the ECM session's IP does NOT
+    equal the Emby server's IP (browser-direct-play), the resolver no
+    longer short-circuits. It enters Mode B and runs Tier 1/2 strict
+    matching against the cached session list. Without a Tier-1/2 match
+    the result is still ``None``, but the cache IS consulted now."""
 
-    async def test_ip_mismatch_returns_none_without_cache_call(self):
-        """IP mismatch on an IP-literal base URL skips the cache entirely."""
+    async def test_ip_mismatch_with_no_tier_match_returns_none(self):
+        """Mode B (browser-direct fallback): IP mismatch, no usable ECM
+        channel input → Tier 1/2 skip, no match, ``None``. The cache IS
+        awaited because Mode B fetches sessions to attempt the match."""
         cache_mock = AsyncMock(return_value=[_make_session()])
         with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
              patch.object(emby_resolver, "get_cached_emby_sessions", cache_mock):
             result = await emby_resolver.resolve_emby_user(
                 ecm_session_ip="10.0.0.5",  # NOT the Emby server (192.168.1.10)
-                ecm_stream_name="CNN HD",
+                ecm_stream_name="totally unrelated stream",
             )
         assert result is None
-        cache_mock.assert_not_awaited()
+        cache_mock.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -394,9 +397,11 @@ class TestHostnameBaseUrl:
         assert result is not None
         assert result.user_name == "eve"
 
-    async def test_hostname_resolves_to_non_matching_ip_returns_none(self):
-        """``emby.local`` resolves to ``10.0.0.1`` — does NOT match the
-        ECM session IP and the resolver short-circuits before the cache."""
+    async def test_hostname_resolves_to_non_matching_ip_enters_mode_b(self):
+        """bd-ost8o: ``emby.local`` resolves to ``10.0.0.1`` while the
+        ECM session IP is ``192.168.1.10``. Mode B (browser-direct
+        fallback) runs Tier 1/2; without ECM channel input no tier
+        matches, so the result is ``None`` — but the cache IS awaited."""
         cache_mock = AsyncMock(return_value=[_make_session(item_name="CNN HD")])
         settings = _enabled_settings(base_url="https://emby.local:8920")
 
@@ -406,10 +411,10 @@ class TestHostnameBaseUrl:
                           return_value="10.0.0.1"):
             result = await emby_resolver.resolve_emby_user(
                 ecm_session_ip="192.168.1.10",
-                ecm_stream_name="CNN HD",
+                ecm_stream_name="totally unrelated stream",
             )
         assert result is None
-        cache_mock.assert_not_awaited()
+        cache_mock.assert_awaited_once()
 
     async def test_hostname_resolution_failure_logs_warn_and_returns_none(self, caplog):
         """``socket.gethostbyname`` raises ``socket.gaierror`` for an
@@ -850,17 +855,19 @@ class TestMultiViewer:
             )
         assert users == []
 
-    async def test_ip_mismatch_returns_empty_list_without_cache_call(self):
-        """IP short-circuit also applies to the plural variant."""
+    async def test_ip_mismatch_enters_mode_b_for_plural_variant(self):
+        """bd-ost8o: the plural variant respects two-mode dispatch
+        identically to the singular wrapper. IP mismatch + no usable
+        ECM channel input → empty list, but the cache IS consulted."""
         cache_mock = AsyncMock(return_value=[_make_session()])
         with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
              patch.object(emby_resolver, "get_cached_emby_sessions", cache_mock):
             users = await emby_resolver.resolve_emby_users(
                 ecm_session_ip="10.0.0.5",  # NOT the Emby server
-                ecm_stream_name="CNN HD",
+                ecm_stream_name="completely different stream",
             )
         assert users == []
-        cache_mock.assert_not_awaited()
+        cache_mock.assert_awaited_once()
 
     async def test_singular_wrapper_returns_most_recent_viewer(self):
         """Back-compat target: the legacy singular wrapper still returns
@@ -1013,8 +1020,11 @@ class TestNoMatchDiagnostic:
         assert len(users) == 1
         assert self._no_match_records(caplog.records) == []
 
-    async def test_no_emit_when_ip_short_circuit_fails(self, caplog):
-        """IP mismatch short-circuits before the session compare → no WARN."""
+    async def test_emits_when_ip_mismatch_mode_b_finds_no_match(self, caplog):
+        """bd-ost8o: post-fix, IP mismatch enters Mode B instead of
+        short-circuiting. Mode B with no Tier-1/2 match emits the same
+        forensic WARN as Mode A — the diagnostic surface is what makes
+        direct-play debugging tractable."""
         session = _make_session(
             item_name="NotTheChannel", channel_number="999",
         )
@@ -1028,7 +1038,7 @@ class TestNoMatchDiagnostic:
                     ecm_channel_name="CNN",
                 )
         assert users == []
-        assert self._no_match_records(caplog.records) == []
+        assert len(self._no_match_records(caplog.records)) == 1
 
     async def test_rate_limit_within_window(self, caplog):
         """Two no-match calls in quick succession for the same (ip, channel)
@@ -1412,3 +1422,158 @@ class TestEcmPipePrefixAsChannelNumber:
             )
         assert result is not None
         assert result.user_name == "explicit_num_user"
+
+
+# ---------------------------------------------------------------------------
+# bd-ost8o: two-mode dispatch — Mode B (browser-direct fallback) for
+# Emby. Same pattern as Jellyfin: when the user opens Emby Web in a
+# browser and plays a Live TV channel, the browser fetches the IPTV
+# stream URL directly from Dispatcharr. ECM sees the browser's egress
+# IP, NOT the Emby server, so the pre-bd-ost8o strict IP-gate would
+# silently skip attribution. Mode B fetches sessions and runs Tier 1/2
+# only (Tier 3 fuzzy disabled).
+# ---------------------------------------------------------------------------
+
+
+class TestModeBDirectFallback:
+    """Browser-direct-play attribution path for Emby. Mirrors the
+    Jellyfin two-mode-dispatch tests."""
+
+    _BROWSER_IP = "172.18.0.1"  # Docker bridge gateway
+    _EMBY_IP = "192.168.1.10"
+
+    async def test_mode_b_tier1_channel_name_match(self):
+        """Emby session item_name="408 | ESPN" matches
+        ecm_channel_name="ESPN" via Tier-1 pipe-suffix in Mode B."""
+        session = _make_session(
+            user_id="emby-uid-mw", user_name="MotWakorb",
+            item_name="408 | ESPN",
+        )
+        with patch.object(emby_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip=self._BROWSER_IP,
+                ecm_stream_name="US: ESPN HD",
+                ecm_channel_name="ESPN",
+            )
+        assert result == emby_resolver.EmbyAttribution(
+            user_id="emby-uid-mw", user_name="MotWakorb",
+        )
+
+    async def test_mode_b_tier2_channel_number_match(self):
+        """Emby session channel_number="408" matches
+        ecm_channel_number=408 via Tier-2 in Mode B."""
+        session = _make_session(
+            user_id="emby-uid-mw", user_name="MotWakorb",
+            item_name="Some Other Show",  # Tier-1 cannot match
+            channel_number="408",
+        )
+        with patch.object(emby_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip=self._BROWSER_IP,
+                ecm_stream_name="ESPN",
+                ecm_channel_name="ESPN",
+                ecm_channel_number=408,
+            )
+        assert result is not None
+        assert result.user_name == "MotWakorb"
+
+    async def test_mode_b_no_match_emits_no_match_diagnostic(self, caplog):
+        """Mode B with zero Tier-1/2 matches → ``None`` + structured
+        WARN identical to the Mode A no-match path."""
+        session = _make_session(item_name="UnrelatedShow")
+        with patch.object(emby_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.WARNING,
+                                 logger="services.emby_resolver"):
+                result = await emby_resolver.resolve_emby_user(
+                    ecm_session_ip=self._BROWSER_IP,
+                    ecm_stream_name="ESPN",
+                    ecm_channel_name="ESPN",
+                )
+        assert result is None
+        no_match = [r for r in caplog.records
+                    if "[EMBY-RESOLVER] no-match diagnostic" in r.getMessage()]
+        assert len(no_match) == 1
+
+    async def test_mode_b_ambiguous_skip_returns_none(self, caplog):
+        """Mode B with two Tier-1 matches → ambiguous_skip, no
+        attribution, INFO ambiguous_skip diagnostic fires."""
+        s1 = _make_session(
+            user_id="uid-a", user_name="alice", item_name="408 | ESPN",
+        )
+        # Force distinct session_ids by passing user_name override
+        # (the helper uses user_name in session_id).
+        s2 = _make_session(
+            user_id="uid-b", user_name="bob", item_name="408 | ESPN",
+        )
+        with patch.object(emby_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[s1, s2])):
+            with caplog.at_level(logging.INFO,
+                                 logger="services.emby_resolver"):
+                result = await emby_resolver.resolve_emby_user(
+                    ecm_session_ip=self._BROWSER_IP,
+                    ecm_stream_name="ESPN",
+                    ecm_channel_name="ESPN",
+                )
+        assert result is None
+        ambig = [r for r in caplog.records
+                 if "result=ambiguous_skip" in r.getMessage()]
+        assert len(ambig) == 1
+        assert "matched_sessions=2" in ambig[0].getMessage()
+
+    async def test_mode_b_skips_tier3_fuzzy(self):
+        """Mode B must NOT use the Tier-3 fuzzy stream-name fallback.
+        Compare Mode A vs Mode B on the same fuzzy-only candidate."""
+        session = _make_session(
+            user_name="fuzzy_user", item_name="ESPN Sports Channel",
+        )
+        # Mode A — fuzzy match resolves.
+        with patch.object(emby_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            mode_a_result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip=self._EMBY_IP,
+                ecm_stream_name="ESPN Sports Channel",
+            )
+            assert mode_a_result is not None
+            assert mode_a_result.user_name == "fuzzy_user"
+        # Mode B — fuzzy skipped; no Tier-1/2 path open → None.
+        with patch.object(emby_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            mode_b_result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip=self._BROWSER_IP,
+                ecm_stream_name="ESPN Sports Channel",
+            )
+        assert mode_b_result is None
+
+    async def test_mode_b_emits_resolver_call_with_mode_marker(self, caplog):
+        """The resolver_call INFO log surfaces ``mode=direct_fallback``."""
+        session = _make_session(user_name="alice", item_name="408 | ESPN")
+        with patch.object(emby_resolver, "get_settings",
+                          return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            with caplog.at_level(logging.INFO,
+                                 logger="services.emby_resolver"):
+                await emby_resolver.resolve_emby_user(
+                    ecm_session_ip=self._BROWSER_IP,
+                    ecm_stream_name="ESPN",
+                    ecm_channel_name="ESPN",
+                )
+        calls = [r for r in caplog.records
+                 if "[EMBY-RESOLVER] resolver_call" in r.getMessage()]
+        assert len(calls) == 1
+        assert "mode=direct_fallback" in calls[0].getMessage()

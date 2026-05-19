@@ -241,30 +241,30 @@ async def resolve_emby_users(
         )
         return []
 
-    if ecm_session_ip != emby_server_ip:
-        # Hot path: the vast majority of ECM sessions are NOT
-        # Emby-mediated. Short-circuit before the cache call.
-        logger.debug(
-            "[EMBY-RESOLVER] resolver_call ip=%s ecm_channel=%r "
-            "result=ip_mismatch (server=%s)",
-            ecm_session_ip, ecm_channel_name, emby_server_ip,
-        )
-        return []
+    # bd-ost8o: two-mode dispatch. Mode A (server-mediated) — IP matches
+    # the Emby server; behavior identical to the pre-bd-ost8o path. Mode
+    # B (browser-direct fallback) — IP does NOT match (browser opened
+    # Emby Web and the IPTV stream was fetched directly from
+    # Dispatcharr); fetch sessions and run tier-1/tier-2 only. Tier 3
+    # (fuzzy stream-name) is disabled in Mode B because the IP gate's
+    # implicit identity signal is absent and a generic stream name
+    # would cross-attribute viewers in a multi-user setup.
+    mode = "server_ip" if ecm_session_ip == emby_server_ip else "direct_fallback"
 
     sessions = await get_cached_emby_sessions()
     sessions_with_now_playing = sum(
         1 for s in sessions
         if s.now_playing_item_name or s.now_playing_channel_name or s.channel_number
     )
-    # bd-dok7u: forensic INFO log so future "Emby shows User #0"
-    # incidents have the same diagnostic surface as the new Jellyfin
-    # logging. Symmetric across all three resolvers.
+    # bd-dok7u / bd-ost8o: forensic INFO log so future "Emby shows User
+    # #0" incidents have the same diagnostic surface as the new Jellyfin
+    # logging. ``mode`` surfaces which dispatch branch ran.
     logger.info(
         "[EMBY-RESOLVER] resolver_call ip=%s ecm_channel=%r "
         "ecm_channel_number=%r ecm_stream=%r sessions_count=%d "
-        "sessions_with_now_playing=%d (bd-dok7u)",
+        "sessions_with_now_playing=%d mode=%s (bd-ost8o)",
         ecm_session_ip, ecm_channel_name, ecm_channel_number,
-        ecm_stream_name, len(sessions), sessions_with_now_playing,
+        ecm_stream_name, len(sessions), sessions_with_now_playing, mode,
     )
     for session in sessions:
         logger.info(
@@ -287,6 +287,7 @@ async def resolve_emby_users(
         ecm_channel_name=ecm_channel_name,
         ecm_channel_number=ecm_channel_number,
         sessions=sessions,
+        mode=mode,
     )
     if not matches:
         logger.debug(
@@ -295,10 +296,10 @@ async def resolve_emby_users(
             ecm_stream_name, ecm_channel_name, ecm_channel_number,
             len(sessions),
         )
-        # bd-r5f0c.10: forensic logging — IP matched, sessions exist,
-        # but no tier produced a match. Rate-limited per (ip, channel)
-        # per 60 s. Guarded on ``sessions`` so an empty session cache
-        # (the normal idle state) does NOT generate noise.
+        # bd-r5f0c.10: forensic logging — sessions exist, but no tier
+        # produced a match. Rate-limited per (ip, channel) per 60 s.
+        # Guarded on ``sessions`` so an empty session cache (the normal
+        # idle state) does NOT generate noise.
         if sessions:
             _log_emby_resolver_no_match(
                 client_ip=ecm_session_ip,
@@ -307,6 +308,23 @@ async def resolve_emby_users(
                 ecm_stream_name=ecm_stream_name,
                 sessions=sessions,
             )
+        observability.get_metric("user_attribution_unresolved_total").labels(source="emby").inc()
+        return []
+
+    # bd-ost8o: in Mode B (browser-direct fallback) a >1-match result is
+    # ambiguous — Tier 1/2 do strict equality so two simultaneous viewers
+    # on the same Tier-1 channel would both match. Without the IP gate's
+    # implicit "Emby server vouched for the playback" tiebreaker,
+    # attributing to either viewer is a coin flip. Skip and emit a
+    # structured diagnostic.
+    if mode == "direct_fallback" and len(matches) > 1:
+        logger.info(
+            "[EMBY-RESOLVER] resolver_call ip=%s ecm_channel=%r "
+            "result=ambiguous_skip matched_sessions=%d "
+            "matched_users=%s (bd-ost8o)",
+            ecm_session_ip, ecm_channel_name, len(matches),
+            [s.user_name for s in matches],
+        )
         observability.get_metric("user_attribution_unresolved_total").labels(source="emby").inc()
         return []
 
@@ -513,8 +531,14 @@ def _find_matching_sessions(
     ecm_channel_name: str | None,
     ecm_channel_number: str | int | None,
     sessions: list[EmbySession],
+    mode: str = "server_ip",
 ) -> list[EmbySession]:
-    """Return every Emby session that matches across any of the three tiers.
+    """Return every Emby session that matches across the active tiers.
+
+    ``mode`` is ``"server_ip"`` (Mode A — IP-matched, all three tiers
+    run) or ``"direct_fallback"`` (Mode B — IP did NOT match; tier 3
+    fuzzy stream-name matching is skipped per bd-ost8o).
+
 
     bd-zldrq tiered match (live-TV fix for v0.17.1-0033):
 
@@ -615,8 +639,10 @@ def _find_matching_sessions(
                 _accept(session)
 
     # ----- Tier 3: legacy fuzzy fallback on stream_name
+    # bd-ost8o: skip the fuzzy tier in Mode B (browser-direct fallback)
+    # to avoid cross-viewer attribution. See module docstring.
     normalized_stream = _normalize(ecm_stream_name or "")
-    if normalized_stream:
+    if normalized_stream and mode != "direct_fallback":
         for session, normalized_item, normalized_channel, _sfx in prepared:
             if _fuzzy_or_exact_match(normalized_stream, normalized_item):
                 _accept(session)
