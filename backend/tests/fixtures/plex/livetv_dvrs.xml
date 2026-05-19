@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- bd-ma6r3 fixture for GET /livetv/dvrs. Mirrors the shape PO's
+     running Plex returns: a single DVR with key="7" (the Dispatcharr-
+     HDHomeRun fronted setup the bead targets). Tests that exercise
+     multi-DVR setups assemble a synthetic XML inline rather than
+     loading a fixture — the multi-DVR path is rare and the fixture
+     would not represent any real operator's setup. -->
+<MediaContainer size="1">
+  <Dvr key="7" uuid="c3b23c5e-45c0-4a73-bb4b-8be36abb0b22"
+       language="eng" lineupTitle="My Guide"
+       country="usa" refreshedAt="1779144558"
+       epgIdentifier="tv.plex.providers.epg.xmltv:7">
+    <Device parentID="7" key="2" protocol="livetv"
+            status="alive" state="enabled" />
+  </Dvr>
+</MediaContainer>

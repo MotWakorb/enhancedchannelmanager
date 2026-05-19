@@ -882,9 +882,27 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
         #
         # Six metrics cover the cache + resolver hot path for Emby /
         # Plex / Jellyfin user attribution. All share a single bounded
-        # ``source`` label with three values: "emby", "plex",
-        # "jellyfin". Attribution is best-effort (SLO-8 posture) — the
-        # alert rules that wire on these are warn-only, never paging.
+        # ``source`` label.
+        #
+        # Resolver metrics carry exactly three values: "emby", "plex",
+        # "jellyfin" — one per primary attribution source.
+        #
+        # Cache metrics carry the resolver three values PLUS one
+        # secondary surface introduced by bd-ma6r3:
+        #
+        #   * "plex_epg" — the Plex EPG-airings cache used by the
+        #     :mod:`services.plex_epg_cache` module to cross-reference
+        #     a Live TV session's ``grandparentTitle`` (program name)
+        #     to the airing's ``channelCallSign``. The cache lives
+        #     beside the session cache; same TTL / lock / stale-
+        #     fallback envelope, different upstream surface and
+        #     longer TTL (30 s vs 5 s session). Dashboards that filter
+        #     on ``source=plex`` will see ONLY the session cache —
+        #     filter on ``source=~"plex|plex_epg"`` for full Plex
+        #     attribution-stack visibility.
+        #
+        # Attribution is best-effort (SLO-8 posture) — the alert rules
+        # that wire on these are warn-only, never paging.
         #
         # Cache metrics (incremented by services/<source>_cache.py):
         #
@@ -928,22 +946,27 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
         "media_session_cache_hits_total": Counter(
             "ecm_media_session_cache_hits_total",
             "Count of per-source session-cache hits (returned without an "
-            "upstream fetch). source ∈ {emby, plex, jellyfin}. "
+            "upstream fetch). source ∈ {emby, plex, jellyfin, plex_epg}. "
             "Incremented on both the fast-path hit (before lock) and the "
             "under-lock re-check hit (another waiter populated the cache "
             "while we waited). Does NOT count cache misses that went to "
-            "the upstream and succeeded.",
+            "the upstream and succeeded. The plex_epg label (bd-ma6r3) "
+            "covers the Plex EPG-airings cache, a secondary surface used "
+            "only by the Plex resolver's Live TV cross-reference tier.",
             ["source"],
             registry=registry,
         ),
         "media_session_fetch_duration_seconds": Histogram(
             "ecm_media_session_fetch_duration_seconds",
             "Wall time of the upstream get_sessions() HTTP call, in "
-            "seconds. source ∈ {emby, plex, jellyfin}. Cache hits are "
-            "NOT counted — this histogram tracks upstream latency only. "
-            "Recorded on every fetch attempt regardless of outcome "
-            "(success or exception); the _count gives total fetch "
-            "attempts, the _sum gives total latency across all fetches.",
+            "seconds. source ∈ {emby, plex, jellyfin, plex_epg}. Cache "
+            "hits are NOT counted — this histogram tracks upstream "
+            "latency only. Recorded on every fetch attempt regardless "
+            "of outcome (success or exception); the _count gives total "
+            "fetch attempts, the _sum gives total latency across all "
+            "fetches. The plex_epg label (bd-ma6r3) measures the full "
+            "DVR/section sweep (multiple sequential HTTP GETs); samples "
+            "will be wider than the single-GET session caches.",
             ["source"],
             buckets=_HTTP_LATENCY_BUCKETS,
             registry=registry,
@@ -951,8 +974,9 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
         "media_session_fetch_errors_total": Counter(
             "ecm_media_session_fetch_errors_total",
             "Count of upstream session-fetch failures (exception raised "
-            "by the upstream client). source ∈ {emby, plex, jellyfin}. "
-            "Incremented on every exception from get_sessions(), "
+            "by the upstream client). source ∈ {emby, plex, jellyfin, "
+            "plex_epg}. Incremented on every exception from "
+            "get_sessions() / get_current_live_epg_channels(), "
             "regardless of whether a stale cache exists to fall back on. "
             "Alert rule MediaSessionFetchErrorsSustained fires when this "
             "counter has a non-zero rate for > 10m (warn-only, SLO-8 "
@@ -963,7 +987,7 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
         "media_session_stale_fallback_total": Counter(
             "ecm_media_session_stale_fallback_total",
             "Count of stale-cache returns after an upstream fetch failure. "
-            "source ∈ {emby, plex, jellyfin}. Incremented when "
+            "source ∈ {emby, plex, jellyfin, plex_epg}. Incremented when "
             "fetch_errors_total fires AND a prior cache entry exists to "
             "return. A non-zero rate means ECM is serving stale session "
             "data to resolvers; attribution quality degrades but does not "
