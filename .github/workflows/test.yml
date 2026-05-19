@@ -117,6 +117,88 @@ jobs:
           # flake-pr-comment aggregator.
           retention-days: 30
 
+  # ─── MCP Server tests (bd-ak7xa) ──────────────────────────────────────
+  # Gates the mcp-server/tests/ suite (72 tests, 4 files, ~1.6k LOC) so
+  # new tests don't rot silently. This is a hard precondition for the
+  # OAuth 2.1 epic (bd-buiqr) — every OAuth abuse-case test we land
+  # rides on this gate. Mirrors the backend job structure (checkout +
+  # python setup + pip install + pytest with coverage + JUnit upload).
+  #
+  # Coverage threshold: --cov-fail-under=26 (measured 28% on 2026-05-19
+  # minus 2-point regression buffer, per the ratchet policy in
+  # docs/testing.md § "Coverage ratchet cadence"). The --cov-config
+  # points at mcp-server/.coveragerc which excludes tests/ from the
+  # measurement (so self-coverage doesn't inflate the TOTAL).
+  mcp-server:
+    name: MCP Server Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: mcp-server/requirements.txt
+
+      - name: Install dependencies
+        working-directory: mcp-server
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Test deps are not in requirements.txt (runtime deps only) —
+          # pin them here so the CI command is self-documenting.
+          pip install pytest pytest-asyncio pytest-cov
+
+      - name: Run pytest
+        working-directory: mcp-server
+        run: |
+          # Coverage threshold is enforced via --cov-fail-under=26 with
+          # paths filtered by .coveragerc (omits tests/). Pytest exits
+          # non-zero if coverage drops below the threshold, so this step
+          # enforces the ratchet automatically.
+          # See docs/testing.md § "Coverage ratchet cadence".
+          #
+          # --junitxml emits a JUnit-format report consumed by the
+          # flake-pr-comment workflow (bead xq19y) under the
+          # `junit-mcp` artifact name.
+          #
+          # --tb=short --no-header -p no:warnings matches the backend
+          # invocation so the summary line is the last line of output
+          # (per docs/pytest_conventions.md).
+          python -m pytest tests/ \
+            --tb=short --no-header -p no:warnings \
+            --cov=. --cov-config=.coveragerc --cov-fail-under=26 \
+            --junitxml=junit.xml
+
+      - name: Upload mcp-server coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-server-coverage
+          path: |
+            mcp-server/.coverage
+            mcp-server/coverage.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload mcp-server JUnit artifact (flake tracking — bead xq19y)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # NOTE: the `junit-mcp` artifact name is consumed by
+          # .github/workflows/flake-pr-comment.yml (JUNIT_ARTIFACT_NAMES
+          # in scripts/aggregate_flakes.py) — do not rename without
+          # updating the consumer.
+          name: junit-mcp
+          path: mcp-server/junit.xml
+          if-no-files-found: ignore
+          # 30-day retention matches the 30-run rolling window used by
+          # the flake-pr-comment aggregator.
+          retention-days: 30
+
   # ─── Frontend lint / typecheck / unit tests ───────────────────────────
   frontend:
     name: Frontend Tests
