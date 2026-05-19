@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- bd-ma6r3 EPG fixture: one DVR section with three episodes; the
+     middle episode is currently airing (1779148800 = 2026-05-19T00:00:00Z),
+     the first ended an hour ago, the third starts in three hours.
+
+     Time-window filter (epg_entry_is_current with now=1779150000):
+       beginsAt=1779148800 endsAt=1779159600  → currently airing
+       beginsAt=1779141600 endsAt=1779145200  → ended ~80m ago
+       beginsAt=1779159600 endsAt=1779163200  → starts in ~25m
+
+     The currently-airing entry's channelCallSign="8.1 | NBC: KGW Portland"
+     is the PO's actual symptom — without bd-ma6r3 the resolver only
+     gets "MLB Baseball" (the program) from /status/sessions and never
+     knows the channel. -->
+<MediaContainer size="3" identifier="tv.plex.providers.epg.xmltv" title1="Sports" title2="All Shows" viewGroup="show">
+  <Video ratingKey="airing-past" type="episode"
+         title="Conference Semifinals: Past Game"
+         grandparentTitle="NBA Basketball"
+         parentTitle="Season 2026">
+    <Media id="999" duration="3600000" channelCallSign="5.1 | CBS: KIRO Seattle"
+           channelIdentifier="5.1" channelTitle="5.1 5.1 | CBS: KIRO Seattle"
+           channelVcn="5.1" protocol="livetv"
+           beginsAt="1779141600" endsAt="1779145200" channelID="7" />
+  </Video>
+  <Video ratingKey="airing-current" type="episode"
+         title="Milwaukee Brewers at Chicago Cubs"
+         grandparentTitle="MLB Baseball"
+         parentTitle="Season 2026">
+    <Media id="3230" duration="10800000" channelCallSign="8.1 | NBC: KGW Portland"
+           channelIdentifier="8.1" channelTitle="8.1 8.1 | NBC: KGW Portland"
+           channelVcn="8.1" protocol="livetv"
+           beginsAt="1779148800" endsAt="1779159600" channelID="8" />
+  </Video>
+  <Video ratingKey="airing-future" type="episode"
+         title="Episode 138"
+         grandparentTitle="The Kelly Clarkson Show"
+         parentTitle="Season 7">
+    <Media id="756" duration="3600000" channelCallSign="6.1 | CBS: KOIN Portland"
+           channelIdentifier="6.1" channelTitle="6.1 6.1 | CBS: KOIN Portland"
+           channelVcn="6.1" protocol="livetv"
+           beginsAt="1779159600" endsAt="1779163200" channelID="6" />
+  </Video>
+</MediaContainer>

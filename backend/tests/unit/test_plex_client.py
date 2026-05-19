@@ -416,3 +416,369 @@ async def test_close_releases_pool():
     with patch.object(client._client, "aclose", new_callable=AsyncMock) as aclose_mock:
         await client.close()
     aclose_mock.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# bd-ma6r3 EPG-tier tests — DVR/section discovery + EPG entry parsing
+# ---------------------------------------------------------------------------
+
+
+from plex_client import (  # noqa: E402 — group bd-ma6r3 additions below
+    PlexEpgEntry,
+    _epg_entry_is_current,
+    _parse_epg_xml,
+)
+
+
+# ----- PlexEpgEntry parsing
+
+
+def test_parse_epg_xml_emits_one_entry_per_media_element():
+    """The parser must flatten each ``<Media>`` under each ``<Video>``
+    into a separate :class:`PlexEpgEntry`. A single Video carrying four
+    upcoming airings must produce four entries — the resolver's
+    time-window filter then keeps only the one currently airing.
+    """
+    xml = _load_fixture("epg_section_multi_media_per_video.xml")
+    entries = _parse_epg_xml(xml)
+    assert len(entries) == 4
+    # All four entries share the same grandparent_title and call_sign
+    # (operator's "Fox 11 News at Five" airs at four times on 11.1).
+    for entry in entries:
+        assert entry.grandparent_title == "Fox 11 News at Five"
+        assert entry.channel_call_sign == "11.1 | FOX: WLUK Green Bay"
+        assert entry.channel_identifier == "11.1"
+        assert entry.channel_vcn == "11.1"
+        assert entry.protocol == "livetv"
+        assert entry.begins_at is not None
+        assert entry.ends_at is not None
+
+
+def test_parse_epg_xml_handles_empty_container():
+    """An empty ``<MediaContainer/>`` (section has no airings) must
+    produce ``[]`` without raising — this is the normal state of the
+    Movies section in the PO's all-Dispatcharr setup."""
+    xml = '<?xml version="1.0"?><MediaContainer size="0"/>'
+    assert _parse_epg_xml(xml) == []
+
+
+def test_parse_epg_xml_skips_videos_without_grandparent_title():
+    """A ``<Video>`` element missing ``@grandparentTitle`` cannot be
+    cross-referenced (the resolver's lookup key is grandparent_title),
+    so the parser must skip it entirely rather than emit entries with
+    an empty grandparent."""
+    xml = (
+        '<?xml version="1.0"?>'
+        '<MediaContainer size="1">'
+        '<Video ratingKey="orphan" type="episode" title="Orphan">'
+        '<Media id="0" channelCallSign="X" protocol="livetv"'
+        ' beginsAt="1779148800" endsAt="1779159600" />'
+        '</Video>'
+        '</MediaContainer>'
+    )
+    assert _parse_epg_xml(xml) == []
+
+
+def test_parse_epg_xml_preserves_individual_media_time_windows():
+    """When a Video has multiple Media elements with DIFFERENT begins/ends,
+    the parser must preserve each pair on its own entry. The resolver
+    then independently filters each entry's time window."""
+    xml = _load_fixture("epg_section_multi_media_per_video.xml")
+    entries = _parse_epg_xml(xml)
+    begins = sorted(e.begins_at for e in entries)
+    # All four begin times distinct (24h spacing in the fixture).
+    assert len({b for b in begins}) == 4
+
+
+def test_parse_epg_xml_raises_on_malformed_xml():
+    """Malformed XML must raise :class:`PlexClientError` for the cache
+    layer to absorb via stale-fallback — not return ``[]`` silently."""
+    with pytest.raises(PlexClientError):
+        _parse_epg_xml("<not really xml")
+
+
+# ----- Time-window filter
+
+
+def test_epg_entry_is_current_accepts_window_match():
+    """An entry whose time window covers ``now`` and protocol is
+    ``"livetv"`` is current."""
+    now = datetime(2026, 5, 19, 0, 0, 0, tzinfo=timezone.utc)
+    entry = PlexEpgEntry(
+        grandparent_title="MLB Baseball",
+        channel_call_sign="8.1 | NBC: KGW Portland",
+        channel_identifier="8.1",
+        channel_title="8.1 NBC",
+        channel_vcn="8.1",
+        begins_at=datetime(2026, 5, 18, 22, 0, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 5, 19, 1, 0, 0, tzinfo=timezone.utc),
+        protocol="livetv",
+    )
+    assert _epg_entry_is_current(entry, now=now) is True
+
+
+def test_epg_entry_is_current_rejects_protocol_mismatch():
+    """An entry whose protocol is not ``"livetv"`` is never current —
+    defensive against mixed-provider Plex setups that surface non-live
+    EPG entries."""
+    now = datetime(2026, 5, 19, 0, 0, 0, tzinfo=timezone.utc)
+    entry = PlexEpgEntry(
+        grandparent_title="Some Show",
+        channel_call_sign="X",
+        channel_identifier="X",
+        channel_title="X",
+        channel_vcn="X",
+        begins_at=datetime(2026, 5, 18, 22, 0, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 5, 19, 1, 0, 0, tzinfo=timezone.utc),
+        protocol="vod",
+    )
+    assert _epg_entry_is_current(entry, now=now) is False
+
+
+def test_epg_entry_is_current_rejects_outside_window():
+    """An entry whose window is entirely in the past (or future) is not
+    current."""
+    now = datetime(2026, 5, 19, 0, 0, 0, tzinfo=timezone.utc)
+    past = PlexEpgEntry(
+        grandparent_title="Past Show",
+        channel_call_sign="X",
+        channel_identifier="X",
+        channel_title="X",
+        channel_vcn="X",
+        begins_at=datetime(2026, 5, 18, 18, 0, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 5, 18, 19, 0, 0, tzinfo=timezone.utc),
+        protocol="livetv",
+    )
+    future = PlexEpgEntry(
+        grandparent_title="Future Show",
+        channel_call_sign="X",
+        channel_identifier="X",
+        channel_title="X",
+        channel_vcn="X",
+        begins_at=datetime(2026, 5, 19, 3, 0, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 5, 19, 4, 0, 0, tzinfo=timezone.utc),
+        protocol="livetv",
+    )
+    assert _epg_entry_is_current(past, now=now) is False
+    assert _epg_entry_is_current(future, now=now) is False
+
+
+def test_epg_entry_is_current_rejects_missing_times():
+    """Missing begins_at OR ends_at can't be window-checked — defensively
+    treat the entry as not-current."""
+    now = datetime(2026, 5, 19, 0, 0, 0, tzinfo=timezone.utc)
+    entry = PlexEpgEntry(
+        grandparent_title="X",
+        channel_call_sign="X",
+        channel_identifier="X",
+        channel_title="X",
+        channel_vcn="X",
+        begins_at=None,
+        ends_at=None,
+        protocol="livetv",
+    )
+    assert _epg_entry_is_current(entry, now=now) is False
+
+
+# ----- DVR/section discovery
+
+
+@pytest.mark.asyncio
+async def test_get_dvr_keys_returns_keys_from_livetv_dvrs():
+    """``get_dvr_keys`` extracts the ``key`` attribute from each
+    ``<Dvr>`` element under ``<MediaContainer>``."""
+    client = PlexClient(base_url="http://plex.local:32400", api_key="token")
+    try:
+        xml = _load_fixture("livetv_dvrs.xml")
+        fake_resp = _xml_response(200, xml)
+        with patch.object(client._client, "request",
+                          AsyncMock(return_value=fake_resp)):
+            keys = await client.get_dvr_keys()
+        assert keys == ["7"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_dvr_keys_returns_empty_for_empty_container():
+    """When ``/livetv/dvrs`` returns an empty container (no DVRs
+    configured), the method returns ``[]`` without raising — this is
+    a normal state on non-LiveTV Plex installs."""
+    client = PlexClient(base_url="http://plex.local:32400", api_key="token")
+    try:
+        fake_resp = _xml_response(200, '<MediaContainer size="0"/>')
+        with patch.object(client._client, "request",
+                          AsyncMock(return_value=fake_resp)):
+            keys = await client.get_dvr_keys()
+        assert keys == []
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_dvr_section_keys_returns_keys_for_dvr():
+    """``get_dvr_section_keys(dvr_key)`` returns the section
+    ``<Directory key="...">`` attributes for the provided DVR."""
+    client = PlexClient(base_url="http://plex.local:32400", api_key="token")
+    try:
+        xml = _load_fixture("dvr_sections.xml")
+        fake_resp = _xml_response(200, xml)
+        with patch.object(client._client, "request",
+                          AsyncMock(return_value=fake_resp)) as request_mock:
+            keys = await client.get_dvr_section_keys("7")
+        # Per the fixture: Movies=1, News=4, Shows=2, Sports=3.
+        assert sorted(keys) == ["1", "2", "3", "4"]
+        # The URL must include the DVR-keyed EPG provider path so a
+        # typo in path construction would be caught here.
+        request_mock.assert_awaited_once()
+        called_url = request_mock.await_args.args[1]
+        assert "tv.plex.providers.epg.xmltv:7/sections" in called_url
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_section_epg_entries_parses_fixture():
+    """``get_section_epg_entries`` returns one entry per ``<Media>``
+    element across all ``<Video>`` elements in the section, with no
+    time-window filtering — that's the caller's responsibility."""
+    client = PlexClient(base_url="http://plex.local:32400", api_key="token")
+    try:
+        xml = _load_fixture("epg_section_one_current_airing.xml")
+        fake_resp = _xml_response(200, xml)
+        with patch.object(client._client, "request",
+                          AsyncMock(return_value=fake_resp)) as request_mock:
+            entries = await client.get_section_epg_entries(
+                dvr_key="7", section_key="3",
+            )
+        # Three entries (one per Video, each Video has one Media).
+        assert len(entries) == 3
+        # Ensure the ?type=4 query was sent.
+        called_kwargs = request_mock.await_args.kwargs
+        assert called_kwargs.get("params") == {"type": "4"}
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_section_epg_entries_raises_on_non_2xx():
+    """Non-2xx propagates as :class:`PlexClientError` so the cache
+    layer can wrap with stale-fallback."""
+    client = PlexClient(base_url="http://plex.local:32400", api_key="token")
+    try:
+        fake_resp = _xml_response(503, "")
+        with patch.object(client._client, "request",
+                          AsyncMock(return_value=fake_resp)):
+            with pytest.raises(PlexClientError):
+                await client.get_section_epg_entries(
+                    dvr_key="7", section_key="3",
+                )
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_current_live_epg_channels_filters_to_current_airings():
+    """``get_current_live_epg_channels`` orchestrates DVR + section
+    discovery and applies the time-window filter. Across the fixture's
+    three airings only the middle one (NBC, beginsAt=1779148800,
+    endsAt=1779159600) covers ``now=1779150000``."""
+    client = PlexClient(base_url="http://plex.local:32400", api_key="token")
+    try:
+        # Stage three responses in order: DVRs, sections, airings.
+        dvrs_xml = _load_fixture("livetv_dvrs.xml")
+        sections_xml = (
+            '<?xml version="1.0"?><MediaContainer size="1">'
+            '<Directory key="3" type="show" title="Sports" />'
+            '</MediaContainer>'
+        )
+        airings_xml = _load_fixture("epg_section_one_current_airing.xml")
+        responses = [
+            _xml_response(200, dvrs_xml),
+            _xml_response(200, sections_xml),
+            _xml_response(200, airings_xml),
+        ]
+        with patch.object(client._client, "request",
+                          AsyncMock(side_effect=responses)):
+            now = datetime(2026, 5, 19, 0, 20, 0, tzinfo=timezone.utc)
+            entries = await client.get_current_live_epg_channels(now=now)
+        assert len(entries) == 1
+        assert entries[0].grandparent_title == "MLB Baseball"
+        assert entries[0].channel_call_sign == "8.1 | NBC: KGW Portland"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_current_live_epg_channels_returns_empty_when_no_dvrs():
+    """No DVRs configured → empty list (no error). The resolver's
+    EPG-tier gate then quietly does nothing."""
+    client = PlexClient(base_url="http://plex.local:32400", api_key="token")
+    try:
+        fake_resp = _xml_response(200, '<MediaContainer size="0"/>')
+        with patch.object(client._client, "request",
+                          AsyncMock(return_value=fake_resp)):
+            entries = await client.get_current_live_epg_channels()
+        assert entries == []
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_current_live_epg_channels_continues_on_per_dvr_section_failure():
+    """When one DVR's section listing fails, the sweep must log + continue
+    so a broken DVR doesn't disable EPG attribution for the others —
+    multi-DVR friendliness for the operator. Here we simulate the
+    single-DVR case with the sections call failing; the result should
+    be an empty list (no airings discovered) but NO exception."""
+    client = PlexClient(base_url="http://plex.local:32400", api_key="token")
+    try:
+        dvrs_xml = _load_fixture("livetv_dvrs.xml")
+        responses = [
+            _xml_response(200, dvrs_xml),
+            _xml_response(500, ""),  # sections call fails
+        ]
+        with patch.object(client._client, "request",
+                          AsyncMock(side_effect=responses)):
+            entries = await client.get_current_live_epg_channels()
+        assert entries == []
+    finally:
+        await client.close()
+
+
+# ----- is_live extraction
+
+
+@pytest.mark.asyncio
+async def test_get_sessions_extracts_is_live_flag_from_video_live_attribute():
+    """bd-ma6r3: ``@live="1"`` on the ``<Video>`` element marks Plex Live
+    TV sessions. The resolver's EPG-tier gate runs only for sessions
+    with ``is_live=True``."""
+    client = PlexClient(base_url="http://plex.local:32400", api_key="token")
+    try:
+        xml = (
+            '<?xml version="1.0"?>'
+            '<MediaContainer size="2">'
+            '<Video ratingKey="live-1" type="episode"'
+            ' title="MLB Baseball" grandparentTitle="MLB Baseball"'
+            ' live="1" lastViewedAt="1779150000">'
+            '<User id="2" title="MotWakorb" />'
+            '<Player address="172.16.0.2" />'
+            '</Video>'
+            '<Video ratingKey="vod-1" type="movie"'
+            ' title="Dune" lastViewedAt="1779150000">'
+            '<User id="1" title="alice" />'
+            '<Player address="172.16.0.3" />'
+            '</Video>'
+            '</MediaContainer>'
+        )
+        fake_resp = _xml_response(200, xml)
+        with patch.object(client._client, "request",
+                          AsyncMock(return_value=fake_resp)):
+            sessions = await client.get_sessions()
+        live = next(s for s in sessions if s.session_id == "live-1")
+        vod = next(s for s in sessions if s.session_id == "vod-1")
+        assert live.is_live is True
+        assert vod.is_live is False
+    finally:
+        await client.close()
