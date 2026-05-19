@@ -183,6 +183,30 @@
   right: 0.5rem;
 }
 
+.mcp-prereq-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  margin-top: 0.5rem;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+  border-left: 3px solid var(--accent-color, #4a9eff);
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.mcp-prereq-note .material-icons {
+  color: var(--accent-color, #4a9eff);
+  font-size: 1.1rem;
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.mcp-prereq-note a {
+  color: var(--accent-color, #4a9eff);
+}
+
 /* Tools grid */
 .mcp-tools-grid {
   display: grid;
