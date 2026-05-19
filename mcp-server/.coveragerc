@@ -1,0 +1,31 @@
+# Coverage.py config for the mcp-server pytest suite.
+#
+# Paired with .github/workflows/test.yml's mcp-server job
+# (--cov=. --cov-fail-under=26). See docs/testing.md
+# § "Coverage ratchet cadence" for the methodology and the ratchet
+# policy. Baseline: 28% line coverage on dev tip, measured 2026-05-19
+# during bead enhancedchannelmanager-ak7xa.
+
+[run]
+source = .
+branch = False
+# Exclude code we deliberately do not measure:
+#   - tests/*          — the suite itself
+#   - __pycache__/*    — bytecode caches
+omit =
+    tests/*
+    __pycache__/*
+    */__pycache__/*
+
+[report]
+# Show missing line numbers in term output so contributors can see gaps.
+show_missing = True
+# Don't hide 100% covered files — keep the report complete for small suite.
+skip_covered = False
+# Exclude well-known lines from coverage consideration.
+exclude_lines =
+    pragma: no cover
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    @abstractmethod
