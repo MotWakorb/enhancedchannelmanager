@@ -1173,7 +1173,33 @@ export function StatsTab() {
                   <div className="channel-clients">
                     <div className="clients-header">
                       <span className="material-icons">people</span>
-                      Connected Clients ({channel.clients.length})
+                      {/* bd-w9c2a: Count actual humans watching, not ECM-side
+                          proxy connections. An Emby / Plex / Jellyfin
+                          transcoding-proxy client is ONE ECM connection but
+                          can carry N upstream viewers (W9 / bd-r5f0c.9
+                          multi-viewer). Counting raw clients.length
+                          undercounts in the deduped-upstream case (e.g.,
+                          1 Dispatcharr + 1 Emby-proxy with 2 viewers = 3
+                          humans, not 2).
+
+                          Precedence when a client carries viewers from
+                          multiple sources concurrently (rare — would imply
+                          one connection mediated by two source servers):
+                          take the MAX across the three source lists rather
+                          than summing them. This matches the per-client
+                          renderer's source-precedence semantic (emby >
+                          plex > jellyfin in lookup order) and avoids
+                          double-counting when the same humans are visible
+                          to multiple resolvers. */}
+                      Connected Clients ({(channel.clients || []).reduce((n, c) => {
+                        const sourceViewerCounts = [
+                          c.emby_viewers?.length ?? 0,
+                          c.plex_viewers?.length ?? 0,
+                          c.jellyfin_viewers?.length ?? 0,
+                        ];
+                        const maxSource = Math.max(...sourceViewerCounts);
+                        return n + (maxSource > 0 ? maxSource : 1);
+                      }, 0)})
                     </div>
                     <div className="client-list">
                       {channel.clients.map((client, idx) => (
