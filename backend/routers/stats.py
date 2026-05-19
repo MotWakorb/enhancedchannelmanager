@@ -311,18 +311,43 @@ async def _enrich_channels_with_attribution(channels: list) -> None:
         # stream name is provider-prefixed verbose.
         channel_name = ch.get("channel_name")
         channel_number = ch.get("channel_number")
-        # Skip cheap when no tier could match for any source.
-        if not stream_name and not channel_name and channel_number is None:
-            continue
         clients = ch.get("clients") or []
         client_ips = [c.get("ip_address") for c in clients if c.get("ip_address")]
-        if not client_ips:
+
+        # bd-dok7u: per-channel forensic trace — captures every short-circuit
+        # cause so "User #0 on channel X" can be diagnosed in one log read.
+        # The skip reason names the EXACT guard that fired (no_data /
+        # no_clients) or 'proceed' when both guards passed.
+        if not stream_name and not channel_name and channel_number is None:
+            decision = "skip:no_data"
+        elif not client_ips:
+            decision = "skip:no_clients"
+        else:
+            decision = "proceed"
+        logger.info(
+            "[STATS-ENRICH] channel_trace ch_id=%s stream_name=%r "
+            "channel_name=%r channel_number=%r client_ips=%s decision=%s "
+            "(bd-dok7u)",
+            ch.get("channel_id"),
+            stream_name, channel_name, channel_number, client_ips, decision,
+        )
+        if decision != "proceed":
             continue
 
         # Each source's enrichment is independent — a channel can
         # surface attribution from multiple sources on the same poll
         # if the operator runs multiple media servers (rare but
         # supported).
+        # bd-dok7u: per-source dispatch trace — captures which sources
+        # actually run for this channel so an operator seeing no
+        # attribution can tell at a glance whether the source was
+        # disabled or merely failed to match.
+        logger.info(
+            "[STATS-ENRICH] source_dispatch ch_id=%s emby_enabled=%s "
+            "plex_enabled=%s jellyfin_enabled=%s (bd-dok7u)",
+            ch.get("channel_id"),
+            emby_enabled, plex_enabled, jellyfin_enabled,
+        )
         if emby_enabled:
             await _enrich_one_source(
                 ch=ch,

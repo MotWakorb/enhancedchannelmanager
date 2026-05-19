@@ -279,10 +279,20 @@ async def _resolve_plex_users_inner(
 
     plex_server_ip = _resolve_plex_server_ip(base_url)
     if plex_server_ip is None:
+        logger.info(
+            "[PLEX-RESOLVER] resolver_call ip=%s ecm_channel=%r "
+            "result=no_server_ip (bd-dok7u)",
+            ecm_session_ip, ecm_channel_name,
+        )
         return []
 
     if ecm_session_ip != plex_server_ip:
         # Hot path short-circuit.
+        logger.debug(
+            "[PLEX-RESOLVER] resolver_call ip=%s ecm_channel=%r "
+            "result=ip_mismatch (server=%s)",
+            ecm_session_ip, ecm_channel_name, plex_server_ip,
+        )
         return []
 
     try:
@@ -290,6 +300,34 @@ async def _resolve_plex_users_inner(
     except Exception as exc:  # noqa: BLE001
         logger.debug("[PLEX] Unexpected error fetching cached sessions: %s", exc)
         return []
+
+    sessions_with_now_playing = sum(
+        1 for s in sessions
+        if s.now_playing_item_name or getattr(s, "now_playing_channel_name", None)
+    )
+    # bd-dok7u: forensic INFO log so future "Plex shows User #0"
+    # incidents have the same diagnostic surface as the new Jellyfin
+    # logging. Symmetric across all three resolvers.
+    logger.info(
+        "[PLEX-RESOLVER] resolver_call ip=%s ecm_channel=%r "
+        "ecm_channel_number=%r ecm_stream=%r sessions_count=%d "
+        "sessions_with_now_playing=%d (bd-dok7u)",
+        ecm_session_ip, ecm_channel_name, ecm_channel_number,
+        ecm_stream_name, len(sessions), sessions_with_now_playing,
+    )
+    for session in sessions:
+        logger.info(
+            "[PLEX-RESOLVER] session_inspect user=%s is_live=%s "
+            "has_now_playing=%s item_name=%r channel_name=%r "
+            "parent_title=%r last_activity=%s",
+            session.user_name,
+            getattr(session, "is_live", None),
+            bool(session.now_playing_item_name),
+            session.now_playing_item_name,
+            getattr(session, "now_playing_channel_name", None),
+            getattr(session, "now_playing_parent_title", None),
+            getattr(session, "last_activity_date", None),
+        )
 
     if not sessions:
         return []
@@ -374,6 +412,15 @@ async def _resolve_plex_users_inner(
         return []
 
     sorted_matches = _sort_by_recency_descending(matches)
+
+    # bd-dok7u: INFO-level success log so operators can confirm
+    # attribution from production logs without DEBUG.
+    logger.info(
+        "[PLEX-RESOLVER] tier_match ecm_channel=%r ecm_stream=%r "
+        "match_count=%d top_user=%s (bd-dok7u)",
+        ecm_channel_name, ecm_stream_name,
+        len(sorted_matches), sorted_matches[0].user_name,
+    )
 
     if len(sorted_matches) > 1:
         _log_disambiguation_warn(

@@ -395,3 +395,180 @@ async def test_close_releases_connection_pool():
     with patch.object(client._client, "aclose", new_callable=AsyncMock) as aclose_mock:
         await client.close()
     aclose_mock.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# bd-dok7u: NowPlayingQueue extraction + get_user_item lookup
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_sessions_captures_now_playing_queue_item_id_when_present():
+    """The PO's Jellyfin Web sessions report NowPlayingItem absent but
+    NowPlayingQueue[0].Id populated. The dataclass must surface that ID
+    so the cache layer can resolve it against /Users/{user}/Items/{id}.
+    """
+    client = JellyfinClient(base_url="http://jellyfin.local:8096", api_key="k")
+    try:
+        payload = [
+            {
+                "Id": "jf-mw-sess",
+                "UserId": "jf-mw-uid",
+                "UserName": "MotWakorb",
+                "RemoteEndPoint": "192.168.1.61",
+                # NO NowPlayingItem — this is the bd-dok7u case
+                "NowPlayingQueue": [
+                    {"Id": "2b0159285ef4370ec3c8c91534bc076d",
+                     "PlaylistItemId": "playlistItem0"},
+                ],
+                "IsActive": True,
+                "LastActivityDate": "2026-05-19T02:33:36Z",
+            },
+        ]
+        fake_resp = _response(200, payload)
+        request_mock = AsyncMock(return_value=fake_resp)
+        with patch.object(client._client, "request", request_mock):
+            sessions = await client.get_sessions()
+        assert len(sessions) == 1
+        assert sessions[0].now_playing_item_name is None
+        assert sessions[0].now_playing_queue_item_id == (
+            "2b0159285ef4370ec3c8c91534bc076d"
+        )
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_sessions_queue_item_id_none_when_queue_absent():
+    """An idle session (no NowPlayingItem, no NowPlayingQueue) maps to
+    now_playing_queue_item_id=None — the cache layer's gate predicate
+    relies on this being None rather than an empty string."""
+    client = JellyfinClient(base_url="http://jellyfin.local:8096", api_key="k")
+    try:
+        payload = [
+            {
+                "Id": "jf-idle-sess",
+                "UserId": "jf-idle-uid",
+                "UserName": "idle_user",
+                "RemoteEndPoint": "192.168.1.99",
+                # Neither NowPlayingItem nor NowPlayingQueue present.
+                "LastActivityDate": "2026-05-19T00:00:00Z",
+            },
+        ]
+        fake_resp = _response(200, payload)
+        request_mock = AsyncMock(return_value=fake_resp)
+        with patch.object(client._client, "request", request_mock):
+            sessions = await client.get_sessions()
+        assert len(sessions) == 1
+        assert sessions[0].now_playing_queue_item_id is None
+
+
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_sessions_queue_item_id_none_when_queue_empty():
+    """A degenerate session with NowPlayingQueue=[] (empty list) must
+    map to None — the cache only resolves a populated queue."""
+    client = JellyfinClient(base_url="http://jellyfin.local:8096", api_key="k")
+    try:
+        payload = [
+            {
+                "Id": "jf-empty-q-sess",
+                "UserId": "jf-empty-q-uid",
+                "UserName": "empty_q",
+                "RemoteEndPoint": "192.168.1.99",
+                "NowPlayingQueue": [],
+                "LastActivityDate": "2026-05-19T00:00:00Z",
+            },
+        ]
+        fake_resp = _response(200, payload)
+        request_mock = AsyncMock(return_value=fake_resp)
+        with patch.object(client._client, "request", request_mock):
+            sessions = await client.get_sessions()
+        assert sessions[0].now_playing_queue_item_id is None
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_user_item_returns_parsed_json_on_200():
+    """The user-scoped item endpoint returns the raw item dict for
+    Live TV channel items so the cache can extract Name + ChannelNumber.
+    """
+    client = JellyfinClient(base_url="http://jellyfin.local:8096", api_key="k")
+    try:
+        item_body = {
+            "Name": "| ABC: WBAY Green Bay",
+            "ChannelNumber": "2.1",
+            "Number": "2.1",
+            "Type": "TvChannel",
+            "Id": "2b0159285ef4370ec3c8c91534bc076d",
+        }
+        fake_resp = _response(200, item_body)
+        request_mock = AsyncMock(return_value=fake_resp)
+        with patch.object(client._client, "request", request_mock):
+            item = await client.get_user_item(
+                user_id="jf-mw-uid",
+                item_id="2b0159285ef4370ec3c8c91534bc076d",
+            )
+        assert item == item_body
+        # Verify the correct user-scoped URL was used (the unscoped
+        # /Items/{id} 400s for Live TV channel items).
+        call = request_mock.await_args
+        assert call.args[0] == "GET"
+        assert call.args[1] == (
+            "http://jellyfin.local:8096/Users/jf-mw-uid/Items/"
+            "2b0159285ef4370ec3c8c91534bc076d"
+        )
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_user_item_returns_none_on_non_200():
+    """Non-200 responses (404 for unknown items, 400 for unscoped Live
+    TV lookups, 401 for bad keys) must return None — the fallback path
+    is best-effort, not required."""
+    client = JellyfinClient(base_url="http://jellyfin.local:8096", api_key="k")
+    try:
+        fake_resp = _response(404, {"error": "not found"})
+        request_mock = AsyncMock(return_value=fake_resp)
+        with patch.object(client._client, "request", request_mock):
+            item = await client.get_user_item(
+                user_id="jf-u", item_id="missing",
+            )
+        assert item is None
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_user_item_returns_none_on_network_error():
+    """A network-level failure must not raise — the fallback path is
+    best-effort and the resolver's no-match path takes over."""
+    client = JellyfinClient(base_url="http://jellyfin.local:8096", api_key="k")
+    try:
+        request_mock = AsyncMock(side_effect=httpx.ConnectError("nope"))
+        with patch.object(client._client, "request", request_mock):
+            item = await client.get_user_item(
+                user_id="jf-u", item_id="anything",
+            )
+        assert item is None
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_user_item_returns_none_for_empty_inputs():
+    """Empty user_id or item_id short-circuits without an HTTP call."""
+    client = JellyfinClient(base_url="http://jellyfin.local:8096", api_key="k")
+    try:
+        request_mock = AsyncMock()
+        with patch.object(client._client, "request", request_mock):
+            assert await client.get_user_item(user_id="", item_id="x") is None
+            assert await client.get_user_item(user_id="u", item_id="") is None
+        request_mock.assert_not_called()
+    finally:
+        await client.close()
