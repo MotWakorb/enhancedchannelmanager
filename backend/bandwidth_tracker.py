@@ -169,6 +169,50 @@ def _coerce_connected_at(value) -> Optional[float]:
         return None
 
 
+def _build_persisted_connection(*, ip: str, meta: dict, source_server_ip):
+    """Build one reconciler :class:`Connection` for the persisted path (bd-rools).
+
+    Mirrors ``routers.stats._build_attribution_connections`` so the live and
+    persisted attribution paths apply the IDENTICAL per-connection
+    discriminator. ``meta`` is the ``client_meta`` entry for this IP (or an
+    empty dict). A connection carries a Dispatcharr ACCOUNT identity when its
+    ``user_id`` is a positive integer (the ``client_meta`` now threads it
+    through, bd-rools) — that marks a genuine direct-IPTV subscriber, which is
+    excluded from media-server reconciliation and is never the server proxy.
+    Anonymous pulls (``user_id`` ``"0"`` / ``0`` / ``None``, including the
+    transcoding proxy and NAT'd browser-direct playback) stay eligible.
+
+    ``has_url_identity`` is always ``False`` here — bd-4w9w6 removed the
+    channel-upstream-URL discriminator that conflated channel SOURCE with
+    client IDENTITY and dropped every media-server viewer to User #0.
+    """
+    from services.attribution_reconciler import (
+        Connection,
+        has_dispatcharr_account_identity,
+    )
+
+    has_account_identity = has_dispatcharr_account_identity(
+        user_id=meta.get("user_id"),
+    )
+    return Connection(
+        client_id=str(meta.get("client_id") or ip),
+        ip_address=ip,
+        connected_at=_coerce_connected_at(meta.get("connected_at")),
+        # bd-4w9w6: the channel's upstream provider URL is the operator's
+        # account, NOT a per-client identity — it must not exclude these
+        # connections from reconciliation (the live "User #0" root cause).
+        has_url_identity=False,
+        # bd-rools: genuine direct subscriber → excluded from reconciliation.
+        has_account_identity=has_account_identity,
+        # A real subscriber is never the media server's own transcoding proxy.
+        is_server_proxy=(
+            not has_account_identity
+            and source_server_ip is not None
+            and ip == source_server_ip
+        ),
+    )
+
+
 def _build_persisted_trusted_networks(configured_cidrs: list[str]):
     """Assemble the soft IP-ranking trusted-network list for the persisted
     path (bd-mlcla).
@@ -1806,11 +1850,18 @@ class BandwidthTracker:
                     # ``url`` above feeds the bd-gy5nd provider/hostname path;
                     # bd-4w9w6 removed its use as a reconciliation discriminator
                     # — see _reconcile_persisted_attributions.)
+                    # bd-rools: carry the Dispatcharr account ``user_id`` so the
+                    # persisted reconciler can apply the SAME per-connection
+                    # account-identity discriminator as the live stats path — a
+                    # genuine direct subscriber (positive user_id) is excluded
+                    # from media-server reconciliation, anonymous pulls
+                    # (user_id "0"/None) stay eligible.
                     "client_meta": [
                         {
                             "ip_address": c.get("ip_address"),
                             "client_id": c.get("client_id"),
                             "connected_at": c.get("connected_at"),
+                            "user_id": c.get("user_id"),
                         }
                         for c in clients
                         if c.get("ip_address")
@@ -2865,7 +2916,6 @@ class BandwidthTracker:
         """
         from services.attribution_reconciler import (
             CandidateUser,
-            Connection,
             reconcile_channel,
             rollup_label,
         )
@@ -2949,25 +2999,10 @@ class BandwidthTracker:
                 # (bd-r5f0c.9 multi-viewer-on-proxy); others are direct.
                 source_server_ip = server_ip_by_source.get(source)
                 connections = [
-                    Connection(
-                        client_id=str(
-                            (meta_by_ip.get(ip) or {}).get("client_id") or ip
-                        ),
-                        ip_address=ip,
-                        connected_at=_coerce_connected_at(
-                            (meta_by_ip.get(ip) or {}).get("connected_at")
-                        ),
-                        # bd-4w9w6: Dispatcharr /proxy/ts/status connections are
-                        # proxy clients with no per-client credentials. The
-                        # channel's upstream provider URL is the operator's
-                        # account, NOT a per-client identity, so it must not
-                        # exclude these connections from reconciliation (the
-                        # live "User #0" root cause).
-                        has_url_identity=False,
-                        is_server_proxy=(
-                            source_server_ip is not None
-                            and ip == source_server_ip
-                        ),
+                    _build_persisted_connection(
+                        ip=ip,
+                        meta=meta_by_ip.get(ip) or {},
+                        source_server_ip=source_server_ip,
                     )
                     for ip in sorted(ips_for_channel)
                 ]
