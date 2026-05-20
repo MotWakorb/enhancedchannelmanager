@@ -1356,6 +1356,32 @@ export function StatsTab() {
                               return null;
                             })()}
                             <span className="client-ip">{client.ip_address || 'Unknown'}</span>
+                            {/* bd-7ncci: the REAL requesting-device IP the media
+                                server reported for an attributed connection,
+                                shown as a SEPARATE field (not replacing the
+                                Dispatcharr connection IP above). Single
+                                attributed viewer → client_ip; server-proxy /
+                                Option-B rollup → the distinct client_ips set.
+                                Blank when not attributed to a media-server
+                                session. */}
+                            {(() => {
+                              const ips: string[] = client.client_ips && client.client_ips.length > 0
+                                ? client.client_ips
+                                : (client.client_ip ? [client.client_ip] : []);
+                              if (ips.length === 0) return null;
+                              return (
+                                <span className="client-device-ip" data-testid="client-device-ip">
+                                  <span
+                                    className="material-icons"
+                                    style={{ fontSize: '14px' }}
+                                    title="Real client device IP reported by the media server"
+                                  >
+                                    devices
+                                  </span>
+                                  Client IP: {ips.join(', ')}
+                                </span>
+                              );
+                            })()}
                             <span className="client-ua">{parseUserAgent(client.user_agent)}</span>
                           </div>
                           <div className="client-stats">

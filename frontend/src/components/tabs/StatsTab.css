@@ -423,6 +423,18 @@
   min-width: 100px;
 }
 
+/* bd-7ncci: the real requesting-device IP the media server reported, shown
+   as a separate field next to the Dispatcharr connection IP. Styled
+   secondary + monospace so it reads as supplementary, not the primary IP. */
+.client-device-ip {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--text-secondary);
+  font-family: monospace;
+  white-space: nowrap;
+}
+
 .client-ua {
   color: var(--text-muted);
   white-space: nowrap;

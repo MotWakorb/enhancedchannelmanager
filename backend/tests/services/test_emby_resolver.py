@@ -55,18 +55,21 @@ def _make_session(
     channel_name: str | None = None,
     channel_number: str | None = None,
     last_activity: str | None = "2026-05-16T12:00:00Z",
+    remote_endpoint: str = "10.0.0.99",
 ) -> EmbySession:
     """Build a representative :class:`EmbySession` for assertions.
 
     Defaults match the most common test case (a live-TV session
     playing "CNN HD"). Callers override one or two fields per test to
-    keep the table-readable.
+    keep the table-readable. ``remote_endpoint`` defaults to a bare IP so
+    the bd-7ncci ``client_ip`` threading is exercised by the existing
+    happy-path tests.
     """
     return EmbySession(
         session_id=f"sess-{user_name}",
         user_id=user_id,
         user_name=user_name,
-        remote_endpoint="10.0.0.99",
+        remote_endpoint=remote_endpoint,
         now_playing_item_name=item_name,
         now_playing_channel_name=channel_name,
         last_activity_date=last_activity,
@@ -193,7 +196,11 @@ class TestExactMatch:
                 ecm_session_ip="192.168.1.10",
                 ecm_stream_name="CNN HD",
             )
-        assert result == emby_resolver.EmbyAttribution(user_id="uid-bob", user_name="bob")
+        # bd-7ncci: the attribution now also carries the real client device
+        # IP normalized from the session's RemoteEndPoint.
+        assert result == emby_resolver.EmbyAttribution(
+            user_id="uid-bob", user_name="bob", client_ip="10.0.0.99",
+        )
         # Metric assertion: resolved counter incremented; unresolved is zero.
         assert _get_counter_value("user_attribution_resolved_total", "emby") == 1.0
         assert _get_counter_value("user_attribution_unresolved_total", "emby") == 0.0
@@ -227,7 +234,9 @@ class TestExactMatch:
                 ecm_session_ip="192.168.1.10",
                 ecm_stream_name="ESPN HD",
             )
-        assert result == emby_resolver.EmbyAttribution(user_id="uid-carol", user_name="carol")
+        assert result == emby_resolver.EmbyAttribution(
+            user_id="uid-carol", user_name="carol", client_ip="10.0.0.99",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +349,7 @@ class TestMultipleMatchTiebreak:
                 ecm_stream_name="CNN HD",
             )
         assert result == emby_resolver.EmbyAttribution(
-            user_id="uid-new", user_name="new_viewer",
+            user_id="uid-new", user_name="new_viewer", client_ip="10.0.0.99",
         )
 
     async def test_null_last_activity_loses_to_populated(self):
@@ -521,7 +530,7 @@ class TestChannelNamePrimaryMatch:
                 ecm_channel_number=408,
             )
         assert result == emby_resolver.EmbyAttribution(
-            user_id="uid-mw", user_name="MotWakorb",
+            user_id="uid-mw", user_name="MotWakorb", client_ip="10.0.0.99",
         )
 
     async def test_channel_name_matches_whole_name_without_prefix(self):
@@ -589,7 +598,7 @@ class TestChannelNumberMatch:
                 ecm_channel_number=408,
             )
         assert result == emby_resolver.EmbyAttribution(
-            user_id="uid-num", user_name="num_user",
+            user_id="uid-num", user_name="num_user", client_ip="10.0.0.99",
         )
 
     async def test_channel_number_missing_on_session_skips_tier(self):
@@ -687,7 +696,7 @@ class TestMultiTierTiebreak:
                 ecm_channel_number=408,
             )
         assert result == emby_resolver.EmbyAttribution(
-            user_id="uid-new", user_name="new_user",
+            user_id="uid-new", user_name="new_user", client_ip="10.0.0.99",
         )
 
     async def test_debug_log_fires_when_multiple_candidates(self, caplog):
@@ -1229,7 +1238,7 @@ class TestECMPipePrefixTolerance:
                 ecm_channel_number=None,
             )
         assert result == emby_resolver.EmbyAttribution(
-            user_id="uid-mw", user_name="MotWakorb",
+            user_id="uid-mw", user_name="MotWakorb", client_ip="10.0.0.99",
         )
 
     async def test_ecm_prefix_emby_clean(self):
@@ -1372,7 +1381,7 @@ class TestEcmPipePrefixAsChannelNumber:
                 ecm_channel_number=None,
             )
         assert result == emby_resolver.EmbyAttribution(
-            user_id="emby-uid-mw", user_name="MotWakorb",
+            user_id="emby-uid-mw", user_name="MotWakorb", client_ip="10.0.0.99",
         )
 
     async def test_ecm_prefix_non_numeric_does_not_false_match(self):
@@ -1540,3 +1549,60 @@ class TestPodx3DistinctIpsDoNotCollapse:
             )
         assert [u.user_name for u in users] == ["jkaisersoze"]
         cache_mock.assert_awaited()
+
+
+# ---------------------------------------------------------------------------
+# bd-7ncci — real client device IP threaded from RemoteEndPoint
+# ---------------------------------------------------------------------------
+
+
+class TestClientIpCapture:
+    """The resolved attribution carries the session's normalized client IP."""
+
+    async def test_bare_ip_threaded(self):
+        session = _make_session(remote_endpoint="47.203.164.8")
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="CNN HD",
+            )
+        assert result is not None
+        assert result.client_ip == "47.203.164.8"
+
+    async def test_host_port_form_strips_port(self):
+        session = _make_session(remote_endpoint="47.203.164.8:51514")
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="CNN HD",
+            )
+        assert result is not None
+        assert result.client_ip == "47.203.164.8"
+
+    async def test_ipv6_form_normalized(self):
+        session = _make_session(remote_endpoint="[2001:db8::1]:51514")
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="CNN HD",
+            )
+        assert result is not None
+        assert result.client_ip == "2001:db8::1"
+
+    async def test_missing_remote_endpoint_yields_none(self):
+        session = _make_session(remote_endpoint="")
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await emby_resolver.resolve_emby_user(
+                ecm_session_ip="192.168.1.10",
+                ecm_stream_name="CNN HD",
+            )
+        assert result is not None
+        assert result.client_ip is None

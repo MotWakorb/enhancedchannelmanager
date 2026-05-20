@@ -711,7 +711,9 @@ class TestActiveChannelsEmbyEnrichment:
         assert len(non_empty) == 1, (
             f"Single user must land on exactly one connection, got: {payloads!r}"
         )
-        assert non_empty[0] == [{"user_id": "uid-mw", "user_name": "MotWakorb"}]
+        assert non_empty[0] == [
+            {"user_id": "uid-mw", "user_name": "MotWakorb", "client_ip": None}
+        ]
 
     @pytest.mark.asyncio
     async def test_channel_with_empty_clients_list_handles_cleanly(

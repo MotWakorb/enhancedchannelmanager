@@ -68,6 +68,7 @@ from rapidfuzz import fuzz
 
 from config import get_settings
 from plex_client import PlexEpgEntry, PlexSession
+from services.attribution_reconciler import normalize_client_ip
 from services.plex_cache import get_cached_plex_sessions
 from services.plex_epg_cache import maybe_get_cached_plex_epg
 import observability
@@ -126,10 +127,19 @@ class PlexAttribution:
     expose a stable upstream identifier — the bandwidth_tracker writer
     tolerates this by writing ``None`` to ``plex_user_id`` (and to the
     ``user_id`` key in the encoded ``plex_viewers`` JSON list).
+
+    The ``client_ip`` slot (bd-7ncci) carries the REAL requesting-device
+    IP Plex reported for this session (``Player/@address``, normalized to
+    a bare IP via
+    :func:`services.attribution_reconciler.normalize_client_ip`).
+    ``None`` when Plex did not expose it. Surfaced as a separate
+    "Client IP" Stats field — distinct from the Dispatcharr connection IP
+    ECM observes.
     """
 
     user_name: str
     user_id: str | None = None
+    client_ip: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -447,7 +457,11 @@ async def _resolve_plex_users_inner(
     # on the public ``/status/sessions`` surface today. The Attribution
     # carries ``user_id=None``; the column tolerates it (NULL).
     return [
-        PlexAttribution(user_name=session.user_name, user_id=None)
+        PlexAttribution(
+            user_name=session.user_name,
+            user_id=None,
+            client_ip=normalize_client_ip(session.remote_endpoint),
+        )
         for session in sorted_matches
     ]
 

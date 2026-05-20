@@ -269,7 +269,7 @@ async def test_scenario_a_emby_only_active(
         assert row.emby_user_name == "alice"
         assert row.emby_viewers is not None
         assert _json.loads(row.emby_viewers) == [
-            {"user_id": "e1", "user_name": "alice"}
+            {"user_id": "e1", "user_name": "alice", "client_ip": None}
         ]
         # Plex: ALL fields empty (no spillover from Emby)
         assert row.plex_user_id is None, (
@@ -341,7 +341,7 @@ async def test_scenario_b_plex_only_active(
         assert row.plex_user_name == "bob"
         assert row.plex_viewers is not None
         assert _json.loads(row.plex_viewers) == [
-            {"user_id": None, "user_name": "bob"}
+            {"user_id": None, "user_name": "bob", "client_ip": None}
         ]
         # Jellyfin: ALL fields empty (no spillover from Plex)
         assert row.jellyfin_user_id is None, (
@@ -402,7 +402,7 @@ async def test_scenario_c_jellyfin_only_active(
         assert row.jellyfin_user_name == "carol"
         assert row.jellyfin_viewers is not None
         assert _json.loads(row.jellyfin_viewers) == [
-            {"user_id": "jf1", "user_name": "carol"}
+            {"user_id": "jf1", "user_name": "carol", "client_ip": None}
         ]
 
 
@@ -711,8 +711,8 @@ async def test_scenario_f_two_emby_viewers_back_compat_and_multi_viewer(
         assert row.emby_viewers is not None
         decoded_emby = _json.loads(row.emby_viewers)
         assert decoded_emby == [
-            {"user_id": "e1", "user_name": "alice"},
-            {"user_id": "e2", "user_name": "bob"},
+            {"user_id": "e1", "user_name": "alice", "client_ip": None},
+            {"user_id": "e2", "user_name": "bob", "client_ip": None},
         ]
         # Plex: ALL fields NULL (no emby overflow into plex columns).
         assert row.plex_user_id is None, (
@@ -905,14 +905,14 @@ async def test_scenario_h_source_disabled_emby_columns_null(
         assert row.plex_user_name == "bob"
         assert row.plex_viewers is not None
         assert _json.loads(row.plex_viewers) == [
-            {"user_id": None, "user_name": "bob"}
+            {"user_id": None, "user_name": "bob", "client_ip": None}
         ]
         # Jellyfin populated
         assert row.jellyfin_user_id == "jf1"
         assert row.jellyfin_user_name == "carol"
         assert row.jellyfin_viewers is not None
         assert _json.loads(row.jellyfin_viewers) == [
-            {"user_id": "jf1", "user_name": "carol"}
+            {"user_id": "jf1", "user_name": "carol", "client_ip": None}
         ]
 
 
@@ -969,7 +969,7 @@ async def test_scenario_i_plex_timeout_row_still_writes(
         assert row.emby_user_name == "alice"
         assert row.emby_viewers is not None
         assert _json.loads(row.emby_viewers) == [
-            {"user_id": "e1", "user_name": "alice"}
+            {"user_id": "e1", "user_name": "alice", "client_ip": None}
         ]
         # Plex: ALL fields NULL (timed out — must NOT spill from Emby or Jellyfin)
         assert row.plex_user_id is None, (
@@ -986,7 +986,7 @@ async def test_scenario_i_plex_timeout_row_still_writes(
         assert row.jellyfin_user_name == "carol"
         assert row.jellyfin_viewers is not None
         assert _json.loads(row.jellyfin_viewers) == [
-            {"user_id": "jf1", "user_name": "carol"}
+            {"user_id": "jf1", "user_name": "carol", "client_ip": None}
         ]
 
 
