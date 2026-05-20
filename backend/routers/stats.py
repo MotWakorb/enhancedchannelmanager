@@ -395,12 +395,26 @@ async def _enrich_channels_with_attribution(channels: list) -> None:
 def _build_attribution_connections(ch: dict, clients: list, server_ip=None) -> list:
     """Build reconciler :class:`Connection` objects for a channel's clients.
 
-    bd-mlcla. The channel's active stream ``url`` is the URL-identity
-    discriminator: when it embeds XC/M3U credentials the channel is a
-    direct-IPTV channel attributed via the bd-gy5nd provider path, so ALL
-    its connections are marked ``has_url_identity=True`` and the reconciler
-    excludes them. (Dispatcharr serves one upstream URL per channel, so the
-    discriminator is per-channel, not per-connection.)
+    bd-mlcla / bd-4w9w6. Each ``client`` here is a Dispatcharr
+    ``/proxy/ts/status`` connection — i.e. a viewer connected to ECM's own
+    proxy. Such a connection NEVER carries its own embedded XC/M3U
+    credentials (Dispatcharr's status payload exposes only
+    ``client_id`` / ``ip_address`` / ``user_agent`` / ``connected_at``), so
+    ``has_url_identity`` is always ``False`` for proxy connections and they
+    are always eligible for media-server reconciliation.
+
+    **bd-4w9w6 root-cause fix:** the original bd-mlcla code derived
+    ``has_url_identity`` from the *channel's upstream provider URL*
+    (``ch["url"]``, e.g. ``https://provider.tv/live/<user>/<pass>/<id>.ts``).
+    That URL is the operator's UPSTREAM PROVIDER ACCOUNT — shared by every
+    viewer of the channel — not a per-client identity. Since virtually every
+    XC-sourced channel carries such a URL, the discriminator excluded ALL of
+    those channels from reconciliation, silently dropping every legitimate
+    media-server match (the live TSN5/Jellyfin "User #0" bug) to User #0.
+    The channel-provider label is computed independently via the bd-gy5nd
+    provider/hostname path and continues to surface alongside the
+    media-server user; the two are NOT mutually exclusive (a viewer can
+    watch an XC-sourced channel through Jellyfin/Emby/Plex).
 
     A connection whose IP equals ``server_ip`` (the resolved media-server
     IP for the source being reconciled) is flagged ``is_server_proxy`` — it
@@ -411,9 +425,8 @@ def _build_attribution_connections(ch: dict, clients: list, server_ip=None) -> l
     from the float Dispatcharr surfaces — it is only a tie-break, so a
     missing value is safe.
     """
-    from services.attribution_reconciler import Connection, url_embeds_username
+    from services.attribution_reconciler import Connection
 
-    has_url_identity = url_embeds_username(ch.get("url"))
     connections: list[Connection] = []
     for idx, client in enumerate(clients):
         ip = client.get("ip_address")
@@ -428,7 +441,9 @@ def _build_attribution_connections(ch: dict, clients: list, server_ip=None) -> l
                 client_id=str(client_id),
                 ip_address=ip,
                 connected_at=connected_at,
-                has_url_identity=has_url_identity,
+                # Proxy connections never carry per-client credentials; the
+                # channel's upstream provider URL is NOT a per-client signal.
+                has_url_identity=False,
                 is_server_proxy=(server_ip is not None and ip == server_ip),
             )
         )
@@ -624,6 +639,9 @@ async def _enrich_one_source(
     )
     result = reconcile_channel(
         connections, candidate_users, trusted_networks=trusted_networks,
+        channel_label=(
+            f"{channel_name or stream_name or ch.get('channel_id')} [{source_label}]"
+        ),
     )
 
     # --- Channel-level: the full distinct user set + top display name.

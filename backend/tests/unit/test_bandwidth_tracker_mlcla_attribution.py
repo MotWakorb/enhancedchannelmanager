@@ -28,6 +28,7 @@ import database
 from bandwidth_tracker import BandwidthTracker
 from models import SessionTelemetry
 from services.emby_resolver import EmbyAttribution
+from services.jellyfin_resolver import JellyfinAttribution
 
 
 # ---------------------------------------------------------------------------
@@ -396,3 +397,74 @@ async def test_n1_same_nat_ip_collapses_to_one_telemetry_row(
             f"persisted path must NOT show the live-path rollup for same-NAT "
             f"devices (N1 limitation); got {r.emby_user_name}"
         )
+
+
+# ---------------------------------------------------------------------------
+# bd-4w9w6 — XC-credentialed UPSTREAM channel URL must not suppress
+# media-server reconciliation on the persisted path either.
+#
+# The #1 test above used a non-credentialed Dispatcharr proxy URL. In
+# production ``channel["url"]`` is the upstream provider URL, which for an XC
+# provider embeds the operator's account credentials. The old code excluded
+# such channels from reconciliation, dropping the live Jellyfin match to
+# User #0 / NULL telemetry. This test drives the realistic XC upstream URL
+# through ``_collect_stats`` and asserts the persisted row attributes the
+# Jellyfin user even though Emby + Plex run and return nothing.
+# ---------------------------------------------------------------------------
+
+
+def _all_sources_settings():
+    s = MagicMock()
+    s.emby_enabled = True
+    s.emby_base_url = "http://172.16.0.19:8096"
+    s.emby_api_key = "k"
+    s.plex_enabled = True
+    s.plex_base_url = "http://172.16.0.19:32400"
+    s.plex_token = "t"
+    s.jellyfin_enabled = True
+    s.jellyfin_base_url = "http://172.16.0.19:8096"
+    s.jellyfin_api_key = "k"
+    s.trusted_media_networks = []
+    return s
+
+
+@pytest.mark.asyncio
+async def test_xc_upstream_url_jellyfin_match_persisted_bd4w9w6(
+    patched_session_local, tracker, mock_client
+):
+    """bd-4w9w6 persisted regression: a channel whose UPSTREAM url embeds XC
+    credentials, watched by a NAT'd Jellyfin viewer, still writes a telemetry
+    row attributed to that Jellyfin user. Emby + Plex run and match nothing;
+    their empty results must not suppress the Jellyfin attribution.
+
+    FAILS pre-fix (URL-identity exclusion → NULL jellyfin_user_name);
+    PASSES post-fix.
+    """
+    mock_client.get_streams_by_ids.return_value = [_stream_record()]
+    ch_uuid = "ch-xc-upstream"
+    specs = [{"ip": "172.18.0.1", "client_id": "browser-jf"}]
+    xc_url = "https://infinity.gives/live/mot/16118141/108495.ts"
+    first = _channel(channel_uuid=ch_uuid, client_specs=specs,
+                     total_bytes=1_000_000, url=xc_url)
+    second = _channel(channel_uuid=ch_uuid, client_specs=specs,
+                      total_bytes=2_000_000, url=xc_url)
+
+    jf = [JellyfinAttribution(user_id="uid-mw", user_name="MotWakorb")]
+    with patch("bandwidth_tracker.resolve_emby_users", AsyncMock(return_value=[])), \
+         patch("bandwidth_tracker.resolve_emby_user", AsyncMock(return_value=None)), \
+         patch("bandwidth_tracker.resolve_plex_users", AsyncMock(return_value=[])), \
+         patch("bandwidth_tracker.resolve_plex_user", AsyncMock(return_value=None)), \
+         patch("bandwidth_tracker.resolve_jellyfin_users", AsyncMock(return_value=jf)), \
+         patch("bandwidth_tracker.resolve_jellyfin_user", AsyncMock(return_value=jf[0])), \
+         patch("config.get_settings", return_value=_all_sources_settings()):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    rows = _rows(patched_session_local, ch_uuid)
+    assert rows, "expected persisted telemetry rows for the XC-sourced channel"
+    assert all(r.jellyfin_user_name == "MotWakorb" for r in rows), (
+        "XC-upstream-URL channel watched via Jellyfin must attribute: "
+        f"{[(r.session_id, r.jellyfin_user_name) for r in rows]}"
+    )
+    # Empty Emby/Plex results did not overwrite or block the Jellyfin match.
+    assert all(r.emby_user_name is None for r in rows)
+    assert all(r.plex_user_name is None for r in rows)
