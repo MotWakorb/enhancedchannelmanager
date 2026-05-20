@@ -454,13 +454,29 @@ pair. For each channel:
    ranking hint (see step 3). **Tier 3 fuzzy stays server-IP-gated**
    internally to avoid VOD/library false positives — fuzzy matching is
    only trusted for connections that egress through the server IP.
-2. **Eligible connections** = the channel's Dispatcharr connections whose
-   active stream URL does **not** embed XC/M3U credentials. A connection
-   whose URL carries a username/password (`/live/<user>/<pass>/<id>` or
-   `get.php?username=…`) is a genuine direct-IPTV client attributed via
-   the provider/hostname path (bd-gy5nd) and is **excluded** from
-   media-server reconciliation. This "no-URL-identity" test is the
-   discriminator that replaces the old IP gate.
+2. **Eligible connections** = all of the channel's Dispatcharr
+   `/proxy/ts/status` connections. These are clients connected to ECM's own
+   proxy; their status payload carries only
+   `client_id` / `ip_address` / `user_agent` / `connected_at` — no
+   per-client credentials — so every proxy connection is eligible for
+   media-server reconciliation. The channel's **upstream provider URL**
+   (`ch["url"]`, e.g. `https://provider/live/<user>/<pass>/<id>.ts`) is the
+   operator's PROVIDER ACCOUNT, shared by every viewer of the channel; it
+   feeds the bd-gy5nd provider/hostname label but is **not** a per-client
+   identity and does **not** exclude any connection from reconciliation. The
+   provider label and the media-server user are independent surfaces — a
+   viewer can watch an XC-sourced channel through Emby/Plex/Jellyfin and
+   carries both.
+
+   > **bd-4w9w6 correction:** the original bd-mlcla wiring derived a
+   > per-connection `has_url_identity` flag from this channel-upstream URL and
+   > excluded the connection when it embedded XC credentials. Because nearly
+   > every XC-sourced channel has such a URL, that excluded essentially all
+   > media-server-mediated viewers, silently dropping every match to "User
+   > #0" (the live TSN5/Jellyfin bug). The discriminator was conflating the
+   > channel's upstream source with the client's identity. Dispatcharr
+   > proxy connections never carry their own credentials, so the flag is now
+   > always `False` at both call sites.
 3. **IP is a ranking hint only, never a gate.** Connections whose source
    IP falls in the trusted/infrastructure set sort first when pairing
    users to connections. The trusted set is the union of: the resolved
