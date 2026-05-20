@@ -182,14 +182,31 @@ class Connection:
             the full connection list and let the module do the filtering.
         is_server_proxy: True when this connection's source IP IS a resolved
             media-server IP — i.e. it is the media server's own transcoding
-            proxy pull, which legitimately carries ALL the channel's
-            upstream viewers on one Dispatcharr connection (the bd-r5f0c.9
-            multi-viewer-on-one-proxy case). A server-proxy connection
-            receives the FULL candidate-user set; the at-most-one 1:1
-            assignment applies only to the remaining (browser-direct /
-            NAT'd) connections, which each represent exactly one viewer.
-            Distinguishing the two topologies is what lets the same model
-            serve both server-mediated and browser-direct playback.
+            proxy pull, which legitimately carries the channel's upstream
+            viewers on one Dispatcharr connection (the bd-r5f0c.9
+            multi-viewer-on-one-proxy case).
+
+            **bd-mlcla B1 ordering:** the at-most-once 1:1 assignment runs
+            on the DIRECT (non-proxy) connections FIRST, consuming distinct
+            users; the server-proxy connection then carries only the
+            REMAINING (unconsumed) users as its rollup. This guarantees a
+            browser-direct viewer sharing a channel with a proxy pull always
+            gets its own distinct name whenever an unconsumed matching user
+            exists — the proxy never suppresses it to User #0.
+
+            **Exact-IP-equality assumption (mis-fire edge):** this flag is
+            set by the call sites as ``source_ip == resolved_server_ip`` with
+            NO corroborating signal (no user-agent check, no session
+            cross-reference). A browser-direct connection whose observed
+            source IP happens to equal the configured server IP (e.g. the
+            operator runs the browser on the media-server host itself) is
+            therefore mis-flagged as the proxy. The B1 direct-first ordering
+            bounds the blast radius: even when mis-flagged, distinct direct
+            viewers on the channel are reconciled first, so the mis-flagged
+            connection carries only the leftover set rather than swallowing
+            everyone. The mis-fire can still mislabel that one connection's
+            display (proxy rollup vs. single name); a corroborating signal is
+            tracked as future work, not gated here.
     """
 
     client_id: str
@@ -238,7 +255,9 @@ class ConnectionAssignment:
       single name.
     * ``proxy_viewers`` is non-empty (2+ users) — the connection is the
       media server's transcoding PROXY, which genuinely carries every one
-      of those distinct viewers (bd-r5f0c.9). Render the full viewer LIST
+      of those distinct viewers (bd-r5f0c.9). After the bd-mlcla B1 fix the
+      proxy carries the REMAINING users not already consumed by distinct
+      direct connections on the same channel. Render the full viewer LIST
       (legacy single name = position 0). This is NOT ambiguous: the proxy
       knows all its sessions.
     * ``rollup_users`` is non-empty (2+ users) — the connection is in a
@@ -550,15 +569,27 @@ def reconcile_channel(
     * ``users > connections`` → assign the top N users; surplus surface
       only in ``channel_viewers``.
 
-    Server-proxy topology (bd-r5f0c.9 preservation): a connection flagged
-    ``is_server_proxy`` IS the media server's own transcoding pull and
-    legitimately carries ALL the channel's viewers on one Dispatcharr
-    connection. Such connections receive the FULL candidate set as a rollup
-    (when 2+ users) or the single user (when 1). The at-most-one 1:1
-    assignment then applies ONLY to the remaining non-proxy (browser-direct
-    / NAT'd) connections, which each represent exactly one viewer. This is
-    what lets the same model serve both server-mediated and browser-direct
-    playback without collapsing or broadcasting.
+    Server-proxy topology (bd-mlcla B1 + bd-r5f0c.9 preservation): a
+    connection flagged ``is_server_proxy`` IS the media server's own
+    transcoding pull and can carry multiple of the channel's viewers on one
+    Dispatcharr connection. **The direct (non-proxy) connections are
+    reconciled FIRST** — each distinct direct connection consumes a distinct
+    candidate user at most once (the same anti-collapse group walk used in
+    the proxy-free topology). **The server-proxy connection then carries the
+    REMAINING (unconsumed) users** as its rollup (2+ remaining → full list,
+    1 → single user, 0 → User #0). This guarantees a browser-direct viewer
+    sharing a channel with a proxy pull always gets its own distinct name
+    whenever an unconsumed matching user exists (the TSN5 mixed case), while
+    a proxy serving N app-viewers with no direct connection still carries the
+    full set (bd-r5f0c.9). This is what lets the same model serve both
+    server-mediated and browser-direct playback without collapsing,
+    broadcasting, or dropping a viewer to User #0.
+
+    When two or more connections are flagged ``is_server_proxy`` on the same
+    channel (an exotic multi-proxy topology), they are processed in input
+    order: the first consumes the remaining set, the rest get User #0 (one
+    proxy already represents every upstream session, so a second would
+    double-count).
 
     Option B (residual ambiguity): within a single IP-priority group of
     NON-proxy connections, if the group has 2+ connections AND is offered
@@ -593,79 +624,99 @@ def reconcile_channel(
     if not eligible:
         return ReconciliationResult(assignments=(), channel_viewers=channel_viewers)
 
-    # Split server-proxy connections (carry the full set) from the rest.
+    # Split server-proxy connections (carry the remainder) from the rest.
     proxy_conns = [c for c in eligible if c.is_server_proxy]
     direct_conns = [c for c in eligible if not c.is_server_proxy]
 
     assignments_by_id: dict[str, ConnectionAssignment] = {}
 
-    # Server-proxy connections receive the FULL candidate-user set — they
-    # are the transcoding proxy and genuinely carry every viewer
-    # (bd-r5f0c.9). 2+ users → ``proxy_viewers`` full list (NOT an Option-B
-    # rollup: the proxy is not ambiguous, it knows all its sessions);
-    # 1 → single user; 0 → User #0.
-    for conn in proxy_conns:
-        if len(ranked_users) >= 2:
-            assignments_by_id[conn.client_id] = ConnectionAssignment(
-                client_id=conn.client_id,
-                proxy_viewers=tuple(ranked_users),
-            )
-        elif len(ranked_users) == 1:
-            assignments_by_id[conn.client_id] = ConnectionAssignment(
-                client_id=conn.client_id,
-                user=ranked_users[0],
-            )
-        else:
-            assignments_by_id[conn.client_id] = ConnectionAssignment(
-                client_id=conn.client_id,
-            )
-
-    # When a server-proxy connection is present it is AUTHORITATIVE for every
-    # media-server viewer on this channel — the media server proxies all of
-    # its own playback through that one connection, so the candidate-user set
-    # IS exactly what the proxy carries. Any non-proxy connection on the same
-    # channel is therefore either the same viewer seen from a different
-    # vantage (already represented by the proxy) or a non-media-server pull;
-    # assigning it a user too would double-count (collapse). So when a proxy
-    # exists, direct connections stay User #0. The 1:1 direct reconciliation
-    # below runs ONLY in the browser-direct-only topology (no proxy present).
-    if proxy_conns:
-        for conn in direct_conns:
-            assignments_by_id.setdefault(
-                conn.client_id, ConnectionAssignment(client_id=conn.client_id)
-            )
-        return ReconciliationResult(
-            assignments=tuple(assignments_by_id[c.client_id] for c in eligible),
-            channel_viewers=channel_viewers,
-        )
-
-    ranked_connections = sorted(
-        direct_conns,
-        key=lambda c: _connection_sort_key(c, nets),
+    # --- bd-mlcla B1: DIRECT connections are reconciled FIRST. Each distinct
+    # direct connection consumes a distinct candidate user (at most once),
+    # via the same anti-collapse / Option-B group walk used in the
+    # proxy-free topology. ``user_queue`` is consumed front-to-back; whatever
+    # is left over is what the server-proxy connection carries. This is the
+    # PO-approved "never drop the viewer" ordering — a browser-direct viewer
+    # sharing a channel with a proxy pull is reconciled before the proxy, so
+    # it always gets its own name when an unconsumed matching user exists.
+    user_queue = list(ranked_users)  # consumed front-to-back
+    _reconcile_direct_groups(
+        direct_conns, user_queue, nets, assignments_by_id,
     )
 
-    if not ranked_users or not ranked_connections:
-        # No users for the direct connections, or no direct connections at
-        # all — direct connections (if any) stay User #0; proxy assignments
-        # already set above. Preserve a deterministic output order: proxy
-        # first (in input order), then direct (rank order).
-        for c in ranked_connections:
-            assignments_by_id.setdefault(
-                c.client_id, ConnectionAssignment(client_id=c.client_id)
+    # --- Server-proxy connections carry the REMAINING (unconsumed) users.
+    # The transcoding proxy genuinely carries every upstream session that no
+    # distinct direct connection already claimed (bd-r5f0c.9 multi-viewer-on-
+    # one-proxy). 2+ remaining → ``proxy_viewers`` full list (NOT an Option-B
+    # rollup: the proxy is not ambiguous, it knows all its sessions); 1 →
+    # single user; 0 → User #0. When 2+ connections are flagged proxy (exotic
+    # multi-proxy topology), only the first carries the remainder — a second
+    # proxy would double-count the same upstream sessions.
+    remaining_users = tuple(user_queue)
+    for proxy_idx, conn in enumerate(proxy_conns):
+        if proxy_idx > 0 or len(remaining_users) == 0:
+            assignments_by_id[conn.client_id] = ConnectionAssignment(
+                client_id=conn.client_id,
             )
-        ordered = [c for c in eligible]
-        return ReconciliationResult(
-            assignments=tuple(assignments_by_id[c.client_id] for c in ordered),
-            channel_viewers=channel_viewers,
-        )
+        elif len(remaining_users) >= 2:
+            assignments_by_id[conn.client_id] = ConnectionAssignment(
+                client_id=conn.client_id,
+                proxy_viewers=remaining_users,
+            )
+        else:  # exactly one remaining user
+            assignments_by_id[conn.client_id] = ConnectionAssignment(
+                client_id=conn.client_id,
+                user=remaining_users[0],
+            )
 
-    # Walk the rank-ordered priority groups, consuming users top-down. A
-    # user assigned in an earlier (higher-priority) group is unavailable to
-    # later groups — this is the anti-collapse pop. (``assignments_by_id``
-    # already holds the proxy-connection assignments from above; the direct
-    # connections accumulate into the same dict.)
-    groups = _group_by_priority(ranked_connections, nets)
-    user_queue = list(ranked_users)  # consumed front-to-back
+    # Emit ALL eligible connections (direct + proxy) in input order, each
+    # carrying its assignment.
+    return ReconciliationResult(
+        assignments=tuple(assignments_by_id[c.client_id] for c in eligible),
+        channel_viewers=channel_viewers,
+    )
+
+
+def _reconcile_direct_groups(
+    direct_conns: list[Connection],
+    user_queue: list[CandidateUser],
+    trusted_networks: list[ipaddress._BaseNetwork],
+    assignments_by_id: dict[str, ConnectionAssignment],
+) -> None:
+    """Assign users to direct (non-proxy) connections, consuming the queue.
+
+    bd-mlcla B1. Walks the rank-ordered IP-priority groups of
+    ``direct_conns``, consuming users from the FRONT of ``user_queue``
+    (mutated in place — a user popped here is unavailable to later groups and
+    to the server-proxy carrier). Writes one
+    :class:`ConnectionAssignment` per direct connection into
+    ``assignments_by_id``. Implements:
+
+    * **Anti-collapse** — each user popped at most once.
+    * **Anti-broadcast** — a user pairs to one ``client_id``, never all.
+    * **Option B** — a single IP-priority group with 2+ connections AND 2+
+      offered users is genuinely ambiguous → every row in the group gets the
+      same ``rollup_users`` set; no single (possibly-wrong) name is pinned.
+    * **User #0** — a connection with no user left in its group's slice gets
+      an empty assignment.
+
+    Connections with no users remaining all become User #0.
+    """
+    ranked_connections = sorted(
+        direct_conns,
+        key=lambda c: _connection_sort_key(c, trusted_networks),
+    )
+
+    if not user_queue or not ranked_connections:
+        # No users left, or no direct connections — every direct connection
+        # stays User #0. (The user_queue is untouched, so the proxy carrier
+        # downstream still sees the full remaining set.)
+        for conn in ranked_connections:
+            assignments_by_id[conn.client_id] = ConnectionAssignment(
+                client_id=conn.client_id
+            )
+        return
+
+    groups = _group_by_priority(ranked_connections, trusted_networks)
 
     for group in groups:
         n_conns = len(group.connections)
@@ -708,16 +759,6 @@ def reconcile_channel(
                 assignments_by_id[conn.client_id] = ConnectionAssignment(
                     client_id=conn.client_id
                 )
-
-    # Emit ALL eligible connections (proxy + direct) in input order, each
-    # carrying its assignment.
-    assignments = tuple(
-        assignments_by_id[c.client_id] for c in eligible
-    )
-    return ReconciliationResult(
-        assignments=assignments,
-        channel_viewers=channel_viewers,
-    )
 
 
 # ---------------------------------------------------------------------------

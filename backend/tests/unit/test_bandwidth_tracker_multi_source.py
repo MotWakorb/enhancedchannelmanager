@@ -609,17 +609,28 @@ async def test_scenario_e_same_channel_three_clients_no_spillover(
     channel_rows = [r for r in rows if r.channel_id == channel_uuid]
     assert channel_rows, f"No rows found for channel {channel_uuid}"
 
-    # bd-mlcla: the Emby SERVER IP (192.168.1.50) connection is the
-    # transcoding proxy — it is authoritative for the single Emby viewer
-    # alice. The other two IPs (.51/.52) are NOT the Emby server, so under
-    # the anti-broadcast rule they do NOT also get stamped with alice (that
-    # would be the bd-cat70 broadcast). alice attributes to the proxy row(s)
-    # only — across both polls that is the .50 session, never .51/.52.
+    # bd-mlcla B1: with a single Emby viewer (alice) and three connections —
+    # one of which (192.168.1.50) is the Emby server IP (the transcoding
+    # proxy) and two of which (.51/.52) are direct — the DIRECT connections
+    # are reconciled FIRST. So alice attributes to the top-ranked DIRECT
+    # connection (.51, the lower-sorting unknown-bucket IP), and the .50 proxy
+    # carries the empty remainder (User #0). This is the PO-approved
+    # "never drop the viewer" ordering: a single browser-direct viewer is not
+    # suppressed in favour of the proxy. Anti-broadcast still holds — alice
+    # lands on exactly ONE session, never all three (the bd-cat70 regression).
     emby_rows = [r for r in channel_rows if r.emby_user_name == "alice"]
     emby_sessions = {r.session_id for r in emby_rows}
-    assert emby_sessions == {"conn-1"}, (
-        f"alice must attribute to the Emby server-proxy session only, "
-        f"not broadcast: {[(r.session_id, r.emby_user_name) for r in channel_rows]}"
+    assert emby_sessions == {"conn-2"}, (
+        f"alice must attribute to exactly one DIRECT session (B1 direct-first "
+        f"ordering), not broadcast and not pinned to the proxy: "
+        f"{[(r.session_id, r.emby_user_name) for r in channel_rows]}"
+    )
+    # The proxy session (.50 = conn-1) carries the remainder, which is empty
+    # here (alice already consumed by the direct connection) → User #0.
+    proxy_rows = [r for r in channel_rows if r.session_id == "conn-1"]
+    assert all(r.emby_user_name is None for r in proxy_rows), (
+        f"proxy must carry only the UNCONSUMED remainder (empty here): "
+        f"{[(r.session_id, r.emby_user_name) for r in proxy_rows]}"
     )
     assert all(r.emby_viewers is not None for r in emby_rows)
     # Critical no-spillover: NO row has Plex or Jellyfin populated — the

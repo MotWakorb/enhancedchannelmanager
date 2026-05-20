@@ -261,3 +261,138 @@ async def test_single_user_not_broadcast_across_distinct_nat_connections(
         f"single user broadcast across connections: "
         f"{[(r.session_id, r.emby_user_name) for r in rows]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# B1 — mixed server-proxy + browser-direct on the SAME channel (persisted)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_b1_mixed_proxy_plus_browser_direct_both_attributed_persisted(
+    patched_session_local, tracker, mock_client
+):
+    """bd-mlcla B1 (persisted path): a channel with BOTH the server-proxy pull
+    (source IP == Emby server 172.16.0.19) AND a browser-direct viewer
+    (NAT'd 172.18.0.1) writes a telemetry row for EACH — the browser-direct
+    gets its distinct name, the proxy carries the remainder. Before the B1 fix
+    the proxy early-return dropped the browser-direct row to User #0."""
+    mock_client.get_streams_by_ids.return_value = [_stream_record()]
+    ch_uuid = "ch-mixed"
+    specs = [
+        {"ip": "172.16.0.19", "client_id": "proxy", "connected_at": 1.0},
+        {"ip": "172.18.0.1", "client_id": "browser", "connected_at": 2.0},
+    ]
+    first = _channel(channel_uuid=ch_uuid, client_specs=specs, total_bytes=1_000_000,
+                     url="http://dispatcharr/proxy/ts/stream/ch-mixed")
+    second = _channel(channel_uuid=ch_uuid, client_specs=specs, total_bytes=2_000_000,
+                      url="http://dispatcharr/proxy/ts/stream/ch-mixed")
+
+    viewers = [
+        EmbyAttribution(user_id="u1", user_name="alice"),
+        EmbyAttribution(user_id="u2", user_name="bob"),
+    ]
+    with patch("bandwidth_tracker.resolve_emby_users", AsyncMock(return_value=viewers)), \
+         patch("bandwidth_tracker.resolve_emby_user", AsyncMock(return_value=viewers[0])), \
+         patch("bandwidth_tracker.resolve_plex_users", AsyncMock(return_value=[])), \
+         patch("bandwidth_tracker.resolve_plex_user", AsyncMock(return_value=None)), \
+         patch("bandwidth_tracker.resolve_jellyfin_users", AsyncMock(return_value=[])), \
+         patch("bandwidth_tracker.resolve_jellyfin_user", AsyncMock(return_value=None)), \
+         patch("config.get_settings", return_value=_emby_only_settings()):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    rows = _rows(patched_session_local, ch_uuid)
+    assert rows
+    # The browser-direct viewer (172.18.0.1) is NEVER User #0 — it gets the
+    # top-ranked unconsumed user (alice).
+    browser_names = {
+        r.emby_user_name for r in rows if r.session_id and "172.18.0.1" not in (r.session_id or "")
+    }
+    # Distinguish rows by which IP they belong to via the assigned name set.
+    attributed = {r.emby_user_name for r in rows if r.emby_user_name}
+    assert "alice" in attributed, attributed  # browser-direct attributed
+    assert "bob" in attributed, attributed    # proxy carries the remainder
+    # Neither row dropped to User #0 (NULL emby_user_name) while users existed.
+    assert all(r.emby_user_name is not None for r in rows), (
+        [(r.session_id, r.emby_user_name) for r in rows]
+    )
+
+
+# ---------------------------------------------------------------------------
+# N1 — persisted-path same-NAT-IP collapse (documented limitation)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_n1_same_nat_ip_collapses_to_one_telemetry_row(
+    patched_session_local, tracker, mock_client
+):
+    """bd-mlcla N1: the PERSISTED path keys ``session_telemetry`` by
+    ``(channel, ip)``, so two browser-direct viewers behind the SAME NAT IP
+    collapse to ONE telemetry row — the persisted path lacks the live path's
+    full ``client_id`` granularity.
+
+    This is a documented limitation (docs/architecture.md "User Attribution
+    Pipeline" §persisted-path), NOT a bug. This test ASSERTS the collapse so
+    the limitation cannot silently drift: if a future change gives the
+    persisted path per-client_id granularity, this test fails and forces a
+    docs + test update rather than letting the behavior change unnoticed.
+
+    Two distinct client_ids on the SAME IP (172.18.0.1), two Emby users → the
+    persisted path builds ONE reconciler Connection (keyed by the distinct
+    IP), so it is the ``users > connections`` case: the single (channel, ip)
+    telemetry identity carries ONE user (the top-ranked match); the second
+    viewer is NOT persisted on this path. The live Stats path, by contrast,
+    has full client_id granularity and would surface the Option-B rollup for
+    the same two devices."""
+    mock_client.get_streams_by_ids.return_value = [_stream_record()]
+    ch_uuid = "ch-samenat"
+    specs = [
+        {"ip": "172.18.0.1", "client_id": "device-a", "connected_at": 1.0},
+        {"ip": "172.18.0.1", "client_id": "device-b", "connected_at": 2.0},
+    ]
+    first = _channel(channel_uuid=ch_uuid, client_specs=specs, total_bytes=1_000_000,
+                     url="http://dispatcharr/proxy/ts/stream/x")
+    second = _channel(channel_uuid=ch_uuid, client_specs=specs, total_bytes=2_000_000,
+                      url="http://dispatcharr/proxy/ts/stream/x")
+
+    viewers = [
+        EmbyAttribution(user_id="u1", user_name="alice"),
+        EmbyAttribution(user_id="u2", user_name="bob"),
+    ]
+    with patch("bandwidth_tracker.resolve_emby_users", AsyncMock(return_value=viewers)), \
+         patch("bandwidth_tracker.resolve_emby_user", AsyncMock(return_value=viewers[0])), \
+         patch("bandwidth_tracker.resolve_plex_users", AsyncMock(return_value=[])), \
+         patch("bandwidth_tracker.resolve_plex_user", AsyncMock(return_value=None)), \
+         patch("bandwidth_tracker.resolve_jellyfin_users", AsyncMock(return_value=[])), \
+         patch("bandwidth_tracker.resolve_jellyfin_user", AsyncMock(return_value=None)), \
+         patch("config.get_settings", return_value=_emby_only_settings()):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    rows = _rows(patched_session_local, ch_uuid)
+    assert rows
+    # The DOCUMENTED collapse: per poll there is exactly ONE distinct
+    # (channel, ip) telemetry identity for this channel, because both devices
+    # share 172.18.0.1. (Two polls write two rows for that one identity; the
+    # collapse is on the IP dimension, asserted via the session_id which the
+    # writer derives from (channel, ip).)
+    distinct_session_ids = {r.session_id for r in rows}
+    assert len(distinct_session_ids) == 1, (
+        "persisted path must collapse same-NAT-IP devices to one telemetry "
+        f"identity (N1 limitation); got {distinct_session_ids}"
+    )
+    # The collapsed identity carries exactly ONE attributed user across all
+    # its rows — NOT a two-viewer rollup. Same-NAT-IP devices have only one
+    # (channel, ip) Connection on the persisted path, so the second viewer is
+    # not persisted (the documented N1 loss). The top-ranked match (alice)
+    # wins; a rollup would only appear if there were 2+ distinct connections.
+    attributed_names = {r.emby_user_name for r in rows if r.emby_user_name}
+    assert attributed_names == {"alice"}, (
+        f"persisted same-NAT-IP must collapse to one user, not a rollup; "
+        f"got {attributed_names}"
+    )
+    for r in rows:
+        assert not (r.emby_user_name or "").startswith("2 viewers:"), (
+            f"persisted path must NOT show the live-path rollup for same-NAT "
+            f"devices (N1 limitation); got {r.emby_user_name}"
+        )

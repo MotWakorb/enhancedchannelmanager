@@ -50,12 +50,14 @@ def _conn(
     ip: str | None = None,
     connected_at: float | None = None,
     url_identity: bool = False,
+    server_proxy: bool = False,
 ) -> Connection:
     return Connection(
         client_id=client_id,
         ip_address=ip,
         connected_at=connected_at,
         has_url_identity=url_identity,
+        is_server_proxy=server_proxy,
     )
 
 
@@ -409,6 +411,229 @@ class TestOptionBRollup:
         assert all(not a.is_rollup for a in result.assignments)
         names = _assigned_names(result)
         assert sorted(n for n in names.values() if n) == ["alice"]
+
+
+# ---------------------------------------------------------------------------
+# Server-proxy branch (bd-mlcla B1: direct-first / proxy-remainder)
+# ---------------------------------------------------------------------------
+
+
+class TestServerProxyBranch:
+    """The proxy branch had ZERO coverage on this PR — these pin the B1 fix.
+
+    The PO decision is NEVER DROP THE VIEWER: distinct direct connections
+    are reconciled FIRST, and the server-proxy connection carries only the
+    REMAINING (unconsumed) users. A browser-direct viewer sharing a channel
+    with a proxy pull therefore always gets its own name when an unconsumed
+    matching user exists.
+    """
+
+    def test_b1a_mixed_proxy_plus_one_browser_direct_both_attributed(self):
+        """(a) Mixed proxy + 1 browser-direct same channel: the browser-direct
+        connection gets its distinct name; the proxy carries the remainder.
+
+        This is the exact TSN5 mixed case the feature exists to fix. Before
+        the B1 fix the proxy early-return stamped the browser-direct
+        connection to User #0 — the regression this test guards."""
+        conns = [
+            _conn("proxy", ip="172.16.0.19", connected_at=1.0, server_proxy=True),
+            _conn("browser", ip="172.18.0.1", connected_at=2.0),
+        ]
+        users = [
+            _user("alice", user_id="u1", last_activity="2026-05-20T12:00:00Z"),
+            _user("bob", user_id="u2", last_activity="2026-05-20T11:00:00Z"),
+        ]
+        result = reconcile_channel(
+            conns, users,
+            trusted_networks=build_trusted_networks(server_ips=["172.16.0.19"]),
+        )
+        by_id = {a.client_id: a for a in result.assignments}
+
+        # Browser-direct viewer is NEVER dropped: it gets a distinct single
+        # name (the top-ranked unconsumed user).
+        browser = by_id["browser"]
+        assert browser.user is not None
+        assert browser.user.user_name == "alice"
+        assert not browser.is_rollup
+
+        # Proxy carries the REMAINING single user (bob) — not a phantom, not
+        # a duplicate of alice, not User #0.
+        proxy = by_id["proxy"]
+        assert proxy.user is not None
+        assert proxy.user.user_name == "bob"
+        assert not proxy.is_proxy_multi  # only one remaining → single user
+
+        # No user appears twice across the channel (anti-collapse).
+        singles = [a.user.user_name for a in result.assignments if a.user]
+        assert sorted(singles) == ["alice", "bob"]
+
+    def test_b1b_proxy_serving_multiple_viewers_no_direct_preserves_rollup(self):
+        """(b) Proxy serving multiple app-viewers with NO direct connection:
+        the proxy carries the full viewer list (bd-r5f0c.9 preserved).
+
+        With no direct connection consuming any user, the remainder IS the
+        full set, so the proxy rollup is unchanged from pre-B1 behavior."""
+        conns = [
+            _conn("proxy", ip="172.16.0.19", connected_at=1.0, server_proxy=True),
+        ]
+        users = [
+            _user("alice", user_id="u1", last_activity="2026-05-20T12:00:00Z"),
+            _user("bob", user_id="u2", last_activity="2026-05-20T11:00:00Z"),
+            _user("carol", user_id="u3", last_activity="2026-05-20T10:00:00Z"),
+        ]
+        result = reconcile_channel(
+            conns, users,
+            trusted_networks=build_trusted_networks(server_ips=["172.16.0.19"]),
+        )
+        assert len(result.assignments) == 1
+        proxy = result.assignments[0]
+        assert proxy.is_proxy_multi
+        # Full set, recency order, position 0 = legacy single name.
+        assert [u.user_name for u in proxy.proxy_viewers] == ["alice", "bob", "carol"]
+        # Not an Option-B rollup — the proxy knows all its sessions.
+        assert not proxy.is_rollup
+
+    def test_b1c_proxy_plus_two_indistinguishable_direct_none_dropped(self):
+        """(c) Proxy + 2 indistinguishable browser-direct + enough users:
+        the direct rows get distinct names or the Option-B rollup per the
+        predicate; none drop to User #0 while an unconsumed user exists.
+
+        Two browser-direct connections in the SAME (UNKNOWN) IP-priority
+        bucket with 2+ users offered to that bucket → Option-B rollup on the
+        direct rows. The proxy carries whatever the direct group did not
+        consume. The key invariant: no direct row is User #0 while users
+        remain."""
+        conns = [
+            _conn("proxy", ip="172.16.0.19", connected_at=1.0, server_proxy=True),
+            _conn("d1", ip="172.18.0.1", connected_at=2.0),
+            _conn("d2", ip="172.18.0.1", connected_at=3.0),
+        ]
+        users = [
+            _user("alice", user_id="u1", last_activity="2026-05-20T12:00:00Z"),
+            _user("bob", user_id="u2", last_activity="2026-05-20T11:00:00Z"),
+            _user("carol", user_id="u3", last_activity="2026-05-20T10:00:00Z"),
+        ]
+        result = reconcile_channel(
+            conns, users,
+            trusted_networks=build_trusted_networks(server_ips=["172.16.0.19"]),
+        )
+        by_id = {a.client_id: a for a in result.assignments}
+
+        # Two indistinguishable direct connections → Option-B rollup (the
+        # group consumed the top two users alice + bob).
+        for cid in ("d1", "d2"):
+            assert by_id[cid].is_rollup, cid
+            names = sorted(u.user_name for u in by_id[cid].rollup_users)
+            assert names == ["alice", "bob"]
+            # Never User #0 while users remained.
+            assert not (by_id[cid].user is None and not by_id[cid].is_rollup)
+
+        # Proxy carries the single remaining user (carol).
+        proxy = by_id["proxy"]
+        assert proxy.user is not None
+        assert proxy.user.user_name == "carol"
+
+        # Full distinct set still surfaces at channel level.
+        assert {u.user_name for u in result.channel_viewers} == {
+            "alice", "bob", "carol"
+        }
+
+    def test_b1d_is_server_proxy_misfire_browser_direct_with_server_ip(self):
+        """(d) is_server_proxy mis-fire edge: a browser-direct connection
+        whose observed source IP happens to equal the configured server IP is
+        mis-flagged as the proxy (exact-IP-equality, no corroborating signal).
+
+        The call sites set ``is_server_proxy = (source_ip == server_ip)``. If
+        the operator runs the browser on the media-server host, that one
+        connection trips the flag. This test pins the bounded behavior: a
+        SECOND genuine direct viewer (NAT'd) is still reconciled first and
+        keeps its own name; the mis-flagged connection carries the remainder
+        rather than swallowing everyone. The blast radius is limited to that
+        one connection's display, never the other viewer's attribution."""
+        conns = [
+            # Browser on the server host → mis-flagged as proxy.
+            _conn("misfired", ip="172.16.0.19", connected_at=1.0, server_proxy=True),
+            # Genuine NAT'd browser-direct viewer.
+            _conn("nat", ip="172.18.0.1", connected_at=2.0),
+        ]
+        users = [
+            _user("alice", user_id="u1", last_activity="2026-05-20T12:00:00Z"),
+            _user("bob", user_id="u2", last_activity="2026-05-20T11:00:00Z"),
+        ]
+        result = reconcile_channel(
+            conns, users,
+            trusted_networks=build_trusted_networks(server_ips=["172.16.0.19"]),
+        )
+        by_id = {a.client_id: a for a in result.assignments}
+
+        # The genuine NAT'd viewer is reconciled FIRST and keeps its own
+        # distinct name — the mis-fire does not suppress it.
+        nat = by_id["nat"]
+        assert nat.user is not None
+        assert nat.user.user_name == "alice"
+
+        # The mis-flagged connection carries the remainder (bob) — bounded
+        # blast radius, not a User #0 drop and not a collapse onto alice.
+        misfired = by_id["misfired"]
+        assert misfired.user is not None
+        assert misfired.user.user_name == "bob"
+
+        # Anti-collapse holds even under the mis-fire.
+        singles = [a.user.user_name for a in result.assignments if a.user]
+        assert sorted(singles) == ["alice", "bob"]
+
+    def test_proxy_with_no_users_stays_user0(self):
+        """A proxy connection with zero candidate users stays User #0 — no
+        phantom, no broadcast."""
+        conns = [
+            _conn("proxy", ip="172.16.0.19", server_proxy=True),
+        ]
+        result = reconcile_channel(conns, [])
+        assert len(result.assignments) == 1
+        assert result.assignments[0].user is None
+        assert not result.assignments[0].is_proxy_multi
+
+    def test_proxy_remainder_empty_when_direct_consume_all(self):
+        """When the direct connections consume every user, the proxy gets
+        User #0 (the remainder is empty) — no double-count."""
+        conns = [
+            _conn("proxy", ip="172.16.0.19", connected_at=1.0, server_proxy=True),
+            _conn("nat", ip="172.18.0.1", connected_at=2.0),
+        ]
+        users = [_user("solo", user_id="u1", last_activity="2026-05-20T12:00:00Z")]
+        result = reconcile_channel(
+            conns, users,
+            trusted_networks=build_trusted_networks(server_ips=["172.16.0.19"]),
+        )
+        by_id = {a.client_id: a for a in result.assignments}
+        assert by_id["nat"].user.user_name == "solo"
+        assert by_id["proxy"].user is None  # remainder empty → User #0
+        assert not by_id["proxy"].is_proxy_multi
+
+    def test_two_proxies_only_first_carries_remainder(self):
+        """Exotic multi-proxy topology: only the first proxy carries the
+        remaining set; a second would double-count the same upstream
+        sessions, so it gets User #0."""
+        conns = [
+            _conn("proxy1", ip="172.16.0.19", connected_at=1.0, server_proxy=True),
+            _conn("proxy2", ip="172.16.0.19", connected_at=2.0, server_proxy=True),
+        ]
+        users = [
+            _user("alice", user_id="u1", last_activity="2026-05-20T12:00:00Z"),
+            _user("bob", user_id="u2", last_activity="2026-05-20T11:00:00Z"),
+        ]
+        result = reconcile_channel(
+            conns, users,
+            trusted_networks=build_trusted_networks(server_ips=["172.16.0.19"]),
+        )
+        by_id = {a.client_id: a for a in result.assignments}
+        # First proxy carries the full set (no direct connections consumed
+        # anything).
+        assert by_id["proxy1"].is_proxy_multi
+        assert [u.user_name for u in by_id["proxy1"].proxy_viewers] == ["alice", "bob"]
+        # Second proxy → User #0 (no double-count).
+        assert by_id["proxy2"].user is None
+        assert not by_id["proxy2"].is_proxy_multi
 
 
 # ---------------------------------------------------------------------------
