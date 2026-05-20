@@ -229,18 +229,25 @@ async def resolve_jellyfin_users(
         )
         return []
 
-    # bd-ost8o: two-mode dispatch. Mode A (server-mediated) runs when
-    # the ECM session IP equals the Jellyfin server IP — the playback
-    # came through Jellyfin's transcoding proxy, all tiers run as before.
-    # Mode B (browser-direct fallback) runs when the IPs differ — the
-    # user's browser opened Jellyfin Web and fetched the IPTV stream
-    # URL directly from Dispatcharr, so the source IP is the browser's
-    # egress, NOT the Jellyfin server. Mode B fetches sessions and runs
-    # ONLY tier-1 / tier-2 (channel-name + channel-number strict
-    # matches); tier-3 fuzzy stream-name matching is skipped because in
-    # a multi-user setup any sufficiently generic stream name would
-    # match unrelated viewers and produce false attribution.
-    mode = "server_ip" if ecm_session_ip == jellyfin_server_ip else "direct_fallback"
+    # bd-podx3: revert bd-ost8o's two-mode dispatch. The strict IP gate
+    # is the load-bearing correctness guarantee — only traffic egressing
+    # through the Jellyfin server's IP can be a genuine Jellyfin viewer.
+    # bd-ost8o's "direct_fallback" mode matched ECM clients to sessions
+    # by channel name alone, collapsing every non-Jellyfin viewer on a
+    # channel onto the one Jellyfin user watching it. See emby_resolver
+    # for the full incident analysis. Browser-direct-play attribution
+    # needs a sound identity signal (the unused ``remote_endpoint``) and
+    # is deferred to a fresh bead.
+    if ecm_session_ip != jellyfin_server_ip:
+        # Hot path on every non-Jellyfin IP; DEBUG-level to avoid log
+        # flood. INFO entries fire below for the IP-matched callers
+        # which are the ones operators care about.
+        logger.debug(
+            "[JELLYFIN-RESOLVER] resolver_call ip=%s ecm_channel=%r "
+            "result=ip_mismatch (server=%s)",
+            ecm_session_ip, ecm_channel_name, jellyfin_server_ip,
+        )
+        return []
 
     sessions = await get_cached_jellyfin_sessions()
     sessions_with_now_playing = sum(
@@ -250,9 +257,9 @@ async def resolve_jellyfin_users(
     logger.info(
         "[JELLYFIN-RESOLVER] resolver_call ip=%s ecm_channel=%r "
         "ecm_channel_number=%r ecm_stream=%r sessions_count=%d "
-        "sessions_with_now_playing=%d mode=%s (bd-ost8o)",
+        "sessions_with_now_playing=%d (bd-dok7u)",
         ecm_session_ip, ecm_channel_name, ecm_channel_number,
-        ecm_stream_name, len(sessions), sessions_with_now_playing, mode,
+        ecm_stream_name, len(sessions), sessions_with_now_playing,
     )
     for session in sessions:
         logger.info(
@@ -276,7 +283,6 @@ async def resolve_jellyfin_users(
         ecm_channel_name=ecm_channel_name,
         ecm_channel_number=ecm_channel_number,
         sessions=sessions,
-        mode=mode,
     )
     if not matches:
         logger.debug(
@@ -296,24 +302,6 @@ async def resolve_jellyfin_users(
                 ecm_stream_name=ecm_stream_name,
                 sessions=sessions,
             )
-        observability.get_metric("user_attribution_unresolved_total").labels(source="jellyfin").inc()
-        return []
-
-    # bd-ost8o: in Mode B (browser-direct fallback) a >1-match result is
-    # ambiguous — Tier 1/2 do strict equality so two simultaneous viewers
-    # on the same Tier-1 channel would both match. Without a reliable
-    # tiebreaker (the IP gate's "Jellyfin server picked the session" no
-    # longer applies in direct-play), attributing to either viewer is a
-    # coin flip that risks credit theft. Skip attribution and emit a
-    # structured diagnostic so the operator can investigate.
-    if mode == "direct_fallback" and len(matches) > 1:
-        logger.info(
-            "[JELLYFIN-RESOLVER] resolver_call ip=%s ecm_channel=%r "
-            "result=ambiguous_skip matched_sessions=%d "
-            "matched_users=%s (bd-ost8o)",
-            ecm_session_ip, ecm_channel_name, len(matches),
-            [s.user_name for s in matches],
-        )
         observability.get_metric("user_attribution_unresolved_total").labels(source="jellyfin").inc()
         return []
 
@@ -486,9 +474,8 @@ def _find_matching_sessions(
     ecm_channel_name: str | None,
     ecm_channel_number: str | int | None,
     sessions: list[JellyfinSession],
-    mode: str = "server_ip",
 ) -> list[JellyfinSession]:
-    """Return every Jellyfin session that matches across the tiers.
+    """Return every Jellyfin session that matches across any of the three tiers.
 
     Tiered match (mirrors emby_resolver's three-tier strategy, but with
     Jellyfin-specific no-pipe-suffix tolerance):
@@ -501,18 +488,11 @@ def _find_matching_sessions(
       when either side is missing.
     * **Tier 3** — RapidFuzz ``token_set_ratio`` on ``ecm_stream_name``
       against ``item_name`` / ``channel_name`` with the 0.85 floor.
-      Back-compat for movies / VOD. **Mode B disables this tier**
-      because fuzzy stream-name matching is too lenient when the IP
-      gate's implicit "Jellyfin server vouched for the playback" is
-      not available — any multi-user setup would risk false matches.
+      Back-compat for movies / VOD.
 
-    A session matches if ANY active tier accepts it. The list is the
-    union of tier hits — duplicates are de-duped by session identity so
-    the same physical session is not double-counted in the tie-break.
-
-    ``mode`` is ``"server_ip"`` (Mode A — IP-matched, all tiers active)
-    or ``"direct_fallback"`` (Mode B — IP did NOT match; tier 3 disabled
-    per bd-ost8o).
+    A session matches if ANY tier accepts it. The list is the union of
+    tier hits — duplicates are de-duped by session identity so the same
+    physical session is not double-counted in the tie-break.
     """
     # Pre-normalize Emby session strings ONCE — hot-path performance.
     prepared: list[tuple[JellyfinSession, str, str, str]] = []
@@ -591,14 +571,8 @@ def _find_matching_sessions(
                 _accept(session)
 
     # ----- Tier 3: legacy fuzzy fallback on stream_name
-    # bd-ost8o: in Mode B (browser-direct fallback) we skip the fuzzy
-    # tier entirely. Tier 1/2 are strict equality matches; Tier 3's
-    # 0.85 fuzzy ratio is intentionally loose and would cause
-    # cross-viewer attribution when the IP gate's implicit identity
-    # signal is absent (e.g. two viewers watching different but
-    # similarly-named channels would both score above the fuzzy floor).
     normalized_stream = _normalize(ecm_stream_name or "")
-    if normalized_stream and mode != "direct_fallback":
+    if normalized_stream:
         for session, normalized_item, normalized_channel, _sfx in prepared:
             if _fuzzy_or_exact_match(normalized_stream, normalized_item):
                 _accept(session)

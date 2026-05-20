@@ -130,25 +130,20 @@ def _get_counter_value(metric_key: str, source: str) -> float:
 
 
 class TestIpMismatch:
-    """bd-ost8o two-mode dispatch — when the ECM session's IP does NOT
-    equal the Plex server's IP (browser-direct-play), the resolver no
-    longer short-circuits. It enters Mode B and runs Tier 1/2 plus the
-    bd-ma6r3 EPG tier against the cached session list. Without a match
-    the result is still ``None``, but the cache IS consulted now."""
+    """When the ECM session's IP is not the Plex server's IP, the resolver
+    must return ``None`` without ever touching the cache."""
 
-    async def test_ip_mismatch_with_no_tier_match_returns_none(self):
-        """Mode B (browser-direct fallback): IP mismatch, no usable ECM
-        channel input → no Tier-1/2 match, no EPG candidates, ``None``.
-        The cache IS awaited."""
+    async def test_ip_mismatch_returns_none_without_cache_call(self):
+        """IP mismatch on an IP-literal base URL skips the cache entirely."""
         cache_mock = AsyncMock(return_value=[_make_session()])
         with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
              patch.object(plex_resolver, "get_cached_plex_sessions", cache_mock):
             result = await plex_resolver.resolve_plex_user(
                 ecm_session_ip="10.0.0.5",  # NOT the Plex server (192.168.1.20)
-                ecm_stream_name="totally unrelated stream",
+                ecm_stream_name="ESPN",
             )
         assert result is None
-        cache_mock.assert_awaited_once()
+        cache_mock.assert_not_awaited()
 
     async def test_ip_match_proceeds_to_cache_call(self):
         """When the session IP matches the Plex server IP, the cache is called."""
@@ -713,12 +708,8 @@ class TestHostnameBaseUrl:
             )
         assert result == "eve"
 
-    async def test_hostname_resolves_to_non_matching_ip_enters_mode_b(self):
-        """bd-ost8o: ``plex.local`` resolves to ``10.0.0.1`` while the
-        ECM session IP is ``192.168.1.20``. Mode B (browser-direct
-        fallback) runs Tier 1/2 + EPG; without ECM channel input no
-        tier matches, so the result is ``None`` — but the cache IS
-        awaited."""
+    async def test_hostname_resolves_to_non_matching_ip_returns_none(self):
+        """``plex.local`` resolves to ``10.0.0.1`` — does NOT match."""
         cache_mock = AsyncMock(return_value=[_make_session(item_name="CNN HD")])
         settings = _enabled_settings(base_url="https://plex.local:32400")
 
@@ -728,10 +719,10 @@ class TestHostnameBaseUrl:
                           return_value="10.0.0.1"):
             result = await plex_resolver.resolve_plex_user(
                 ecm_session_ip="192.168.1.20",
-                ecm_stream_name="totally unrelated stream",
+                ecm_stream_name="CNN HD",
             )
         assert result is None
-        cache_mock.assert_awaited_once()
+        cache_mock.assert_not_awaited()
 
     async def test_hostname_resolution_failure_logs_warn_and_returns_none(self, caplog):
         """Unresolvable hostname logs WARN with [PLEX] prefix and returns None."""
@@ -1004,19 +995,17 @@ class TestMultiViewer:
             )
         assert users == []
 
-    async def test_ip_mismatch_enters_mode_b_for_plural_variant(self):
-        """bd-ost8o: the plural variant respects two-mode dispatch
-        identically to the singular wrapper. IP mismatch + no usable
-        ECM channel input → empty list, but the cache IS consulted."""
+    async def test_ip_mismatch_returns_empty_list_without_cache_call(self):
+        """IP short-circuit also applies to the plural variant."""
         cache_mock = AsyncMock(return_value=[_make_session()])
         with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
              patch.object(plex_resolver, "get_cached_plex_sessions", cache_mock):
             users = await plex_resolver.resolve_plex_users(
                 ecm_session_ip="10.0.0.5",  # NOT the Plex server
-                ecm_stream_name="completely different stream",
+                ecm_stream_name="ESPN",
             )
         assert users == []
-        cache_mock.assert_awaited_once()
+        cache_mock.assert_not_awaited()
 
     async def test_singular_wrapper_returns_most_recent_user_name(self):
         """Back-compat target: the legacy singular wrapper still returns
@@ -1134,11 +1123,8 @@ class TestNoMatchDiagnostic:
         assert len(users) == 1
         assert self._no_match_records(caplog.records) == []
 
-    async def test_emits_when_ip_mismatch_mode_b_finds_no_match(self, caplog):
-        """bd-ost8o: post-fix, IP mismatch enters Mode B (browser-direct
-        fallback). Mode B with no Tier-1/2 match emits the same forensic
-        WARN as Mode A — the diagnostic surface is what makes
-        direct-play debugging tractable."""
+    async def test_no_emit_when_ip_short_circuit_fails(self, caplog):
+        """IP mismatch short-circuits before the session compare → no WARN."""
         session = _make_session(item_name="UnrelatedShow")
         with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
              patch.object(plex_resolver, "get_cached_plex_sessions",
@@ -1150,7 +1136,7 @@ class TestNoMatchDiagnostic:
                     ecm_channel_name="ESPN",
                 )
         assert users == []
-        assert len(self._no_match_records(caplog.records)) == 1
+        assert self._no_match_records(caplog.records) == []
 
     async def test_rate_limit_within_window(self, caplog):
         """Two no-match calls for same (ip, channel) within 60 s → one WARN."""
@@ -1954,185 +1940,3 @@ class TestEcmPipePrefixAsChannelNumber:
                 ecm_channel_number=408,
             )
         assert result == "explicit_num_user"
-
-
-# ---------------------------------------------------------------------------
-# bd-ost8o: two-mode dispatch — Mode B (browser-direct fallback) for Plex.
-# Same pattern as Jellyfin/Emby; the bd-ma6r3 EPG tier remains active in
-# Mode B because it is a Tier-1 alternative (strict equality on EPG
-# channelCallSign), not a fuzzy match.
-# ---------------------------------------------------------------------------
-
-
-class TestModeBDirectFallback:
-    """Browser-direct-play attribution path for Plex. Mirrors the
-    Jellyfin / Emby two-mode dispatch tests, plus a bonus EPG-tier
-    coverage test (the EPG path is not gated on Mode A)."""
-
-    _BROWSER_IP = "172.18.0.1"
-    _PLEX_IP = "192.168.1.20"
-
-    async def test_mode_b_tier1_channel_name_match(self):
-        """Plex session item_name="408 | ESPN" matches
-        ecm_channel_name="ESPN" via Tier-1 pipe-suffix in Mode B."""
-        session = _make_session(
-            user_id="plex-uid-mw", user_name="MotWakorb",
-            item_name="408 | ESPN",
-        )
-        with patch.object(plex_resolver, "get_settings",
-                          return_value=_enabled_settings()), \
-             patch.object(plex_resolver, "get_cached_plex_sessions",
-                          AsyncMock(return_value=[session])):
-            result = await plex_resolver.resolve_plex_user(
-                ecm_session_ip=self._BROWSER_IP,
-                ecm_stream_name="US: ESPN HD",
-                ecm_channel_name="ESPN",
-            )
-        assert result == "MotWakorb"
-
-    async def test_mode_b_tier2_channel_number_match(self):
-        """Plex Tier-2 derives the channel number from the pipe-prefix
-        of item_name (matches its Tier-2 implementation). Mode B keeps
-        Tier-2 active."""
-        session = _make_session(
-            user_id="plex-uid-mw", user_name="MotWakorb",
-            # Tier-1 cannot match (different channel name on the right
-            # of the pipe), but Tier-2 sees "408" on the left.
-            item_name="408 | NotESPN",
-        )
-        with patch.object(plex_resolver, "get_settings",
-                          return_value=_enabled_settings()), \
-             patch.object(plex_resolver, "get_cached_plex_sessions",
-                          AsyncMock(return_value=[session])):
-            result = await plex_resolver.resolve_plex_user(
-                ecm_session_ip=self._BROWSER_IP,
-                ecm_stream_name="ESPN",
-                ecm_channel_name="ESPN",
-                ecm_channel_number=408,
-            )
-        assert result == "MotWakorb"
-
-    async def test_mode_b_no_match_emits_no_match_diagnostic(self, caplog):
-        """Mode B with zero Tier-1/2/EPG matches → ``None`` + structured
-        WARN identical to the Mode A no-match path."""
-        session = _make_session(
-            user_name="alice", item_name="UnrelatedShow",
-        )
-        with patch.object(plex_resolver, "get_settings",
-                          return_value=_enabled_settings()), \
-             patch.object(plex_resolver, "get_cached_plex_sessions",
-                          AsyncMock(return_value=[session])):
-            with caplog.at_level(logging.WARNING,
-                                 logger="services.plex_resolver"):
-                result = await plex_resolver.resolve_plex_user(
-                    ecm_session_ip=self._BROWSER_IP,
-                    ecm_stream_name="ESPN",
-                    ecm_channel_name="ESPN",
-                )
-        assert result is None
-        no_match = [r for r in caplog.records
-                    if "[PLEX-RESOLVER] no-match diagnostic" in r.getMessage()]
-        assert len(no_match) == 1
-
-    async def test_mode_b_ambiguous_skip_returns_none(self, caplog):
-        """Mode B with two Tier-1 matches → ambiguous_skip; no
-        attribution returned + structured INFO log fires."""
-        s1 = _make_session(
-            session_id="sess-a", user_id="uid-a", user_name="alice",
-            item_name="408 | ESPN",
-        )
-        s2 = _make_session(
-            session_id="sess-b", user_id="uid-b", user_name="bob",
-            item_name="408 | ESPN",
-        )
-        with patch.object(plex_resolver, "get_settings",
-                          return_value=_enabled_settings()), \
-             patch.object(plex_resolver, "get_cached_plex_sessions",
-                          AsyncMock(return_value=[s1, s2])):
-            with caplog.at_level(logging.INFO,
-                                 logger="services.plex_resolver"):
-                result = await plex_resolver.resolve_plex_user(
-                    ecm_session_ip=self._BROWSER_IP,
-                    ecm_stream_name="ESPN",
-                    ecm_channel_name="ESPN",
-                )
-        assert result is None
-        ambig = [r for r in caplog.records
-                 if "result=ambiguous_skip" in r.getMessage()]
-        assert len(ambig) == 1
-        assert "matched_sessions=2" in ambig[0].getMessage()
-
-    async def test_mode_b_skips_tier3_fuzzy(self):
-        """Mode B must NOT use the Tier-3 fuzzy stream-name fallback.
-        Compare Mode A vs Mode B on the same fuzzy-only candidate."""
-        session = _make_session(
-            user_name="fuzzy_user", item_name="ESPN Sports Channel",
-        )
-        # Mode A — fuzzy stream-name match resolves.
-        with patch.object(plex_resolver, "get_settings",
-                          return_value=_enabled_settings()), \
-             patch.object(plex_resolver, "get_cached_plex_sessions",
-                          AsyncMock(return_value=[session])):
-            mode_a_result = await plex_resolver.resolve_plex_user(
-                ecm_session_ip=self._PLEX_IP,
-                ecm_stream_name="ESPN Sports Channel",
-            )
-            assert mode_a_result == "fuzzy_user"
-        # Mode B — fuzzy skipped; no Tier-1/2 path open → None.
-        with patch.object(plex_resolver, "get_settings",
-                          return_value=_enabled_settings()), \
-             patch.object(plex_resolver, "get_cached_plex_sessions",
-                          AsyncMock(return_value=[session])):
-            mode_b_result = await plex_resolver.resolve_plex_user(
-                ecm_session_ip=self._BROWSER_IP,
-                ecm_stream_name="ESPN Sports Channel",
-            )
-        assert mode_b_result is None
-
-    async def test_mode_b_emits_resolver_call_with_mode_marker(self, caplog):
-        """The resolver_call INFO log surfaces ``mode=direct_fallback``."""
-        session = _make_session(user_name="alice", item_name="408 | ESPN")
-        with patch.object(plex_resolver, "get_settings",
-                          return_value=_enabled_settings()), \
-             patch.object(plex_resolver, "get_cached_plex_sessions",
-                          AsyncMock(return_value=[session])):
-            with caplog.at_level(logging.INFO,
-                                 logger="services.plex_resolver"):
-                await plex_resolver.resolve_plex_user(
-                    ecm_session_ip=self._BROWSER_IP,
-                    ecm_stream_name="ESPN",
-                    ecm_channel_name="ESPN",
-                )
-        calls = [r for r in caplog.records
-                 if "[PLEX-RESOLVER] resolver_call" in r.getMessage()]
-        assert len(calls) == 1
-        assert "mode=direct_fallback" in calls[0].getMessage()
-
-    async def test_mode_b_epg_tier_match(self):
-        """bd-ost8o + bd-ma6r3 interaction: the Plex EPG cross-reference
-        tier MUST run in Mode B (it is a Tier-1 alternative, not the
-        fuzzy Tier-3 we disabled). PO's MLB Baseball symptom translated
-        to a Mode B fixture."""
-        session = _make_live_session(
-            user_name="MotWakorb",
-            item_name="Brewers at Cubs",
-            grandparent_title="MLB Baseball",
-        )
-        epg = [
-            _epg_entry(
-                grandparent_title="MLB Baseball",
-                channel_call_sign="8.1 | NBC: KGW Portland",
-            ),
-        ]
-        with patch.object(plex_resolver, "get_settings",
-                          return_value=_enabled_settings()), \
-             patch.object(plex_resolver, "get_cached_plex_sessions",
-                          AsyncMock(return_value=[session])), \
-             patch.object(plex_resolver, "maybe_get_cached_plex_epg",
-                          AsyncMock(return_value=epg)):
-            result = await plex_resolver.resolve_plex_user(
-                ecm_session_ip=self._BROWSER_IP,
-                ecm_stream_name="US: 8.1 NBC",
-                ecm_channel_name="8.1 | NBC: KGW Portland",
-            )
-        assert result == "MotWakorb"
