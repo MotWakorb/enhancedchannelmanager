@@ -286,15 +286,23 @@ async def _resolve_plex_users_inner(
         )
         return []
 
-    # bd-ost8o: two-mode dispatch. Mode A (server-mediated) runs when
-    # the ECM session IP equals the Plex server IP. Mode B
-    # (browser-direct fallback) runs when the IPs differ — the user
-    # opened Plex Web and the IPTV stream was fetched directly from
-    # Dispatcharr, so the source IP is the browser's egress, NOT Plex.
-    # Mode B fetches sessions and runs tier-1/tier-2 AND the bd-ma6r3
-    # EPG tier (which is a tier-1 alternative for Live TV); only the
-    # fuzzy tier-3 stream-name fallback is disabled.
-    mode = "server_ip" if ecm_session_ip == plex_server_ip else "direct_fallback"
+    # bd-podx3: revert bd-ost8o's two-mode dispatch. The strict IP gate
+    # is the load-bearing correctness guarantee — only traffic egressing
+    # through the Plex server's IP can be a genuine Plex viewer. bd-ost8o's
+    # "direct_fallback" mode matched ECM clients to sessions by channel
+    # name alone, collapsing every non-Plex viewer on a channel onto the
+    # one Plex user watching it. See emby_resolver for the full incident
+    # analysis. Browser-direct-play attribution needs a sound identity
+    # signal (the unused ``remote_endpoint``) and is deferred to a fresh
+    # bead.
+    if ecm_session_ip != plex_server_ip:
+        # Hot path short-circuit.
+        logger.debug(
+            "[PLEX-RESOLVER] resolver_call ip=%s ecm_channel=%r "
+            "result=ip_mismatch (server=%s)",
+            ecm_session_ip, ecm_channel_name, plex_server_ip,
+        )
+        return []
 
     try:
         sessions = await get_cached_plex_sessions()
@@ -306,14 +314,15 @@ async def _resolve_plex_users_inner(
         1 for s in sessions
         if s.now_playing_item_name or getattr(s, "now_playing_channel_name", None)
     )
-    # bd-dok7u / bd-ost8o: forensic INFO log; ``mode`` surfaces which
-    # dispatch branch ran.
+    # bd-dok7u: forensic INFO log so future "Plex shows User #0"
+    # incidents have the same diagnostic surface as the new Jellyfin
+    # logging. Symmetric across all three resolvers.
     logger.info(
         "[PLEX-RESOLVER] resolver_call ip=%s ecm_channel=%r "
         "ecm_channel_number=%r ecm_stream=%r sessions_count=%d "
-        "sessions_with_now_playing=%d mode=%s (bd-ost8o)",
+        "sessions_with_now_playing=%d (bd-dok7u)",
         ecm_session_ip, ecm_channel_name, ecm_channel_number,
-        ecm_stream_name, len(sessions), sessions_with_now_playing, mode,
+        ecm_stream_name, len(sessions), sessions_with_now_playing,
     )
     for session in sessions:
         logger.info(
@@ -337,7 +346,6 @@ async def _resolve_plex_users_inner(
         ecm_channel_name=ecm_channel_name,
         ecm_channel_number=ecm_channel_number,
         sessions=sessions,
-        mode=mode,
     )
 
     # bd-ma6r3 EPG cross-reference tier. After Tier 1/2/3 in
@@ -409,23 +417,6 @@ async def _resolve_plex_users_inner(
                 sessions=sessions,
                 epg_attempt=epg_attempt,
             )
-        observability.get_metric("user_attribution_unresolved_total").labels(source="plex").inc()
-        return []
-
-    # bd-ost8o: in Mode B (browser-direct fallback) a >1-match result is
-    # ambiguous — strict equality on Tier 1/2 (and the bd-ma6r3 EPG
-    # tier) cannot disambiguate two simultaneous viewers on the same
-    # channel without the IP gate's implicit tiebreaker. Skip and emit
-    # a structured diagnostic so the operator can investigate rather
-    # than misattribute.
-    if mode == "direct_fallback" and len(matches) > 1:
-        logger.info(
-            "[PLEX-RESOLVER] resolver_call ip=%s ecm_channel=%r "
-            "result=ambiguous_skip matched_sessions=%d "
-            "matched_users=%s (bd-ost8o)",
-            ecm_session_ip, ecm_channel_name, len(matches),
-            [s.user_name for s in matches],
-        )
         observability.get_metric("user_attribution_unresolved_total").labels(source="plex").inc()
         return []
 
@@ -601,16 +592,8 @@ def _find_matching_sessions(
     ecm_channel_name: str | None,
     ecm_channel_number: str | int | None,
     sessions: list[PlexSession],
-    mode: str = "server_ip",
 ) -> list[PlexSession]:
-    """Return every Plex session that matches across the active tiers.
-
-    ``mode`` is ``"server_ip"`` (Mode A — IP-matched, all tiers run) or
-    ``"direct_fallback"`` (Mode B — IP did NOT match; tier 3 fuzzy
-    stream-name matching is skipped per bd-ost8o; the bd-ma6r3 EPG
-    cross-reference tier still runs because it is a Tier-1 alternative
-    relying on EPG channelCallSign equality, not fuzzy matching).
-
+    """Return every Plex session that matches across the tiers.
 
     Tiered match (mirrors emby_resolver's bd-zldrq approach):
 
@@ -751,10 +734,8 @@ def _find_matching_sessions(
     # which compares stream_name against both ``item_name`` and
     # ``channel_name``. Without the channel/parent compare, Live TV
     # whose ``@title`` is the program would fall through tier 3 too.
-    # bd-ost8o: skip the fuzzy tier in Mode B (browser-direct fallback)
-    # to avoid cross-viewer attribution; see module docstring.
     normalized_stream = _normalize(ecm_stream_name or "")
-    if normalized_stream and mode != "direct_fallback":
+    if normalized_stream:
         for (
             session,
             normalized_item,
