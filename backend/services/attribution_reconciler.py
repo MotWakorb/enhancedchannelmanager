@@ -541,6 +541,7 @@ def reconcile_channel(
     users: list[CandidateUser],
     *,
     trusted_networks: Optional[list[ipaddress._BaseNetwork]] = None,
+    channel_label: Optional[str] = None,
 ) -> ReconciliationResult:
     """Reconcile one channel's eligible connections against its candidate users.
 
@@ -608,6 +609,11 @@ def reconcile_channel(
             :func:`build_trusted_networks`). ``None`` → empty → every
             connection ranks UNKNOWN and ordering falls back to
             ``connected_at`` (still correct; IP only breaks ties).
+        channel_label: Optional human-readable channel identifier (e.g.
+            ``"494 | TSN 5"`` or a channel UUID + source) stamped into the
+            ``[RECONCILE]`` result log so the per-channel assignment outcome
+            is diagnosable in one log read. Logging-only; never affects the
+            result. ``None`` → the label renders as ``"?"``.
 
     Returns:
         :class:`ReconciliationResult` — one assignment per eligible
@@ -622,7 +628,13 @@ def reconcile_channel(
     channel_viewers = tuple(ranked_users)
 
     if not eligible:
-        return ReconciliationResult(assignments=(), channel_viewers=channel_viewers)
+        result = ReconciliationResult(
+            assignments=(), channel_viewers=channel_viewers
+        )
+        _log_reconcile_result(
+            channel_label, connections, eligible, ranked_users, result,
+        )
+        return result
 
     # Split server-proxy connections (carry the remainder) from the rest.
     proxy_conns = [c for c in eligible if c.is_server_proxy]
@@ -670,10 +682,65 @@ def reconcile_channel(
 
     # Emit ALL eligible connections (direct + proxy) in input order, each
     # carrying its assignment.
-    return ReconciliationResult(
+    result = ReconciliationResult(
         assignments=tuple(assignments_by_id[c.client_id] for c in eligible),
         channel_viewers=channel_viewers,
     )
+    _log_reconcile_result(
+        channel_label, connections, eligible, ranked_users, result,
+    )
+    return result
+
+
+def _log_reconcile_result(
+    channel_label: Optional[str],
+    connections: list[Connection],
+    eligible: list[Connection],
+    ranked_users: list[CandidateUser],
+    result: ReconciliationResult,
+) -> None:
+    """Emit one INFO ``[RECONCILE]`` line summarising a channel's outcome.
+
+    bd-4w9w6. Closes the bd-mlcla diagnosability gap: the reconciler had no
+    result logging, so a "resolver matched but Stats shows User #0" failure
+    (the reconciler dropping a viewer, or never reaching it) produced ZERO
+    log lines downstream of the resolver. This line captures, per channel:
+    the eligible-vs-total connection count (so an all-excluded channel is
+    obvious), the candidate users offered, the per-connection assignments
+    (``client_id -> user | rollup | proxy[...] | #0``), and the
+    unattributed (User #0) count. Logging-only; never raises on the hot
+    path (any formatting failure is swallowed).
+    """
+    try:
+        candidate_names = [u.user_name for u in ranked_users]
+        assignments_repr: dict[str, str] = {}
+        unattributed = 0
+        for a in result.assignments:
+            if a.is_proxy_multi:
+                assignments_repr[a.client_id] = (
+                    "proxy[" + ", ".join(u.user_name for u in a.proxy_viewers) + "]"
+                )
+            elif a.is_rollup:
+                assignments_repr[a.client_id] = (
+                    "rollup[" + ", ".join(u.user_name for u in a.rollup_users) + "]"
+                )
+            elif a.user is not None:
+                assignments_repr[a.client_id] = a.user.user_name
+            else:
+                assignments_repr[a.client_id] = "#0"
+                unattributed += 1
+        logger.info(
+            "[RECONCILE] channel=%s conns=%d eligible=%d candidate_users=%s "
+            "assignments=%s unattributed=%d (bd-4w9w6)",
+            channel_label or "?",
+            len(connections),
+            len(eligible),
+            candidate_names,
+            assignments_repr,
+            unattributed,
+        )
+    except Exception:  # noqa: BLE001 — logging must never break reconciliation
+        logger.debug("[RECONCILE] result-log formatting failed", exc_info=True)
 
 
 def _reconcile_direct_groups(
