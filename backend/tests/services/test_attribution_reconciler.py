@@ -34,7 +34,9 @@ from services.attribution_reconciler import (
     eligible_connections,
     has_dispatcharr_account_identity,
     ip_priority,
+    normalize_client_ip,
     reconcile_channel,
+    rollup_client_ips,
     rollup_label,
     url_embeds_username,
 )
@@ -70,12 +72,14 @@ def _user(
     user_id: str | None = None,
     last_activity=None,
     source: str = "jellyfin",
+    client_ip: str | None = None,
 ) -> CandidateUser:
     return CandidateUser(
         user_name=name,
         user_id=user_id,
         last_activity_date=last_activity,
         source=source,
+        client_ip=client_ip,
     )
 
 
@@ -779,3 +783,128 @@ class TestTopologyAgnostic:
         # The Option-B predicate has one canonical statement.
         assert "2+ connections" in AMBIGUOUS_GROUP_PREDICATE
         assert "2+ distinct candidate users" in AMBIGUOUS_GROUP_PREDICATE
+
+
+# ---------------------------------------------------------------------------
+# bd-7ncci — real client device IP normalization + threading
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeClientIp:
+    """The bare-IP normalizer for media-server-reported client endpoints."""
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("47.203.164.8", "47.203.164.8"),       # bare IPv4 (Emby live)
+            ("172.16.0.2", "172.16.0.2"),            # bare IPv4 (Jellyfin/Plex)
+            ("47.203.164.8:51514", "47.203.164.8"),  # host:port → strip port
+            ("2001:db8::1", "2001:db8::1"),          # bare IPv6
+            ("[2001:db8::1]", "2001:db8::1"),        # bracketed IPv6
+            ("[2001:db8::1]:51514", "2001:db8::1"),  # bracketed IPv6 + port
+            ("47.203.164.8, 10.0.0.1", "47.203.164.8"),  # XFF → first hop
+            ("  47.203.164.8  ", "47.203.164.8"),    # surrounding whitespace
+        ],
+    )
+    def test_normalizes_to_bare_ip(self, raw, expected):
+        assert normalize_client_ip(raw) == expected
+
+    @pytest.mark.parametrize("raw", [None, "", "   ", "not-an-ip", "999.999.999.999"])
+    def test_missing_or_invalid_returns_none(self, raw):
+        assert normalize_client_ip(raw) is None
+
+
+class TestCandidateUserCarriesClientIp:
+    """CandidateUser threads the matched session's real client IP through
+    the reconciler assignment so the caller can stamp the Client IP field."""
+
+    def test_single_assignment_carries_client_ip(self):
+        conns = [_conn("c1", ip="172.18.0.1")]
+        users = [_user("MotWakorb", user_id="u1", client_ip="172.16.0.2")]
+        result = reconcile_channel(conns, users)
+        assignment = result.assignment_for("c1")
+        assert assignment is not None
+        assert assignment.user is not None
+        assert assignment.user.client_ip == "172.16.0.2"
+
+    def test_unattributed_connection_has_no_client_ip(self):
+        # One connection, zero candidate users → User #0, no client IP.
+        conns = [_conn("c1", ip="172.18.0.1")]
+        result = reconcile_channel(conns, [])
+        assignment = result.assignment_for("c1")
+        assert assignment is not None
+        assert assignment.user is None
+        assert assignment.rollup_users == ()
+        assert assignment.proxy_viewers == ()
+
+    def test_channel_viewers_carry_client_ip(self):
+        conns = [_conn("c1", ip="172.18.0.1")]
+        users = [
+            _user("amitb", user_id="u1", client_ip="47.203.164.8"),
+            _user("MotWakorb", user_id="u2", client_ip="172.16.0.2"),
+        ]
+        result = reconcile_channel(conns, users)
+        ip_by_name = {u.user_name: u.client_ip for u in result.channel_viewers}
+        assert ip_by_name == {"amitb": "47.203.164.8", "MotWakorb": "172.16.0.2"}
+
+    def test_proxy_viewers_carry_per_viewer_client_ip(self):
+        # Server-proxy carrying 2 viewers → proxy_viewers list, each with IP.
+        conns = [_conn("proxy", ip="172.16.0.19", server_proxy=True)]
+        users = [
+            _user("amitb", user_id="u1", client_ip="47.203.164.8"),
+            _user("MotWakorb", user_id="u2", client_ip="172.16.0.2"),
+        ]
+        result = reconcile_channel(conns, users)
+        assignment = result.assignment_for("proxy")
+        assert assignment is not None
+        assert assignment.is_proxy_multi is True
+        ips = {u.client_ip for u in assignment.proxy_viewers}
+        assert ips == {"47.203.164.8", "172.16.0.2"}
+
+
+class TestRollupClientIps:
+    """rollup_client_ips renders the distinct set behind an Option-B rollup."""
+
+    def test_distinct_set_preserves_recency_order(self):
+        users = (
+            _user("amitb", client_ip="47.203.164.8"),
+            _user("MotWakorb", client_ip="172.16.0.2"),
+        )
+        assert rollup_client_ips(users) == ["47.203.164.8", "172.16.0.2"]
+
+    def test_dedupes_repeated_ips(self):
+        users = (
+            _user("a", client_ip="1.1.1.1"),
+            _user("b", client_ip="1.1.1.1"),
+            _user("c", client_ip="2.2.2.2"),
+        )
+        assert rollup_client_ips(users) == ["1.1.1.1", "2.2.2.2"]
+
+    def test_skips_missing_ips(self):
+        users = (
+            _user("a", client_ip=None),
+            _user("b", client_ip="2.2.2.2"),
+        )
+        assert rollup_client_ips(users) == ["2.2.2.2"]
+
+    def test_empty_when_no_ips(self):
+        users = (_user("a", client_ip=None), _user("b", client_ip=None))
+        assert rollup_client_ips(users) == []
+
+    def test_option_b_rollup_group_carries_ip_set(self):
+        # 2 indistinguishable direct connections + 2 users → Option-B rollup.
+        conns = [
+            _conn("c1", ip="10.0.0.5", connected_at=100.0),
+            _conn("c2", ip="10.0.0.5", connected_at=100.0),
+        ]
+        users = [
+            _user("amitb", user_id="u1", client_ip="47.203.164.8"),
+            _user("MotWakorb", user_id="u2", client_ip="172.16.0.2"),
+        ]
+        result = reconcile_channel(conns, users)
+        for a in result.assignments:
+            assert a.is_rollup is True
+            assert rollup_client_ips(a.rollup_users) == [
+                "47.203.164.8",
+                "172.16.0.2",
+            ]

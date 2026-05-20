@@ -633,8 +633,8 @@ async def test_two_emby_viewers_write_both_legacy_and_viewers_json(
         )
         decoded = _json.loads(row.emby_viewers)
         assert decoded == [
-            {"user_id": "uid-bob", "user_name": "bob"},
-            {"user_id": "uid-alice", "user_name": "alice"},
+            {"user_id": "uid-bob", "user_name": "bob", "client_ip": None},
+            {"user_id": "uid-alice", "user_name": "alice", "client_ip": None},
         ]
         # Plex + Jellyfin sources had no match — their viewer columns NULL.
         assert row.plex_viewers is None
@@ -685,14 +685,14 @@ async def test_mixed_multi_viewer_two_emby_one_plex_columns_independent(
         # emby_viewers: 2 entries
         assert row.emby_viewers is not None
         assert _json.loads(row.emby_viewers) == [
-            {"user_id": "emby-1", "user_name": "emby_alice"},
-            {"user_id": "emby-2", "user_name": "emby_bob"},
+            {"user_id": "emby-1", "user_name": "emby_alice", "client_ip": None},
+            {"user_id": "emby-2", "user_name": "emby_bob", "client_ip": None},
         ]
         # plex_viewers: 1 entry; user_id None today (Plex resolver
         # doesn't surface stable upstream IDs).
         assert row.plex_viewers is not None
         assert _json.loads(row.plex_viewers) == [
-            {"user_id": None, "user_name": "plex_charlie"},
+            {"user_id": None, "user_name": "plex_charlie", "client_ip": None},
         ]
         # jellyfin_viewers: no match → NULL.
         assert row.jellyfin_viewers is None

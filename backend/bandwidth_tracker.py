@@ -2917,6 +2917,7 @@ class BandwidthTracker:
         from services.attribution_reconciler import (
             CandidateUser,
             reconcile_channel,
+            rollup_client_ips,
             rollup_label,
         )
 
@@ -2988,6 +2989,10 @@ class BandwidthTracker:
                                     a, "last_activity_date", None
                                 ),
                                 source=source,
+                                # bd-7ncci: thread the real client device IP
+                                # the media server reported for this viewer's
+                                # session through to the assignment.
+                                client_ip=getattr(a, "client_ip", None),
                             )
                         )
                 if not pooled:
@@ -3020,22 +3025,32 @@ class BandwidthTracker:
                     ip = ip_by_client_id.get(assignment.client_id)
                     if ip is None:
                         continue
+                    # bd-7ncci: each viewer dict carries the real client
+                    # device IP the media server reported (rides inside the
+                    # *_viewers JSON — no schema migration). The Option-B
+                    # rollup encodes the SET of distinct IPs (mirroring the
+                    # "N viewers: ..." label) on its single synthetic dict.
                     if assignment.is_proxy_multi:
                         # Server-proxy carrying N genuine viewers (bd-r5f0c.9):
                         # write the FULL viewer list; legacy = position 0.
                         viewers_payload = [
-                            {"user_id": u.user_id, "user_name": u.user_name}
+                            {"user_id": u.user_id, "user_name": u.user_name,
+                             "client_ip": u.client_ip}
                             for u in assignment.proxy_viewers
                         ]
                     elif assignment.is_rollup:
+                        rollup_ips = rollup_client_ips(assignment.rollup_users)
                         viewers_payload = [
                             {"user_id": None,
-                             "user_name": rollup_label(assignment.rollup_users)}
+                             "user_name": rollup_label(assignment.rollup_users),
+                             "client_ip": None,
+                             "client_ips": rollup_ips}
                         ]
                     elif assignment.user is not None:
                         viewers_payload = [
                             {"user_id": assignment.user.user_id,
-                             "user_name": assignment.user.user_name}
+                             "user_name": assignment.user.user_name,
+                             "client_ip": assignment.user.client_ip}
                         ]
                     else:
                         continue  # User #0 — leave the row's source slot NULL
@@ -3688,6 +3703,10 @@ class BandwidthTracker:
                                     {
                                         "user_id": emby_attr_legacy.user_id,
                                         "user_name": emby_attr_legacy.user_name,
+                                        # bd-7ncci: real client device IP.
+                                        "client_ip": getattr(
+                                            emby_attr_legacy, "client_ip", None
+                                        ),
                                     }
                                 ])
                             else:

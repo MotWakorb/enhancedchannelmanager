@@ -215,6 +215,14 @@ def _seed_attribution_keys(channels: list) -> None:
             client.setdefault("emby_viewers", [])
             client.setdefault("plex_viewers", [])
             client.setdefault("jellyfin_viewers", [])
+            # bd-7ncci: the real requesting-device IP the media server
+            # reported for an attributed connection (source-agnostic at the
+            # connection level). ``client_ip`` for a single attributed
+            # viewer; ``client_ips`` for the proxy / Option-B rollup set.
+            # Seeded blank so the frontend TS shape is stable for
+            # unattributed (and direct-XC) connections.
+            client.setdefault("client_ip", None)
+            client.setdefault("client_ips", [])
 
 
 async def _enrich_channels_with_attribution(channels: list) -> None:
@@ -579,6 +587,7 @@ async def _enrich_one_source(
         CandidateUser,
         eligible_connections,
         reconcile_channel,
+        rollup_client_ips,
         rollup_label,
     )
 
@@ -661,6 +670,7 @@ async def _enrich_one_source(
                     user_id=uid,
                     last_activity_date=payload.get("last_activity_date"),
                     source=source_label,
+                    client_ip=payload.get("client_ip"),
                 )
             )
 
@@ -681,8 +691,9 @@ async def _enrich_one_source(
     )
 
     # --- Channel-level: the full distinct user set + top display name.
+    # bd-7ncci: each viewer dict carries the real client device IP.
     channel_viewers_payload = [
-        {"user_id": u.user_id, "user_name": u.user_name}
+        {"user_id": u.user_id, "user_name": u.user_name, "client_ip": u.client_ip}
         for u in result.channel_viewers
     ]
     if channel_viewers_payload:
@@ -705,12 +716,19 @@ async def _enrich_one_source(
             continue
         if assignment.is_proxy_multi:
             # Server-proxy carrying N genuine viewers (bd-r5f0c.9): the full
-            # viewer list, legacy single name = position 0.
+            # viewer list, legacy single name = position 0. bd-7ncci: each
+            # viewer carries its real client device IP, and the connection-
+            # level client_ip rolls up the distinct set (the proxy fronts
+            # multiple real devices).
             client[viewers_key] = [
-                {"user_id": u.user_id, "user_name": u.user_name}
+                {"user_id": u.user_id, "user_name": u.user_name,
+                 "client_ip": u.client_ip}
                 for u in assignment.proxy_viewers
             ]
             client[user_name_key] = assignment.proxy_viewers[0].user_name
+            proxy_ips = rollup_client_ips(assignment.proxy_viewers)
+            if proxy_ips:
+                client["client_ips"] = proxy_ips
         elif assignment.is_rollup:
             # Option B: the group is genuinely ambiguous — show the rollup
             # LABEL via the singular field (NOT the viewers list, which the
@@ -718,40 +736,59 @@ async def _enrich_one_source(
             # the viewers list empty makes StatsTab fall to the singular
             # path and render the "N viewers: ..." label verbatim — the
             # operator sees the ambiguity rather than a possibly-wrong pin.
+            # bd-7ncci: mirror that with the SET of distinct real client IPs
+            # across the rolled-up viewers (no possibly-wrong 1:1 pin).
             client[user_name_key] = rollup_label(assignment.rollup_users)
+            rollup_ips = rollup_client_ips(assignment.rollup_users)
+            if rollup_ips:
+                client["client_ips"] = rollup_ips
         elif assignment.user is not None:
             client[user_name_key] = assignment.user.user_name
             client[viewers_key] = [
                 {
                     "user_id": assignment.user.user_id,
                     "user_name": assignment.user.user_name,
+                    "client_ip": assignment.user.client_ip,
                 }
             ]
+            # bd-7ncci: the single attributed viewer's real client device IP
+            # as the connection-level "Client IP" field. Blank when the
+            # source did not expose it.
+            if assignment.user.client_ip:
+                client["client_ip"] = assignment.user.client_ip
         # else: User #0 — leave the seeded None/[] in place.
 
 
 def _coerce_viewer_to_dict(viewer) -> dict:
-    """Normalise a resolver result to ``{"user_id", "user_name"}``.
+    """Normalise a resolver result to ``{"user_id", "user_name", "client_ip"}``.
 
     Handles three input shapes:
 
     * Bare ``str`` (legacy Plex singular wrapper) → ``{"user_id": None,
-      "user_name": <str>}``.
-    * Dataclass with ``.user_id`` + ``.user_name`` (Emby / Jellyfin
-      attribution + the bd-r5f0c.9 PlexAttribution) → dict of the same.
+      "user_name": <str>, "client_ip": None}``.
+    * Dataclass with ``.user_id`` + ``.user_name`` (+ the bd-7ncci
+      ``.client_ip``) — Emby / Jellyfin attribution + the bd-r5f0c.9
+      PlexAttribution → dict of the same.
     * Plain dict → return verbatim (defensive; the bandwidth_tracker
       writer's JSON-decoded form already uses this shape).
+
+    bd-7ncci: ``client_ip`` is the REAL requesting-device IP the media
+    server reported for the viewer's session, threaded through to the
+    candidate-user pool so the reconciler assignment can stamp it as the
+    separate "Client IP" Stats field.
     """
     if isinstance(viewer, str):
-        return {"user_id": None, "user_name": viewer}
+        return {"user_id": None, "user_name": viewer, "client_ip": None}
     if isinstance(viewer, dict):
         return {
             "user_id": viewer.get("user_id"),
             "user_name": viewer.get("user_name"),
+            "client_ip": viewer.get("client_ip"),
         }
     return {
         "user_id": getattr(viewer, "user_id", None),
         "user_name": getattr(viewer, "user_name", None),
+        "client_ip": getattr(viewer, "client_ip", None),
     }
 
 
