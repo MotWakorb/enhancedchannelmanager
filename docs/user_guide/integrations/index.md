@@ -64,11 +64,25 @@ enabled, it shows usernames (e.g., `Alice via Emby`).
 
 **Multi-client disambiguation is best-effort.** When two viewers from the
 same source (e.g., Alice and Bob both via Emby) are watching the SAME
-channel, ECM matches by IP address and session activity timestamp. In rare
-cases involving identical channel names, identical timestamps, or
-multi-source overlap, the attribution may surface viewers in a
-non-deterministic order. The username list is accurate; the row ordering
-within the list is best-effort.
+channel and ECM cannot tell their connections apart, the Connected Clients
+list shows each row as a `"2 viewers: Alice, Bob"` rollup rather than
+guessing which row is which person. The username SET is always accurate;
+only the per-row identity is rolled up when it can't be determined. (A
+single viewer, or viewers ECM can distinguish, still show their individual
+name.) Attribution itself is networking-agnostic — it works whether your
+viewers reach ECM directly, through a media server, or NAT'd through a
+Docker bridge; it does not depend on the connection's source IP matching
+the media server's IP.
+
+**Two viewers behind the same NAT IP collapse in stored history.** The
+live Stats tab can distinguish two viewers even when they share one network
+address (e.g., two devices behind the same router/VPN exit), because it
+uses each connection's stable client id. The persisted watch-history /
+watch-time tables, however, key on `(channel, IP)`, so two same-channel
+viewers behind the **same** IP are recorded as a single history entry
+attributed to one of them. They are correctly distinguished live; only the
+stored aggregate collapses. This affects only the same-IP case — viewers on
+different addresses are recorded separately.
 
 ## Privacy posture
 

@@ -965,3 +965,86 @@ class TestStatsReconciliationBdMlcla:
         # Both rows show the rollup label.
         assert all(n is not None and n.startswith("2 viewers:") for n in names), names
         assert all("alice" in n and "bob" in n for n in names)
+
+    @pytest.mark.asyncio
+    async def test_b1_mixed_proxy_plus_browser_direct_both_attributed(self):
+        """bd-mlcla B1 (call-site): a channel with BOTH the server-proxy pull
+        (source IP == Emby server 172.16.0.19) AND a browser-direct viewer
+        (NAT'd 172.18.0.1) attributes BOTH — the browser-direct gets its
+        distinct name, the proxy carries the remainder. Before the B1 fix the
+        proxy early-return dropped the browser-direct row to User #0; this is
+        the exact regression guard."""
+        from routers.stats import _enrich_channels_with_attribution
+
+        channels = [{
+            "channel_id": "ch-mixed",
+            "channel_name": "TSN5",
+            "channel_number": 200,
+            "stream_name": "CA: TSN5",
+            "url": "http://dispatcharr:9191/proxy/ts/stream/ch-mixed",
+            "clients": [
+                # The Emby server's own transcoding proxy pull.
+                {"ip_address": "172.16.0.19", "client_id": "proxy"},
+                # A genuine browser-direct viewer NAT'd through the bridge.
+                {"ip_address": "172.18.0.1", "client_id": "browser"},
+            ],
+        }]
+        viewers = [
+            EmbyAttribution(user_id="u1", user_name="alice"),
+            EmbyAttribution(user_id="u2", user_name="bob"),
+        ]
+        with patch("config.get_settings", return_value=_emby_only_settings()), \
+             patch("services.emby_resolver.resolve_emby_user",
+                   AsyncMock(return_value=viewers[0])), \
+             patch("services.emby_resolver.resolve_emby_users",
+                   AsyncMock(return_value=viewers)):
+            await _enrich_channels_with_attribution(channels)
+
+        by_id = {c["client_id"]: c for c in channels[0]["clients"]}
+        # Browser-direct viewer is NEVER dropped to User #0.
+        assert by_id["browser"]["emby_user_name"] == "alice"
+        # Proxy carries the single remaining user (bob).
+        assert by_id["proxy"]["emby_user_name"] == "bob"
+        # Channel-level full distinct set still present.
+        assert {v["user_name"] for v in channels[0]["emby_viewers"]} == {
+            "alice", "bob"
+        }
+
+    @pytest.mark.asyncio
+    async def test_b1_misfire_browser_on_server_ip_does_not_suppress_other(self):
+        """bd-mlcla B1 (d) mis-fire at call-site: a browser-direct connection
+        whose observed source IP equals the Emby server IP is mis-flagged as
+        the proxy (exact-equality, no corroborating signal). A second genuine
+        NAT'd viewer is still reconciled first and keeps its own name; the
+        mis-flagged row carries only the remainder."""
+        from routers.stats import _enrich_channels_with_attribution
+
+        channels = [{
+            "channel_id": "ch-misfire",
+            "channel_name": "TSN5",
+            "channel_number": 200,
+            "stream_name": "CA: TSN5",
+            "url": "http://dispatcharr:9191/proxy/ts/stream/ch-misfire",
+            "clients": [
+                # Browser running on the Emby host → mis-flagged as proxy.
+                {"ip_address": "172.16.0.19", "client_id": "misfired"},
+                # Genuine NAT'd browser-direct viewer.
+                {"ip_address": "172.18.0.1", "client_id": "nat"},
+            ],
+        }]
+        viewers = [
+            EmbyAttribution(user_id="u1", user_name="alice"),
+            EmbyAttribution(user_id="u2", user_name="bob"),
+        ]
+        with patch("config.get_settings", return_value=_emby_only_settings()), \
+             patch("services.emby_resolver.resolve_emby_user",
+                   AsyncMock(return_value=viewers[0])), \
+             patch("services.emby_resolver.resolve_emby_users",
+                   AsyncMock(return_value=viewers)):
+            await _enrich_channels_with_attribution(channels)
+
+        by_id = {c["client_id"]: c for c in channels[0]["clients"]}
+        # The genuine NAT'd viewer keeps its own distinct name.
+        assert by_id["nat"]["emby_user_name"] == "alice"
+        # The mis-flagged connection carries the remainder, not User #0.
+        assert by_id["misfired"]["emby_user_name"] == "bob"
