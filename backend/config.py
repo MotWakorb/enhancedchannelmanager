@@ -271,6 +271,18 @@ class DispatcharrSettings(BaseModel):
     # Plex auth token (``X-Plex-Token`` header value). Plaintext at rest,
     # same approach as ``emby_api_key``.
     plex_token: str = ""
+    # bd-mlcla: operator-configured trusted media/proxy networks used ONLY
+    # to RANK media-server attribution candidates, never to gate. Each entry
+    # is a CIDR (``"172.16.0.0/24"``) or a bare IP (``"172.16.0.19"``,
+    # treated as a host). Connections whose source IP falls inside any entry
+    # sort first when pairing media-server users to Dispatcharr connections
+    # (most-likely media-mediated). Getting this list wrong can only change
+    # tie-break ORDER, never which users attribute — attribution is a
+    # per-channel set reconciliation, not an IP join. Default empty: pure
+    # ``connected_at`` ordering, still safe (the reconciler does the
+    # anti-collapse work; IP only breaks ties). See
+    # ``services.attribution_reconciler``.
+    trusted_media_networks: list[str] = []
 
     @field_validator("dedup_threshold")
     @classmethod
@@ -589,6 +601,69 @@ def get_http_port() -> int:
     except ValueError:
         logger.warning("[CONFIG] Invalid ECM_PORT '%s', using default 6100", os.environ.get("ECM_PORT"))
         return 6100
+
+
+def detect_local_bridge_gateways() -> list[str]:
+    """Best-effort auto-detect local Docker bridge-gateway IPs (bd-mlcla).
+
+    When ECM runs inside a container, browser-direct media-server traffic
+    is frequently NAT'd through the media box's Docker bridge gateway, so
+    ECM observes the gateway IP (e.g. ``172.18.0.1``) instead of the
+    configured media-server IP. Including those gateway IPs in the
+    attribution RANKING (never the gate) lets such connections sort first
+    as most-likely media-mediated.
+
+    This reads ``/proc/net/route`` to find the default-gateway IP(s) for
+    every interface. It is intentionally a HINT only: getting detection
+    wrong can change tie-break order but never which users attribute
+    (asserted by ``test_attribution_reconciler`` /
+    ``test_bandwidth_tracker_*attribution*``). Never raises — any parse or
+    I/O failure returns an empty list so the hot path degrades to
+    ``connected_at`` ordering.
+
+    Returns a list of IPv4 dotted-quad strings (deduplicated, order
+    preserved). Empty when no gateways could be read.
+    """
+    gateways: list[str] = []
+    seen: set[str] = set()
+    route_path = Path("/proc/net/route")
+    try:
+        if not route_path.exists():
+            return []
+        for line in route_path.read_text().splitlines()[1:]:
+            fields = line.split()
+            if len(fields) < 3:
+                continue
+            # /proc/net/route gateway is a little-endian hex IPv4. A
+            # non-zero gateway with the default-route destination
+            # (0.0.0.0) is the interface's default gateway.
+            destination_hex = fields[1]
+            gateway_hex = fields[2]
+            if gateway_hex == "00000000":
+                continue
+            if destination_hex != "00000000":
+                # Only default routes give us the egress gateway; per-subnet
+                # routes are not what we want for the NAT-source hint.
+                continue
+            try:
+                gw_int = int(gateway_hex, 16)
+            except ValueError:
+                continue
+            # Little-endian: reverse the four bytes.
+            octets = [
+                (gw_int >> 0) & 0xFF,
+                (gw_int >> 8) & 0xFF,
+                (gw_int >> 16) & 0xFF,
+                (gw_int >> 24) & 0xFF,
+            ]
+            ip = ".".join(str(o) for o in octets)
+            if ip != "0.0.0.0" and ip not in seen:
+                seen.add(ip)
+                gateways.append(ip)
+    except Exception as exc:  # noqa: BLE001 — hint-only, must never raise
+        logger.debug("[CONFIG] Bridge-gateway auto-detect failed (hint only): %s", exc)
+        return []
+    return gateways
 
 
 def get_log_level_from_env() -> str:

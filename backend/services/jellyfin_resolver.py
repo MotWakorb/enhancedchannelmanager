@@ -229,36 +229,28 @@ async def resolve_jellyfin_users(
         )
         return []
 
-    # bd-podx3: revert bd-ost8o's two-mode dispatch. The strict IP gate
-    # is the load-bearing correctness guarantee — only traffic egressing
-    # through the Jellyfin server's IP can be a genuine Jellyfin viewer.
-    # bd-ost8o's "direct_fallback" mode matched ECM clients to sessions
-    # by channel name alone, collapsing every non-Jellyfin viewer on a
-    # channel onto the one Jellyfin user watching it. See emby_resolver
-    # for the full incident analysis. Browser-direct-play attribution
-    # needs a sound identity signal (the unused ``remote_endpoint``) and
-    # is deferred to a fresh bead.
-    if ecm_session_ip != jellyfin_server_ip:
-        # Hot path on every non-Jellyfin IP; DEBUG-level to avoid log
-        # flood. INFO entries fire below for the IP-matched callers
-        # which are the ones operators care about.
-        logger.debug(
-            "[JELLYFIN-RESOLVER] resolver_call ip=%s ecm_channel=%r "
-            "result=ip_mismatch (server=%s)",
-            ecm_session_ip, ecm_channel_name, jellyfin_server_ip,
-        )
-        return []
+    # bd-mlcla: strict IP gate removed. Browser-direct Jellyfin playback
+    # (Jellyfin Web) is NAT'd through the media box's Docker bridge gateway
+    # so ECM observes the gateway IP, not the configured Jellyfin server IP
+    # — the old gate rejected it and showed "User #0" (the live TSN5 /
+    # MotWakorb case). Attribution is now a per-channel SET RECONCILIATION
+    # keyed on stable ids (services.attribution_reconciler), not an IP join,
+    # so the resolver returns the matched-user set regardless of source IP.
+    # Tier 3 fuzzy stays server-IP-gated (bd-ost8o false-positive vector).
+    ip_is_server = ecm_session_ip == jellyfin_server_ip
 
     sessions = await get_cached_jellyfin_sessions()
     sessions_with_now_playing = sum(
         1 for s in sessions
         if s.now_playing_item_name or s.now_playing_channel_name or s.channel_number
     )
+    # bd-mlcla: ``ip_is_server`` records the soft rank hint + Tier-3 gate
+    # state — replaces the old ``ip_mismatch`` reject log.
     logger.info(
-        "[JELLYFIN-RESOLVER] resolver_call ip=%s ecm_channel=%r "
+        "[JELLYFIN-RESOLVER] resolver_call ip=%s ip_is_server=%s ecm_channel=%r "
         "ecm_channel_number=%r ecm_stream=%r sessions_count=%d "
-        "sessions_with_now_playing=%d (bd-dok7u)",
-        ecm_session_ip, ecm_channel_name, ecm_channel_number,
+        "sessions_with_now_playing=%d (bd-dok7u, bd-mlcla)",
+        ecm_session_ip, ip_is_server, ecm_channel_name, ecm_channel_number,
         ecm_stream_name, len(sessions), sessions_with_now_playing,
     )
     for session in sessions:
@@ -283,6 +275,7 @@ async def resolve_jellyfin_users(
         ecm_channel_name=ecm_channel_name,
         ecm_channel_number=ecm_channel_number,
         sessions=sessions,
+        allow_fuzzy_tier3=ip_is_server,
     )
     if not matches:
         logger.debug(
@@ -474,8 +467,15 @@ def _find_matching_sessions(
     ecm_channel_name: str | None,
     ecm_channel_number: str | int | None,
     sessions: list[JellyfinSession],
+    allow_fuzzy_tier3: bool = True,
 ) -> list[JellyfinSession]:
     """Return every Jellyfin session that matches across any of the three tiers.
+
+    bd-mlcla: ``allow_fuzzy_tier3`` gates Tier 3 to the server-IP case —
+    fuzzy stream-name matching with no IP signal is the bd-ost8o
+    VOD-onto-live false-positive vector. Tier 1 + Tier 2 strict matching
+    run unconditionally; the caller passes ``allow_fuzzy_tier3=True`` only
+    when the source IP equals the Jellyfin server IP.
 
     Tiered match (mirrors emby_resolver's three-tier strategy, but with
     Jellyfin-specific no-pipe-suffix tolerance):
@@ -571,8 +571,9 @@ def _find_matching_sessions(
                 _accept(session)
 
     # ----- Tier 3: legacy fuzzy fallback on stream_name
+    # bd-mlcla: server-IP-gated (see allow_fuzzy_tier3 docstring note).
     normalized_stream = _normalize(ecm_stream_name or "")
-    if normalized_stream:
+    if allow_fuzzy_tier3 and normalized_stream:
         for session, normalized_item, normalized_channel, _sfx in prepared:
             if _fuzzy_or_exact_match(normalized_stream, normalized_item):
                 _accept(session)

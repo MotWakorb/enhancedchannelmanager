@@ -130,20 +130,45 @@ def _get_counter_value(metric_key: str, source: str) -> float:
 
 
 class TestIpMismatch:
-    """When the ECM session's IP is not the Plex server's IP, the resolver
-    must return ``None`` without ever touching the cache."""
+    """bd-mlcla: the strict IP gate is GONE. Off-server (NAT'd) traffic now
+    strict-matches Tier 1/Tier 2 (and the strict EPG callsign tier); only
+    Tier 3 fuzzy stays server-IP-gated. Anti-collapse moved to the
+    reconciler."""
 
-    async def test_ip_mismatch_returns_none_without_cache_call(self):
-        """IP mismatch on an IP-literal base URL skips the cache entirely."""
-        cache_mock = AsyncMock(return_value=[_make_session()])
+    async def test_off_server_ip_strict_match_still_attributes(self):
+        """An off-server IP that matches Tier 1 (channel-name suffix) now
+        attributes — the gate removal is the 'User #0' fix."""
+        session = _make_session(item_name="408 | ESPN", user_name="alice")
+        cache_mock = AsyncMock(return_value=[session])
         with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
              patch.object(plex_resolver, "get_cached_plex_sessions", cache_mock):
             result = await plex_resolver.resolve_plex_user(
-                ecm_session_ip="10.0.0.5",  # NOT the Plex server (192.168.1.20)
-                ecm_stream_name="ESPN",
+                ecm_session_ip="172.18.0.1",  # NOT the Plex server (192.168.1.20)
+                ecm_stream_name="US: ESPN FHD",
+                ecm_channel_name="ESPN",
             )
-        assert result is None
-        cache_mock.assert_not_awaited()
+        assert result == "alice"
+        cache_mock.assert_awaited()
+
+    async def test_off_server_ip_does_not_run_tier3_fuzzy(self):
+        """bd-ost8o guard: off-server traffic must NOT fuzzy-match."""
+        # "ESPN" fuzzy-matches "ESPN HD 1080p" but there is no Tier-1 hit
+        # (no ecm_channel_name) — server IP matches via Tier 3, off-server
+        # does not.
+        session = _make_session(item_name="ESPN HD 1080p", user_name="dan")
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            off_server = await plex_resolver.resolve_plex_users(
+                ecm_session_ip="172.18.0.1",  # off-server → Tier 3 disabled
+                ecm_stream_name="ESPN HD",
+            )
+            on_server = await plex_resolver.resolve_plex_users(
+                ecm_session_ip="192.168.1.20",  # server IP → Tier 3 enabled
+                ecm_stream_name="ESPN HD",
+            )
+        assert off_server == []
+        assert [u.user_name for u in on_server] == ["dan"]
 
     async def test_ip_match_proceeds_to_cache_call(self):
         """When the session IP matches the Plex server IP, the cache is called."""
@@ -708,9 +733,11 @@ class TestHostnameBaseUrl:
             )
         assert result == "eve"
 
-    async def test_hostname_resolves_to_non_matching_ip_returns_none(self):
-        """``plex.local`` resolves to ``10.0.0.1`` — does NOT match."""
-        cache_mock = AsyncMock(return_value=[_make_session(item_name="CNN HD")])
+    async def test_hostname_resolves_to_non_matching_ip_still_strict_matches(self):
+        """bd-mlcla: ``plex.local`` resolves to ``10.0.0.1`` (off-server),
+        but with the gate removed Tier 1 still matches and the cache is
+        consulted."""
+        cache_mock = AsyncMock(return_value=[_make_session(item_name="CNN HD", user_name="eve")])
         settings = _enabled_settings(base_url="https://plex.local:32400")
 
         with patch.object(plex_resolver, "get_settings", return_value=settings), \
@@ -720,9 +747,10 @@ class TestHostnameBaseUrl:
             result = await plex_resolver.resolve_plex_user(
                 ecm_session_ip="192.168.1.20",
                 ecm_stream_name="CNN HD",
+                ecm_channel_name="CNN HD",
             )
-        assert result is None
-        cache_mock.assert_not_awaited()
+        assert result == "eve"
+        cache_mock.assert_awaited()
 
     async def test_hostname_resolution_failure_logs_warn_and_returns_none(self, caplog):
         """Unresolvable hostname logs WARN with [PLEX] prefix and returns None."""
@@ -995,17 +1023,18 @@ class TestMultiViewer:
             )
         assert users == []
 
-    async def test_ip_mismatch_returns_empty_list_without_cache_call(self):
-        """IP short-circuit also applies to the plural variant."""
-        cache_mock = AsyncMock(return_value=[_make_session()])
+    async def test_off_server_ip_plural_strict_matches(self):
+        """bd-mlcla: the plural variant also drops the gate."""
+        cache_mock = AsyncMock(return_value=[_make_session(item_name="408 | ESPN", user_name="alice")])
         with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
              patch.object(plex_resolver, "get_cached_plex_sessions", cache_mock):
             users = await plex_resolver.resolve_plex_users(
-                ecm_session_ip="10.0.0.5",  # NOT the Plex server
-                ecm_stream_name="ESPN",
+                ecm_session_ip="172.18.0.1",  # NOT the Plex server
+                ecm_stream_name="US: ESPN FHD",
+                ecm_channel_name="ESPN",
             )
-        assert users == []
-        cache_mock.assert_not_awaited()
+        assert [u.user_name for u in users] == ["alice"]
+        cache_mock.assert_awaited()
 
     async def test_singular_wrapper_returns_most_recent_user_name(self):
         """Back-compat target: the legacy singular wrapper still returns
@@ -1123,20 +1152,21 @@ class TestNoMatchDiagnostic:
         assert len(users) == 1
         assert self._no_match_records(caplog.records) == []
 
-    async def test_no_emit_when_ip_short_circuit_fails(self, caplog):
-        """IP mismatch short-circuits before the session compare → no WARN."""
+    async def test_off_server_ip_no_strict_match_still_emits_diagnostic(self, caplog):
+        """bd-mlcla: off-server IP with sessions but no strict match emits
+        the forensic WARN (operators need it to debug a NAT'd 'User #0')."""
         session = _make_session(item_name="UnrelatedShow")
         with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
              patch.object(plex_resolver, "get_cached_plex_sessions",
                           AsyncMock(return_value=[session])):
             with caplog.at_level(logging.WARNING, logger="services.plex_resolver"):
                 users = await plex_resolver.resolve_plex_users(
-                    ecm_session_ip="10.0.0.99",  # NOT the Plex server
+                    ecm_session_ip="172.18.0.1",  # NOT the Plex server
                     ecm_stream_name="ESPN",
                     ecm_channel_name="ESPN",
                 )
         assert users == []
-        assert self._no_match_records(caplog.records) == []
+        assert len(self._no_match_records(caplog.records)) == 1
 
     async def test_rate_limit_within_window(self, caplog):
         """Two no-match calls for same (ip, channel) within 60 s → one WARN."""

@@ -155,6 +155,73 @@ class AttributionResult:
         )
 
 
+def _coerce_connected_at(value) -> Optional[float]:
+    """Best-effort coerce a Dispatcharr ``connected_at`` to a float (bd-mlcla).
+
+    Used only as the IP-bucket tie-break in the reconciler, so a missing or
+    unparsable value is harmless (sorts last). Never raises.
+    """
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_persisted_trusted_networks(configured_cidrs: list[str]):
+    """Assemble the soft IP-ranking trusted-network list for the persisted
+    path (bd-mlcla).
+
+    Unions the three configured media-server IPs (resolved from their base
+    URLs), the operator's ``trusted_media_networks``, and auto-detected
+    Docker bridge gateways. Ranking-only — never gates. Resolving the
+    server IPs reuses each resolver's cached server-IP helper so this adds
+    no DNS thrash. Any failure degrades to the configured + detected sets.
+
+    Returns ``(trusted_networks, server_ip_by_source)`` — the second value
+    maps ``"emby"``/``"plex"``/``"jellyfin"`` to the resolved server IP (or
+    ``None``), so the reconciler can flag the server-proxy connection per
+    source (the bd-r5f0c.9 full-viewer-set carrier).
+    """
+    from config import detect_local_bridge_gateways, get_settings
+    from services.attribution_reconciler import build_trusted_networks
+
+    server_ip_by_source: dict[str, Optional[str]] = {}
+    try:
+        settings = get_settings()
+        from services.emby_resolver import _resolve_emby_server_ip
+        from services.jellyfin_resolver import _resolve_jellyfin_server_ip
+        from services.plex_resolver import _resolve_plex_server_ip
+
+        if getattr(settings, "emby_enabled", False):
+            server_ip_by_source["emby"] = _resolve_emby_server_ip(
+                getattr(settings, "emby_base_url", "") or ""
+            )
+        if getattr(settings, "plex_enabled", False):
+            server_ip_by_source["plex"] = _resolve_plex_server_ip(
+                getattr(settings, "plex_base_url", "") or ""
+            )
+        if getattr(settings, "jellyfin_enabled", False):
+            server_ip_by_source["jellyfin"] = _resolve_jellyfin_server_ip(
+                getattr(settings, "jellyfin_base_url", "") or ""
+            )
+    except Exception as exc:  # noqa: BLE001 — ranking hint, must never raise
+        logger.debug("[BANDWIDTH] server-IP rank-hint resolution failed: %s", exc)
+
+    try:
+        detected = detect_local_bridge_gateways()
+    except Exception:  # noqa: BLE001
+        detected = []
+
+    networks = build_trusted_networks(
+        server_ips=list(server_ip_by_source.values()),
+        configured_cidrs=configured_cidrs,
+        detected_gateways=detected,
+    )
+    return networks, server_ip_by_source
+
+
 # bd-r5f0c.4: per-source resolver timeout for the asyncio.gather fan-out
 # in ``_resolve_attributions``. SRE failure-isolation requirement —
 # a slow Plex server cannot block the per-poll telemetry write past
@@ -1734,6 +1801,18 @@ class BandwidthTracker:
                     "channel_bytes_delta": channel_bytes_delta,
                     "stream_id": channel.get("stream_id"),
                     "url": channel.get("url"),
+                    # bd-mlcla: per-connection metadata for the reconciler.
+                    # ``connected_at`` is the IP-bucket tie-break; the channel
+                    # ``url`` (above) is the URL-identity discriminator.
+                    "client_meta": [
+                        {
+                            "ip_address": c.get("ip_address"),
+                            "client_id": c.get("client_id"),
+                            "connected_at": c.get("connected_at"),
+                        }
+                        for c in clients
+                        if c.get("ip_address")
+                    ],
                 })
 
         # Check for channels that stopped being watched
@@ -2733,52 +2812,201 @@ class BandwidthTracker:
             emby_task, plex_task, jellyfin_task,
         )
 
-        # Merge the three sparse maps into a single result per (channel,
-        # ip). Each per-source map value is now a list of attributions
-        # (bd-r5f0c.9 multi-viewer) — sorted most-recent-first. We
-        # populate BOTH the legacy singular fields (position 0 = most-
-        # recent viewer, back-compat with Stats v2 aggregations + the
-        # pre-W5 frontend) AND the full ``*_viewers`` list field (W5+
-        # consumers render every viewer). Sources that didn't match
-        # leave their slot as the dataclass default (None / empty list).
-        merged: dict[tuple[str, str], AttributionResult] = {}
-        all_keys = set(emby_map.keys()) | set(plex_map.keys()) | set(jellyfin_map.keys())
-        for key in all_keys:
-            emby_list = emby_map.get(key) or []
-            plex_list = plex_map.get(key) or []
-            jellyfin_list = jellyfin_map.get(key) or []
+        # bd-mlcla: RECONCILE per channel instead of broadcasting the
+        # per-(channel, ip) candidate lists onto the row verbatim. The
+        # per-source maps gathered above are
+        # ``{(channel_uuid, ip): [Attribution]}`` — but with the IP gate
+        # removed every (channel, ip) on the channel carries the SAME
+        # candidate set (the channel's matched users). Reconciliation
+        # assigns each user to AT MOST ONE connection (anti-collapse),
+        # never broadcasts one user to all connections (anti-broadcast),
+        # and surplus users surface only at the channel level (no phantom
+        # rows). Each source is reconciled independently so a connection
+        # that matches Emby AND Plex gets both columns.
+        return self._reconcile_persisted_attributions(
+            telemetry_channel_snapshot,
+            emby_map=emby_map,
+            plex_map=plex_map,
+            jellyfin_map=jellyfin_map,
+            settings=settings,
+        )
 
-            # Most-recent viewer per source (position 0 of the sorted
-            # list) → legacy singular columns. Empty list → None.
-            emby_top = emby_list[0] if emby_list else None
-            plex_top = plex_list[0] if plex_list else None
-            jellyfin_top = jellyfin_list[0] if jellyfin_list else None
+    def _reconcile_persisted_attributions(
+        self,
+        telemetry_channel_snapshot: list[dict],
+        *,
+        emby_map: dict[tuple[str, str], list],
+        plex_map: dict[tuple[str, str], list],
+        jellyfin_map: dict[tuple[str, str], list],
+        settings,
+    ) -> dict[tuple[str, str], "AttributionResult"]:
+        """Reconcile per-channel candidate sets into per-(channel, ip) rows.
 
-            merged[key] = AttributionResult(
-                emby_user_id=emby_top.user_id if emby_top else None,
-                emby_user_name=emby_top.user_name if emby_top else None,
-                # Plex resolver currently surfaces only the user_name.
-                # PlexAttribution.user_id is None today (no stable
-                # upstream identifier on /status/sessions); the column
-                # tolerates this by being nullable.
-                plex_user_id=plex_top.user_id if plex_top else None,
-                plex_user_name=plex_top.user_name if plex_top else None,
-                jellyfin_user_id=jellyfin_top.user_id if jellyfin_top else None,
-                jellyfin_user_name=jellyfin_top.user_name if jellyfin_top else None,
-                emby_viewers=[
-                    {"user_id": a.user_id, "user_name": a.user_name}
-                    for a in emby_list
-                ],
-                plex_viewers=[
-                    {"user_id": a.user_id, "user_name": a.user_name}
-                    for a in plex_list
-                ],
-                jellyfin_viewers=[
-                    {"user_id": a.user_id, "user_name": a.user_name}
-                    for a in jellyfin_list
-                ],
-            )
-        return merged
+        bd-mlcla. For the persisted telemetry path the row granularity is
+        ``(channel_uuid, client_ip)``, so each distinct (channel, ip) is one
+        reconciler :class:`Connection`. For each source independently:
+
+        1. Pool the channel's distinct candidate users (the union of the
+           per-ip lists for that channel — same set on each ip post-gate-
+           removal, but unioning is robust to Tier-3 server-IP-only hits).
+        2. Build one Connection per distinct (channel, ip), excluding
+           direct-IPTV channels via the URL-identity discriminator.
+        3. Reconcile (anti-collapse / anti-broadcast / Option-B rollup).
+        4. Emit the per-ip assignment into the row's source columns +
+           ``*_viewers`` list. The channel-level distinct set is NOT
+           persisted per row (the read APIs aggregate per user from the
+           assigned rows); surplus users simply do not stamp a row.
+
+        The Option-B rollup is encoded into the row as a single synthetic
+        viewer whose ``user_name`` is the ``"N viewers: ..."`` label (so
+        the read APIs + frontend render the rollup) with ``user_id=None``.
+        """
+        from services.attribution_reconciler import (
+            CandidateUser,
+            Connection,
+            reconcile_channel,
+            rollup_label,
+            url_embeds_username,
+        )
+
+        configured = getattr(settings, "trusted_media_networks", None)
+        if not isinstance(configured, list):
+            configured = []
+        trusted_networks, server_ip_by_source = _build_persisted_trusted_networks(
+            configured
+        )
+
+        # Index snapshot rows by channel for url + per-connection metadata.
+        snapshot_by_channel = {
+            entry["channel_uuid"]: entry for entry in telemetry_channel_snapshot
+        }
+
+        # AttributionResult is frozen, so accumulate per-key mutable dicts
+        # and freeze into AttributionResult at the end.
+        acc: dict[tuple[str, str], dict] = {}
+
+        def _row(key):
+            if key not in acc:
+                acc[key] = {
+                    "emby_user_id": None, "emby_user_name": None,
+                    "plex_user_id": None, "plex_user_name": None,
+                    "jellyfin_user_id": None, "jellyfin_user_name": None,
+                    "emby_viewers": [], "plex_viewers": [], "jellyfin_viewers": [],
+                }
+            return acc[key]
+
+        # Set of channels touched by any source.
+        channels = {k[0] for k in emby_map} | {k[0] for k in plex_map} \
+            | {k[0] for k in jellyfin_map}
+
+        for channel_uuid in channels:
+            entry = snapshot_by_channel.get(channel_uuid, {})
+            has_url_identity = url_embeds_username(entry.get("url"))
+            meta_by_ip = {
+                m.get("ip_address"): m
+                for m in (entry.get("client_meta") or [])
+                if m.get("ip_address")
+            }
+
+            for source, source_map in (
+                ("emby", emby_map),
+                ("plex", plex_map),
+                ("jellyfin", jellyfin_map),
+            ):
+                # Per-channel candidate pool (union across ips).
+                pooled: list[CandidateUser] = []
+                seen: set = set()
+                ips_for_channel: set[str] = set()
+                for (ch_uuid, ip), viewers in source_map.items():
+                    if ch_uuid != channel_uuid:
+                        continue
+                    ips_for_channel.add(ip)
+                    for a in viewers or []:
+                        name = getattr(a, "user_name", None)
+                        if not name:
+                            continue
+                        uid = getattr(a, "user_id", None)
+                        dedup = ("id", uid) if uid is not None else ("name", name)
+                        if dedup in seen:
+                            continue
+                        seen.add(dedup)
+                        pooled.append(
+                            CandidateUser(
+                                user_name=name,
+                                user_id=uid,
+                                last_activity_date=getattr(
+                                    a, "last_activity_date", None
+                                ),
+                                source=source,
+                            )
+                        )
+                if not pooled:
+                    continue
+
+                # One Connection per distinct ip on this channel. A
+                # connection whose IP IS this source's resolved server IP is
+                # the transcoding proxy and carries the FULL viewer set
+                # (bd-r5f0c.9 multi-viewer-on-proxy); others are direct.
+                source_server_ip = server_ip_by_source.get(source)
+                connections = [
+                    Connection(
+                        client_id=str(
+                            (meta_by_ip.get(ip) or {}).get("client_id") or ip
+                        ),
+                        ip_address=ip,
+                        connected_at=_coerce_connected_at(
+                            (meta_by_ip.get(ip) or {}).get("connected_at")
+                        ),
+                        has_url_identity=has_url_identity,
+                        is_server_proxy=(
+                            source_server_ip is not None
+                            and ip == source_server_ip
+                        ),
+                    )
+                    for ip in sorted(ips_for_channel)
+                ]
+                # Map client_id back to ip for row emission.
+                ip_by_client_id = {
+                    c.client_id: ip
+                    for c, ip in zip(connections, sorted(ips_for_channel))
+                }
+
+                result = reconcile_channel(
+                    connections, pooled, trusted_networks=trusted_networks,
+                )
+                for assignment in result.assignments:
+                    ip = ip_by_client_id.get(assignment.client_id)
+                    if ip is None:
+                        continue
+                    if assignment.is_proxy_multi:
+                        # Server-proxy carrying N genuine viewers (bd-r5f0c.9):
+                        # write the FULL viewer list; legacy = position 0.
+                        viewers_payload = [
+                            {"user_id": u.user_id, "user_name": u.user_name}
+                            for u in assignment.proxy_viewers
+                        ]
+                    elif assignment.is_rollup:
+                        viewers_payload = [
+                            {"user_id": None,
+                             "user_name": rollup_label(assignment.rollup_users)}
+                        ]
+                    elif assignment.user is not None:
+                        viewers_payload = [
+                            {"user_id": assignment.user.user_id,
+                             "user_name": assignment.user.user_name}
+                        ]
+                    else:
+                        continue  # User #0 — leave the row's source slot NULL
+                    top_name = viewers_payload[0]["user_name"]
+                    top_uid = viewers_payload[0]["user_id"]
+                    row = _row((channel_uuid, ip))
+                    row[f"{source}_user_id"] = top_uid
+                    row[f"{source}_user_name"] = top_name
+                    row[f"{source}_viewers"] = viewers_payload
+
+        return {
+            key: AttributionResult(**fields) for key, fields in acc.items()
+        }
 
     async def _resolve_emby_for_clients(
         self,

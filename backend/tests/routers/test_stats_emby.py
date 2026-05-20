@@ -426,12 +426,14 @@ class TestActiveChannelsEmbyEnrichment:
     # -----------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_emby_user_name_propagated_to_each_client_when_resolver_matches(
+    async def test_single_emby_user_not_broadcast_to_every_client(
         self, async_client
     ):
-        """When the resolver attributes a channel to an Emby user, every
-        client dict in ``clients[]`` receives ``emby_user_name`` set to the
-        same resolved value — not just the channel-level field."""
+        """bd-mlcla anti-broadcast (supersedes bd-cat70 broadcast): when ONE
+        Emby user is watching a channel with TWO distinct connections, the
+        user is stamped on exactly ONE connection — never broadcast to both.
+        The other connection stays User #0. The channel-level field still
+        carries the resolved name."""
         mock_client = AsyncMock()
         mock_client.get_channel_stats.return_value = {
             "channels": [
@@ -440,8 +442,8 @@ class TestActiveChannelsEmbyEnrichment:
                     "channel_name": "ESPN",
                     "stream_id": 408,
                     "clients": [
-                        {"ip_address": "10.0.0.42", "user_id": 0},
-                        {"ip_address": "10.0.0.43", "user_id": 0},
+                        {"ip_address": "10.0.0.42", "client_id": "c1", "user_id": 0},
+                        {"ip_address": "10.0.0.43", "client_id": "c2", "user_id": 0},
                     ],
                 },
             ],
@@ -471,11 +473,13 @@ class TestActiveChannelsEmbyEnrichment:
         ch = body["channels"][0]
         # Channel-level field still set.
         assert ch["emby_user_name"] == "MotWakorb"
-        # Each client dict carries the resolved name.
-        for client in ch["clients"]:
-            assert client["emby_user_name"] == "MotWakorb", (
-                f"Expected client to carry emby_user_name='MotWakorb', got: {client!r}"
-            )
+        # Exactly ONE client carries the name (anti-broadcast); the other
+        # is User #0 (None).
+        names = [c.get("emby_user_name") for c in ch["clients"]]
+        assert names.count("MotWakorb") == 1, (
+            f"single user must not broadcast to both connections, got: {names!r}"
+        )
+        assert names.count(None) == 1
 
     @pytest.mark.asyncio
     async def test_emby_user_name_null_on_each_client_when_resolver_returns_none(

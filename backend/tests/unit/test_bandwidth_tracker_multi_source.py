@@ -609,18 +609,23 @@ async def test_scenario_e_same_channel_three_clients_no_spillover(
     channel_rows = [r for r in rows if r.channel_id == channel_uuid]
     assert channel_rows, f"No rows found for channel {channel_uuid}"
 
-    # Every row (all 3 IPs on the shared channel): Emby populated, Plex + Jellyfin NULL.
-    # (Emby resolver mock is module-level — it returns alice for every IP.)
-    # Critical: plex_viewers and jellyfin_viewers MUST be NULL on every row —
-    # the Emby result must not spill into Plex or Jellyfin columns even when
-    # multiple IPs are being attributed simultaneously via asyncio.gather.
+    # bd-mlcla: the Emby SERVER IP (192.168.1.50) connection is the
+    # transcoding proxy — it is authoritative for the single Emby viewer
+    # alice. The other two IPs (.51/.52) are NOT the Emby server, so under
+    # the anti-broadcast rule they do NOT also get stamped with alice (that
+    # would be the bd-cat70 broadcast). alice attributes to the proxy row(s)
+    # only — across both polls that is the .50 session, never .51/.52.
+    emby_rows = [r for r in channel_rows if r.emby_user_name == "alice"]
+    emby_sessions = {r.session_id for r in emby_rows}
+    assert emby_sessions == {"conn-1"}, (
+        f"alice must attribute to the Emby server-proxy session only, "
+        f"not broadcast: {[(r.session_id, r.emby_user_name) for r in channel_rows]}"
+    )
+    assert all(r.emby_viewers is not None for r in emby_rows)
+    # Critical no-spillover: NO row has Plex or Jellyfin populated — the
+    # Emby result must not spill into another source's columns even with
+    # concurrent multi-IP attribution via asyncio.gather.
     for row in channel_rows:
-        assert row.emby_user_name == "alice", (
-            f"emby_user_name wrong on row id={row.id}: {row.emby_user_name!r}"
-        )
-        assert row.emby_viewers is not None, (
-            f"emby_viewers NULL on row id={row.id} — Emby attribution lost"
-        )
         assert row.plex_user_name is None, (
             f"plex_user_name non-NULL on row id={row.id} "
             f"— emby result spilled into plex column"

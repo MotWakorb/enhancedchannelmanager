@@ -200,6 +200,8 @@ const settingsBase = {
   jellyfin_enabled: false,
   jellyfin_base_url: '',
   jellyfin_api_key_configured: false,
+  // bd-mlcla: trusted media/proxy networks (ranking hint only).
+  trusted_media_networks: [],
 };
 
 function renderOnChannelDefaults() {

@@ -465,9 +465,13 @@ class TestEnrichChannelsMultiViewer:
     viewer)."""
 
     @pytest.mark.asyncio
-    async def test_two_emby_viewers_populate_viewers_list_and_legacy_field(self):
-        """2 Emby viewers → channel.emby_viewers = [...{2 dicts}] AND
-        channel.emby_user_name == position-0 viewer (most-recent)."""
+    async def test_two_emby_viewers_server_proxy_carries_full_list(self):
+        """bd-mlcla (preserves bd-r5f0c.9): the single connection IS the Emby
+        server IP (192.168.1.50) — the transcoding PROXY. It legitimately
+        carries BOTH viewers, so the per-connection ``emby_viewers`` is the
+        full [bob, alice] list and the legacy single name is position 0
+        (bob). This is the server-mediated multi-viewer case, distinct from
+        the browser-direct Option-B rollup."""
         from routers.stats import _enrich_channels_with_attribution
 
         channels = [
@@ -476,7 +480,7 @@ class TestEnrichChannelsMultiViewer:
                 "channel_name": "ESPN",
                 "channel_number": 408,
                 "stream_name": "US: ESPN FHD",
-                "clients": [{"ip_address": "192.168.1.50"}],
+                "clients": [{"ip_address": "192.168.1.50", "client_id": "c1"}],
             }
         ]
 
@@ -484,32 +488,29 @@ class TestEnrichChannelsMultiViewer:
             EmbyAttribution(user_id="uid-bob", user_name="bob"),
             EmbyAttribution(user_id="uid-alice", user_name="alice"),
         ]
-        with patch("config.get_settings", return_value=_enabled_plex_only_settings()), \
-             patch("services.plex_resolver.resolve_plex_user", AsyncMock(return_value=None)), \
-             patch("services.plex_resolver.resolve_plex_users", AsyncMock(return_value=[])):
-            # Use a custom settings stub: Emby enabled, others off.
-            emby_only = MagicMock()
-            emby_only.emby_enabled = True
-            emby_only.emby_base_url = "http://192.168.1.50:8096"
-            emby_only.emby_api_key = "emby-key"
-            emby_only.plex_enabled = False
-            emby_only.jellyfin_enabled = False
-            with patch("config.get_settings", return_value=emby_only), \
-                 patch("services.emby_resolver.resolve_emby_user",
-                       AsyncMock(return_value=emby_viewers[0])), \
-                 patch("services.emby_resolver.resolve_emby_users",
-                       AsyncMock(return_value=emby_viewers)):
-                await _enrich_channels_with_attribution(channels)
+        emby_only = MagicMock()
+        emby_only.emby_enabled = True
+        emby_only.emby_base_url = "http://192.168.1.50:8096"
+        emby_only.emby_api_key = "emby-key"
+        emby_only.plex_enabled = False
+        emby_only.jellyfin_enabled = False
+        emby_only.trusted_media_networks = []
+        with patch("config.get_settings", return_value=emby_only), \
+             patch("services.emby_resolver.resolve_emby_user",
+                   AsyncMock(return_value=emby_viewers[0])), \
+             patch("services.emby_resolver.resolve_emby_users",
+                   AsyncMock(return_value=emby_viewers)):
+            await _enrich_channels_with_attribution(channels)
 
         ch = channels[0]
-        # Legacy field: most-recent viewer (bob).
+        # Channel-level legacy field: top-ranked viewer (bob).
         assert ch["emby_user_name"] == "bob"
-        # Multi-viewer field: full list.
+        # Channel-level multi-viewer field: full distinct set.
         assert ch["emby_viewers"] == [
             {"user_id": "uid-bob", "user_name": "bob"},
             {"user_id": "uid-alice", "user_name": "alice"},
         ]
-        # Per-client propagation: same list on each client.
+        # The server-proxy connection carries the FULL list (bd-r5f0c.9).
         client = ch["clients"][0]
         assert client["emby_user_name"] == "bob"
         assert client["emby_viewers"] == [
@@ -832,3 +833,135 @@ class TestEnrichmentForensicLogging:
         dispatches = self._enrich_records(caplog.records,
                                           "[STATS-ENRICH] source_dispatch")
         assert dispatches == []
+
+
+# ---------------------------------------------------------------------------
+# bd-mlcla: networking-agnostic reconciliation at the Stats enrich level
+# ---------------------------------------------------------------------------
+
+
+def _emby_only_settings(base_url="http://172.16.0.19:8096"):
+    s = MagicMock()
+    s.emby_enabled = True
+    s.emby_base_url = base_url
+    s.emby_api_key = "k"
+    s.plex_enabled = False
+    s.jellyfin_enabled = False
+    s.trusted_media_networks = []
+    return s
+
+
+class TestStatsReconciliationBdMlcla:
+    """bd-mlcla brief tests #1, #2, #5, #7 exercised through
+    ``_enrich_channels_with_attribution``."""
+
+    @pytest.mark.asyncio
+    async def test_bridge_nat_source_attributes(self):
+        """#1: a connection NAT'd through the Docker bridge gateway
+        (172.18.0.1, NOT the configured Emby server 172.16.0.19) attributes
+        to the matched user — the live TSN5/MotWakorb case."""
+        from routers.stats import _enrich_channels_with_attribution
+
+        channels = [{
+            "channel_id": "ch-nat",
+            "channel_name": "TSN5",
+            "channel_number": 200,
+            "stream_name": "CA: TSN5",
+            "url": "http://dispatcharr:9191/proxy/ts/stream/ch-nat",
+            "clients": [{"ip_address": "172.18.0.1", "client_id": "browser1"}],
+        }]
+        viewers = [EmbyAttribution(user_id="uid-mw", user_name="MotWakorb")]
+        with patch("config.get_settings", return_value=_emby_only_settings()), \
+             patch("services.emby_resolver.resolve_emby_user",
+                   AsyncMock(return_value=viewers[0])), \
+             patch("services.emby_resolver.resolve_emby_users",
+                   AsyncMock(return_value=viewers)):
+            await _enrich_channels_with_attribution(channels)
+        client = channels[0]["clients"][0]
+        assert client["emby_user_name"] == "MotWakorb"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "source_ip",
+        ["172.16.0.19", "172.18.0.1", "10.88.0.7", "192.168.1.40"],
+    )
+    async def test_topology_agnostic_single_viewer(self, source_ip):
+        """#2: host IP, bridge gateway, container IP, and configured server
+        IP all attribute the single viewer identically."""
+        from routers.stats import _enrich_channels_with_attribution
+
+        channels = [{
+            "channel_id": f"ch-{source_ip}",
+            "channel_name": "CNBC",
+            "channel_number": 50,
+            "stream_name": "US: CNBC",
+            "url": "http://dispatcharr/proxy/ts/stream/x",
+            "clients": [{"ip_address": source_ip, "client_id": "c1"}],
+        }]
+        viewers = [EmbyAttribution(user_id="u1", user_name="viewer")]
+        with patch("config.get_settings", return_value=_emby_only_settings()), \
+             patch("services.emby_resolver.resolve_emby_user",
+                   AsyncMock(return_value=viewers[0])), \
+             patch("services.emby_resolver.resolve_emby_users",
+                   AsyncMock(return_value=viewers)):
+            await _enrich_channels_with_attribution(channels)
+        assert channels[0]["clients"][0]["emby_user_name"] == "viewer"
+
+    @pytest.mark.asyncio
+    async def test_direct_iptv_url_identity_excluded(self):
+        """#5: a channel whose active stream URL embeds XC credentials is a
+        direct-IPTV channel — it is EXCLUDED from media-server
+        reconciliation (no emby_user_name stamped from the resolver)."""
+        from routers.stats import _enrich_channels_with_attribution
+
+        channels = [{
+            "channel_id": "ch-direct",
+            "channel_name": "ESPN",
+            "channel_number": 408,
+            "stream_name": "US: ESPN FHD",
+            "url": "http://provider.tv/live/motuser/motpass/85796.ts",
+            "clients": [{"ip_address": "203.0.113.5", "client_id": "xc1"}],
+        }]
+        # Even though the resolver WOULD match, the URL-identity exclusion
+        # means the connection is never reconciled to an Emby user.
+        viewers = [EmbyAttribution(user_id="u1", user_name="leaked")]
+        with patch("config.get_settings", return_value=_emby_only_settings()), \
+             patch("services.emby_resolver.resolve_emby_user",
+                   AsyncMock(return_value=viewers[0])), \
+             patch("services.emby_resolver.resolve_emby_users",
+                   AsyncMock(return_value=viewers)):
+            await _enrich_channels_with_attribution(channels)
+        assert channels[0]["clients"][0]["emby_user_name"] is None
+
+    @pytest.mark.asyncio
+    async def test_option_b_rollup_for_ambiguous_group(self):
+        """#7: 2 indistinguishable connections (same UNKNOWN IP bucket) + 2
+        users → each connection row shows the 'N viewers: ...' rollup, not a
+        single pinned name."""
+        from routers.stats import _enrich_channels_with_attribution
+
+        channels = [{
+            "channel_id": "ch-amb",
+            "channel_name": "ESPN",
+            "channel_number": 408,
+            "stream_name": "US: ESPN FHD",
+            "url": "http://dispatcharr/proxy/ts/stream/x",
+            "clients": [
+                {"ip_address": "172.18.0.1", "client_id": "a"},
+                {"ip_address": "172.18.0.1", "client_id": "b"},
+            ],
+        }]
+        viewers = [
+            EmbyAttribution(user_id="u1", user_name="alice"),
+            EmbyAttribution(user_id="u2", user_name="bob"),
+        ]
+        with patch("config.get_settings", return_value=_emby_only_settings()), \
+             patch("services.emby_resolver.resolve_emby_user",
+                   AsyncMock(return_value=viewers[0])), \
+             patch("services.emby_resolver.resolve_emby_users",
+                   AsyncMock(return_value=viewers)):
+            await _enrich_channels_with_attribution(channels)
+        names = [c["emby_user_name"] for c in channels[0]["clients"]]
+        # Both rows show the rollup label.
+        assert all(n is not None and n.startswith("2 viewers:") for n in names), names
+        assert all("alice" in n and "bob" in n for n in names)
