@@ -505,17 +505,19 @@ class TestEnrichChannelsMultiViewer:
         ch = channels[0]
         # Channel-level legacy field: top-ranked viewer (bob).
         assert ch["emby_user_name"] == "bob"
-        # Channel-level multi-viewer field: full distinct set.
+        # Channel-level multi-viewer field: full distinct set. bd-7ncci:
+        # each viewer dict now carries client_ip (None here — the mocked
+        # attributions did not set it).
         assert ch["emby_viewers"] == [
-            {"user_id": "uid-bob", "user_name": "bob"},
-            {"user_id": "uid-alice", "user_name": "alice"},
+            {"user_id": "uid-bob", "user_name": "bob", "client_ip": None},
+            {"user_id": "uid-alice", "user_name": "alice", "client_ip": None},
         ]
         # The server-proxy connection carries the FULL list (bd-r5f0c.9).
         client = ch["clients"][0]
         assert client["emby_user_name"] == "bob"
         assert client["emby_viewers"] == [
-            {"user_id": "uid-bob", "user_name": "bob"},
-            {"user_id": "uid-alice", "user_name": "alice"},
+            {"user_id": "uid-bob", "user_name": "bob", "client_ip": None},
+            {"user_id": "uid-alice", "user_name": "alice", "client_ip": None},
         ]
 
     @pytest.mark.asyncio
@@ -579,9 +581,9 @@ class TestEnrichChannelsMultiViewer:
         ch = channels[0]
         assert ch["plex_user_name"] == "alice@plex"
         assert ch["plex_viewers"] == [
-            {"user_id": None, "user_name": "alice@plex"},
-            {"user_id": None, "user_name": "bob@plex"},
-            {"user_id": None, "user_name": "carol@plex"},
+            {"user_id": None, "user_name": "alice@plex", "client_ip": None},
+            {"user_id": None, "user_name": "bob@plex", "client_ip": None},
+            {"user_id": None, "user_name": "carol@plex", "client_ip": None},
         ]
 
     @pytest.mark.asyncio
@@ -626,7 +628,7 @@ class TestEnrichChannelsMultiViewer:
         assert ch["emby_user_name"] == "emby-only-alice"
         # Multi-viewer field reflects the singular result wrapped.
         assert ch["emby_viewers"] == [
-            {"user_id": "e-uid", "user_name": "emby-only-alice"},
+            {"user_id": "e-uid", "user_name": "emby-only-alice", "client_ip": None},
         ]
 
 
@@ -1152,7 +1154,7 @@ class TestStatsBd4w9w6XcUpstreamUrl:
         assert client["jellyfin_user_name"] == "MotWakorb"
         assert client["jellyfin_viewers"] == [
             {"user_id": "72be7fac4ca046cf8198573ad285c963",
-             "user_name": "MotWakorb"}
+             "user_name": "MotWakorb", "client_ip": None}
         ]
         # Channel-level surface too.
         assert ch["jellyfin_user_name"] == "MotWakorb"
@@ -1204,3 +1206,115 @@ class TestStatsBd4w9w6XcUpstreamUrl:
         assert any(
             "MotWakorb" in m and "unattributed=0" in m for m in recon_lines
         ), recon_lines
+
+
+# ---------------------------------------------------------------------------
+# bd-7ncci — real client device IP surfaced as a separate Stats field
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichChannelsClientIp:
+    """``_enrich_channels_with_attribution`` surfaces the real client device
+    IP the media server reported as a separate per-connection ``client_ip``
+    field, distinct from the Dispatcharr-observed ``ip_address``."""
+
+    @pytest.mark.asyncio
+    async def test_attributed_connection_carries_client_ip(self):
+        """A single Emby viewer attributed to a connection → the connection
+        gets the viewer's real device IP in the new ``client_ip`` field; the
+        observed ``ip_address`` is unchanged."""
+        from routers.stats import _enrich_channels_with_attribution
+
+        channels = [
+            {
+                "channel_id": "ch-1",
+                "channel_name": "ESPN",
+                "channel_number": 408,
+                "stream_name": "US: ESPN FHD",
+                "clients": [{"ip_address": "172.18.0.1", "client_id": "c1"}],
+            }
+        ]
+        emby_only = MagicMock()
+        emby_only.emby_enabled = True
+        emby_only.emby_base_url = "http://192.168.1.50:8096"
+        emby_only.emby_api_key = "emby-key"
+        emby_only.plex_enabled = False
+        emby_only.jellyfin_enabled = False
+        emby_only.trusted_media_networks = []
+        emby_attr = EmbyAttribution(
+            user_id="e-uid", user_name="amitb", client_ip="47.203.164.8"
+        )
+        with patch("config.get_settings", return_value=emby_only), \
+             patch("services.emby_resolver.resolve_emby_user",
+                   AsyncMock(return_value=emby_attr)), \
+             patch("services.emby_resolver.resolve_emby_users",
+                   AsyncMock(return_value=[emby_attr])):
+            await _enrich_channels_with_attribution(channels)
+
+        client = channels[0]["clients"][0]
+        # New separate field carries the REAL device IP.
+        assert client["client_ip"] == "47.203.164.8"
+        # Existing Dispatcharr connection IP is untouched.
+        assert client["ip_address"] == "172.18.0.1"
+        # Per-viewer client_ip rides in the viewers list too.
+        assert client["emby_viewers"] == [
+            {"user_id": "e-uid", "user_name": "amitb", "client_ip": "47.203.164.8"}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_unattributed_connection_has_blank_client_ip(self):
+        """No media-server match → the connection's ``client_ip`` stays blank
+        (None) and ``client_ips`` is the empty list."""
+        from routers.stats import _enrich_channels_with_attribution
+
+        channels = [
+            {
+                "channel_id": "ch-1",
+                "channel_name": "ESPN",
+                "channel_number": 408,
+                "stream_name": "ESPN",
+                "clients": [{"ip_address": "10.0.0.5", "client_id": "c1"}],
+            }
+        ]
+        with patch("config.get_settings", return_value=_all_disabled_settings()):
+            await _enrich_channels_with_attribution(channels)
+
+        client = channels[0]["clients"][0]
+        assert client["client_ip"] is None
+        assert client["client_ips"] == []
+
+    @pytest.mark.asyncio
+    async def test_server_proxy_rolls_up_distinct_client_ips(self):
+        """Server-proxy connection carrying 2 viewers → ``client_ips`` is the
+        distinct set of the viewers' real device IPs."""
+        from routers.stats import _enrich_channels_with_attribution
+
+        channels = [
+            {
+                "channel_id": "ch-1",
+                "channel_name": "ESPN",
+                "channel_number": 408,
+                "stream_name": "US: ESPN FHD",
+                "clients": [{"ip_address": "192.168.1.50", "client_id": "proxy"}],
+            }
+        ]
+        emby_only = MagicMock()
+        emby_only.emby_enabled = True
+        emby_only.emby_base_url = "http://192.168.1.50:8096"
+        emby_only.emby_api_key = "emby-key"
+        emby_only.plex_enabled = False
+        emby_only.jellyfin_enabled = False
+        emby_only.trusted_media_networks = []
+        viewers = [
+            EmbyAttribution(user_id="u1", user_name="amitb", client_ip="47.203.164.8"),
+            EmbyAttribution(user_id="u2", user_name="MotWakorb", client_ip="172.16.0.2"),
+        ]
+        with patch("config.get_settings", return_value=emby_only), \
+             patch("services.emby_resolver.resolve_emby_user",
+                   AsyncMock(return_value=viewers[0])), \
+             patch("services.emby_resolver.resolve_emby_users",
+                   AsyncMock(return_value=viewers)):
+            await _enrich_channels_with_attribution(channels)
+
+        client = channels[0]["clients"][0]
+        assert client["client_ips"] == ["47.203.164.8", "172.16.0.2"]

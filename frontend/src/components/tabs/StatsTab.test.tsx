@@ -1388,3 +1388,103 @@ describe('StatsTab — Connected Clients header viewer count (bd-w9c2a)', () => 
     expect(readClientsHeaderText(container)).toContain('Connected Clients (2)');
   });
 });
+
+describe('StatsTab — real client device IP field (bd-7ncci)', () => {
+  it('renders the Client IP field for an attributed connection', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseMultiViewerChannel,
+          clients: [
+            {
+              client_id: 'cid-ip1',
+              ip_address: '172.18.0.1',
+              user_agent: 'Emby/1.0',
+              connected_at: '2026-05-20T00:00:00Z',
+              last_active: '2026-05-20T00:01:00Z',
+              emby_viewers: [
+                { user_id: 'e1', user_name: 'amitb', client_ip: '47.203.164.8' },
+              ],
+              client_ip: '47.203.164.8',
+            },
+          ],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('client-device-ip')).toBeInTheDocument();
+    });
+    // The real device IP is shown in the new field.
+    expect(screen.getByTestId('client-device-ip')).toHaveTextContent(
+      'Client IP: 47.203.164.8'
+    );
+    // The Dispatcharr connection IP is still rendered, unchanged.
+    expect(screen.getByText('172.18.0.1')).toBeInTheDocument();
+  });
+
+  it('renders no Client IP field when the connection is not attributed', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseMultiViewerChannel,
+          clients: [
+            {
+              client_id: 'cid-ip2',
+              ip_address: '10.0.0.5',
+              user_agent: 'VLC/3.0',
+              connected_at: '2026-05-20T00:00:00Z',
+              last_active: '2026-05-20T00:01:00Z',
+            },
+          ],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('10.0.0.5')).toBeInTheDocument();
+    });
+    // No Client IP field for an unattributed connection.
+    expect(screen.queryByTestId('client-device-ip')).not.toBeInTheDocument();
+  });
+
+  it('renders the set of Client IPs for a server-proxy / rollup connection', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseMultiViewerChannel,
+          clients: [
+            {
+              client_id: 'cid-ip3',
+              ip_address: '172.16.0.19',
+              user_agent: 'Emby-Server/4.8',
+              connected_at: '2026-05-20T00:00:00Z',
+              last_active: '2026-05-20T00:01:00Z',
+              emby_viewers: [
+                { user_id: 'e1', user_name: 'amitb', client_ip: '47.203.164.8' },
+                { user_id: 'e2', user_name: 'MotWakorb', client_ip: '172.16.0.2' },
+              ],
+              client_ips: ['47.203.164.8', '172.16.0.2'],
+            },
+          ],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('client-device-ip')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('client-device-ip')).toHaveTextContent(
+      'Client IP: 47.203.164.8, 172.16.0.2'
+    );
+  });
+});

@@ -364,6 +364,12 @@ export * from './journal';
 export interface Viewer {
   user_id: string | null;
   user_name: string;
+  // bd-7ncci: the REAL requesting-device IP the media server reported for
+  // this viewer's session (Emby/Jellyfin RemoteEndPoint / Plex
+  // Player@address, normalized to a bare IP). Null when the source did not
+  // expose it. Distinct from the StreamClient's Dispatcharr-observed
+  // ip_address — this is the device behind the media server.
+  client_ip?: string | null;
 }
 
 // Attribution source for a given client or channel. Drives badge icon +
@@ -394,6 +400,14 @@ export interface StreamClient {
   emby_viewers?: Viewer[] | null;
   plex_viewers?: Viewer[] | null;
   jellyfin_viewers?: Viewer[] | null;
+  // bd-7ncci: the REAL requesting-device IP the media server reported for an
+  // attributed connection (source-agnostic). ``client_ip`` is the single
+  // attributed viewer's device IP; ``client_ips`` is the distinct set for a
+  // server-proxy or Option-B rollup connection. Blank/empty for an
+  // unattributed (or direct-XC) connection. Distinct from ``ip_address``
+  // (the Dispatcharr connection IP ECM observes).
+  client_ip?: string | null;
+  client_ips?: string[];
   // Most-recent viewer's attribution source (drives badge selection)
   attribution_source?: AttributionSource;
 }

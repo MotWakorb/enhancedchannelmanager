@@ -60,6 +60,63 @@ from urllib.parse import parse_qs, urlparse
 logger = logging.getLogger(__name__)
 
 
+def normalize_client_ip(raw: Optional[str]) -> Optional[str]:
+    """Normalize a media-server session's reported client endpoint to a bare IP.
+
+    bd-7ncci. The three media servers report the requesting device's
+    address in slightly different shapes:
+
+    * Emby / Jellyfin ``RemoteEndPoint`` — usually a bare IPv4
+      (``"47.203.164.8"``) but can carry a ``host:port`` suffix
+      (``"47.203.164.8:51514"``) or an IPv6 literal, optionally
+      bracketed with a port (``"[2001:db8::1]:51514"``).
+    * Plex ``Player/@address`` — a bare IP in practice.
+
+    This helper returns the bare IP for display, stripping any port and
+    surrounding brackets, and validating the result is a real IP address
+    so a malformed value never reaches the Stats UI. It also tolerates an
+    XFF-style comma-separated list by taking the FIRST entry (the
+    originating client) — defensive against a reverse-proxy-injected
+    value, though the upstream session payloads do not currently produce
+    that shape.
+
+    Returns:
+        The bare IPv4/IPv6 string, or ``None`` when ``raw`` is empty /
+        whitespace / not parseable as an IP. ``None`` (not ``""``) is the
+        "no client IP available" sentinel so the Stats field stays blank
+        rather than rendering an empty string. Never raises.
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    token = raw.strip()
+    if not token:
+        return None
+
+    # XFF-style "client, proxy1, proxy2" — the first hop is the origin.
+    if "," in token:
+        token = token.split(",", 1)[0].strip()
+        if not token:
+            return None
+
+    # Bracketed IPv6 with optional port: "[2001:db8::1]" or "[..]:51514".
+    if token.startswith("["):
+        host = token[1:].split("]", 1)[0]
+    elif token.count(":") == 1:
+        # Exactly one colon → "ipv4:port" form. Strip the port.
+        host = token.split(":", 1)[0]
+    else:
+        # No colon (bare IPv4) or many colons (bare IPv6) → use as-is.
+        host = token
+
+    host = host.strip()
+    if not host:
+        return None
+    try:
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        return None
+
+
 # Xtream-Codes (XC) live-stream URL path: ``/live/<user>/<pass>/<id>.ts``
 # (the ``/live/`` segment is optional in some providers:
 # ``/<user>/<pass>/<id>``). The presence of a username/password pair in the
@@ -311,12 +368,22 @@ class CandidateUser:
         source: ``"emby"`` / ``"plex"`` / ``"jellyfin"`` — the media
             server that matched this user. Carried through to the
             assignment so the caller can stamp the right source badge.
+        client_ip: bd-7ncci. The REAL requesting-device IP the media
+            server reported for this viewer's session
+            (Emby/Jellyfin ``RemoteEndPoint`` / Plex ``Player/@address``,
+            normalized to a bare IP via :func:`normalize_client_ip`).
+            ``None`` when the source did not expose it. This is distinct
+            from the connection's Dispatcharr-observed source IP — it is
+            the device behind the media server, surfaced as a separate
+            "Client IP" Stats field. Carried through assignment so the
+            caller can stamp it per viewer.
     """
 
     user_name: str
     user_id: Optional[str] = None
     last_activity_date: Optional[object] = None
     source: str = ""
+    client_ip: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -938,3 +1005,30 @@ def rollup_label(users: tuple[CandidateUser, ...]) -> str:
             seen.add(u.user_name)
             names.append(u.user_name)
     return f"{len(names)} viewers: {', '.join(names)}"
+
+
+def rollup_client_ips(users: tuple[CandidateUser, ...]) -> list[str]:
+    """Return the distinct set of real client IPs across an Option-B rollup.
+
+    bd-7ncci. The Option-B rollup labels a genuinely-ambiguous group of
+    connections with ``"N viewers: <names>"`` rather than pinning one
+    name per row. The matching Client IP display mirrors that: render the
+    SET of distinct client IPs the rolled-up viewers reported, in the
+    same recency order as :func:`rollup_label`, so the operator sees
+    every real device IP behind the ambiguous group without a
+    possibly-wrong 1:1 pin.
+
+    Skips viewers whose ``client_ip`` is ``None`` (a source that did not
+    expose the IP) so the set carries only real values. Duplicate IPs are
+    collapsed (two viewers behind one NAT, or one viewer matched by two
+    tiers) while preserving first-seen order. Returns an empty list when
+    no viewer in the rollup carried a client IP.
+    """
+    seen: set[str] = set()
+    ips: list[str] = []
+    for u in users:
+        ip = u.client_ip
+        if ip and ip not in seen:
+            seen.add(ip)
+            ips.append(ip)
+    return ips

@@ -54,13 +54,18 @@ def _make_session(
     channel_name: str | None = None,
     channel_number: str | None = None,
     last_activity: str | None = "2026-05-17T12:00:00Z",
+    remote_endpoint: str = "10.0.0.99",
 ) -> JellyfinSession:
-    """Build a representative :class:`JellyfinSession` for assertions."""
+    """Build a representative :class:`JellyfinSession` for assertions.
+
+    ``remote_endpoint`` defaults to a bare IP so the bd-7ncci
+    ``client_ip`` threading is exercised by the existing happy-path tests.
+    """
     return JellyfinSession(
         session_id=f"jf-sess-{user_name}",
         user_id=user_id,
         user_name=user_name,
-        remote_endpoint="10.0.0.99",
+        remote_endpoint=remote_endpoint,
         now_playing_item_name=item_name,
         now_playing_channel_name=channel_name,
         last_activity_date=last_activity,
@@ -185,8 +190,10 @@ class TestNoPipeSuffixTolerance:
                 ecm_channel_name="ESPN",
                 ecm_channel_number=408,
             )
+        # bd-7ncci: the attribution now also carries the real client device
+        # IP normalized from the session's RemoteEndPoint.
         assert result == jellyfin_resolver.JellyfinAttribution(
-            user_id="jf-uid-mw", user_name="MotWakorb",
+            user_id="jf-uid-mw", user_name="MotWakorb", client_ip="10.0.0.99",
         )
         # Metric assertion: resolved counter incremented; unresolved is zero.
         assert _get_counter_value("user_attribution_resolved_total", "jellyfin") == 1.0
@@ -270,7 +277,9 @@ class TestExactMatch:
                 ecm_session_ip="192.168.1.20",
                 ecm_stream_name="CNN HD",
             )
-        assert result == jellyfin_resolver.JellyfinAttribution(user_id="jf-uid-bob", user_name="bob")
+        assert result == jellyfin_resolver.JellyfinAttribution(
+            user_id="jf-uid-bob", user_name="bob", client_ip="10.0.0.99",
+        )
 
     async def test_case_insensitive_match(self):
         """Case differences do not prevent an exact match."""
@@ -300,7 +309,7 @@ class TestExactMatch:
                 ecm_stream_name="ESPN HD",
             )
         assert result == jellyfin_resolver.JellyfinAttribution(
-            user_id="jf-uid-carol", user_name="carol",
+            user_id="jf-uid-carol", user_name="carol", client_ip="10.0.0.99",
         )
 
 
@@ -329,7 +338,7 @@ class TestChannelNumberMatch:
                 ecm_channel_number=408,
             )
         assert result == jellyfin_resolver.JellyfinAttribution(
-            user_id="jf-uid-num", user_name="num_user",
+            user_id="jf-uid-num", user_name="num_user", client_ip="10.0.0.99",
         )
 
     async def test_channel_number_missing_on_session_skips_tier(self):
@@ -465,7 +474,7 @@ class TestMultipleMatchTiebreak:
                 ecm_stream_name="CNN HD",
             )
         assert result == jellyfin_resolver.JellyfinAttribution(
-            user_id="jf-uid-new", user_name="new_viewer",
+            user_id="jf-uid-new", user_name="new_viewer", client_ip="10.0.0.99",
         )
 
     async def test_null_last_activity_loses_to_populated(self):
@@ -514,7 +523,7 @@ class TestMultipleMatchTiebreak:
                 ecm_channel_number=408,
             )
         assert result == jellyfin_resolver.JellyfinAttribution(
-            user_id="jf-uid-new", user_name="new_user",
+            user_id="jf-uid-new", user_name="new_user", client_ip="10.0.0.99",
         )
 
 
@@ -1314,7 +1323,7 @@ class TestECMPipePrefixTolerance:
                 ecm_channel_name="109 | CNN",
             )
         assert result == jellyfin_resolver.JellyfinAttribution(
-            user_id="jf-uid-mw", user_name="MotWakorb",
+            user_id="jf-uid-mw", user_name="MotWakorb", client_ip="10.0.0.99",
         )
 
     async def test_ecm_prefix_jellyfin_clean(self):
@@ -1468,6 +1477,7 @@ class TestEcmPipePrefixAsChannelNumber:
         assert result == jellyfin_resolver.JellyfinAttribution(
             user_id="72be7fac4ca046cf8198573ad285c963",
             user_name="MotWakorb",
+            client_ip="10.0.0.99",
         )
 
     async def test_po_symptom_full_data_shape(self):
@@ -1612,3 +1622,48 @@ class TestEcmPipePrefixAsChannelNumber:
             )
         assert result is not None
         assert result.user_name == "subchannel_user"
+
+
+# ---------------------------------------------------------------------------
+# bd-7ncci — real client device IP threaded from RemoteEndPoint
+# ---------------------------------------------------------------------------
+
+
+class TestClientIpCapture:
+    """The resolved Jellyfin attribution carries the session's client IP."""
+
+    async def test_bare_ip_threaded(self):
+        session = _make_session(remote_endpoint="172.16.0.2")
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="CNN HD",
+            )
+        assert result is not None
+        assert result.client_ip == "172.16.0.2"
+
+    async def test_host_port_form_strips_port(self):
+        session = _make_session(remote_endpoint="172.16.0.2:8443")
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="CNN HD",
+            )
+        assert result is not None
+        assert result.client_ip == "172.16.0.2"
+
+    async def test_missing_remote_endpoint_yields_none(self):
+        session = _make_session(remote_endpoint="")
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await jellyfin_resolver.resolve_jellyfin_user(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="CNN HD",
+            )
+        assert result is not None
+        assert result.client_ip is None
