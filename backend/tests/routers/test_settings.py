@@ -100,6 +100,9 @@ def _mock_settings(**overrides):
         "jellyfin_enabled": False,
         "jellyfin_base_url": "",
         "jellyfin_api_key": "",
+        # bd-mlcla: soft IP-ranking trusted networks (ranking only, never a
+        # gate). Empty default so existing tests ignore it.
+        "trusted_media_networks": [],
     }
     defaults.update(overrides)
     mock = MagicMock()
@@ -1081,6 +1084,170 @@ class TestEmbySettingsPersistence:
         assert captured["emby_api_key"] == "stored-emby-key-xyz", (
             "Partial POST cleared emby_api_key — preserve-on-omit broken"
         )
+
+
+class TestPlexJellyfinSecretPreserveOnOmit:
+    """bd-mlcla N3: symmetric preserve-on-omit tests for ``plex_token`` and
+    ``jellyfin_api_key``.
+
+    Only ``emby_api_key`` had this coverage. The settings router applies the
+    same truthiness-based preserve-on-omit contract to all three media-server
+    secrets (``routers/settings.py`` — ``request.X if request.X else
+    current.X``): a partial POST that omits the secret keeps the stored value
+    so the Settings UI can save non-secret fields without re-entering the key.
+    """
+
+    @pytest.mark.asyncio
+    async def test_partial_post_preserves_stored_plex_token(self, async_client):
+        """A POST that omits ``plex_token`` must NOT clear the stored token."""
+        current = _mock_settings(plex_token="stored-plex-token-xyz")
+        captured: dict = {}
+
+        def capture_save(new_settings):
+            captured["plex_token"] = new_settings.plex_token
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+                "plex_enabled": True,
+                "plex_base_url": "http://plex.local:32400",
+                # plex_token intentionally omitted
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["plex_token"] == "stored-plex-token-xyz", (
+            "Partial POST cleared plex_token — preserve-on-omit broken"
+        )
+
+    @pytest.mark.asyncio
+    async def test_partial_post_preserves_stored_jellyfin_api_key(self, async_client):
+        """A POST that omits ``jellyfin_api_key`` must NOT clear the key."""
+        current = _mock_settings(jellyfin_api_key="stored-jellyfin-key-xyz")
+        captured: dict = {}
+
+        def capture_save(new_settings):
+            captured["jellyfin_api_key"] = new_settings.jellyfin_api_key
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+                "jellyfin_enabled": True,
+                "jellyfin_base_url": "http://jellyfin.local:8096",
+                # jellyfin_api_key intentionally omitted
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["jellyfin_api_key"] == "stored-jellyfin-key-xyz", (
+            "Partial POST cleared jellyfin_api_key — preserve-on-omit broken"
+        )
+
+
+class TestTrustedMediaNetworksPersistence:
+    """bd-mlcla N3: router-level preserve-on-omit + clear semantics for
+    ``trusted_media_networks``.
+
+    Unlike the secret fields (which preserve on BOTH ``None`` and ``""``),
+    ``trusted_media_networks`` uses ``is not None`` semantics: ``None``
+    (omitted, e.g. an older frontend bundle) preserves the stored list, but an
+    explicit ``[]`` CLEARS it. This list is a soft IP-ranking hint only — it
+    never gates attribution — so the clear path is safe."""
+
+    @pytest.mark.asyncio
+    async def test_omitted_field_preserves_existing_list(self, async_client):
+        """An older frontend bundle omits the field (None) → stored list kept."""
+        current = _mock_settings(
+            trusted_media_networks=["172.18.0.0/16", "10.0.0.5"]
+        )
+        captured: dict = {}
+
+        def capture_save(new_settings):
+            captured["trusted_media_networks"] = new_settings.trusted_media_networks
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+                # trusted_media_networks intentionally omitted
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["trusted_media_networks"] == ["172.18.0.0/16", "10.0.0.5"], (
+            "Omitted trusted_media_networks must preserve the stored list"
+        )
+
+    @pytest.mark.asyncio
+    async def test_explicit_empty_list_clears_existing(self, async_client):
+        """An explicit ``[]`` clears the stored list (the operator emptied it)."""
+        current = _mock_settings(
+            trusted_media_networks=["172.18.0.0/16", "10.0.0.5"]
+        )
+        captured: dict = {}
+
+        def capture_save(new_settings):
+            captured["trusted_media_networks"] = new_settings.trusted_media_networks
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+                "trusted_media_networks": [],
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["trusted_media_networks"] == [], (
+            "Explicit empty list must CLEAR trusted_media_networks"
+        )
+
+    @pytest.mark.asyncio
+    async def test_explicit_list_persists(self, async_client):
+        """A non-empty list is persisted verbatim."""
+        current = _mock_settings(trusted_media_networks=[])
+        captured: dict = {}
+
+        def capture_save(new_settings):
+            captured["trusted_media_networks"] = new_settings.trusted_media_networks
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+                "trusted_media_networks": ["192.168.1.0/24"],
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["trusted_media_networks"] == ["192.168.1.0/24"]
 
 
 class TestMCPStatusHostResolution:

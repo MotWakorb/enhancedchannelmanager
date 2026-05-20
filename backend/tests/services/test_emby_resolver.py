@@ -126,22 +126,51 @@ def _get_counter_value(metric_key: str, source: str) -> float:
 
 
 class TestIpMismatch:
-    """When the ECM session's IP is not the Emby server's IP, the resolver
-    must return ``None`` without ever touching the cache — every poll
-    cycle hits this path for every non-Emby session, so the short-circuit
-    is the load-bearing optimization."""
+    """bd-mlcla: the strict IP gate is GONE. Off-server traffic (NAT'd
+    through a Docker bridge gateway) is now matched via Tier 1/Tier 2
+    strict channel matching so browser-direct media-server playback
+    attributes; only Tier 3 (fuzzy) stays server-IP-gated. The
+    anti-collapse guarantee moved to ``services.attribution_reconciler``.
+    """
 
-    async def test_ip_mismatch_returns_none_without_cache_call(self):
-        """IP mismatch on an IP-literal base URL skips the cache entirely."""
-        cache_mock = AsyncMock(return_value=[_make_session()])
+    async def test_off_server_ip_strict_match_still_attributes(self):
+        """An off-server IP (e.g. a bridge-gateway NAT source) that matches
+        Tier 1 (channel name) attributes — the resolver consults the cache
+        and returns the user instead of short-circuiting to None."""
+        session = _make_session(item_name="CNN HD", user_name="alice")
+        cache_mock = AsyncMock(return_value=[session])
         with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
              patch.object(emby_resolver, "get_cached_emby_sessions", cache_mock):
             result = await emby_resolver.resolve_emby_user(
-                ecm_session_ip="10.0.0.5",  # NOT the Emby server (192.168.1.10)
+                ecm_session_ip="172.18.0.1",  # NOT the Emby server (192.168.1.10)
+                ecm_stream_name="CNN HD",
+                ecm_channel_name="CNN HD",
+            )
+        assert result is not None
+        assert result.user_name == "alice"
+        cache_mock.assert_awaited()  # gate removed → cache IS consulted
+
+    async def test_off_server_ip_does_not_run_tier3_fuzzy(self):
+        """The bd-ost8o false-positive guard: off-server traffic must NOT
+        fuzzy-match. A session whose item_name only fuzzy-matches the
+        stream name (no Tier 1/2 hit) returns no match for an off-server
+        IP — but the SAME inputs DO match from the server IP (Tier 3)."""
+        # "CNN HD" vs "CNN HD 1080p" fuzzy-matches above 0.85 but there is
+        # no exact Tier-1 channel-name hit (no ecm_channel_name passed).
+        session = _make_session(item_name="CNN HD 1080p", user_name="dan")
+        with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(emby_resolver, "get_cached_emby_sessions",
+                          AsyncMock(return_value=[session])):
+            off_server = await emby_resolver.resolve_emby_users(
+                ecm_session_ip="172.18.0.1",  # off-server → Tier 3 disabled
                 ecm_stream_name="CNN HD",
             )
-        assert result is None
-        cache_mock.assert_not_awaited()
+            on_server = await emby_resolver.resolve_emby_users(
+                ecm_session_ip="192.168.1.10",  # server IP → Tier 3 enabled
+                ecm_stream_name="CNN HD",
+            )
+        assert off_server == [], "off-server fuzzy match must be suppressed (bd-ost8o)"
+        assert [u.user_name for u in on_server] == ["dan"]
 
 
 # ---------------------------------------------------------------------------
@@ -394,10 +423,12 @@ class TestHostnameBaseUrl:
         assert result is not None
         assert result.user_name == "eve"
 
-    async def test_hostname_resolves_to_non_matching_ip_returns_none(self):
-        """``emby.local`` resolves to ``10.0.0.1`` — does NOT match the
-        ECM session IP and the resolver short-circuits before the cache."""
-        cache_mock = AsyncMock(return_value=[_make_session(item_name="CNN HD")])
+    async def test_hostname_resolves_to_non_matching_ip_still_strict_matches(self):
+        """bd-mlcla: ``emby.local`` resolves to ``10.0.0.1`` (NOT the ECM
+        session IP). The hostname is still resolved (to compute the soft
+        rank hint + the Tier-3 gate), but with the strict gate removed an
+        off-server IP still consults the cache and Tier 1 still matches."""
+        cache_mock = AsyncMock(return_value=[_make_session(item_name="CNN HD", user_name="eve")])
         settings = _enabled_settings(base_url="https://emby.local:8920")
 
         with patch.object(emby_resolver, "get_settings", return_value=settings), \
@@ -407,9 +438,11 @@ class TestHostnameBaseUrl:
             result = await emby_resolver.resolve_emby_user(
                 ecm_session_ip="192.168.1.10",
                 ecm_stream_name="CNN HD",
+                ecm_channel_name="CNN HD",
             )
-        assert result is None
-        cache_mock.assert_not_awaited()
+        assert result is not None
+        assert result.user_name == "eve"
+        cache_mock.assert_awaited()
 
     async def test_hostname_resolution_failure_logs_warn_and_returns_none(self, caplog):
         """``socket.gethostbyname`` raises ``socket.gaierror`` for an
@@ -850,17 +883,19 @@ class TestMultiViewer:
             )
         assert users == []
 
-    async def test_ip_mismatch_returns_empty_list_without_cache_call(self):
-        """IP short-circuit also applies to the plural variant."""
-        cache_mock = AsyncMock(return_value=[_make_session()])
+    async def test_off_server_ip_plural_strict_matches(self):
+        """bd-mlcla: the plural variant also drops the gate — an off-server
+        IP returns the full Tier-1/Tier-2 matched set for reconciliation."""
+        cache_mock = AsyncMock(return_value=[_make_session(item_name="CNN HD", user_name="alice")])
         with patch.object(emby_resolver, "get_settings", return_value=_enabled_settings()), \
              patch.object(emby_resolver, "get_cached_emby_sessions", cache_mock):
             users = await emby_resolver.resolve_emby_users(
-                ecm_session_ip="10.0.0.5",  # NOT the Emby server
+                ecm_session_ip="172.18.0.1",  # NOT the Emby server
                 ecm_stream_name="CNN HD",
+                ecm_channel_name="CNN HD",
             )
-        assert users == []
-        cache_mock.assert_not_awaited()
+        assert [u.user_name for u in users] == ["alice"]
+        cache_mock.assert_awaited()
 
     async def test_singular_wrapper_returns_most_recent_viewer(self):
         """Back-compat target: the legacy singular wrapper still returns
@@ -1013,8 +1048,11 @@ class TestNoMatchDiagnostic:
         assert len(users) == 1
         assert self._no_match_records(caplog.records) == []
 
-    async def test_no_emit_when_ip_short_circuit_fails(self, caplog):
-        """IP mismatch short-circuits before the session compare → no WARN."""
+    async def test_off_server_ip_no_strict_match_still_emits_diagnostic(self, caplog):
+        """bd-mlcla: with the gate removed, an off-server IP that has
+        sessions but no strict (Tier 1/2) match still emits the no-match
+        forensic WARN — the diagnostic now fires for off-server traffic
+        too (it is the data operators need to debug a NAT'd 'User #0')."""
         session = _make_session(
             item_name="NotTheChannel", channel_number="999",
         )
@@ -1023,12 +1061,12 @@ class TestNoMatchDiagnostic:
                           AsyncMock(return_value=[session])):
             with caplog.at_level(logging.WARNING, logger="services.emby_resolver"):
                 users = await emby_resolver.resolve_emby_users(
-                    ecm_session_ip="10.0.0.99",  # NOT the Emby server
+                    ecm_session_ip="172.18.0.1",  # NOT the Emby server
                     ecm_stream_name="CNN",
                     ecm_channel_name="CNN",
                 )
         assert users == []
-        assert self._no_match_records(caplog.records) == []
+        assert len(self._no_match_records(caplog.records)) == 1
 
     async def test_rate_limit_within_window(self, caplog):
         """Two no-match calls in quick succession for the same (ip, channel)
@@ -1420,21 +1458,22 @@ class TestEcmPipePrefixAsChannelNumber:
 
 
 class TestPodx3DistinctIpsDoNotCollapse:
-    """bd-podx3 regression (live production attribution collapse).
+    """bd-mlcla supersedes the bd-podx3 IP-gate contract.
 
-    bd-ost8o's removed-the-IP-gate "direct_fallback" mode attributed an
-    ECM client to whichever Emby user happened to be watching the same
-    channel, matching by channel name ALONE with no signal tying the
-    client to the session. In the PO's live setup, four ECM clients —
-    each from a DIFFERENT IP — were all on channel ``679 | Milwaukee
-    Brewers`` (the channel the Emby user ``jkaisersoze`` was watching),
-    so all four collapsed onto ``jkaisersoze``.
+    bd-podx3 restored a strict IP gate so only a client whose IP equalled
+    the Emby server IP could attribute. That gate broke browser-direct /
+    NAT'd traffic (bd-mlcla: source ``172.18.0.1`` instead of the
+    configured server IP → "User #0"). The redesign removes the gate: the
+    RESOLVER now returns the channel's matched-user SET for any IP via
+    strict Tier 1/Tier 2 matching, and the anti-collapse guarantee
+    (jkaisersoze must not land on four distinct connections) moved to
+    ``services.attribution_reconciler`` — see
+    ``test_attribution_reconciler.TestAntiCollapseAntiBroadcast`` and the
+    bandwidth/stats reconciliation suites.
 
-    The contract this restores: ONLY a client whose IP equals the Emby
-    server IP can resolve to an Emby user. Every other IP — direct XC
-    viewers, other devices, browsers fetching the stream directly — must
-    return an empty attribution. Channel-name coincidence is NOT a viewer
-    identity signal.
+    These tests pin the NEW resolver contract: off-server IPs DO match
+    (so reconciliation has candidates to work with), but Tier-3 fuzzy
+    stays gated.
     """
 
     # Mirrors the live data: one Emby session for ``jkaisersoze`` playing
@@ -1447,12 +1486,11 @@ class TestPodx3DistinctIpsDoNotCollapse:
         channel_number="679",
     )
 
-    async def test_non_server_ips_on_matching_channel_return_empty(self):
-        """The three non-server IPs from the live incident
-        (98.144.168.47, a second 98.144.168.47 client, 192.168.1.108)
-        all watching channel 679 must NOT be attributed to jkaisersoze —
-        each resolves to an empty list because its IP is not the Emby
-        server IP."""
+    async def test_off_server_ips_now_strict_match_for_reconciliation(self):
+        """bd-mlcla: off-server IPs on channel 679 now DO match jkaisersoze
+        via Tier 1 (the gate is gone). The resolver's job is to surface the
+        candidate user SET; preventing jkaisersoze from collapsing onto all
+        four connections is the reconciler's job, asserted separately."""
         session = _make_session(**self._SESSION)
         settings = _enabled_settings(base_url=f"http://{self._SERVER_IP}:8096")
         with patch.object(emby_resolver, "get_settings", return_value=settings), \
@@ -1465,15 +1503,15 @@ class TestPodx3DistinctIpsDoNotCollapse:
                     ecm_channel_name="679 | Milwaukee Brewers",
                     ecm_channel_number=None,
                 )
-                assert users == [], (
-                    f"client {client_ip} must not be attributed to an Emby "
-                    f"user merely for sharing channel 679 — got {users!r}"
+                assert [u.user_name for u in users] == ["jkaisersoze"], (
+                    f"off-server client {client_ip} should strict-match the "
+                    f"channel-679 session for reconciliation — got {users!r}"
                 )
 
     async def test_server_ip_client_still_attributes(self):
         """The genuinely Emby-mediated client (egressing through the Emby
-        server IP) still resolves correctly — the fix restores the gate
-        without breaking the legitimate server-mediated path."""
+        server IP) still resolves correctly — the server-mediated path is
+        unaffected by the gate removal."""
         session = _make_session(**self._SESSION)
         settings = _enabled_settings(base_url=f"http://{self._SERVER_IP}:8096")
         with patch.object(emby_resolver, "get_settings", return_value=settings), \
@@ -1487,10 +1525,10 @@ class TestPodx3DistinctIpsDoNotCollapse:
             )
         assert [u.user_name for u in users] == ["jkaisersoze"]
 
-    async def test_non_server_ip_does_not_consult_cache(self):
-        """The strict gate short-circuits BEFORE the session cache call
-        for non-server IPs — both a correctness guarantee (no channel
-        match attempted) and the load-bearing hot-path optimization."""
+    async def test_off_server_ip_consults_cache(self):
+        """bd-mlcla: the gate-removal means off-server IPs now consult the
+        session cache (the strict tiers need the sessions to match against).
+        The old short-circuit-before-cache assertion is inverted."""
         cache_mock = AsyncMock(return_value=[_make_session(**self._SESSION)])
         settings = _enabled_settings(base_url=f"http://{self._SERVER_IP}:8096")
         with patch.object(emby_resolver, "get_settings", return_value=settings), \
@@ -1500,5 +1538,5 @@ class TestPodx3DistinctIpsDoNotCollapse:
                 ecm_stream_name="US: Milwaukee Brewers",
                 ecm_channel_name="679 | Milwaukee Brewers",
             )
-        assert users == []
-        cache_mock.assert_not_awaited()
+        assert [u.user_name for u in users] == ["jkaisersoze"]
+        cache_mock.assert_awaited()

@@ -114,20 +114,43 @@ def _get_counter_value(metric_key: str, source: str) -> float:
 
 
 class TestIpMismatch:
-    """When the ECM session's IP is not the Jellyfin server's IP, the resolver
-    must return ``None`` without ever touching the cache."""
+    """bd-mlcla: the strict IP gate is GONE — this is the live TSN5 /
+    MotWakorb case (Jellyfin Web NAT'd through 172.18.0.1). Off-server
+    traffic now strict-matches Tier 1/Tier 2; only Tier 3 fuzzy stays
+    server-IP-gated. Anti-collapse moved to the reconciler."""
 
-    async def test_ip_mismatch_returns_none_without_cache_call(self):
-        """IP mismatch on an IP-literal base URL skips the cache entirely."""
-        cache_mock = AsyncMock(return_value=[_make_session()])
+    async def test_off_server_ip_strict_match_still_attributes(self):
+        """An off-server (bridge-gateway NAT) IP that matches Tier 1 now
+        attributes — the gate removal is the fix for the 'User #0' bug."""
+        session = _make_session(item_name="CNN HD", user_name="motwakorb")
+        cache_mock = AsyncMock(return_value=[session])
         with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
              patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions", cache_mock):
             result = await jellyfin_resolver.resolve_jellyfin_user(
-                ecm_session_ip="10.0.0.5",  # NOT the Jellyfin server (192.168.1.20)
+                ecm_session_ip="172.18.0.1",  # NAT'd bridge gateway
+                ecm_stream_name="CNN HD",
+                ecm_channel_name="CNN HD",
+            )
+        assert result is not None
+        assert result.user_name == "motwakorb"
+        cache_mock.assert_awaited()
+
+    async def test_off_server_ip_does_not_run_tier3_fuzzy(self):
+        """bd-ost8o guard: off-server traffic must NOT fuzzy-match."""
+        session = _make_session(item_name="CNN HD 1080p", user_name="dan")
+        with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
+                          AsyncMock(return_value=[session])):
+            off_server = await jellyfin_resolver.resolve_jellyfin_users(
+                ecm_session_ip="172.18.0.1",  # off-server → Tier 3 disabled
                 ecm_stream_name="CNN HD",
             )
-        assert result is None
-        cache_mock.assert_not_awaited()
+            on_server = await jellyfin_resolver.resolve_jellyfin_users(
+                ecm_session_ip="192.168.1.20",  # server IP → Tier 3 enabled
+                ecm_stream_name="CNN HD",
+            )
+        assert off_server == []
+        assert [u.user_name for u in on_server] == ["dan"]
 
 
 # ---------------------------------------------------------------------------
@@ -522,10 +545,11 @@ class TestHostnameBaseUrl:
         assert result is not None
         assert result.user_name == "eve"
 
-    async def test_hostname_resolves_to_non_matching_ip_returns_none(self):
-        """``jf.local`` resolves to ``10.0.0.1`` — does NOT match the ECM
-        session IP and the resolver short-circuits before the cache."""
-        cache_mock = AsyncMock(return_value=[_make_session(item_name="CNN HD")])
+    async def test_hostname_resolves_to_non_matching_ip_still_strict_matches(self):
+        """bd-mlcla: hostname still resolved (for the rank hint + Tier-3
+        gate), but with the gate removed an off-server IP still consults
+        the cache and Tier 1 still matches."""
+        cache_mock = AsyncMock(return_value=[_make_session(item_name="CNN HD", user_name="eve")])
         settings = _enabled_settings(base_url="https://jf.local:8920")
 
         with patch.object(jellyfin_resolver, "get_settings", return_value=settings), \
@@ -535,9 +559,11 @@ class TestHostnameBaseUrl:
             result = await jellyfin_resolver.resolve_jellyfin_user(
                 ecm_session_ip="192.168.1.20",
                 ecm_stream_name="CNN HD",
+                ecm_channel_name="CNN HD",
             )
-        assert result is None
-        cache_mock.assert_not_awaited()
+        assert result is not None
+        assert result.user_name == "eve"
+        cache_mock.assert_awaited()
 
     async def test_hostname_resolution_failure_logs_warn_and_returns_none(self, caplog):
         """``socket.gethostbyname`` raises ``socket.gaierror`` for an
@@ -798,17 +824,18 @@ class TestMultiViewer:
             )
         assert users == []
 
-    async def test_ip_mismatch_returns_empty_list_without_cache_call(self):
-        """IP short-circuit also applies to the plural variant."""
-        cache_mock = AsyncMock(return_value=[_make_session()])
+    async def test_off_server_ip_plural_strict_matches(self):
+        """bd-mlcla: the plural variant also drops the gate."""
+        cache_mock = AsyncMock(return_value=[_make_session(item_name="CNN HD", user_name="alice")])
         with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
              patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions", cache_mock):
             users = await jellyfin_resolver.resolve_jellyfin_users(
-                ecm_session_ip="10.0.0.5",  # NOT the Jellyfin server
+                ecm_session_ip="172.18.0.1",  # NOT the Jellyfin server
                 ecm_stream_name="CNN HD",
+                ecm_channel_name="CNN HD",
             )
-        assert users == []
-        cache_mock.assert_not_awaited()
+        assert [u.user_name for u in users] == ["alice"]
+        cache_mock.assert_awaited()
 
     async def test_singular_wrapper_returns_most_recent_viewer(self):
         """Back-compat target: the legacy singular wrapper still returns
@@ -957,20 +984,21 @@ class TestNoMatchDiagnostic:
         assert len(users) == 1
         assert self._no_match_records(caplog.records) == []
 
-    async def test_no_emit_when_ip_short_circuit_fails(self, caplog):
-        """IP mismatch short-circuits before the session compare → no WARN."""
+    async def test_off_server_ip_no_strict_match_still_emits_diagnostic(self, caplog):
+        """bd-mlcla: off-server IP with sessions but no strict match emits
+        the forensic WARN (operators need it to debug a NAT'd 'User #0')."""
         session = _make_session(item_name="UnrelatedShow")
         with patch.object(jellyfin_resolver, "get_settings", return_value=_enabled_settings()), \
              patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
                           AsyncMock(return_value=[session])):
             with caplog.at_level(logging.WARNING, logger="services.jellyfin_resolver"):
                 users = await jellyfin_resolver.resolve_jellyfin_users(
-                    ecm_session_ip="10.0.0.99",  # NOT the Jellyfin server
+                    ecm_session_ip="172.18.0.1",  # NOT the Jellyfin server
                     ecm_stream_name="CNN",
                     ecm_channel_name="CNN",
                 )
         assert users == []
-        assert self._no_match_records(caplog.records) == []
+        assert len(self._no_match_records(caplog.records)) == 1
 
     async def test_rate_limit_within_window(self, caplog):
         """Two no-match calls for same (ip, channel) within 60 s → one WARN."""
@@ -1232,10 +1260,13 @@ class TestForensicInfoLogging:
         msg = inspects[0].getMessage()
         assert "queue_item_id=2b0159285ef4370ec3c8c91534bc076d" in msg
 
-    async def test_ip_mismatch_emits_no_info(self, caplog):
-        """IP-mismatch short-circuit must NOT emit the resolver_call INFO
-        — it's a hot path called on every non-Jellyfin IP and would
-        flood the log. DEBUG only."""
+    async def test_off_server_ip_emits_resolver_call_info(self, caplog):
+        """bd-mlcla: off-server traffic is now a real attribution-candidate
+        path (gate removed), so it DOES emit the resolver_call INFO with
+        ``ip_is_server=False`` — the forensic surface operators use to
+        diagnose a NAT'd 'User #0'. (Idle, empty-session installs still
+        produce no spam: the line fires only when the resolver enters with
+        a configured server.)"""
         with patch.object(jellyfin_resolver, "get_settings",
                           return_value=_enabled_settings()), \
              patch.object(jellyfin_resolver, "get_cached_jellyfin_sessions",
@@ -1243,14 +1274,14 @@ class TestForensicInfoLogging:
             with caplog.at_level(logging.INFO,
                                  logger="services.jellyfin_resolver"):
                 await jellyfin_resolver.resolve_jellyfin_user(
-                    ecm_session_ip="10.0.0.99",  # NOT the Jellyfin server
+                    ecm_session_ip="172.18.0.1",  # NOT the Jellyfin server
                     ecm_stream_name="CNN",
                 )
-        cache_mock.assert_not_awaited()
+        cache_mock.assert_awaited()
         calls = self._info_records(caplog.records,
                                    "[JELLYFIN-RESOLVER] resolver_call")
-        # No INFO log on the ip-mismatch hot path.
-        assert calls == []
+        assert len(calls) == 1
+        assert "ip_is_server=False" in calls[0].getMessage()
 
 
 # ---------------------------------------------------------------------------

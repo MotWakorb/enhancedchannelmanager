@@ -1032,6 +1032,10 @@ export interface SettingsResponse {
   jellyfin_enabled: boolean;
   jellyfin_base_url: string;
   jellyfin_api_key_configured: boolean;
+  // bd-mlcla: operator-configured trusted media/proxy networks (CIDRs or
+  // bare IPs). Used ONLY to RANK media-server attribution candidates,
+  // never to gate. Default empty.
+  trusted_media_networks: string[];
 }
 
 // Stream preview mode for browser playback
@@ -1144,6 +1148,8 @@ export async function saveSettings(settings: {
   jellyfin_enabled?: boolean;
   jellyfin_base_url?: string;
   jellyfin_api_key?: string;
+  // bd-mlcla: trusted media/proxy networks (ranking hint only, never gates).
+  trusted_media_networks?: string[];
 }): Promise<{ status: string; configured: boolean; server_changed: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',

@@ -392,6 +392,95 @@ async def _enrich_channels_with_attribution(channels: list) -> None:
             )
 
 
+def _build_attribution_connections(ch: dict, clients: list, server_ip=None) -> list:
+    """Build reconciler :class:`Connection` objects for a channel's clients.
+
+    bd-mlcla. The channel's active stream ``url`` is the URL-identity
+    discriminator: when it embeds XC/M3U credentials the channel is a
+    direct-IPTV channel attributed via the bd-gy5nd provider path, so ALL
+    its connections are marked ``has_url_identity=True`` and the reconciler
+    excludes them. (Dispatcharr serves one upstream URL per channel, so the
+    discriminator is per-channel, not per-connection.)
+
+    A connection whose IP equals ``server_ip`` (the resolved media-server
+    IP for the source being reconciled) is flagged ``is_server_proxy`` — it
+    is the transcoding proxy that carries the full viewer set (bd-r5f0c.9).
+
+    ``client_id`` falls back to ``ip_address`` then a positional synthetic
+    so reconciliation always has a stable key. ``connected_at`` is parsed
+    from the float Dispatcharr surfaces — it is only a tie-break, so a
+    missing value is safe.
+    """
+    from services.attribution_reconciler import Connection, url_embeds_username
+
+    has_url_identity = url_embeds_username(ch.get("url"))
+    connections: list[Connection] = []
+    for idx, client in enumerate(clients):
+        ip = client.get("ip_address")
+        client_id = client.get("client_id") or ip or f"_conn{idx}"
+        connected_at = client.get("connected_at")
+        try:
+            connected_at = float(connected_at) if connected_at is not None else None
+        except (TypeError, ValueError):
+            connected_at = None
+        connections.append(
+            Connection(
+                client_id=str(client_id),
+                ip_address=ip,
+                connected_at=connected_at,
+                has_url_identity=has_url_identity,
+                is_server_proxy=(server_ip is not None and ip == server_ip),
+            )
+        )
+    return connections
+
+
+def _resolve_source_server_ip(source_label: str, settings):
+    """Resolve the media-server IP for a source (bd-mlcla). None on failure.
+
+    Reuses each resolver's cached server-IP helper so this adds no DNS
+    thrash. Used to flag the server-proxy connection (the full-viewer-set
+    carrier) — a best-effort hint, so any failure returns ``None`` and the
+    connection is treated as a direct (1:1) connection.
+    """
+    try:
+        if source_label == "emby":
+            from services.emby_resolver import _resolve_emby_server_ip
+            return _resolve_emby_server_ip(getattr(settings, "emby_base_url", "") or "")
+        if source_label == "plex":
+            from services.plex_resolver import _resolve_plex_server_ip
+            return _resolve_plex_server_ip(getattr(settings, "plex_base_url", "") or "")
+        if source_label == "jellyfin":
+            from services.jellyfin_resolver import _resolve_jellyfin_server_ip
+            return _resolve_jellyfin_server_ip(
+                getattr(settings, "jellyfin_base_url", "") or ""
+            )
+    except Exception:  # noqa: BLE001 — hint only, never raise
+        return None
+    return None
+
+
+def _build_trusted_networks_for_attribution(settings, server_ip):
+    """Assemble the soft IP-ranking trusted-network list (bd-mlcla).
+
+    Unions the resolved media-server IP, the operator's
+    ``trusted_media_networks`` setting, and auto-detected local Docker
+    bridge gateways. Ranking-only — never gates. Auto-detect failures
+    degrade silently to ``connected_at`` ordering.
+    """
+    from config import detect_local_bridge_gateways
+    from services.attribution_reconciler import build_trusted_networks
+
+    configured = getattr(settings, "trusted_media_networks", None)
+    if not isinstance(configured, list):
+        configured = []
+    return build_trusted_networks(
+        server_ips=[server_ip],
+        configured_cidrs=configured,
+        detected_gateways=detect_local_bridge_gateways(),
+    )
+
+
 async def _enrich_one_source(
     *,
     ch: dict,
@@ -406,50 +495,77 @@ async def _enrich_one_source(
     user_name_key: str,
     viewers_key: str,
 ) -> None:
-    """Resolve one channel's clients against one media source (multi-viewer).
+    """Reconcile one channel's clients against one media source (bd-mlcla).
 
-    Shared loop used by Emby / Plex / Jellyfin branches of
-    :func:`_enrich_channels_with_attribution`.
+    Replaces the pre-bd-mlcla per-IP broadcast loop. The resolvers no
+    longer IP-gate; they return the channel's matched-user SET for any IP
+    (Tier 3 fuzzy still server-IP-gated internally). This function:
 
-    bd-r5f0c.9 dual-call back-compat discipline: call BOTH
-    ``single_resolver`` (the bd-fm23o/bd-r5f0c.4 mock target the
-    existing ``test_stats_emby.py`` regression suite asserts against)
-    and ``plural_resolver`` (the bd-r5f0c.9 multi-viewer surface).
-    Whichever returns the most viewers populates the response. In
-    production both go to the same real resolver chain and the plural
-    carries everything the singular does (the singular wrapper is
-    ``plural[0]``); in legacy tests that mock only the singular
-    function, the plural call hits the real un-mocked resolver and
-    returns empty, so we wrap the singular result into a 1-element
-    list. The production cost is one extra microsecond-scale function
-    call per (channel, ip); the back-compat benefit is the full
-    bd-fm23o + bd-r5f0c.4 stats regression suite continues to verify
-    the single-viewer contract without test-file edits.
+    1. Builds reconciler :class:`Connection` objects from ``clients``,
+       excluding direct-IPTV channels via the URL-identity discriminator.
+    2. Gathers the distinct candidate-user set by calling the resolver for
+       each eligible connection's IP and unioning the results — so a
+       server-IP connection contributes its Tier-3 matches while NAT'd
+       connections contribute Tier-1/2 matches, all pooled.
+    3. Reconciles connections against candidate users via
+       :func:`services.attribution_reconciler.reconcile_channel` (each
+       user assigned at most once; surplus users channel-level only; the
+       Option-B rollup for genuinely-ambiguous groups).
+    4. Stamps per-client + channel-level fields from the assignment.
 
-    Surfaces TWO fields per channel + per client:
+    Back-compat: BOTH ``single_resolver`` and ``plural_resolver`` are
+    still called (the existing ``test_stats_emby.py`` / ``_attribution``
+    suites mock only the singular). Whichever yields the most viewers for
+    an IP feeds the candidate pool.
 
-    * ``<user_name_key>`` — back-compat singular field, populated from
-      position 0 of the viewer list (most-recent viewer). Frontend
-      pre-W5 renders this verbatim.
-    * ``<viewers_key>`` — full list of ``{"user_id", "user_name"}``
-      dicts. W5 frontend renders every viewer; empty list when no
-      tier matched.
+    Surfaces per channel + per client:
 
-    Each Attribution duck-typed result is normalised to a plain dict
-    ``{"user_id": ..., "user_name": ...}``; PlexAttribution carries a
-    ``.user_id`` slot (currently always ``None``) and a ``.user_name``
-    slot, matching the Emby / Jellyfin shape. The Plex resolver's
-    legacy singular wrapper returns ``str | None``; we handle both the
-    string and the dataclass forms in the duck-typed extraction below.
+    * ``<user_name_key>`` — singular display name. For a connection in an
+      Option-B rollup group this is the ``"N viewers: ..."`` rollup label;
+      otherwise the single user_name (or unset for User #0).
+    * ``<viewers_key>`` — list of ``{"user_id", "user_name"}`` dicts. The
+      channel-level list is the full distinct user set; a per-connection
+      list is that connection's assigned user(s) (one, or the rollup set).
     """
-    channel_level_set = False
-    for ip in client_ips:
-        # Call BOTH the singular (legacy mock seam) and the plural
-        # (bd-r5f0c.9 multi-viewer). Whichever has more entries wins.
+    from config import get_settings
+    from services.attribution_reconciler import (
+        CandidateUser,
+        reconcile_channel,
+        rollup_label,
+    )
+
+    try:
+        settings = get_settings()
+    except Exception:  # pragma: no cover — settings access raise is exotic
+        settings = None
+    server_ip = (
+        _resolve_source_server_ip(source_label, settings)
+        if settings is not None
+        else None
+    )
+
+    connections = _build_attribution_connections(ch, clients, server_ip=server_ip)
+    # eligible IPs = connections the reconciler will consider (URL-identity
+    # channels contribute none).
+    eligible_ips = [
+        c.ip_address for c in connections
+        if not c.has_url_identity and c.ip_address
+    ]
+    # Preserve channel-level seeded keys when nothing is eligible.
+    if not eligible_ips:
+        return
+
+    # --- Gather the distinct candidate-user set across eligible IPs.
+    # Call the resolver per IP and union; the resolver returns the same
+    # channel-user set regardless of IP except Tier 3 (server-IP only), so
+    # unioning lets a server-IP connection contribute fuzzy matches while
+    # NAT'd connections contribute strict matches.
+    candidate_users: list[CandidateUser] = []
+    seen_candidate_keys: set = set()
+    for ip in eligible_ips:
         try:
             single_result = await single_resolver(
-                ip,
-                stream_name or "",
+                ip, stream_name or "",
                 ecm_channel_name=channel_name,
                 ecm_channel_number=channel_number,
             )
@@ -461,8 +577,7 @@ async def _enrich_one_source(
             single_result = None
         try:
             plural_result = await plural_resolver(
-                ip,
-                stream_name or "",
+                ip, stream_name or "",
                 ecm_channel_name=channel_name,
                 ecm_channel_number=channel_number,
             )
@@ -473,60 +588,92 @@ async def _enrich_one_source(
             )
             plural_result = []
 
-        # Normalize to a single viewers list. Plural wins when non-empty
-        # (production path + new multi-viewer tests). Singular wraps to
-        # a 1-element list when plural is empty (legacy test path that
-        # mocks only the singular function).
         viewers_list: list = []
         if plural_result:
             viewers_list = list(plural_result)
         elif single_result is not None:
             viewers_list = [single_result]
 
-        if not viewers_list:
+        for v in viewers_list:
+            payload = _coerce_viewer_to_dict(v)
+            name = payload.get("user_name")
+            if not name:
+                continue
+            uid = payload.get("user_id")
+            key = ("id", uid) if uid is not None else ("name", name)
+            if key in seen_candidate_keys:
+                continue
+            seen_candidate_keys.add(key)
+            candidate_users.append(
+                CandidateUser(
+                    user_name=name,
+                    user_id=uid,
+                    last_activity_date=payload.get("last_activity_date"),
+                    source=source_label,
+                )
+            )
+
+    if not candidate_users:
+        return
+
+    # --- Reconcile.
+    trusted_networks = (
+        _build_trusted_networks_for_attribution(settings, server_ip)
+        if settings is not None
+        else None
+    )
+    result = reconcile_channel(
+        connections, candidate_users, trusted_networks=trusted_networks,
+    )
+
+    # --- Channel-level: the full distinct user set + top display name.
+    channel_viewers_payload = [
+        {"user_id": u.user_id, "user_name": u.user_name}
+        for u in result.channel_viewers
+    ]
+    if channel_viewers_payload:
+        ch[viewers_key] = channel_viewers_payload
+        ch[user_name_key] = channel_viewers_payload[0]["user_name"]
+
+    # --- Per-client stamp from the reconciler assignment.
+    assignment_by_id = {a.client_id: a for a in result.assignments}
+    conn_by_client = {c.client_id: c for c in connections}
+    for client in clients:
+        ip = client.get("ip_address")
+        # Re-derive the same client_id the connection builder used.
+        client_id = str(client.get("client_id") or ip or "")
+        # Match by client_id when present; otherwise the synthetic key.
+        conn = conn_by_client.get(client_id)
+        if conn is None:
             continue
-
-        # Duck-typed dict coercion: Plex's singular returns a bare
-        # ``str`` (legacy contract); Emby + Jellyfin (and all three
-        # plural variants) return dataclasses with ``.user_id +
-        # .user_name``. Normalise to ``{"user_id", "user_name"}`` so
-        # the response shape matches the bandwidth_tracker writer's
-        # JSON encoding of ``session_telemetry.<source>_viewers``.
-        viewers_payload = [_coerce_viewer_to_dict(v) for v in viewers_list]
-        # Filter out entries with no user_name (defensive; should not
-        # occur in production).
-        viewers_payload = [v for v in viewers_payload if v.get("user_name")]
-        if not viewers_payload:
+        assignment = assignment_by_id.get(conn.client_id)
+        if assignment is None:
             continue
-
-        top_user_name = viewers_payload[0]["user_name"]
-
-        # Channel-level: first matching IP wins (back-compat with
-        # bd-fm23o single-source contract). Subsequent IPs at the same
-        # channel keep their own per-client attribution but do not
-        # overwrite the channel-level singular field.
-        if not channel_level_set:
-            ch[user_name_key] = top_user_name
-            ch[viewers_key] = viewers_payload
-            channel_level_set = True
-
-        # bd-cat70 (fix-forward for v0.17.1-0056): per-IP attribution.
-        # Only stamp client dicts whose ip_address matches THIS loop
-        # iteration's IP. The bd-5kbyf assumption — "every client comes
-        # from the source server's IP, so the channel-level resolved
-        # viewers ARE the per-client viewers" — holds only when the
-        # channel is purely source-mediated. For mixed channels (one
-        # Emby-mediated client + one direct Dispatcharr XC client at a
-        # different IP), broadcasting the source resolver hit to the
-        # non-matching client mis-attributes the second viewer.
-        for client in clients:
-            if client.get("ip_address") == ip:
-                client[user_name_key] = top_user_name
-                client[viewers_key] = viewers_payload
-        # NB: do NOT return — keep iterating so each IP gets its own
-        # per-client stamp. The channel-level fields are set on the
-        # first match only (above); subsequent matches only affect
-        # their own IP's client(s).
+        if assignment.is_proxy_multi:
+            # Server-proxy carrying N genuine viewers (bd-r5f0c.9): the full
+            # viewer list, legacy single name = position 0.
+            client[viewers_key] = [
+                {"user_id": u.user_id, "user_name": u.user_name}
+                for u in assignment.proxy_viewers
+            ]
+            client[user_name_key] = assignment.proxy_viewers[0].user_name
+        elif assignment.is_rollup:
+            # Option B: the group is genuinely ambiguous — show the rollup
+            # LABEL via the singular field (NOT the viewers list, which the
+            # frontend would render as confident distinct names). Leaving
+            # the viewers list empty makes StatsTab fall to the singular
+            # path and render the "N viewers: ..." label verbatim — the
+            # operator sees the ambiguity rather than a possibly-wrong pin.
+            client[user_name_key] = rollup_label(assignment.rollup_users)
+        elif assignment.user is not None:
+            client[user_name_key] = assignment.user.user_name
+            client[viewers_key] = [
+                {
+                    "user_id": assignment.user.user_id,
+                    "user_name": assignment.user.user_name,
+                }
+            ]
+        # else: User #0 — leave the seeded None/[] in place.
 
 
 def _coerce_viewer_to_dict(viewer) -> dict:

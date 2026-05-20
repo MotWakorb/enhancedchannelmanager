@@ -168,6 +168,10 @@ class SettingsRequest(BaseModel):
     jellyfin_enabled: bool = False
     jellyfin_base_url: str = ""
     jellyfin_api_key: Optional[str] = None
+    # bd-mlcla: trusted media/proxy networks (CIDRs or bare IPs) used ONLY
+    # to RANK media-server attribution candidates, never to gate. Optional
+    # so an older frontend bundle that omits it preserves the stored value.
+    trusted_media_networks: Optional[list[str]] = None
 
 
 class SettingsResponse(BaseModel):
@@ -278,6 +282,8 @@ class SettingsResponse(BaseModel):
     jellyfin_enabled: bool
     jellyfin_base_url: str
     jellyfin_api_key_configured: bool
+    # bd-mlcla: trusted media/proxy networks (ranking hint only).
+    trusted_media_networks: list[str]
 
 
 class EmbyTestConnectionRequest(BaseModel):
@@ -476,6 +482,8 @@ async def get_current_settings():
         jellyfin_enabled=settings.jellyfin_enabled,
         jellyfin_base_url=settings.jellyfin_base_url,
         jellyfin_api_key_configured=bool(settings.jellyfin_api_key),
+        # bd-mlcla: trusted media/proxy networks (ranking hint only).
+        trusted_media_networks=settings.trusted_media_networks,
     )
 
 
@@ -533,6 +541,15 @@ async def update_settings(request: SettingsRequest):
         request.jellyfin_api_key
         if request.jellyfin_api_key
         else current_settings.jellyfin_api_key
+    )
+
+    # bd-mlcla: trusted_media_networks preserve-on-omit. An older frontend
+    # bundle that doesn't send the field (None) keeps the stored value; an
+    # explicit empty list clears it.
+    trusted_media_networks = (
+        request.trusted_media_networks
+        if request.trusted_media_networks is not None
+        else current_settings.trusted_media_networks
     )
 
     # MCP API key is never accepted on this endpoint (it has dedicated
@@ -684,6 +701,8 @@ async def update_settings(request: SettingsRequest):
         jellyfin_enabled=request.jellyfin_enabled,
         jellyfin_base_url=request.jellyfin_base_url,
         jellyfin_api_key=jellyfin_api_key,
+        # bd-mlcla: trusted media/proxy networks (preserve-on-omit above).
+        trusted_media_networks=trusted_media_networks,
     )
     save_settings(new_settings)
     clear_settings_cache()
