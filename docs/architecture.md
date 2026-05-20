@@ -454,14 +454,21 @@ pair. For each channel:
    ranking hint (see step 3). **Tier 3 fuzzy stays server-IP-gated**
    internally to avoid VOD/library false positives — fuzzy matching is
    only trusted for connections that egress through the server IP.
-2. **Eligible connections** = all of the channel's Dispatcharr
-   `/proxy/ts/status` connections. These are clients connected to ECM's own
-   proxy; their status payload carries only
-   `client_id` / `ip_address` / `user_agent` / `connected_at` — no
-   per-client credentials — so every proxy connection is eligible for
-   media-server reconciliation. The channel's **upstream provider URL**
-   (`ch["url"]`, e.g. `https://provider/live/<user>/<pass>/<id>.ts`) is the
-   operator's PROVIDER ACCOUNT, shared by every viewer of the channel; it
+2. **Eligible connections** = the channel's Dispatcharr `/proxy/ts/status`
+   connections that do **not** carry a per-client identity. A connection is
+   excluded — kept out of media-server reconciliation and attributed via the
+   bd-gy5nd provider/hostname path instead — when it has a **Dispatcharr
+   ACCOUNT identity**: a positive `user_id` (and resolved `username`) on the
+   client dict, meaning the viewer authenticated to Dispatcharr with a real
+   sub-account (e.g. `kmfelmer`, `user_id=3`). Anonymous connections —
+   Dispatcharr `user_id` `"0"` / `0` / `None`, which is how Dispatcharr
+   serves EVERY media-server pull (the transcoding proxy AND NAT'd
+   browser-direct playback) — carry no account identity and **are** eligible.
+   This per-connection account-identity test is the discriminator: it
+   replaces both the old per-IP gate and the (incorrect, bd-4w9w6)
+   channel-upstream-URL discriminator. The channel's **upstream provider
+   URL** (`ch["url"]`, e.g. `https://provider/live/<user>/<pass>/<id>.ts`) is
+   the operator's PROVIDER ACCOUNT, shared by every viewer of the channel; it
    feeds the bd-gy5nd provider/hostname label but is **not** a per-client
    identity and does **not** exclude any connection from reconciliation. The
    provider label and the media-server user are independent surfaces — a
@@ -469,14 +476,28 @@ pair. For each channel:
    carries both.
 
    > **bd-4w9w6 correction:** the original bd-mlcla wiring derived a
-   > per-connection `has_url_identity` flag from this channel-upstream URL and
+   > per-connection `has_url_identity` flag from the channel-upstream URL and
    > excluded the connection when it embedded XC credentials. Because nearly
    > every XC-sourced channel has such a URL, that excluded essentially all
    > media-server-mediated viewers, silently dropping every match to "User
    > #0" (the live TSN5/Jellyfin bug). The discriminator was conflating the
-   > channel's upstream source with the client's identity. Dispatcharr
-   > proxy connections never carry their own credentials, so the flag is now
-   > always `False` at both call sites.
+   > channel's upstream source with the client's identity.
+   >
+   > **bd-rools correction (re-fix for the bd-cat70 direct-client
+   > cross-attribution):** bd-4w9w6 first set `has_url_identity=False`
+   > unconditionally, which fixed User #0 but — because the resolver is no
+   > longer IP-gated and returns the channel's full matched-user set for ANY
+   > source IP — re-exposed the bd-cat70 cross-attribution: a genuine direct
+   > XC subscriber sharing a channel with a media-server viewer would, via the
+   > B1 direct-first ordering, ABSORB that media-server user (`kmfelmer`'s row
+   > showing `MotWakorb`; the real viewer dropped to User #0). The real
+   > per-client signal is the **Dispatcharr account identity** (`user_id` /
+   > `username` on the `/proxy/ts/status` client dict), implemented as the
+   > `Connection.has_account_identity` flag set at both call sites
+   > (`routers.stats._build_attribution_connections` and
+   > `bandwidth_tracker._build_persisted_connection`). An account-identity
+   > connection is excluded from `eligible_connections()` and never flagged
+   > `is_server_proxy`; `has_url_identity` remains `False` at both call sites.
 3. **IP is a ranking hint only, never a gate.** Connections whose source
    IP falls in the trusted/infrastructure set sort first when pairing
    users to connections. The trusted set is the union of: the resolved
@@ -489,9 +510,21 @@ pair. For each channel:
    structural guarantees: each candidate user is consumed **at most once**
    (anti-collapse — one user can never land on two connections, the
    bd-ost8o regression); assignment is **per-connection** (anti-broadcast
-   — never stamp one user onto every connection, the bd-cat70 regression);
-   and surplus users (`users > connections`) surface only in the
+   — never stamp one user onto every connection, the bd-cat70 *fan-out*
+   form); and surplus users (`users > connections`) surface only in the
    channel-level viewer list, never as a synthesized phantom connection.
+
+   > Note the two distinct bd-cat70 shapes. The **fan-out** form (one
+   > resolver hit broadcast to every connection) is prevented here, by the
+   > per-connection at-most-once assignment. The **direct-client
+   > cross-attribution** form (a genuine direct XC subscriber absorbing a
+   > media-server viewer it shares a channel with) is NOT prevented by the
+   > assignment model — a non-IP-gated resolver would happily offer the
+   > subscriber the media-server users and B1 direct-first ordering would
+   > pair them. That form is prevented one step earlier, by the
+   > **account-identity discriminator** in step 2: the subscriber carries a
+   > Dispatcharr account identity and is excluded from
+   > `eligible_connections()` before assignment runs (bd-rools).
 5. **Server-proxy carries the remainder** (bd-mlcla B1 + bd-r5f0c.9). A
    connection whose source IP equals the resolved server IP is the media
    server's own transcoding proxy pull, which can carry multiple upstream
@@ -564,9 +597,12 @@ channel. Both assumptions broke under Docker networking: browser-direct
 playback NAT'd through a bridge gateway (`172.18.0.1`) was rejected as
 "User #0" (bd-mlcla / bd-podx3), and channel-name-only matching with no
 per-connection identity collapsed every viewer onto one user (bd-ost8o) or
-broadcast one user to all (bd-cat70). The set-reconciliation model above
-replaces both — IP is a ranking hint, identity comes from per-connection
-set assignment.
+broadcast one user to all (bd-cat70 fan-out). The set-reconciliation model
+above replaces both — IP is a ranking hint, identity comes from
+per-connection set assignment. The separate bd-cat70 direct-client
+cross-attribution form (a genuine direct subscriber absorbing a media-server
+viewer) is held off by the account-identity discriminator in step 2, not by
+the assignment model (bd-rools).
 
 ```
 Per-source resolvers (services/{emby,plex,jellyfin}_resolver.py)

@@ -122,6 +122,50 @@ def url_embeds_username(url: Optional[str]) -> bool:
     return False
 
 
+def has_dispatcharr_account_identity(
+    user_id: object = None, username: object = None
+) -> bool:
+    """True when a Dispatcharr ``/proxy/ts/status`` client carries an account.
+
+    bd-rools. The per-connection discriminator that distinguishes a genuine
+    direct-IPTV subscriber (a viewer authenticated to Dispatcharr with a
+    real sub-account) from an anonymous media-server pull (the transcoding
+    proxy AND NAT'd browser-direct playback, which Dispatcharr serves
+    anonymously).
+
+    Dispatcharr surfaces ``user_id == "0"`` / ``0`` / ``None`` / ``""`` for
+    an anonymous connection — there is no ``users.id == 0`` row, it is the
+    project-wide "User #0" sentinel (see
+    ``bandwidth_tracker._coerce_session_user_id``). A connection has an
+    account identity when EITHER:
+
+    * ``user_id`` parses to a positive integer (the canonical signal — the
+      Dispatcharr account primary key), OR
+    * ``username`` is a non-empty, non-whitespace string that is not the
+      ``"0"`` sentinel (defensive fallback for payloads that surface a name
+      without a numeric id).
+
+    Returns ``False`` for anonymous / missing / sentinel values so those
+    connections stay eligible for media-server reconciliation. Never raises.
+    """
+    # Positive-integer user_id is the canonical account signal. Mirror
+    # bandwidth_tracker._coerce_session_user_id's anonymous-sentinel rules
+    # (None / "" / 0 / "0" / bool / float / non-positive → anonymous).
+    if user_id is not None and not isinstance(user_id, (bool, float)):
+        try:
+            parsed = int(user_id)
+        except (TypeError, ValueError):
+            parsed = 0
+        if parsed > 0:
+            return True
+    # Defensive username fallback: a real, non-sentinel name.
+    if isinstance(username, str):
+        token = username.strip()
+        if token and token != "0":
+            return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # IP-priority ranking buckets
 # ---------------------------------------------------------------------------
@@ -180,6 +224,36 @@ class Connection:
             URL identity are EXCLUDED from media-server reconciliation by
             :func:`eligible_connections`; this field lets the caller pass
             the full connection list and let the module do the filtering.
+
+            **bd-4w9w6 / bd-rools:** the call sites no longer derive this
+            from the channel's shared upstream URL (that conflated channel
+            SOURCE with client IDENTITY and dropped every media-server
+            viewer to User #0). The per-client discriminator is now
+            :attr:`has_account_identity`. ``has_url_identity`` is retained
+            for the pure-reconciler API and any future caller that has a
+            genuine per-connection credentialed URL, but both call sites
+            currently set it ``False``.
+        has_account_identity: True when this connection carries a genuine
+            Dispatcharr ACCOUNT identity — a positive ``user_id`` (and/or a
+            non-empty ``username``) on the Dispatcharr ``/proxy/ts/status``
+            client dict, i.e. the viewer authenticated to Dispatcharr with
+            a real sub-account (e.g. ``kmfelmer``, ``user_id=3``). Such a
+            connection is a genuine direct-IPTV subscriber whose attribution
+            comes from its Dispatcharr account (bd-gy5nd path), NOT from a
+            media-server session.
+
+            **bd-rools (re-fix for bd-cat70 direct-client cross-attribution):**
+            Dispatcharr surfaces ``user_id == "0"`` / ``0`` / ``None`` for
+            an ANONYMOUS connection — every media-server pull (transcoding
+            proxy AND NAT'd browser-direct playback) is anonymous to
+            Dispatcharr and therefore has NO account identity, so it stays
+            eligible. A connection WITH an account identity is EXCLUDED from
+            reconciliation by :func:`eligible_connections` (so a real
+            subscriber on a channel shared with a media-server viewer can
+            never absorb that viewer via the B1 direct-first ordering) and
+            is never treated as the server proxy. Verified against live
+            Dispatcharr data (the active media-server pull carries
+            ``user_id="0"``; sub-accounts carry positive ids).
         is_server_proxy: True when this connection's source IP IS a resolved
             media-server IP — i.e. it is the media server's own transcoding
             proxy pull, which legitimately carries the channel's upstream
@@ -213,6 +287,7 @@ class Connection:
     ip_address: Optional[str] = None
     connected_at: Optional[float] = None
     has_url_identity: bool = False
+    has_account_identity: bool = False
     is_server_proxy: bool = False
 
 
@@ -413,12 +488,27 @@ def build_trusted_networks(
 def eligible_connections(connections: list[Connection]) -> list[Connection]:
     """Return connections eligible for media-server reconciliation.
 
-    Drops connections with a URL identity (``has_url_identity is True``) —
-    those are genuine direct-IPTV clients attributed via the bd-gy5nd
-    provider/hostname path and must NOT be reconciled against media-server
-    sessions. This is the discriminator that replaces the IP gate.
+    Drops connections that carry a genuine per-client identity — either a
+    URL identity (``has_url_identity``) or a Dispatcharr account identity
+    (``has_account_identity``). Both mark a genuine direct-IPTV client
+    attributed via the bd-gy5nd provider/hostname path; neither must be
+    reconciled against media-server sessions.
+
+    bd-rools (re-fix for the bd-cat70 direct-client cross-attribution):
+    excluding account-identity connections is what stops a genuine direct
+    XC subscriber (e.g. ``kmfelmer``, Dispatcharr ``user_id=3``) on a
+    channel shared with a media-server viewer (``MotWakorb``) from being
+    paired — under B1 direct-first ordering — to that media-server user and
+    dropping the real viewer to User #0. Anonymous media-server pulls
+    (``user_id == "0"`` / ``0`` / ``None``, including NAT'd browser-direct
+    playback) carry no account identity and stay eligible. This is the
+    per-connection discriminator that replaces both the IP gate and the
+    (incorrect) channel-upstream-URL discriminator.
     """
-    return [c for c in connections if not c.has_url_identity]
+    return [
+        c for c in connections
+        if not c.has_url_identity and not c.has_account_identity
+    ]
 
 
 def _user_dedup_key(user: CandidateUser) -> tuple:
