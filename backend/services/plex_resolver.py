@@ -286,23 +286,15 @@ async def _resolve_plex_users_inner(
         )
         return []
 
-    # bd-podx3: revert bd-ost8o's two-mode dispatch. The strict IP gate
-    # is the load-bearing correctness guarantee — only traffic egressing
-    # through the Plex server's IP can be a genuine Plex viewer. bd-ost8o's
-    # "direct_fallback" mode matched ECM clients to sessions by channel
-    # name alone, collapsing every non-Plex viewer on a channel onto the
-    # one Plex user watching it. See emby_resolver for the full incident
-    # analysis. Browser-direct-play attribution needs a sound identity
-    # signal (the unused ``remote_endpoint``) and is deferred to a fresh
-    # bead.
-    if ecm_session_ip != plex_server_ip:
-        # Hot path short-circuit.
-        logger.debug(
-            "[PLEX-RESOLVER] resolver_call ip=%s ecm_channel=%r "
-            "result=ip_mismatch (server=%s)",
-            ecm_session_ip, ecm_channel_name, plex_server_ip,
-        )
-        return []
+    # bd-mlcla: strict IP gate removed. Browser-direct Plex playback is
+    # NAT'd through the Docker bridge gateway so ECM observes the gateway
+    # IP, not the configured Plex server IP. Attribution is now a
+    # per-channel SET RECONCILIATION keyed on stable ids
+    # (services.attribution_reconciler), not an IP join, so the resolver
+    # returns the matched-user set regardless of source IP. Tier 3 fuzzy
+    # stays server-IP-gated (bd-ost8o false-positive vector); Tier 1/2 and
+    # the bd-ma6r3 EPG callsign tier are strict and run unconditionally.
+    ip_is_server = ecm_session_ip == plex_server_ip
 
     try:
         sessions = await get_cached_plex_sessions()
@@ -317,11 +309,13 @@ async def _resolve_plex_users_inner(
     # bd-dok7u: forensic INFO log so future "Plex shows User #0"
     # incidents have the same diagnostic surface as the new Jellyfin
     # logging. Symmetric across all three resolvers.
+    # bd-mlcla: ``ip_is_server`` records the soft rank hint + Tier-3 gate
+    # state — replaces the old ``ip_mismatch`` reject log.
     logger.info(
-        "[PLEX-RESOLVER] resolver_call ip=%s ecm_channel=%r "
+        "[PLEX-RESOLVER] resolver_call ip=%s ip_is_server=%s ecm_channel=%r "
         "ecm_channel_number=%r ecm_stream=%r sessions_count=%d "
-        "sessions_with_now_playing=%d (bd-dok7u)",
-        ecm_session_ip, ecm_channel_name, ecm_channel_number,
+        "sessions_with_now_playing=%d (bd-dok7u, bd-mlcla)",
+        ecm_session_ip, ip_is_server, ecm_channel_name, ecm_channel_number,
         ecm_stream_name, len(sessions), sessions_with_now_playing,
     )
     for session in sessions:
@@ -346,6 +340,7 @@ async def _resolve_plex_users_inner(
         ecm_channel_name=ecm_channel_name,
         ecm_channel_number=ecm_channel_number,
         sessions=sessions,
+        allow_fuzzy_tier3=ip_is_server,
     )
 
     # bd-ma6r3 EPG cross-reference tier. After Tier 1/2/3 in
@@ -592,8 +587,16 @@ def _find_matching_sessions(
     ecm_channel_name: str | None,
     ecm_channel_number: str | int | None,
     sessions: list[PlexSession],
+    allow_fuzzy_tier3: bool = True,
 ) -> list[PlexSession]:
     """Return every Plex session that matches across the tiers.
+
+    bd-mlcla: ``allow_fuzzy_tier3`` gates Tier 3 to the server-IP case —
+    fuzzy stream-name matching with no IP signal is the bd-ost8o
+    VOD-onto-live false-positive vector. Tier 1 + Tier 2 strict matching
+    run unconditionally; the caller passes ``allow_fuzzy_tier3=True`` only
+    when the source IP equals the Plex server IP. The bd-ma6r3 EPG callsign
+    tier (run separately by the caller) is strict and always runs.
 
     Tiered match (mirrors emby_resolver's bd-zldrq approach):
 
@@ -734,8 +737,9 @@ def _find_matching_sessions(
     # which compares stream_name against both ``item_name`` and
     # ``channel_name``. Without the channel/parent compare, Live TV
     # whose ``@title`` is the program would fall through tier 3 too.
+    # bd-mlcla: server-IP-gated (see allow_fuzzy_tier3 docstring note).
     normalized_stream = _normalize(ecm_stream_name or "")
-    if normalized_stream:
+    if allow_fuzzy_tier3 and normalized_stream:
         for (
             session,
             normalized_item,

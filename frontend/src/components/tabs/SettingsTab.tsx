@@ -384,6 +384,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [jellyfinTestStatus, setJellyfinTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [jellyfinTestMessage, setJellyfinTestMessage] = useState('');
 
+  // bd-mlcla: trusted media/proxy networks (CIDRs or bare IPs). Edited as a
+  // newline/comma-separated textarea; used ONLY to rank media-server
+  // attribution candidates, never to gate.
+  const [trustedMediaNetworks, setTrustedMediaNetworks] = useState<string[]>([]);
+
   const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels']);
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false });
   const [m3uAccountPriorities, setM3uAccountPriorities] = useState<Record<string, number>>({});
@@ -840,6 +845,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setJellyfinApiKeyConfigured(settings.jellyfin_api_key_configured ?? false);
       setJellyfinTestStatus('idle');
       setJellyfinTestMessage('');
+      // bd-mlcla: trusted media/proxy networks (ranking hint only).
+      setTrustedMediaNetworks(settings.trusted_media_networks ?? []);
       setStatsPollInterval(settings.stats_poll_interval ?? 10);
       setOriginalPollInterval(settings.stats_poll_interval ?? 10);
       setUserTimezone(settings.user_timezone ?? '');
@@ -1224,6 +1231,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         jellyfin_enabled: jellyfinEnabled,
         jellyfin_base_url: jellyfinBaseUrl,
         ...(jellyfinApiKey ? { jellyfin_api_key: jellyfinApiKey } : {}),
+        // bd-mlcla: trusted media/proxy networks (ranking hint only).
+        trusted_media_networks: trustedMediaNetworks,
         stats_poll_interval: statsPollInterval,
         user_timezone: userTimezone,
         backend_log_level: backendLogLevel,
@@ -3719,6 +3728,45 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 ✗ {jellyfinTestMessage}
               </span>
             )}
+          </div>
+        </div>
+      </div>
+
+      {/* Trusted media networks — soft ranking hint for media-server
+          attribution (bd-mlcla). Never gates; only breaks ties when
+          pairing media-server viewers to connections. */}
+      <div id="trusted-media-networks" className="settings-section" data-testid="trusted-media-networks-section">
+        <div className="settings-section-header">
+          <h3>Trusted Media Networks</h3>
+        </div>
+        <div className="settings-section-body">
+          <div className="form-group-vertical">
+            <label htmlFor="trustedMediaNetworks">Trusted media/proxy networks</label>
+            <span className="form-description">
+              Optional. One CIDR or IP per line (e.g. <code>172.16.0.0/24</code> or
+              {' '}<code>172.16.0.19</code>). These are used ONLY to <strong>rank</strong> media-server
+              attribution candidates — connections whose source IP falls inside a trusted network are
+              treated as most-likely media-mediated and sorted first. They are <strong>never</strong> used
+              to reject a connection, so getting this list wrong can only change tie-break order, never
+              which user is attributed. Local Docker bridge gateways are auto-detected and added to the
+              ranking automatically; leave this empty unless you need to override.
+            </span>
+            <textarea
+              id="trustedMediaNetworks"
+              value={trustedMediaNetworks.join('\n')}
+              onChange={(e) =>
+                setTrustedMediaNetworks(
+                  e.target.value
+                    .split(/[\n,]/)
+                    .map((s) => s.trim())
+                    .filter((s) => s.length > 0)
+                )
+              }
+              placeholder={'172.16.0.0/24\n172.16.0.19'}
+              rows={4}
+              data-testid="trusted-media-networks-input"
+              className="settings-text-input"
+            />
           </div>
         </div>
       </div>

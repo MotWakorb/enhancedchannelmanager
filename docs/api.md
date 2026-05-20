@@ -445,16 +445,19 @@ curl -X POST "http://localhost:6100/api/channel-merges/42/dismiss" \
 
 Each channel object — and each entry in `channel.clients[]` — carries
 per-source attribution fields when an integration is enabled and the
-session matches:
+session matches. Attribution is networking-agnostic (per-channel set
+reconciliation, not an IP join); see
+[Architecture § User Attribution Pipeline](architecture.md#user-attribution-pipeline)
+for the model.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `emby_viewers` | `[{user_id, user_name}] \| null` | All Emby users watching this channel via this client. Null if Emby integration disabled or no match. |
-| `plex_viewers` | `[{user_id, user_name}] \| null` | All Plex users watching this channel via this client. Null if Plex integration disabled or no match. |
-| `jellyfin_viewers` | `[{user_id, user_name}] \| null` | All Jellyfin users watching this channel via this client. Null if Jellyfin integration disabled or no match. |
-| `emby_user_name` | `string \| null` | The most-recent Emby user's name. Provided for back-compat; prefer `emby_viewers`. |
-| `plex_user_name` | `string \| null` | Most-recent Plex user. Prefer `plex_viewers`. |
-| `jellyfin_user_name` | `string \| null` | Most-recent Jellyfin user. Prefer `jellyfin_viewers`. |
+| `emby_viewers` | `[{user_id, user_name}] \| null` | Emby users on this channel/client. At channel level: the full distinct set. At client level: that connection's assigned user(s) — one for a 1:1 match, or the full set for a server-proxy connection carrying multiple viewers. Null if Emby disabled or no match. |
+| `plex_viewers` | `[{user_id, user_name}] \| null` | Plex users on this channel/client (same shape as `emby_viewers`). `user_id` is `null` for Plex — `/status/sessions` exposes no stable id. Null if Plex disabled or no match. |
+| `jellyfin_viewers` | `[{user_id, user_name}] \| null` | Jellyfin users on this channel/client (same shape as `emby_viewers`). Null if Jellyfin disabled or no match. |
+| `emby_user_name` | `string \| null` | Singular display name. Usually the assigned (or most-recent, at channel level) Emby user's name. For a connection in a genuinely-ambiguous group it is instead the Option-B rollup label `"N viewers: a, b, …"` (and `emby_viewers` is left empty for that client so the UI renders the label verbatim rather than confident names). Provided for back-compat; prefer `emby_viewers`. |
+| `plex_user_name` | `string \| null` | Singular Plex display name (same semantics as `emby_user_name`, including the Option-B rollup label). Prefer `plex_viewers`. |
+| `jellyfin_user_name` | `string \| null` | Singular Jellyfin display name (same semantics, including the Option-B rollup label). Prefer `jellyfin_viewers`. |
 | `attribution_source` | `'emby' \| 'plex' \| 'jellyfin' \| 'dispatcharr' \| null` | The source that wins display precedence (Emby > Plex > Jellyfin > Dispatcharr). |
 
 Operator setup: see [`docs/user_guide/integrations/index.md`](user_guide/integrations/index.md).

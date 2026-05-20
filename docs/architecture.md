@@ -431,58 +431,152 @@ The rename in v0.17.1 (`api_key` → `dispatcharr_api_key`) eliminates the field
 
 ## User Attribution Pipeline
 
-On each bandwidth poll (~5s cadence), the `BandwidthTracker`
-cross-references active stream sessions against the live-sessions API of
-each configured media server (Emby, Plex, Jellyfin). For each
-`(channel, client_ip)` pair, the per-source resolver:
+On each bandwidth poll (~5s cadence), the `BandwidthTracker` (persisted
+path) and the on-demand `/api/stats/channels` enrichment (live path)
+cross-reference active stream sessions against the live-sessions API of
+each configured media server (Emby, Plex, Jellyfin). Attribution is
+**networking-agnostic** — it works whether ECM observes a connection's
+source as the configured server IP, the host IP, a Docker bridge gateway
+(`172.18.0.1`), a NAT'd address, or a container IP. This was redesigned in
+bd-mlcla; the brittle source-IP gate it replaced is described under
+*Superseded model* below.
 
-1. Short-circuits if the client IP doesn't match the upstream media
-   server's IP — non-Emby/Plex/Jellyfin sessions bypass the resolver
-   entirely.
-2. Calls a tiered match against the cached session list: channel-name
-   match → channel-number match → fuzzy stream-name match. All sessions
-   that match across the tiers are pooled into the viewer list.
-3. Returns the viewer list sorted most-recent first.
+### How it works (per channel)
+
+The unit of reconciliation is a channel, not a single `(channel, ip)`
+pair. For each channel:
+
+1. **Resolvers return the matched-user SET for any IP** (no gate). Each
+   per-source resolver runs a tiered match against its cached session
+   list — Tier 1 channel-name → Tier 2 channel-number → Tier 3 fuzzy
+   stream-name — and returns every matched session, sorted most-recent
+   first. The IP is no longer a reject condition; it is demoted to a
+   ranking hint (see step 3). **Tier 3 fuzzy stays server-IP-gated**
+   internally to avoid VOD/library false positives — fuzzy matching is
+   only trusted for connections that egress through the server IP.
+2. **Eligible connections** = the channel's Dispatcharr connections whose
+   active stream URL does **not** embed XC/M3U credentials. A connection
+   whose URL carries a username/password (`/live/<user>/<pass>/<id>` or
+   `get.php?username=…`) is a genuine direct-IPTV client attributed via
+   the provider/hostname path (bd-gy5nd) and is **excluded** from
+   media-server reconciliation. This "no-URL-identity" test is the
+   discriminator that replaces the old IP gate.
+3. **IP is a ranking hint only, never a gate.** Connections whose source
+   IP falls in the trusted/infrastructure set sort first when pairing
+   users to connections. The trusted set is the union of: the resolved
+   media-server IP(s), the operator-configured `trusted_media_networks`
+   setting (CIDRs or bare IPs), and auto-detected local Docker bridge
+   gateways. Getting the ranking wrong can only change tie-break order,
+   never which users attribute — an unknown IP is ranked lower, not
+   rejected.
+4. **Set reconciliation** assigns users to connections with three
+   structural guarantees: each candidate user is consumed **at most once**
+   (anti-collapse — one user can never land on two connections, the
+   bd-ost8o regression); assignment is **per-connection** (anti-broadcast
+   — never stamp one user onto every connection, the bd-cat70 regression);
+   and surplus users (`users > connections`) surface only in the
+   channel-level viewer list, never as a synthesized phantom connection.
+5. **Server-proxy carries the remainder** (bd-mlcla B1 + bd-r5f0c.9). A
+   connection whose source IP equals the resolved server IP is the media
+   server's own transcoding proxy pull, which can carry multiple upstream
+   viewers on one Dispatcharr connection. The **direct (non-proxy)
+   connections are reconciled first**, each consuming a distinct user; the
+   server-proxy connection then carries the **remaining (unconsumed)**
+   users as its rollup. This guarantees a browser-direct viewer sharing a
+   channel with a proxy pull always gets its own distinct name whenever an
+   unconsumed matching user exists — the proxy never suppresses it to
+   "User #0". A proxy serving N app-viewers with no direct connection still
+   carries the full set unchanged. (The `is_server_proxy` flag is exact
+   source-IP-equality with no corroborating signal, so a browser-direct
+   connection whose observed IP happens to equal the server IP — e.g. a
+   browser run on the media-server host — is mis-flagged as the proxy;
+   the direct-first ordering bounds the blast radius to that one
+   connection's display label, never another viewer's attribution.)
+6. **Option-B rollup for unresolvable ties.** When a group of 2+ direct
+   connections shares one IP-priority bucket (no signal to order them) AND
+   is offered 2+ distinct candidate users, the connection-to-user mapping
+   is genuinely ambiguous. Rather than pin a possibly-wrong single name to
+   each row, every connection in the group renders a
+   `"N viewers: <comma-separated list>"` rollup label. The channel-level
+   distinct set remains exactly correct; only the per-connection identity
+   is shown as a rollup.
+
+The reconciler lives in
+[`backend/services/attribution_reconciler.py`](../backend/services/attribution_reconciler.py)
+(`reconcile_channel`); the live path wires it through
+`routers/stats.py:_enrich_one_source` and the persisted path through
+`bandwidth_tracker.py:_resolve_attributions`.
+
+### Output surfaces
 
 The bandwidth tracker writes the viewer list (JSON-encoded) to
 `session_telemetry.<source>_viewers`, and the most-recent viewer's name
-to the legacy `session_telemetry.<source>_user_name` column. The
-`/api/stats/channels` endpoint surfaces both; prefer the array form.
+(or the Option-B rollup label) to the legacy
+`session_telemetry.<source>_user_name` column. The `/api/stats/channels`
+endpoint surfaces both per channel and per client; prefer the array form.
 
-Caching: each source has a 5-second TTL cache of upstream sessions with
+### Persisted-path same-NAT-IP limitation
+
+The **live** path (`/api/stats/channels`) keys connections by Dispatcharr's
+stable per-connection `client_id`, so it distinguishes two browser-direct
+viewers even behind the same NAT IP. The **persisted** path
+(`session_telemetry`) keys rows by `(channel, ip)`, so two browser-direct
+viewers behind the **same NAT IP** collapse to **one telemetry row** — the
+persisted path attributes that row to the single top-ranked matched user
+(the second viewer is not persisted on this path; it still surfaces on the
+live Stats page and in the channel-level viewer list). This is a known
+limitation, not a bug: per-`client_id` telemetry granularity is future
+work. The collapse is pinned by
+`tests/unit/test_bandwidth_tracker_mlcla_attribution.py::test_n1_same_nat_ip_collapses_to_one_telemetry_row`
+so it cannot silently drift.
+
+### Caching & failure isolation
+
+Each source has a 5-second TTL cache of upstream sessions with
 thundering-herd lock + stale-fallback on upstream failure. The resolver
 never raises — upstream failures degrade the row's attribution to NULL
-without affecting the telemetry write.
+without affecting the telemetry write. The three resolvers run via
+`asyncio.gather` with per-source 2s timeouts: a slow Plex does not stall
+Emby or Jellyfin attribution.
 
-Failure isolation: the three resolvers run via `asyncio.gather` with
-per-source 2s timeouts. A slow Plex does not stall Emby or Jellyfin
-attribution.
+### Superseded model (pre-bd-mlcla)
 
-Multi-viewer model: ECM media-server integrations are transcoding
-proxies — N upstream users share one ECM-client (the media server's
-IP). The viewer list captures all matched users; the legacy singular
-`*_user_name` column captures the most-recent for back-compat.
+Earlier builds short-circuited the resolver when the client IP did not
+match the upstream media server's IP (`if ecm_session_ip != server_ip:
+return []`) and broadcast a single resolver hit to every connection on the
+channel. Both assumptions broke under Docker networking: browser-direct
+playback NAT'd through a bridge gateway (`172.18.0.1`) was rejected as
+"User #0" (bd-mlcla / bd-podx3), and channel-name-only matching with no
+per-connection identity collapsed every viewer onto one user (bd-ost8o) or
+broadcast one user to all (bd-cat70). The set-reconciliation model above
+replaces both — IP is a ranking hint, identity comes from per-connection
+set assignment.
 
 ```
-BandwidthTracker (poll ~5s)
-  ├─ _enrich_channels_with_attribution()
-  │    ├─ emby_enabled?  → services/emby_resolver.py
-  │    │    └─ resolve_emby_users(ip, stream_name, channel_name, channel_number)
-  │    │         → [{user_id, user_name}, ...] (tiered match, sorted recent-first)
-  │    ├─ plex_enabled?  → services/plex_resolver.py  (same shape)
-  │    └─ jellyfin_enabled? → services/jellyfin_resolver.py  (same shape)
-  │
-  └─ writes to session_telemetry:
-       emby_viewers     (TEXT, JSON-encoded list)
-       plex_viewers     (TEXT, JSON-encoded list)
-       jellyfin_viewers (TEXT, JSON-encoded list)
-       emby_user_name   (TEXT, legacy — most-recent viewer)
-       plex_user_name   (TEXT, legacy)
-       jellyfin_user_name (TEXT, legacy)
+Per-source resolvers (services/{emby,plex,jellyfin}_resolver.py)
+  resolve_<source>_users(ip, stream_name, channel_name, channel_number)
+    → [{user_id, user_name, last_activity_date}, ...]
+      Tier 1 channel-name → Tier 2 channel-number → Tier 3 fuzzy (server-IP-only)
+      NO IP gate (any IP returns the channel's matched-user SET)
 
-GET /api/stats/channels  →  _enrich_channels_with_attribution (live, on-demand)
-                         →  surfaces *_viewers arrays + *_user_name fields
-                         →  attribution_source: Emby > Plex > Jellyfin > Dispatcharr
+services/attribution_reconciler.py :: reconcile_channel(connections, users)
+  • eligible = connections without a URL-identity (XC/M3U creds excluded)
+  • IP ranks (trusted set: server IP ∪ trusted_media_networks ∪ bridge gateways)
+  • direct connections reconciled FIRST (each user consumed ≤ once)
+  • server-proxy connection carries the REMAINING users (bd-mlcla B1)
+  • genuinely-ambiguous group → "N viewers: …" rollup (Option B)
+
+Persisted path: BandwidthTracker (poll ~5s) → _resolve_attributions
+  keys (channel, ip)  → writes session_telemetry:
+       emby_viewers / plex_viewers / jellyfin_viewers (TEXT, JSON list)
+       emby_user_name / plex_user_name / jellyfin_user_name (TEXT, legacy
+         — most-recent viewer or the Option-B rollup label)
+  ⚠ same-NAT-IP devices collapse to one row (live path keeps client_id)
+
+Live path: GET /api/stats/channels → _enrich_channels_with_attribution
+  keys client_id (full per-connection granularity)
+    → surfaces *_viewers arrays + *_user_name fields per channel AND per client
+    → attribution_source precedence: Emby > Plex > Jellyfin > Dispatcharr
 ```
 
 Operator setup: see [`docs/user_guide/integrations/index.md`](user_guide/integrations/index.md).
