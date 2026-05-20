@@ -678,6 +678,47 @@ describe('StatsTab — per-client Emby attribution badge (bd-5kbyf)', () => {
   });
 });
 
+// bd-mlcla: Option-B ambiguous-group rollup rendering. The backend
+// reconciler stamps the "N viewers: <list>" label into the per-client
+// *_user_name string (with the *_viewers list left empty) so the existing
+// singular path renders the label verbatim — the operator sees the
+// ambiguity instead of a possibly-wrong single name.
+describe('StatsTab — Option-B ambiguous-group rollup (bd-mlcla)', () => {
+  it('renders the "N viewers: ..." rollup label from emby_user_name', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [
+        {
+          ...baseClientChannel,
+          emby_user_name: '2 viewers: alice, bob',
+          clients: [
+            {
+              client_id: 'cid-amb-1',
+              ip_address: '172.18.0.1',
+              user_agent: 'JellyfinWeb/1.0',
+              connected_at: '2026-05-20T00:00:00Z',
+              last_active: '2026-05-20T00:01:00Z',
+              user_id: '0',
+              username: null,
+              emby_user_name: '2 viewers: alice, bob',
+            },
+          ],
+        },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('2 viewers: alice, bob')).toBeInTheDocument();
+    });
+    // The rollup is attributed via the media-server badge, and the raw
+    // "User #0" fallback does not appear.
+    expect(screen.getByText('via Emby')).toBeInTheDocument();
+    expect(screen.queryByText('User #0')).not.toBeInTheDocument();
+  });
+});
+
 // bd-r5f0c.5 (W5): Multi-viewer rendering in Connected Clients.
 // The W9 backend now surfaces *_viewers[] lists per source on each client.
 // These tests verify the new rendering paths WITHOUT disturbing the

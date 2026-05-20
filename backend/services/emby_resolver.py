@@ -241,28 +241,23 @@ async def resolve_emby_users(
         )
         return []
 
-    # bd-podx3: revert bd-ost8o's two-mode dispatch. The strict IP gate
-    # is the load-bearing correctness guarantee — only traffic egressing
-    # through the Emby server's IP can be a genuine Emby viewer. bd-ost8o
-    # removed this gate to enable browser-direct-play attribution, but
-    # the "direct_fallback" mode it added matched ECM clients to Emby
-    # sessions by channel name ALONE, with no signal tying the client to
-    # the session. In the PO's live setup that collapsed every non-Emby
-    # viewer on a channel (direct XC clients, other devices) onto the one
-    # Emby user who happened to be watching the same channel. Restoring
-    # the gate is the minimal, lowest-risk fix that restores correct
-    # attribution. Browser-direct-play can be re-attempted under a fresh
-    # bead using a sound identity signal (the unused EmbySession
-    # ``remote_endpoint`` client IP) rather than channel-name guessing.
-    if ecm_session_ip != emby_server_ip:
-        # Hot path: the vast majority of ECM sessions are NOT
-        # Emby-mediated. Short-circuit before the cache call.
-        logger.debug(
-            "[EMBY-RESOLVER] resolver_call ip=%s ecm_channel=%r "
-            "result=ip_mismatch (server=%s)",
-            ecm_session_ip, ecm_channel_name, emby_server_ip,
-        )
-        return []
+    # bd-mlcla: the strict IP gate is GONE. Browser-direct media-server
+    # playback is NAT'd through a Docker bridge gateway, so ECM observes a
+    # source IP (e.g. 172.18.0.1) that is NOT the configured Emby server
+    # IP — the old gate (bd-podx3 revert) rejected that traffic and showed
+    # "User #0". Attribution is now a per-channel SET RECONCILIATION
+    # (services.attribution_reconciler) keyed on stable ids, NOT an IP
+    # join, so the resolver returns the matched-user set for the channel
+    # regardless of source IP. Source IP becomes a SOFT RANKING HINT in the
+    # reconciler, never a reject here.
+    #
+    # The one place IP still matters: Tier 3 (fuzzy stream-name) stays
+    # gated to the server-IP case. Fuzzy matching with no IP signal is the
+    # documented bd-ost8o false-positive vector (VOD names fuzzing onto
+    # live channels). Tier 1 (channel-name strict) + Tier 2 (channel-number
+    # strict) run unconditionally; Tier 3 runs ONLY when the source IP IS
+    # the Emby server IP.
+    ip_is_server = ecm_session_ip == emby_server_ip
 
     sessions = await get_cached_emby_sessions()
     sessions_with_now_playing = sum(
@@ -272,11 +267,14 @@ async def resolve_emby_users(
     # bd-dok7u: forensic INFO log so future "Emby shows User #0"
     # incidents have the same diagnostic surface as the new Jellyfin
     # logging. Symmetric across all three resolvers.
+    # bd-mlcla: ``ip_is_server`` records whether the source IP matched the
+    # Emby server (the soft rank hint + Tier-3 gate) — replaces the old
+    # ``ip_mismatch`` reject log so the forensic trail shows rank-not-gate.
     logger.info(
-        "[EMBY-RESOLVER] resolver_call ip=%s ecm_channel=%r "
+        "[EMBY-RESOLVER] resolver_call ip=%s ip_is_server=%s ecm_channel=%r "
         "ecm_channel_number=%r ecm_stream=%r sessions_count=%d "
-        "sessions_with_now_playing=%d (bd-dok7u)",
-        ecm_session_ip, ecm_channel_name, ecm_channel_number,
+        "sessions_with_now_playing=%d (bd-dok7u, bd-mlcla)",
+        ecm_session_ip, ip_is_server, ecm_channel_name, ecm_channel_number,
         ecm_stream_name, len(sessions), sessions_with_now_playing,
     )
     for session in sessions:
@@ -300,6 +298,7 @@ async def resolve_emby_users(
         ecm_channel_name=ecm_channel_name,
         ecm_channel_number=ecm_channel_number,
         sessions=sessions,
+        allow_fuzzy_tier3=ip_is_server,
     )
     if not matches:
         logger.debug(
@@ -526,6 +525,7 @@ def _find_matching_sessions(
     ecm_channel_name: str | None,
     ecm_channel_number: str | int | None,
     sessions: list[EmbySession],
+    allow_fuzzy_tier3: bool = True,
 ) -> list[EmbySession]:
     """Return every Emby session that matches across any of the three tiers.
 
@@ -545,6 +545,16 @@ def _find_matching_sessions(
     A session matches if ANY tier accepts it. The list is the union
     of tier hits — duplicates are de-duped by session identity so the
     same physical session is not double-counted in the tie-break.
+
+    bd-mlcla: ``allow_fuzzy_tier3`` gates Tier 3. After the strict IP
+    gate was removed (resolvers now return the matched-user set for
+    reconciliation regardless of source IP), Tier 3 fuzzy matching is
+    the one tier that is unsafe without an IP signal — fuzzy stream-name
+    matching with no IP tie collapses VOD names onto live channels
+    (the bd-ost8o false-positive vector). The caller passes
+    ``allow_fuzzy_tier3=True`` ONLY when the source IP equals the Emby
+    server IP; off-server (NAT'd / bridge-gateway) traffic runs Tier 1 +
+    Tier 2 strict matching only.
 
     Hot-path discipline (bandwidth tracker calls this every ~5s per
     channel on every poll, with up to ~30 Emby sessions per call): the
@@ -628,8 +638,10 @@ def _find_matching_sessions(
                 _accept(session)
 
     # ----- Tier 3: legacy fuzzy fallback on stream_name
+    # bd-mlcla: server-IP-gated. Off-server traffic skips fuzzy matching to
+    # avoid the bd-ost8o VOD-onto-live false-positive vector.
     normalized_stream = _normalize(ecm_stream_name or "")
-    if normalized_stream:
+    if allow_fuzzy_tier3 and normalized_stream:
         for session, normalized_item, normalized_channel, _sfx in prepared:
             if _fuzzy_or_exact_match(normalized_stream, normalized_item):
                 _accept(session)
