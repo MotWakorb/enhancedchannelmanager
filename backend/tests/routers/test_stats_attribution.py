@@ -908,30 +908,47 @@ class TestStatsReconciliationBdMlcla:
         assert channels[0]["clients"][0]["emby_user_name"] == "viewer"
 
     @pytest.mark.asyncio
-    async def test_direct_iptv_url_identity_excluded(self):
-        """#5: a channel whose active stream URL embeds XC credentials is a
-        direct-IPTV channel — it is EXCLUDED from media-server
-        reconciliation (no emby_user_name stamped from the resolver)."""
+    async def test_xc_sourced_channel_still_attributes_via_media_server(self):
+        """bd-4w9w6 (call-site regression for the live TSN5/Jellyfin bug):
+
+        A channel whose UPSTREAM provider URL embeds XC credentials
+        (``http://provider.tv/live/<user>/<pass>/<id>.ts``) is the common
+        case — almost every channel sourced from an Xtream-Codes provider has
+        such a URL. That URL is the operator's PROVIDER ACCOUNT, shared by
+        every viewer; it is NOT a per-client identity. A viewer watching this
+        channel through a media server (Emby/Jellyfin/Plex) MUST still be
+        attributed.
+
+        The original bd-mlcla code derived ``has_url_identity`` from this
+        channel URL and EXCLUDED the connection from reconciliation,
+        silently dropping the match to User #0 — the live bug. This test
+        FAILS on pre-fix code (expected ``None``) and PASSES after the fix
+        (the media-server user is stamped).
+        """
         from routers.stats import _enrich_channels_with_attribution
 
         channels = [{
-            "channel_id": "ch-direct",
-            "channel_name": "ESPN",
-            "channel_number": 408,
-            "stream_name": "US: ESPN FHD",
+            "channel_id": "ch-xc-source",
+            "channel_name": "494 | TSN 5",
+            "channel_number": 494,
+            "stream_name": "CA: TSN 5 FHD",
+            # Upstream XC provider URL — the operator's account, NOT the
+            # client's identity. Mirrors the live infinity.gives URL.
             "url": "http://provider.tv/live/motuser/motpass/85796.ts",
-            "clients": [{"ip_address": "203.0.113.5", "client_id": "xc1"}],
+            # The viewer is a NAT'd browser-direct media-server session, not a
+            # direct-IPTV client (Dispatcharr proxy connection, no per-client
+            # credentials).
+            "clients": [{"ip_address": "172.18.0.1", "client_id": "xc1"}],
         }]
-        # Even though the resolver WOULD match, the URL-identity exclusion
-        # means the connection is never reconciled to an Emby user.
-        viewers = [EmbyAttribution(user_id="u1", user_name="leaked")]
+        viewers = [EmbyAttribution(user_id="u1", user_name="MotWakorb")]
         with patch("config.get_settings", return_value=_emby_only_settings()), \
              patch("services.emby_resolver.resolve_emby_user",
                    AsyncMock(return_value=viewers[0])), \
              patch("services.emby_resolver.resolve_emby_users",
                    AsyncMock(return_value=viewers)):
             await _enrich_channels_with_attribution(channels)
-        assert channels[0]["clients"][0]["emby_user_name"] is None
+        assert channels[0]["clients"][0]["emby_user_name"] == "MotWakorb"
+        assert channels[0]["emby_user_name"] == "MotWakorb"
 
     @pytest.mark.asyncio
     async def test_option_b_rollup_for_ambiguous_group(self):
@@ -1048,3 +1065,142 @@ class TestStatsReconciliationBdMlcla:
         assert by_id["nat"]["emby_user_name"] == "alice"
         # The mis-flagged connection carries the remainder, not User #0.
         assert by_id["misfired"]["emby_user_name"] == "bob"
+
+
+# ---------------------------------------------------------------------------
+# bd-4w9w6: end-to-end regression for the live TSN5/Jellyfin "User #0" bug
+#
+# The bd-mlcla call-site tests above all used a NON-credentialed Dispatcharr
+# proxy URL (``http://dispatcharr/proxy/ts/stream/...``) as the channel
+# ``url``. In production, ``ch["url"]`` is the UPSTREAM PROVIDER URL, which
+# for an Xtream-Codes provider embeds the operator's account credentials
+# (``https://provider/live/<user>/<pass>/<id>.ts``). The old code fed that
+# URL to the URL-identity discriminator and EXCLUDED every XC-sourced
+# channel from media-server reconciliation, so a Jellyfin viewer watching a
+# TSN5 channel sourced from infinity.gives was silently dropped to User #0.
+# These tests drive the realistic XC upstream URL through the FULL
+# multi-source enrich path and assert the match survives.
+# ---------------------------------------------------------------------------
+
+
+def _all_sources_with_trusted_nets():
+    """All-sources settings stub with an explicit (empty) trusted-net list.
+
+    ``_enrich_channels_with_attribution`` reads
+    ``settings.trusted_media_networks`` for IP ranking; a real list keeps the
+    MagicMock from returning a truthy auto-attr that breaks ``isinstance``.
+    """
+    s = _enabled_all_sources_settings()
+    s.trusted_media_networks = []
+    return s
+
+
+class TestStatsBd4w9w6XcUpstreamUrl:
+    """bd-4w9w6: an XC-credentialed UPSTREAM channel URL must NOT suppress
+    media-server reconciliation of the channel's proxy connections."""
+
+    @pytest.mark.asyncio
+    async def test_live_tsn5_jellyfin_match_survives_xc_url_multi_source(self):
+        """Reproduces the live bug end-to-end: channel sourced from an XC
+        provider (URL embeds creds), watched by a Jellyfin user NAT'd through
+        the Docker bridge (172.18.0.1). Emby + Plex run for the channel and
+        return NO match; Jellyfin matches MotWakorb. The match must reach the
+        connection (NOT User #0), and the other sources' empty results must
+        not overwrite it.
+
+        FAILS pre-fix: ``has_url_identity`` (from the XC channel URL)
+        excludes the connection, so all three sources stay None.
+        PASSES post-fix: jellyfin_user_name == "MotWakorb".
+        """
+        from routers.stats import _enrich_channels_with_attribution
+
+        channels = [{
+            "channel_id": "893c18f3-5aaf-4254-b1d0-3b926deb4c78",
+            "channel_name": "494 | TSN 5",
+            "channel_number": None,
+            "stream_name": "CA: TSN 5 FHD",
+            # The actual live upstream URL shape (XC creds in the path).
+            "url": "https://infinity.gives/live/mot/16118141/108495.ts",
+            "clients": [{
+                "ip_address": "172.18.0.1",
+                "client_id": "client_1779297136349_7273",
+                "connected_at": 1779297136.4891016,
+            }],
+        }]
+        jf = [JellyfinAttribution(
+            user_id="72be7fac4ca046cf8198573ad285c963", user_name="MotWakorb"
+        )]
+        with patch("config.get_settings",
+                   return_value=_all_sources_with_trusted_nets()), \
+             patch("services.emby_resolver.resolve_emby_user",
+                   AsyncMock(return_value=None)), \
+             patch("services.emby_resolver.resolve_emby_users",
+                   AsyncMock(return_value=[])), \
+             patch("services.plex_resolver.resolve_plex_user",
+                   AsyncMock(return_value=None)), \
+             patch("services.plex_resolver.resolve_plex_users",
+                   AsyncMock(return_value=[])), \
+             patch("services.jellyfin_resolver.resolve_jellyfin_user",
+                   AsyncMock(return_value=jf[0])), \
+             patch("services.jellyfin_resolver.resolve_jellyfin_users",
+                   AsyncMock(return_value=jf)):
+            await _enrich_channels_with_attribution(channels)
+
+        ch = channels[0]
+        client = ch["clients"][0]
+        # The Jellyfin match reaches the connection.
+        assert client["jellyfin_user_name"] == "MotWakorb"
+        assert client["jellyfin_viewers"] == [
+            {"user_id": "72be7fac4ca046cf8198573ad285c963",
+             "user_name": "MotWakorb"}
+        ]
+        # Channel-level surface too.
+        assert ch["jellyfin_user_name"] == "MotWakorb"
+        # The empty Emby/Plex results did NOT overwrite the Jellyfin match.
+        assert client.get("emby_user_name") is None
+        assert client.get("plex_user_name") is None
+
+    @pytest.mark.asyncio
+    async def test_reconcile_result_logging_emitted(self, caplog):
+        """bd-4w9w6: the reconciler now emits an INFO ``[RECONCILE]`` result
+        line so a future 'matched but User #0' failure is diagnosable. Assert
+        it fires with the assignment for the matched user."""
+        from routers.stats import _enrich_channels_with_attribution
+
+        channels = [{
+            "channel_id": "ch-log",
+            "channel_name": "494 | TSN 5",
+            "channel_number": None,
+            "stream_name": "CA: TSN 5 FHD",
+            "url": "https://infinity.gives/live/mot/16118141/108495.ts",
+            "clients": [{"ip_address": "172.18.0.1", "client_id": "c-log"}],
+        }]
+        jf = [JellyfinAttribution(user_id="uid", user_name="MotWakorb")]
+        with patch("config.get_settings",
+                   return_value=_all_sources_with_trusted_nets()), \
+             patch("services.emby_resolver.resolve_emby_user",
+                   AsyncMock(return_value=None)), \
+             patch("services.emby_resolver.resolve_emby_users",
+                   AsyncMock(return_value=[])), \
+             patch("services.plex_resolver.resolve_plex_user",
+                   AsyncMock(return_value=None)), \
+             patch("services.plex_resolver.resolve_plex_users",
+                   AsyncMock(return_value=[])), \
+             patch("services.jellyfin_resolver.resolve_jellyfin_user",
+                   AsyncMock(return_value=jf[0])), \
+             patch("services.jellyfin_resolver.resolve_jellyfin_users",
+                   AsyncMock(return_value=jf)):
+            with caplog.at_level(
+                logging.INFO, logger="services.attribution_reconciler"
+            ):
+                await _enrich_channels_with_attribution(channels)
+
+        recon_lines = [
+            r.getMessage() for r in caplog.records
+            if "[RECONCILE]" in r.getMessage()
+        ]
+        assert recon_lines, "expected a [RECONCILE] result log line"
+        # At least one line records the MotWakorb assignment.
+        assert any(
+            "MotWakorb" in m and "unattributed=0" in m for m in recon_lines
+        ), recon_lines

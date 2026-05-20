@@ -1802,8 +1802,10 @@ class BandwidthTracker:
                     "stream_id": channel.get("stream_id"),
                     "url": channel.get("url"),
                     # bd-mlcla: per-connection metadata for the reconciler.
-                    # ``connected_at`` is the IP-bucket tie-break; the channel
-                    # ``url`` (above) is the URL-identity discriminator.
+                    # ``connected_at`` is the IP-bucket tie-break. (The channel
+                    # ``url`` above feeds the bd-gy5nd provider/hostname path;
+                    # bd-4w9w6 removed its use as a reconciliation discriminator
+                    # — see _reconcile_persisted_attributions.)
                     "client_meta": [
                         {
                             "ip_address": c.get("ip_address"),
@@ -2866,7 +2868,6 @@ class BandwidthTracker:
             Connection,
             reconcile_channel,
             rollup_label,
-            url_embeds_username,
         )
 
         configured = getattr(settings, "trusted_media_networks", None)
@@ -2876,7 +2877,7 @@ class BandwidthTracker:
             configured
         )
 
-        # Index snapshot rows by channel for url + per-connection metadata.
+        # Index snapshot rows by channel for per-connection metadata.
         snapshot_by_channel = {
             entry["channel_uuid"]: entry for entry in telemetry_channel_snapshot
         }
@@ -2901,7 +2902,6 @@ class BandwidthTracker:
 
         for channel_uuid in channels:
             entry = snapshot_by_channel.get(channel_uuid, {})
-            has_url_identity = url_embeds_username(entry.get("url"))
             meta_by_ip = {
                 m.get("ip_address"): m
                 for m in (entry.get("client_meta") or [])
@@ -2957,7 +2957,13 @@ class BandwidthTracker:
                         connected_at=_coerce_connected_at(
                             (meta_by_ip.get(ip) or {}).get("connected_at")
                         ),
-                        has_url_identity=has_url_identity,
+                        # bd-4w9w6: Dispatcharr /proxy/ts/status connections are
+                        # proxy clients with no per-client credentials. The
+                        # channel's upstream provider URL is the operator's
+                        # account, NOT a per-client identity, so it must not
+                        # exclude these connections from reconciliation (the
+                        # live "User #0" root cause).
+                        has_url_identity=False,
                         is_server_proxy=(
                             source_server_ip is not None
                             and ip == source_server_ip
@@ -2973,6 +2979,7 @@ class BandwidthTracker:
 
                 result = reconcile_channel(
                     connections, pooled, trusted_networks=trusted_networks,
+                    channel_label=f"{channel_uuid} [{source}]",
                 )
                 for assignment in result.assignments:
                     ip = ip_by_client_id.get(assignment.client_id)
