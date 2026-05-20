@@ -67,6 +67,7 @@ from rapidfuzz import fuzz
 
 from config import get_settings
 from emby_client import EmbySession
+from services.attribution_reconciler import normalize_client_ip
 from services.emby_cache import get_cached_emby_sessions
 import observability
 
@@ -167,10 +168,17 @@ class EmbyAttribution:
         user_name: Human-readable Emby username. Persisted to
             ``session_telemetry.emby_user_name`` and surfaced in Stats >
             User Watch Time.
+        client_ip: bd-7ncci. The REAL requesting-device IP Emby reported
+            for this session (``RemoteEndPoint``, normalized to a bare IP
+            via :func:`services.attribution_reconciler.normalize_client_ip`).
+            ``None`` when Emby did not expose it. Surfaced as a separate
+            "Client IP" Stats field — distinct from the Dispatcharr
+            connection IP ECM observes.
     """
 
     user_id: str
     user_name: str
+    client_ip: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -361,7 +369,11 @@ async def resolve_emby_users(
         metric.labels(source="emby").inc()
 
     return [
-        EmbyAttribution(user_id=session.user_id, user_name=session.user_name)
+        EmbyAttribution(
+            user_id=session.user_id,
+            user_name=session.user_name,
+            client_ip=normalize_client_ip(session.remote_endpoint),
+        )
         for session in sorted_matches
     ]
 

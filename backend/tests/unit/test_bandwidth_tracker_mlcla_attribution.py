@@ -19,6 +19,7 @@ Synthetic identities only — ``docs/security/threat_model_stats_v2.md`` §7.7.
 """
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -169,6 +170,76 @@ async def test_bridge_nat_source_attributes_persisted(patched_session_local, tra
     assert all(r.emby_user_name == "MotWakorb" for r in rows), (
         f"NAT'd browser-direct must attribute: {[(r.session_id, r.emby_user_name) for r in rows]}"
     )
+
+
+@pytest.mark.asyncio
+async def test_real_client_ip_persisted_in_viewers_json(
+    patched_session_local, tracker, mock_client
+):
+    """bd-7ncci: the real requesting-device IP the media server reported rides
+    in the persisted ``emby_viewers`` JSON for an attributed row, and is blank
+    (None) for a row whose matched viewer carried no client IP."""
+    mock_client.get_streams_by_ids.return_value = [_stream_record()]
+    ch_uuid = "ch-clientip"
+    specs = [{"ip": "172.18.0.1", "client_id": "browser1"}]
+    first = _channel(channel_uuid=ch_uuid, client_specs=specs, total_bytes=1_000_000,
+                     url="http://dispatcharr/proxy/ts/stream/ch-clientip")
+    second = _channel(channel_uuid=ch_uuid, client_specs=specs, total_bytes=2_000_000,
+                      url="http://dispatcharr/proxy/ts/stream/ch-clientip")
+
+    viewers = [
+        EmbyAttribution(
+            user_id="uid-mw", user_name="MotWakorb", client_ip="172.16.0.2"
+        )
+    ]
+    with patch("bandwidth_tracker.resolve_emby_users", AsyncMock(return_value=viewers)), \
+         patch("bandwidth_tracker.resolve_emby_user", AsyncMock(return_value=viewers[0])), \
+         patch("bandwidth_tracker.resolve_plex_users", AsyncMock(return_value=[])), \
+         patch("bandwidth_tracker.resolve_plex_user", AsyncMock(return_value=None)), \
+         patch("bandwidth_tracker.resolve_jellyfin_users", AsyncMock(return_value=[])), \
+         patch("bandwidth_tracker.resolve_jellyfin_user", AsyncMock(return_value=None)), \
+         patch("config.get_settings", return_value=_emby_only_settings()):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    rows = _rows(patched_session_local, ch_uuid)
+    assert rows
+    for r in rows:
+        assert r.emby_viewers is not None
+        decoded = json.loads(r.emby_viewers)
+        assert decoded == [
+            {"user_id": "uid-mw", "user_name": "MotWakorb", "client_ip": "172.16.0.2"}
+        ]
+
+
+@pytest.mark.asyncio
+async def test_missing_client_ip_persists_as_null_in_viewers_json(
+    patched_session_local, tracker, mock_client
+):
+    """bd-7ncci: a matched viewer with no client IP persists ``client_ip``
+    as null in the viewers JSON (blank, not absent)."""
+    mock_client.get_streams_by_ids.return_value = [_stream_record()]
+    ch_uuid = "ch-noip"
+    specs = [{"ip": "172.18.0.1", "client_id": "browser1"}]
+    first = _channel(channel_uuid=ch_uuid, client_specs=specs, total_bytes=1_000_000,
+                     url="http://dispatcharr/proxy/ts/stream/ch-noip")
+    second = _channel(channel_uuid=ch_uuid, client_specs=specs, total_bytes=2_000_000,
+                      url="http://dispatcharr/proxy/ts/stream/ch-noip")
+
+    viewers = [EmbyAttribution(user_id="uid-mw", user_name="MotWakorb")]
+    with patch("bandwidth_tracker.resolve_emby_users", AsyncMock(return_value=viewers)), \
+         patch("bandwidth_tracker.resolve_emby_user", AsyncMock(return_value=viewers[0])), \
+         patch("bandwidth_tracker.resolve_plex_users", AsyncMock(return_value=[])), \
+         patch("bandwidth_tracker.resolve_plex_user", AsyncMock(return_value=None)), \
+         patch("bandwidth_tracker.resolve_jellyfin_users", AsyncMock(return_value=[])), \
+         patch("bandwidth_tracker.resolve_jellyfin_user", AsyncMock(return_value=None)), \
+         patch("config.get_settings", return_value=_emby_only_settings()):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    rows = _rows(patched_session_local, ch_uuid)
+    assert rows
+    for r in rows:
+        decoded = json.loads(r.emby_viewers)
+        assert decoded[0]["client_ip"] is None
 
 
 # ---------------------------------------------------------------------------

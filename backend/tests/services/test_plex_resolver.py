@@ -1970,3 +1970,49 @@ class TestEcmPipePrefixAsChannelNumber:
                 ecm_channel_number=408,
             )
         assert result == "explicit_num_user"
+
+
+# ---------------------------------------------------------------------------
+# bd-7ncci — real client device IP threaded from Player/@address
+# ---------------------------------------------------------------------------
+
+
+class TestClientIpCapture:
+    """The resolved Plex attribution carries the session's normalized client IP."""
+
+    async def test_bare_ip_threaded(self):
+        session = _make_session(remote_endpoint="172.16.0.2", item_name="ESPN")
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_users(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ESPN",
+            )
+        assert len(result) == 1
+        assert result[0].user_name == "alice"
+        assert result[0].client_ip == "172.16.0.2"
+
+    async def test_host_port_form_strips_port(self):
+        session = _make_session(remote_endpoint="172.16.0.2:32400", item_name="ESPN")
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_users(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ESPN",
+            )
+        assert len(result) == 1
+        assert result[0].client_ip == "172.16.0.2"
+
+    async def test_missing_address_yields_none(self):
+        session = _make_session(remote_endpoint="", item_name="ESPN")
+        with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
+             patch.object(plex_resolver, "get_cached_plex_sessions",
+                          AsyncMock(return_value=[session])):
+            result = await plex_resolver.resolve_plex_users(
+                ecm_session_ip="192.168.1.20",
+                ecm_stream_name="ESPN",
+            )
+        assert len(result) == 1
+        assert result[0].client_ip is None
