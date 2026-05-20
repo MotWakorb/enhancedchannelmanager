@@ -237,7 +237,10 @@ class TestActiveChannelsEmbyEnrichment:
                     "channel_id": "uuid-emby",
                     "channel_name": "TNT HD",
                     "stream_id": 555,
-                    "clients": [{"ip_address": "10.0.0.42", "user_id": 7}],
+                    # bd-rools: anonymous media-server pull (user_id "0").
+                    # A positive user_id would be a genuine Dispatcharr
+                    # subscriber, excluded from media-server reconciliation.
+                    "clients": [{"ip_address": "10.0.0.42", "user_id": "0"}],
                 },
             ],
         }
@@ -293,7 +296,8 @@ class TestActiveChannelsEmbyEnrichment:
                     "channel_name": "ESPN",
                     "channel_number": 408,
                     "stream_id": 9001,
-                    "clients": [{"ip_address": "10.0.0.42", "user_id": 7}],
+                    # bd-rools: anonymous media-server pull (user_id "0").
+                    "clients": [{"ip_address": "10.0.0.42", "user_id": "0"}],
                 },
             ],
         }
@@ -544,14 +548,30 @@ class TestActiveChannelsEmbyEnrichment:
     # -----------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_resolver_hit_does_not_broadcast_to_unmatched_ip_clients(
+    async def test_direct_xc_subscriber_does_not_absorb_media_server_viewer(
         self, async_client
     ):
-        """Two clients on the same channel at DIFFERENT IPs: client A at the
-        Emby server IP resolves to ``MotWakorb``; client B at a non-Emby IP
-        gets no match. Client A must carry ``emby_user_name='MotWakorb'``
-        while client B must carry ``emby_user_name=None`` — the resolver
-        hit must NOT broadcast onto the unmatched client (bd-cat70).
+        """bd-rools (re-fix for bd-cat70 direct-client cross-attribution).
+
+        Two clients on the same channel, with REALISTIC (non-IP-gated)
+        resolver semantics — the post-bd-mlcla resolver returns the
+        channel's matched-user SET for ANY source IP, not just the server
+        IP:
+
+        * ``kmfelmer`` — a genuine direct XC subscriber identified by a
+          Dispatcharr ACCOUNT (``user_id=3``) at a NAT'd IP.
+        * an anonymous media-server pull (``user_id="0"``) at the Emby
+          server IP — the real Emby viewer ``MotWakorb``.
+
+        The bug (BLOCKER on PR #366): forcing ``has_url_identity=False`` with
+        no account discriminator left kmfelmer eligible, so the non-IP-gated
+        resolver offered it MotWakorb and B1 direct-first ordering paired
+        kmfelmer → MotWakorb, dropping the real Emby viewer to User #0.
+
+        After the fix kmfelmer carries an account identity → excluded from
+        media-server reconciliation; it keeps its own Dispatcharr username
+        and is NEVER cross-attributed to MotWakorb, while the anonymous
+        server-IP pull gets MotWakorb.
         """
         mock_client = AsyncMock()
         mock_client.get_channel_stats.return_value = {
@@ -562,12 +582,18 @@ class TestActiveChannelsEmbyEnrichment:
                     "channel_number": 679,
                     "stream_id": 679,
                     "clients": [
-                        # client A — connecting from the Emby server IP
-                        # (the bd-5kbyf "Emby-mediated" path).
-                        {"ip_address": "172.16.0.19", "user_id": 1, "username": "po"},
-                        # client B — direct Dispatcharr XC connection at
-                        # an unrelated IP (kmfelmer in the PO's repro).
-                        {"ip_address": "172.16.0.50", "user_id": 2, "username": "kmfelmer"},
+                        # Genuine direct XC subscriber, Dispatcharr account
+                        # user_id=3 (kmfelmer in the PO's repro) at a NAT'd IP.
+                        # Earlier connected_at so it RANKS FIRST — without the
+                        # account discriminator B1 direct-first ordering would
+                        # pair kmfelmer → MotWakorb (the bd-cat70 absorb bug).
+                        {"ip_address": "172.16.0.50", "user_id": 3,
+                         "connected_at": 1.0},
+                        # Anonymous media-server pull — the real Emby viewer
+                        # MotWakorb (Dispatcharr serves it anonymously,
+                        # user_id "0"), later connected_at → ranks second.
+                        {"ip_address": "172.16.0.19", "user_id": "0",
+                         "connected_at": 2.0},
                     ],
                 },
             ],
@@ -575,17 +601,22 @@ class TestActiveChannelsEmbyEnrichment:
         mock_client.get_streams_by_ids.return_value = [
             {"id": 679, "name": "US: Milwaukee Brewers", "m3u_account": 6},
         ]
+        # Dispatcharr account → username join (the user_map path in
+        # get_channel_stats). user_id=3 resolves to "kmfelmer".
+        mock_client.get_users.return_value = [
+            {"id": 3, "username": "kmfelmer"},
+        ]
 
-        async def _per_ip_resolver(ip, stream_name, **_kwargs):
-            if ip == "172.16.0.19":
-                return EmbyAttribution(user_id="uid-mw", user_name="MotWakorb")
-            return None
+        async def _non_ip_gated_resolver(ip, stream_name, **_kwargs):
+            # REALISTIC: the post-bd-mlcla resolver returns the channel's
+            # matched user for ANY ip (no server-IP gate).
+            return EmbyAttribution(user_id="uid-mw", user_name="MotWakorb")
 
         with (
             patch("routers.stats.get_client", return_value=mock_client),
             patch(
                 "services.emby_resolver.resolve_emby_user",
-                side_effect=_per_ip_resolver,
+                side_effect=_non_ip_gated_resolver,
             ),
             patch(
                 "config.get_settings",
@@ -597,30 +628,39 @@ class TestActiveChannelsEmbyEnrichment:
         assert response.status_code == 200, response.text
         body = response.json()
         ch = body["channels"][0]
-        # Channel-level field: still set from the IP that matched.
-        assert ch["emby_user_name"] == "MotWakorb"
-
-        # Resolve clients by IP — order in the response is not
-        # contractually pinned, so look them up.
         clients_by_ip = {c["ip_address"]: c for c in ch["clients"]}
-        assert (
-            clients_by_ip["172.16.0.19"]["emby_user_name"] == "MotWakorb"
-        ), (
-            "Expected the Emby-server-IP client to carry the resolved "
-            f"username, got: {clients_by_ip['172.16.0.19']!r}"
+
+        # The genuine direct XC subscriber keeps its Dispatcharr username and
+        # is NOT cross-attributed to the media-server user.
+        kmfelmer_client = clients_by_ip["172.16.0.50"]
+        assert kmfelmer_client.get("username") == "kmfelmer"
+        assert kmfelmer_client.get("emby_user_name") is None, (
+            "Direct XC subscriber must NOT absorb the media-server viewer "
+            f"(bd-cat70 cross-attribution), got: {kmfelmer_client!r}"
         )
-        assert clients_by_ip["172.16.0.50"]["emby_user_name"] is None, (
-            "Expected the non-Emby IP client's emby_user_name to remain "
-            f"None (no broadcast), got: {clients_by_ip['172.16.0.50']!r}"
+
+        # The anonymous media-server pull at the server IP gets MotWakorb —
+        # the real Emby viewer is NOT dropped to User #0.
+        media_pull = clients_by_ip["172.16.0.19"]
+        assert media_pull["emby_user_name"] == "MotWakorb", (
+            "The real Emby viewer must attribute to the anonymous "
+            f"media-server pull, got: {media_pull!r}"
         )
 
     @pytest.mark.asyncio
-    async def test_resolver_hit_does_not_broadcast_via_viewers_list(
+    async def test_single_user_not_broadcast_to_every_eligible_connection(
         self, async_client
     ):
-        """Same per-IP scoping rule applies to the W5 multi-viewer
-        ``emby_viewers`` list — only the matched client carries the
-        per-client viewers payload; non-matched clients keep ``[]``."""
+        """Anti-broadcast on the W5 multi-viewer ``emby_viewers`` list with
+        REALISTIC non-IP-gated resolver semantics (bd-cat70 / bd-mlcla).
+
+        Two anonymous eligible connections (``user_id="0"`` — media-server
+        pulls at different IPs) on one channel; the resolver returns ONE
+        user for ANY IP. Anti-collapse/anti-broadcast guarantees the single
+        user lands on exactly ONE connection's ``emby_viewers`` payload — the
+        other stays empty (User #0). The resolver hit must NOT be stamped
+        onto every eligible connection.
+        """
         mock_client = AsyncMock()
         mock_client.get_channel_stats.return_value = {
             "channels": [
@@ -630,8 +670,8 @@ class TestActiveChannelsEmbyEnrichment:
                     "channel_number": 679,
                     "stream_id": 679,
                     "clients": [
-                        {"ip_address": "172.16.0.19", "user_id": 1},
-                        {"ip_address": "172.16.0.50", "user_id": 2},
+                        {"ip_address": "172.16.0.19", "user_id": "0"},
+                        {"ip_address": "172.16.0.50", "user_id": "0"},
                     ],
                 },
             ],
@@ -640,16 +680,15 @@ class TestActiveChannelsEmbyEnrichment:
             {"id": 679, "name": "US: Milwaukee Brewers", "m3u_account": 6},
         ]
 
-        async def _per_ip_plural(ip, stream_name, **_kwargs):
-            if ip == "172.16.0.19":
-                return [EmbyAttribution(user_id="uid-mw", user_name="MotWakorb")]
-            return []
+        async def _non_ip_gated_plural(ip, stream_name, **_kwargs):
+            # REALISTIC: same single-user set returned for ANY ip.
+            return [EmbyAttribution(user_id="uid-mw", user_name="MotWakorb")]
 
         with (
             patch("routers.stats.get_client", return_value=mock_client),
             patch(
                 "services.emby_resolver.resolve_emby_users",
-                side_effect=_per_ip_plural,
+                side_effect=_non_ip_gated_plural,
             ),
             patch(
                 "config.get_settings",
@@ -662,12 +701,17 @@ class TestActiveChannelsEmbyEnrichment:
         body = response.json()
         ch = body["channels"][0]
         clients_by_ip = {c["ip_address"]: c for c in ch["clients"]}
-        # Matched client carries the viewers payload.
-        assert clients_by_ip["172.16.0.19"]["emby_viewers"] == [
-            {"user_id": "uid-mw", "user_name": "MotWakorb"}
+        # Exactly ONE connection carries the viewers payload; the other is
+        # empty — the single user is never broadcast to both.
+        payloads = [
+            clients_by_ip["172.16.0.19"].get("emby_viewers") or [],
+            clients_by_ip["172.16.0.50"].get("emby_viewers") or [],
         ]
-        # Non-matched client's viewers list stays empty — no broadcast.
-        assert clients_by_ip["172.16.0.50"]["emby_viewers"] == []
+        non_empty = [p for p in payloads if p]
+        assert len(non_empty) == 1, (
+            f"Single user must land on exactly one connection, got: {payloads!r}"
+        )
+        assert non_empty[0] == [{"user_id": "uid-mw", "user_name": "MotWakorb"}]
 
     @pytest.mark.asyncio
     async def test_channel_with_empty_clients_list_handles_cleanly(

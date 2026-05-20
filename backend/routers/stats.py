@@ -395,22 +395,36 @@ async def _enrich_channels_with_attribution(channels: list) -> None:
 def _build_attribution_connections(ch: dict, clients: list, server_ip=None) -> list:
     """Build reconciler :class:`Connection` objects for a channel's clients.
 
-    bd-mlcla / bd-4w9w6. Each ``client`` here is a Dispatcharr
+    bd-mlcla / bd-4w9w6 / bd-rools. Each ``client`` here is a Dispatcharr
     ``/proxy/ts/status`` connection — i.e. a viewer connected to ECM's own
-    proxy. Such a connection NEVER carries its own embedded XC/M3U
-    credentials (Dispatcharr's status payload exposes only
-    ``client_id`` / ``ip_address`` / ``user_agent`` / ``connected_at``), so
-    ``has_url_identity`` is always ``False`` for proxy connections and they
-    are always eligible for media-server reconciliation.
+    proxy. The status payload never carries embedded XC/M3U credentials, so
+    ``has_url_identity`` is always ``False`` here.
 
-    **bd-4w9w6 root-cause fix:** the original bd-mlcla code derived
-    ``has_url_identity`` from the *channel's upstream provider URL*
-    (``ch["url"]``, e.g. ``https://provider.tv/live/<user>/<pass>/<id>.ts``).
+    **bd-4w9w6 root-cause fix:** the original bd-mlcla code derived a
+    per-connection ``has_url_identity`` from the *channel's upstream provider
+    URL* (``ch["url"]``, e.g. ``https://provider.tv/live/<user>/<pass>/...``).
     That URL is the operator's UPSTREAM PROVIDER ACCOUNT — shared by every
     viewer of the channel — not a per-client identity. Since virtually every
     XC-sourced channel carries such a URL, the discriminator excluded ALL of
     those channels from reconciliation, silently dropping every legitimate
     media-server match (the live TSN5/Jellyfin "User #0" bug) to User #0.
+
+    **bd-rools per-connection discriminator (re-fix for the bd-cat70
+    direct-client cross-attribution):** the real per-client signal is the
+    Dispatcharr ACCOUNT identity. A connection authenticated to Dispatcharr
+    with a real sub-account carries a positive ``user_id`` (and a resolved
+    ``username``) on the client dict — that is a genuine direct-IPTV
+    subscriber, attributed via its Dispatcharr account (bd-gy5nd path), and
+    must be EXCLUDED from media-server reconciliation. If it stayed eligible,
+    the non-IP-gated resolver would offer it the channel's media-server users
+    and B1 direct-first ordering would let it absorb a media-server viewer
+    (``kmfelmer`` showing ``MotWakorb``; the real viewer → User #0).
+    Anonymous connections (Dispatcharr ``user_id == "0"`` / ``0`` / ``None``,
+    including the transcoding proxy AND NAT'd browser-direct playback) carry
+    no account identity and stay eligible. An account-identity connection is
+    additionally never flagged ``is_server_proxy`` (it is a real subscriber,
+    not the media server's proxy).
+
     The channel-provider label is computed independently via the bd-gy5nd
     provider/hostname path and continues to surface alongside the
     media-server user; the two are NOT mutually exclusive (a viewer can
@@ -425,7 +439,10 @@ def _build_attribution_connections(ch: dict, clients: list, server_ip=None) -> l
     from the float Dispatcharr surfaces — it is only a tie-break, so a
     missing value is safe.
     """
-    from services.attribution_reconciler import Connection
+    from services.attribution_reconciler import (
+        Connection,
+        has_dispatcharr_account_identity,
+    )
 
     connections: list[Connection] = []
     for idx, client in enumerate(clients):
@@ -436,6 +453,15 @@ def _build_attribution_connections(ch: dict, clients: list, server_ip=None) -> l
             connected_at = float(connected_at) if connected_at is not None else None
         except (TypeError, ValueError):
             connected_at = None
+        # bd-rools: genuine direct-IPTV subscriber iff the client carries a
+        # Dispatcharr account identity (positive user_id / real username).
+        # The username is resolved onto the client dict earlier in
+        # get_channel_stats (the user_map join); user_id comes straight from
+        # the /proxy/ts/status payload.
+        has_account_identity = has_dispatcharr_account_identity(
+            user_id=client.get("user_id"),
+            username=client.get("username"),
+        )
         connections.append(
             Connection(
                 client_id=str(client_id),
@@ -444,7 +470,13 @@ def _build_attribution_connections(ch: dict, clients: list, server_ip=None) -> l
                 # Proxy connections never carry per-client credentials; the
                 # channel's upstream provider URL is NOT a per-client signal.
                 has_url_identity=False,
-                is_server_proxy=(server_ip is not None and ip == server_ip),
+                has_account_identity=has_account_identity,
+                # A real subscriber is never the media server's own proxy.
+                is_server_proxy=(
+                    not has_account_identity
+                    and server_ip is not None
+                    and ip == server_ip
+                ),
             )
         )
     return connections
@@ -545,6 +577,7 @@ async def _enrich_one_source(
     from config import get_settings
     from services.attribution_reconciler import (
         CandidateUser,
+        eligible_connections,
         reconcile_channel,
         rollup_label,
     )
@@ -560,11 +593,14 @@ async def _enrich_one_source(
     )
 
     connections = _build_attribution_connections(ch, clients, server_ip=server_ip)
-    # eligible IPs = connections the reconciler will consider (URL-identity
-    # channels contribute none).
+    # eligible IPs = connections the reconciler will consider. bd-rools:
+    # reuse eligible_connections() so the URL-identity AND Dispatcharr-account
+    # discriminators stay in ONE place — an account-identity connection (a
+    # genuine direct subscriber) contributes no IP and is never offered the
+    # channel's media-server users.
     eligible_ips = [
-        c.ip_address for c in connections
-        if not c.has_url_identity and c.ip_address
+        c.ip_address for c in eligible_connections(connections)
+        if c.ip_address
     ]
     # Preserve channel-level seeded keys when nothing is eligible.
     if not eligible_ips:

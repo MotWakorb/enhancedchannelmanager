@@ -32,6 +32,7 @@ from services.attribution_reconciler import (
     build_trusted_networks,
     distinct_users,
     eligible_connections,
+    has_dispatcharr_account_identity,
     ip_priority,
     reconcile_channel,
     rollup_label,
@@ -50,6 +51,7 @@ def _conn(
     ip: str | None = None,
     connected_at: float | None = None,
     url_identity: bool = False,
+    account_identity: bool = False,
     server_proxy: bool = False,
 ) -> Connection:
     return Connection(
@@ -57,6 +59,7 @@ def _conn(
         ip_address=ip,
         connected_at=connected_at,
         has_url_identity=url_identity,
+        has_account_identity=account_identity,
         is_server_proxy=server_proxy,
     )
 
@@ -139,6 +142,79 @@ class TestEligibility:
         # at channel level.
         assert result.assignments == ()
         assert [u.user_name for u in result.channel_viewers] == ["alice"]
+
+    def test_account_identity_connections_excluded(self):
+        """bd-rools: a Dispatcharr-account connection is not reconciled."""
+        conns = [
+            _conn("c1", ip="172.18.0.1"),  # anonymous media-server pull
+            _conn("c2", ip="10.0.0.5", account_identity=True),  # direct sub
+        ]
+        eligible = eligible_connections(conns)
+        assert [c.client_id for c in eligible] == ["c1"]
+
+    def test_account_identity_connection_never_absorbs_media_server_user(self):
+        """bd-rools (re-fix bd-cat70): a genuine direct XC subscriber sharing a
+        channel with a media-server viewer must NOT absorb that viewer.
+
+        kmfelmer (Dispatcharr account) + an anonymous media-server pull on
+        the same channel; the resolver (now non-IP-gated) offers MotWakorb.
+        kmfelmer is excluded from reconciliation, so MotWakorb pairs to the
+        anonymous pull — kmfelmer keeps no media-server name and the real
+        viewer is NOT dropped to User #0.
+        """
+        kmfelmer = _conn("kmfelmer", ip="172.16.0.50", account_identity=True)
+        media_pull = _conn("anon", ip="172.16.0.19")
+        users = [_user("MotWakorb", user_id="uid-mw")]
+        result = reconcile_channel([kmfelmer, media_pull], users)
+        names = _assigned_names(result)
+        # kmfelmer never appears in the assignments (excluded upstream).
+        assert "kmfelmer" not in names
+        # The media-server viewer lands on the anonymous pull.
+        assert names["anon"] == "MotWakorb"
+
+    def test_account_identity_connection_never_server_proxy_carrier(self):
+        """bd-rools: even when its IP equals the server IP, an account-identity
+        connection (set is_server_proxy=False by the call site) is excluded
+        and never carries the proxy remainder."""
+        # The call sites set is_server_proxy=False for account-identity conns;
+        # the reconciler additionally drops it via eligible_connections().
+        sub = _conn("sub", ip="172.16.0.19", account_identity=True)
+        users = [_user("alice"), _user("bob")]
+        result = reconcile_channel([sub], users)
+        assert result.assignments == ()
+        assert {u.user_name for u in result.channel_viewers} == {"alice", "bob"}
+
+
+class TestAccountIdentityHelper:
+    """bd-rools: the Dispatcharr-account-identity discriminator helper."""
+
+    @pytest.mark.parametrize(
+        "user_id",
+        [1, 3, "3", "42", 9],
+    )
+    def test_positive_user_id_is_account_identity(self, user_id):
+        assert has_dispatcharr_account_identity(user_id=user_id) is True
+
+    @pytest.mark.parametrize(
+        "user_id",
+        [None, "", 0, "0", -1, "-1", "abc", True, False, 42.0],
+    )
+    def test_anonymous_or_sentinel_user_id_is_not_account_identity(self, user_id):
+        assert has_dispatcharr_account_identity(user_id=user_id) is False
+
+    def test_real_username_without_user_id_is_account_identity(self):
+        # Defensive fallback: a real name with no numeric id still counts.
+        assert (
+            has_dispatcharr_account_identity(user_id=None, username="kmfelmer")
+            is True
+        )
+
+    @pytest.mark.parametrize("username", [None, "", "   ", "0"])
+    def test_blank_or_sentinel_username_is_not_account_identity(self, username):
+        assert (
+            has_dispatcharr_account_identity(user_id="0", username=username)
+            is False
+        )
 
 
 # ---------------------------------------------------------------------------

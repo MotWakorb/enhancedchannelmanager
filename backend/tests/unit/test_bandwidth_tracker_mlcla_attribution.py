@@ -85,13 +85,18 @@ def _emby_only_settings(base_url="http://172.16.0.19:8096"):
 
 
 def _channel(*, channel_uuid, client_specs, total_bytes, url=None):
-    """Build a Dispatcharr channels[] entry with per-client metadata."""
+    """Build a Dispatcharr channels[] entry with per-client metadata.
+
+    Each spec may carry a ``user_id`` to model a genuine Dispatcharr account
+    (positive int) vs. an anonymous media-server pull (default ``None``,
+    bd-rools).
+    """
     clients = [
         {
             "ip_address": spec["ip"],
             "client_id": spec.get("client_id", spec["ip"]),
             "connected_at": spec.get("connected_at"),
-            "user_id": None,
+            "user_id": spec.get("user_id"),
         }
         for spec in client_specs
     ]
@@ -468,3 +473,109 @@ async def test_xc_upstream_url_jellyfin_match_persisted_bd4w9w6(
     # Empty Emby/Plex results did not overwrite or block the Jellyfin match.
     assert all(r.emby_user_name is None for r in rows)
     assert all(r.plex_user_name is None for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# bd-rools — per-connection Dispatcharr-account discriminator (persisted path).
+# Re-fix for the bd-cat70 direct-client cross-attribution that the bd-4w9w6
+# unconditional has_url_identity=False re-exposed.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_nat_browser_direct_no_account_stays_eligible_persisted_bd_rools(
+    patched_session_local, tracker, mock_client
+):
+    """bd-rools: a NAT'd media-server browser-direct connection with NO
+    Dispatcharr account (``user_id`` absent / anonymous) stays ELIGIBLE and
+    attributes the media-server user on the persisted path.
+
+    This is the User#0-fix invariant: the per-connection account discriminator
+    must NOT exclude an anonymous browser-direct pull.
+    """
+    mock_client.get_streams_by_ids.return_value = [_stream_record()]
+    ch_uuid = "ch-rools-anon"
+    # No user_id key → anonymous media-server pull (NAT'd browser-direct).
+    specs = [{"ip": "172.18.0.1", "client_id": "browser-anon"}]
+    first = _channel(channel_uuid=ch_uuid, client_specs=specs, total_bytes=1_000_000,
+                     url="https://infinity.gives/live/mot/16118141/108495.ts")
+    second = _channel(channel_uuid=ch_uuid, client_specs=specs, total_bytes=2_000_000,
+                      url="https://infinity.gives/live/mot/16118141/108495.ts")
+
+    viewers = [EmbyAttribution(user_id="uid-mw", user_name="MotWakorb")]
+    with patch("bandwidth_tracker.resolve_emby_users", AsyncMock(return_value=viewers)), \
+         patch("bandwidth_tracker.resolve_emby_user", AsyncMock(return_value=viewers[0])), \
+         patch("bandwidth_tracker.resolve_plex_users", AsyncMock(return_value=[])), \
+         patch("bandwidth_tracker.resolve_plex_user", AsyncMock(return_value=None)), \
+         patch("bandwidth_tracker.resolve_jellyfin_users", AsyncMock(return_value=[])), \
+         patch("bandwidth_tracker.resolve_jellyfin_user", AsyncMock(return_value=None)), \
+         patch("config.get_settings", return_value=_emby_only_settings()):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    rows = _rows(patched_session_local, ch_uuid)
+    assert rows
+    assert all(r.emby_user_name == "MotWakorb" for r in rows), (
+        "anonymous NAT'd browser-direct must stay eligible and attribute: "
+        f"{[(r.session_id, r.emby_user_name) for r in rows]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_direct_subscriber_does_not_absorb_media_viewer_persisted_bd_rools(
+    patched_session_local, tracker, mock_client
+):
+    """bd-rools (re-fix bd-cat70, persisted path): a genuine direct XC
+    subscriber (Dispatcharr account ``user_id=3``, kmfelmer) sharing a channel
+    with an anonymous media-server pull must NOT absorb the media-server user.
+
+    The subscriber is excluded from media-server reconciliation (account
+    identity), so the media-server viewer (MotWakorb) attributes to the
+    anonymous pull's (channel, ip) row and the subscriber's IP row carries NO
+    media-server name — never cross-attributed.
+    """
+    mock_client.get_streams_by_ids.return_value = [_stream_record()]
+    ch_uuid = "ch-rools-mixed"
+    specs = [
+        # Anonymous media-server pull at the Emby server IP (the real viewer).
+        {"ip": "172.16.0.19", "client_id": "anon-pull", "connected_at": 1.0},
+        # Genuine direct XC subscriber, Dispatcharr account user_id=3, NAT'd.
+        {"ip": "172.16.0.50", "client_id": "kmfelmer", "connected_at": 2.0,
+         "user_id": 3},
+    ]
+    first = _channel(channel_uuid=ch_uuid, client_specs=specs, total_bytes=1_000_000,
+                     url="https://infinity.gives/live/mot/16118141/108495.ts")
+    second = _channel(channel_uuid=ch_uuid, client_specs=specs, total_bytes=2_000_000,
+                      url="https://infinity.gives/live/mot/16118141/108495.ts")
+
+    # REALISTIC non-IP-gated resolver: returns MotWakorb for ANY ip.
+    viewers = [EmbyAttribution(user_id="uid-mw", user_name="MotWakorb")]
+    with patch("bandwidth_tracker.resolve_emby_users", AsyncMock(return_value=viewers)), \
+         patch("bandwidth_tracker.resolve_emby_user", AsyncMock(return_value=viewers[0])), \
+         patch("bandwidth_tracker.resolve_plex_users", AsyncMock(return_value=[])), \
+         patch("bandwidth_tracker.resolve_plex_user", AsyncMock(return_value=None)), \
+         patch("bandwidth_tracker.resolve_jellyfin_users", AsyncMock(return_value=[])), \
+         patch("bandwidth_tracker.resolve_jellyfin_user", AsyncMock(return_value=None)), \
+         patch("config.get_settings", return_value=_emby_only_settings()):
+        await _drive_two_polls(tracker, mock_client, first, second)
+
+    rows = _rows(patched_session_local, ch_uuid)
+    assert rows
+    # SessionTelemetry rows carry the Dispatcharr account ``user_id`` (coerced:
+    # the genuine subscriber row = 3, the anonymous pull row = None). The
+    # media-server viewer (MotWakorb) must land ONLY on the anonymous (user_id
+    # IS NULL) row — never on the genuine subscriber's (user_id == 3) row.
+    attributed = [r for r in rows if r.emby_user_name == "MotWakorb"]
+    assert attributed, f"media-server viewer must attribute somewhere: {rows}"
+    # No row belonging to the genuine subscriber (user_id == 3) was attributed
+    # the media-server user — the bd-cat70 cross-attribution is prevented.
+    subscriber_absorbed = [r for r in attributed if r.user_id == 3]
+    assert not subscriber_absorbed, (
+        "genuine direct subscriber (user_id=3) must NOT absorb the "
+        "media-server viewer (bd-cat70 cross-attribution); got "
+        f"{[(r.session_id, r.user_id, r.emby_user_name) for r in subscriber_absorbed]}"
+    )
+    # The MotWakorb attribution belongs to the anonymous pull (user_id IS NULL).
+    assert all(r.user_id is None for r in attributed), (
+        "media-server viewer must attribute to the anonymous pull row "
+        f"(user_id NULL); got {[(r.session_id, r.user_id) for r in attributed]}"
+    )
