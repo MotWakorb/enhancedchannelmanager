@@ -212,6 +212,57 @@ class OAuthProvider:
         )
         return code
 
+    # ── CSRF state binding (consent flow, bead buiqr.4 AC3) ──────────────────
+
+    def bind_consent_state(
+        self,
+        *,
+        state: str,
+        client_id: str,
+        user_sub: str,
+        now: Optional[int] = None,
+    ) -> None:
+        """Bind the anti-CSRF ``state`` to the admin subject at ``/authorize``.
+
+        Called once ``/authorize`` has validated the request AND confirmed the
+        admin session, this records a single-use, short-lived (≤10 min) binding
+        of ``state`` → ``user_sub`` in the store (state hashed at rest). The
+        consent-approval step later proves it carried the *same* admin's state by
+        consuming this binding (:meth:`verify_consent_state`). An empty state is
+        a no-op (nothing to bind) — the approval step then has nothing to match,
+        so a forged non-empty state on approve is still rejected.
+        """
+        if not state:
+            return
+        self.store.bind_consent_state(
+            state=state, client_id=client_id, user_sub=user_sub, now=now
+        )
+
+    def verify_consent_state(
+        self,
+        *,
+        state: str,
+        user_sub: str,
+        now: Optional[int] = None,
+    ) -> None:
+        """Verify + consume the CSRF ``state`` binding on consent approval.
+
+        Raises :class:`OAuthError` ``invalid_request`` (400) when the presented
+        ``state`` has no live binding for *this* admin subject — i.e. it is
+        missing, forged, expired, already consumed (replay), or was bound to a
+        different admin session (cross-session CSRF). On success the binding is
+        consumed (single-use). This is the server-side seam the consent UI
+        (buiqr.7) relies on: the UI round-trips the ``state`` it received and
+        this method enforces the binding (bead buiqr.4 AC3, threat model CSRF1).
+        """
+        if not state or not self.store.consume_consent_state(
+            state=state, user_sub=user_sub, now=now
+        ):
+            raise OAuthError(
+                "invalid_request",
+                "state parameter is missing or does not match the authorization request",
+            )
+
     # ── token minting ────────────────────────────────────────────────────────
 
     def _mint_access_token(

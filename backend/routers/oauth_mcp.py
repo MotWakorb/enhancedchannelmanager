@@ -26,6 +26,20 @@ ECM-managed DB at ``/config/mcp_oauth.db`` (ADR-009 §5, Option A).
 The consent SCREEN is buiqr.7, not this bead. ``GET /authorize`` validates the
 request and redirects to the consent route as a clean seam; it does NOT render
 consent HTML here.
+
+SECURITY HARDENING (bead buiqr.4)
+=================================
+  - **Rate limiting** (threat model D1/D2): ``/authorize`` and ``/token`` each
+    carry two stacked slowapi limits — a per-IP bucket and a per-user bucket
+    (``auth/oauth_rate_limit.py``). They reuse the same ``limiter`` the login
+    endpoints use, so the existing ``RateLimitExceeded`` handler + the
+    ``RATE_LIMIT_ENABLED`` test switch apply unchanged. Defaults are
+    env-configurable (``5/min`` authorize, ``10/min`` token).
+  - **Consent CSRF** (threat model CSRF1): ``GET /authorize`` binds the
+    anti-forgery ``state`` to the admin subject; ``POST /authorize/approve``
+    consumes that binding and rejects any missing/forged/mismatched/replayed/
+    cross-session ``state`` with 400 before a code is minted. This is the
+    server-side state seam the consent UI (buiqr.7) round-trips.
 """
 from __future__ import annotations
 
@@ -35,10 +49,17 @@ from urllib.parse import urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import JSONResponse, RedirectResponse
+from slowapi.util import get_remote_address
 
 from auth.dependencies import RequireAdminIfEnabled
 from auth.oauth_provider import MCP_SCOPE, PKCE_S256, OAuthError, OAuthProvider
+from auth.oauth_rate_limit import (
+    authorize_rate_limit,
+    oauth_user_rate_key,
+    token_rate_limit,
+)
 from auth.oauth_store import OAuthStore
+from auth.routes import limiter
 from config import CONFIG_DIR
 from models import User
 
@@ -93,6 +114,8 @@ def _admin_sub(admin: Optional[User]) -> str:
 
 
 @router.get("/authorize")
+@limiter.limit(authorize_rate_limit, key_func=get_remote_address)  # per-IP (D2)
+@limiter.limit(authorize_rate_limit, key_func=oauth_user_rate_key)  # per-user (D2)
 async def authorize(
     request: Request,
     response_type: str,
@@ -141,6 +164,16 @@ async def authorize(
         if (scope or MCP_SCOPE) != MCP_SCOPE:
             raise OAuthError("invalid_scope", "only the 'mcp' scope is supported")
 
+        # CSRF: bind the anti-forgery `state` to THIS admin subject before
+        # handing off to consent (bead buiqr.4 AC3). The approval step
+        # (/authorize/approve) consumes this binding; a forged/mismatched state
+        # there has no live binding and is rejected with 400. A future cross-
+        # session attacker who guesses the consent URL cannot mint a code
+        # because their forged state was never bound to their session.
+        provider.bind_consent_state(
+            state=state, client_id=client_id, user_sub=_admin_sub(admin)
+        )
+
         # Hand off to the consent screen (buiqr.7) with the validated params.
         consent_params = {
             "client_id": client_id,
@@ -178,15 +211,22 @@ async def authorize_approve(
 
     This is the action the consent screen (buiqr.7) submits when the admin
     approves. It re-validates the request server-side (defence in depth — never
-    trust that the consent form preserved the validated params), mints the PKCE
-    authorization code bound to the admin subject, and 302-redirects to the
-    client's registered redirect_uri with ``code`` (+ ``state`` if provided).
-    Requires the admin session (the consent screen is admin-only, SP3).
+    trust that the consent form preserved the validated params), enforces the
+    CSRF ``state`` binding created at ``/authorize`` (bead buiqr.4 AC3 — a
+    forged/mismatched/cross-session state → 400 before any code is minted),
+    mints the PKCE authorization code bound to the admin subject, and
+    302-redirects to the client's registered redirect_uri with ``code``
+    (+ ``state``). Requires the admin session (the consent screen is admin-only,
+    SP3).
     """
     store = get_oauth_store()
     try:
         provider = OAuthProvider(store)
         user_sub = _admin_sub(admin)
+        # CSRF: the submitted `state` MUST match a live binding created for THIS
+        # admin at /authorize (bead buiqr.4 AC3). A missing/forged/mismatched or
+        # cross-session state has no live binding → 400 before any code is minted.
+        provider.verify_consent_state(state=state, user_sub=user_sub)
         code = provider.create_authorization_code(
             client_id=client_id,
             redirect_uri=redirect_uri,
@@ -211,6 +251,8 @@ async def authorize_approve(
 
 
 @router.post("/token")
+@limiter.limit(token_rate_limit, key_func=get_remote_address)  # per-IP (D1)
+@limiter.limit(token_rate_limit, key_func=oauth_user_rate_key)  # per-user (D1)
 async def token(
     request: Request,
     grant_type: str = Form(...),
