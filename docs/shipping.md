@@ -143,6 +143,20 @@ these steps.
   ```
 - Do NOT run `bd sync` as part of code commits. `bd sync` is ONLY for syncing beads issue tracking data.
 
+## MCP Release Verification
+
+Before cutting any release that touches MCP or OAuth code, the releaser must walk the manual verification checklist in [`docs/runbooks/mcp-release-verification.md`](runbooks/mcp-release-verification.md). This covers:
+
+1. Adding a Custom Connector (OAuth flow end-to-end)
+2. Making a tool call via the OAuth connector
+3. Token refresh / re-authorization after revoke
+4. Static `?api_key=` backward-compat path
+5. Settings panel smoke check
+
+Sign-off text from the checklist goes in the release PR description alongside the G1a–G7 gate checklist.
+
+Releases that do not touch `mcp-server/`, `backend/routers/oauth*.py`, or `MCPSettingsSection.tsx` may skip this checklist (at releaser discretion).
+
 ## Release Workflow (Merging to Main)
 
 Release cuts are **intentional, gated acts** — not emergent side effects of whatever PR next targets `main`. This workflow is authoritative per [ADR-004: Release-Cut Promotion Discipline](adr/ADR-004-release-cut-promotion-discipline.md); read that ADR for full context on why each step exists and which alternatives were rejected.

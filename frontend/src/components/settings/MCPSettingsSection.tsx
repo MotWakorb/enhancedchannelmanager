@@ -370,32 +370,45 @@ export function MCPSettingsSection({ isAdmin }: Props) {
 
           <div className="form-group-vertical">
             <p className="form-description">
-              The MCP server runs on port <strong>{mcpPort}</strong> alongside ECM, using the Streamable HTTP transport on a single <code>/mcp</code> endpoint. Connect Claude Desktop or Claude Code using the endpoint below.
+              The MCP server runs on port <strong>{mcpPort}</strong> alongside ECM, using the Streamable HTTP transport on a single <code>/mcp</code> endpoint.
             </p>
 
-            <label className="form-label">MCP Endpoint</label>
-            <div className="mcp-key-display">
-              <code>http://YOUR_ECM_HOST:{mcpPort}/mcp?api_key=YOUR_API_KEY</code>
-              <button
-                className="mcp-copy-btn"
-                onClick={() => handleCopy(mcpEndpoint, 'MCP endpoint URL')}
-                title="Copy URL"
-              >
-                <span className="material-icons">content_copy</span>
-              </button>
-            </div>
-
-            <label className="form-label" style={{ marginTop: '1rem' }}>Claude Desktop Config</label>
+            {/* Custom Connector (OAuth) — bd-buiqr.11 */}
+            <label className="form-label">Claude Desktop — Custom Connector (no Node required)</label>
             <p className="form-description">
-              Add this to your Claude Desktop settings. Replace <code>YOUR_ECM_HOST</code> with your server's IP or hostname and <code>YOUR_API_KEY</code> with the key above. (Claude Desktop reaches remote MCP servers through the <code>mcp-remote</code> bridge; <code>--allow-http</code> is needed for plain-HTTP endpoints.)
+              Claude Desktop&apos;s built-in <strong>Settings → Connectors → Add custom connector</strong> uses OAuth 2.1. ECM authorizes the connection in your browser; Claude Desktop stores the token automatically. No Node.js needed.
             </p>
             <p className="form-description mcp-prereq-note">
-              <span className="material-icons" aria-hidden="true">info</span>
+              <span className="material-icons" aria-hidden="true">https</span>
               <span>
-                <strong>Prerequisite:</strong> Claude Desktop does not bundle Node.js. The <code>mcp-remote</code> bridge below runs via <code>npx</code>, so Node.js (LTS, 18+) must be installed on the same machine as Claude Desktop. Install from <a href="https://nodejs.org/" target="_blank" rel="noopener noreferrer">nodejs.org</a> or via a package manager (<code>winget install OpenJS.NodeJS.LTS</code>, <code>brew install node</code>, <code>apt install nodejs npm</code>). Without Node on PATH, Claude Desktop's logs show <code>spawn npx ENOENT</code>.
-                <br /><br />
-                <strong>Why not Custom Connectors?</strong> Claude Desktop's Settings &gt; Connectors UI requires OAuth 2.1; ECM's MCP server uses a static API key, so the no-Node Custom Connector path is not supported yet. Claude Code (below) talks to the server directly and does not need Node.
+                <strong>Prerequisite: HTTPS.</strong> The MCP SDK rejects plain-HTTP origins for non-loopback hosts. You must front the MCP container (port {mcpPort}) with a TLS reverse proxy before using Custom Connectors. See the{' '}
+                <a href="https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/runbooks/mcp-https-reverse-proxy.md" target="_blank" rel="noopener noreferrer">HTTPS reverse-proxy runbook</a>{' '}
+                for Caddy, nginx, and Traefik recipes.
               </span>
+            </p>
+            <p className="form-description mcp-prereq-note">
+              <span className="material-icons" aria-hidden="true">warning</span>
+              <span>
+                <strong>Required: set <code>OAUTH_ISSUER</code> identically on both containers.</strong> Both the ECM and MCP containers must have <code>OAUTH_ISSUER</code> set to the same external HTTPS origin (e.g. <code>https://mcp.yourdomain.com</code>). If they differ, every OAuth Bearer token fails with a silent 401. Without this env var, both containers default to <code>https://ecm.local</code>, which only works loopback.
+              </span>
+            </p>
+            <ol className="form-description" style={{ paddingLeft: '1.25rem', margin: '0 0 0.75rem' }}>
+              <li>Stand up an HTTPS reverse proxy and set <code>OAUTH_ISSUER</code> on both containers.</li>
+              <li>In Claude Desktop, go to <strong>Settings → Connectors → Add custom connector</strong>.</li>
+              <li>Enter the MCP URL: <code>https://YOUR_MCP_HTTPS_DOMAIN/mcp</code></li>
+              <li>Claude Desktop discovers the OAuth endpoints automatically.</li>
+              <li>Your browser opens the ECM consent screen. Log in and click <strong>Authorize</strong>.</li>
+              <li>Claude Desktop stores the token — connected. No config file edits needed.</li>
+            </ol>
+
+            {/* mcp-remote bridge (Node) — existing path */}
+            <label className="form-label" style={{ marginTop: '1.25rem' }}>Claude Desktop — mcp-remote bridge (Node required)</label>
+            <p className="form-description">
+              If you have Node.js installed on the same machine as Claude Desktop (LTS 18+ — install from{' '}
+              <a href="https://nodejs.org/" target="_blank" rel="noopener noreferrer">nodejs.org</a>
+              {', '}
+              <code>winget install OpenJS.NodeJS.LTS</code>, <code>brew install node</code>, or <code>apt install nodejs npm</code>), add this to your <code>claude_desktop_config.json</code>.
+              Replace <code>YOUR_ECM_HOST</code> and <code>YOUR_API_KEY</code>. Without Node on PATH, Claude Desktop&apos;s logs show <code>spawn npx ENOENT</code>.
             </p>
             <div className="mcp-config-block">
               <pre>{claudeDesktopConfig}</pre>
@@ -403,6 +416,21 @@ export function MCPSettingsSection({ isAdmin }: Props) {
                 className="mcp-copy-btn"
                 onClick={() => handleCopy(claudeDesktopConfig, 'Claude Desktop config')}
                 title="Copy config"
+              >
+                <span className="material-icons">content_copy</span>
+              </button>
+            </div>
+            <p className="form-description" style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: 'var(--text-secondary, #888)' }}>
+              (<code>--allow-http</code> is needed because the endpoint is plain HTTP. The <code>?api_key=</code> parameter is your <code>mcp_api_key</code> — not your Dispatcharr key.)
+            </p>
+
+            <label className="form-label" style={{ marginTop: '1rem' }}>MCP Endpoint (reference)</label>
+            <div className="mcp-key-display">
+              <code>http://YOUR_ECM_HOST:{mcpPort}/mcp?api_key=YOUR_API_KEY</code>
+              <button
+                className="mcp-copy-btn"
+                onClick={() => handleCopy(mcpEndpoint, 'MCP endpoint URL')}
+                title="Copy URL"
               >
                 <span className="material-icons">content_copy</span>
               </button>
