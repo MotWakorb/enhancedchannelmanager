@@ -15,7 +15,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
-from config import MCP_PORT, get_mcp_api_key, get_mcp_api_key_status
+from config import MCP_PORT, get_mcp_api_key, get_mcp_api_key_status, get_signing_key_status
 from resources import register_all_resources
 from tools import register_all_tools
 
@@ -96,6 +96,10 @@ async def handle_health(request):
     (no settings file, corrupted JSON, missing field, empty field). This
     lets an operator (and the ECM Settings UI's MCP Server Status panel)
     diagnose a misconfigured deployment without container shell access.
+
+    bd-buiqr10 (Option-A slice): we also surface ``signing_key_status`` —
+    whether the shared HS256 OAuth signing secret is present in settings.json.
+    This is additive; existing ``api_key_status`` behavior is unchanged.
     """
     api_key, status = get_mcp_api_key_status()
     configured = bool(api_key)
@@ -125,17 +129,48 @@ async def handle_health(request):
         ),
     }
 
+    # bd-buiqr10: signing key diagnostic (additive — does not alter api_key_status).
+    # SECURITY (threat model ID1): the hint text describes the PROBLEM and
+    # remediation; it never contains or references the secret value itself.
+    _, signing_status = get_signing_key_status()
+    signing_key_hints = {
+        "signing_key_missing": (
+            "The OAuth signing secret (mcp_oauth_signing_secret) is not present "
+            "in settings.json. OAuth Bearer-JWT verification requires this shared "
+            "HS256 secret. Ensure ECM has written the signing secret to the shared "
+            "/config volume — this is set automatically when the OAuth AS is "
+            "configured. Check that both containers mount the same /config volume."
+        ),
+        "file_not_found": (
+            "settings.json was not found at /config/settings.json. The OAuth "
+            "signing secret cannot be read. Verify the /config volume is mounted "
+            "and ECM Settings has been saved at least once."
+        ),
+        "invalid_json": (
+            "/config/settings.json could not be parsed as JSON. The OAuth signing "
+            "secret cannot be read. Restore from a backup or recreate the file by "
+            "saving ECM Settings."
+        ),
+    }
+
     response = {
         "status": "ok" if configured else "not_configured",
         "server": "ecm-mcp",
         "transport": "streamable-http",
         "api_key_configured": configured,
         "api_key_status": status,
+        # bd-buiqr10: signing key status is always included in the response
+        # so operators can diagnose OAuth readiness independently of api_key
+        # status. 'ok' means the HS256 secret is present; 'signing_key_missing'
+        # means OAuth Bearer-JWT auth cannot work until the secret is set.
+        "signing_key_status": signing_status,
         "tools_available": len(mcp._tool_manager.list_tools()),
         "resources_available": len(mcp._resource_manager.list_resources()),
     }
     if not configured and status in setup_hints:
         response["setup_hint"] = setup_hints[status]
+    if signing_status != "ok" and signing_status in signing_key_hints:
+        response["signing_key_hint"] = signing_key_hints[signing_status]
     return JSONResponse(response)
 
 
