@@ -710,6 +710,30 @@ ENDPOINTS: dict[str, Endpoint] = {
         query_params=frozenset({"stream_name", "group_id", "page", "page_size"}),
         response_fields=frozenset({"stream_name", "candidates", "total", "page", "page_size", "total_pages"}),
     ),
+    # -- channel_merges enqueue — bd-b3czq (ADR-008 §D7 MCP prompt path) -----
+    # POST /api/channel-merges async-queues a merge candidate (creates a
+    # pending_merges row with trigger_context='mcp_tool') and returns a
+    # merge_id so add_stream(dedup_action='prompt') can hand the agent a row
+    # to accept/dismiss. The server re-runs the matcher; the tool sends only
+    # the stream context (NOT a confidence — the action-time score is
+    # authoritative per §D6).
+    "channel_merges_enqueue": Endpoint(
+        name="channel_merges_enqueue",
+        method="POST",
+        path="/api/channel-merges",
+        request_fields=frozenset({"stream_name", "group_id"}),
+        response_fields=frozenset(
+            {
+                "merge_id",
+                "created",
+                "candidate_channel_id",
+                "candidate_channel_name",
+                "confidence",
+                "meets_threshold",
+                "status",
+            }
+        ),
+    ),
     # -- tasks domain ------------------------------------------------------
     "tasks_list": Endpoint(
         name="tasks_list",
