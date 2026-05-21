@@ -15,9 +15,26 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
-from config import MCP_PORT, get_mcp_api_key, get_mcp_api_key_status, get_signing_key_status
+from config import (
+    MCP_PORT,
+    MCP_RESOURCE_URL,
+    get_mcp_api_key,
+    get_mcp_api_key_status,
+    get_oauth_allow_insecure,
+    get_signing_key_status,
+)
+from oauth_discovery import (
+    build_protected_resource_metadata,
+    discovery_blocked,
+    issuer_is_insecure,
+    resolve_issuer,
+    resolve_resource_url,
+)
 from resources import register_all_resources
 from tools import register_all_tools
+
+#: The well-known path the RS serves its RFC 9728 discovery document at.
+PROTECTED_RESOURCE_PATH = "/.well-known/oauth-protected-resource"
 
 # Configure logging
 logging.basicConfig(
@@ -63,6 +80,12 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
 
         # Health endpoint is always public
         if path == "/health":
+            return await call_next(request)
+
+        # OAuth protected-resource discovery is PUBLIC by spec (RFC 9728) — a
+        # client must read it BEFORE it has any credential. Its own handler
+        # applies the fail-closed HTTP-posture gate (bd-buiqr.5, ADR-009 §4/§7).
+        if path == PROTECTED_RESOURCE_PATH:
             return await call_next(request)
 
         expected_key = get_mcp_api_key()
@@ -174,6 +197,58 @@ async def handle_health(request):
     return JSONResponse(response)
 
 
+async def handle_protected_resource(request):
+    """RFC 9728 OAuth protected-resource discovery (PUBLIC; fail-closed on plain HTTP).
+
+    Points clients at the ECM AS issuer (``authorization_servers``). Returns 404
+    when the ``oauth_allow_insecure`` posture gate fail-closes the endpoint
+    (plain-HTTP non-loopback issuer, flag false → 404; bd-buiqr.5, ADR-009 §4,
+    threat model HT1). The document exposes ONLY protocol-required fields — never
+    the HS256 secret, the internal Docker host (``ecm:6100``), filesystem paths,
+    or ``mcp_api_key`` (threat model ID1).
+    """
+    host = request.headers.get("host")
+    scheme = request.url.scheme
+    issuer = resolve_issuer(request_host=host, request_scheme=scheme)
+    allow_insecure = get_oauth_allow_insecure()
+
+    if discovery_blocked(issuer, allow_insecure):
+        # Generic 404 — reveals nothing about the gate (threat model HT1/ID1).
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+
+    resource = resolve_resource_url(MCP_RESOURCE_URL, request_host=host, request_scheme=scheme)
+    return JSONResponse(build_protected_resource_metadata(issuer, resource))
+
+
+def _log_oauth_discovery_posture():
+    """Emit EXACTLY ONE WARN per startup describing the discovery posture.
+
+    Mirrors the ECM AS startup WARN (bd-buiqr.5, ADR-009 §4, threat model HT1):
+    fail-closed (404) when plain-HTTP/non-loopback and not opted in; an explicit
+    insecure-opt-in acknowledgement when oauth_allow_insecure=true on an insecure
+    posture. A secure (HTTPS or loopback) posture logs nothing. Best-effort.
+    """
+    try:
+        issuer = resolve_issuer()
+        allow_insecure = get_oauth_allow_insecure()
+        if discovery_blocked(issuer, allow_insecure):
+            logger.warning(
+                "[OAUTH] Protected-resource discovery DISABLED (HTTP 404): the AS issuer "
+                "is plain-HTTP on a non-loopback host and oauth_allow_insecure=false "
+                "(fail-closed, ADR-009 §4). Front MCP with HTTPS or set "
+                "oauth_allow_insecure=true in settings.json to opt in to plain-HTTP OAuth."
+            )
+        elif allow_insecure and issuer_is_insecure(issuer):
+            logger.warning(
+                "[OAUTH] oauth_allow_insecure=true — serving OAuth protected-resource "
+                "discovery over PLAIN HTTP on a non-loopback host. Tokens traverse "
+                "cleartext and can be replayed within their TTL (threat model HT1). "
+                "This is an explicit, operator-accepted insecure posture."
+            )
+    except Exception as exc:  # noqa: BLE001 — startup log must never abort boot
+        logger.warning("[MCP] OAuth discovery posture check failed: %s", exc)
+
+
 # The StreamableHTTP transport needs mcp.session_manager.run() active for the
 # lifetime of the app. streamable_http_app() wires that up via its own lifespan,
 # but Starlette does NOT propagate a Mounted sub-app's lifespan — so the outer
@@ -183,6 +258,8 @@ streamable_app = mcp.streamable_http_app()
 
 @contextlib.asynccontextmanager
 async def lifespan(app):
+    # One-per-startup OAuth discovery posture WARN (bd-buiqr.5, ADR-009 §4).
+    _log_oauth_discovery_posture()
     async with mcp.session_manager.run():
         yield
 
@@ -190,6 +267,9 @@ async def lifespan(app):
 app = Starlette(
     routes=[
         Route("/health", endpoint=handle_health),
+        # RFC 9728 protected-resource discovery — registered BEFORE the catch-all
+        # Mount so it is matched here (and exempted from the API-key middleware).
+        Route(PROTECTED_RESOURCE_PATH, endpoint=handle_protected_resource),
         Mount("/", app=streamable_app),
     ],
     lifespan=lifespan,
