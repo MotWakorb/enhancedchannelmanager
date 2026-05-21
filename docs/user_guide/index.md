@@ -42,12 +42,16 @@ The Stats tab, including the Stats v2 features shipped in v0.17.0.
 - **[Metric glossary](stats/metric-glossary.md)** — definitions for every Stats v2 number: watch time, session count, last watched, buffer events, provider attribution, bytes delta, and bitrate.
 - **[History cutover note](stats/stats-v2-history-cutover.md)** — what happens to historical stats data at the v0.17.0 cutover; why metrics start on deploy day.
 
-### 8. [Integrations](integrations/index.md) — Media Server Integrations (v0.17.1)
+### 8. [Integrations](integrations/index.md) — Media Server Integrations & MCP (v0.17.1)
 
 Connect ECM to Emby, Plex, and/or Jellyfin so the Stats tab shows viewer
-usernames instead of raw IP addresses. Covers setup for all three sources,
-the Plex server-local token (vs. plex.tv account token), multi-viewer
-behaviour, and troubleshooting.
+usernames instead of raw IP addresses. Also covers the full MCP / Claude AI
+connection reference — both the OAuth Custom Connector path and the mcp-remote
+bridge.
+
+- **[MCP Integration](integrations/mcp.md)** — step-by-step OAuth Custom
+  Connector walkthrough, mcp-remote bridge setup, Claude Code `.mcp.json`,
+  key rotation, and OAuth troubleshooting.
 
 ### 9. [Backup & Restore](backup-restore/index.md) — Placeholder
 

@@ -311,6 +311,8 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 
 **Redeploying or rotating the MCP key:** use Settings > MCP Integration > Regenerate Key — this updates `mcp_api_key` in `settings.json`. Then update the `?api_key=` value in your Claude Desktop / Claude Code config. Do **not** edit `dispatcharr_api_key` (or its legacy `api_key` alias) in `settings.json` — that is the Dispatcharr REST token and is separate (see the field reference at the top of this section). As of v0.17.1 (GH #273) the Dispatcharr token lives in `dispatcharr_api_key`; the legacy `api_key` field is still read for one release of back-compat with a deprecation WARN.
 
+**For the full reference** — step-by-step OAuth walkthrough, key rotation details, and OAuth troubleshooting — see **[docs/user_guide/integrations/mcp.md](docs/user_guide/integrations/mcp.md)**.
+
 ### Available Tools (124)
 
 | Tool | Description |
