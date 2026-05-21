@@ -542,3 +542,94 @@ class TestConsentStateCsrf:
         )
         with pytest.raises(OAuthError):
             provider.verify_consent_state(state="anything", user_sub="admin")
+
+
+class TestGrantsAndRevoke:
+    """Provider-level Active Grants listing + grant revoke (bead buiqr.7).
+
+    These verify the registry-pinned client name, the returning-user lookup, and
+    that revoke kills the refresh family AND revokes the live access jti — reusing
+    the established revocation primitives.
+    """
+
+    def _issue_grant(self, provider, store, *, user_sub="admin"):
+        """Run a full code flow and return the resulting (access_token, refresh_token)."""
+        verifier, challenge = _pkce_pair()
+        redirect = store.get_client(CLAUDE_DESKTOP_CLIENT_ID)["redirect_uris"][0]
+        code = provider.create_authorization_code(
+            client_id=CLAUDE_DESKTOP_CLIENT_ID,
+            redirect_uri=redirect,
+            code_challenge=challenge,
+            code_challenge_method="S256",
+            scope=MCP_SCOPE,
+            user_sub=user_sub,
+        )
+        tokens = provider.exchange_authorization_code(
+            client_id=CLAUDE_DESKTOP_CLIENT_ID,
+            code=code,
+            redirect_uri=redirect,
+            code_verifier=verifier,
+        )
+        return tokens
+
+    def test_list_grants_pins_client_name_from_registry(self, provider, store):
+        self._issue_grant(provider, store)
+        grants = provider.list_grants(user_sub="admin")
+        assert len(grants) == 1
+        g = grants[0]
+        # Display name is the REGISTRY value, not the client_id (CP1).
+        assert g["client_name"] == "Claude Desktop"
+        assert g["client_id"] == CLAUDE_DESKTOP_CLIENT_ID
+        assert "id" in g and g["granted_at"] and g["last_used"]
+        # No token values/hashes leak.
+        assert "token" not in repr(g) and "hash" not in repr(g)
+
+    def test_list_grants_scoped_to_subject(self, provider, store):
+        self._issue_grant(provider, store, user_sub="admin-1")
+        self._issue_grant(provider, store, user_sub="admin-2")
+        assert len(provider.list_grants(user_sub="admin-1")) == 1
+        assert len(provider.list_grants(user_sub="admin-2")) == 1
+        # Without a subject filter, both are returned.
+        assert len(provider.list_grants()) == 2
+
+    def test_returning_user_detection(self, provider, store):
+        assert (
+            provider.get_active_grant_for_client(CLAUDE_DESKTOP_CLIENT_ID, "admin")
+            is None
+        )
+        self._issue_grant(provider, store)
+        existing = provider.get_active_grant_for_client(
+            CLAUDE_DESKTOP_CLIENT_ID, "admin"
+        )
+        assert existing is not None
+        assert existing["client_name"] == "Claude Desktop"
+
+    def test_revoke_grant_kills_family_and_access_jti(self, provider, store):
+        tokens = self._issue_grant(provider, store)
+        grants = provider.list_grants(user_sub="admin")
+        grant_id = grants[0]["id"]
+
+        # The access token's jti is live before revoke.
+        access = store.get_access_token(tokens["access_token"])
+        assert access is not None
+        assert store.is_jti_revoked(access["jti"]) is False
+
+        assert provider.revoke_grant(grant_id=grant_id, user_sub="admin") is True
+
+        # The grant is gone from the active list.
+        assert provider.list_grants(user_sub="admin") == []
+        # The access jti is now revoked.
+        assert store.is_jti_revoked(access["jti"]) is True
+        # The refresh family is dead — reuse raises and yields no new tokens.
+        assert store.is_refresh_family_revoked(grant_id) is True
+
+    def test_revoke_grant_unknown_id_returns_false(self, provider):
+        assert provider.revoke_grant(grant_id="does-not-exist") is False
+
+    def test_revoke_grant_wrong_subject_denied(self, provider, store):
+        self._issue_grant(provider, store, user_sub="admin-1")
+        grant_id = provider.list_grants(user_sub="admin-1")[0]["id"]
+        # A different admin cannot revoke this grant.
+        assert provider.revoke_grant(grant_id=grant_id, user_sub="admin-2") is False
+        # Still active.
+        assert len(provider.list_grants(user_sub="admin-1")) == 1

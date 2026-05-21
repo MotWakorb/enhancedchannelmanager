@@ -1251,6 +1251,61 @@ export async function getMCPStatus(): Promise<{
   return fetchJson(`${API_BASE}/settings/mcp-status`);
 }
 
+// ── OAuth grants + consent (bead buiqr.7) ───────────────────────────────────
+
+/** One active OAuth grant the admin made to a client (Active Grants list). */
+export interface OAuthGrant {
+  /** The refresh-token family id — the handle for revoke. */
+  id: string;
+  client_id: string;
+  /** Display name PINNED from the hardcoded registry (never attacker input). */
+  client_name: string;
+  /** Epoch seconds when the admin first approved the grant. */
+  granted_at: number;
+  /** Epoch seconds of the most recent token activity in the grant. */
+  last_used: number;
+}
+
+/** Data the consent screen renders — sourced server-side, not from the query. */
+export interface ConsentContext {
+  /** Registry-pinned client name (CP1 — NEVER reflected from the query input). */
+  client_name: string;
+  client_id: string;
+  scope: string;
+  /** True when an active grant already exists for this client + admin. */
+  already_connected: boolean;
+  existing_grant: OAuthGrant | null;
+  /** Open-redirect-guarded cancel target (OR1) — always same-origin. */
+  return_to: string;
+}
+
+/** List the admin's active OAuth grants (Active Grants Settings sub-section). */
+export async function getOAuthGrants(): Promise<{ grants: OAuthGrant[] }> {
+  return fetchJson(`${API_BASE}/oauth/grants`);
+}
+
+/** Revoke one OAuth grant by id (kills its refresh family + access tokens). */
+export async function revokeOAuthGrant(grantId: string): Promise<void> {
+  await fetchJson(`${API_BASE}/oauth/grants/${encodeURIComponent(grantId)}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
+ * Fetch the trusted consent-screen context for a client_id.
+ *
+ * The consent page MUST call this rather than rendering the client name from
+ * its own query string — the name comes from the hardcoded registry server-side
+ * (threat model CP1). ``return_to`` is open-redirect-guarded server-side (OR1).
+ */
+export async function getConsentContext(
+  clientId: string,
+  returnTo?: string,
+): Promise<ConsentContext> {
+  const query = buildQuery({ client_id: clientId, return_to: returnTo });
+  return fetchJson(`${API_BASE}/oauth/authorize/consent-context${query}`);
+}
+
 export async function testConnection(settings: {
   url: string;
   auth_method: DispatcharrAuthMethod;

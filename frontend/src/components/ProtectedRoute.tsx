@@ -11,6 +11,7 @@ import { LoginPage } from './LoginPage';
 import { SetupPage } from './SetupPage';
 import { ForgotPasswordPage } from './ForgotPasswordPage';
 import { ResetPasswordPage } from './ResetPasswordPage';
+import { OAuthConsentPage } from './OAuthConsentPage';
 import { checkSetupRequired } from '../services/api';
 import './ProtectedRoute.css';
 
@@ -99,6 +100,13 @@ export function ProtectedRoute({ children, requireAdmin = false }: ProtectedRout
     if (currentPath === '/login' || currentPath === '/forgot-password' || currentPath === '/reset-password') {
       window.history.replaceState({}, '', '/');
     }
+    // OAuth consent screen (bead buiqr.7) — a standalone full-page route, not a
+    // Settings panel. In open mode (no auth) the single-admin deployment may
+    // authorize directly. The page itself enforces the admin gate when a user
+    // is present (defence in depth; the backend /authorize already gated).
+    if (currentPath === '/oauth/consent') {
+      return <OAuthConsentPage />;
+    }
     return <>{children}</>;
   }
 
@@ -110,6 +118,13 @@ export function ProtectedRoute({ children, requireAdmin = false }: ProtectedRout
   // If authenticated but on a login/auth page, redirect to home
   if (currentPath === '/login' || currentPath === '/forgot-password') {
     window.history.replaceState({}, '', '/');
+  }
+
+  // OAuth consent screen (bead buiqr.7) — admin-gated standalone route. The
+  // backend /authorize already required the admin session before redirecting
+  // here; the page also checks user.is_admin client-side (threat model SP3/CP1).
+  if (currentPath === '/oauth/consent') {
+    return <OAuthConsentPage />;
   }
 
   // Check admin requirement

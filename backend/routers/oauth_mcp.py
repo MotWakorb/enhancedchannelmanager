@@ -48,7 +48,7 @@ from typing import Optional
 from urllib.parse import urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from slowapi.util import get_remote_address
 
 from auth.dependencies import RequireAdminIfEnabled
@@ -247,6 +247,114 @@ async def authorize_approve(
         store.close()
 
 
+# ── GET /authorize/consent-context — registry-pinned consent data (buiqr.7) ──
+
+
+@router.get("/authorize/consent-context")
+async def consent_context(
+    request: Request,
+    client_id: str,
+    return_to: str = "",
+    admin: Optional[User] = RequireAdminIfEnabled,
+):
+    """Resolve the trusted data the consent screen renders (bead buiqr.7).
+
+    The consent frontend page (``/oauth/consent``) MUST NOT render the client
+    name from the ``client_id`` query parameter — that is attacker-influenceable
+    input and reflecting it enables consent-phishing (threat model CP1). Instead
+    the page calls this admin-gated endpoint, which looks the client up in the
+    hardcoded registry (buiqr.6) and returns the **pinned** ``client_name``. It
+    also reports whether an active grant already exists for this (client, admin)
+    pair so the page can show the 'Already connected' returning-user state
+    (bead buiqr.7 (c)) instead of silently minting a second token family.
+
+    Returns 400 ``invalid_client`` for an unknown ``client_id`` (the consent
+    page then refuses to render an approve button for an unregistered client).
+    """
+    store = get_oauth_store()
+    try:
+        provider = OAuthProvider(store)
+        client = provider.get_client(client_id)
+        if client is None:
+            raise OAuthError("invalid_client", "unknown client_id")
+        user_sub = _admin_sub(admin)
+        existing = provider.get_active_grant_for_client(client_id, user_sub)
+        return JSONResponse(
+            status_code=200,
+            content={
+                # Registry-pinned display name — NEVER the query input (CP1).
+                "client_name": client["client_name"],
+                "client_id": client_id,
+                "scope": MCP_SCOPE,
+                # The returning-user signal (bead buiqr.7 (c)).
+                "already_connected": existing is not None,
+                "existing_grant": existing,
+                # Open-redirect-guarded cancel target (threat model OR1): any
+                # off-origin return_to is replaced with the safe internal default.
+                "return_to": safe_return_to(return_to),
+            },
+        )
+    except OAuthError as exc:
+        logger.warning("[OAUTH] /authorize/consent-context rejected: %s", exc)
+        return _oauth_error_response(exc)
+    finally:
+        store.close()
+
+
+# ── GET /grants + DELETE /grants/{id} — active-grants management (buiqr.7) ────
+
+
+@router.get("/grants")
+async def list_grants(
+    request: Request,
+    admin: Optional[User] = RequireAdminIfEnabled,
+):
+    """List the admin's active OAuth grants (bead buiqr.7 (d)).
+
+    Admin-gated (not in AUTH_EXEMPT_PATHS — the global auth middleware rejects an
+    unauthenticated /api/* call, and RequireAdminIfEnabled enforces the admin
+    role). Returns one entry per live refresh-token family, each with the
+    registry-pinned client name, the grant timestamp, and the last-used
+    timestamp. Token values/hashes are NEVER exposed (threat model TS1).
+    """
+    store = get_oauth_store()
+    try:
+        provider = OAuthProvider(store)
+        grants = provider.list_grants(user_sub=_admin_sub(admin))
+        return JSONResponse(status_code=200, content={"grants": grants})
+    finally:
+        store.close()
+
+
+@router.delete("/grants/{grant_id}")
+async def revoke_grant(
+    request: Request,
+    grant_id: str,
+    admin: Optional[User] = RequireAdminIfEnabled,
+):
+    """Revoke one active grant (bead buiqr.7 (d) + returning-user re-authorize).
+
+    Kills the grant's refresh-token family (no successor can rotate) and revokes
+    its live access-token jtis, reusing the provider's revocation primitives.
+    Admin-gated. The grant is matched to THIS admin subject — an admin cannot
+    revoke a grant bound to a different subject. Returns 204 on success, 404 if
+    no matching active grant exists.
+    """
+    store = get_oauth_store()
+    try:
+        provider = OAuthProvider(store)
+        revoked = provider.revoke_grant(
+            grant_id=grant_id, user_sub=_admin_sub(admin)
+        )
+        if not revoked:
+            return JSONResponse(
+                status_code=404, content={"detail": "grant not found"}
+            )
+        return Response(status_code=204)
+    finally:
+        store.close()
+
+
 # ── POST /token — PUBLIC token endpoint (RFC 6749) ───────────────────────────
 
 
@@ -331,6 +439,38 @@ async def revoke(
 
 #: Cache-control headers for token/revoke responses (RFC 6749 §5.1).
 _NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+
+#: Where the consent screen sends the admin after Cancel when no (or an unsafe)
+#: ``return_to`` is supplied. A relative, same-origin internal path — never a
+#: client-controlled absolute URL (threat model OR1).
+DEFAULT_RETURN_TO = "/?tab=settings"
+
+
+def safe_return_to(return_to: str) -> str:
+    """Sanitize a consent ``return_to`` to a same-origin internal path (OR1).
+
+    Open-redirect guard (threat model OR1): a ``return_to`` carried through the
+    consent flow must NEVER be allowed to bounce the admin to an attacker origin
+    (``https://evil.example``) — that enables phishing/credential capture. Only
+    a same-origin **relative** path is honored; anything else (absolute URL,
+    scheme-relative ``//host``, backslash trick, missing/empty) is replaced with
+    the safe internal default. This is allowlist-by-shape: we accept only values
+    that start with a single ``/`` and not ``//`` (which browsers treat as
+    protocol-relative to another host).
+    """
+    if not return_to:
+        return DEFAULT_RETURN_TO
+    # Reject protocol-relative ("//evil"), backslash ("/\\evil" → "//evil" in
+    # some browsers), and any value carrying a scheme ("https:", "javascript:").
+    normalized = return_to.replace("\\", "/")
+    if not normalized.startswith("/") or normalized.startswith("//"):
+        return DEFAULT_RETURN_TO
+    parsed = urlparse(return_to)
+    # A relative path must have no scheme and no netloc (host). urlparse on a
+    # bare path leaves both empty; a sneaky absolute URL populates them.
+    if parsed.scheme or parsed.netloc:
+        return DEFAULT_RETURN_TO
+    return return_to
 
 
 def _append_query(url: str, params: dict[str, str]) -> str:

@@ -497,6 +497,39 @@ class OAuthStore:
             return None
         return dict(row)
 
+    def revoke_access_tokens_for(
+        self,
+        *,
+        client_id: str,
+        user_sub: str,
+        reason: Optional[str] = None,
+        now: Optional[int] = None,
+    ) -> int:
+        """Revoke every live access-token ``jti`` for a (client, admin) pair.
+
+        Used when revoking a grant (bead buiqr.7): killing the refresh family
+        stops *renewal*, but a live access token would otherwise survive until
+        its short TTL. Access tokens are not tagged with ``family_id`` in the
+        schema, so the correlation handle is ``(client_id, user_sub)`` — under
+        the single-admin model and returning-user detection (which prevents
+        multiple live families per client+admin) this targets exactly the grant
+        being revoked. Already-expired records are skipped (no point revoking a
+        dead jti). Returns the number of jtis newly revoked, for logging.
+        """
+        now = _now() if now is None else now
+        conn = self._require_conn()
+        rows = conn.execute(
+            "SELECT jti FROM access_tokens "
+            "WHERE client_id = ? AND user_sub = ? AND expires_at > ?",
+            (client_id, user_sub, now),
+        ).fetchall()
+        count = 0
+        for row in rows:
+            if not self.is_jti_revoked(row["jti"]):
+                self.revoke_jti(row["jti"], reason=reason, now=now)
+                count += 1
+        return count
+
     # ── refresh_tokens ────────────────────────────────────────────────────────
 
     def store_refresh_token(
@@ -718,6 +751,116 @@ class OAuthStore:
             "SELECT 1 FROM revocations WHERE family_id = ? LIMIT 1", (family_id,)
         ).fetchone()
         return row is not None
+
+    # ── active grants (bead buiqr.7 — Active Grants UI + revoke) ──────────────
+    #
+    # A *grant* is one authorization the admin made to a client: it is created
+    # when an authorization code is exchanged for tokens (a fresh refresh-token
+    # family per grant, see OAuthProvider.exchange_authorization_code). The
+    # ``family_id`` IS the grant id — stable across refresh rotation. Listing
+    # grants groups the refresh_tokens table by family and excludes families
+    # that are revoked or fully expired. Token VALUES/hashes are never exposed:
+    # only the family id, client, subject, and lifecycle timestamps leave the
+    # store (threat model TS1 — a read of this surface yields no credential).
+
+    def list_active_grants(self, now: Optional[int] = None) -> list[dict[str, Any]]:
+        """Return active grants (one row per live refresh-token family).
+
+        A grant is *active* when its family has not been revoked AND at least one
+        refresh token in the family is unexpired. For each family we report:
+
+          - ``family_id``  — the grant id (stable across rotation).
+          - ``client_id``  — the client the grant was issued to.
+          - ``user_sub``   — the admin subject that authorized it.
+          - ``granted_at`` — the earliest ``created_at`` in the family (when the
+                             admin first approved the grant).
+          - ``last_used``  — the most recent ``created_at`` in the family (each
+                             refresh rotation appends a successor, so the newest
+                             row marks the last token activity).
+
+        Revoked families are excluded by an anti-join against ``revocations``.
+        Fully-expired families (no live refresh token) are excluded by the
+        ``MAX(expires_at) > now`` having-clause. Ordered newest-first by
+        ``granted_at`` for a stable UI list.
+        """
+        now = _now() if now is None else now
+        conn = self._require_conn()
+        rows = conn.execute(
+            """
+            SELECT rt.family_id            AS family_id,
+                   rt.client_id            AS client_id,
+                   rt.user_sub             AS user_sub,
+                   MIN(rt.created_at)      AS granted_at,
+                   MAX(rt.created_at)      AS last_used,
+                   MAX(rt.expires_at)      AS family_expires_at
+            FROM refresh_tokens rt
+            WHERE rt.family_id NOT IN (
+                SELECT family_id FROM revocations WHERE family_id IS NOT NULL
+            )
+            GROUP BY rt.family_id
+            HAVING MAX(rt.expires_at) > ?
+            ORDER BY granted_at DESC
+            """,
+            (now,),
+        ).fetchall()
+        grants = []
+        for row in rows:
+            record = dict(row)
+            record.pop("family_expires_at", None)
+            grants.append(record)
+        return grants
+
+    def get_active_grant(
+        self, family_id: str, now: Optional[int] = None
+    ) -> Optional[dict[str, Any]]:
+        """Return one active grant by family id, or None if absent/revoked/expired.
+
+        Used by revoke (DELETE /api/oauth/grants/{id}) to confirm the grant
+        exists and is the admin's before killing it, and by returning-user
+        detection. Applies the same active filter as :meth:`list_active_grants`.
+        """
+        now = _now() if now is None else now
+        if self.is_refresh_family_revoked(family_id):
+            return None
+        conn = self._require_conn()
+        row = conn.execute(
+            """
+            SELECT family_id,
+                   client_id,
+                   user_sub,
+                   MIN(created_at) AS granted_at,
+                   MAX(created_at) AS last_used,
+                   MAX(expires_at) AS family_expires_at
+            FROM refresh_tokens
+            WHERE family_id = ?
+            GROUP BY family_id
+            HAVING MAX(expires_at) > ?
+            """,
+            (family_id, now),
+        ).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        record.pop("family_expires_at", None)
+        return record
+
+    def find_active_grant_for_client(
+        self, client_id: str, user_sub: str, now: Optional[int] = None
+    ) -> Optional[dict[str, Any]]:
+        """Return the most-recent active grant for a (client, admin) pair, or None.
+
+        Powers the consent screen's returning-user detection (bead buiqr.7 (c)):
+        when an active grant already exists for the requesting ``client_id`` and
+        this admin ``user_sub``, the UI shows the 'Already connected' state
+        instead of silently minting another token family.
+        """
+        now = _now() if now is None else now
+        for grant in self.list_active_grants(now=now):
+            if grant["client_id"] == client_id and secrets.compare_digest(
+                str(grant["user_sub"]), str(user_sub)
+            ):
+                return grant
+        return None
 
     # ── consent_states (CSRF state binding, bead buiqr.4 AC3) ─────────────────
 
