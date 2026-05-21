@@ -58,8 +58,8 @@ def store(tmp_path):
 
 @pytest.fixture()
 def provider(store, monkeypatch):
-    """A provider whose JWT secret is pinned so we can verify minted tokens."""
-    monkeypatch.setattr("auth.oauth_provider._jwt_secret", lambda: TEST_SECRET)
+    """A provider whose OAuth signing secret is pinned so we can verify minted tokens."""
+    monkeypatch.setattr("auth.oauth_provider._oauth_signing_secret", lambda: TEST_SECRET)
     return OAuthProvider(store, issuer=TEST_ISSUER)
 
 

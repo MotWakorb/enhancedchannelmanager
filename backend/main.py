@@ -709,15 +709,21 @@ async def startup_event():
     try:
         from auth.oauth_store import OAuthStore
         from auth.oauth_clients import seed_oauth_clients
-        from config import CONFIG_DIR
+        from config import CONFIG_DIR, get_or_create_oauth_signing_secret
         _oauth_store = OAuthStore(CONFIG_DIR / "mcp_oauth.db")
         try:
             _oauth_store.init_schema()
             seed_oauth_clients(_oauth_store)
         finally:
             _oauth_store.close()
+        # Generate the DEDICATED OAuth signing secret (settings.json →
+        # mcp_oauth_signing_secret) if absent, so it exists for the read-only
+        # MCP RS to verify against (ADR-009 §3, dedicated-secret design). Kept
+        # separate from ECM's user-session jwt.secret_key (blast-radius
+        # isolation, threat model SR1). Idempotent.
+        get_or_create_oauth_signing_secret()
     except Exception as _oauth_seed_err:
-        logger.warning("[MAIN] Failed to init/seed OAuth client registry: %s", _oauth_seed_err)
+        logger.warning("[MAIN] Failed to init/seed OAuth store + signing secret: %s", _oauth_seed_err)
 
     # Seed the ecm_pending_merges_queue_depth gauge on startup (bd-wvr1d).
     # This ensures the gauge reflects the actual queue depth immediately

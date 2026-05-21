@@ -27,7 +27,7 @@ SECURITY CONTRACT (ADR-009 §3, threat model T3/RD1/SP4/SP2/CD1)
   - **Unknown client_id** → :class:`OAuthError` ``invalid_client`` (SP4).
   - **Access token = HS256 JWT.** ``sub`` = admin user id, ``aud`` = ``ecm-mcp``,
     ``iss`` = issuer, ``scope`` = ``mcp``, ``jti``, ``iat``, ``exp`` (≤ 15 min).
-    Signed with ECM's existing ``auth_settings.jwt.secret_key`` (SP1/SP2/T2).
+    Signed with the dedicated ``mcp_oauth_signing_secret`` (SP1/SP2/T2).
   - **Refresh rotation + reuse detection.** Delegated to
     :meth:`OAuthStore.rotate_refresh_token`; reuse → ``invalid_grant`` +
     family kill (T3).
@@ -221,7 +221,7 @@ class OAuthProvider:
 
         Returns ``(token, jti)``. Claims: ``sub`` (admin), ``aud=ecm-mcp``,
         ``iss``, ``scope=mcp``, ``jti``, ``iat``, ``exp`` (now + 15 min).
-        Signed with ECM's existing JWT secret (SP1/SP2/T2).
+        Signed with the dedicated OAuth signing secret (SP1/SP2/T2).
         """
         jti = _new_jti()
         exp = now + ACCESS_TOKEN_TTL_SECONDS
@@ -235,7 +235,7 @@ class OAuthProvider:
             "exp": exp,
             "token_type": "access",
         }
-        token = jwt.encode(payload, _jwt_secret(), algorithm=ALGORITHM)
+        token = jwt.encode(payload, _oauth_signing_secret(), algorithm=ALGORITHM)
         self.store.store_access_token(
             token=token,
             jti=jti,
@@ -424,15 +424,19 @@ class OAuthProvider:
         logger.debug("[OAUTH] Revoke request for unknown/expired token (no-op)")
 
 
-def _jwt_secret() -> str:
-    """Resolve ECM's existing HS256 JWT secret (auth_settings.jwt.secret_key).
+def _oauth_signing_secret() -> str:
+    """Resolve the DEDICATED OAuth signing secret (settings.json → mcp_oauth_signing_secret).
 
-    Mirrors backend/auth/tokens.py — the access tokens this AS mints are signed
-    with the SAME secret the MCP RS reads for offline verification (ADR-009 §1).
+    ADR-009 §3 (amended 2026-05-21): MCP OAuth access tokens are signed with a
+    secret that is **separate** from ECM's user-session ``jwt.secret_key``. The
+    MCP RS reads this dedicated secret (from the shared ``/config/settings.json``,
+    read-only) for offline verification (ADR-009 §1) — and reads ONLY this, never
+    ECM's session key — so a compromised MCP can forge only MCP-scope tokens, not
+    ECM admin sessions (threat model SR1). Auto-generated/persisted by ECM.
     """
-    from auth.settings import get_jwt_secret_key
+    from config import get_or_create_oauth_signing_secret
 
-    return get_jwt_secret_key()
+    return get_or_create_oauth_signing_secret()
 
 
 def _token_response(
