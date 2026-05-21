@@ -22,17 +22,14 @@ MCP_PORT = int(os.environ.get("MCP_PORT", "6101"))
 # ---------------------------------------------------------------------------
 # OAuth signing-key contract (bd-buiqr10, Option-A slice)
 #
-# The MCP RS verifies OAuth Bearer JWTs OFFLINE using a shared HS256 secret
-# read from /config/settings.json (ADR-009 §1). The exact settings.json key
-# is centralized here so that reconciling the buiqr.8 final contract is a
-# ONE-LINE CHANGE: update SIGNING_KEY_SETTINGS_JSON_KEY.
-#
-# ASSUMPTION (confidence: HIGH): 'mcp_oauth_signing_secret' is the key name
-# ECM's AS side will write into settings.json for the MCP RS to read. This
-# mirrors the pattern of 'mcp_api_key' already in settings.json, and avoids
-# the RS reading auth_settings.json directly (a separate file, different
-# lifecycle). buiqr.8 finalizes the exact name; if it differs, change only
-# this constant.
+# The MCP RS verifies OAuth Bearer JWTs OFFLINE using a DEDICATED HS256 secret
+# read from /config/settings.json (ADR-009 §1/§3). This is the LOCKED contract:
+# the ECM AS (buiqr.3) generates 'mcp_oauth_signing_secret' in settings.json on
+# startup and signs MCP access tokens with it; the RS reads the same key here.
+# It is deliberately SEPARATE from ECM's user-session jwt.secret_key
+# (auth_settings.json), which the RS never reads — so a compromised MCP can
+# forge only MCP-scope tokens, never ECM admin sessions (threat model SR1,
+# dedicated-secret amendment 2026-05-21). buiqr.8 consumes this same constant.
 # ---------------------------------------------------------------------------
 SIGNING_KEY_SETTINGS_JSON_KEY = "mcp_oauth_signing_secret"
 
