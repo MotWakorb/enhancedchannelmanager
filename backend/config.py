@@ -204,6 +204,16 @@ class DispatcharrSettings(BaseModel):
     # ECM admin sessions. Auto-generated on first use; credential-class (redacted
     # in backups via backup.py _SETTINGS_CREDENTIAL_FIELDS).
     mcp_oauth_signing_secret: str = ""
+    # OAuth HTTP-posture safety flag (ADR-009 §4, bd-buiqr.5). Default FALSE
+    # (fail-closed). When False AND the OAuth issuer is plain-HTTP on a
+    # non-loopback host, BOTH discovery endpoints
+    # (/.well-known/oauth-authorization-server,
+    # /.well-known/oauth-protected-resource) return 404 — the OAuth surface is
+    # off for insecure-posture deploys (threat model HT1). Setting it True is the
+    # operator's EXPLICIT, recorded opt-in to running OAuth over plain HTTP,
+    # accepting token-interception/replay risk (threat model T5/HT1). The flag
+    # never affects the static-key MCP path. See docs/security/threat_model_mcp_oauth.md.
+    oauth_allow_insecure: bool = False
     # Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m).
     # Default ON — Phase 1 data never leaves the container. When False,
     # the backend /api/client-errors endpoint returns 204 without logging
