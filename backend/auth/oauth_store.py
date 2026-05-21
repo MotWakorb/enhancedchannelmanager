@@ -96,12 +96,25 @@ revocations        — explicit revocation ledger (jti-based and family-based).
   family_id        TEXT                — revoked refresh family (NULL for jti rows).
   reason           TEXT
   revoked_at       INTEGER NOT NULL    — epoch seconds.
+
+consent_states     — CSRF state bindings for the /authorize → consent → approve
+                     flow (bead buiqr.4 AC3). A short-lived row that binds the
+                     anti-CSRF ``state`` value to the admin subject that started
+                     the flow at /authorize, so a forged/mismatched state on
+                     /authorize/approve is rejected. Single-use, like auth codes.
+  state_hash       TEXT PRIMARY KEY    — SHA-256(state). The raw state is never stored.
+  client_id        TEXT NOT NULL       — the client the flow was started for.
+  user_sub         TEXT NOT NULL       — the admin subject the state binds to.
+  created_at       INTEGER NOT NULL    — epoch seconds.
+  expires_at       INTEGER NOT NULL    — epoch seconds; capped at created_at + 600.
+  consumed_at      INTEGER             — epoch seconds when consumed; NULL = unused.
 ================================================================================
 """
 import hashlib
 import json
 import logging
 import os
+import secrets
 import sqlite3
 import time
 from pathlib import Path
@@ -114,6 +127,10 @@ logger = logging.getLogger(__name__)
 AUTH_CODE_MAX_TTL_SECONDS = 10 * 60  # 600
 #: Refresh tokens are capped at 30 days (AC).
 REFRESH_TOKEN_MAX_TTL_SECONDS = 30 * 24 * 60 * 60  # 2_592_000
+#: CSRF consent-state bindings expire in at most 10 minutes — the same window as
+#: an authorization code, since the state must survive only the brief
+#: /authorize → consent → approve round-trip (bead buiqr.4 AC3).
+CONSENT_STATE_MAX_TTL_SECONDS = 10 * 60  # 600
 
 #: File mode for the DB file: owner read/write only (AC6).
 _DB_FILE_MODE = 0o600
@@ -173,11 +190,21 @@ CREATE TABLE IF NOT EXISTS revocations (
     revoked_at INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_revocations_jti       ON revocations(jti);
-CREATE INDEX IF NOT EXISTS idx_revocations_family    ON revocations(family_id);
-CREATE INDEX IF NOT EXISTS idx_refresh_family        ON refresh_tokens(family_id);
-CREATE INDEX IF NOT EXISTS idx_auth_codes_expires    ON auth_codes(expires_at);
-CREATE INDEX IF NOT EXISTS idx_access_tokens_expires ON access_tokens(expires_at);
+CREATE TABLE IF NOT EXISTS consent_states (
+    state_hash  TEXT PRIMARY KEY,
+    client_id   TEXT NOT NULL,
+    user_sub    TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    expires_at  INTEGER NOT NULL,
+    consumed_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_revocations_jti        ON revocations(jti);
+CREATE INDEX IF NOT EXISTS idx_revocations_family     ON revocations(family_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_family         ON refresh_tokens(family_id);
+CREATE INDEX IF NOT EXISTS idx_auth_codes_expires     ON auth_codes(expires_at);
+CREATE INDEX IF NOT EXISTS idx_access_tokens_expires  ON access_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_consent_states_expires ON consent_states(expires_at);
 """
 
 
@@ -691,3 +718,88 @@ class OAuthStore:
             "SELECT 1 FROM revocations WHERE family_id = ? LIMIT 1", (family_id,)
         ).fetchone()
         return row is not None
+
+    # ── consent_states (CSRF state binding, bead buiqr.4 AC3) ─────────────────
+
+    def bind_consent_state(
+        self,
+        *,
+        state: str,
+        client_id: str,
+        user_sub: str,
+        ttl_seconds: int = CONSENT_STATE_MAX_TTL_SECONDS,
+        now: Optional[int] = None,
+    ) -> None:
+        """Bind a CSRF ``state`` value to the admin subject that started the flow.
+
+        Persists a single-use binding (state hashed at rest) created when
+        ``/authorize`` validates a request and confirms the admin session. The
+        consent-approval step (``/authorize/approve``) consumes it via
+        :meth:`consume_consent_state`; a forged/mismatched state has no live
+        binding and is rejected (bead buiqr.4 AC3).
+
+        ``ttl_seconds`` is clamped to ``CONSENT_STATE_MAX_TTL_SECONDS`` (10 min)
+        so a binding can never outlive the brief consent round-trip. Re-binding
+        the same state value (e.g. a retried /authorize) upserts in place.
+        """
+        now = _now() if now is None else now
+        ttl = min(ttl_seconds, CONSENT_STATE_MAX_TTL_SECONDS)
+        conn = self._require_conn()
+        conn.execute(
+            """
+            INSERT INTO consent_states (
+                state_hash, client_id, user_sub, created_at, expires_at, consumed_at
+            ) VALUES (?, ?, ?, ?, ?, NULL)
+            ON CONFLICT(state_hash) DO UPDATE SET
+                client_id   = excluded.client_id,
+                user_sub    = excluded.user_sub,
+                created_at  = excluded.created_at,
+                expires_at  = excluded.expires_at,
+                consumed_at = NULL
+            """,
+            (hash_secret(state), client_id, user_sub, now, now + ttl),
+        )
+        conn.commit()
+
+    def consume_consent_state(
+        self,
+        *,
+        state: str,
+        user_sub: str,
+        now: Optional[int] = None,
+    ) -> bool:
+        """Atomically consume a CSRF state binding for ``user_sub``.
+
+        Returns ``True`` only when a live (unexpired, unconsumed) binding exists
+        for the exact ``state`` value AND it is bound to ``user_sub`` — i.e. the
+        same admin subject that started the flow at ``/authorize``. Any other
+        case (unknown state, expired, already-consumed/replay, or bound to a
+        different subject) returns ``False`` so the caller rejects the approval
+        with 400 (bead buiqr.4 AC3). The binding is single-use: a successful
+        consume burns it, so a replayed approval also fails.
+        """
+        now = _now() if now is None else now
+        state_hash = hash_secret(state)
+        conn = self._require_conn()
+        row = conn.execute(
+            "SELECT user_sub, expires_at, consumed_at "
+            "FROM consent_states WHERE state_hash = ?",
+            (state_hash,),
+        ).fetchone()
+        if row is None:
+            return False  # unknown / forged state
+        if row["consumed_at"] is not None:
+            return False  # replay of an already-approved state
+        if row["expires_at"] <= now:
+            return False  # expired binding
+        # Constant-time subject comparison — the state must belong to THIS admin.
+        if not secrets.compare_digest(str(row["user_sub"]), str(user_sub)):
+            return False  # bound to a different subject (cross-session forgery)
+        # Mark consumed atomically — only succeeds if still unconsumed (race-safe).
+        cur = conn.execute(
+            "UPDATE consent_states SET consumed_at = ? "
+            "WHERE state_hash = ? AND consumed_at IS NULL",
+            (now, state_hash),
+        )
+        conn.commit()
+        return cur.rowcount == 1

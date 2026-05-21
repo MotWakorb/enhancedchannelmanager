@@ -485,3 +485,60 @@ class TestRevocation:
 
     def test_revoke_unknown_token_is_noop(self, provider):
         provider.revoke_token("never-issued")  # must not raise (RFC 7009)
+
+
+# ─────────────── buiqr.4 AC3: CSRF state binding (provider) ────────────────
+
+
+class TestConsentStateCsrf:
+    """Provider-level CSRF ``state`` binding (buiqr.4 AC3).
+
+    ``bind_consent_state`` (called at /authorize) → ``verify_consent_state``
+    (called at /authorize/approve). A missing/forged/mismatched/replayed/
+    cross-session state raises ``OAuthError`` invalid_request (the router maps
+    that to 400).
+    """
+
+    def test_bound_state_verifies(self, provider):
+        provider.bind_consent_state(
+            state="good", client_id=CLAUDE_DESKTOP_CLIENT_ID, user_sub="admin"
+        )
+        provider.verify_consent_state(state="good", user_sub="admin")  # no raise
+
+    def test_missing_state_rejected(self, provider):
+        """No state presented at approve → 400 invalid_request (mandatory binding)."""
+        with pytest.raises(OAuthError) as ei:
+            provider.verify_consent_state(state="", user_sub="admin")
+        assert ei.value.error == "invalid_request"
+        assert ei.value.status_code == 400
+
+    def test_forged_state_rejected(self, provider):
+        """A state never bound at /authorize → 400 invalid_request."""
+        with pytest.raises(OAuthError) as ei:
+            provider.verify_consent_state(state="forged", user_sub="admin")
+        assert ei.value.error == "invalid_request"
+
+    def test_state_for_other_subject_rejected(self, provider):
+        """A state bound to admin-A cannot be redeemed by admin-B (cross-session)."""
+        provider.bind_consent_state(
+            state="cross", client_id=CLAUDE_DESKTOP_CLIENT_ID, user_sub="admin-A"
+        )
+        with pytest.raises(OAuthError):
+            provider.verify_consent_state(state="cross", user_sub="admin-B")
+
+    def test_state_is_single_use(self, provider):
+        """Replaying an approved state → 400 (single-use)."""
+        provider.bind_consent_state(
+            state="once", client_id=CLAUDE_DESKTOP_CLIENT_ID, user_sub="admin"
+        )
+        provider.verify_consent_state(state="once", user_sub="admin")  # consumes it
+        with pytest.raises(OAuthError):
+            provider.verify_consent_state(state="once", user_sub="admin")
+
+    def test_empty_state_binding_is_noop(self, provider):
+        """Binding an empty state is a no-op; a later forged non-empty state still fails."""
+        provider.bind_consent_state(
+            state="", client_id=CLAUDE_DESKTOP_CLIENT_ID, user_sub="admin"
+        )
+        with pytest.raises(OAuthError):
+            provider.verify_consent_state(state="anything", user_sub="admin")
