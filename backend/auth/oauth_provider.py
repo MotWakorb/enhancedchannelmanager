@@ -537,6 +537,38 @@ class OAuthProvider:
             "last_used": g["last_used"],
         }
 
+    def revoke_all_grants(
+        self,
+        *,
+        user_sub: Optional[str] = None,
+        now: Optional[int] = None,
+    ) -> int:
+        """Bulk-revoke every active grant for the requesting admin (buiqr.12).
+
+        Kills every live refresh-token family and revokes all active access-token
+        jtis for the admin subject. Reuses the same per-grant revocation primitives
+        as :meth:`revoke_grant` so the security posture is identical. Returns the
+        count of grants revoked (0 if the admin had no active grants — idempotent).
+
+        Admin-gated: the caller (router) enforces the admin session; this method
+        applies an additional subject filter when ``user_sub`` is given so a future
+        multi-admin deployment cannot cross-revoke.
+        """
+        now = _now() if now is None else now
+        grants = self.list_grants(user_sub=user_sub, now=now)
+        revoked_count = 0
+        for grant in grants:
+            ok = self.revoke_grant(grant_id=grant["id"], user_sub=user_sub, now=now)
+            if ok:
+                revoked_count += 1
+        if revoked_count:
+            logger.info(
+                "[OAUTH] Bulk-revoked %d grant(s) for sub=%s",
+                revoked_count,
+                user_sub or "admin",
+            )
+        return revoked_count
+
     def revoke_grant(
         self,
         *,

@@ -55,6 +55,13 @@ export function MCPSettingsSection({ isAdmin }: Props) {
   const [confirmingGrantId, setConfirmingGrantId] = useState<string | null>(null);
   const [revokingGrantId, setRevokingGrantId] = useState<string | null>(null);
 
+  // Bulk-revoke state machine (buiqr.12):
+  // null → idle; 'confirm1' → first Are-you-sure prompt;
+  // 'confirm2' → type-REVOKE gate; 'revoking' → in-flight.
+  type BulkRevokeStage = null | 'confirm1' | 'confirm2' | 'revoking';
+  const [bulkRevokeStage, setBulkRevokeStage] = useState<BulkRevokeStage>(null);
+  const [bulkRevokeInput, setBulkRevokeInput] = useState('');
+
   const loadSettings = useCallback(async () => {
     try {
       const settings = await api.getSettings();
@@ -91,6 +98,30 @@ export function MCPSettingsSection({ isAdmin }: Props) {
       setRevokingGrantId(null);
       setConfirmingGrantId(null);
     }
+  };
+
+  const handleRevokeAll = async () => {
+    // Guard: only proceed from the confirm2 stage with exact typed confirmation.
+    if (bulkRevokeStage !== 'confirm2' || bulkRevokeInput !== 'REVOKE') return;
+    setBulkRevokeStage('revoking');
+    try {
+      const result = await api.revokeAllOAuthGrants();
+      setGrants([]);
+      notifications.success(
+        `All active connections revoked (${result.revoked} total)`
+      );
+    } catch (err) {
+      logger.error('Failed to bulk-revoke OAuth grants:', err);
+      notifications.error('Failed to revoke all connections');
+    } finally {
+      setBulkRevokeStage(null);
+      setBulkRevokeInput('');
+    }
+  };
+
+  const cancelBulkRevoke = () => {
+    setBulkRevokeStage(null);
+    setBulkRevokeInput('');
   };
 
   const checkMcpStatus = useCallback(async () => {
@@ -458,6 +489,89 @@ export function MCPSettingsSection({ isAdmin }: Props) {
               </li>
             ))}
           </ul>
+
+          {/* Bulk-revoke panic button (buiqr.12 AC1-3) — double-confirmation
+              because this is destructive: kills ALL active connections at once. */}
+          <div className="mcp-bulk-revoke" data-testid="oauth-bulk-revoke-section">
+            {bulkRevokeStage === null && (
+              <button
+                className="btn btn-sm btn-danger"
+                onClick={() => setBulkRevokeStage('confirm1')}
+                data-testid="oauth-bulk-revoke-btn"
+              >
+                <span className="material-icons">block</span>
+                Revoke all active tokens
+              </button>
+            )}
+
+            {/* Step 1: Are you sure? */}
+            {bulkRevokeStage === 'confirm1' && (
+              <div
+                className="mcp-bulk-revoke-confirm"
+                role="group"
+                aria-label="Confirm revoke all"
+                data-testid="oauth-bulk-revoke-confirm1"
+              >
+                <span className="mcp-grant-confirm-label">
+                  This will disconnect ALL apps. Are you sure?
+                </span>
+                <button
+                  className="btn btn-sm btn-danger"
+                  onClick={() => setBulkRevokeStage('confirm2')}
+                  data-testid="oauth-bulk-revoke-confirm1-yes"
+                >
+                  Yes, continue
+                </button>
+                <button
+                  className="btn btn-sm"
+                  onClick={cancelBulkRevoke}
+                  data-testid="oauth-bulk-revoke-cancel"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+
+            {/* Step 2: Type REVOKE to confirm */}
+            {(bulkRevokeStage === 'confirm2' || bulkRevokeStage === 'revoking') && (
+              <div
+                className="mcp-bulk-revoke-confirm"
+                role="group"
+                aria-label="Type REVOKE to confirm"
+                data-testid="oauth-bulk-revoke-confirm2"
+              >
+                <span className="mcp-grant-confirm-label">
+                  Type <strong>REVOKE</strong> to confirm:
+                </span>
+                <input
+                  type="text"
+                  className="mcp-bulk-revoke-input"
+                  value={bulkRevokeInput}
+                  onChange={(e) => setBulkRevokeInput(e.target.value)}
+                  placeholder="REVOKE"
+                  disabled={bulkRevokeStage === 'revoking'}
+                  data-testid="oauth-bulk-revoke-input"
+                  autoFocus
+                />
+                <button
+                  className="btn btn-sm btn-danger"
+                  onClick={handleRevokeAll}
+                  disabled={bulkRevokeInput !== 'REVOKE' || bulkRevokeStage === 'revoking'}
+                  data-testid="oauth-bulk-revoke-confirm2-yes"
+                >
+                  {bulkRevokeStage === 'revoking' ? 'Revoking...' : 'Revoke all'}
+                </button>
+                <button
+                  className="btn btn-sm"
+                  onClick={cancelBulkRevoke}
+                  disabled={bulkRevokeStage === 'revoking'}
+                  data-testid="oauth-bulk-revoke-cancel"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

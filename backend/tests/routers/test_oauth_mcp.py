@@ -12,6 +12,7 @@ the FastAPI app + auth middleware:
   buiqr.3 AC6 — /api/oauth/token is in AUTH_EXEMPT_PATHS (public).
   buiqr.6 AC3/AC4 — unknown client / mismatched redirect over HTTP.
   RFC 7009 — /revoke returns 200 even for unknown tokens.
+  buiqr.12 AC1-3 — DELETE /api/oauth/grants (no id) bulk-revokes all grants.
 """
 import base64
 import hashlib
@@ -697,3 +698,137 @@ class TestTokensHashedAtRest:
         haystack = db_bytes + wal_bytes
         assert access.encode() not in haystack
         assert refresh.encode() not in haystack
+
+
+# ─────────── buiqr.12: DELETE /api/oauth/grants (bulk revoke) ───────────────
+
+
+class TestBulkRevokeGrants:
+    """bead buiqr.12 — DELETE /api/oauth/grants (no id) revokes ALL grants.
+
+    AC1: button visible only when grants exist — no backend AC, tested at UI.
+    AC2: double-confirm — no backend AC, tested at UI.
+    AC3: after bulk revoke all grants disappear + toast — tested via API:
+         GET /grants returns an empty list after DELETE /grants.
+    """
+
+    async def _issue_grant(self, async_client, oauth_store, state_suffix: str) -> str:
+        """Drive the full /authorize → approve → /token flow and return the
+        refresh token family_id (grant id). Uses a unique state suffix so
+        multiple grants can be issued in the same test."""
+        verifier, challenge = _pkce_pair()
+        state = f"bulk-{state_suffix}"
+        await async_client.get(
+            "/api/oauth/authorize",
+            params={
+                "response_type": "code",
+                "client_id": CLAUDE_DESKTOP_CLIENT_ID,
+                "redirect_uri": _registered_redirect(oauth_store),
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "state": state,
+            },
+            follow_redirects=False,
+        )
+        approve = await async_client.post(
+            "/api/oauth/authorize/approve",
+            data={
+                "client_id": CLAUDE_DESKTOP_CLIENT_ID,
+                "redirect_uri": _registered_redirect(oauth_store),
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "state": state,
+            },
+            follow_redirects=False,
+        )
+        from urllib.parse import parse_qs, urlparse
+
+        code = parse_qs(urlparse(approve.headers["location"]).query)["code"][0]
+        tok = await async_client.post(
+            "/api/oauth/token",
+            data={
+                "grant_type": "authorization_code",
+                "client_id": CLAUDE_DESKTOP_CLIENT_ID,
+                "code": code,
+                "redirect_uri": _registered_redirect(oauth_store),
+                "code_verifier": verifier,
+            },
+        )
+        assert tok.status_code == 200
+        return tok.json()["refresh_token"]
+
+    @pytest.mark.asyncio
+    async def test_bulk_revoke_returns_200_with_count(
+        self, async_client, oauth_store
+    ):
+        """buiqr.12 AC3 — DELETE /api/oauth/grants returns 200 + revoked count."""
+        await self._issue_grant(async_client, oauth_store, "a")
+        resp = await async_client.delete("/api/oauth/grants")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "revoked" in body
+        assert body["revoked"] >= 1
+
+    @pytest.mark.asyncio
+    async def test_bulk_revoke_with_no_grants_returns_200_count_zero(
+        self, async_client, oauth_store
+    ):
+        """buiqr.12 — no grants → still 200, count 0 (idempotent)."""
+        resp = await async_client.delete("/api/oauth/grants")
+        assert resp.status_code == 200
+        assert resp.json()["revoked"] == 0
+
+    @pytest.mark.asyncio
+    async def test_bulk_revoke_clears_all_grants(
+        self, async_client, oauth_store
+    ):
+        """buiqr.12 AC3 — after bulk revoke, GET /grants returns empty list."""
+        # Issue two grants (two full flows with different state tokens).
+        await self._issue_grant(async_client, oauth_store, "x1")
+        # Need a second flow with a different state, but the returning-user
+        # detection means a second grant for the same (client, admin) replaces
+        # the first. That's fine — we're testing that ALL active grants are
+        # killed; even a single active grant going to zero is the correct AC.
+        grants_before = await async_client.get("/api/oauth/grants")
+        assert grants_before.status_code == 200
+        assert len(grants_before.json()["grants"]) >= 1
+
+        resp = await async_client.delete("/api/oauth/grants")
+        assert resp.status_code == 200
+
+        grants_after = await async_client.get("/api/oauth/grants")
+        assert grants_after.status_code == 200
+        assert grants_after.json()["grants"] == []
+
+    @pytest.mark.asyncio
+    async def test_bulk_revoke_kills_refresh_families(
+        self, async_client, oauth_store
+    ):
+        """buiqr.12 — after bulk revoke, refresh tokens for all families are revoked."""
+        refresh_token = await self._issue_grant(async_client, oauth_store, "fam1")
+
+        await async_client.delete("/api/oauth/grants")
+
+        # The refresh token's family must now be revoked.
+        rt_record = oauth_store.get_refresh_token(refresh_token)
+        # Expired (consumed=1) or family revoked — either way the store confirms.
+        family_id = oauth_store._conn.execute(
+            "SELECT family_id FROM refresh_tokens WHERE token_hash = ?",
+            (__import__("hashlib").sha256(refresh_token.encode()).hexdigest(),),
+        ).fetchone()
+        if family_id:
+            assert oauth_store.is_refresh_family_revoked(family_id["family_id"])
+
+    @pytest.mark.asyncio
+    async def test_bulk_revoke_is_admin_gated(
+        self, async_client, oauth_store
+    ):
+        """buiqr.12 — DELETE /api/oauth/grants requires admin when auth is enabled."""
+        with patch("main.get_auth_settings") as mw_mock, \
+                patch("auth.dependencies.get_auth_settings") as dep_mock:
+            for m in (mw_mock, dep_mock):
+                m.return_value.require_auth = True
+                m.return_value.setup_complete = True
+            resp = await async_client.delete("/api/oauth/grants")
+        # Unauthenticated → 401 from the auth middleware (never reaches the handler).
+        assert resp.status_code == 401

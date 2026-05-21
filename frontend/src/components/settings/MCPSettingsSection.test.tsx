@@ -18,6 +18,7 @@ vi.mock('../../services/api', () => ({
   getMCPStatus: vi.fn(),
   getOAuthGrants: vi.fn(),
   revokeOAuthGrant: vi.fn(),
+  revokeAllOAuthGrants: vi.fn(),
 }));
 
 vi.mock('../../contexts/NotificationContext', () => ({
@@ -322,5 +323,170 @@ describe('MCPSettingsSection — Active Connections (bd-buiqr.7)', () => {
 
     expect(api.revokeOAuthGrant).not.toHaveBeenCalled();
     expect(screen.getByTestId('oauth-grant-row')).toBeInTheDocument();
+  });
+});
+
+/**
+ * Bulk-revoke panic button — bead buiqr.12.
+ *
+ * AC1: button visible only when grants exist.
+ * AC2: double confirmation — "Are you sure?" → "Type REVOKE to confirm".
+ * AC3: after successful bulk revoke, all grant rows disappear + toast fires.
+ */
+describe('MCPSettingsSection — Bulk Revoke (bd-buiqr.12)', () => {
+  const grant = {
+    id: 'fam-bulk-1',
+    client_id: 'claude-desktop',
+    client_name: 'Claude Desktop',
+    granted_at: 1_700_000_000,
+    last_used: 1_700_100_000,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getSettings).mockResolvedValue(settingsConfigured);
+    vi.mocked(api.getMCPStatus).mockResolvedValue({
+      reachable: true,
+      api_key_configured: true,
+      api_key_status: 'ok',
+      tools_available: 80,
+    });
+  });
+
+  it('AC1: bulk-revoke button is visible when grants exist', async () => {
+    vi.mocked(api.getOAuthGrants).mockResolvedValue({ grants: [grant] });
+
+    render(<MCPSettingsSection isAdmin={true} />);
+
+    await waitFor(() => screen.getByTestId('oauth-grants-section'));
+    expect(screen.getByTestId('oauth-bulk-revoke-btn')).toBeInTheDocument();
+  });
+
+  it('AC1: bulk-revoke button is NOT present when there are no grants', async () => {
+    vi.mocked(api.getOAuthGrants).mockResolvedValue({ grants: [] });
+
+    render(<MCPSettingsSection isAdmin={true} />);
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('oauth-grants-section')).not.toBeInTheDocument()
+    );
+    expect(screen.queryByTestId('oauth-bulk-revoke-btn')).not.toBeInTheDocument();
+  });
+
+  it('AC2: first confirmation prompt appears on button click', async () => {
+    vi.mocked(api.getOAuthGrants).mockResolvedValue({ grants: [grant] });
+
+    render(<MCPSettingsSection isAdmin={true} />);
+    await waitFor(() => screen.getByTestId('oauth-bulk-revoke-btn'));
+
+    fireEvent.click(screen.getByTestId('oauth-bulk-revoke-btn'));
+
+    expect(screen.getByTestId('oauth-bulk-revoke-confirm1')).toBeInTheDocument();
+    expect(screen.getByText(/all apps/i)).toBeInTheDocument();
+    // The type-REVOKE gate must NOT be shown yet (only after the first confirm).
+    expect(screen.queryByTestId('oauth-bulk-revoke-confirm2')).not.toBeInTheDocument();
+    expect(api.revokeAllOAuthGrants).not.toHaveBeenCalled();
+  });
+
+  it('AC2: canceling the first confirmation returns to idle state', async () => {
+    vi.mocked(api.getOAuthGrants).mockResolvedValue({ grants: [grant] });
+
+    render(<MCPSettingsSection isAdmin={true} />);
+    await waitFor(() => screen.getByTestId('oauth-bulk-revoke-btn'));
+
+    fireEvent.click(screen.getByTestId('oauth-bulk-revoke-btn'));
+    expect(screen.getByTestId('oauth-bulk-revoke-confirm1')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('oauth-bulk-revoke-cancel'));
+
+    expect(screen.queryByTestId('oauth-bulk-revoke-confirm1')).not.toBeInTheDocument();
+    expect(screen.getByTestId('oauth-bulk-revoke-btn')).toBeInTheDocument();
+    expect(api.revokeAllOAuthGrants).not.toHaveBeenCalled();
+  });
+
+  it('AC2: second confirmation (type-REVOKE) appears after first yes', async () => {
+    vi.mocked(api.getOAuthGrants).mockResolvedValue({ grants: [grant] });
+
+    render(<MCPSettingsSection isAdmin={true} />);
+    await waitFor(() => screen.getByTestId('oauth-bulk-revoke-btn'));
+
+    fireEvent.click(screen.getByTestId('oauth-bulk-revoke-btn'));
+    fireEvent.click(screen.getByTestId('oauth-bulk-revoke-confirm1-yes'));
+
+    expect(screen.getByTestId('oauth-bulk-revoke-confirm2')).toBeInTheDocument();
+    expect(screen.getByTestId('oauth-bulk-revoke-input')).toBeInTheDocument();
+    // The final button must be disabled until the user types REVOKE.
+    expect(screen.getByTestId('oauth-bulk-revoke-confirm2-yes')).toBeDisabled();
+    expect(api.revokeAllOAuthGrants).not.toHaveBeenCalled();
+  });
+
+  it('AC2: final confirm button is disabled until "REVOKE" is typed exactly', async () => {
+    vi.mocked(api.getOAuthGrants).mockResolvedValue({ grants: [grant] });
+
+    render(<MCPSettingsSection isAdmin={true} />);
+    await waitFor(() => screen.getByTestId('oauth-bulk-revoke-btn'));
+
+    fireEvent.click(screen.getByTestId('oauth-bulk-revoke-btn'));
+    fireEvent.click(screen.getByTestId('oauth-bulk-revoke-confirm1-yes'));
+
+    const input = screen.getByTestId('oauth-bulk-revoke-input');
+    const confirmBtn = screen.getByTestId('oauth-bulk-revoke-confirm2-yes');
+
+    fireEvent.change(input, { target: { value: 'revoke' } }); // lowercase — not valid
+    expect(confirmBtn).toBeDisabled();
+
+    fireEvent.change(input, { target: { value: 'REVOK' } }); // partial — not valid
+    expect(confirmBtn).toBeDisabled();
+
+    fireEvent.change(input, { target: { value: 'REVOKE' } }); // exact match
+    expect(confirmBtn).not.toBeDisabled();
+  });
+
+  it('AC3: confirming bulk revoke clears all grants and fires success toast', async () => {
+    vi.mocked(api.getOAuthGrants).mockResolvedValue({ grants: [grant] });
+    vi.mocked(api.revokeAllOAuthGrants).mockResolvedValue({ revoked: 1 });
+
+    const notifMock = { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() };
+    // Re-mock the notification context for this test to capture the call.
+    vi.doMock('../../contexts/NotificationContext', () => ({
+      useNotifications: () => notifMock,
+    }));
+
+    render(<MCPSettingsSection isAdmin={true} />);
+    await waitFor(() => screen.getByTestId('oauth-bulk-revoke-btn'));
+
+    // Drive through both confirmation steps.
+    fireEvent.click(screen.getByTestId('oauth-bulk-revoke-btn'));
+    fireEvent.click(screen.getByTestId('oauth-bulk-revoke-confirm1-yes'));
+
+    const input = screen.getByTestId('oauth-bulk-revoke-input');
+    fireEvent.change(input, { target: { value: 'REVOKE' } });
+    fireEvent.click(screen.getByTestId('oauth-bulk-revoke-confirm2-yes'));
+
+    await waitFor(() => {
+      expect(api.revokeAllOAuthGrants).toHaveBeenCalledTimes(1);
+    });
+
+    // After bulk revoke the grants list clears — section is gone.
+    await waitFor(() => {
+      expect(screen.queryByTestId('oauth-grants-section')).not.toBeInTheDocument();
+    });
+  });
+
+  it('AC3: canceling the type-REVOKE gate returns to idle', async () => {
+    vi.mocked(api.getOAuthGrants).mockResolvedValue({ grants: [grant] });
+
+    render(<MCPSettingsSection isAdmin={true} />);
+    await waitFor(() => screen.getByTestId('oauth-bulk-revoke-btn'));
+
+    fireEvent.click(screen.getByTestId('oauth-bulk-revoke-btn'));
+    fireEvent.click(screen.getByTestId('oauth-bulk-revoke-confirm1-yes'));
+
+    // Cancel from the second stage.
+    fireEvent.click(screen.getByTestId('oauth-bulk-revoke-cancel'));
+
+    expect(screen.queryByTestId('oauth-bulk-revoke-confirm2')).not.toBeInTheDocument();
+    expect(screen.getByTestId('oauth-bulk-revoke-btn')).toBeInTheDocument();
+    expect(api.revokeAllOAuthGrants).not.toHaveBeenCalled();
   });
 });
