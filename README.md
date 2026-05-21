@@ -179,14 +179,16 @@ Things you can ask Claude to do:
 
 ### Setup
 
-> **`settings.json` field reference — two separate keys**
+> **`settings.json` field reference**
 >
 > | Field in `settings.json` | What it is for |
 > |---|---|
 > | `url` | Dispatcharr base URL |
 > | `dispatcharr_api_key` | **Dispatcharr REST API token** — ECM uses this to talk to Dispatcharr. (Canonical field name as of v0.17.1, GH #273. Operators upgrading from v0.17.0 or earlier will have the value in the legacy `api_key` field; ECM auto-migrates on next startup with a one-time `[CONFIG] Reading deprecated 'api_key' field …` WARN log.) Never replace it with an MCP key. |
 > | `api_key` | **DEPRECATED legacy alias for `dispatcharr_api_key`.** ECM still reads this for one release of back-compat (v0.17.x). The first read after upgrade emits a deprecation WARN and silently mirrors the value into `dispatcharr_api_key` on the next save. Rename or remove this field once you confirm `dispatcharr_api_key` is populated. |
-> | `mcp_api_key` | **ECM MCP key** — the `ecm-mcp` sidecar uses this to authenticate calls to ECM. This is what the Generate / Regenerate button in Settings > MCP Integration writes. |
+> | `mcp_api_key` | **ECM MCP static key** — the `ecm-mcp` sidecar uses this to authenticate calls to ECM via the `?api_key=` path. This is what the Generate / Regenerate button in Settings > MCP Integration writes. The `?api_key=` path is **permanent** — it will never be deprecated. |
+> | `mcp_oauth_signing_secret` | **OAuth HS256 signing secret** — auto-generated and managed by ECM; operators do not set this manually. It is the shared secret ECM and the MCP container use to sign and verify OAuth Bearer JWTs. Treat as credential-class; it is redacted in backup exports. |
+> | `oauth_allow_insecure` | **Default: `false`.** Set to `true` to enable OAuth on plain-HTTP (non-loopback) deployments. Without HTTPS, the MCP SDK rejects the OAuth flow. Only set this if you have a closed LAN and accept the token-interception risk. See [HTTPS Reverse Proxy](#claude-desktop-custom-connector-https-required) below for the standard HTTPS setup. |
 >
 > When rotating an MCP key, the new key goes in `mcp_api_key`. Do **not** touch `dispatcharr_api_key` (or its legacy `api_key` alias) — overwriting either with an MCP key breaks every channel and stream operation (ECM returns 401 to Dispatcharr). If you see `api_key_configured: false` from the `/health` endpoint after a rotation, the diagnostic's `status` field will indicate whether `mcp_api_key` is missing from the file (`field_missing`), blank (`field_empty`), or the file itself is unreadable (`file_not_found` / `invalid_json`) — use `GET http://YOUR_ECM_HOST:6100/api/health` to check.
 >
@@ -211,11 +213,54 @@ Things you can ask Claude to do:
 
 1. **Generate an API key** in ECM Settings > MCP Integration (this writes to `mcp_api_key` in `settings.json`)
 2. **Start the MCP container** — add the `ecm-mcp` service to your compose file (see [With MCP Server](#with-mcp-server-claude-ai-integration)) and start it on port 6101
-3. **Connect Claude** using one of the methods below (replace `YOUR_ECM_HOST` and `YOUR_API_KEY` with the value from step 1):
+3. **Connect Claude** — choose your method:
 
-**Claude Desktop** — Claude Desktop talks to remote MCP servers through the `mcp-remote` bridge, so add this to your `claude_desktop_config.json`:
+### Choose your connection method
 
-> **Prerequisite:** Claude Desktop does **not** bundle Node.js. The `mcp-remote` bridge below is an npm package that Claude Desktop runs via `npx`, so you need Node.js installed on the same machine as Claude Desktop (any current LTS — Node 18+ — is fine). Install it from [nodejs.org](https://nodejs.org/) (or via a package manager: `winget install OpenJS.NodeJS.LTS` on Windows, `brew install node` on macOS, `apt install nodejs npm` on Debian/Ubuntu). Without Node on PATH, Claude Desktop fails to launch the MCP server with a `spawn npx ENOENT` error in its logs.
+| Method | Prerequisite | Best for |
+|---|---|---|
+| [Claude Desktop — Custom Connector](#claude-desktop-custom-connector-https-required) | HTTPS in front of MCP (port 6101) | No Node.js; OAuth 2.1 flow; lowest friction once HTTPS is set up |
+| [Claude Desktop — mcp-remote bridge](#claude-desktop-mcp-remote-bridge-node-required) | Node.js (LTS 18+) on the same machine as Claude Desktop | Plain HTTP deploys; existing setups; no reverse proxy needed |
+| [Claude Code — `.mcp.json`](#claude-code-mcp-json) | None | Claude Code in any project directory; direct HTTP, no auth UI |
+
+---
+
+### Claude Desktop — Custom Connector (HTTPS required)
+
+Claude Desktop's built-in **Connectors** UI (Settings → Connectors → Add custom connector) uses OAuth 2.1 + PKCE. ECM acts as the Authorization Server; you authorize in a browser window and Claude Desktop stores the token automatically. **No Node.js required.**
+
+**Prerequisite: HTTPS.** The MCP SDK rejects plain-HTTP issuers for non-loopback hostnames. You must front the MCP container (port 6101) with a TLS reverse proxy. See **[docs/runbooks/mcp-https-reverse-proxy.md](docs/runbooks/mcp-https-reverse-proxy.md)** for Caddy, nginx, and Traefik recipes.
+
+**Required: `OAUTH_ISSUER` must be identical on both containers.** Set the same external HTTPS origin on the ECM container and the MCP container. If they differ, every OAuth Bearer token fails verification with a silent 401.
+
+```yaml
+# In your docker-compose.yml — both containers
+environment:
+  - OAUTH_ISSUER=https://mcp.yourdomain.com
+```
+
+**Setup steps:**
+
+1. Stand up an HTTPS reverse proxy (see [mcp-https-reverse-proxy.md](docs/runbooks/mcp-https-reverse-proxy.md)) and set `OAUTH_ISSUER` on both containers.
+2. In Claude Desktop, go to **Settings → Connectors → Add custom connector**.
+3. Enter the MCP URL: `https://mcp.yourdomain.com/mcp`
+4. Claude Desktop discovers OAuth endpoints automatically.
+5. Your browser opens the ECM consent screen. Log in and click **Authorize**.
+6. Claude Desktop stores the token — you are connected. No config file edits required.
+
+> **`oauth_allow_insecure` escape hatch**: on a closed LAN with no DNS, set `oauth_allow_insecure: true` in `settings.json` to enable OAuth over plain HTTP. This accepts the token-interception risk. The MCP SDK may still reject `http://` issuers in some SDK versions regardless. Default is `false` (fail-closed).
+
+> **Static `?api_key=` is permanent**: the `?api_key=` query-parameter authentication path will never be deprecated. Existing Claude Code and mcp-remote setups are unaffected by the addition of OAuth.
+
+> **redirect_uri caveat**: ECM's registered `redirect_uri` for Claude Desktop is a placeholder pending verification (bead `buiqr.6`). If the OAuth consent flow fails with a `redirect_uri mismatch` error, check ECM's backend logs for the actual URI Claude Desktop sent, and update the client registry. This is a known open item.
+
+---
+
+### Claude Desktop — mcp-remote bridge (Node required)
+
+Claude Desktop talks to remote MCP servers through the `mcp-remote` bridge. Add this to your `claude_desktop_config.json`:
+
+> **Prerequisite:** Claude Desktop does **not** bundle Node.js. The `mcp-remote` bridge is an npm package that Claude Desktop runs via `npx`, so you need Node.js installed on the same machine as Claude Desktop (any current LTS — Node 18+ — is fine). Install it from [nodejs.org](https://nodejs.org/) (or via a package manager: `winget install OpenJS.NodeJS.LTS` on Windows, `brew install node` on macOS, `apt install nodejs npm` on Debian/Ubuntu). Without Node on PATH, Claude Desktop fails to launch the MCP server with a `spawn npx ENOENT` error in its logs.
 
 ```json
 {
@@ -233,11 +278,14 @@ Things you can ask Claude to do:
 ```
 (`--allow-http` is needed because the endpoint is plain HTTP.)
 
-> **Why not Claude Desktop's Custom Connectors (no-Node path)?** Claude Desktop's built-in "Custom Connectors" UI (Settings → Connectors → Add custom connector) would let you skip Node entirely, but it requires OAuth 2.1 with PKCE per the MCP spec — it rejects URL-embedded `?api_key=` auth. ECM's MCP server currently uses a static API key, so the Custom Connector path is **not supported yet**. Adding OAuth is tracked separately. For Claude Desktop today, the `mcp-remote` bridge above (with Node installed) is the only path. **Claude Code is unaffected** — it talks Streamable HTTP directly, so the API-key URL works without Node (see below).
-
 > **Note:** the `?api_key=` query parameter in these URLs is your `mcp_api_key` value from `settings.json` — the key generated in ECM Settings > MCP Integration. It is **not** your Dispatcharr `api_key`.
 
-**Claude Code** — create a `.mcp.json` file in any project directory where you want ECM tools available:
+---
+
+### Claude Code (`.mcp.json`)
+
+Create a `.mcp.json` file in any project directory where you want ECM tools available:
+
 ```json
 {
   "mcpServers": {
@@ -256,6 +304,8 @@ To connect:
 4. Ask Claude to manage your channels — e.g. "list my channels", "create an auto-creation rule for sports", "probe all streams"
 
 If running ECM locally, use `localhost` as your host. If the MCP container is on the same Docker network as Claude Code, use the container name (`ecm-mcp`).
+
+---
 
 **Upgrading from an earlier version:** the MCP server moved from the deprecated SSE transport (`/sse` + `/messages/`) to the modern Streamable HTTP transport on a single `/mcp` endpoint. If you have an existing config pointing at `http://YOUR_ECM_HOST:6101/sse?api_key=...` (or `"type": "sse"` in a `.mcp.json`), change the path to `/mcp` (and `"type": "http"` for Claude Code). The `/sse` endpoint was removed in this version. API-key auth is unchanged.
 
