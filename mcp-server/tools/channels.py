@@ -295,25 +295,27 @@ def register(mcp: FastMCP):
         """Create a channel from a stream name and assign it to a group, with deduplication control.
 
         The ``dedup_action`` parameter governs how a potential duplicate channel
-        (identified by the BD-A matcher via ``GET /api/channel-merges/candidates``)
-        is handled before the new channel is created.  Three modes are supported
-        (ADR-008 §D7):
+        (identified by the BD-A matcher) is handled before the new channel is
+        created.  Three modes are supported (ADR-008 §D7):
 
-        * ``prompt`` (default) — call the candidates endpoint; if a match above
-          the operator-configured threshold is found, return the candidate to the
-          agent so it can call ``accept_channel_merge`` or ``dismiss_channel_merge``
-          on the existing pending-merges row, or retry with a different
-          ``dedup_action``.  If no candidate is found, proceed with normal channel
-          creation.
+        * ``prompt`` (default) — async-queue the merge candidate via
+          ``POST /api/channel-merges`` and return its ``merge_id`` so you (the
+          AI agent) can call ``accept_channel_merge(merge_id)`` to confirm the
+          merge or ``dismiss_channel_merge(merge_id)`` to reject it.  This is
+          the operator modal's "prompt" at MCP scale: the decision is deferred
+          to you via a real pending-merges row, fully audited
+          (``trigger_context='mcp_tool'``).  If no candidate is found, proceed
+          with normal channel creation.
         * ``force_new`` — skip dedup entirely; always create a new channel
           regardless of any existing match.
-        * ``merge_if_found`` — call the candidates endpoint; if a match at or
-          above the operator threshold is found, add the stream to the candidate
-          channel directly (auto-accept).  If the confidence falls below the
-          threshold (but above the ADR-008 §D2 hard floor — the matcher never
-          emits below the floor), fall back to ``prompt`` semantics and return
-          the candidate for the agent to decide.  If no candidate is found,
-          proceed with normal channel creation.
+        * ``merge_if_found`` — async-queue the candidate, then auto-accept it
+          when its confidence is at or above the operator-configured threshold
+          (the merge is applied and the row resolved for you).  When the
+          confidence is below the threshold (but above the ADR-008 §D2 floor),
+          fall back to ``prompt`` semantics: the row stays queued and the
+          ``merge_id`` is returned for you to ``accept_channel_merge`` /
+          ``dismiss_channel_merge``.  If no candidate is found, proceed with
+          normal channel creation.
 
         In all cases where channel creation proceeds, the tool creates a new
         channel with the stream name as the channel name, assigns it to
@@ -338,71 +340,92 @@ def register(mcp: FastMCP):
             client = get_ecm_client()
 
             # ------------------------------------------------------------------
-            # Dedup branch: skip candidate lookup when force_new requested.
+            # Dedup branch: skip enqueue when force_new requested. For prompt /
+            # merge_if_found, POST /api/channel-merges async-queues the merge
+            # candidate (creating a pending_merges row with
+            # trigger_context='mcp_tool') and returns the merge_id so the agent
+            # can call back via accept_channel_merge / dismiss_channel_merge
+            # (ADR-008 §D7).
             # ------------------------------------------------------------------
             if dedup_action != "force_new":
+                enqueue_resp = None
                 try:
-                    candidates_resp = await client.call_endpoint(
-                        ENDPOINTS["channel_merges_candidates"],
-                        query={"stream_name": stream_name, "group_id": group_id},
+                    enqueue_resp = await client.call_endpoint(
+                        ENDPOINTS["channel_merges_enqueue"],
+                        body={"stream_name": stream_name, "group_id": group_id},
                     )
-                    candidates = candidates_resp.get("candidates", []) if isinstance(candidates_resp, dict) else []
-                except Exception as cand_err:
-                    logger.warning("[MCP] add_stream candidates lookup failed: %s", cand_err)
-                    candidates = []
-
-                if candidates:
-                    top = candidates[0]
-                    candidate_channel_id = top.get("channel_id", "?")
-                    candidate_channel_name = top.get("channel_name", "?")
-                    confidence = top.get("confidence", 0.0)
-
-                    if dedup_action == "merge_if_found":
-                        # Auto-accept: add the stream directly to the candidate channel.
-                        # This requires resolving the stream id first.
-                        stream_id = await _resolve_stream_id(client, stream_name)
-                        if stream_id is None:
-                            return (
-                                f"merge_if_found: candidate channel found "
-                                f"('{candidate_channel_name}', id={candidate_channel_id}, "
-                                f"confidence={confidence:.0%}) but stream '{stream_name}' "
-                                f"could not be resolved to a stream ID — "
-                                f"use force_new or prompt to proceed."
-                            )
-                        try:
-                            await client.call_endpoint(
-                                ENDPOINTS["channels_add_stream"],
-                                path_args={"channel_id": candidate_channel_id},
-                                body={"stream_id": stream_id},
-                            )
-                            return (
-                                f"merge_if_found: stream '{stream_name}' (id={stream_id}) "
-                                f"added to existing channel '{candidate_channel_name}' "
-                                f"(id={candidate_channel_id}, confidence={confidence:.0%})."
-                            )
-                        except Exception as merge_err:
-                            logger.warning("[MCP] add_stream merge_if_found failed: %s", merge_err)
-                            return (
-                                f"merge_if_found: auto-merge to '{candidate_channel_name}' "
-                                f"(id={candidate_channel_id}) failed: {merge_err}"
-                            )
-
-                    # prompt (or merge_if_found fallback when below threshold —
-                    # but the matcher never emits below the ADR-008 §D2 floor, so
-                    # any returned candidate is already above the floor; the
-                    # operator threshold comparison is intentionally delegated to
-                    # the backend matcher).
+                except Exception as enq_err:
+                    # An enqueue failure must not silently drop the request —
+                    # surface a structured error so the agent can decide
+                    # (retry, or force_new). Per §D7 the dedup tools return a
+                    # {error:{code,message}} envelope; mirror that here.
+                    logger.warning("[MCP] add_stream enqueue failed: %s", enq_err)
                     return (
-                        f"action=pending_merge — candidate channel found for "
-                        f"'{stream_name}':\n"
+                        "action=error — could not queue a dedup decision for "
+                        f"'{stream_name}': {enq_err}. "
+                        f"Retry, or call add_stream(stream_name='{stream_name}', "
+                        f"group_id={group_id}, dedup_action='force_new') to "
+                        "create a new channel without dedup."
+                    )
+
+                merge_id = enqueue_resp.get("merge_id") if isinstance(enqueue_resp, dict) else None
+
+                if merge_id is not None:
+                    candidate_channel_id = enqueue_resp.get("candidate_channel_id", "?")
+                    candidate_channel_name = enqueue_resp.get("candidate_channel_name", "?")
+                    confidence = enqueue_resp.get("confidence", 0.0)
+                    meets_threshold = bool(enqueue_resp.get("meets_threshold"))
+
+                    if dedup_action == "merge_if_found" and meets_threshold:
+                        # Auto-accept the queued merge — accept_channel_merge
+                        # applies the Dispatcharr-side merge and resolves the
+                        # row, with the full §D6 audit trail.
+                        try:
+                            accept_resp = await client.call_endpoint(
+                                ENDPOINTS["channel_merges_accept"],
+                                path_args={"merge_id": merge_id},
+                            )
+                        except Exception as acc_err:
+                            logger.warning("[MCP] add_stream merge_if_found accept failed: %s", acc_err)
+                            return (
+                                f"merge_if_found: candidate '{candidate_channel_name}' "
+                                f"(id={candidate_channel_id}, confidence={confidence:.0%}) "
+                                f"was queued as merge_id={merge_id} but auto-accept "
+                                f"failed: {acc_err}. Call accept_channel_merge({merge_id}) "
+                                f"to retry, or dismiss_channel_merge({merge_id}) to reject."
+                            )
+                        merged_into = (
+                            accept_resp.get("merged_into_channel_id", candidate_channel_id)
+                            if isinstance(accept_resp, dict) else candidate_channel_id
+                        )
+                        return (
+                            f"merge_if_found: stream '{stream_name}' merged into "
+                            f"existing channel '{candidate_channel_name}' "
+                            f"(id={merged_into}, confidence={confidence:.0%}) "
+                            f"via merge_id={merge_id}."
+                        )
+
+                    # prompt, OR merge_if_found below-threshold fallback: the row
+                    # is queued; hand the merge_id to the agent to accept/dismiss.
+                    fallback_note = (
+                        " (below the auto-merge threshold — falling back to "
+                        "prompt semantics)"
+                        if dedup_action == "merge_if_found"
+                        else ""
+                    )
+                    return (
+                        f"action=pending_merge{fallback_note} — candidate channel "
+                        f"queued for '{stream_name}':\n"
+                        f"  merge_id: {merge_id}\n"
                         f"  candidate_channel_id: {candidate_channel_id}\n"
                         f"  candidate_channel_name: {candidate_channel_name}\n"
                         f"  confidence: {confidence:.0%}\n"
-                        f"Call add_stream(stream_name='{stream_name}', group_id={group_id}, "
-                        f"dedup_action='force_new') to create a new channel anyway, or "
+                        f"Call accept_channel_merge({merge_id}) to confirm the merge "
+                        f"(adds the stream to the existing channel), or "
+                        f"dismiss_channel_merge({merge_id}) to reject the candidate. "
+                        f"To create a new channel anyway, dismiss then call "
                         f"add_stream(stream_name='{stream_name}', group_id={group_id}, "
-                        f"dedup_action='merge_if_found') to add the stream to the "
-                        f"candidate channel."
+                        f"dedup_action='force_new')."
                     )
 
             # ------------------------------------------------------------------
