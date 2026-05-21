@@ -102,6 +102,7 @@ tags_metadata = [
     {"name": "Lookup Tables", "description": "Named key→value tables used by the dummy EPG template engine"},
     {"name": "Observability", "description": "Telemetry endpoints — frontend runtime error reporting (ADR-006)"},
     {"name": "Channel Merges", "description": "Interactive stream-to-channel deduplication — candidate lookup and merge queue (ADR-008, bd-1v4ht)"},
+    {"name": "OAuth", "description": "OAuth 2.1 + PKCE Authorization Server for the MCP integration — /authorize, /token, /revoke (ADR-009, bd-buiqr.3)"},
 ]
 
 app = FastAPI(
@@ -469,6 +470,12 @@ AUTH_EXEMPT_PATHS = {
     "/api/auth/providers",
     "/api/auth/dispatcharr/login",
     "/api/auth/admin/settings",
+    # OAuth 2.1 token + revocation endpoints (PUBLIC per spec — the PKCE
+    # verifier / refresh token / revoked token value IS the credential, not an
+    # ECM admin session). bead buiqr.3 AC6 (token) + RFC 7009 (revoke).
+    # /api/oauth/authorize is NOT exempt — it requires the admin session.
+    "/api/oauth/token",
+    "/api/oauth/revoke",
     # Initial setup (only works when no config exists)
     "/api/backup/restore-initial",
     # OpenAPI docs
@@ -690,6 +697,33 @@ async def startup_event():
 
     # Initialize journal database
     init_db()
+
+    # Initialize the ECM-managed OAuth state store schema + seed the hardcoded
+    # OAuth client registry (beads buiqr.2 / buiqr.3 / buiqr.6, ADR-009 §5).
+    # Under Option A the store is ECM-owned (/config rw); the MCP RS mounts
+    # /config read-only and never touches it. Seeding here (not on MCP start —
+    # buiqr.6 AC1's "MCP container first start" is infeasible under Option A)
+    # is idempotent: create_client is an upsert, so a restart re-seeds harmlessly.
+    # Best-effort — a failure is logged at WARN and does NOT abort startup; the
+    # per-request store init in routers/oauth_mcp.py also runs the schema DDL.
+    try:
+        from auth.oauth_store import OAuthStore
+        from auth.oauth_clients import seed_oauth_clients
+        from config import CONFIG_DIR, get_or_create_oauth_signing_secret
+        _oauth_store = OAuthStore(CONFIG_DIR / "mcp_oauth.db")
+        try:
+            _oauth_store.init_schema()
+            seed_oauth_clients(_oauth_store)
+        finally:
+            _oauth_store.close()
+        # Generate the DEDICATED OAuth signing secret (settings.json →
+        # mcp_oauth_signing_secret) if absent, so it exists for the read-only
+        # MCP RS to verify against (ADR-009 §3, dedicated-secret design). Kept
+        # separate from ECM's user-session jwt.secret_key (blast-radius
+        # isolation, threat model SR1). Idempotent.
+        get_or_create_oauth_signing_secret()
+    except Exception as _oauth_seed_err:
+        logger.warning("[MAIN] Failed to init/seed OAuth store + signing secret: %s", _oauth_seed_err)
 
     # Seed the ecm_pending_merges_queue_depth gauge on startup (bd-wvr1d).
     # This ensures the gauge reflects the actual queue depth immediately
