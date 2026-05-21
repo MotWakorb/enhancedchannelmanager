@@ -1,11 +1,7 @@
 """Tests for MCP server endpoints and auth middleware (Streamable HTTP transport)."""
 import json
 
-import pytest
 from unittest.mock import patch
-from starlette.testclient import TestClient
-
-from server import app
 
 # Headers a Streamable HTTP client must send on the POST to /mcp.
 _MCP_HEADERS = {
@@ -23,15 +19,6 @@ _INITIALIZE = {
         "clientInfo": {"name": "test", "version": "0"},
     },
 }
-
-
-@pytest.fixture(scope="module")
-def client():
-    # The Starlette lifespan starts the StreamableHTTP session manager. That
-    # session manager can only be run once per process, so the client (and its
-    # lifespan) is shared across the whole module.
-    with TestClient(app) as c:
-        yield c
 
 
 def _parse_initialize_result(response):
