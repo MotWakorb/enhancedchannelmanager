@@ -145,6 +145,39 @@ def get_mcp_api_key_status() -> tuple[str, str]:
     return key, "ok"
 
 
+def get_signing_key() -> str:
+    """Read the dedicated OAuth HS256 signing secret from settings.json (bd-buiqr.8).
+
+    Returns the secret VALUE for offline Bearer-JWT verification by the MCP RS
+    (``oauth_rs.verify_oauth_token``), or ``""`` when it is missing/unreadable.
+
+    This is the read counterpart to :func:`get_signing_key_status` (which only
+    reports presence/absence and NEVER returns the value, for the public
+    /health endpoint). This function DOES return the value because the verifier
+    needs it — but the caller MUST NOT log it (threat model ID1/SR1).
+
+    Re-reads from disk on every call so secret rotation takes effect without
+    restarting the MCP container (mirrors :func:`get_mcp_api_key`). The read is
+    a single cheap file read + JSON parse — no network, no DB — so it stays
+    inside the ≤5 ms latency budget (ADR-009 §1, AC6). The OS page cache makes
+    the repeated read effectively in-memory under load.
+
+    SECURITY: reads ONLY ``SIGNING_KEY_SETTINGS_JSON_KEY`` — never ECM's
+    user-session ``jwt.secret_key`` (which lives in a different file the RS does
+    not open). A compromised MCP can therefore forge only MCP-scope tokens, not
+    ECM admin sessions (threat model SR1; ADR-009 §1 dedicated-secret amendment).
+    """
+    if not SETTINGS_FILE.exists():
+        return ""
+    try:
+        data = json.loads(SETTINGS_FILE.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        # Never log the file contents or the secret; only the failure class.
+        logger.warning("[MCP-CONFIG] Could not read signing secret: %s", e)
+        return ""
+    return data.get(SIGNING_KEY_SETTINGS_JSON_KEY, "") or ""
+
+
 def get_signing_key_status() -> tuple[str, str]:
     """Check whether the HS256 OAuth signing secret is present in settings.json.
 
