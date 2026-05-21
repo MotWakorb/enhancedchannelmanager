@@ -54,27 +54,38 @@ graph LR
     subgraph MCPContainer["MCP Container (:6101, RS)"]
         Route["Auth router<br/>(dual-path by SHAPE)"]
         DiscRS["/.well-known/<br/>oauth-protected-resource"]
-        Verify["Offline JWT verify<br/>(HS256, no callback to ECM)"]
+        Verify["Offline JWT verify<br/>(HS256, no callback to ECM,<br/>no token-store read)"]
         Tools["~110 MCP tools"]
     end
 
-    Store["/config/mcp_oauth.db<br/>(SQLite WAL, MCP-managed,<br/>tokens hashed-at-rest)"]
-    Settings["/config/settings.json<br/>(shared volume)"]
+    Store["/config/mcp_oauth.db<br/>(SQLite WAL, ECM-managed,<br/>tokens hashed-at-rest)"]
+    Settings["/config/settings.json<br/>(shared volume, MCP reads :ro)"]
 
     Desktop -->|"1. discover"| DiscRS
     Desktop -->|"2. /authorize"| AuthZ
     AuthZ --> Session
     Desktop -->|"3. /token + PKCE verifier"| Token
     Token --> HS256
-    Token -.writes hash.-> Store
+    Token -.writes + reads hash.-> Store
     Desktop -->|"4. /mcp + Bearer JWT"| Route
     Code -->|"/mcp + static key"| Route
     Route --> Verify
     Verify --> HS256
-    Verify -.reads hash.-> Store
     Route --> Tools
     HS256 -.same secret.-> Settings
 ```
+
+> **Amendment (2026-05-21, Option A — blocker `gswk2`).** The token store is
+> **ECM-managed**, not MCP-managed. The MCP container mounts `/config`
+> **read-only**, so it can neither write `mcp_oauth.db` nor reliably read a live
+> WAL DB (WAL readers must create `-shm`/`-wal` sidecars). The RS therefore does
+> **pure offline JWT verification and never opens the token store**; the
+> access-token revocation window is bounded by the short access-token TTL alone.
+> ECM (the AS) is the sole owner: it writes issued/refresh/revocation records
+> **and** reads them at `/token` (refresh rotation + family-reuse detection).
+> This reverses epic PO-locked decision #3 ("MCP-container-managed"). The
+> module `oauth_store.py` lives in `backend/auth/`, not `mcp-server/`. See the
+> Revision History and §1/§5 below.
 
 ## Decision
 
@@ -96,7 +107,7 @@ The OAuth roles are split across the two existing containers along the line that
 
   - **Performance.** A per-request HTTP callback from MCP to ECM would add a network round-trip to every tool call. AC#11 caps the p50 latency increase at ≤ 5 ms vs the static-key baseline; an in-process HMAC verification meets that, a callback does not.
   - **Failure isolation.** The current MCP server can serve cached/tool operations even under ECM backend stress; coupling token validation to a live ECM call would mean an ECM hiccup takes down all authenticated MCP traffic. Offline verification preserves the existing failure-isolation envelope.
-  - **The trade-off is acknowledged:** offline verification means revocation is not instantaneous — a revoked token is rejected only once the RS sees the revocation state (via the shared token store, §6) or the token's short TTL expires. This is the standard JWT trade and is mitigated by short access-token TTLs (§3) and the shared hashed-token store the RS reads (§6). See the threat model's *token-replay* and *secret-rotation* rows.
+  - **The trade-off is acknowledged:** offline verification means revocation is not instantaneous. **Per the 2026-05-21 Option A amendment (§5, blocker `gswk2`), the RS does NOT read the token store** — it verifies purely offline — so a revoked *access token* is honored until its short TTL expires. Session revocation is still effective: the AS enforces *refresh-token* revocation at `/token` (a revoked refresh token / killed family cannot mint a new access token), so revoking a grant stops renewal and the live access token dies within ≤ 15 min (§3). This is the standard JWT trade, mitigated by short access-token TTLs (§3). See the threat model's *revocation gap* (TS2), *token-replay*, and *secret-rotation* rows.
 
 HS256 (symmetric) is chosen over RS256 (asymmetric) because the two containers already co-locate on one host and share a config volume; a symmetric secret is the simplest primitive that fits the deployment, and it mirrors ECM's existing JWT subsystem (`backend/auth/tokens.py`, `ALGORITHM = "HS256"`). The exit path to RS256 (publish a JWKS from ECM, have MCP fetch + cache it) exists if a future multi-host split needs it, but is out of scope here.
 
@@ -125,7 +136,7 @@ This is the security-critical routing rule (epic AC#2 / AC#7). The RS's auth rou
 - **Single ECM-admin identity model.** Per the PO-locked decision, OAuth grants are made by the **single ECM admin on behalf of the deployment**. The issued token's `sub` claim binds to the admin user. There is no multi-tenant / per-end-user identity in v1 (out of scope, §8). The consent screen (§ below) is the admin saying "this deployment authorizes Claude Desktop."
 - **PKCE S256 only.** The `code_challenge_method` accepted at `/authorize` and enforced at `/token` is **`S256` only**. The `plain` method is **rejected with HTTP 400 `invalid_request`** (AC#5). PKCE is mandatory (no non-PKCE authorization-code flow); a missing or `plain` challenge is a 400.
 - **Hardcoded client registry; no Dynamic Client Registration.** The set of OAuth clients is a fixed, in-code registry (`buiqr.6`) containing the Claude Desktop and Claude Code client identifiers and their exact redirect URIs. **RFC 7591 Dynamic Client Registration is not implemented** (out of scope, §8). An unknown `client_id` is rejected; a `redirect_uri` that is not an exact match for the registered client's allowlisted URI(s) is rejected (threat model: redirect-URI validation, open-redirect).
-- **Token shape and TTL.** Access tokens are HS256 JWTs carrying at minimum `sub` (admin user binding), `jti` (unique id for revocation, mirroring `backend/auth/tokens.py`), `iss` (the ECM AS), `aud` (the MCP RS), `scope` (`mcp`, §8), `iat`, and `exp`. Access-token TTL is **short** (mirroring ECM's existing `ACCESS_TOKEN_EXPIRE_MINUTES = 30` posture; the exact value is `buiqr.3`'s call within that envelope) to bound the offline-verification revocation gap (§1). Refresh handling, if issued, follows the existing one-time-use rotation pattern in `backend/auth/tokens.py`.
+- **Token shape and TTL.** Access tokens are HS256 JWTs carrying at minimum `sub` (admin user binding), `jti` (unique id for revocation, mirroring `backend/auth/tokens.py`), `iss` (the ECM AS), `aud` (the MCP RS), `scope` (`mcp`, §8), `iat`, and `exp`. Access-token TTL is **short** to bound the offline-verification revocation gap (§1). **Under the Option A amendment (§5), the access-token TTL is the *sole* backstop for access-token revocation** (the RS does not read the token store), so it should sit at the **short end of the envelope — ≤ 15 min recommended** — rather than the 30-min `ACCESS_TOKEN_EXPIRE_MINUTES` ceiling; the exact value is `buiqr.3`'s call. Refresh handling follows the existing one-time-use rotation pattern in `backend/auth/tokens.py`, with rotation + family-reuse detection enforced by the store at `/token` (`buiqr.2`).
 - **Consent UI.** Rendered by the AS at the `/authorize` step (`buiqr.7`), shown to the authenticated admin. Copy is the PO-locked single-`mcp`-scope wording: *"Claude Desktop will be able to read and manage your ECM channels, streams, M3U accounts, and EPG sources."* The consent screen pins the requesting client's name (from the hardcoded registry, not from attacker-supplied input) and enforces same-origin / allowlist on any `return_to`-style parameter (threat model: consent-phishing, open-redirect).
 
 ### §4 — `oauth_allow_insecure` flag policy
@@ -137,11 +148,21 @@ A single boolean in `/config/settings.json`, **default `false`**, governs whethe
 
 **Rationale.** This flag exists because of the MCP SDK 1.27.0 http-issuer rejection finding (see Context). Rather than silently failing on the typical `http://<LAN-IP>:6101` shape, ECM defaults to refusing the insecure posture (404, fail-closed) and makes the operator make an explicit, documented choice to weaken it. The default is the safe value; weakening it is a deliberate act recorded in `settings.json`. The flag never weakens the static-key path — that path is unchanged and HTTP-or-HTTPS as today.
 
-### §5 — Token store: SQLite at `/config/mcp_oauth.db`, MCP-container-managed, hashed-at-rest
+### §5 — Token store: SQLite at `/config/mcp_oauth.db`, **ECM-managed**, hashed-at-rest
 
-- **Location & engine.** A dedicated SQLite database at **`/config/mcp_oauth.db`**, in **WAL mode** (consistent with ECM's other SQLite stores). It is **MCP-container-managed** — the RS owns its lifecycle (`buiqr.2`). This deliberately avoids any runtime HTTP coupling to ECM for token state, preserving the §1 failure-isolation property: the AS issues tokens and writes their hashed records; the RS reads/validates against the same store; neither calls the other at request time.
+> **Amended 2026-05-21 (Option A, blocker `gswk2`).** This section originally
+> specified an **MCP-container-managed** store that the RS read for revocation.
+> That is infeasible: the MCP container mounts `/config` **read-only** (it cannot
+> write the DB, and a `:ro` mount cannot reliably host a live WAL DB whose readers
+> must create `-shm`/`-wal` sidecars). The store is therefore **ECM-managed** and
+> the RS **does not read it**. This reverses epic PO-locked decision #3; the
+> alternative (flip the MCP mount to `:rw`) was rejected as a hardening regression
+> — it would give the MCP container write access to the volume holding the HS256
+> secret and `mcp_api_key`. The store module lives in `backend/auth/oauth_store.py`.
+
+- **Location & engine.** A dedicated SQLite database at **`/config/mcp_oauth.db`**, in **WAL mode** (consistent with ECM's other SQLite stores). It is **ECM-managed** — ECM (the AS) is the *only* container with `/config` read-write, and owns the store's full lifecycle (`buiqr.2`): create, schema, write, and read. WAL covers concurrent access from ECM's own worker threads. This still avoids any runtime HTTP coupling between the two containers for token state (the §1 failure-isolation property): the AS issues tokens and writes their hashed records and reads them at `/token`; **the RS validates Bearer JWTs purely offline and never opens this file.**
 - **Hashed-at-rest.** Tokens are **never stored in plaintext.** The store holds **SHA-256 hashes** of the token (or of the `jti`, per `buiqr.2`/`buiqr.4` implementation), mirroring the established `hash_token()` pattern in `backend/auth/tokens.py` (`hashlib.sha256(token.encode()).hexdigest()`) and that module's `jti`-based revocation set. A read of `mcp_oauth.db` yields hashes, not bearer credentials — so a compromised store leaks revocation/audit metadata, not usable tokens (threat model: token-store at-rest compromise).
-- **Revocation.** Revocation marks the `jti`/hash record revoked; the RS's offline verifier consults the store to reject revoked tokens (the §1 revocation-gap mitigation), exactly mirroring `revoke_token(jti)` in the existing JWT subsystem.
+- **Revocation.** Revocation marks the `jti`/hash record revoked, mirroring `revoke_token(jti)` in the existing JWT subsystem. **Enforcement point (Option A):** because the RS verifies offline and never reads the store, revocation is enforced **at the AS `/token` endpoint** — a revoked refresh token (or a killed refresh *family*, the rotation-reuse breach response) cannot be exchanged for a new access token, so renewal stops immediately. A revoked *access* token is not rejected mid-flight by the RS; it simply expires within its short TTL (§3). The `access_tokens`/`revocations` tables remain the issuance/revocation **audit ledger** (threat model R2/R3) and the substrate for the AS-side checks; access-token-level instant revocation is the documented residual gap (§1, threat model TS2), bounded by the ≤ 15 min TTL.
 
 ### §6 — Rate limiting; `dispatcharr_api_key` isolation
 
@@ -171,7 +192,7 @@ Explicitly **not** built in v1. Each is a future-epic candidate, not a silent om
 
 | # | Option | Pros | Cons | Portability | Decision |
 |---|--------|------|------|-------------|----------|
-| 1 | **Chosen — ECM=AS, MCP=RS, offline HS256 verify, dual-path-by-shape** | Consent lives where the user session lives; no per-request callback (meets ≤5 ms AC#11); failure-isolation preserved; shape-routing closes the auth-bypass class | Revocation is not instantaneous (TTL/shared-store mitigated); one shared secret to rotate | High — symmetric secret on a co-located shared volume, no new infra | **Adopted** (PO-locked) |
+| 1 | **Chosen — ECM=AS, MCP=RS, offline HS256 verify, dual-path-by-shape** | Consent lives where the user session lives; no per-request callback (meets ≤5 ms AC#11); failure-isolation preserved; shape-routing closes the auth-bypass class | Access-token revocation is not instantaneous (TTL-bounded; refresh revocation enforced at AS `/token` — §5); one shared secret to rotate | High — symmetric secret on a co-located shared volume, no new infra | **Adopted** (PO-locked) |
 | 2 | MCP=AS (MCP hosts `/authorize` + consent) | Single container owns the whole OAuth surface | MCP has no user session — would have to proxy/re-implement ECM login; wider attack surface; consent UI divorced from identity | Med | Rejected — consent must live with identity |
 | 3 | Per-request runtime callback MCP→ECM to validate every token | Instant revocation; single source of truth at request time | Adds a network round-trip per tool call (blows AC#11); couples MCP availability to ECM; destroys failure isolation | Med | Rejected — perf + isolation |
 | 4 | RS256 (asymmetric) instead of HS256 | No shared secret; RS only needs the public key; cleaner multi-host story | More moving parts (JWKS publish/fetch/cache) for two co-located containers that already share a volume; doesn't mirror ECM's existing HS256 JWT subsystem | High | Rejected for v1; documented exit path if multi-host split appears |
@@ -194,7 +215,7 @@ Explicitly **not** built in v1. Each is a future-epic candidate, not a silent om
 ### Negative
 
 - **One shared HS256 secret to protect and rotate.** Both containers read it from `/config/settings.json`. Compromise of the secret allows token forgery; rotation invalidates all live tokens (acceptable given short TTLs). The threat model's secret-rotation / alg-confusion rows track this; protecting `settings.json` file permissions is the compensating control.
-- **Revocation is not instantaneous.** The offline-verification trade means a revoked token is honored until the RS sees the revocation (shared store, §6) or the TTL expires. Mitigated by short TTLs and the shared hashed-token store, but it is a real gap vs a callback design.
+- **Access-token revocation is not instantaneous.** The offline-verification trade means a revoked *access* token is honored until its short TTL expires — the RS verifies offline and (per the Option A amendment, §5) does not read the token store. Refresh-token revocation *is* enforced at the AS `/token` endpoint, so revoking a grant stops renewal and the live access token dies within ≤ 15 min. Mitigated by short TTLs, but the per-access-token gap is real vs a callback design.
 - **A second auth path is permanent operational surface.** The dual-path matrix must be maintained forever (PO-locked). Every future change to either path must re-verify the shape-routing invariant.
 - **The HTTPS prerequisite shifts operator burden.** Operators on the typical `http://<LAN-IP>:6101` shape must set up a reverse proxy or accept the `oauth_allow_insecure` risk. This is documented (`buiqr.11`) but it is a real friction wall the epic explicitly accepted.
 
@@ -227,7 +248,7 @@ No external vendor relationship is introduced; no new infrastructure beyond the 
 - **PKCE method?** → S256 only; `plain` → 400 `invalid_request` (§3).
 - **Dynamic Client Registration?** → No; hardcoded client registry (§3).
 - **HTTP posture?** → `oauth_allow_insecure` default false; discovery 404 on plain HTTP unless set (§4).
-- **Token store?** → SQLite `/config/mcp_oauth.db`, WAL, MCP-managed, SHA-256 hashed-at-rest (§5).
+- **Token store?** → SQLite `/config/mcp_oauth.db`, WAL, **ECM-managed** (amended 2026-05-21, Option A / `gswk2` — was MCP-managed; the MCP `/config:ro` mount made that infeasible), SHA-256 hashed-at-rest, RS never reads it (§5).
 - **Scope model?** → Single `mcp` scope in v1 (§3, §8).
 - **Static `?api_key=` path?** → Permanent, no deprecation (§8); dual-path matrix is a permanent CI fixture.
 
@@ -253,3 +274,4 @@ No external vendor relationship is introduced; no new infrastructure beyond the 
 | Date | Bead | Change | Rationale |
 |---|---|---|---|
 | 2026-05-20 | `enhancedchannelmanager-buiqr.1` | Proposed | Formalizes the PO-locked OAuth split from epic `buiqr` (2026-05-19 grooming). Contract-lock for `buiqr.2`–`buiqr.9`. Status Proposed pending AC#5 PO sign-off before any implementation child opens. |
+| 2026-05-21 | `enhancedchannelmanager-buiqr.2` / `gswk2` | Amended — **Option A** (token store re-homed to ECM) | Discovered during `buiqr.2` that the MCP container mounts `ecm-config:/config` **read-only**, so an MCP-managed store (decision #3) cannot write the DB, and a `:ro` mount cannot host a live WAL DB (readers must create `-shm`/`-wal` sidecars). **Resolution (PO-approved Option A):** the token store is **ECM-managed** (`backend/auth/oauth_store.py`, was `mcp-server/`); ECM is the sole reader/writer; the **RS verifies purely offline and never reads the store**; the access-token revocation window is **TTL-bounded** and refresh-token revocation is enforced at the AS `/token`. Reverses epic decision #3. Rejected alternative: flip the MCP mount to `:rw` (hardening regression — would expose the HS256 secret + `mcp_api_key` volume to MCP writes). Amends §1, §5, the architecture diagram, Alternatives row 1, Consequences, and Open Questions. Threat model amended in lockstep. |

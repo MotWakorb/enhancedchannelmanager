@@ -6,6 +6,18 @@
 **Status:** Draft — pending PO review (AC#5 sign-off on ADR-009 + Assumptions §6 + Residual Risks §8)
 **Related:** epic `enhancedchannelmanager-buiqr` (PO-locked decisions), ADR-009 (the architecture this model secures — every mitigation below ties to an ADR-009 §section), `enhancedchannelmanager-ak7xa` (closed — CI gate precondition), `docs/architecture.md` (MCP Server static-key baseline + `settings.json` credential schema), `backend/auth/tokens.py` (HS256 + `jti` revocation + `hash_token()` patterns reused), `docs/adr/ADR-008-interactive-stream-dedup.md`, `docs/security/threat_model_dbas_import.md` (template mirrored)
 
+> **Amendment 2026-05-21 (Option A — `buiqr.2` / blocker `gswk2`).** The MCP
+> container mounts `ecm-config:/config` **read-only**, making an MCP-managed
+> token store and any RS read of `mcp_oauth.db` infeasible. The token store is
+> therefore **ECM-managed** (`backend/auth/oauth_store.py`); the **RS verifies
+> Bearer JWTs purely offline and never opens the store.** Consequences for this
+> model: the AS↔store↔RS shared-state boundary collapses to **ECM-only**
+> (the RS no longer touches `mcp_oauth.db`); the revocation-gap row **TS2** and
+> hardening item **#15** change from "RS reads the revocation table" to
+> "refresh-token revocation enforced at the AS `/token` + access-token window
+> bounded solely by the short TTL (≤ 15 min)." Rows below are updated in place;
+> see ADR-009's Revision History for the full rationale and rejected alternative.
+
 ---
 
 ## 1. Scope & System Overview
@@ -15,7 +27,7 @@ Epic `buiqr` adds OAuth 2.1 + PKCE so Claude Desktop's **Custom Connector** UI c
 - **ECM container = Authorization Server (AS):** hosts `GET /authorize` + consent UI, `POST /token` (PKCE S256), and `GET /.well-known/oauth-authorization-server`. It owns the admin user session.
 - **MCP container = Resource Server (RS):** hosts `GET /.well-known/oauth-protected-resource`, validates Bearer JWTs **offline** (HS256, shared secret from `/config/settings.json`, **no per-request callback to ECM**), and serves the `/mcp` tools surface.
 
-A **second** authentication path now coexists with the **permanent** static `?api_key=` path. The RS routes by credential **shape** (JWT-shaped → OAuth-only; static-key-shaped → static-key-only) and **never** fail-cascades from a failed OAuth validation to the static-key check (ADR-009 §2). Tokens are stored hashed-at-rest (SHA-256) in a MCP-managed SQLite DB at `/config/mcp_oauth.db` (WAL).
+A **second** authentication path now coexists with the **permanent** static `?api_key=` path. The RS routes by credential **shape** (JWT-shaped → OAuth-only; static-key-shaped → static-key-only) and **never** fail-cascades from a failed OAuth validation to the static-key check (ADR-009 §2). Tokens are stored hashed-at-rest (SHA-256) in an **ECM-managed** SQLite DB at `/config/mcp_oauth.db` (WAL), written and read **only by ECM** (the RS does not access it — Option A).
 
 This threat model covers the **OAuth subsystem ECM + MCP will build.** The current static-key MCP auth (`APIKeyAuthMiddleware`, `mcp_api_key`, per `docs/architecture.md`) is the **inherited baseline**; its protections are table stakes and the dual-path interaction is modeled here (§3.6) because two paths sharing one RS is precisely where auth-bypass bugs live.
 
@@ -44,11 +56,11 @@ Attack surfaces modeled:
    |<--(redirect to allowlisted redirect_uri + code)--
    |
    |--(/token: code + PKCE verifier)--> [ECM AS] --HS256 sign--> JWT (sub=admin, jti, aud=RS)
-   |                                            --writes hash--> [/config/mcp_oauth.db]
+   |                                            --writes + reads hash--> [/config/mcp_oauth.db] (ECM rw, sole owner)
+   |                                            --refresh rotation + family-reuse check on refresh
    |
    |--(/mcp + Authorization: Bearer <JWT>)--> [MCP RS dual-path-by-shape router]
-   |                                            --offline HS256 verify (shared secret)
-   |                                            --reads revocation--> [/config/mcp_oauth.db]
+   |                                            --offline HS256 verify (shared secret; NO store read)
    |                                            --> ~110 MCP tools --> [ECM backend :6100]
    |                                                                 --> [Dispatcharr (separate boundary)]
 [Claude Code / scripts] --(/mcp + ?api_key= OR Bearer static-key)--> [static-key path only]
@@ -57,8 +69,8 @@ Attack surfaces modeled:
 Trust boundaries crossed:
 
 - **Client → operator-supplied TLS proxy → ECM AS / MCP RS** (the network boundary; **TLS is operator-supplied**, not ECM-managed — ADR-009 §4/§8).
-- **AS ⇄ shared `/config/settings.json`** (HS256 secret, `oauth_allow_insecure`, `mcp_api_key`).
-- **AS ⇄ `/config/mcp_oauth.db` ⇄ RS** (hashed tokens; the **only** shared OAuth state — no runtime HTTP coupling between AS and RS, ADR-009 §1/§5).
+- **AS ⇄ shared `/config/settings.json`** (HS256 secret, `oauth_allow_insecure`, `mcp_api_key`). ECM mounts `/config` **rw**; the MCP RS mounts it **read-only** and reads only the secret + flag it needs for offline verify.
+- **AS ⇄ `/config/mcp_oauth.db` (ECM-only).** Hashed tokens/codes/refresh/revocation records. **Option A:** the store is owned and accessed **exclusively by ECM** — the RS does **not** read or write it (it verifies offline). There is no shared OAuth *state* across the two containers and no runtime HTTP coupling between AS and RS (ADR-009 §1/§5).
 - **MCP RS → ECM backend → Dispatcharr** (the existing service boundary; Dispatcharr is admin-configured & trusted per the existing model; the OAuth token must **not** widen authority beyond the admin's existing reach — §3.6 / threat O1).
 
 ---
@@ -86,7 +98,7 @@ Each row's mitigation cites the ADR-009 §section it derives from. Severity is r
 | T1 | Token in transit | MITM modifies the Bearer token / authorization code in flight | Plain-HTTP deploy; attacker on the LAN rewrites the token | TLS (operator-supplied) is the in-transit integrity control; on plain HTTP, OAuth is **off by default** (discovery 404, §4) — the operator must explicitly opt in (HT1) | baseline + to-build | High |
 | T2 | Token contents | Attacker mutates JWT claims (e.g., extends `exp`, changes `scope`) | Edit the payload segment of a captured token | HS256 signature covers header+payload; any claim mutation invalidates the signature → 401 (§1) | to-build (`buiqr.8`) | High |
 | T3 | PKCE | **PKCE downgrade** — attacker forces `plain` to defeat code-interception protection | Client/attacker sends `code_challenge_method=plain` | **S256 only**; `plain` (or missing challenge) rejected with **400 `invalid_request`** at `/authorize` and `/token` (§3, AC#5) | to-build (`buiqr.3`) | **High** |
-| T4 | Token store | Attacker tampers with `mcp_oauth.db` to un-revoke or forge a token record | Write access to `/config/mcp_oauth.db` | Store holds **hashes**, not tokens — cannot reconstruct a usable token from a record (§5); file lives on the protected `/config` volume (filesystem perms = compensating control, §6/TS1) | to-build (`buiqr.2`) | Med |
+| T4 | Token store | Attacker tampers with `mcp_oauth.db` to un-revoke or forge a token record | Write access to `/config/mcp_oauth.db` | Store holds **hashes**, not tokens — cannot reconstruct a usable token from a record (§5); file lives on the protected `/config` volume (filesystem perms = compensating control, §6/TS1); **Option A narrows the writers**: only ECM mounts `/config` rw — the MCP container mounts it `:ro` and cannot write the DB at all, so an MCP-side compromise cannot tamper with the store | to-build (`buiqr.2`) | Med |
 | T5 | Settings flag | Attacker flips `oauth_allow_insecure=true` to enable HTTP OAuth | Write access to `settings.json` | Flag default false; flipping it requires write access to `settings.json` (same trust level as the HS256 secret itself — if an attacker has that, the secret is already lost). Change is operator-visible in `settings.json` (§4) | to-build (`buiqr.5`) | Med |
 | T6 | Consent params | Tampered `redirect_uri` / `return_to` to redirect the code/flow | Attacker alters the redirect target in the authorize request | **Exact-match allowlist** of `redirect_uri` against the hardcoded client registry; consent `return_to` enforced same-origin/allowlist (§3 — see RD1, OR1) | to-build (`buiqr.6`/`buiqr.7`) | High |
 
@@ -149,7 +161,7 @@ Each row's mitigation cites the ADR-009 §section it derives from. Severity is r
 | # | Surface | STRIDE | Threat | Attack scenario | Mitigation (ADR-009 ref) | Status | Sev |
 |---|---------|--------|--------|-----------------|--------------------------|--------|-----|
 | TS1 | `mcp_oauth.db` | Info-Disclosure / Tampering | At-rest compromise or tamper of the token store | See ID2 (disclosure) + T4 (tamper) | Hashes-not-tokens (§5); `/config` volume perms; WAL durability; (cross-ref ID2/T4) | to-build (`buiqr.2`) | Med |
-| TS2 | Revocation read | EoP | **Revocation gap** — a revoked token keeps working because the RS verifies offline and hasn't seen the revocation | Admin revokes a token; offline RS honors it until TTL or until it reads the revocation record | RS consults the shared store's revocation state on validation (§5); **short TTL** is the backstop (§3); the gap is the documented offline-verification trade-off (ADR-009 §1) | to-build (`buiqr.8`) | Med |
+| TS2 | Revocation enforcement | EoP | **Revocation gap** — a revoked *access* token keeps working because the RS verifies offline and (Option A) never reads the store | Admin revokes a grant; the offline RS honors a still-live access token until its TTL expires | **Option A enforcement:** the RS does **not** read the store; revocation is enforced at the **AS `/token`** — a revoked refresh token / killed family cannot mint a new access token, so renewal stops at once and the live access token dies within the **short TTL (≤ 15 min, §3)**, which is the sole access-token backstop. The gap is the documented offline-verification trade-off (ADR-009 §1/§5). | to-build (`buiqr.3` AS-side; access-token TTL `buiqr.3`) | Med |
 
 **Cell coverage note.** The six canonical STRIDE dimensions are all covered (§3.1–§3.6), plus three deployment/secret/store dimension tables (§3.7–§3.9) where a single surface warranted dedicated rows. Every grooming-named concern from AC#4 appears as an explicit row — see the AC#4 coverage map in §7.
 
@@ -173,15 +185,15 @@ The OAuth implementation must satisfy **all** of the following, each mapped to S
 12. **Secret + token-store redaction in exports** — the HS256 secret and `mcp_oauth.db` are credential-class; covered by `_SETTINGS_CREDENTIAL_FIELDS` / export redaction. *(ID5, SR1)*
 13. **Audience + scope enforcement** — `aud` bound to the MCP RS and checked; `scope=mcp` carried and enforced. *(EP1)*
 14. **Single-use, short-TTL authorization codes + short-TTL access tokens** — bounds code-replay and the offline revocation gap. *(D1, TS2, HT1)*
-15. **Revocation read on validation** — RS consults the shared store's revocation state; mirrors `revoke_token(jti)`. *(TS2, R3)*
+15. **Revocation enforced at the AS, not the RS (Option A)** — the RS verifies offline and does **not** read the store; refresh-token / family revocation is enforced at `/token` (a revoked refresh cannot mint a new access token), and the access-token window is bounded solely by the short TTL. Mirrors `revoke_token(jti)` on the AS side. *(TS2, R3)*
 16. **Audit on consent / issuance / revocation** — AS journals consent (admin `sub`, client, scope, request id), token issuance (`jti`+hash), and revocation; RS records auth-mode per request. *(R1, R2, R3, R4)*
 17. **Error-response hygiene** — OAuth-standard short error codes; full detail server-side only. *(ID4)*
 
 ---
 
-## 5. Test Cases (for `mcp-server/tests/` and `backend/tests/security/`)
+## 5. Test Cases (split by container: `mcp-server/tests/` for RS, `backend/tests/` for AS + store)
 
-> The `mcp-server/tests/` suite is now CI-gated (precondition `enhancedchannelmanager-ak7xa`, closed), so these tests will not rot silently. Detailed test infrastructure lands in `buiqr.9`.
+> The `mcp-server/tests/` suite is now CI-gated (precondition `enhancedchannelmanager-ak7xa`, closed), so the RS tests will not rot silently. **Under Option A** the token-store tests live in `backend/tests/unit/test_oauth_store.py` (the store is ECM-managed) — already merged with `buiqr.2` — and the AS endpoint tests land in the backend suite with `buiqr.3`. RS-side tests (dual-path routing, offline verify, discovery) stay in `mcp-server/tests/`. Detailed test infrastructure lands in `buiqr.9`.
 
 - `test_dual_path_routing.py` *(CD1 — the headline)*
   - `test_invalid_jwt_not_evaluated_as_static_key` — JWT-shaped Bearer with bad signature → 401, and the value is **never** compared to `mcp_api_key`.
@@ -203,9 +215,9 @@ The OAuth implementation must satisfy **all** of the following, each mapped to S
   - `test_discovery_no_secret_or_internal_host` — grep response for the HS256 secret, `ecm:6100`, paths, `mcp_api_key` → absent.
   - `test_discovery_404_on_plain_http_when_insecure_false`.
   - `test_discovery_200_on_plain_http_when_insecure_true`.
-- `test_token_store.py` *(ID2, TS2)*
-  - `test_tokens_hashed_at_rest` — DB row contains a SHA-256 hash, not the token.
-  - `test_revoked_token_rejected` — revoke then validate → 401.
+- `backend/tests/unit/test_oauth_store.py` *(ID2, TS2 — ECM-side, merged with `buiqr.2`)*
+  - `test_*_hashed_at_rest` — DB rows contain SHA-256 hashes, not the raw token/code.
+  - refresh-rotation + reuse-detection: a replayed refresh token raises and kills the family (the AS-side revocation enforcement point — `buiqr.3` wires this into `/token` so a revoked refresh cannot mint a new access token). The RS performs **no** store read, so there is no RS-side "revoke then validate → 401" test; access-token revocation is bounded by the short TTL.
 - `test_rate_limit.py` *(D1, D2)*
   - `test_token_endpoint_rate_limited` / `test_authorize_endpoint_rate_limited`.
 - `test_dispatcharr_isolation.py` *(O1)*
@@ -218,12 +230,12 @@ The OAuth implementation must satisfy **all** of the following, each mapped to S
 This preamble states what the model assumes; deviations change the risk picture and need PO confirmation.
 
 - **TB1 — TLS is operator-supplied, not ECM-managed.** ECM does not terminate TLS for the OAuth surface; the operator fronts MCP with a reverse proxy (Caddy/nginx/Traefik) or ECM's `:6143`. In-transit confidentiality/integrity (T1, ID3, HT1) **depends on the operator doing this.** PO-locked (ADR-009 §4/§8). The `oauth_allow_insecure` flag is the explicit acknowledgment that an operator may run without it.
-- **TB2 — Both containers co-locate and share `/config`.** The AS/RS split assumes the two containers share the `/config` volume (HS256 secret, `oauth_allow_insecure`, `mcp_oauth.db`). HS256 (symmetric) is justified by this co-location (ADR-009 §1). A future multi-host split is the documented RS256/JWKS exit path, **out of scope** here.
+- **TB2 — Both containers co-locate on `/config`, with asymmetric access.** The AS/RS split assumes both containers see the `/config` volume, but **ECM mounts it read-write and the MCP RS mounts it read-only** (Option A). The RS reads only the HS256 secret + `oauth_allow_insecure` flag from `settings.json` for offline verify; `mcp_oauth.db` is **ECM-only** (the RS never opens it). HS256 (symmetric) is justified by this co-location (ADR-009 §1). A future multi-host split is the documented RS256/JWKS exit path, **out of scope** here.
 - **TB3 — `/config/settings.json` write access ≈ full trust.** Anyone who can write `settings.json` already controls the HS256 secret, so threats whose precondition is `settings.json` write access (T5, SR1) are bounded by the same trust level as secret compromise. The mitigation is filesystem perms on `/config`, which is an operational/deployment control, not OAuth code.
 - **TB4 — Dispatcharr is the existing admin-configured, trusted boundary.** The OAuth token does not change the MCP→Dispatcharr relationship; Dispatcharr is reached with `dispatcharr_api_key` as today (O1). Cross-instance / untrusted-Dispatcharr scenarios are out of scope (consistent with the existing model).
 - **TB5 — Single ECM admin identity.** v1 binds tokens to the single admin (`sub`). **Multi-tenant per-user grants are out of scope** (ADR-009 §8). If multi-admin/multi-user ECM auth lands later, this model must be revisited for per-user token scoping. **PO to confirm** single-admin is the v1 posture (it is, per epic — flagged for traceability).
-- **A1 — Offline-verification revocation gap is acceptable.** Tokens are verified offline; revocation propagates via the shared store + TTL, not instantly (TS2, ADR-009 §1). **PO to confirm** that a bounded revocation gap (≤ token TTL) is acceptable for v1 in exchange for the latency (AC#11) and failure-isolation properties. *(This is the central security/perf trade — the PO already accepted offline verification at grooming; restated here for the AC#5 sign-off.)*
-- **A2 — Access-token TTL value.** The model assumes a short TTL (in the spirit of ECM's existing `ACCESS_TOKEN_EXPIRE_MINUTES = 30`). The exact value is `buiqr.3`'s call within that envelope; a longer TTL widens HT1 (replay) and TS2 (revocation gap). **PO to ratify** the TTL ceiling.
+- **A1 — Offline-verification revocation gap is acceptable.** Tokens are verified offline; under Option A the RS does not read the store, so access-token revocation is bounded **solely by the short TTL**, while refresh-token revocation is enforced at the AS `/token` (renewal stops immediately) (TS2, ADR-009 §1/§5). **PO to confirm** that a bounded access-token revocation gap (≤ TTL, ≤ 15 min recommended) is acceptable for v1 in exchange for the latency (AC#11) and failure-isolation properties. *(This is the central security/perf trade — the PO accepted offline verification at grooming and Option A on 2026-05-21; restated here for the AC#5 sign-off.)*
+- **A2 — Access-token TTL value.** The model assumes a short TTL. **Under Option A the access-token TTL is the *sole* backstop for access-token revocation** (the RS does not read the store), so it should sit at the short end — **≤ 15 min recommended**, tighter than ECM's 30-min `ACCESS_TOKEN_EXPIRE_MINUTES`. The exact value is `buiqr.3`'s call; a longer TTL widens HT1 (replay) and TS2 (revocation gap). **PO to ratify** the TTL ceiling.
 - **A3 — Rate-limit thresholds.** Per-IP + per-user limits on `/authorize` and `/token` are mandated (D1, D2); the concrete numbers are `buiqr.4`'s call. **PO to ratify** thresholds sized to single-admin usage.
 - **A4 — Token-store reaper deferred.** Expired/revoked rows in `mcp_oauth.db` are not auto-pruned in v1 (D4); single-admin volume keeps this small. An additive reaper is a backlog candidate if the table grows. **PO to confirm** deferral is acceptable.
 
@@ -259,7 +271,7 @@ All eight grooming-named concerns from AC#4 are present, plus seven Security-Eng
 
 These remain after the §4 mitigations; each is bounded and noted for the PO's AC#5 sign-off.
 
-- **Residual: offline-verification revocation gap — Medium, accepted (A1/TS2).** A revoked token is honored until the RS reads the revocation or the TTL expires. Mitigated by short TTL + shared-store revocation read. Not closeable without a per-request callback, which the architecture deliberately rejects (latency AC#11 + failure isolation). The narrower the TTL, the smaller the gap.
+- **Residual: offline-verification revocation gap — Medium, accepted (A1/TS2).** A revoked *access* token is honored until its TTL expires; under Option A the RS does not read the store, so the access-token gap is **purely TTL-bounded** (refresh-token revocation, by contrast, is enforced immediately at the AS `/token`). Not closeable without a per-request callback or an RS store read, both of which the architecture deliberately rejects (latency AC#11 + failure isolation + the MCP `/config:ro` mount). The narrower the TTL (≤ 15 min), the smaller the gap.
 - **Residual: token-replay on opt-in HTTP — Medium, operator-accepted (HT1).** When `oauth_allow_insecure=true`, tokens traverse cleartext and can be replayed within their TTL. Bounded by the explicit opt-in (default fails closed) and short TTL. The operator chose this; the safe default is HTTPS.
 - **Residual: shared-secret compromise → token forgery — High impact / Low likelihood, accepted with compensating controls (SR1).** Whoever can read the HS256 secret can forge admin tokens. Likelihood is gated by `/config` filesystem perms and export redaction; impact is recoverable by rotation (which invalidates all live tokens). No KMS/HSM for v1 (consistent with the existing `settings.json`-stored credentials posture).
 - **Residual: authenticated-admin abuse — Low, inherent.** The single ECM admin can authorize Claude Desktop and then drive any MCP tool — that is the feature. The OAuth layer authenticates *that the admin* granted access; it does not constrain what the admin (or an agent acting on their behalf) may do beyond the single `mcp` scope. Bounded by single-admin identity (TB5) and the consent audit trail (R1). Per-tool scopes (a future epic) would narrow this.
