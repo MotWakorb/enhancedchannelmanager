@@ -1925,6 +1925,17 @@ class AutoCreationRule(Base):
     # default does NOT migrate them; no Alembic revision is needed.
     match_scope_target_group = Column(Boolean, default=True, nullable=False)
 
+    # Explicit rule-level scope group for merge lookups (GH #298, bd-kncun).
+    # When match_scope_target_group is on, this column lets the operator pin
+    # the group that name lookups are restricted to — independent of any
+    # Create Channel action's Target Group. NULL (the default) preserves the
+    # prior behavior: create_channel derives the scope from the action's
+    # effective group_id, and merge_streams stays group-agnostic. A non-NULL
+    # value is enforced across BOTH create_channel and merge_streams name
+    # lookups so a Merge-Streams-only rule can finally scope its match to one
+    # group instead of matching same-name channels in any group.
+    match_scope_group_id = Column(Integer, nullable=True)
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -2028,6 +2039,7 @@ class AutoCreationRule(Base):
             "skip_struck_streams": self.skip_struck_streams or False,
             "orphan_action": self.orphan_action or "delete",
             "match_scope_target_group": self.match_scope_target_group or False,
+            "match_scope_group_id": self.match_scope_group_id,
             "last_run_at": self.last_run_at.isoformat() + "Z" if self.last_run_at else None,
             "last_run_stats": self.get_last_run_stats(),
             "match_count": self.match_count or 0,
