@@ -1292,6 +1292,16 @@ export async function revokeOAuthGrant(grantId: string): Promise<void> {
 }
 
 /**
+ * Bulk-revoke ALL active OAuth grants for the admin (buiqr.12 panic button).
+ *
+ * Kills every live refresh-token family + access-token jtis in one call.
+ * Returns the count of grants revoked (0 if none were active — idempotent).
+ */
+export async function revokeAllOAuthGrants(): Promise<{ revoked: number }> {
+  return fetchJson(`${API_BASE}/oauth/grants`, { method: 'DELETE' });
+}
+
+/**
  * Fetch the trusted consent-screen context for a client_id.
  *
  * The consent page MUST call this rather than rendering the client name from

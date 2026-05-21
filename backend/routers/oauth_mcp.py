@@ -326,6 +326,32 @@ async def list_grants(
         store.close()
 
 
+@router.delete("/grants")
+async def revoke_all_grants(
+    request: Request,
+    admin: Optional[User] = RequireAdminIfEnabled,
+):
+    """Bulk-revoke ALL active grants for the requesting admin (bead buiqr.12).
+
+    Panic-button endpoint: kills every live refresh-token family AND revokes
+    every live access-token jti for this admin subject. Reuses the same per-grant
+    revocation primitives as DELETE /grants/{id} — the security posture is
+    identical to revoking each grant individually. Admin-gated (RequireAdminIfEnabled).
+    Returns 200 with a ``{"revoked": N}`` body (N may be 0 — idempotent).
+
+    This must be registered BEFORE DELETE /grants/{grant_id} so FastAPI's router
+    picks the no-path-param route for bare ``/grants`` DELETE requests; otherwise
+    the path-param route would try to match an empty grant_id.
+    """
+    store = get_oauth_store()
+    try:
+        provider = OAuthProvider(store)
+        count = provider.revoke_all_grants(user_sub=_admin_sub(admin))
+        return JSONResponse(status_code=200, content={"revoked": count})
+    finally:
+        store.close()
+
+
 @router.delete("/grants/{grant_id}")
 async def revoke_grant(
     request: Request,

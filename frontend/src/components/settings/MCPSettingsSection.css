@@ -316,3 +316,30 @@
   font-size: 0.8rem;
   color: var(--text-secondary);
 }
+
+/* Bulk-revoke panic button + double-confirm (buiqr.12) */
+.mcp-bulk-revoke {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+  display: flex;
+  justify-content: flex-end;
+}
+
+.mcp-bulk-revoke-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: flex-end;
+}
+
+.mcp-bulk-revoke-input {
+  font-size: 0.85rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.2));
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  width: 9rem;
+}
