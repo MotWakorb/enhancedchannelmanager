@@ -6,7 +6,7 @@ import type { AutoCreationRule, CreateRuleData, Condition, Action, ConditionType
 import { ConditionEditor } from './ConditionEditor';
 import { ActionEditor } from './ActionEditor';
 import { CustomSelect } from '../CustomSelect';
-import { getNormalizationRules } from '../../services/api';
+import { getNormalizationRules, getChannelGroups } from '../../services/api';
 import './RuleBuilder.css';
 
 export interface RuleBuilderProps {
@@ -51,10 +51,12 @@ export function RuleBuilder({
   const [skipStruckStreams, setSkipStruckStreams] = useState(rule?.skip_struck_streams ?? false);
   const [orphanAction, setOrphanAction] = useState(rule?.orphan_action || 'delete');
   const [matchScopeTargetGroup, setMatchScopeTargetGroup] = useState(rule?.match_scope_target_group ?? true);
+  const [matchScopeGroupId, setMatchScopeGroupId] = useState<number | null>(rule?.match_scope_group_id ?? null);
   const [conditions, setConditions] = useState<Condition[]>(rule?.conditions || []);
   const [actions, setActions] = useState<Action[]>(rule?.actions || []);
 
   const [availableNormGroups, setAvailableNormGroups] = useState<{id: number; name: string; enabled: boolean}[]>([]);
+  const [availableChannelGroups, setAvailableChannelGroups] = useState<{id: number; name: string}[]>([]);
   const [errors, setErrors] = useState<ValidationErrors>({});
   const [saving, setSaving] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
@@ -64,6 +66,13 @@ export function RuleBuilder({
   useEffect(() => {
     getNormalizationRules().then(({ groups }) => {
       setAvailableNormGroups(groups.map(g => ({ id: g.id, name: g.name, enabled: g.enabled })));
+    }).catch(() => {});
+  }, []);
+
+  // Load available channel groups for the merge-scope group selector (GH #298)
+  useEffect(() => {
+    getChannelGroups().then(groups => {
+      setAvailableChannelGroups(groups.map(g => ({ id: g.id, name: g.name })));
     }).catch(() => {});
   }, []);
 
@@ -182,6 +191,7 @@ export function RuleBuilder({
         skip_struck_streams: skipStruckStreams,
         orphan_action: orphanAction,
         match_scope_target_group: matchScopeTargetGroup,
+        match_scope_group_id: matchScopeTargetGroup ? matchScopeGroupId : null,
       });
     } finally {
       setSaving(false);
@@ -239,6 +249,15 @@ export function RuleBuilder({
       handleSave();
     }
   };
+
+  // GH #298: an effective scope group resolves for create_channel when a
+  // Create Channel action carries a target group, OR a Create Group action
+  // exists (which sets the group used by a later Create Channel). When neither
+  // holds (e.g. a Merge-Streams-only rule) and no explicit Scope group is set,
+  // the merge lookup falls back to ALL groups — warn the operator about that.
+  const ruleResolvesAScopeGroup =
+    actions.some(a => a.type === 'create_channel' && a.group_id != null) ||
+    actions.some(a => a.type === 'create_group');
 
   return (
     <div className="rule-builder" data-testid="rule-builder" onKeyDown={handleKeyDown}>
@@ -336,9 +355,10 @@ export function RuleBuilder({
           <div className="form-field">
             <label>Merge lookup scope</label>
             <span className="field-hint">
-              On (default): when a Create Channel action merges into an existing channel, only look within this rule&apos;s
-              target group — so the rule creates a new channel in the target group instead of merging into a same-name
-              channel in another group. Off: search all channel groups for a matching name (the original behavior).
+              On (default): when this rule merges into an existing channel, only look within a single target group —
+              so the rule creates a new channel in that group instead of merging into a same-name channel in another
+              group. Pick the group below, or leave it on Auto to use the Create Channel action&apos;s target group.
+              Off: search all channel groups for a matching name (the original behavior).
             </span>
             <div className="checkbox-group">
               <label className="checkbox-item">
@@ -347,11 +367,37 @@ export function RuleBuilder({
                   checked={matchScopeTargetGroup}
                   onChange={e => setMatchScopeTargetGroup(e.target.checked)}
                   disabled={isLoading}
-                  aria-label="Scope merge lookups to this rule's target group"
+                  aria-label="Scope merge lookups to a target group"
                 />
-                <span>Scope merge lookups to this rule&apos;s target group</span>
+                <span>Scope merge lookups to a target group</span>
               </label>
             </div>
+            {matchScopeTargetGroup && (
+              <div className="form-field" style={{ marginTop: '8px' }}>
+                <label>Scope group</label>
+                <CustomSelect
+                  value={matchScopeGroupId != null ? matchScopeGroupId.toString() : ''}
+                  onChange={val => setMatchScopeGroupId(val ? parseInt(val, 10) : null)}
+                  options={[
+                    { value: '', label: 'Auto — use the Create Channel action\'s target group' },
+                    ...availableChannelGroups.map(group => ({
+                      value: group.id.toString(),
+                      label: group.name,
+                    })),
+                  ]}
+                  disabled={isLoading}
+                  searchable
+                  searchPlaceholder="Search groups..."
+                />
+                {matchScopeGroupId == null && !ruleResolvesAScopeGroup && (
+                  <span className="norm-hint">
+                    <span className="material-icons norm-hint-icon">warning</span>
+                    No scope group will resolve — this rule has no Create Channel target group, so merge lookups will
+                    fall back to ALL channel groups. Pick a Scope group above to restrict matching to one group.
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="form-field">

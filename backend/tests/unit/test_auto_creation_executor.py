@@ -1957,6 +1957,194 @@ class TestMatchScopeTargetGroup:
         self.client.create_channel.assert_not_called()
 
 
+class TestMatchScopeGroupId:
+    """GH #298 / bd-kncun: explicit rule-level ``match_scope_group_id``.
+
+    Migration 0002 scoped create_channel name lookups to the *action's*
+    target group, but a Merge-Streams-only rule had no group to scope to and
+    silently fell back to ALL groups (the reporter's symptom). The explicit
+    ``rule_scope_group_id`` threads a group through BOTH create_channel and
+    merge_streams name lookups, independent of any action's target group.
+    NULL preserves prior behavior exactly.
+    """
+
+    def setup_method(self):
+        """Two groups; an existing 'ESPN' channel in group 1 (SPORTS)."""
+        self.client = MagicMock()
+        self._next_id = 600
+
+        async def _create_channel(data):
+            self._next_id += 1
+            return {
+                "id": self._next_id,
+                "name": data["name"],
+                "channel_number": data.get("channel_number"),
+                "channel_group_id": data.get("channel_group_id"),
+                "streams": data.get("streams", []),
+            }
+
+        self.client.create_channel = AsyncMock(side_effect=_create_channel)
+        self.client.update_channel = AsyncMock()
+
+        # Existing ESPN lives in group 1 (SPORTS). Group 2 (ESPN-GROUP) is empty.
+        self.channels = [
+            {"id": 1, "name": "ESPN", "tvg_id": "ESPN.US", "channel_number": 100,
+             "channel_group_id": 1, "streams": [101]},
+        ]
+        self.groups = [
+            {"id": 1, "name": "SPORTS"},
+            {"id": 2, "name": "ESPN-GROUP"},
+        ]
+        self.executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            existing_groups=self.groups,
+        )
+        self.stream_ctx = StreamContext(
+            stream_id=202,
+            stream_name="ESPN",
+            m3u_account_id=1,
+            m3u_account_name="Provider A",
+            group_name="ESPN-GROUP",
+            tvg_id="ESPN.US",
+        )
+
+    def _run(self, action, exec_ctx=None, **kwargs):
+        exec_ctx = exec_ctx or ExecutionContext()
+        return asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx, **kwargs)
+        )
+
+    # --- create_channel ---------------------------------------------------
+
+    def test_create_channel_explicit_scope_group_overrides_action_group(self):
+        """Explicit rule scope group wins over the action's derived group_id.
+
+        Existing ESPN is in group 1; the action targets group 1, but the rule
+        pins the scope to group 2. The group-1 ESPN must NOT be found, so a new
+        ESPN is created in the action's group rather than merging.
+        """
+        action = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+            "group_id": 1,
+            "if_exists": "merge",
+        }
+        result = self._run(
+            action,
+            match_scope_target_group=True,
+            rule_scope_group_id=2,
+        )
+        assert result.success is True
+        # Scope pinned to group 2 → group-1 ESPN invisible → new channel created.
+        self.client.create_channel.assert_called_once()
+        self.client.update_channel.assert_not_called()
+
+    def test_create_channel_falls_back_to_action_group_when_scope_null(self):
+        """NULL rule scope group → scope derives from the action group (prior behavior).
+
+        Action targets group 1 where ESPN already exists → merge into it, no
+        new channel. This is the exact pre-GH-298 create_channel path.
+        """
+        action = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+            "group_id": 1,
+            "if_exists": "merge",
+        }
+        result = self._run(
+            action,
+            match_scope_target_group=True,
+            rule_scope_group_id=None,
+        )
+        assert result.success is True
+        self.client.create_channel.assert_not_called()
+        self.client.update_channel.assert_called()
+
+    # --- merge_streams ----------------------------------------------------
+
+    def test_merge_streams_rejects_candidate_in_wrong_group(self):
+        """Scope on + explicit group → a candidate in another group is rejected.
+
+        This is the reporter's core scenario: a Merge-Streams rule scoped to
+        group 2 must NOT merge into the group-1 ESPN. With no channel in scope,
+        merge_streams skips (it only adds to existing channels).
+        """
+        action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "ESPN",
+        }
+        result = self._run(
+            action,
+            match_scope_target_group=True,
+            rule_scope_group_id=2,
+        )
+        assert result.success is True
+        assert result.skipped is True
+        # No cross-group merge happened.
+        self.client.update_channel.assert_not_called()
+
+    def test_merge_streams_matches_candidate_in_scope_group(self):
+        """Scope on + explicit group matching the candidate → merge proceeds."""
+        action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "ESPN",
+        }
+        result = self._run(
+            action,
+            match_scope_target_group=True,
+            rule_scope_group_id=1,  # ESPN's actual group
+        )
+        assert result.success is True
+        assert result.skipped is not True
+        self.client.update_channel.assert_called()
+
+    def test_merge_streams_unchanged_when_scope_group_null(self):
+        """Scope on but NULL group → group-agnostic match (prior behavior).
+
+        merge_streams has no action group_id, so a NULL rule scope group means
+        the lookup still finds the group-1 ESPN and merges — exactly as before
+        GH-298 (the rule builder warns the operator about this case).
+        """
+        action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "ESPN",
+        }
+        result = self._run(
+            action,
+            match_scope_target_group=True,
+            rule_scope_group_id=None,
+        )
+        assert result.success is True
+        self.client.update_channel.assert_called()
+
+    def test_merge_streams_scope_off_searches_all_groups(self):
+        """Scope OFF → explicit group ignored, lookup spans all groups.
+
+        Even with a rule_scope_group_id set, match_scope_target_group=False
+        disables scoping entirely, so the group-1 ESPN is matched and merged.
+        """
+        action = {
+            "type": "merge_streams",
+            "target": "auto",
+            "find_channel_by": "name_exact",
+            "find_channel_value": "ESPN",
+        }
+        result = self._run(
+            action,
+            match_scope_target_group=False,
+            rule_scope_group_id=2,  # ignored because scope is off
+        )
+        assert result.success is True
+        self.client.update_channel.assert_called()
+
+
 
 class TestCreateChannelSuperscriptStripping:
     """

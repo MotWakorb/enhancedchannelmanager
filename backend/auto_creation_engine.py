@@ -1291,7 +1291,8 @@ class AutoCreationEngine:
                 action_result = await executor.execute(
                     action, stream, exec_ctx, winning_rule.target_group_id,
                     normalization_group_ids=winning_rule.get_normalization_group_ids(),
-                    match_scope_target_group=bool(getattr(winning_rule, 'match_scope_target_group', False))
+                    match_scope_target_group=bool(getattr(winning_rule, 'match_scope_target_group', False)),
+                    rule_scope_group_id=getattr(winning_rule, 'match_scope_group_id', None)
                 )
 
                 action_entry = {

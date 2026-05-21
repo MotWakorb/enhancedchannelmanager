@@ -738,7 +738,8 @@ class TestPass3RenumberGating:
         async def _fake_execute(action, stream_ctx, exec_ctx,
                                 rule_target_group_id=None,
                                 normalization_group_ids=None,
-                                match_scope_target_group=False):
+                                match_scope_target_group=False,
+                                rule_scope_group_id=None):
             exec_ctx.current_channel_id = channel_id
             if created:
                 exec_ctx.created_channel_ids.add(channel_id)
@@ -842,7 +843,8 @@ class TestPass3RenumberGating:
         async def _fake_execute(action, stream_ctx, exec_ctx,
                                 rule_target_group_id=None,
                                 normalization_group_ids=None,
-                                match_scope_target_group=False):
+                                match_scope_target_group=False,
+                                rule_scope_group_id=None):
             exec_ctx.current_channel_id = 501
             return self.ActionResult(
                 success=True,

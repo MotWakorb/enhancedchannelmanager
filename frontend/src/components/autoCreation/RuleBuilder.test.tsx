@@ -9,6 +9,8 @@ import userEvent from '@testing-library/user-event';
 import {
   server,
   resetMockDataStore,
+  mockDataStore,
+  createMockChannelGroup,
 } from '../../test/mocks/server';
 import { RuleBuilder } from './RuleBuilder';
 import type { AutoCreationRule } from '../../types/autoCreation';
@@ -526,6 +528,131 @@ describe('RuleBuilder', () => {
       await waitFor(() => {
         expect(onSave).toHaveBeenCalled();
       });
+    });
+  });
+
+  describe('merge scope group (GH #298)', () => {
+    it('shows the Scope group selector when merge scope is on', async () => {
+      mockDataStore.channelGroups.push(
+        createMockChannelGroup({ id: 11, name: 'Sports' }),
+      );
+      // Default rule has match_scope_target_group ON, so the selector shows.
+      render(<RuleBuilder onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Scope group')).toBeInTheDocument();
+      });
+    });
+
+    it('hides the Scope group selector when merge scope is off', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelGroups.push(
+        createMockChannelGroup({ id: 11, name: 'Sports' }),
+      );
+      render(<RuleBuilder onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      // Toggle the merge-scope checkbox OFF.
+      await user.click(
+        screen.getByRole('checkbox', { name: /scope merge lookups to a target group/i }),
+      );
+
+      await waitFor(() => {
+        expect(screen.queryByText('Scope group')).not.toBeInTheDocument();
+      });
+    });
+
+    it('includes match_scope_group_id in the save payload', async () => {
+      const user = userEvent.setup();
+      const onSave = vi.fn();
+      mockDataStore.channelGroups.push(
+        createMockChannelGroup({ id: 42, name: 'Sports' }),
+      );
+
+      const rule: Partial<AutoCreationRule> = {
+        name: 'Scoped',
+        conditions: [{ type: 'always' }],
+        actions: [{ type: 'merge_streams' }],
+        match_scope_target_group: true,
+        match_scope_group_id: 42,
+      };
+      render(<RuleBuilder rule={rule as AutoCreationRule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.click(screen.getByRole('button', { name: /save/i }));
+
+      await waitFor(() => {
+        expect(onSave).toHaveBeenCalledWith(
+          expect.objectContaining({ match_scope_group_id: 42 }),
+        );
+      });
+    });
+
+    it('sends null match_scope_group_id when scope is off', async () => {
+      const user = userEvent.setup();
+      const onSave = vi.fn();
+      mockDataStore.channelGroups.push(
+        createMockChannelGroup({ id: 42, name: 'Sports' }),
+      );
+
+      const rule: Partial<AutoCreationRule> = {
+        name: 'Scoped',
+        conditions: [{ type: 'always' }],
+        actions: [{ type: 'merge_streams' }],
+        match_scope_target_group: true,
+        match_scope_group_id: 42,
+      };
+      render(<RuleBuilder rule={rule as AutoCreationRule} onSave={onSave} onCancel={vi.fn()} />);
+
+      // Turn scope OFF — the saved scope group must be cleared to null.
+      await user.click(
+        screen.getByRole('checkbox', { name: /scope merge lookups to a target group/i }),
+      );
+      await user.click(screen.getByRole('button', { name: /save/i }));
+
+      await waitFor(() => {
+        expect(onSave).toHaveBeenCalledWith(
+          expect.objectContaining({ match_scope_group_id: null }),
+        );
+      });
+    });
+
+    it('warns about the all-groups fallback for a merge-only rule with no scope group', async () => {
+      mockDataStore.channelGroups.push(
+        createMockChannelGroup({ id: 11, name: 'Sports' }),
+      );
+      // Merge-Streams-only rule (no create_channel/create_group action),
+      // scope ON, no explicit scope group → the all-groups fallback warning.
+      const rule: Partial<AutoCreationRule> = {
+        name: 'MergeOnly',
+        conditions: [{ type: 'always' }],
+        actions: [{ type: 'merge_streams' }],
+        match_scope_target_group: true,
+        match_scope_group_id: null,
+      };
+      render(<RuleBuilder rule={rule as AutoCreationRule} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/fall back to ALL channel groups/i)).toBeInTheDocument();
+      });
+    });
+
+    it('does not warn when a create_channel action provides a target group', async () => {
+      mockDataStore.channelGroups.push(
+        createMockChannelGroup({ id: 11, name: 'Sports' }),
+      );
+      const rule: Partial<AutoCreationRule> = {
+        name: 'HasCreateChannel',
+        conditions: [{ type: 'always' }],
+        actions: [{ type: 'create_channel', name_template: '{stream_name}', group_id: 11 }],
+        match_scope_target_group: true,
+        match_scope_group_id: null,
+      };
+      render(<RuleBuilder rule={rule as AutoCreationRule} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      // Selector is visible, but the all-groups warning must NOT appear.
+      await waitFor(() => {
+        expect(screen.getByText('Scope group')).toBeInTheDocument();
+      });
+      expect(screen.queryByText(/fall back to ALL channel groups/i)).not.toBeInTheDocument();
     });
   });
 });
