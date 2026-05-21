@@ -21,7 +21,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
-import { ProvidersPanel } from './ProvidersPanel';
+import { ProvidersPanel, formatBucketTick } from './ProvidersPanel';
 import * as api from '../../services/api';
 import { HttpError } from '../../services/httpClient';
 import type {
@@ -758,5 +758,76 @@ describe('ProvidersPanel — a11y', () => {
       expect(screen.getByRole('combobox', { name: /window/i })).toBeInTheDocument();
       expect(screen.getByRole('combobox', { name: /bucket/i })).toBeInTheDocument();
     });
+  });
+});
+
+/**
+ * Unit tests for formatBucketTick (bd-qk2zy).
+ *
+ * All assertions pass explicit locale="en-US" and timeZone="UTC" so the
+ * expected strings are deterministic regardless of the CI runner's locale
+ * or timezone. This mirrors the injection-point pattern from
+ * UserStatsPanel.tsx's formatLocalDayLabel / isTodayInLocalTz tests.
+ *
+ * The en-US + UTC combination produces exactly the fixed-width numeric
+ * labels the format string targets ("MM/DD HH:mm" / "MM/DD").
+ *
+ * Intl.DateTimeFormat hour12:false produces "24:00" for midnight in some
+ * runtimes instead of "00:00". The midnight test covers this boundary so a
+ * regression in the formatter surfaces here before it reaches the chart.
+ */
+describe('formatBucketTick — compact X-axis tick formatter (bd-qk2zy)', () => {
+  // --- hour granularity ---
+
+  it('formats a mid-day UTC ISO string as MM/DD HH:mm for hour bucket', () => {
+    const result = formatBucketTick('2026-05-14T14:30:00Z', 'hour', 'en-US', 'UTC');
+    expect(result).toBe('05/14 14:30');
+  });
+
+  it('formats a morning UTC ISO string as MM/DD HH:mm for hour bucket', () => {
+    const result = formatBucketTick('2026-05-14T02:00:00Z', 'hour', 'en-US', 'UTC');
+    expect(result).toBe('05/14 02:00');
+  });
+
+  it('formats a midnight UTC ISO string (boundary case) for hour bucket', () => {
+    // Midnight is the most common boundary value (e.g. daily-rollover buckets).
+    // Intl.DateTimeFormat hour12:false renders 00:00 — not "24:00".
+    const result = formatBucketTick('2026-05-14T00:00:00Z', 'hour', 'en-US', 'UTC');
+    expect(result).toBe('05/14 00:00');
+  });
+
+  it('handles trailing Z (UTC suffix) correctly for hour bucket', () => {
+    // The backend always produces trailing-Z ISO strings. Explicit guard so
+    // a future change removing the Z does not silently break the formatter.
+    const withZ = formatBucketTick('2026-05-14T06:00:00Z', 'hour', 'en-US', 'UTC');
+    expect(withZ).toMatch(/^\d{2}\/\d{2} \d{2}:\d{2}$/);
+    expect(withZ).toBe('05/14 06:00');
+  });
+
+  // --- day granularity ---
+
+  it('formats a UTC day-level ISO string as MM/DD for day bucket', () => {
+    const result = formatBucketTick('2026-05-14T00:00:00Z', 'day', 'en-US', 'UTC');
+    expect(result).toBe('05/14');
+  });
+
+  it('formats a non-midnight day ISO string as MM/DD for day bucket', () => {
+    // Backend day buckets typically start at T00:00:00Z, but guard against
+    // a non-midnight value being passed through.
+    const result = formatBucketTick('2026-05-14T12:00:00Z', 'day', 'en-US', 'UTC');
+    expect(result).toBe('05/14');
+  });
+
+  it('formats a month-boundary date correctly for day bucket', () => {
+    const result = formatBucketTick('2026-05-01T00:00:00Z', 'day', 'en-US', 'UTC');
+    expect(result).toBe('05/01');
+  });
+
+  // --- fallback (malformed input) ---
+
+  it('returns the raw string when the input is not a parseable date', () => {
+    const bad = 'not-a-date';
+    expect(formatBucketTick(bad, 'hour')).toBe(bad);
+    expect(formatBucketTick(bad, 'day')).toBe(bad);
   });
 });
