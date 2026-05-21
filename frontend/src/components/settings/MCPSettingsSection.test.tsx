@@ -8,7 +8,7 @@
  * without container shell access.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MCPSettingsSection } from './MCPSettingsSection';
 
 vi.mock('../../services/api', () => ({
@@ -16,6 +16,8 @@ vi.mock('../../services/api', () => ({
   generateMCPApiKey: vi.fn(),
   revokeMCPApiKey: vi.fn(),
   getMCPStatus: vi.fn(),
+  getOAuthGrants: vi.fn(),
+  revokeOAuthGrant: vi.fn(),
 }));
 
 vi.mock('../../contexts/NotificationContext', () => ({
@@ -41,6 +43,7 @@ const settingsUnconfigured = {
 describe('MCPSettingsSection — Server Status diagnostic (bd-ix1g6)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(api.getOAuthGrants).mockResolvedValue({ grants: [] });
   });
 
   it('shows the online badge with tool count when reachable AND key configured', async () => {
@@ -120,6 +123,7 @@ describe('MCPSettingsSection — Server Status diagnostic (bd-ix1g6)', () => {
 describe('MCPSettingsSection — signing key diagnostic (bd-buiqr10)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(api.getOAuthGrants).mockResolvedValue({ grants: [] });
   });
 
   it('shows signing_key_hint when signing_key_status is signing_key_missing', async () => {
@@ -219,5 +223,104 @@ describe('MCPSettingsSection — signing key diagnostic (bd-buiqr10)', () => {
     const setupHintText = screen.getByTestId('mcp-status-hint').textContent ?? '';
     const signingHintText = screen.getByTestId('mcp-signing-key-hint').textContent ?? '';
     expect(setupHintText).not.toBe(signingHintText);
+  });
+});
+
+/**
+ * Active Connections (OAuth grants) — bead buiqr.7 (d).
+ *
+ * The section lists active grants with the registry-pinned client name, grant +
+ * last-used timestamps, and an inline-confirm revoke (NOT a modal). The section
+ * is absent entirely when there are no grants (no empty state). A successful
+ * revoke fires a toast and removes the row.
+ */
+describe('MCPSettingsSection — Active Connections (bd-buiqr.7)', () => {
+  const grant = {
+    id: 'fam-1',
+    client_id: 'claude-desktop',
+    client_name: 'Claude Desktop',
+    granted_at: 1_700_000_000,
+    last_used: 1_700_100_000,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getSettings).mockResolvedValue(settingsConfigured);
+    vi.mocked(api.getMCPStatus).mockResolvedValue({
+      reachable: true,
+      api_key_configured: true,
+      api_key_status: 'ok',
+      tools_available: 83,
+    });
+  });
+
+  it('does NOT render the section when there are no grants', async () => {
+    vi.mocked(api.getOAuthGrants).mockResolvedValue({ grants: [] });
+
+    render(<MCPSettingsSection isAdmin={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/MCP server online/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('oauth-grants-section')).not.toBeInTheDocument();
+  });
+
+  it('lists active grants with client name and timestamps', async () => {
+    vi.mocked(api.getOAuthGrants).mockResolvedValue({ grants: [grant] });
+
+    render(<MCPSettingsSection isAdmin={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('oauth-grants-section')).toBeInTheDocument();
+    });
+    const row = screen.getByTestId('oauth-grant-row');
+    expect(row).toHaveTextContent('Claude Desktop');
+    expect(row).toHaveTextContent(/Granted/i);
+    expect(row).toHaveTextContent(/Last used/i);
+  });
+
+  it('uses inline confirmation (not a modal) before revoking', async () => {
+    vi.mocked(api.getOAuthGrants).mockResolvedValue({ grants: [grant] });
+
+    render(<MCPSettingsSection isAdmin={true} />);
+    await waitFor(() => screen.getByTestId('oauth-grant-revoke'));
+
+    // No confirm UI until the revoke button is clicked.
+    expect(screen.queryByRole('group', { name: /confirm revoke/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('oauth-grant-revoke'));
+    // Inline confirm appears in place — no modal/dialog role.
+    expect(screen.getByRole('group', { name: /confirm revoke/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /yes, revoke/i })).toBeInTheDocument();
+  });
+
+  it('revokes the grant, removes the row, and fires a success toast', async () => {
+    vi.mocked(api.getOAuthGrants).mockResolvedValue({ grants: [grant] });
+    vi.mocked(api.revokeOAuthGrant).mockResolvedValue(undefined);
+
+    render(<MCPSettingsSection isAdmin={true} />);
+    await waitFor(() => screen.getByTestId('oauth-grant-revoke'));
+
+    fireEvent.click(screen.getByTestId('oauth-grant-revoke'));
+    fireEvent.click(screen.getByRole('button', { name: /yes, revoke/i }));
+
+    await waitFor(() => {
+      expect(api.revokeOAuthGrant).toHaveBeenCalledWith('fam-1');
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId('oauth-grant-row')).not.toBeInTheDocument();
+    });
+  });
+
+  it('canceling the inline confirm leaves the grant in place', async () => {
+    vi.mocked(api.getOAuthGrants).mockResolvedValue({ grants: [grant] });
+
+    render(<MCPSettingsSection isAdmin={true} />);
+    await waitFor(() => screen.getByTestId('oauth-grant-revoke'));
+
+    fireEvent.click(screen.getByTestId('oauth-grant-revoke'));
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+
+    expect(api.revokeOAuthGrant).not.toHaveBeenCalled();
+    expect(screen.getByTestId('oauth-grant-row')).toBeInTheDocument();
   });
 });
