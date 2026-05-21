@@ -1,7 +1,29 @@
-"""Tests for MCP server endpoints and auth middleware (Streamable HTTP transport)."""
+"""Tests for MCP server endpoints and auth middleware (Streamable HTTP transport).
+
+DUAL-PATH REGRESSION MATRIX (bead buiqr.9 (b), PO decision #4)
+=============================================================
+The MCP RS authenticates a request on EXACTLY ONE of two paths, chosen by
+credential SHAPE (ADR-009 §2): the static-key path (``?api_key=`` /
+non-JWT-shaped Bearer) and the OAuth-bearer path (JWT-shaped Bearer, offline
+HS256 verify). The focused ``TestMCPAuth`` / ``TestMCPInitialize`` classes below
+pin the static-path-SPECIFIC contract (503-when-unconfigured, query-vs-header).
+
+Alongside them, the PERMANENT matrix classes ``TestMCPAuthMatrix`` /
+``TestMCPInitializeMatrix`` parametrize every auth-mode-AGNOSTIC scenario
+(no credential, valid credential, wrong credential, bare GET) so each runs once
+per ``auth_mode`` — ``static_key`` AND ``oauth_bearer``. This is the forever
+guard that a future OAuth refactor cannot regress one path while leaving the
+other green. The per-mode credential factory lives in ``_AUTH_MODES`` and mints
+real tokens (valid HS256 JWT for OAuth, opaque key for static), so the matrix
+exercises the SHAPE router end-to-end through ``server.app`` (no network).
+"""
+import base64
 import json
+import time
 
 from unittest.mock import patch
+
+import pytest
 
 # Headers a Streamable HTTP client must send on the POST to /mcp.
 _MCP_HEADERS = {
@@ -357,6 +379,286 @@ class TestMCPInitialize:
         with patch("server.get_mcp_api_key", return_value="valid-key"):
             response = client.post("/mcp", headers=headers, json=_INITIALIZE)
         assert response.status_code == 200
+        assert "mcp-session-id" in {k.lower() for k in response.headers}
+        result = _parse_initialize_result(response)
+        assert result["id"] == 1
+        assert result["result"]["serverInfo"]["name"] == "ecm-mcp"
+
+
+# ─────────────────── DUAL-PATH REGRESSION MATRIX (buiqr.9 (b)) ────────────────
+#
+# A per-auth-mode harness so the SAME auth scenarios run on BOTH paths. Each mode
+# knows how to (1) install the auth state the path reads, (2) mint a VALID and a
+# WRONG credential for /mcp, and (3) place that credential on the request (query
+# param vs Authorization header). The scenario tests below are written once and
+# parametrized over both modes.
+
+_OAUTH_SECRET = "matrix-oauth-signing-secret-at-least-32-bytes-long-pad"
+_OAUTH_ISSUER = "https://ecm.example.com"
+_OAUTH_AUDIENCE = "ecm-mcp"
+_STATIC_KEY = "matrix-static-key-no-dots-1234567890abcdef"
+
+
+def _mint_oauth_jwt(claims: dict, *, secret: str = _OAUTH_SECRET) -> str:
+    import jwt as pyjwt
+
+    return pyjwt.encode(claims, secret, algorithm="HS256")
+
+
+def _oauth_claims(**overrides) -> dict:
+    now = int(time.time())
+    claims = {
+        "sub": "admin",
+        "aud": _OAUTH_AUDIENCE,
+        "iss": _OAUTH_ISSUER,
+        "scope": "mcp",
+        "jti": "jti-matrix",
+        "iat": now,
+        "exp": now + 900,
+        "token_type": "access",
+    }
+    claims.update(overrides)
+    return claims
+
+
+class _AuthMode:
+    """One row of the dual-path matrix: how to drive /mcp on a single auth path."""
+
+    name: str
+
+    def patches(self):
+        """The unittest.mock.patch context managers installing this path's state."""
+        raise NotImplementedError
+
+    def valid_request(self, client):
+        """POST /mcp with a VALID credential for this path."""
+        raise NotImplementedError
+
+    def wrong_request(self, client):
+        """POST /mcp with a WRONG (rejectable) credential for this path."""
+        raise NotImplementedError
+
+    def get_request(self, client):
+        """Bare GET /mcp (no credential) — must be auth-checked on this path."""
+        raise NotImplementedError
+
+
+class _StaticKeyMode(_AuthMode):
+    """auth_mode=static_key — ?api_key= / non-JWT-shaped Bearer (PO-locked path)."""
+
+    name = "static_key"
+
+    def patches(self):
+        return [patch("server.get_mcp_api_key", return_value=_STATIC_KEY)]
+
+    def valid_request(self, client):
+        return client.post(
+            f"/mcp?api_key={_STATIC_KEY}", headers=_MCP_HEADERS, json=_INITIALIZE
+        )
+
+    def wrong_request(self, client):
+        return client.post(
+            "/mcp?api_key=wrong-static-key", headers=_MCP_HEADERS, json=_INITIALIZE
+        )
+
+    def get_request(self, client):
+        return client.get("/mcp")
+
+
+class _OAuthBearerMode(_AuthMode):
+    """auth_mode=oauth_bearer — JWT-shaped Bearer, offline HS256 verify."""
+
+    name = "oauth_bearer"
+
+    def patches(self):
+        # The static-key reader is also patched (to a real value) so a
+        # fail-cascade would NOT silently authenticate — a bug would surface as
+        # the WRONG path accepting, not as a missing-config 503.
+        return [
+            patch("server.get_signing_key", return_value=_OAUTH_SECRET),
+            patch("server.get_oauth_issuer_for_rs", return_value=_OAUTH_ISSUER),
+            patch("server.get_mcp_api_key", return_value=_STATIC_KEY),
+        ]
+
+    def valid_request(self, client):
+        token = _mint_oauth_jwt(_oauth_claims())
+        return client.post(
+            "/mcp",
+            headers={**_MCP_HEADERS, "Authorization": f"Bearer {token}"},
+            json=_INITIALIZE,
+        )
+
+    def wrong_request(self, client):
+        # JWT-shaped but signed with the WRONG secret → rejected on the OAuth path.
+        token = _mint_oauth_jwt(_oauth_claims(), secret="wrong-secret-32-bytes-padding-zzzz")
+        return client.post(
+            "/mcp",
+            headers={**_MCP_HEADERS, "Authorization": f"Bearer {token}"},
+            json=_INITIALIZE,
+        )
+
+    def get_request(self, client):
+        return client.get("/mcp")
+
+
+_AUTH_MODES = [_StaticKeyMode(), _OAuthBearerMode()]
+
+
+@pytest.fixture(params=_AUTH_MODES, ids=[m.name for m in _AUTH_MODES])
+def auth_mode(request):
+    """Parametrizes a test over BOTH auth paths (static_key + oauth_bearer)."""
+    return request.param
+
+
+def _enter(mode):
+    """Enter all of a mode's patches; return the list so the caller can exit them."""
+    ctxs = mode.patches()
+    for c in ctxs:
+        c.__enter__()
+    return ctxs
+
+
+def _exit(ctxs):
+    for c in reversed(ctxs):
+        c.__exit__(None, None, None)
+
+
+class TestMCPAuthMatrix:
+    """Auth-rejection scenarios that MUST behave identically on both paths.
+
+    Mirrors the auth-mode-agnostic cases in ``TestMCPAuth`` but runs each once
+    per ``auth_mode`` (buiqr.9 (b)). The static-path-SPECIFIC 503-when-not-
+    configured case stays in ``TestMCPAuth`` (it has no OAuth-path analogue).
+    """
+
+    def test_no_credential_rejected_401(self, client, auth_mode):
+        """No credential at all → 401 on either path."""
+        ctxs = _enter(auth_mode)
+        try:
+            response = client.post("/mcp", headers=_MCP_HEADERS, json=_INITIALIZE)
+        finally:
+            _exit(ctxs)
+        assert response.status_code == 401, f"[{auth_mode.name}] {response.text}"
+        assert "Bearer" in response.headers.get("www-authenticate", "")
+
+    def test_wrong_credential_rejected_401(self, client, auth_mode):
+        """A wrong/invalid credential → 401 on either path (no cross-path bypass)."""
+        ctxs = _enter(auth_mode)
+        try:
+            response = auth_mode.wrong_request(client)
+        finally:
+            _exit(ctxs)
+        assert response.status_code == 401, f"[{auth_mode.name}] {response.text}"
+
+    def test_bare_get_requires_credential(self, client, auth_mode):
+        """A bare GET /mcp (event stream) is auth-checked on either path."""
+        ctxs = _enter(auth_mode)
+        try:
+            response = auth_mode.get_request(client)
+        finally:
+            _exit(ctxs)
+        assert response.status_code == 401, f"[{auth_mode.name}] {response.text}"
+
+
+class TestMCPInitializeMatrix:
+    """A full initialize round-trip MUST succeed with a valid credential on BOTH paths.
+
+    Mirrors ``TestMCPInitialize`` but parametrized over ``auth_mode`` so the
+    happy-path round-trip is permanently guarded on both the static-key and the
+    OAuth-bearer path (buiqr.9 (b), PO decision #4).
+    """
+
+    def test_initialize_round_trip_succeeds(self, client, auth_mode):
+        ctxs = _enter(auth_mode)
+        try:
+            response = auth_mode.valid_request(client)
+        finally:
+            _exit(ctxs)
+        assert response.status_code == 200, f"[{auth_mode.name}] {response.text}"
+        assert "mcp-session-id" in {k.lower() for k in response.headers}
+        result = _parse_initialize_result(response)
+        assert result["id"] == 1
+        assert result["result"]["serverInfo"]["name"] == "ecm-mcp"
+
+
+# ─────────────────── .mcp.json COMPATIBILITY GUARD (buiqr.9 (c)) ──────────────
+#
+# The repo-root .mcp.json is the LITERAL client config an operator points Claude
+# at today: the static ?api_key= path over the http transport. The whole epic
+# (AC2/AC3) is that OAuth is ADDITIVE — the existing query-string static path
+# stays working. This guard loads that real config as a fixture and proves it
+# still drives a successful initialize. A future OAuth refactor that breaks
+# query-string auth fails THIS test before it can merge.
+
+from pathlib import Path  # noqa: E402 — co-located with the guard it serves
+
+#: The repo-root .mcp.json. tests/ is mcp-server/tests/, so the repo root is two
+#: levels up. Resolved from THIS file's location (CI runs pytest from
+#: mcp-server/, but anchoring on __file__ is robust to the working directory).
+_REPO_ROOT_MCP_JSON = Path(__file__).resolve().parents[2] / ".mcp.json"
+
+
+def _load_repo_mcp_json() -> dict:
+    """Load and parse the repo-root .mcp.json literal config."""
+    return json.loads(_REPO_ROOT_MCP_JSON.read_text())
+
+
+class TestMcpJsonCompatGuard:
+    """The repo-root .mcp.json static-path config must keep working (AC2/AC3).
+
+    These read the ACTUAL committed .mcp.json — not a hand-built dict — so the
+    guard tracks the file an operator copies. If the file moves or its shape
+    drifts, these fail loudly rather than silently testing nothing.
+    """
+
+    def test_mcp_json_exists_and_is_http_transport(self):
+        """.mcp.json declares the ecm server over the http transport."""
+        assert _REPO_ROOT_MCP_JSON.exists(), (
+            f"repo-root .mcp.json not found at {_REPO_ROOT_MCP_JSON} — the compat "
+            "guard cannot validate the literal client config"
+        )
+        cfg = _load_repo_mcp_json()
+        servers = cfg.get("mcpServers", {})
+        assert "ecm" in servers, "expected an 'ecm' server entry in .mcp.json"
+        assert servers["ecm"]["type"] == "http", (
+            "the ecm MCP server must use the http transport (Streamable HTTP)"
+        )
+
+    def test_mcp_json_url_uses_query_string_api_key(self):
+        """The ecm URL carries the static ?api_key= credential (the static path).
+
+        This is the exact property a query-string-breaking OAuth refactor would
+        violate. Pinning it here means such a refactor cannot merge silently.
+        """
+        cfg = _load_repo_mcp_json()
+        url = cfg["mcpServers"]["ecm"]["url"]
+        assert "/mcp" in url, f"expected the /mcp endpoint in the URL: {url!r}"
+        assert "api_key=" in url, (
+            f"expected a static ?api_key= credential in the .mcp.json URL: {url!r}"
+        )
+
+    def test_mcp_json_config_drives_initialize_round_trip(self, client):
+        """The literal .mcp.json URL drives a successful initialize on the static path.
+
+        We extract the api_key from the committed config's query string and POST
+        an initialize exactly as a client configured from .mcp.json would — the
+        round-trip must succeed (AC3). This proves the static path the config
+        relies on is intact end-to-end, not just that the file parses.
+        """
+        from urllib.parse import parse_qs, urlparse
+
+        cfg = _load_repo_mcp_json()
+        url = cfg["mcpServers"]["ecm"]["url"]
+        api_key = parse_qs(urlparse(url).query)["api_key"][0]
+        assert api_key, "the .mcp.json URL must carry a non-empty api_key value"
+
+        # The server reads the configured key from settings.json; patch it to the
+        # value the literal config presents so the static path authenticates.
+        with patch("server.get_mcp_api_key", return_value=api_key):
+            response = client.post(
+                f"/mcp?api_key={api_key}", headers=_MCP_HEADERS, json=_INITIALIZE
+            )
+        assert response.status_code == 200, response.text
         assert "mcp-session-id" in {k.lower() for k in response.headers}
         result = _parse_initialize_result(response)
         assert result["id"] == 1

@@ -194,7 +194,13 @@ The OAuth implementation must satisfy **all** of the following, each mapped to S
 
 ## 5. Test Cases (split by container: `mcp-server/tests/` for RS, `backend/tests/` for AS + store)
 
-> The `mcp-server/tests/` suite is now CI-gated (precondition `enhancedchannelmanager-ak7xa`, closed), so the RS tests will not rot silently. **Under Option A** the token-store tests live in `backend/tests/unit/test_oauth_store.py` (the store is ECM-managed) — already merged with `buiqr.2` — and the AS endpoint tests land in the backend suite with `buiqr.3`. RS-side tests (dual-path routing, offline verify, discovery) stay in `mcp-server/tests/`. Detailed test infrastructure lands in `buiqr.9`.
+> The `mcp-server/tests/` suite is now CI-gated (precondition `enhancedchannelmanager-ak7xa`, closed), so the RS tests will not rot silently. **Under Option A** the token-store tests live in `backend/tests/unit/test_oauth_store.py` (the store is ECM-managed) — already merged with `buiqr.2` — and the AS endpoint tests land in the backend suite with `buiqr.3`. RS-side tests (dual-path routing, offline verify, discovery) stay in `mcp-server/tests/`. Detailed test infrastructure landed in `buiqr.9`.
+
+> **`buiqr.9` test infrastructure (merged).** The permanent OAuth regression + abuse-case fixtures now live in real files:
+> - **Abuse-case suite (10 cases, split by container).** RS-side cases (expired access token, wrong audience, malformed JWT, cross-instance token) — `mcp-server/tests/test_oauth.py`. AS-side cases (PKCE plain, PKCE verifier mismatch, auth-code replay, mismatched `redirect_uri`, missing `code_challenge`, refresh-token reuse) — `backend/tests/routers/test_oauth_abuse.py`. The split is forced by the AS code not being importable in the RS CI job; each file's header carries the full 10-case map.
+> - **Dual-path regression matrix (CD1, PO decision #4).** `mcp-server/tests/test_server.py::TestMCPAuthMatrix` / `TestMCPInitializeMatrix` parametrize every auth-mode-agnostic case over BOTH `auth_mode=static_key` and `auth_mode=oauth_bearer`.
+> - **`.mcp.json` compat guard (epic AC2/AC3).** `mcp-server/tests/test_server.py::TestMcpJsonCompatGuard` loads the repo-root `.mcp.json` literal config and drives an initialize round-trip on the static path.
+> - **Captured-traffic replay harness (PO decision #6).** `mcp-server/tests/test_oauth_flow_replay.py` replays `mcp-server/tests/fixtures/claude_desktop_oauth_flow.json` (a SYNTHETIC capture generated from the real AS+RS endpoints — see its `generate_oauth_flow_fixture.py`; re-capture from a real Claude Desktop flow once the `buiqr.6` `redirect_uri` is verified).
 
 - `test_dual_path_routing.py` *(CD1 — the headline)*
   - `test_invalid_jwt_not_evaluated_as_static_key` — JWT-shaped Bearer with bad signature → 401, and the value is **never** compared to `mcp_api_key`.
