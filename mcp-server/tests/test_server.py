@@ -265,6 +265,92 @@ class TestMCPAuth:
         assert response.status_code == 401
 
 
+class TestProtectedResourceDiscovery:
+    """GET /.well-known/oauth-protected-resource (RFC 9728, bead buiqr.5).
+
+    Exercised through the Starlette app + APIKeyAuthMiddleware:
+      AC2 — RFC 9728 fields incl. authorization_servers pointing at the AS.
+      AC3 — exact JSON snapshot pinned over HTTP.
+      AC4 — oauth_allow_insecure=false + http non-loopback issuer → 404.
+      AC5 — oauth_allow_insecure=true → 200 over plain HTTP.
+      Public — reachable WITHOUT the MCP API key (exempt from the middleware).
+      ID1 — no secret / internal host / path / mcp_api_key in the body.
+    """
+
+    _PATH = "/.well-known/oauth-protected-resource"
+
+    def test_public_no_api_key_required(self, client):
+        """Discovery is public — the API-key middleware must not gate it."""
+        with patch("server.resolve_issuer", return_value="https://ecm.example.com"), \
+             patch("server.get_oauth_allow_insecure", return_value=False), \
+             patch("server.resolve_resource_url", return_value="https://mcp.example.com"):
+            # No api_key / Authorization header at all.
+            response = client.get(self._PATH)
+        assert response.status_code == 200
+
+    def test_returns_rfc9728_fields(self, client):
+        with patch("server.resolve_issuer", return_value="https://ecm.example.com"), \
+             patch("server.get_oauth_allow_insecure", return_value=False), \
+             patch("server.resolve_resource_url", return_value="https://mcp.example.com"):
+            response = client.get(self._PATH)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["resource"] == "https://mcp.example.com"
+        assert data["authorization_servers"] == ["https://ecm.example.com"]
+        assert data["scopes_supported"] == ["mcp"]
+
+    def test_exact_snapshot(self, client):
+        """AC3 — pin the exact JSON shape served over HTTP."""
+        with patch("server.resolve_issuer", return_value="https://ecm.example.com"), \
+             patch("server.get_oauth_allow_insecure", return_value=False), \
+             patch("server.resolve_resource_url", return_value="https://mcp.example.com"):
+            response = client.get(self._PATH)
+        assert response.json() == {
+            "resource": "https://mcp.example.com",
+            "authorization_servers": ["https://ecm.example.com"],
+            "scopes_supported": ["mcp"],
+            "bearer_methods_supported": ["header"],
+        }
+
+    def test_http_non_loopback_flag_false_returns_404(self, client):
+        """AC4 — plain-HTTP non-loopback issuer + flag false → 404 (fail-closed)."""
+        with patch("server.resolve_issuer", return_value="http://192.168.1.50:6101"), \
+             patch("server.get_oauth_allow_insecure", return_value=False):
+            response = client.get(self._PATH)
+        assert response.status_code == 404
+
+    def test_http_non_loopback_flag_true_returns_200(self, client):
+        """AC5 — opt-in serves over plain HTTP."""
+        with patch("server.resolve_issuer", return_value="http://192.168.1.50:6101"), \
+             patch("server.get_oauth_allow_insecure", return_value=True), \
+             patch("server.resolve_resource_url", return_value="http://192.168.1.50:6101"):
+            response = client.get(self._PATH)
+        assert response.status_code == 200
+        assert response.json()["authorization_servers"] == ["http://192.168.1.50:6101"]
+
+    def test_404_body_is_generic(self, client):
+        """The fail-closed 404 reveals nothing about the gate (HT1/ID1)."""
+        with patch("server.resolve_issuer", return_value="http://192.168.1.50:6101"), \
+             patch("server.get_oauth_allow_insecure", return_value=False):
+            response = client.get(self._PATH)
+        assert response.status_code == 404
+        blob = response.text.lower()
+        assert "oauth_allow_insecure" not in blob
+        assert "insecure" not in blob
+
+    def test_no_secret_or_internal_host_leak(self, client):
+        """ID1 — discovery body never contains the secret / internal host / api key."""
+        with patch("server.resolve_issuer", return_value="https://ecm.example.com"), \
+             patch("server.get_oauth_allow_insecure", return_value=False), \
+             patch("server.resolve_resource_url", return_value="https://mcp.example.com"):
+            response = client.get(self._PATH)
+        blob = response.text
+        assert "ecm:6100" not in blob
+        assert "/config/" not in blob
+        assert "mcp_oauth_signing_secret" not in blob
+        assert "mcp_api_key" not in blob
+
+
 class TestMCPInitialize:
     """End-to-end MCP initialize round-trip over Streamable HTTP."""
 

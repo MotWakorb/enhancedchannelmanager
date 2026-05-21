@@ -57,3 +57,13 @@ def test_oauth_signing_secret_is_credential_class():
     from routers.backup import _SETTINGS_CREDENTIAL_FIELDS
 
     assert "mcp_oauth_signing_secret" in _SETTINGS_CREDENTIAL_FIELDS
+
+
+def test_oauth_allow_insecure_defaults_false():
+    """bd-buiqr.5 — the HTTP-posture flag defaults to the SAFE (fail-closed) value.
+
+    ADR-009 §4: discovery is off on plain-HTTP non-loopback deploys unless the
+    operator explicitly opts in. A True default would silently expose the OAuth
+    surface over cleartext (threat model HT1), so the default must be False.
+    """
+    assert config.DispatcharrSettings().oauth_allow_insecure is False
