@@ -33,6 +33,47 @@ MCP_PORT = int(os.environ.get("MCP_PORT", "6101"))
 # ---------------------------------------------------------------------------
 SIGNING_KEY_SETTINGS_JSON_KEY = "mcp_oauth_signing_secret"
 
+# ---------------------------------------------------------------------------
+# OAuth discovery posture (bd-buiqr.5, ADR-009 §4/§7)
+#
+# The MCP RS serves the RFC 9728 protected-resource discovery document at
+# /.well-known/oauth-protected-resource, pointing clients at the ECM AS issuer.
+# Two values govern it, sourced to match the ECM AS so the docs cannot drift:
+#   - OAUTH_ISSUER: the ECM AS external origin (the discovery `authorization_servers`
+#     entry; equals the AS-minted `iss`). Default placeholder ``https://ecm.local``.
+#   - oauth_allow_insecure (settings.json, default false): the HTTP-posture
+#     fail-closed flag. When false AND the issuer is plain-HTTP/non-loopback, the
+#     discovery endpoint returns 404 (threat model HT1). The MCP reads it from the
+#     SAME shared /config/settings.json the ECM AS writes.
+# The RESOURCE identifier is the MCP RS's own external URL (MCP_RESOURCE_URL),
+# falling back to a port-derived default for un-pinned dev boxes.
+# ---------------------------------------------------------------------------
+OAUTH_ISSUER = os.environ.get("OAUTH_ISSUER", "https://ecm.local")
+PLACEHOLDER_ISSUER = "https://ecm.local"
+#: The MCP RS's external resource identifier advertised in the RFC 9728 doc.
+#: Operators pin this to their externally-reachable MCP origin (e.g.
+#: ``https://mcp.example.com``); when unset we fall back to a request-derived or
+#: port-derived value (see resolve_resource_url in server.py).
+MCP_RESOURCE_URL = os.environ.get("MCP_RESOURCE_URL", "")
+
+
+def get_oauth_allow_insecure() -> bool:
+    """Read the ``oauth_allow_insecure`` flag from the shared settings.json.
+
+    Default False (fail-closed) when the file is missing, unreadable, invalid
+    JSON, or the field is absent — the safe posture is to NOT advertise OAuth on
+    an un-vetted config (ADR-009 §4, threat model HT1). Re-read per call so a
+    flag change takes effect without restarting the MCP container.
+    """
+    if not SETTINGS_FILE.exists():
+        return False
+    try:
+        data = json.loads(SETTINGS_FILE.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("[MCP-CONFIG] Could not read oauth_allow_insecure: %s", e)
+        return False
+    return bool(data.get("oauth_allow_insecure", False))
+
 
 def get_mcp_api_key() -> str:
     """Read the MCP API key from the shared settings.json file.
