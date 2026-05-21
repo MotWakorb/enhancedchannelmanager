@@ -233,6 +233,114 @@ def _now() -> int:
     return int(time.time())
 
 
+# ── Store-health diagnostics (bd-m19zx, Option A follow-up) ─────────────────
+# ECM owns /config/mcp_oauth.db exclusively (ADR-009 §1/§5). These diagnostic
+# codes mirror the ``get_mcp_api_key_status()`` pattern from mcp-server/config.py
+# but are ECM-side because the MCP RS cannot read the store (it mounts /config
+# read-only and never opens this DB — see module docstring).
+#
+# All three codes surface on GET /api/health/oauth (routers/health.py). The
+# check is read-only and non-destructive: it opens the DB with
+# ``immutable=1`` so no WAL / journal mutations can occur, runs
+# ``PRAGMA integrity_check(1)`` (stops at first error to stay fast), and counts
+# rows in oauth_clients. Never exposes token values or DB content.
+
+def get_oauth_store_status(db_path: "Union[str, Path]") -> "dict[str, Optional[str]]":
+    """Classify the health of the ECM-managed OAuth state store (read-only).
+
+    Returns a dict with one key per diagnostic code. Each value is either
+    ``None`` (check passed) or the string code name (check failed).
+
+    Codes:
+
+    ``"token_store_unreadable"``
+        ``/config/mcp_oauth.db`` is missing (ENOENT) or unreadable (EACCES)
+        from ECM's perspective. First-run is the expected cause (the store is
+        created lazily at the first AS request); but a missing store *after*
+        the AS has served at least one flow is a real problem.
+
+    ``"token_store_corrupt"``
+        The file exists and is readable but SQLite's ``PRAGMA integrity_check``
+        reports at least one error — the DB may be partially written, truncated,
+        or replaced with a non-SQLite file.
+
+    ``"client_registry_missing"``
+        The ``oauth_clients`` table exists but contains zero rows. ECM seeds
+        the hardcoded registry (``auth/oauth_clients.py``) on every startup; an
+        empty table after startup signals that the seed step failed or the DB
+        was replaced without restarting ECM.
+    """
+    db_path = Path(db_path)
+    result: dict[str, Optional[str]] = {
+        "token_store_unreadable": None,
+        "token_store_corrupt": None,
+        "client_registry_missing": None,
+    }
+
+    # ── 1. Existence / readability ───────────────────────────────────────────
+    if not db_path.exists():
+        logger.warning("[OAUTH-HEALTH] Store not found at %s", db_path)
+        result["token_store_unreadable"] = "token_store_unreadable"
+        return result
+
+    try:
+        # Open read-only + immutable so we cannot accidentally acquire a write
+        # lock or create WAL sidecar files. ``?immutable=1`` is a SQLite URI
+        # parameter supported in Python's sqlite3 since 3.4+ (Python 3.6).
+        uri = f"file:{db_path}?mode=ro&immutable=1"
+        conn = sqlite3.connect(uri, uri=True)
+    except (OSError, sqlite3.OperationalError) as exc:
+        logger.warning("[OAUTH-HEALTH] Cannot open store at %s: %s", db_path, exc)
+        result["token_store_unreadable"] = "token_store_unreadable"
+        return result
+
+    try:
+        # ── 2. Integrity check (stops at first error for speed) ──────────────
+        try:
+            row = conn.execute("PRAGMA integrity_check(1)").fetchone()
+            if row is None or row[0] != "ok":
+                logger.warning(
+                    "[OAUTH-HEALTH] Integrity check on %s failed: %s",
+                    db_path,
+                    row[0] if row else "no result",
+                )
+                result["token_store_corrupt"] = "token_store_corrupt"
+                # Still run the client-registry check if we can — the table
+                # may still be readable even with integrity errors elsewhere.
+        except sqlite3.DatabaseError as exc:
+            logger.warning(
+                "[OAUTH-HEALTH] Integrity check raised on %s: %s", db_path, exc
+            )
+            result["token_store_corrupt"] = "token_store_corrupt"
+
+        # ── 3. Client registry presence ──────────────────────────────────────
+        # Only attempt the count if we could open the DB (if it was unreadable
+        # we already returned above). Skip if the table doesn't exist yet
+        # (pre-schema DB — which is also "missing" from the registry perspective).
+        if result["token_store_corrupt"] is None:
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM oauth_clients"
+                ).fetchone()
+                if row is None or row[0] == 0:
+                    logger.warning(
+                        "[OAUTH-HEALTH] oauth_clients table is empty in %s", db_path
+                    )
+                    result["client_registry_missing"] = "client_registry_missing"
+            except sqlite3.OperationalError as exc:
+                # Table doesn't exist — schema never initialised.
+                logger.warning(
+                    "[OAUTH-HEALTH] oauth_clients table absent in %s: %s",
+                    db_path,
+                    exc,
+                )
+                result["client_registry_missing"] = "client_registry_missing"
+    finally:
+        conn.close()
+
+    return result
+
+
 class OAuthStore:
     """SQLite-backed OAuth state store (WAL, hashed-at-rest, 0600).
 

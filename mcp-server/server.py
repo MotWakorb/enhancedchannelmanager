@@ -18,9 +18,11 @@ from starlette.routing import Mount, Route
 from config import (
     MCP_PORT,
     MCP_RESOURCE_URL,
+    OAUTH_ISSUER,
     get_mcp_api_key,
     get_mcp_api_key_status,
     get_oauth_allow_insecure,
+    get_signing_key,
     get_signing_key_status,
 )
 from oauth_discovery import (
@@ -30,6 +32,7 @@ from oauth_discovery import (
     resolve_issuer,
     resolve_resource_url,
 )
+from oauth_rs import OAuthTokenError, looks_like_jwt, verify_oauth_token
 from resources import register_all_resources
 from tools import register_all_tools
 
@@ -65,14 +68,52 @@ register_all_tools(mcp)
 register_all_resources(mcp)
 
 
-class APIKeyAuthMiddleware(BaseHTTPMiddleware):
-    """Validate the ECM MCP API key on every request except ``/health``.
+#: The 401 challenge header. Per RFC 6750 / RFC 9728 a client that gets this on
+#: /mcp learns OAuth is offered and where to discover it. Always present on a
+#: 401 so an OAuth client can bootstrap from any rejected request (ADR-009 §2).
+_WWW_AUTHENTICATE = {"WWW-Authenticate": "Bearer"}
 
-    Accepts the key via query param (``?api_key=``) or ``Authorization: Bearer``
-    header. The ``/health`` endpoint is exempt so Docker healthchecks work
-    without a key. With the Streamable HTTP transport every request (POST and
-    the SSE GET stream) hits the single ``/mcp`` endpoint, so auth is checked on
-    each one — the key is static and re-read from disk per call.
+
+def get_oauth_issuer_for_rs() -> str:
+    """Resolve the OAuth issuer the RS pins ``iss`` against (bd-buiqr.8).
+
+    Must equal the value the ECM AS mints into the token's ``iss`` claim
+    (``backend/auth/oauth_provider.get_oauth_issuer`` — also ``OAUTH_ISSUER``).
+
+    DEPLOYMENT REQUIREMENT (flagged for buiqr.11): the MCP container and the ECM
+    container MUST share the same ``OAUTH_ISSUER`` environment value. If they
+    drift, every OAuth Bearer token fails ``iss`` verification here and clients
+    silently get 401s. When unset, both default to the non-production placeholder
+    ``https://ecm.local`` (config.OAUTH_ISSUER); a real deploy must pin the
+    operator's external HTTPS origin in BOTH containers.
+    """
+    return OAUTH_ISSUER
+
+
+class APIKeyAuthMiddleware(BaseHTTPMiddleware):
+    """Dual-path-by-SHAPE auth router for the MCP RS (bd-buiqr.8, ADR-009 §2).
+
+    Classifies each request by the SHAPE of the presented credential BEFORE any
+    validation runs, then dispatches to EXACTLY ONE path. It NEVER tries one
+    path, fails, and falls through to the other (the CD1 no-fail-cascade
+    invariant — the headline auth-bypass this whole design exists to prevent).
+
+    Routing (decided pre-validation):
+      - ``Authorization: Bearer <JWT-shaped>`` (3 base64url segments, header
+        JSON with ``alg``) → **OAuth path only**. Offline HS256 verify. A failed
+        validation → 401 + ``WWW-Authenticate: Bearer``; it is NEVER compared to
+        the static key.
+      - ``?api_key=<value>`` OR ``Bearer <non-JWT-shaped>`` → **static-key path
+        only** (existing behavior, PO-locked permanent).
+      - Both an OAuth-shaped Bearer AND ``?api_key=`` present → **OAuth wins**;
+        the static key is ignored entirely.
+      - Neither → 401 + ``WWW-Authenticate: Bearer``.
+
+    ``/health`` and the RFC 9728 discovery doc stay public (exempt below). With
+    the Streamable HTTP transport every POST and the SSE GET hit the single
+    ``/mcp`` endpoint, so auth is checked per request; the secret/key are re-read
+    from disk per call so rotation takes effect without a restart (offline HMAC
+    verify keeps this inside the ≤5 ms budget — AC6).
     """
 
     async def dispatch(self, request, call_next):
@@ -88,6 +129,46 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         if path == PROTECTED_RESOURCE_PATH:
             return await call_next(request)
 
+        # ── SHAPE CLASSIFICATION (before any validation — ADR-009 §2 / CD1) ──
+        # An OAuth-shaped Bearer takes precedence over ?api_key= (OAuth wins).
+        auth_header = request.headers.get("authorization", "")
+        bearer_value = auth_header[7:] if auth_header.startswith("Bearer ") else ""
+
+        if bearer_value and looks_like_jwt(bearer_value):
+            # JWT-shaped → OAuth path ONLY. Its outcome is "valid OAuth session"
+            # or 401 — it can NEVER fall through to the static-key check.
+            return await self._handle_oauth(request, bearer_value, call_next)
+
+        # Not JWT-shaped → static-key path ONLY (existing behavior, permanent).
+        return await self._handle_static_key(request, bearer_value, call_next)
+
+    async def _handle_oauth(self, request, token, call_next):
+        """OAuth-only path. Failure → 401; NEVER a static-key fall-through (CD1)."""
+        secret = get_signing_key()  # dedicated mcp_oauth_signing_secret (never logged)
+        issuer = get_oauth_issuer_for_rs()
+        try:
+            claims = verify_oauth_token(token, secret=secret, issuer=issuer)
+        except OAuthTokenError as exc:
+            # Single uniform 401 for every OAuth failure. We log the failure
+            # CLASS only (never the token / secret) and do NOT touch the static
+            # key — the CD1 invariant. The 401 carries WWW-Authenticate: Bearer.
+            logger.warning("[MCP] OAuth Bearer rejected: %s", exc)
+            return JSONResponse(
+                {"error": "Invalid or expired OAuth token"},
+                status_code=401,
+                headers=_WWW_AUTHENTICATE,
+            )
+        # Success. AC5/R4: distinguish the auth METHOD in logs. We deliberately
+        # log auth_method only and NOT any claim value: the access token is a
+        # credential source, so logging claims-derived data — even the non-secret
+        # `sub` — trips CodeQL py/clear-text-logging-sensitive-data (#1604). The
+        # audit requirement (threat model R4) is the auth-mode distinction, not
+        # the subject (single ECM admin in v1, ADR-009 §3/§8).
+        logger.info("[MCP] Authenticated request auth_method=oauth")
+        return await call_next(request)
+
+    async def _handle_static_key(self, request, bearer_value, call_next):
+        """Static-key-only path — existing behavior, PO-locked permanent (EP2)."""
         expected_key = get_mcp_api_key()
         if not expected_key:
             logger.warning("[MCP] Connection rejected: no MCP API key configured in ECM")
@@ -96,17 +177,27 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
                 status_code=503,
             )
 
-        # Extract key from query param or Authorization header
-        api_key = request.query_params.get("api_key", "")
+        # Extract key from query param, else the (non-JWT-shaped) Bearer value.
+        api_key = request.query_params.get("api_key", "") or bearer_value
+
         if not api_key:
-            auth_header = request.headers.get("authorization", "")
-            if auth_header.startswith("Bearer "):
-                api_key = auth_header[7:]
+            # No credential at all → 401 with the OAuth bootstrap challenge.
+            return JSONResponse(
+                {"error": "Authentication required"},
+                status_code=401,
+                headers=_WWW_AUTHENTICATE,
+            )
 
         if api_key != expected_key:
             logger.warning("[MCP] Connection rejected: invalid API key")
-            return JSONResponse({"error": "Invalid API key"}, status_code=401)
+            return JSONResponse(
+                {"error": "Invalid API key"},
+                status_code=401,
+                headers=_WWW_AUTHENTICATE,
+            )
 
+        # Success. AC5: distinguish the auth method in logs.
+        logger.info("[MCP] Authenticated request auth_method=static_key")
         return await call_next(request)
 
 
