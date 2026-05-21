@@ -158,10 +158,13 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
                 status_code=401,
                 headers=_WWW_AUTHENTICATE,
             )
-        # Success. AC5: distinguish the auth method in logs (sub for audit).
-        logger.info(
-            "[MCP] Authenticated request auth_method=oauth sub=%s", claims.get("sub")
-        )
+        # Success. AC5/R4: distinguish the auth METHOD in logs. We deliberately
+        # log auth_method only and NOT any claim value: the access token is a
+        # credential source, so logging claims-derived data — even the non-secret
+        # `sub` — trips CodeQL py/clear-text-logging-sensitive-data (#1604). The
+        # audit requirement (threat model R4) is the auth-mode distinction, not
+        # the subject (single ECM admin in v1, ADR-009 §3/§8).
+        logger.info("[MCP] Authenticated request auth_method=oauth")
         return await call_next(request)
 
     async def _handle_static_key(self, request, bearer_value, call_next):
