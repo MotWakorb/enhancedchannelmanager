@@ -3,3 +3,9 @@ httpx>=0.28.0
 uvicorn[standard]>=0.32.0
 pydantic>=2.10.0
 starlette>=0.41.0
+# PyJWT — offline HS256 Bearer-token verification for the OAuth RS path
+# (bd-buiqr.8). Already installed transitively via the mcp SDK; pinned here as a
+# DIRECT dependency so a future mcp version dropping it cannot silently break the
+# RS verifier. The ECM AS signs with python-jose; jose-signed HS256 tokens are
+# standard JWTs that verify with PyJWT.
+pyjwt>=2.10.0
