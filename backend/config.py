@@ -4,6 +4,7 @@ from pydantic import BaseModel, field_validator
 import json
 import os
 import logging
+import secrets
 
 # Single source of truth for the dedup confidence floor per ADR-008 §D2.
 # Imported from BD-A's matcher so this validator (layer 2) cannot drift from
@@ -196,6 +197,13 @@ class DispatcharrSettings(BaseModel):
     auto_creation_exclude_auto_sync_groups: bool = False  # Exclude streams in Dispatcharr auto-sync groups
     # MCP server API key for Claude integration (empty = not configured)
     mcp_api_key: str = ""
+    # Dedicated OAuth token-signing secret (ADR-009 §3, amended 2026-05-21).
+    # SEPARATE from ECM's user-session jwt.secret_key (auth_settings.json) — the
+    # MCP Resource Server reads THIS (settings.json, :ro) for offline JWT verify,
+    # so isolating it means a compromised MCP can forge only MCP-scope tokens, not
+    # ECM admin sessions. Auto-generated on first use; credential-class (redacted
+    # in backups via backup.py _SETTINGS_CREDENTIAL_FIELDS).
+    mcp_oauth_signing_secret: str = ""
     # Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m).
     # Default ON — Phase 1 data never leaves the container. When False,
     # the backend /api/client-errors endpoint returns 204 without logging
@@ -588,6 +596,30 @@ def clear_settings_cache() -> None:
 def get_settings() -> DispatcharrSettings:
     """Get the current Dispatcharr settings."""
     return load_settings()
+
+
+def get_or_create_oauth_signing_secret() -> str:
+    """Return the dedicated OAuth signing secret, generating it on first use.
+
+    This is the HS256 secret the ECM Authorization Server signs MCP OAuth access
+    tokens with, and the MCP Resource Server reads (from /config/settings.json,
+    read-only) to verify them offline (ADR-009 §1/§3, amended 2026-05-21 for the
+    dedicated-secret design). It is **deliberately separate** from ECM's
+    user-session ``jwt.secret_key`` (``auth_settings.json``): the RS never reads
+    that file, so a compromised MCP container can forge only MCP-scope tokens,
+    never ECM admin sessions (threat model SR1 blast-radius isolation).
+
+    Auto-generated (``secrets.token_urlsafe(32)``) and persisted on first use,
+    mirroring the auth subsystem's ``jwt.secret_key`` bootstrap. ECM must call
+    this at startup so the secret exists in ``settings.json`` for the read-only
+    RS to find it. Idempotent: a present secret is returned unchanged.
+    """
+    settings = get_settings()
+    if not settings.mcp_oauth_signing_secret:
+        settings.mcp_oauth_signing_secret = secrets.token_urlsafe(32)
+        save_settings(settings)
+        logger.info("[CONFIG] Generated dedicated OAuth signing secret (mcp_oauth_signing_secret)")
+    return settings.mcp_oauth_signing_secret
 
 
 def get_http_port() -> int:

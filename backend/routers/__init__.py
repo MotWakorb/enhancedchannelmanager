@@ -30,6 +30,7 @@ from routers.backup import router as backup_router
 from routers.lookup_tables import router as lookup_tables_router
 from routers.client_errors import router as client_errors_router
 from routers.session_starts import router as session_starts_router
+from routers.oauth_mcp import router as oauth_mcp_router
 
 all_routers = [
     tasks_router,
@@ -59,4 +60,5 @@ all_routers = [
     lookup_tables_router,
     client_errors_router,
     session_starts_router,
+    oauth_mcp_router,
 ]
