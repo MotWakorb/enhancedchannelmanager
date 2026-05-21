@@ -18,12 +18,16 @@ import logging
 
 import pytest
 
-from models import PendingMerge
+from models import PendingMerge, PendingMergeJournal
+from services.dedup_matcher import MatchResult
 from services.m3u_dedup_hook import (
+    M3U_REFRESH_ACTOR_TOKEN_ID,
     M3U_REFRESH_TRIGGER_CONTEXT,
     M3U_REFRESH_TRIGGERED_BY,
     DedupHookResult,
+    EnqueueResult,
     check_and_enqueue_pending_merge,
+    enqueue_pending_merge,
 )
 
 
@@ -348,3 +352,186 @@ class TestHookIdempotency:
         assert test_session.query(PendingMerge).count() == 2
         pending = test_session.query(PendingMerge).filter_by(status="pending").one()
         assert pending.trigger_context == "m3u_refresh"
+
+
+# ---------------------------------------------------------------------------
+# §D6 audit journal — the hook now writes an auto_queued journal row.
+# ---------------------------------------------------------------------------
+
+
+class TestHookWritesJournal:
+    """Post-b3czq: the bulk-M3U hook writes a §D6 ``auto_queued`` journal row.
+
+    Before bd-b3czq the hook inserted the ``pending_merges`` row + bumped
+    the metric but did NOT write the §D6 journal row, even though §D6 says
+    "every accept / dismiss / queue / auto-aged-out action writes a row".
+    The shared enqueue core (extracted to back both the M3U hook and the
+    new MCP path) now writes the ``auto_queued`` row for both surfaces.
+    """
+
+    def test_fresh_insert_writes_auto_queued_journal_row(self, test_session):
+        check_and_enqueue_pending_merge(
+            stream_name="ESPN HD",
+            group_id=42,
+            candidates=[("99", "ESPN HD")],
+            threshold=0.80,
+            triggered_by="m3u_refresh",
+            dry_run=False,
+            db_session=test_session,
+        )
+        row = test_session.query(PendingMerge).one()
+        journals = test_session.query(PendingMergeJournal).all()
+        assert len(journals) == 1
+        j = journals[0]
+        # All seven §D6 fields populated.
+        assert j.pending_merge_id == row.id
+        assert j.action_type == "auto_queued"
+        assert j.actor_token_id == M3U_REFRESH_ACTOR_TOKEN_ID  # "system"
+        # Audit-first fallback at queue time: raw stream_name, not a stream id.
+        assert j.source_channel_id == "ESPN HD"
+        assert j.target_channel_id == "99"
+        assert j.confidence_score == 1.0
+        assert j.timestamp_utc > 0
+        assert j.trigger_context == "m3u_refresh"
+
+    def test_collision_does_not_write_second_journal_row(self, test_session):
+        kwargs = dict(
+            stream_name="ESPN HD",
+            group_id=42,
+            candidates=[("99", "ESPN HD")],
+            threshold=0.80,
+            triggered_by="m3u_refresh",
+            dry_run=False,
+            db_session=test_session,
+        )
+        check_and_enqueue_pending_merge(**kwargs)
+        check_and_enqueue_pending_merge(**kwargs)  # §D5 collision
+        # One pending row, one journal row — the collision is an idempotent no-op.
+        assert test_session.query(PendingMerge).count() == 1
+        assert test_session.query(PendingMergeJournal).count() == 1
+
+
+# ---------------------------------------------------------------------------
+# Shared enqueue core — trigger-context-agnostic primitive (bd-b3czq).
+# ---------------------------------------------------------------------------
+
+
+class TestSharedEnqueueCore:
+    """Direct tests of ``enqueue_pending_merge`` with non-m3u trigger_context.
+
+    This is the primitive the MCP ``add_stream`` prompt path calls with
+    ``trigger_context='mcp_tool'``. The core is NOT gated to m3u_refresh —
+    it inserts, journals, and bumps the metric for any caller.
+    """
+
+    def test_mcp_tool_enqueue_inserts_row_and_journal(self, test_session):
+        match = MatchResult(
+            candidate_channel_id="ch-uuid-7",
+            candidate_name="ESPN HD",
+            confidence=0.91,
+        )
+        result = enqueue_pending_merge(
+            stream_name="ESPN",
+            group_id=5,
+            match=match,
+            trigger_context="mcp_tool",
+            actor_token_id="77",
+            db_session=test_session,
+        )
+        assert isinstance(result, EnqueueResult)
+        assert result.fresh is True
+        assert result.candidate is match
+
+        row = test_session.query(PendingMerge).one()
+        assert result.merge_id == row.id
+        assert row.stream_name == "ESPN"
+        assert row.group_id == 5
+        assert row.candidate_channel_id == "ch-uuid-7"
+        assert row.confidence == 0.91
+        assert row.status == "pending"
+        assert row.trigger_context == "mcp_tool"
+        assert row.resolved_at is None
+        assert row.resolution_source is None
+
+        j = test_session.query(PendingMergeJournal).one()
+        assert j.pending_merge_id == row.id
+        assert j.action_type == "auto_queued"
+        assert j.actor_token_id == "77"
+        assert j.source_channel_id == "ESPN"
+        assert j.target_channel_id == "ch-uuid-7"
+        assert j.confidence_score == 0.91
+        assert j.trigger_context == "mcp_tool"
+
+    def test_mcp_tool_enqueue_bumps_metric(self, test_session):
+        from observability import get_metric, install_metrics
+
+        install_metrics()
+        counter = get_metric("pending_merges_queue_depth_added_total")
+        before = counter._value.get()
+
+        enqueue_pending_merge(
+            stream_name="ESPN",
+            group_id=5,
+            match=MatchResult(
+                candidate_channel_id="ch-uuid-7",
+                candidate_name="ESPN HD",
+                confidence=0.91,
+            ),
+            trigger_context="mcp_tool",
+            actor_token_id="77",
+            db_session=test_session,
+        )
+        assert counter._value.get() == before + 1
+
+    def test_mcp_tool_enqueue_collision_returns_existing_merge_id(self, test_session):
+        match = MatchResult(
+            candidate_channel_id="ch-uuid-7",
+            candidate_name="ESPN HD",
+            confidence=0.91,
+        )
+        first = enqueue_pending_merge(
+            stream_name="ESPN",
+            group_id=5,
+            match=match,
+            trigger_context="mcp_tool",
+            actor_token_id="77",
+            db_session=test_session,
+        )
+        assert first.fresh is True
+
+        second = enqueue_pending_merge(
+            stream_name="ESPN",
+            group_id=5,
+            match=match,
+            trigger_context="mcp_tool",
+            actor_token_id="88",
+            db_session=test_session,
+        )
+        # §D5 idempotency: same merge_id, fresh=False, no duplicate row/journal.
+        assert second.fresh is False
+        assert second.merge_id == first.merge_id
+        assert test_session.query(PendingMerge).count() == 1
+        assert test_session.query(PendingMergeJournal).count() == 1
+
+    def test_mcp_tool_collision_does_not_bump_metric(self, test_session):
+        from observability import get_metric, install_metrics
+
+        install_metrics()
+        counter = get_metric("pending_merges_queue_depth_added_total")
+        match = MatchResult(
+            candidate_channel_id="ch-uuid-7",
+            candidate_name="ESPN HD",
+            confidence=0.91,
+        )
+        enqueue_pending_merge(
+            stream_name="ESPN", group_id=5, match=match,
+            trigger_context="mcp_tool", actor_token_id="77",
+            db_session=test_session,
+        )
+        mid = counter._value.get()
+        enqueue_pending_merge(
+            stream_name="ESPN", group_id=5, match=match,
+            trigger_context="mcp_tool", actor_token_id="88",
+            db_session=test_session,
+        )
+        assert counter._value.get() == mid

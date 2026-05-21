@@ -63,6 +63,15 @@ M3U_REFRESH_TRIGGER_CONTEXT: str = "m3u_refresh"
 # surfaces and predate the dedup epic.
 M3U_REFRESH_TRIGGERED_BY: str = "m3u_refresh"
 
+# §D6 ``actor_token_id`` for the bulk-M3U enqueue. The hook runs from the
+# auto-creation engine with no acting token (it is a background import
+# surface, not an authenticated request). The literal ``"system"`` makes
+# the audit trail explicit — "this row was queued by the import pipeline,
+# not by an operator or an MCP agent" — and satisfies the NOT NULL audit
+# invariant. The MCP path resolves a real token id; this is the only
+# surface with no credential to attribute.
+M3U_REFRESH_ACTOR_TOKEN_ID: str = "system"
+
 
 @dataclass(frozen=True)
 class DedupHookResult:
@@ -92,6 +101,202 @@ class DedupHookResult:
 
     enqueued: bool
     candidate: Optional[MatchResult] = None
+
+
+@dataclass(frozen=True)
+class EnqueueResult:
+    """Outcome of the shared :func:`enqueue_pending_merge` core.
+
+    Returned by the trigger-context-agnostic enqueue primitive that backs
+    BOTH the bulk-M3U hook (``trigger_context='m3u_refresh'``) and the
+    MCP ``add_stream`` prompt path (``trigger_context='mcp_tool'``).
+
+    Attributes
+    ----------
+    merge_id:
+        The ``pending_merges.id`` of the row that is authoritative for
+        this ``(stream_name, candidate_channel_id)`` pair after the call.
+        On a fresh insert this is the newly-created row; on a §D5
+        partial-unique collision this is the *existing* pending row's id
+        (idempotent contract — same id every time the same pair is
+        re-enqueued without resolution).
+    fresh:
+        True when this call inserted a new row (and therefore wrote the
+        ``auto_queued`` journal row + bumped the BD-M metric). False when
+        the row already existed (§D5 collision) — no new journal row, no
+        metric bump, the prior row is the source of truth.
+    candidate:
+        The ``MatchResult`` that drove the enqueue. Always populated
+        (the caller passes the already-scored match in), so MCP / hook
+        callers can echo the candidate + confidence back to the agent
+        without a re-score.
+    """
+
+    merge_id: int
+    fresh: bool
+    candidate: MatchResult
+
+
+def enqueue_pending_merge(
+    *,
+    stream_name: str,
+    group_id: Optional[int],
+    match: MatchResult,
+    trigger_context: str,
+    actor_token_id: str,
+    db_session,
+) -> EnqueueResult:
+    """Insert a ``pending_merges`` row + ``auto_queued`` journal row.
+
+    This is the shared, trigger-context-agnostic enqueue primitive.
+    BOTH the bulk-M3U hook (:func:`check_and_enqueue_pending_merge`,
+    ``trigger_context='m3u_refresh'``) and the MCP prompt path
+    (``POST /api/channel-merges``, ``trigger_context='mcp_tool'``) call
+    it. It is NOT gated to ``m3u_refresh`` — the gate lives in the M3U
+    hook wrapper, not here.
+
+    Encodes the load-bearing ADR-008 invariants in one place so the two
+    surfaces cannot drift:
+
+    * §D5 idempotency — the partial unique index
+      ``(stream_name, candidate_channel_id) WHERE status='pending'``
+      raises ``IntegrityError`` on a duplicate pending row. This is
+      caught, the existing row is looked up, and its ``merge_id`` is
+      returned (``fresh=False``). No second journal row, no metric bump.
+    * §D6 audit — EVERY fresh enqueue writes a ``pending_merge_journal``
+      row with ``action_type='auto_queued'`` and the full seven-field
+      audit set. ``source_channel_id`` is the raw ``stream_name`` (the
+      bulk-import / queue-time audit-first fallback per §D6 — the
+      Dispatcharr stream id is not resolved at queue time). ``confidence_
+      score`` is the score captured at action time (``match.confidence``).
+    * BD-M metric — a fresh insert increments
+      ``ecm_pending_merges_queue_depth_added_total`` (LOCKED CONTRACT)
+      and refreshes the companion queue-depth gauge.
+
+    The row INSERT + journal write land in a single ``commit`` so a
+    crash between them cannot leave a queue row with no audit trail.
+
+    Parameters
+    ----------
+    stream_name:
+        Raw incoming stream name (stored verbatim; normalization is the
+        matcher's compare-time concern).
+    group_id:
+        Dispatcharr group id, or ``None`` for the ungrouped scope
+        (stored as NULL).
+    match:
+        The already-scored :class:`MatchResult`. The caller runs the
+        matcher; this core trusts the candidate id + confidence verbatim
+        (the caller is responsible for using the authoritative
+        action-time threshold, per §D6).
+    trigger_context:
+        ``'m3u_refresh'`` | ``'add_stream'`` | ``'drag_drop'`` |
+        ``'mcp_tool'`` — the surface that enqueued the row. Written to
+        both ``pending_merges.trigger_context`` and the journal row.
+    actor_token_id:
+        The §D6 audit actor — the token's DB id as a string, or
+        ``"anonymous"`` when auth is disabled. For the M3U hook this is
+        a fixed system-actor sentinel; for the MCP path it is resolved
+        from the bearer token.
+    db_session:
+        SQLAlchemy session for ECM's ``journal.db``. The core commits
+        its own unit of work and rolls back on the §D5 collision so the
+        caller can keep using the session.
+
+    Returns
+    -------
+    EnqueueResult
+        See the dataclass docstring.
+    """
+    from models import PendingMerge, PendingMergeJournal
+
+    now_ms = int(time.time() * 1000)
+    row = PendingMerge(
+        stream_name=stream_name,
+        group_id=group_id,
+        candidate_channel_id=match.candidate_channel_id,
+        confidence=match.confidence,
+        status="pending",
+        created_at=now_ms,
+        trigger_context=trigger_context,
+    )
+    db_session.add(row)
+    try:
+        # Flush (not commit) so the row gets its autoincrement id, which
+        # the NOT NULL FK on the journal row needs. A §D5 collision raises
+        # here at flush time.
+        db_session.flush()
+    except IntegrityError:
+        # ADR-008 §D5: a pending row for this (stream_name,
+        # candidate_channel_id) pair already exists. Roll back, look up
+        # the authoritative existing row, and return its id idempotently.
+        db_session.rollback()
+        existing = (
+            db_session.query(PendingMerge)
+            .filter(
+                PendingMerge.stream_name == stream_name,
+                PendingMerge.candidate_channel_id == match.candidate_channel_id,
+                PendingMerge.status == "pending",
+            )
+            .order_by(PendingMerge.created_at.asc(), PendingMerge.id.asc())
+            .first()
+        )
+        if existing is None:  # pragma: no cover — defensive; the IntegrityError implies one exists
+            raise
+        logger.info(
+            "[DEDUP] Pending merge for stream=%r candidate=%s already queued "
+            "(merge_id=%s); idempotent no-op (partial-unique-index collision "
+            "per ADR-008 §D5)",
+            stream_name, match.candidate_channel_id, existing.id,
+        )
+        return EnqueueResult(merge_id=int(existing.id), fresh=False, candidate=match)
+
+    # §D6: every queue action writes an audit row. action_type='auto_queued',
+    # source_channel_id is the raw stream_name (queue-time audit-first
+    # fallback — the Dispatcharr stream id is not resolved here).
+    journal = PendingMergeJournal(
+        pending_merge_id=row.id,
+        actor_token_id=actor_token_id,
+        action_type="auto_queued",
+        source_channel_id=stream_name,
+        target_channel_id=match.candidate_channel_id,
+        confidence_score=match.confidence,
+        timestamp_utc=now_ms,
+        trigger_context=trigger_context,
+    )
+    db_session.add(journal)
+    db_session.commit()
+
+    # Fresh insert — emit the LOCKED-CONTRACT counter per BD-M.
+    try:
+        from observability import get_metric
+        get_metric("pending_merges_queue_depth_added_total").inc()
+    except Exception:  # pragma: no cover
+        # Observability must not break the enqueue path. The pending row
+        # is the source of truth; a failed metric emit is logged at DEBUG.
+        logger.debug(
+            "[DEDUP] metric increment failed for "
+            "ecm_pending_merges_queue_depth_added_total",
+            exc_info=True,
+        )
+
+    # Update the companion gauge (bd-wvr1d). Best-effort.
+    try:
+        from observability import set_pending_merges_queue_depth_gauge
+        set_pending_merges_queue_depth_gauge(db_session)
+    except Exception:  # pragma: no cover — defensive import guard
+        logger.warning(
+            "[DEDUP] gauge update failed after pending_merges insert",
+            exc_info=True,
+        )
+
+    logger.info(
+        "[DEDUP] Enqueued pending merge: merge_id=%s stream=%r group_id=%s "
+        "candidate_channel_id=%s confidence=%.2f trigger=%s",
+        row.id, stream_name, group_id, match.candidate_channel_id,
+        match.confidence, trigger_context,
+    )
+    return EnqueueResult(merge_id=int(row.id), fresh=True, candidate=match)
 
 
 def check_and_enqueue_pending_merge(
@@ -189,70 +394,23 @@ def check_and_enqueue_pending_merge(
         # scored above the clamped threshold).
         return DedupHookResult(enqueued=False)
 
-    # Import inside the function so test code that imports the module
-    # doesn't need PendingMerge available at import time (avoids a
-    # circular-import risk if someone later wires the executor through
-    # a shared module).
-    from models import PendingMerge
-
-    created_at_ms = int(time.time() * 1000)
-    row = PendingMerge(
+    # Delegate the INSERT → §D5 idempotency → §D6 journal → BD-M metric to
+    # the shared, trigger-context-agnostic core. The M3U surface fixes
+    # trigger_context='m3u_refresh' and the system-actor sentinel; the gate
+    # above (triggered_by / dry_run) is the M3U-specific policy that stays
+    # in this wrapper.
+    result = enqueue_pending_merge(
         stream_name=stream_name,
         group_id=group_id,
-        candidate_channel_id=match.candidate_channel_id,
-        confidence=match.confidence,
-        status="pending",
-        created_at=created_at_ms,
+        match=match,
         trigger_context=M3U_REFRESH_TRIGGER_CONTEXT,
+        actor_token_id=M3U_REFRESH_ACTOR_TOKEN_ID,
+        db_session=db_session,
     )
-    db_session.add(row)
-    try:
-        db_session.commit()
-    except IntegrityError:
-        # ADR-008 §D5 partial unique index collision: a pending row for
-        # this (stream_name, candidate_channel_id) pair already exists.
-        # This is the expected repeat-import path — log at INFO so the
-        # operator can see in trace why a stream they expected to
-        # re-prompt did not, then signal "skip channel creation"
-        # because the prior pending row is still authoritative.
-        db_session.rollback()
-        logger.info(
-            "[DEDUP] Pending merge for stream=%r candidate=%s already queued; "
-            "skipping (partial-unique-index collision per ADR-008 §D5)",
-            stream_name, match.candidate_channel_id,
-        )
-        return DedupHookResult(enqueued=True, candidate=None)
-
-    # Fresh insert — emit the LOCKED-CONTRACT counter per BD-M.
-    try:
-        from observability import get_metric
-        get_metric("pending_merges_queue_depth_added_total").inc()
-    except Exception:  # pragma: no cover
-        # Observability must not break the import path. A failed
-        # metric emission is logged at DEBUG and the enqueue still
-        # succeeded — the pending row is the source of truth.
-        logger.debug(
-            "[DEDUP] metric increment failed for "
-            "ecm_pending_merges_queue_depth_added_total",
-            exc_info=True,
-        )
-
-    # Update the companion gauge (bd-wvr1d). Best-effort: a failed COUNT
-    # or gauge.set is logged at WARN inside the helper and never blocks
-    # the enqueue path — the pending row is the source of truth.
-    try:
-        from observability import set_pending_merges_queue_depth_gauge
-        set_pending_merges_queue_depth_gauge(db_session)
-    except Exception:  # pragma: no cover — defensive import guard
-        logger.warning(
-            "[DEDUP] gauge update failed after pending_merges insert",
-            exc_info=True,
-        )
-
-    logger.info(
-        "[DEDUP] Enqueued pending merge: stream=%r group_id=%s "
-        "candidate_channel_id=%s confidence=%.2f trigger=%s",
-        stream_name, group_id, match.candidate_channel_id,
-        match.confidence, M3U_REFRESH_TRIGGER_CONTEXT,
+    # Preserve the historical hook contract: candidate is None on the §D5
+    # collision branch (the prior pending row is authoritative; we did not
+    # re-score it), and the MatchResult on a fresh insert.
+    return DedupHookResult(
+        enqueued=True,
+        candidate=result.candidate if result.fresh else None,
     )
-    return DedupHookResult(enqueued=True, candidate=match)

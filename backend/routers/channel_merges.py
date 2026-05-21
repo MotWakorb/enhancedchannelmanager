@@ -88,7 +88,7 @@ import time
 from typing import List, Literal, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi import status as http_status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -99,7 +99,8 @@ from database import get_session
 from dispatcharr_client import get_client
 from models import PendingMerge, PendingMergeJournal
 from observability import get_metric
-from services.dedup_matcher import find_candidate, MatchResult
+from services.dedup_matcher import CONFIDENCE_FLOOR, find_candidate, MatchResult
+from services.m3u_dedup_hook import enqueue_pending_merge
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +233,69 @@ class DismissOutcome(BaseModel):
 
     journal_entry_id: int
     status: Literal["dismissed"] = "dismissed"
+
+
+# ---------------------------------------------------------------------------
+# bd-b3czq: POST /api/channel-merges — enqueue (ADR-008 §D7 MCP prompt path)
+# ---------------------------------------------------------------------------
+
+
+class EnqueueMergeRequest(BaseModel):
+    """Request body for POST /api/channel-merges (the MCP prompt-mode enqueue).
+
+    The caller supplies only the stream *context* — never a confidence.
+    The endpoint re-runs the matcher server-side against the live
+    Dispatcharr candidate set to capture the authoritative confidence at
+    action time (ADR-008 §D6, mirroring the bulk-M3U hook). A
+    client-supplied confidence cannot be trusted: the candidate pool and
+    the operator threshold may have drifted since the client last looked.
+
+    ``group_id`` is optional — ``None`` is the ungrouped scope (the matcher
+    searches all groups), matching ``GET /api/channel-merges/candidates``.
+    """
+
+    stream_name: str
+    group_id: Optional[int] = None
+
+
+class EnqueueMergeResponse(BaseModel):
+    """Response for POST /api/channel-merges.
+
+    Two shapes, distinguished by ``created`` / ``merge_id``:
+
+    * **Candidate found (``created`` may be True or False).** A
+      ``pending_merges`` row exists for this pair. ``merge_id`` is the row
+      id the agent passes to ``accept_channel_merge`` /
+      ``dismiss_channel_merge``. ``created`` is True when this call
+      inserted the row, False when an existing pending row was returned
+      idempotently (§D5 collision). The candidate fields + ``confidence``
+      echo what the row was queued against so the agent does not need a
+      second round-trip.
+    * **No candidate above threshold.** ``merge_id`` is ``None``,
+      ``created`` is False, and the candidate fields are ``None``. The
+      caller proceeds with normal channel creation (the matcher found
+      nothing above ``max(threshold, floor)``).
+
+    The HTTP status carries the same fresh-vs-idempotent signal: 201 on a
+    fresh insert, 200 on an idempotent collision or a no-candidate result.
+
+    ``meets_threshold`` is the server-authoritative answer to "is this
+    candidate's confidence at or above the operator's auto-merge
+    threshold?" — so a ``merge_if_found`` caller can decide auto-accept vs
+    prompt without re-reading settings. The enqueue matcher runs at the
+    §D2 *floor* (not the threshold) so it surfaces every show-able
+    candidate to the agent, mirroring the operator modal; the threshold is
+    the auto-merge bar the caller applies, reported here. ``None`` when no
+    candidate was found.
+    """
+
+    merge_id: Optional[int] = None
+    created: bool = False
+    candidate_channel_id: Optional[str] = None
+    candidate_channel_name: Optional[str] = None
+    confidence: Optional[float] = None
+    meets_threshold: Optional[bool] = None
+    status: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -513,6 +577,164 @@ async def get_dedup_candidates(
         page=page,
         page_size=page_size,
         total_pages=total_pages,
+    )
+
+
+# ---------------------------------------------------------------------------
+# bd-b3czq: POST /api/channel-merges — enqueue (ADR-008 §D7 MCP prompt path)
+# ---------------------------------------------------------------------------
+@router.post(
+    "",
+    response_model=EnqueueMergeResponse,
+    status_code=http_status.HTTP_201_CREATED,
+)
+async def enqueue_pending_merge_endpoint(
+    request: Request,
+    body: EnqueueMergeRequest,
+    response: Response,
+    db: Session = Depends(get_session),
+    user=RequireAdminIfEnabled,
+) -> EnqueueMergeResponse:
+    """Async-queue a merge candidate and return its ``merge_id`` (ADR-008 §D7).
+
+    This is the enqueue half of the §D7 MCP prompt path. The
+    ``add_stream(dedup_action='prompt')`` MCP tool calls it when it wants
+    to defer a probable-duplicate decision to the AI agent: the endpoint
+    creates a ``pending_merges`` row (``trigger_context='mcp_tool'``),
+    writes the §D6 ``auto_queued`` audit row, and returns the new
+    ``merge_id`` so the agent can call back via
+    ``POST /api/channel-merges/{merge_id}/accept`` or ``.../dismiss``.
+
+    Admin-gated — same auth posture as accept / dismiss. ADR-008 §D7
+    ratifies MCP api_key holders as authorized to trigger merges; the
+    journal's ``actor_token_id`` + ``trigger_context='mcp_tool'`` is the
+    audit trail for that posture.
+
+    **Confidence is captured server-side.** The matcher re-runs against
+    the live Dispatcharr candidate set (filtered by ``group_id`` when
+    given) using the operator-configured ``dedup_threshold`` read at
+    request time — exactly like ``GET /candidates`` and the bulk-M3U hook.
+    A client-supplied confidence is not accepted; the action-time score is
+    the authoritative one per §D6.
+
+    Outcomes:
+
+    * **Candidate found, fresh insert** → 201, ``{merge_id, created: true,
+      candidate_*, confidence, status: 'pending'}``.
+    * **Candidate found, §D5 idempotent collision** → 200, the existing
+      pending row's ``merge_id`` with ``created: false`` (same contract as
+      the bulk-M3U hook — the prior row is authoritative).
+    * **No candidate above the §D2 floor** → 200,
+      ``{merge_id: null, created: false}``. The caller proceeds with normal
+      channel creation.
+
+    The enqueue itself (INSERT → §D5 → §D6 journal → BD-M metric) is
+    delegated to the shared ``enqueue_pending_merge`` core so this path and
+    the M3U hook cannot drift.
+    """
+    stream_name = body.stream_name.strip()
+    if not stream_name:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail="stream_name must not be blank",
+        )
+
+    # Re-run the matcher server-side against the live candidate set, exactly
+    # like GET /candidates — so the queued confidence is the action-time one.
+    try:
+        client = get_client()
+        channels_data = await client.get_channels(
+            page=1,
+            page_size=1000,
+            channel_group=body.group_id,
+        )
+    except Exception as e:
+        logger.warning(
+            "[CHANNEL-MERGES] enqueue: failed to fetch channels from "
+            "Dispatcharr: %s", e,
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+    results = channels_data.get("results", [])
+    candidates: list[tuple[str, str]] = [
+        (str(ch["id"]), ch["name"])
+        for ch in results
+        if ch.get("id") is not None and ch.get("name")
+    ]
+
+    settings = get_settings()
+    threshold = settings.dedup_threshold  # operator auto-merge bar
+
+    # Match at the §D2 FLOOR (not the threshold) so the enqueue surfaces
+    # every show-able candidate to the agent — mirroring the operator modal
+    # "prompt at MCP scale" intent of §D7. The threshold is the auto-merge
+    # bar; we report whether the found candidate meets it via
+    # ``meets_threshold`` so a merge_if_found caller can decide auto-accept
+    # vs prompt without re-reading settings. (The bulk-M3U hook and the
+    # operator /candidates lookup keep matching at the threshold — only this
+    # MCP enqueue path widens to the floor.)
+    try:
+        match: MatchResult | None = find_candidate(
+            stream_name, candidates, CONFIDENCE_FLOOR
+        )
+    except Exception as e:
+        logger.warning("[CHANNEL-MERGES] enqueue: matcher raised: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if match is None:
+        # No candidate above the floor: nothing to queue. The caller proceeds
+        # with normal channel creation. 200, not 201 — no resource created.
+        response.status_code = http_status.HTTP_200_OK
+        logger.debug(
+            "[CHANNEL-MERGES] enqueue: no candidate for stream=%r group_id=%s "
+            "(floor=%.2f, candidates=%d) — no row queued",
+            stream_name, body.group_id, CONFIDENCE_FLOOR, len(candidates),
+        )
+        return EnqueueMergeResponse(merge_id=None, created=False)
+
+    meets_threshold = match.confidence >= threshold
+
+    # Delegate the INSERT → §D5 idempotency → §D6 journal → BD-M metric to
+    # the shared core. trigger_context='mcp_tool' per §D7; actor is the
+    # acting token id (or 'anonymous' when auth is disabled).
+    try:
+        enqueued = enqueue_pending_merge(
+            stream_name=stream_name,
+            group_id=body.group_id,
+            match=match,
+            trigger_context="mcp_tool",
+            actor_token_id=_actor_token_id(user),
+            db_session=db,
+        )
+    except Exception as e:  # noqa: BLE001
+        db.rollback()
+        logger.exception(
+            "[CHANNEL-MERGES] enqueue failed for stream=%r candidate=%s: %s",
+            stream_name, match.candidate_channel_id, e,
+        )
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal error enqueueing pending merge",
+        )
+
+    # Fresh insert → 201; idempotent collision → 200 (no resource created).
+    response.status_code = (
+        http_status.HTTP_201_CREATED if enqueued.fresh else http_status.HTTP_200_OK
+    )
+    logger.info(
+        "[CHANNEL-MERGES] enqueue ok: merge_id=%s fresh=%s stream=%r "
+        "candidate=%s confidence=%.2f actor=%s trigger=mcp_tool",
+        enqueued.merge_id, enqueued.fresh, stream_name,
+        match.candidate_channel_id, match.confidence, _actor_token_id(user),
+    )
+    return EnqueueMergeResponse(
+        merge_id=enqueued.merge_id,
+        created=enqueued.fresh,
+        candidate_channel_id=match.candidate_channel_id,
+        candidate_channel_name=match.candidate_name,
+        confidence=match.confidence,
+        meets_threshold=meets_threshold,
+        status="pending",
     )
 
 

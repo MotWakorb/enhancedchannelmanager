@@ -40,6 +40,7 @@ import pytest
 
 import observability
 from models import PendingMerge, PendingMergeJournal
+from services.dedup_matcher import CONFIDENCE_FLOOR
 
 
 # ---------------------------------------------------------------------------
@@ -651,6 +652,240 @@ class TestDismissPendingMerge:
             "/api/channel-merges/99999/dismiss"
         )
         assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# POST /api/channel-merges — enqueue (bd-b3czq, ADR-008 §D7 MCP prompt path)
+# ---------------------------------------------------------------------------
+class TestEnqueuePendingMerge:
+    """Tests for POST /api/channel-merges — the MCP-reachable enqueue.
+
+    ADR-008 §D7 prompt mode async-queues a merge candidate (creates a
+    ``pending_merges`` row with ``trigger_context='mcp_tool'``) and returns
+    a ``merge_id`` so the agent can call back via accept/dismiss. This
+    endpoint re-runs the matcher server-side against the live Dispatcharr
+    candidate set to capture the authoritative confidence at action time
+    (§D6) — it does NOT trust a client-supplied confidence.
+    """
+
+    @pytest.mark.asyncio
+    async def test_enqueue_creates_mcp_tool_row_and_returns_merge_id(
+        self, async_client, test_session
+    ):
+        """Happy path: matcher finds a candidate → row + journal + merge_id."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [
+                {"id": "ch-uuid-001", "name": "ESPN HD"},
+                {"id": "ch-uuid-002", "name": "BBC One"},
+            ]
+        }
+
+        with patch("routers.channel_merges.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channel-merges",
+                json={"stream_name": "ESPN HD", "group_id": 5},
+            )
+
+        assert response.status_code == 201, response.text
+        data = response.json()
+        assert isinstance(data["merge_id"], int)
+        assert data["candidate_channel_id"] == "ch-uuid-001"
+        assert data["candidate_channel_name"] == "ESPN HD"
+        # Exact normalized match → confidence 1.0, captured server-side.
+        assert data["confidence"] == pytest.approx(1.0)
+        assert data["status"] == "pending"
+        assert data["created"] is True
+
+        row = test_session.query(PendingMerge).filter_by(id=data["merge_id"]).one()
+        assert row.stream_name == "ESPN HD"
+        assert row.group_id == 5
+        assert row.candidate_channel_id == "ch-uuid-001"
+        assert row.trigger_context == "mcp_tool"
+        assert row.status == "pending"
+
+        # §D6 journal row with action_type='auto_queued'.
+        journal = (
+            test_session.query(PendingMergeJournal)
+            .filter_by(pending_merge_id=row.id)
+            .one()
+        )
+        assert journal.action_type == "auto_queued"
+        assert journal.trigger_context == "mcp_tool"
+        assert journal.source_channel_id == "ESPN HD"
+        assert journal.target_channel_id == "ch-uuid-001"
+        assert journal.confidence_score == pytest.approx(1.0)
+
+    @pytest.mark.asyncio
+    async def test_enqueue_above_floor_below_threshold_still_queues(
+        self, async_client, test_session
+    ):
+        """A candidate above the floor but below the threshold is still queued.
+
+        §D7 merge_if_found fallback: the MCP enqueue matches at the §D2 floor
+        (0.60), not the operator threshold, so it surfaces show-able
+        candidates the agent should decide on. ``meets_threshold`` reports
+        whether the score clears the operator auto-merge bar (default 0.80).
+        """
+        # "ESPN HD" vs "ESPN Sports" scores ~0.73 — above the 0.60 floor,
+        # below the 0.80 default threshold.
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [{"id": "ch-uuid-001", "name": "ESPN Sports"}]
+        }
+
+        with patch("routers.channel_merges.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channel-merges",
+                json={"stream_name": "ESPN HD", "group_id": 5},
+            )
+
+        assert response.status_code == 201, response.text
+        data = response.json()
+        assert data["merge_id"] is not None
+        # Above floor (it was returned) but below the 0.80 default threshold.
+        assert CONFIDENCE_FLOOR <= data["confidence"] < 0.80
+        assert data["meets_threshold"] is False
+        # Row was still queued for the agent to decide.
+        assert test_session.query(PendingMerge).count() == 1
+
+    @pytest.mark.asyncio
+    async def test_enqueue_exact_match_meets_threshold(
+        self, async_client, test_session
+    ):
+        """An exact match (confidence 1.0) reports meets_threshold=True."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [{"id": "ch-uuid-001", "name": "ESPN HD"}]
+        }
+        with patch("routers.channel_merges.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channel-merges",
+                json={"stream_name": "ESPN HD", "group_id": 5},
+            )
+        assert response.status_code == 201
+        assert response.json()["meets_threshold"] is True
+
+    @pytest.mark.asyncio
+    async def test_enqueue_no_candidate_returns_200_with_no_merge(
+        self, async_client, test_session
+    ):
+        """No candidate above threshold → 200, merge_id=None, no row written."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [{"id": "ch-uuid-002", "name": "Totally Unrelated Channel"}]
+        }
+
+        with patch("routers.channel_merges.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channel-merges",
+                json={"stream_name": "ESPN HD", "group_id": 5},
+            )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["merge_id"] is None
+        assert data["created"] is False
+        assert data["candidate_channel_id"] is None
+        assert test_session.query(PendingMerge).count() == 0
+        assert test_session.query(PendingMergeJournal).count() == 0
+
+    @pytest.mark.asyncio
+    async def test_enqueue_idempotent_collision_returns_existing_merge_id(
+        self, async_client, test_session
+    ):
+        """§D5: a second enqueue of the same pair returns the existing merge_id."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [{"id": "ch-uuid-001", "name": "ESPN HD"}]
+        }
+
+        with patch("routers.channel_merges.get_client", return_value=mock_client):
+            first = await async_client.post(
+                "/api/channel-merges",
+                json={"stream_name": "ESPN HD", "group_id": 5},
+            )
+            assert first.status_code == 201
+            first_id = first.json()["merge_id"]
+
+            second = await async_client.post(
+                "/api/channel-merges",
+                json={"stream_name": "ESPN HD", "group_id": 5},
+            )
+
+        # Idempotent — same merge_id, 200 (not a fresh 201), created=False.
+        assert second.status_code == 200, second.text
+        data = second.json()
+        assert data["merge_id"] == first_id
+        assert data["created"] is False
+        # No duplicate row / journal.
+        assert test_session.query(PendingMerge).count() == 1
+        assert test_session.query(PendingMergeJournal).count() == 1
+
+    @pytest.mark.asyncio
+    async def test_enqueue_bumps_queue_depth_metric_on_fresh(
+        self, async_client, test_session
+    ):
+        """A fresh enqueue increments ecm_pending_merges_queue_depth_added_total."""
+        observability.install_metrics()
+        counter = observability.get_metric("pending_merges_queue_depth_added_total")
+        before = counter._value.get()
+
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [{"id": "ch-uuid-001", "name": "ESPN HD"}]
+        }
+        with patch("routers.channel_merges.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channel-merges",
+                json={"stream_name": "ESPN HD", "group_id": 5},
+            )
+        assert response.status_code == 201
+        assert counter._value.get() == before + 1
+
+    @pytest.mark.asyncio
+    async def test_enqueue_blank_stream_name_returns_400(
+        self, async_client, test_session
+    ):
+        """A blank stream_name is rejected with 400."""
+        response = await async_client.post(
+            "/api/channel-merges",
+            json={"stream_name": "   ", "group_id": 5},
+        )
+        assert response.status_code == 400
+        assert "stream_name" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_enqueue_missing_stream_name_returns_422(
+        self, async_client, test_session
+    ):
+        """A missing required field is a Pydantic 422."""
+        response = await async_client.post(
+            "/api/channel-merges",
+            json={"group_id": 5},
+        )
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_enqueue_ignores_client_supplied_confidence(
+        self, async_client, test_session
+    ):
+        """A client-supplied confidence is ignored — the matcher is authoritative."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [{"id": "ch-uuid-001", "name": "ESPN HD"}]
+        }
+        with patch("routers.channel_merges.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channel-merges",
+                # confidence is not a request field; even if a client tries to
+                # smuggle one, the server re-scores. Exact match → 1.0.
+                json={"stream_name": "ESPN HD", "group_id": 5, "confidence": 0.01},
+            )
+        assert response.status_code == 201
+        assert response.json()["confidence"] == pytest.approx(1.0)
+        row = test_session.query(PendingMerge).one()
+        assert row.confidence == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------
