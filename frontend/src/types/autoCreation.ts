@@ -219,6 +219,12 @@ export interface AutoCreationRule {
   // targeting different groups can create separate channels with the
   // same name instead of merging into a foreign group (GH-92).
   match_scope_target_group?: boolean;
+  // Explicit rule-level scope group for merge lookups (GH #298). When
+  // match_scope_target_group is on, this pins the group that name lookups
+  // are restricted to across both create_channel and merge_streams. null/
+  // undefined = "Auto" (create_channel falls back to the action's target
+  // group; merge_streams stays group-agnostic).
+  match_scope_group_id?: number | null;
   last_run_at?: string;
   match_count: number;
   created_at: string;
@@ -251,6 +257,8 @@ export interface CreateRuleData {
   skip_struck_streams?: boolean;
   orphan_action?: string;
   match_scope_target_group?: boolean;
+  // Explicit rule-level scope group for merge lookups (GH #298). null = "Auto".
+  match_scope_group_id?: number | null;
 }
 
 /**

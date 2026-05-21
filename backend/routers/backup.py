@@ -63,7 +63,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 
 # App version for manifest (imported at call time to avoid circular imports)
 
-APP_VERSION = "0.17.1-0072"
+APP_VERSION = "0.17.1-0073"
 
 REDACTED = "***REDACTED***"
 
@@ -1182,6 +1182,9 @@ def _restore_auto_creation_rules(items: list) -> dict:
                 # backups always include this field (via to_dict). An ancient
                 # backup that omits it inherits the new-rule default (True).
                 match_scope_target_group=item.get("match_scope_target_group", True),
+                # GH #298 (bd-kncun): None = "Auto" (preserves prior behavior).
+                # Backups predating this column omit it and inherit None.
+                match_scope_group_id=item.get("match_scope_group_id"),
             )
             session.add(rule)
         session.commit()
