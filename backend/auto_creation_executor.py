@@ -272,7 +272,8 @@ class ActionExecutor:
     async def execute(self, action: Action | dict, stream_ctx: StreamContext,
                       exec_ctx: ExecutionContext, rule_target_group_id: int = None,
                       normalization_group_ids: list[int] = None,
-                      match_scope_target_group: bool = False) -> ActionResult:
+                      match_scope_target_group: bool = False,
+                      rule_scope_group_id: int = None) -> ActionResult:
         """
         Execute a single action.
 
@@ -288,6 +289,14 @@ class ActionExecutor:
                 to create separate channels with the same name instead of
                 merging into the first group's channel (GH-92, bd-r9mtd).
                 Default False preserves pre-GH-92 global-lookup behavior.
+            rule_scope_group_id: Explicit rule-level scope group (GH #298,
+                bd-kncun). When set AND match_scope_target_group is True, it
+                pins the group that name lookups are restricted to — in
+                create_channel it takes precedence over the action's derived
+                group_id, and in merge_streams it is the ONLY way to scope the
+                match (merge_streams has no action group_id). None (default)
+                preserves prior behavior: create_channel falls back to the
+                derived group, merge_streams stays group-agnostic.
 
         Returns:
             ActionResult with execution details
@@ -321,13 +330,16 @@ class ActionExecutor:
             result = await self._execute_create_channel(
                 action, stream_ctx, exec_ctx, template_ctx, rule_target_group_id,
                 normalization_group_ids=normalization_group_ids,
-                match_scope_target_group=match_scope_target_group
+                match_scope_target_group=match_scope_target_group,
+                rule_scope_group_id=rule_scope_group_id
             )
         elif action_type == ActionType.CREATE_GROUP:
             result = await self._execute_create_group(action, stream_ctx, exec_ctx, template_ctx)
         elif action_type == ActionType.MERGE_STREAMS:
             result = await self._execute_merge_streams(action, stream_ctx, exec_ctx, template_ctx,
-                                                         normalization_group_ids=normalization_group_ids)
+                                                         normalization_group_ids=normalization_group_ids,
+                                                         match_scope_target_group=match_scope_target_group,
+                                                         rule_scope_group_id=rule_scope_group_id)
         elif action_type == ActionType.ASSIGN_LOGO:
             result = await self._execute_assign_logo(action, stream_ctx, exec_ctx, template_ctx)
         elif action_type == ActionType.ASSIGN_TVG_ID:
@@ -507,7 +519,8 @@ class ActionExecutor:
                                        exec_ctx: ExecutionContext, template_ctx: dict,
                                        rule_target_group_id: int = None,
                                        normalization_group_ids: list[int] = None,
-                                       match_scope_target_group: bool = False) -> ActionResult:
+                                       match_scope_target_group: bool = False,
+                                       rule_scope_group_id: int = None) -> ActionResult:
         """Execute create_channel action."""
         params = action.params
         name_template = params.get("name_template", "{stream_name}")
@@ -558,7 +571,11 @@ class ActionExecutor:
         # When match_scope_target_group is True, restrict the lookup to channels in the
         # effective target group (GH-92, bd-r9mtd) so that two rules targeting different
         # groups can create separate channels with the same name.
-        scope_group_id = group_id if match_scope_target_group else None
+        #
+        # GH #298 (bd-kncun): prefer the explicit rule-level scope group when set,
+        # falling back to the action's derived group_id. NULL rule_scope_group_id
+        # preserves the prior behavior (scope = derived group_id).
+        scope_group_id = (rule_scope_group_id or group_id) if match_scope_target_group else None
         existing = self._find_channel_by_name(channel_name, scope_group_id=scope_group_id)
         logger.debug(
             "[AUTO-CREATE-EXEC] Lookup '%s' (scope_group_id=%s): %s",
@@ -1073,19 +1090,36 @@ class ActionExecutor:
 
     async def _execute_merge_streams(self, action: Action, stream_ctx: StreamContext,
                                       exec_ctx: ExecutionContext, template_ctx: dict,
-                                      normalization_group_ids: list[int] = None) -> ActionResult:
-        """Execute merge_streams action."""
+                                      normalization_group_ids: list[int] = None,
+                                      match_scope_target_group: bool = False,
+                                      rule_scope_group_id: int = None) -> ActionResult:
+        """Execute merge_streams action.
+
+        GH #298 (bd-kncun): when ``match_scope_target_group`` is on and the rule
+        carries an explicit ``rule_scope_group_id``, the channel match is scoped
+        to that group across EVERY resolution path (name_exact, regex, tvg_id,
+        normalized auto, core-name map, deparen, word-prefix, call-sign). merge_
+        streams has no action group_id, so ``rule_scope_group_id`` is the only
+        source of an effective scope group — if scope is on but the rule has no
+        explicit scope group (NULL), behavior is unchanged (search all groups),
+        and the rule builder warns the operator about that case.
+        """
         params = action.params
         target = params.get("target", "auto")
         find_channel_by = params.get("find_channel_by")
         max_streams = params.get("max_streams_per_channel", 0)  # 0 = unlimited
         find_channel_value = params.get("find_channel_value")
         remove_non_matching = params.get("remove_non_matching", False) is True
+        # Effective scope group for merge lookups (GH #298). merge_streams has no
+        # action group_id, so the explicit rule scope group is the only source.
+        # None when scope is off or no explicit group is pinned — preserves the
+        # prior group-agnostic match.
+        effective_scope_group_id = rule_scope_group_id if match_scope_target_group else None
         logger.debug(
             "[AUTO-CREATE-EXEC] target=%s find_by=%s "
-            "find_value=%s stream=%r",
+            "find_value=%s stream=%r scope_group_id=%s",
             target, find_channel_by,
-            find_channel_value, stream_ctx.stream_name
+            find_channel_value, stream_ctx.stream_name, effective_scope_group_id
         )
 
         # For existing_channel target, find the channel
@@ -1094,7 +1128,7 @@ class ActionExecutor:
 
             if find_channel_by == "name_exact":
                 expanded_name = TemplateVariables.expand_template(find_channel_value or "", template_ctx, exec_ctx.custom_variables)
-                channel = self._find_channel_by_name(expanded_name)
+                channel = self._find_channel_by_name(expanded_name, scope_group_id=effective_scope_group_id)
             elif find_channel_by == "name_regex":
                 channel = self._find_channel_by_regex(find_channel_value)
             elif find_channel_by == "tvg_id":
@@ -1113,7 +1147,7 @@ class ActionExecutor:
                     except Exception as e:
                         logger.warning("[AUTO-CREATE-EXEC] Normalization failed for stream '%s': %s", stream_ctx.stream_name, e)
                 logger.debug("[AUTO-CREATE-EXEC] Auto-lookup by normalized name: '%s'", lookup_name)
-                channel = self._find_channel_by_name(lookup_name)
+                channel = self._find_channel_by_name(lookup_name, scope_group_id=effective_scope_group_id)
 
             # Core-name fallback: strip country prefix + quality suffix using
             # tag groups directly (works even when normalization rules are disabled)
@@ -1171,6 +1205,26 @@ class ActionExecutor:
                             logger.debug("[AUTO-CREATE-EXEC] Call sign matched '%s' (id=%s)", channel.get('name'), channel.get('id'))
                 except Exception as e:
                     logger.debug("[AUTO-CREATE-EXEC] Call sign fallback failed: %s", e)
+
+            # GH #298 (bd-kncun): post-resolution scope enforcement. The name-
+            # keyed paths above — name_regex, tvg_id, and especially the global
+            # fallback maps (_core_name_to_channel, _callsign_to_channel) and the
+            # deparen / word-prefix lookups — do NOT honor the group scope on
+            # their own. Whatever path produced the candidate, if a scope group
+            # is in effect and the resolved channel lives in a different group,
+            # treat it as "not found" so the rule does not merge across groups.
+            # name_exact and the normalized auto-fallback already filtered via
+            # _find_channel_by_name(scope_group_id=...); re-checking them here is
+            # a cheap, harmless no-op (same group passes again).
+            if channel and effective_scope_group_id is not None \
+                    and channel.get("channel_group_id") != effective_scope_group_id:
+                logger.debug(
+                    "[AUTO-CREATE-EXEC] Scope reject: candidate '%s' (id=%s) in "
+                    "group %s != scope group %s — treating as not found",
+                    channel.get('name'), channel.get('id'),
+                    channel.get('channel_group_id'), effective_scope_group_id
+                )
+                channel = None
 
             if channel:
                 # Track merged stream IDs per channel for optional prune step.

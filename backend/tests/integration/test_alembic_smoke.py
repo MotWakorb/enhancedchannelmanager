@@ -1690,6 +1690,20 @@ class TestSmartBootstrapFastPath:
             Base = database.Base
             Base.metadata.create_all(bind=engine)
 
+            # create_all() materialises missing TABLES and their columns, but it
+            # cannot add a column to a table that already exists at 0005. Post-
+            # 0005 migrations that ADD COLUMN to a pre-0005 table (e.g. 0019's
+            # auto_creation_rules.match_scope_group_id, GH #298) therefore stay
+            # absent after create_all(). To simulate the true "ORM fully ahead
+            # of the migration timeline" state this test asserts on, add those
+            # columns by hand so the live schema genuinely matches head — exactly
+            # what _schema_matches_head must see for the fast-path to engage.
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_rules "
+                    "ADD COLUMN match_scope_group_id INTEGER"
+                ))
+
             # Sanity: alembic_version is still at 0005 (create_all does not
             # touch the version row), but every model table is now present.
             with engine.connect() as conn:
@@ -3724,5 +3738,196 @@ class TestMigration0018Idempotent:
                 assert col_type == "TEXT", (
                     f"{name} must be TEXT after round-trip"
                 )
+        finally:
+            engine.dispose()
+
+
+@pytest.mark.integration
+class TestMigration0019:
+    """Migration 0019 — explicit ``match_scope_group_id`` on ``auto_creation_rules``.
+
+    GH #298 (bd-kncun): adds a single NULLABLE INTEGER column so a rule can
+    pin the group its merge lookups are scoped to, independent of any action's
+    target group. NULL (the default for every existing row) preserves prior
+    behavior exactly — no backfill, no NOT NULL, no server default.
+
+    Coverage:
+      - Fresh upgrade through 0019 — column exists as INTEGER NULL; every prior
+        auto_creation_rules column (the 0002 ``match_scope_target_group`` flag,
+        ``orphan_action``, the 0005 quality columns) is untouched.
+      - Fresh downgrade — the column is gone; everything prior survives.
+      - Idempotency (bd-5w6jz) — column already present via create_all() drift
+        does not raise ``OperationalError: duplicate column name``.
+      - Round-trip up/down/up — re-appliable after a downgrade.
+    """
+
+    NEW_COLUMN = "match_scope_group_id"
+
+    def test_fresh_sqlite_upgrade_through_0019(self, tmp_path):
+        """Fresh DB: ``alembic upgrade 0019`` adds the nullable column."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0019_fresh.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0019")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "auto_creation_rules")
+            assert self.NEW_COLUMN in cols, (
+                f"{self.NEW_COLUMN} missing after upgrade 0019 — migration "
+                f"0019 did not run correctly."
+            )
+            # Prior auto_creation_rules columns are preserved — additive only.
+            for prior in (
+                "match_scope_target_group",
+                "orphan_action",
+                "quality_tie_break_order",
+                "quality_m3u_tie_break_enabled",
+            ):
+                assert prior in cols, (
+                    f"{prior} must be preserved by 0019 — the scope-group "
+                    f"column is additive."
+                )
+            # Verify NULLABLE INTEGER with no DEFAULT via PRAGMA.
+            with engine.connect() as conn:
+                rows = conn.execute(text(
+                    "PRAGMA table_info(auto_creation_rules)"
+                )).fetchall()
+            col_info = {r[1]: r for r in rows}
+            _, name, col_type, notnull, dflt, _pk = col_info[self.NEW_COLUMN]
+            assert notnull == 0, (
+                f"{name} must be NULLABLE (notnull=0); got notnull={notnull}"
+            )
+            assert col_type == "INTEGER", (
+                f"{name} must be INTEGER; got type={col_type!r}"
+            )
+            assert dflt is None, (
+                f"{name} must have no DEFAULT; got dflt={dflt!r}"
+            )
+        finally:
+            engine.dispose()
+
+    def test_fresh_sqlite_downgrade_from_0019(self, tmp_path):
+        """Downgrade 0019 -> 0018: the new column is dropped."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0019_downgrade.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0019")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert self.NEW_COLUMN in _column_names(engine, "auto_creation_rules"), (
+                "test setup is wrong — column missing post-upgrade"
+            )
+        finally:
+            engine.dispose()
+
+        command.downgrade(cfg, "0018")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "auto_creation_rules")
+            assert self.NEW_COLUMN not in cols, (
+                f"{self.NEW_COLUMN} still present after downgrade — 0019's "
+                f"downgrade() did not drop the column."
+            )
+            # The 0002 flag must survive — it is unrelated to this migration.
+            assert "match_scope_target_group" in cols, (
+                "match_scope_target_group must survive downgrade — it was "
+                "never added or dropped by 0019."
+            )
+        finally:
+            engine.dispose()
+
+    def test_drifted_column_already_added(self, tmp_path):
+        """create_all()-style drift: column already present pre-0019.
+
+        Long-running install where ``create_all()`` materialised the post-0019
+        ORM column ahead of Alembic. The guarded upgrade must early-return
+        rather than raising ``OperationalError: duplicate column name``.
+        """
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0019_drift.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0018")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert self.NEW_COLUMN not in _column_names(engine, "auto_creation_rules"), (
+                "test setup is wrong — column already at 0018"
+            )
+            with engine.begin() as conn:
+                conn.execute(text(
+                    f"ALTER TABLE auto_creation_rules ADD COLUMN "
+                    f"{self.NEW_COLUMN} INTEGER"
+                ))
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == "0018"
+        finally:
+            engine.dispose()
+
+        # Pre-fix this would raise:
+        #   OperationalError: duplicate column name: match_scope_group_id
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert self.NEW_COLUMN in _column_names(engine, "auto_creation_rules")
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).fetchone()
+            assert row is not None and row[0] == database.get_alembic_head_revision()
+        finally:
+            engine.dispose()
+
+    def test_round_trip_up_down_up(self, tmp_path):
+        """Round-trip: upgrade 0019, downgrade to 0018, re-upgrade to 0019.
+
+        A migration that breaks on re-apply after a downgrade is the hardest
+        mistake to catch in a fresh-DB test. The column must reappear with its
+        NULLABLE INTEGER shape intact.
+        """
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0019_round_trip.db'}"
+        cfg = _make_alembic_config(db_url)
+
+        command.upgrade(cfg, "0019")
+        engine = create_engine(db_url, future=True)
+        try:
+            assert self.NEW_COLUMN in _column_names(engine, "auto_creation_rules")
+        finally:
+            engine.dispose()
+
+        command.downgrade(cfg, "0018")
+        engine = create_engine(db_url, future=True)
+        try:
+            assert self.NEW_COLUMN not in _column_names(engine, "auto_creation_rules")
+        finally:
+            engine.dispose()
+
+        command.upgrade(cfg, "0019")
+        engine = create_engine(db_url, future=True)
+        try:
+            cols = _column_names(engine, "auto_creation_rules")
+            assert self.NEW_COLUMN in cols, (
+                f"{self.NEW_COLUMN} missing after re-upgrade — the migration "
+                f"must be re-appliable after a downgrade."
+            )
+            with engine.connect() as conn:
+                rows = conn.execute(text(
+                    "PRAGMA table_info(auto_creation_rules)"
+                )).fetchall()
+            col_info = {r[1]: r for r in rows}
+            _, name, col_type, notnull, _dflt, _pk = col_info[self.NEW_COLUMN]
+            assert notnull == 0, f"{name} must be NULLABLE after round-trip"
+            assert col_type == "INTEGER", f"{name} must be INTEGER after round-trip"
         finally:
             engine.dispose()
