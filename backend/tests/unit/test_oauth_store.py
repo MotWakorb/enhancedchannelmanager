@@ -1,10 +1,14 @@
-"""Tests for the OAuth state store (oauth_store.py) — bead buiqr.2.
+"""Tests for the OAuth state store (auth/oauth_store.py) — bead buiqr.2.
 
 The store is the foundation layer of the OAuth 2.1 epic (ADR-009 §5). It is a
-framework-agnostic SQLite data layer that the Authorization Server (ECM,
-buiqr.3) writes to and the Resource Server (MCP, buiqr.8) reads from. Neither
-container calls the other at runtime — they share the file at
-/config/mcp_oauth.db (WAL mode).
+framework-agnostic SQLite data layer owned **exclusively by ECM** (the
+Authorization Server, buiqr.3). ECM mounts /config read-write and is the sole
+process that reads/writes /config/mcp_oauth.db. The MCP Resource Server
+(buiqr.8) mounts /config read-only and never opens this file — it verifies
+Bearer JWTs offline, with the revocation window bounded by a short access-token
+TTL. WAL mode covers concurrent access from ECM's own worker threads. (This is
+Option A from blocker gswk2, which re-homed the store here from mcp-server/ and
+reversed the original "MCP-managed, RS-reads-the-file" design.)
 
 These tests cover every acceptance criterion:
   AC1 — clean store API round-trips (create/lookup/consume/revoke) per table.
@@ -24,7 +28,7 @@ import threading
 
 import pytest
 
-from oauth_store import (
+from auth.oauth_store import (
     AUTH_CODE_MAX_TTL_SECONDS,
     REFRESH_TOKEN_MAX_TTL_SECONDS,
     OAuthStore,
@@ -607,7 +611,8 @@ class TestConcurrentWrites:
 
 
 class TestSchemaContract:
-    """The schema is the cross-container contract (ECM AS + MCP RS share it)."""
+    """The schema is ECM-owned; these assert idempotent init + multi-connection
+    (multiple ECM worker connections) integrity, not any cross-container share."""
 
     def test_all_five_tables_exist(self, store):
         names = {
@@ -626,7 +631,7 @@ class TestSchemaContract:
             assert table in names, f"missing table {table}"
 
     def test_init_schema_is_idempotent(self, tmp_path):
-        """init_schema() can run twice (both containers open the same file)."""
+        """init_schema() can run twice (any ECM worker may re-open the file)."""
         db_path = tmp_path / "idem.db"
         s = OAuthStore(db_path)
         s.init_schema()
@@ -634,12 +639,12 @@ class TestSchemaContract:
         s.init_schema()
         s.close()
 
-    def test_second_process_can_open_same_db(self, tmp_path):
-        """Mirrors the cross-container contract: AS writes, RS reads same file."""
+    def test_second_connection_can_open_same_db(self, tmp_path):
+        """A second ECM connection (e.g. another worker) sees the first's writes."""
         db_path = tmp_path / "shared.db"
-        as_side = OAuthStore(db_path)
-        as_side.init_schema()
-        as_side.store_access_token(
+        writer = OAuthStore(db_path)
+        writer.init_schema()
+        writer.store_access_token(
             token="cross-token",
             jti="cross-jti",
             client_id="c",
@@ -647,16 +652,16 @@ class TestSchemaContract:
             scope="mcp",
             ttl_seconds=1800,
         )
-        as_side.close()
+        writer.close()
 
-        rs_side = OAuthStore(db_path)
-        rs_side.connect()
+        reader = OAuthStore(db_path)
+        reader.connect()
         try:
-            record = rs_side.get_access_token("cross-token")
+            record = reader.get_access_token("cross-token")
             assert record is not None
             assert record["jti"] == "cross-jti"
         finally:
-            rs_side.close()
+            reader.close()
 
     def test_parameterized_sql_resists_injection(self, store):
         """A client_id containing SQL metacharacters is stored/looked up safely."""
