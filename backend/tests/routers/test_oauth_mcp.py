@@ -53,7 +53,7 @@ def patch_store_and_secret(oauth_store, monkeypatch):
     """
     monkeypatch.setattr("routers.oauth_mcp.get_oauth_store", lambda: oauth_store)
     monkeypatch.setattr(oauth_store, "close", lambda: None)
-    monkeypatch.setattr("auth.oauth_provider._jwt_secret", lambda: TEST_SECRET)
+    monkeypatch.setattr("auth.oauth_provider._oauth_signing_secret", lambda: TEST_SECRET)
     monkeypatch.setenv("OAUTH_ISSUER", "https://ecm.test")
 
 
