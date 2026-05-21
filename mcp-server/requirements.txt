@@ -69,7 +69,9 @@ pydantic-settings==2.13.1
 pygments==2.20.0
     # via rich
 pyjwt==2.12.1
-    # via mcp
+    # via
+    #   -r mcp-server/requirements.in
+    #   mcp
 python-dotenv==1.2.2
     # via
     #   mcp
