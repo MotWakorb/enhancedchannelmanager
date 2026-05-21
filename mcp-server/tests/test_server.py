@@ -152,6 +152,87 @@ class TestHealthEndpoint:
         assert "setup_hint" in data
         assert "settings" in data["setup_hint"].lower()
 
+    # ---- bd-buiqr10 Option-A slice: signing_key_missing diagnostic ----
+
+    def test_health_reports_signing_key_ok_when_present(self, client):
+        """/health includes signing_key_status='ok' when the HS256 signing secret
+        is present in settings.json (bd-buiqr10).
+
+        The signing secret exists → OAuth Bearer-JWT verification is possible.
+        """
+        with patch("server.get_mcp_api_key_status", return_value=("real-key", "ok")), \
+             patch("server.get_signing_key_status", return_value=("", "ok")):
+            response = client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["signing_key_status"] == "ok"
+        # No signing_key_hint when the secret is wired correctly.
+        assert "signing_key_hint" not in data
+
+    def test_health_reports_signing_key_missing_when_absent(self, client):
+        """/health reports signing_key_status='signing_key_missing' when the HS256
+        secret field is absent from settings.json (bd-buiqr10).
+
+        This is the diagnostic an operator sees when OAuth Bearer-JWT auth is not
+        yet wired: the MCP RS cannot verify tokens offline without the secret.
+        """
+        with patch("server.get_mcp_api_key_status", return_value=("real-key", "ok")), \
+             patch("server.get_signing_key_status", return_value=("", "signing_key_missing")):
+            response = client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["signing_key_status"] == "signing_key_missing"
+        # A setup hint must guide the operator to remediation.
+        assert "signing_key_hint" in data
+        hint = data["signing_key_hint"].lower()
+        assert "signing" in hint or "oauth" in hint or "secret" in hint
+
+    def test_health_signing_key_status_does_not_expose_secret(self, client):
+        """SECURITY: /health response body never contains the HS256 signing secret.
+
+        This is a direct test of threat model ID1 — the /health endpoint is
+        effectively public and must not leak the secret value, even in the 'ok'
+        branch (bd-buiqr10).
+        """
+        secret = "super-secret-signing-value-must-not-appear"
+        with patch("server.get_mcp_api_key_status", return_value=("real-key", "ok")), \
+             patch("server.get_signing_key_status", return_value=("", "ok")):
+            response = client.get("/health")
+        assert response.status_code == 200
+        assert secret not in response.text
+
+    def test_health_signing_key_missing_hint_is_distinct(self, client):
+        """/health signing_key_hint differs from api_key setup_hint strings.
+
+        Each failure mode should have a distinct, operator-targeted hint so
+        the operator can diagnose the specific problem (bd-buiqr10).
+        """
+        with patch("server.get_mcp_api_key_status", return_value=("", "field_missing")), \
+             patch("server.get_signing_key_status", return_value=("", "signing_key_missing")):
+            response = client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        # Both hints must be present
+        assert "setup_hint" in data
+        assert "signing_key_hint" in data
+        # They must be distinct strings
+        assert data["setup_hint"] != data["signing_key_hint"]
+
+    def test_health_existing_api_key_statuses_unaffected(self, client):
+        """Existing api_key_status codes are unaffected by the signing_key addition.
+
+        No regression on bd-ix1g6's contract (bd-buiqr10 is additive only).
+        """
+        for status in ("file_not_found", "invalid_json", "field_missing", "field_empty"):
+            with patch("server.get_mcp_api_key_status", return_value=("", status)), \
+                 patch("server.get_signing_key_status", return_value=("", "ok")):
+                response = client.get("/health")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["api_key_status"] == status, f"Expected api_key_status={status}"
+            # signing_key_status is always present alongside api_key_status
+            assert "signing_key_status" in data, f"signing_key_status missing for api_key_status={status}"
+
 
 class TestMCPAuth:
     """Tests for API key authentication on the /mcp Streamable HTTP endpoint."""
