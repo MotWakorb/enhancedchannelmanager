@@ -2,13 +2,24 @@
 
 Foundation layer of the OAuth 2.1 epic (``enhancedchannelmanager-buiqr``).
 This module is a clean, framework-agnostic data layer; it holds **no** HTTP
-logic, no MCP-SDK coupling, and no FastAPI/Starlette dependency. The
-Authorization Server (ECM, bead ``buiqr.3``) and the Resource Server (MCP,
-bead ``buiqr.8``) both consume this store. Per ADR-009 §1 and §5 the two
-containers **share the SQLite file, not an HTTP endpoint** — the AS *writes*
-hashed token/code/refresh/revocation records and the RS *reads* them for
-validation/revocation. Neither calls the other at runtime, preserving the
-failure-isolation envelope.
+logic, no MCP-SDK coupling, and no FastAPI/Starlette dependency.
+
+OWNERSHIP — ECM-OWNED, SINGLE WRITER (ADR-009 §1/§5, Option A — gswk2)
+================================================================================
+This store is owned **exclusively by the ECM container** (the Authorization
+Server, bead ``buiqr.3``). ECM mounts ``/config`` read-write and is the sole
+process that creates, reads, and writes ``/config/mcp_oauth.db``. The MCP
+container (the Resource Server, bead ``buiqr.8``) mounts ``/config``
+**read-only** and does **not** touch this DB at all: it validates Bearer JWTs
+purely offline (HS256 signature verify against the shared secret it already
+reads from ``settings.json``), and the revocation window is bounded by a short
+access-token TTL (≤ 15 min) rather than by the RS reading a revocation table.
+
+This re-homes the module from ``mcp-server/`` to ``backend/auth/`` and reverses
+the original "MCP-container-managed, RS-reads-the-shared-file" design (epic
+PO-locked decision #3): the MCP container's ``/config:ro`` mount makes both
+writing the DB and reliably reading a live WAL DB infeasible from MCP. See
+blocker ``enhancedchannelmanager-gswk2`` and ADR-009's revision history.
 
 Security posture (ADR-009 §5, threat model TS1/T3/SP*):
   - **Hashed-at-rest.** Token/code values are SHA-256 hashed before storage,
@@ -16,23 +27,24 @@ Security posture (ADR-009 §5, threat model TS1/T3/SP*):
     (``hashlib.sha256(value.encode()).hexdigest()``). A read of the DB yields
     hashes, not bearer credentials (TS1).
   - **jti revocation.** Revocation marks the ``jti`` revoked, mirroring
-    ``revoke_token(jti)`` in the existing JWT subsystem.
+    ``revoke_token(jti)`` in the existing JWT subsystem. Because the RS verifies
+    offline and never reads this store, revocation is enforced by the AS at
+    ``/token`` (a revoked refresh token cannot mint a new access token) and
+    backstopped by the short access-token TTL — not by a per-request RS lookup.
   - **Refresh rotation + reuse detection.** Refresh tokens rotate on use; a
     replayed (already-consumed) refresh token is rejected AND invalidates the
     whole token *family* — the standard breach response to refresh reuse (T3).
   - **Parameterized SQL only.** No string interpolation into SQL anywhere.
   - **0600 file mode.** The DB file is created/tightened to owner-only rw.
-  - **WAL mode.** Enables concurrent AS-write / RS-read access.
+  - **WAL mode.** Enables concurrent access from ECM's own worker threads.
 
 ================================================================================
-SCHEMA — THE CROSS-CONTAINER CONTRACT
+SCHEMA
 ================================================================================
-ECM (``buiqr.3``) opens the SAME ``/config/mcp_oauth.db`` file. It MUST use the
-identical DDL below (idempotent ``CREATE TABLE IF NOT EXISTS``). The canonical
-DDL lives in ``_SCHEMA_DDL`` in this module. The recommended pattern is for
-ECM to import this module's schema constant (shared schema, one source of
-truth) rather than mirroring the DDL by hand — see the bead report / ADR-009
-follow-up for ``buiqr.3``.
+The canonical DDL lives in ``_SCHEMA_DDL`` below (idempotent
+``CREATE TABLE IF NOT EXISTS``). The ECM AS endpoints (``buiqr.3``) import this
+module directly — one owner, one source of truth, no cross-process schema
+duplication.
 
 All time columns are **epoch seconds** (``int(time.time())``), consistent with
 JWT ``iat``/``exp`` and the second-resolution epoch used elsewhere in the
@@ -106,9 +118,9 @@ REFRESH_TOKEN_MAX_TTL_SECONDS = 30 * 24 * 60 * 60  # 2_592_000
 #: File mode for the DB file: owner read/write only (AC6).
 _DB_FILE_MODE = 0o600
 
-# ── Canonical schema DDL (idempotent). THE cross-container contract. ─────────
-# ECM (buiqr.3) MUST open the same file with this exact DDL. Importing this
-# constant is preferred over mirroring it by hand.
+# ── Canonical schema DDL (idempotent). ──────────────────────────────────────
+# ECM (buiqr.3) is the sole owner; the AS endpoints import this module and run
+# this DDL on init. One owner, one source of truth — no schema mirroring.
 _SCHEMA_DDL = """
 CREATE TABLE IF NOT EXISTS oauth_clients (
     client_id     TEXT PRIMARY KEY,
@@ -199,9 +211,9 @@ class OAuthStore:
 
     A single instance owns one ``sqlite3.Connection``. Instances are **not**
     shared across threads (sqlite3 connections are per-thread by default);
-    each writer/reader thread opens its own ``OAuthStore``. WAL mode lets
-    multiple connections (AS writer, RS reader, even across processes/
-    containers on the shared ``/config`` volume) operate concurrently.
+    each ECM worker thread opens its own ``OAuthStore``. WAL mode lets ECM's
+    concurrent worker connections operate without writer starvation. The store
+    is single-owner (ECM); the MCP RS never opens this file (ADR-009 §1/§5).
     """
 
     def __init__(self, db_path: Union[str, Path]):
@@ -214,7 +226,7 @@ class OAuthStore:
         """Open (or reuse) the connection, enforcing WAL + 0600 file mode.
 
         Idempotent: calling twice returns the same connection. Use this when
-        the schema already exists (e.g. a second container opening the file).
+        the schema already exists (e.g. a new ECM worker opening the file).
         """
         if self._conn is not None:
             return self._conn
@@ -235,7 +247,7 @@ class OAuthStore:
 
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
-        # WAL mode for concurrent AS-write / RS-read (AC5, ADR-009 §5).
+        # WAL mode for concurrent access from ECM worker threads (AC5, ADR-009 §5).
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
         # Wait up to 5s for a write lock rather than failing immediately —
@@ -250,7 +262,7 @@ class OAuthStore:
     def init_schema(self) -> None:
         """Create all tables (idempotent) and confirm WAL + 0600.
 
-        Safe to call from either container — ``CREATE TABLE IF NOT EXISTS``.
+        Safe to call repeatedly (any ECM worker) — ``CREATE TABLE IF NOT EXISTS``.
         """
         conn = self.connect()
         conn.executescript(_SCHEMA_DDL)
