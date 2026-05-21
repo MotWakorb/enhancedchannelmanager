@@ -133,3 +133,99 @@ class TestGetMCPApiKeyStatus:
         with patch("config.SETTINGS_FILE", settings_file):
             from config import get_mcp_api_key
             assert get_mcp_api_key() == "k"
+
+
+class TestGetSigningKeyStatus:
+    """Tests for config.get_signing_key_status() — bd-buiqr10 Option-A slice.
+
+    The MCP RS verifies OAuth Bearer JWTs OFFLINE using a shared HS256 secret
+    from /config/settings.json (ADR-009 §1). This helper reports whether that
+    secret is present, using the same four-status pattern as get_mcp_api_key_status().
+
+    The settings.json key is SIGNING_KEY_SETTINGS_JSON_KEY (currently
+    'mcp_oauth_signing_secret'). This name is a ONE-LINE change point;
+    see config.py comment on SIGNING_KEY_SETTINGS_JSON_KEY for context on the
+    pending buiqr.8 contract finalization.
+
+    SECURITY: these tests assert that the secret VALUE is never returned or
+    exposed by the status helper — only presence/absence is reported.
+    """
+
+    def test_ok_when_signing_key_present(self, tmp_path):
+        """Returns ('', 'ok') when mcp_oauth_signing_secret is present and non-empty.
+
+        Note: returns empty string (not the key) — presence only, never the value.
+        """
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps({"mcp_oauth_signing_secret": "super-secret-hs256-key"}))
+
+        with patch("config.SETTINGS_FILE", settings_file):
+            from config import get_signing_key_status
+            status_val, status = get_signing_key_status()
+            assert status == "ok"
+            # SECURITY: the secret value must NEVER be returned
+            assert status_val != "super-secret-hs256-key"
+            assert "super-secret-hs256-key" not in status_val
+
+    def test_file_not_found_when_settings_missing(self, tmp_path):
+        """Returns ('', 'file_not_found') when settings.json doesn't exist."""
+        missing = tmp_path / "absent.json"
+
+        with patch("config.SETTINGS_FILE", missing):
+            from config import get_signing_key_status
+            status_val, status = get_signing_key_status()
+            assert status_val == ""
+            assert status == "file_not_found"
+
+    def test_invalid_json_when_settings_corrupt(self, tmp_path):
+        """Returns ('', 'invalid_json') when settings.json is not valid JSON."""
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text("{not valid json")
+
+        with patch("config.SETTINGS_FILE", settings_file):
+            from config import get_signing_key_status
+            status_val, status = get_signing_key_status()
+            assert status_val == ""
+            assert status == "invalid_json"
+
+    def test_field_missing_when_key_absent_from_json(self, tmp_path):
+        """Returns ('', 'signing_key_missing') when JSON is valid but the key is absent."""
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps({"mcp_api_key": "some-key"}))
+
+        with patch("config.SETTINGS_FILE", settings_file):
+            from config import get_signing_key_status
+            status_val, status = get_signing_key_status()
+            assert status_val == ""
+            assert status == "signing_key_missing"
+
+    def test_field_missing_when_key_empty_string(self, tmp_path):
+        """Returns ('', 'signing_key_missing') when the field is present but empty."""
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps({"mcp_oauth_signing_secret": ""}))
+
+        with patch("config.SETTINGS_FILE", settings_file):
+            from config import get_signing_key_status
+            status_val, status = get_signing_key_status()
+            assert status_val == ""
+            assert status == "signing_key_missing"
+
+    def test_secret_value_never_in_return(self, tmp_path):
+        """SECURITY: get_signing_key_status() never returns the secret value.
+
+        This is a direct security assertion for threat model ID1: the /health
+        endpoint is effectively public, and the signing secret must never leak
+        through it — not even in a success response.
+        """
+        secret = "very-secret-signing-key-must-not-appear"
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps({"mcp_oauth_signing_secret": secret}))
+
+        with patch("config.SETTINGS_FILE", settings_file):
+            from config import get_signing_key_status
+            result_val, result_status = get_signing_key_status()
+            # The status string must not contain the secret
+            assert secret not in result_val
+            assert secret not in result_status
+            # The first element must be empty (never the key itself)
+            assert result_val == ""
