@@ -109,3 +109,115 @@ describe('MCPSettingsSection — Server Status diagnostic (bd-ix1g6)', () => {
     expect(screen.queryByTestId('mcp-status-hint')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * bd-buiqr10 (Option-A slice): signing_key_missing diagnostic rendering.
+ *
+ * The /health endpoint now includes signing_key_status alongside api_key_status.
+ * When signing_key_status != 'ok', the panel renders a signing_key_hint using
+ * the same pattern as the api_key setup_hint (bd-ix1g6).
+ */
+describe('MCPSettingsSection — signing key diagnostic (bd-buiqr10)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows signing_key_hint when signing_key_status is signing_key_missing', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(settingsConfigured);
+    vi.mocked(api.getMCPStatus).mockResolvedValue({
+      reachable: true,
+      api_key_configured: true,
+      api_key_status: 'ok',
+      tools_available: 80,
+      signing_key_status: 'signing_key_missing',
+      signing_key_hint:
+        'The OAuth signing secret (mcp_oauth_signing_secret) is not present in settings.json. ' +
+        'OAuth Bearer-JWT verification requires this shared HS256 secret.',
+    });
+
+    render(<MCPSettingsSection isAdmin={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mcp-signing-key-hint')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('mcp-signing-key-hint')).toHaveTextContent(/oauth/i);
+    // api_key_status hint should not appear (api key is ok)
+    expect(screen.queryByTestId('mcp-status-hint')).not.toBeInTheDocument();
+  });
+
+  it('does NOT show signing_key_hint when signing_key_status is ok', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(settingsConfigured);
+    vi.mocked(api.getMCPStatus).mockResolvedValue({
+      reachable: true,
+      api_key_configured: true,
+      api_key_status: 'ok',
+      tools_available: 80,
+      signing_key_status: 'ok',
+    });
+
+    render(<MCPSettingsSection isAdmin={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/MCP server online — 80 tools available/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('mcp-signing-key-hint')).not.toBeInTheDocument();
+  });
+
+  it('does NOT show signing_key_hint when there is no signing_key_hint text', async () => {
+    // If the server returns signing_key_status != 'ok' but no signing_key_hint,
+    // nothing should be rendered for it.
+    vi.mocked(api.getSettings).mockResolvedValue(settingsConfigured);
+    vi.mocked(api.getMCPStatus).mockResolvedValue({
+      reachable: true,
+      api_key_configured: true,
+      api_key_status: 'ok',
+      tools_available: 80,
+      signing_key_status: 'signing_key_missing',
+      // No signing_key_hint provided
+    });
+
+    render(<MCPSettingsSection isAdmin={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/MCP server online — 80 tools available/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('mcp-signing-key-hint')).not.toBeInTheDocument();
+  });
+
+  it('does NOT show signing_key_hint when the server is unreachable', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(settingsUnconfigured);
+    vi.mocked(api.getMCPStatus).mockRejectedValue(new Error('connection refused'));
+
+    render(<MCPSettingsSection isAdmin={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/MCP server not reachable/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('mcp-signing-key-hint')).not.toBeInTheDocument();
+  });
+
+  it('can show both setup_hint and signing_key_hint simultaneously', async () => {
+    // Both api_key and signing key are misconfigured — operator sees both hints.
+    vi.mocked(api.getSettings).mockResolvedValue(settingsUnconfigured);
+    vi.mocked(api.getMCPStatus).mockResolvedValue({
+      reachable: true,
+      api_key_configured: false,
+      api_key_status: 'field_missing',
+      setup_hint: 'Open ECM Settings > MCP Integration and generate a key.',
+      signing_key_status: 'signing_key_missing',
+      signing_key_hint:
+        'The OAuth signing secret (mcp_oauth_signing_secret) is not present in settings.json.',
+    });
+
+    render(<MCPSettingsSection isAdmin={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mcp-status-hint')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('mcp-signing-key-hint')).toBeInTheDocument();
+    // The two hints should have distinct text
+    const setupHintText = screen.getByTestId('mcp-status-hint').textContent ?? '';
+    const signingHintText = screen.getByTestId('mcp-signing-key-hint').textContent ?? '';
+    expect(setupHintText).not.toBe(signingHintText);
+  });
+});

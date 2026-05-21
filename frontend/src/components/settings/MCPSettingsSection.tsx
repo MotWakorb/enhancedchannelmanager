@@ -33,6 +33,12 @@ export function MCPSettingsSection({ isAdmin }: Props) {
     api_key_configured?: boolean;
     api_key_status?: 'ok' | 'file_not_found' | 'invalid_json' | 'field_missing' | 'field_empty';
     setup_hint?: string;
+    // bd-buiqr10 (Option-A slice): OAuth signing key diagnostic.
+    // signing_key_status='ok' means the HS256 secret is present in settings.json
+    // and offline JWT verification is possible. 'signing_key_missing' means
+    // the secret is absent — OAuth Bearer-JWT auth cannot work until it is set.
+    signing_key_status?: 'ok' | 'signing_key_missing' | 'file_not_found' | 'invalid_json';
+    signing_key_hint?: string;
   } | null>(null);
 
   const loadSettings = useCallback(async () => {
@@ -197,6 +203,18 @@ export function MCPSettingsSection({ isAdmin }: Props) {
             style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary, #888)' }}
           >
             {mcpStatus.setup_hint}
+          </p>
+        )}
+        {/* bd-buiqr10: OAuth signing key hint — shown when the HS256 secret is
+            absent from settings.json. Rendered identically to the api_key setup_hint
+            pattern (bd-ix1g6) so the operator sees a consistent diagnostic UI. */}
+        {mcpStatus?.reachable && mcpStatus.signing_key_status && mcpStatus.signing_key_status !== 'ok' && mcpStatus.signing_key_hint && (
+          <p
+            className="mcp-status-hint"
+            data-testid="mcp-signing-key-hint"
+            style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary, #888)' }}
+          >
+            {mcpStatus.signing_key_hint}
           </p>
         )}
       </div>

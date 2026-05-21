@@ -1236,6 +1236,14 @@ export async function getMCPStatus(): Promise<{
   // "field_empty" — field present but empty (no key generated / revoked).
   api_key_status?: 'ok' | 'file_not_found' | 'invalid_json' | 'field_missing' | 'field_empty';
   setup_hint?: string;
+  // bd-buiqr10 (Option-A slice): OAuth signing key diagnostic.
+  // signing_key_status='ok' means the HS256 secret is present in settings.json
+  // and offline JWT verification is possible. 'signing_key_missing' means
+  // the shared secret is absent — OAuth Bearer-JWT auth cannot work.
+  // 'file_not_found' / 'invalid_json' mirror the api_key_status states for
+  // the same underlying file-read failure modes.
+  signing_key_status?: 'ok' | 'signing_key_missing' | 'file_not_found' | 'invalid_json';
+  signing_key_hint?: string;
   tools_available?: number;
   resources_available?: number;
   error?: string;
