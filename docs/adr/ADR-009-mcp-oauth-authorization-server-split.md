@@ -1,7 +1,7 @@
 # ADR-009: MCP OAuth 2.1 — ECM as Authorization Server, MCP as Resource Server
 
-- **Status**: Proposed
-- **Date**: 2026-05-20 (proposed)
+- **Status**: Accepted (PO sign-off 2026-05-21, AC#5) — incorporating the 2026-05-21 Option A amendment (token store ECM-managed; see Revision History)
+- **Date**: 2026-05-20 (proposed); 2026-05-21 (accepted)
 - **Author**: Security Engineer persona (PRIMARY) with IT Architect + Technical Writer personas, encoding the 2026-05-19 team-plan grooming + PO-locked decisions on epic `enhancedchannelmanager-buiqr`
 - **Bead**: `enhancedchannelmanager-buiqr.1` (first child of the OAuth 2.1 epic — design lands here before any code child opens)
 - **Related**:
@@ -252,9 +252,9 @@ No external vendor relationship is introduced; no new infrastructure beyond the 
 - **Scope model?** → Single `mcp` scope in v1 (§3, §8).
 - **Static `?api_key=` path?** → Permanent, no deprecation (§8); dual-path matrix is a permanent CI fixture.
 
-### Pending — AC#5
+### Resolved — AC#5
 
-- **PO sign-off on this ADR.** AC#5 of `buiqr.1` requires PO sign-off on the ADR **before any implementation child opens.** Status is therefore **Proposed**, not Accepted. PO sign-off flips this to Accepted and unblocks `buiqr.2`–`buiqr.9`.
+- **PO sign-off on this ADR.** ✅ **Signed off 2026-05-21.** AC#5 of `buiqr.1` required PO sign-off on the ADR before the implementation children proceed. The PO signed off on 2026-05-21, including the Option A amendment (token store ECM-managed — see Revision History). Status is now **Accepted**; `buiqr.1` is closed and `buiqr.2`–`buiqr.9` are unblocked (`buiqr.2` shipped in PR #374).
 
 ## References
 
@@ -274,4 +274,5 @@ No external vendor relationship is introduced; no new infrastructure beyond the 
 | Date | Bead | Change | Rationale |
 |---|---|---|---|
 | 2026-05-20 | `enhancedchannelmanager-buiqr.1` | Proposed | Formalizes the PO-locked OAuth split from epic `buiqr` (2026-05-19 grooming). Contract-lock for `buiqr.2`–`buiqr.9`. Status Proposed pending AC#5 PO sign-off before any implementation child opens. |
+| 2026-05-21 | `enhancedchannelmanager-buiqr.1` | **Accepted** (AC#5 PO sign-off) | PO signed off on the ADR (including the Option A amendment below) on 2026-05-21. Status Proposed → Accepted; `buiqr.1` closed. The implementation children are unblocked (`buiqr.2` shipped in PR #374). |
 | 2026-05-21 | `enhancedchannelmanager-buiqr.2` / `gswk2` | Amended — **Option A** (token store re-homed to ECM) | Discovered during `buiqr.2` that the MCP container mounts `ecm-config:/config` **read-only**, so an MCP-managed store (decision #3) cannot write the DB, and a `:ro` mount cannot host a live WAL DB (readers must create `-shm`/`-wal` sidecars). **Resolution (PO-approved Option A):** the token store is **ECM-managed** (`backend/auth/oauth_store.py`, was `mcp-server/`); ECM is the sole reader/writer; the **RS verifies purely offline and never reads the store**; the access-token revocation window is **TTL-bounded** and refresh-token revocation is enforced at the AS `/token`. Reverses epic decision #3. Rejected alternative: flip the MCP mount to `:rw` (hardening regression — would expose the HS256 secret + `mcp_api_key` volume to MCP writes). Amends §1, §5, the architecture diagram, Alternatives row 1, Consequences, and Open Questions. Threat model amended in lockstep. |
