@@ -7,12 +7,19 @@
 import { logger } from '../../utils/logger';
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../services/api';
+import type { OAuthGrant } from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { copyToClipboard } from '../../utils/clipboard';
+import { MCP_TOOL_CATEGORIES } from './mcpToolCategories';
 import './MCPSettingsSection.css';
 
 interface Props {
   isAdmin: boolean;
+}
+
+/** Format an epoch-seconds timestamp for the Active Grants list (locale date+time). */
+function formatGrantTime(epochSeconds: number): string {
+  return new Date(epochSeconds * 1000).toLocaleString();
 }
 
 export function MCPSettingsSection({ isAdmin }: Props) {
@@ -41,6 +48,13 @@ export function MCPSettingsSection({ isAdmin }: Props) {
     signing_key_hint?: string;
   } | null>(null);
 
+  // Active Grants (bead buiqr.7 (d)) — OAuth authorizations the admin made to
+  // Claude clients. Listed with inline-confirm revoke; the section is absent
+  // entirely when there are no grants (no empty state).
+  const [grants, setGrants] = useState<OAuthGrant[]>([]);
+  const [confirmingGrantId, setConfirmingGrantId] = useState<string | null>(null);
+  const [revokingGrantId, setRevokingGrantId] = useState<string | null>(null);
+
   const loadSettings = useCallback(async () => {
     try {
       const settings = await api.getSettings();
@@ -51,6 +65,33 @@ export function MCPSettingsSection({ isAdmin }: Props) {
       setLoading(false);
     }
   }, []);
+
+  const loadGrants = useCallback(async () => {
+    try {
+      const result = await api.getOAuthGrants();
+      setGrants(result.grants);
+    } catch (err) {
+      // A missing/empty grants surface is non-fatal — leave the list empty so
+      // the section simply doesn't render (no scary error for an absent feature).
+      logger.error('Failed to load OAuth grants:', err);
+      setGrants([]);
+    }
+  }, []);
+
+  const handleRevokeGrant = async (grantId: string) => {
+    setRevokingGrantId(grantId);
+    try {
+      await api.revokeOAuthGrant(grantId);
+      setGrants((prev) => prev.filter((g) => g.id !== grantId));
+      notifications.success('Connection revoked');
+    } catch (err) {
+      logger.error('Failed to revoke OAuth grant:', err);
+      notifications.error('Failed to revoke connection');
+    } finally {
+      setRevokingGrantId(null);
+      setConfirmingGrantId(null);
+    }
+  };
 
   const checkMcpStatus = useCallback(async () => {
     try {
@@ -64,7 +105,8 @@ export function MCPSettingsSection({ isAdmin }: Props) {
   useEffect(() => {
     loadSettings();
     checkMcpStatus();
-  }, [loadSettings, checkMcpStatus]);
+    loadGrants();
+  }, [loadSettings, checkMcpStatus, loadGrants]);
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -353,6 +395,72 @@ export function MCPSettingsSection({ isAdmin }: Props) {
         </div>
       )}
 
+      {/* Active Grants (bead buiqr.7 (d)) — OAuth connections (Claude Desktop,
+          etc.). Absent entirely when there are no grants; no empty state. */}
+      {grants.length > 0 && (
+        <div className="settings-section" data-testid="oauth-grants-section">
+          <div className="settings-section-header">
+            <span className="material-icons">verified_user</span>
+            <h3>Active Connections</h3>
+          </div>
+          <p className="form-description">
+            Apps you have authorized to access ECM via OAuth. Revoking a
+            connection immediately invalidates its access — the app must be
+            re-authorized to connect again.
+          </p>
+          <ul className="mcp-grants-list">
+            {grants.map((grant) => (
+              <li
+                key={grant.id}
+                className="mcp-grant-row"
+                data-testid="oauth-grant-row"
+              >
+                <div className="mcp-grant-info">
+                  <span className="material-icons mcp-grant-icon" aria-hidden="true">
+                    desktop_windows
+                  </span>
+                  <div className="mcp-grant-meta">
+                    <span className="mcp-grant-name">{grant.client_name}</span>
+                    <span className="mcp-grant-times">
+                      Granted {formatGrantTime(grant.granted_at)} · Last used{' '}
+                      {formatGrantTime(grant.last_used)}
+                    </span>
+                  </div>
+                </div>
+                {confirmingGrantId === grant.id ? (
+                  <div className="mcp-grant-confirm" role="group" aria-label="Confirm revoke">
+                    <span className="mcp-grant-confirm-label">Revoke?</span>
+                    <button
+                      className="btn btn-sm btn-danger"
+                      onClick={() => handleRevokeGrant(grant.id)}
+                      disabled={revokingGrantId === grant.id}
+                    >
+                      {revokingGrantId === grant.id ? 'Revoking...' : 'Yes, revoke'}
+                    </button>
+                    <button
+                      className="btn btn-sm"
+                      onClick={() => setConfirmingGrantId(null)}
+                      disabled={revokingGrantId === grant.id}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    className="btn btn-sm btn-danger"
+                    onClick={() => setConfirmingGrantId(grant.id)}
+                    data-testid="oauth-grant-revoke"
+                  >
+                    <span className="material-icons">block</span>
+                    Revoke
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* Available Tools */}
       {keyConfigured && (
         <div className="settings-section">
@@ -361,21 +469,7 @@ export function MCPSettingsSection({ isAdmin }: Props) {
             <h3>Available Tools (80)</h3>
           </div>
           <div className="mcp-tools-grid">
-            {[
-              { category: 'Channels', count: 12, icon: 'tv', desc: 'CRUD, streams, merge, bulk numbering' },
-              { category: 'Groups', count: 6, icon: 'folder', desc: 'CRUD, hidden, orphaned, auto-created' },
-              { category: 'Streams', count: 11, icon: 'stream', desc: 'List, search, probe, health, struck-out' },
-              { category: 'M3U', count: 8, icon: 'playlist_play', desc: 'Account CRUD, refresh, group settings' },
-              { category: 'EPG', count: 7, icon: 'schedule', desc: 'Source CRUD, grid, refresh, auto-match' },
-              { category: 'Auto-Create', count: 9, icon: 'auto_fix_high', desc: 'Rule CRUD, toggle, executions, rollback' },
-              { category: 'Export', count: 6, icon: 'file_download', desc: 'Profiles, cloud targets, publish' },
-              { category: 'Tasks', count: 7, icon: 'timer', desc: 'Run, cancel, history, schedules' },
-              { category: 'Stats', count: 6, icon: 'analytics', desc: 'Top watched, bandwidth, popularity, viewers' },
-              { category: 'System', count: 3, icon: 'settings', desc: 'Settings, backup, journal' },
-              { category: 'Notifications', count: 3, icon: 'notifications', desc: 'List, mark read, clear' },
-              { category: 'Profiles', count: 3, icon: 'tune', desc: 'Channel/stream profiles, bulk assign' },
-              { category: 'Normalize', count: 2, icon: 'text_format', desc: 'Test normalization, list rules' },
-            ].map(t => (
+            {MCP_TOOL_CATEGORIES.map(t => (
               <div key={t.category} className="mcp-tool-card">
                 <div className="mcp-tool-card-header">
                   <span className="material-icons">{t.icon}</span>

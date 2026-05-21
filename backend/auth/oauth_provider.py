@@ -474,6 +474,112 @@ class OAuthProvider:
         # Unknown / expired token — RFC 7009 says return success regardless.
         logger.debug("[OAUTH] Revoke request for unknown/expired token (no-op)")
 
+    # ── active grants (bead buiqr.7 — Active Grants UI + revoke) ──────────────
+
+    def list_grants(
+        self, user_sub: Optional[str] = None, now: Optional[int] = None
+    ) -> list[dict[str, Any]]:
+        """List the admin's active grants, enriched with the pinned client name.
+
+        Returns one entry per live refresh-token family (a grant) with the
+        client display NAME resolved from the hardcoded registry — NOT from any
+        attacker-supplied input (threat model CP1 / SP4). Token values and
+        hashes are never included (TS1). When ``user_sub`` is given, only that
+        admin's grants are returned (the single-admin model means this is the
+        admin's own grants). Shape per grant:
+
+            ``{id, client_id, client_name, granted_at, last_used}``
+
+        ``id`` is the refresh family id (stable across rotation) — the handle the
+        revoke endpoint takes.
+        """
+        grants = self.store.list_active_grants(now=now)
+        out: list[dict[str, Any]] = []
+        for g in grants:
+            if user_sub is not None and not secrets.compare_digest(
+                str(g["user_sub"]), str(user_sub)
+            ):
+                continue
+            client = self.store.get_client(g["client_id"])
+            # Pin the display name from the registry; fall back to the id only if
+            # the registry somehow lacks the client (never reflect free-form input).
+            client_name = client["client_name"] if client else g["client_id"]
+            out.append(
+                {
+                    "id": g["family_id"],
+                    "client_id": g["client_id"],
+                    "client_name": client_name,
+                    "granted_at": g["granted_at"],
+                    "last_used": g["last_used"],
+                }
+            )
+        return out
+
+    def get_active_grant_for_client(
+        self, client_id: str, user_sub: str, now: Optional[int] = None
+    ) -> Optional[dict[str, Any]]:
+        """Return the admin's active grant for ``client_id`` (returning-user state).
+
+        Powers the consent screen's 'Already connected' detection (bead
+        buiqr.7 (c)). Enriched with the registry-pinned client name; ``None``
+        when no active grant exists for this (client, admin) pair.
+        """
+        g = self.store.find_active_grant_for_client(client_id, user_sub, now=now)
+        if g is None:
+            return None
+        client = self.store.get_client(g["client_id"])
+        client_name = client["client_name"] if client else g["client_id"]
+        return {
+            "id": g["family_id"],
+            "client_id": g["client_id"],
+            "client_name": client_name,
+            "granted_at": g["granted_at"],
+            "last_used": g["last_used"],
+        }
+
+    def revoke_grant(
+        self,
+        *,
+        grant_id: str,
+        user_sub: Optional[str] = None,
+        now: Optional[int] = None,
+    ) -> bool:
+        """Revoke a grant by id: kill its refresh family + revoke its access jtis.
+
+        Reuses the established revocation primitives: the refresh family is
+        killed (no successor can rotate — TS2 enforcement at the AS) and every
+        live access-token jti for the grant's (client, admin) pair is revoked.
+        Returns ``True`` if a matching active grant was found and revoked,
+        ``False`` if no such active grant exists (so the router can 404).
+
+        When ``user_sub`` is given, only that admin's grant is revoked — an
+        admin cannot revoke a grant bound to a different subject.
+        """
+        now = _now() if now is None else now
+        grant = self.store.get_active_grant(grant_id, now=now)
+        if grant is None:
+            return False
+        if user_sub is not None and not secrets.compare_digest(
+            str(grant["user_sub"]), str(user_sub)
+        ):
+            return False
+        self.store.revoke_refresh_family(
+            grant_id, reason="grant-revoked-by-admin", now=now
+        )
+        revoked_access = self.store.revoke_access_tokens_for(
+            client_id=grant["client_id"],
+            user_sub=grant["user_sub"],
+            reason="grant-revoked-by-admin",
+            now=now,
+        )
+        logger.info(
+            "[OAUTH] Revoked grant family=%s client=%s (access jtis revoked=%d)",
+            grant_id,
+            grant["client_id"],
+            revoked_access,
+        )
+        return True
+
 
 def _oauth_signing_secret() -> str:
     """Resolve the DEDICATED OAuth signing secret (settings.json → mcp_oauth_signing_secret).

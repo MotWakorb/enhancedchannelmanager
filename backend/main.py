@@ -1184,6 +1184,33 @@ async def shutdown_event():
 ASSETS_CACHE_CONTROL = "public, max-age=31536000, immutable"
 INDEX_CACHE_CONTROL = "no-cache, must-revalidate"
 
+#: The frontend OAuth consent route (bead buiqr.7). The backend AS
+#: (/api/oauth/authorize) redirects here after validating the request; this is
+#: the page where the admin approves Claude Desktop's access. Kept in sync with
+#: routers/oauth_mcp.py CONSENT_ROUTE.
+CONSENT_FRONTEND_PATH = "oauth/consent"
+#: Modern anti-framing for the consent route — defends against clickjacking even
+#: on browsers that ignore the (already globally-set) X-Frame-Options: DENY
+#: header (bead buiqr.7, threat model CP1).
+CONSENT_CSP = "frame-ancestors 'none'"
+
+
+def spa_headers_for(full_path: str) -> dict[str, str]:
+    """Build the response headers for an SPA (index.html) route.
+
+    Every SPA route gets the revalidate-always Cache-Control (bd-hl603). The
+    OAuth consent route additionally gets CSP ``frame-ancestors 'none'`` so the
+    consent screen can never be embedded in a frame (clickjacking — threat model
+    CP1). X-Frame-Options: DENY is already applied to every response by the
+    global ``security_headers_middleware``; this adds the CSP belt to that
+    suspenders. Scoped to the consent route so it doesn't constrain the rest of
+    the SPA.
+    """
+    headers = {"Cache-Control": INDEX_CACHE_CONTROL}
+    if full_path.rstrip("/") == CONSENT_FRONTEND_PATH:
+        headers["Content-Security-Policy"] = CONSENT_CSP
+    return headers
+
 
 class ImmutableStaticFiles(StaticFiles):
     """StaticFiles variant that stamps Cache-Control: immutable on every response.
@@ -1242,10 +1269,7 @@ if os.path.exists(static_dir):
         # static-file mounts.
         index_path = os.path.join(static_dir, "index.html")
         if os.path.exists(index_path):
-            return FileResponse(
-                index_path,
-                headers={"Cache-Control": INDEX_CACHE_CONTROL},
-            )
+            return FileResponse(index_path, headers=spa_headers_for(full_path))
         return {"detail": "Frontend not built"}
 
 
