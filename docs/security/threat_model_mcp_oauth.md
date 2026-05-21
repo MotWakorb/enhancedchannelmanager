@@ -2,8 +2,8 @@
 
 **Bead:** `enhancedchannelmanager-buiqr.1` (ADR + STRIDE threat model — the security companion to `docs/adr/ADR-009-mcp-oauth-authorization-server-split.md`); informs implementation children `buiqr.2`–`buiqr.9`
 **Author:** Security Engineer persona (Claude)
-**Date:** 2026-05-20
-**Status:** Draft — pending PO review (AC#5 sign-off on ADR-009 + Assumptions §6 + Residual Risks §8)
+**Date:** 2026-05-20 (draft); 2026-05-21 (accepted)
+**Status:** Accepted — PO signed off 2026-05-21 (AC#5 on ADR-009 + Assumptions §6 + Residual Risks §8), incorporating the Option A amendment (token store ECM-managed; RS verifies offline and never reads the store)
 **Related:** epic `enhancedchannelmanager-buiqr` (PO-locked decisions), ADR-009 (the architecture this model secures — every mitigation below ties to an ADR-009 §section), `enhancedchannelmanager-ak7xa` (closed — CI gate precondition), `docs/architecture.md` (MCP Server static-key baseline + `settings.json` credential schema), `backend/auth/tokens.py` (HS256 + `jti` revocation + `hash_token()` patterns reused), `docs/adr/ADR-008-interactive-stream-dedup.md`, `docs/security/threat_model_dbas_import.md` (template mirrored)
 
 > **Amendment 2026-05-21 (Option A — `buiqr.2` / blocker `gswk2`).** The MCP
