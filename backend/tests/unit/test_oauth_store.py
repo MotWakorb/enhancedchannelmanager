@@ -680,3 +680,79 @@ class TestSchemaContract:
             ).fetchall()
         }
         assert "oauth_clients" in names
+
+
+# ─────────────── buiqr.4 AC3: CSRF consent-state binding ───────────────────
+
+
+class TestConsentStateBinding:
+    """bind/consume the CSRF ``state`` → admin-subject binding (buiqr.4 AC3).
+
+    The consent-CSRF control: ``/authorize`` binds ``state`` to the admin sub;
+    ``/authorize/approve`` consumes it. A forged/mismatched/expired/replayed
+    state, or one bound to a different subject, must NOT consume successfully.
+    """
+
+    def test_bind_then_consume_succeeds(self, store):
+        store.bind_consent_state(state="s1", client_id="claude-desktop", user_sub="admin")
+        assert store.consume_consent_state(state="s1", user_sub="admin") is True
+
+    def test_state_hashed_at_rest_not_plaintext(self, store):
+        """AC4-style: the raw state value is never persisted, only its hash."""
+        store.bind_consent_state(state="s-secret", client_id="claude-desktop", user_sub="admin")
+        rows = store._conn.execute(
+            "SELECT state_hash FROM consent_states"
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["state_hash"] == hash_secret("s-secret")
+        assert rows[0]["state_hash"] != "s-secret"
+
+    def test_unknown_state_not_consumed(self, store):
+        """A state that was never bound (forged) → False."""
+        assert store.consume_consent_state(state="never-bound", user_sub="admin") is False
+
+    def test_state_bound_to_other_subject_rejected(self, store):
+        """A state bound to admin-A cannot be consumed by admin-B (cross-session CSRF)."""
+        store.bind_consent_state(state="s2", client_id="claude-desktop", user_sub="admin-A")
+        assert store.consume_consent_state(state="s2", user_sub="admin-B") is False
+        # And the binding is still live for the rightful subject (not burned).
+        assert store.consume_consent_state(state="s2", user_sub="admin-A") is True
+
+    def test_state_is_single_use(self, store):
+        """Replaying a consumed state → False (single-use, like an auth code)."""
+        store.bind_consent_state(state="s3", client_id="claude-desktop", user_sub="admin")
+        assert store.consume_consent_state(state="s3", user_sub="admin") is True
+        assert store.consume_consent_state(state="s3", user_sub="admin") is False
+
+    def test_expired_state_rejected(self, store):
+        """A binding past its expiry → False."""
+        store.bind_consent_state(
+            state="s4", client_id="claude-desktop", user_sub="admin", ttl_seconds=10, now=1000
+        )
+        # 11s later → expired.
+        assert store.consume_consent_state(state="s4", user_sub="admin", now=1011) is False
+
+    def test_ttl_capped_at_ceiling(self, store):
+        """A caller cannot mint a binding that outlives the 10-minute ceiling."""
+        from auth.oauth_store import CONSENT_STATE_MAX_TTL_SECONDS
+
+        store.bind_consent_state(
+            state="s5",
+            client_id="claude-desktop",
+            user_sub="admin",
+            ttl_seconds=10 * CONSENT_STATE_MAX_TTL_SECONDS,
+            now=2000,
+        )
+        row = store._conn.execute(
+            "SELECT expires_at FROM consent_states WHERE state_hash = ?",
+            (hash_secret("s5"),),
+        ).fetchone()
+        assert row["expires_at"] == 2000 + CONSENT_STATE_MAX_TTL_SECONDS
+
+    def test_rebind_same_state_resets_binding(self, store):
+        """Re-binding the same state value (retried /authorize) upserts cleanly."""
+        store.bind_consent_state(state="s6", client_id="claude-desktop", user_sub="admin")
+        assert store.consume_consent_state(state="s6", user_sub="admin") is True
+        # Re-bind after consume → consumable again (a fresh /authorize round).
+        store.bind_consent_state(state="s6", client_id="claude-desktop", user_sub="admin")
+        assert store.consume_consent_state(state="s6", user_sub="admin") is True

@@ -235,7 +235,25 @@ class TestAuthorizeEndpoint:
 
 
 class TestApproveAndToken:
-    async def _approve(self, async_client, oauth_store, challenge):
+    async def _approve(self, async_client, oauth_store, challenge, state="st-1"):
+        """Drive the realistic flow: GET /authorize (binds the CSRF state to the
+        admin session, bead buiqr.4 AC3) then POST /authorize/approve with the
+        same state. Without the preceding /authorize the state is unbound and
+        approve correctly rejects it as forged."""
+        if state:
+            authorize = await async_client.get(
+                "/api/oauth/authorize",
+                params={
+                    "response_type": "code",
+                    "client_id": CLAUDE_DESKTOP_CLIENT_ID,
+                    "redirect_uri": _registered_redirect(oauth_store),
+                    "code_challenge": challenge,
+                    "code_challenge_method": "S256",
+                    "state": state,
+                },
+                follow_redirects=False,
+            )
+            assert authorize.status_code == 302
         resp = await async_client.post(
             "/api/oauth/authorize/approve",
             data={
@@ -243,7 +261,7 @@ class TestApproveAndToken:
                 "redirect_uri": _registered_redirect(oauth_store),
                 "code_challenge": challenge,
                 "code_challenge_method": "S256",
-                "state": "st-1",
+                "state": state,
             },
             follow_redirects=False,
         )
@@ -403,6 +421,20 @@ class TestPublicEndpoints:
     @pytest.mark.asyncio
     async def test_revoke_real_token(self, async_client, oauth_store):
         verifier, challenge = _pkce_pair()
+        # Drive the full /authorize → approve flow so the CSRF state is bound
+        # (bead buiqr.4 AC3) before the approval mints a code.
+        await async_client.get(
+            "/api/oauth/authorize",
+            params={
+                "response_type": "code",
+                "client_id": CLAUDE_DESKTOP_CLIENT_ID,
+                "redirect_uri": _registered_redirect(oauth_store),
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "state": "revoke-flow",
+            },
+            follow_redirects=False,
+        )
         approve = await async_client.post(
             "/api/oauth/authorize/approve",
             data={
@@ -410,6 +442,7 @@ class TestPublicEndpoints:
                 "redirect_uri": _registered_redirect(oauth_store),
                 "code_challenge": challenge,
                 "code_challenge_method": "S256",
+                "state": "revoke-flow",
             },
             follow_redirects=False,
         )
@@ -430,3 +463,237 @@ class TestPublicEndpoints:
         resp = await async_client.post("/api/oauth/revoke", data={"token": access})
         assert resp.status_code == 200
         assert oauth_store.is_jti_revoked(rec["jti"]) is True
+
+
+# ─────────── buiqr.4 AC3: CSRF state binding over HTTP ─────────────────────
+
+
+class TestConsentStateCsrf:
+    """bead buiqr.4 AC3 — the consent-CSRF control end-to-end through HTTP.
+
+    ``/authorize`` binds the ``state`` to the admin session; ``/authorize/approve``
+    must present a matching, live binding. A forged/mismatched/missing/replayed
+    state on approve returns 400 BEFORE any code is minted.
+    """
+
+    async def _authorize(self, async_client, oauth_store, challenge, state):
+        return await async_client.get(
+            "/api/oauth/authorize",
+            params={
+                "response_type": "code",
+                "client_id": CLAUDE_DESKTOP_CLIENT_ID,
+                "redirect_uri": _registered_redirect(oauth_store),
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "state": state,
+            },
+            follow_redirects=False,
+        )
+
+    async def _approve(self, async_client, oauth_store, challenge, state):
+        return await async_client.post(
+            "/api/oauth/authorize/approve",
+            data={
+                "client_id": CLAUDE_DESKTOP_CLIENT_ID,
+                "redirect_uri": _registered_redirect(oauth_store),
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "state": state,
+            },
+            follow_redirects=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_matching_state_approves(self, async_client, oauth_store):
+        """The state bound at /authorize is accepted at /approve → 302 + code."""
+        _, challenge = _pkce_pair()
+        await self._authorize(async_client, oauth_store, challenge, "match-1")
+        resp = await self._approve(async_client, oauth_store, challenge, "match-1")
+        assert resp.status_code == 302
+        assert "code=" in resp.headers["location"]
+
+    @pytest.mark.asyncio
+    async def test_mismatched_state_rejected_400(self, async_client, oauth_store):
+        """buiqr.4 AC3 — approve with a DIFFERENT state than bound → 400."""
+        _, challenge = _pkce_pair()
+        await self._authorize(async_client, oauth_store, challenge, "bound-state")
+        resp = await self._approve(async_client, oauth_store, challenge, "attacker-state")
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "invalid_request"
+
+    @pytest.mark.asyncio
+    async def test_forged_state_without_authorize_rejected_400(
+        self, async_client, oauth_store
+    ):
+        """A state never bound at /authorize (no preceding GET) → 400."""
+        _, challenge = _pkce_pair()
+        resp = await self._approve(async_client, oauth_store, challenge, "never-bound")
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "invalid_request"
+
+    @pytest.mark.asyncio
+    async def test_missing_state_on_approve_rejected_400(self, async_client, oauth_store):
+        """An approve with no state at all → 400 (binding is mandatory)."""
+        _, challenge = _pkce_pair()
+        await self._authorize(async_client, oauth_store, challenge, "had-a-state")
+        resp = await self._approve(async_client, oauth_store, challenge, "")
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "invalid_request"
+
+    @pytest.mark.asyncio
+    async def test_state_replay_rejected_400(self, async_client, oauth_store):
+        """Replaying the same approve (single-use binding) → 400 the second time."""
+        _, challenge = _pkce_pair()
+        await self._authorize(async_client, oauth_store, challenge, "replay-state")
+        first = await self._approve(async_client, oauth_store, challenge, "replay-state")
+        assert first.status_code == 302
+        second = await self._approve(async_client, oauth_store, challenge, "replay-state")
+        assert second.status_code == 400
+        assert second.json()["error"] == "invalid_request"
+
+
+# ─────────── buiqr.4 AC2: open-redirect / unregistered redirect_uri ────────
+
+
+class TestUnregisteredRedirectRegression:
+    """bead buiqr.4 AC2 — already enforced by buiqr.3's exact-match RD1 check;
+    these regression tests confirm an unregistered redirect_uri is rejected with
+    400 and the attacker URI is NEVER used as a redirect target (open-redirect
+    guard). The provider-level exact-match suite lives in
+    tests/unit/test_oauth_provider.py::TestRedirectUriExactMatch.
+    """
+
+    @pytest.mark.asyncio
+    async def test_unregistered_redirect_uri_400_no_open_redirect(self, async_client):
+        """Unregistered redirect_uri → 400 invalid_request, NOT a 302 to the attacker."""
+        _, challenge = _pkce_pair()
+        resp = await async_client.get(
+            "/api/oauth/authorize",
+            params={
+                "response_type": "code",
+                "client_id": CLAUDE_DESKTOP_CLIENT_ID,
+                "redirect_uri": "https://evil.example/steal",
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "state": "x",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "invalid_request"
+        # The attacker URI must NEVER appear in a Location header (no open redirect).
+        assert "location" not in {k.lower() for k in resp.headers}
+
+    @pytest.mark.asyncio
+    async def test_approve_with_unregistered_redirect_uri_rejected(
+        self, async_client, oauth_store
+    ):
+        """Even at /approve, an unregistered redirect_uri is rejected before any code."""
+        _, challenge = _pkce_pair()
+        # Bind a state first so we get past CSRF and reach the redirect check.
+        await async_client.get(
+            "/api/oauth/authorize",
+            params={
+                "response_type": "code",
+                "client_id": CLAUDE_DESKTOP_CLIENT_ID,
+                "redirect_uri": _registered_redirect(oauth_store),
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "state": "approve-rd",
+            },
+            follow_redirects=False,
+        )
+        resp = await async_client.post(
+            "/api/oauth/authorize/approve",
+            data={
+                "client_id": CLAUDE_DESKTOP_CLIENT_ID,
+                "redirect_uri": "https://evil.example/steal",
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "state": "approve-rd",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "invalid_request"
+
+
+# ─────────── buiqr.4 AC4: tokens hashed at rest (regression) ───────────────
+
+
+class TestTokensHashedAtRest:
+    """bead buiqr.4 AC4 — already enforced by buiqr.2's oauth_store.hash_secret();
+    this regression confirms an end-to-end HTTP issuance writes only SHA-256
+    hashes to mcp_oauth.db — the raw access/refresh token never appears in any
+    column or in the raw DB bytes.
+    """
+
+    @pytest.mark.asyncio
+    async def test_issued_tokens_never_persisted_in_plaintext(
+        self, async_client, oauth_store, tmp_path
+    ):
+        import hashlib as _hashlib
+
+        verifier, challenge = _pkce_pair()
+        await async_client.get(
+            "/api/oauth/authorize",
+            params={
+                "response_type": "code",
+                "client_id": CLAUDE_DESKTOP_CLIENT_ID,
+                "redirect_uri": _registered_redirect(oauth_store),
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "state": "hash-flow",
+            },
+            follow_redirects=False,
+        )
+        approve = await async_client.post(
+            "/api/oauth/authorize/approve",
+            data={
+                "client_id": CLAUDE_DESKTOP_CLIENT_ID,
+                "redirect_uri": _registered_redirect(oauth_store),
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "state": "hash-flow",
+            },
+            follow_redirects=False,
+        )
+        from urllib.parse import parse_qs, urlparse
+
+        code = parse_qs(urlparse(approve.headers["location"]).query)["code"][0]
+        tok = await async_client.post(
+            "/api/oauth/token",
+            data={
+                "grant_type": "authorization_code",
+                "client_id": CLAUDE_DESKTOP_CLIENT_ID,
+                "code": code,
+                "redirect_uri": _registered_redirect(oauth_store),
+                "code_verifier": verifier,
+            },
+        )
+        body = tok.json()
+        access, refresh = body["access_token"], body["refresh_token"]
+
+        # The stored columns hold the SHA-256 hash, not the raw token value.
+        access_rows = oauth_store._conn.execute(
+            "SELECT token_hash FROM access_tokens"
+        ).fetchall()
+        refresh_rows = oauth_store._conn.execute(
+            "SELECT token_hash FROM refresh_tokens"
+        ).fetchall()
+        access_hashes = {r["token_hash"] for r in access_rows}
+        refresh_hashes = {r["token_hash"] for r in refresh_rows}
+        assert _hashlib.sha256(access.encode()).hexdigest() in access_hashes
+        assert _hashlib.sha256(refresh.encode()).hexdigest() in refresh_hashes
+        # The raw token strings must NOT appear in any stored hash column.
+        assert access not in access_hashes
+        assert refresh not in refresh_hashes
+
+        # And the raw bytes on disk contain neither plaintext token (the WAL is
+        # checkpointed by closing the connection first via a fresh reader).
+        db_bytes = oauth_store.db_path.read_bytes()
+        wal_path = oauth_store.db_path.with_name(oauth_store.db_path.name + "-wal")
+        wal_bytes = wal_path.read_bytes() if wal_path.exists() else b""
+        haystack = db_bytes + wal_bytes
+        assert access.encode() not in haystack
+        assert refresh.encode() not in haystack
