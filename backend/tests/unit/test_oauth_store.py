@@ -756,3 +756,135 @@ class TestConsentStateBinding:
         # Re-bind after consume → consumable again (a fresh /authorize round).
         store.bind_consent_state(state="s6", client_id="claude-desktop", user_sub="admin")
         assert store.consume_consent_state(state="s6", user_sub="admin") is True
+
+
+class TestActiveGrants:
+    """Grant-listing + revoke surface for the Active Grants UI (bead buiqr.7).
+
+    A grant is one refresh-token family. These exercise the store's grouping,
+    active-filter (revoked / expired exclusion), and the access-jti revoke helper
+    used when an admin revokes a grant.
+    """
+
+    def _make_family(
+        self,
+        store,
+        *,
+        family_id,
+        client_id="claude-desktop",
+        user_sub="admin",
+        created_at,
+        ttl_seconds=86400,
+    ):
+        store.store_refresh_token(
+            token=f"rt-{family_id}-{created_at}",
+            jti=f"jti-{family_id}-{created_at}",
+            family_id=family_id,
+            client_id=client_id,
+            user_sub=user_sub,
+            scope="mcp",
+            ttl_seconds=ttl_seconds,
+            now=created_at,
+        )
+
+    def test_lists_one_grant_per_family(self, store):
+        self._make_family(store, family_id="fam-A", created_at=1000)
+        self._make_family(store, family_id="fam-B", created_at=2000)
+        grants = store.list_active_grants(now=3000)
+        ids = {g["family_id"] for g in grants}
+        assert ids == {"fam-A", "fam-B"}
+
+    def test_granted_at_and_last_used_track_rotation(self, store):
+        # A family that rotated twice: first token at 1000, successor at 1500.
+        self._make_family(store, family_id="fam-R", created_at=1000)
+        self._make_family(store, family_id="fam-R", created_at=1500)
+        grants = store.list_active_grants(now=2000)
+        grant = next(g for g in grants if g["family_id"] == "fam-R")
+        assert grant["granted_at"] == 1000  # earliest
+        assert grant["last_used"] == 1500  # newest
+
+    def test_revoked_family_excluded(self, store):
+        self._make_family(store, family_id="fam-live", created_at=1000)
+        self._make_family(store, family_id="fam-dead", created_at=1000)
+        store.revoke_refresh_family("fam-dead", reason="test", now=1100)
+        ids = {g["family_id"] for g in store.list_active_grants(now=1200)}
+        assert ids == {"fam-live"}
+
+    def test_fully_expired_family_excluded(self, store):
+        self._make_family(store, family_id="fam-exp", created_at=1000, ttl_seconds=10)
+        # 11s later, the only token in the family has expired.
+        assert store.list_active_grants(now=1011) == []
+
+    def test_get_active_grant_by_family(self, store):
+        self._make_family(store, family_id="fam-G", created_at=1000)
+        grant = store.get_active_grant("fam-G", now=1500)
+        assert grant is not None
+        assert grant["family_id"] == "fam-G"
+        assert grant["client_id"] == "claude-desktop"
+        # Unknown / revoked family → None.
+        assert store.get_active_grant("nope", now=1500) is None
+        store.revoke_refresh_family("fam-G", now=1600)
+        assert store.get_active_grant("fam-G", now=1700) is None
+
+    def test_find_active_grant_for_client_matches_subject(self, store):
+        self._make_family(
+            store, family_id="fam-admin", user_sub="admin-1", created_at=1000
+        )
+        match = store.find_active_grant_for_client(
+            "claude-desktop", "admin-1", now=1500
+        )
+        assert match is not None and match["family_id"] == "fam-admin"
+        # Different subject → no match (single-admin isolation).
+        assert (
+            store.find_active_grant_for_client("claude-desktop", "admin-2", now=1500)
+            is None
+        )
+        # Different client → no match.
+        assert (
+            store.find_active_grant_for_client("claude-code", "admin-1", now=1500)
+            is None
+        )
+
+    def test_list_grants_never_exposes_token_values(self, store):
+        self._make_family(store, family_id="fam-secret", created_at=1000)
+        grants = store.list_active_grants(now=1500)
+        blob = repr(grants)
+        assert "rt-fam-secret" not in blob  # raw token value
+        assert "token_hash" not in grants[0]
+
+    def test_revoke_access_tokens_for_pair(self, store):
+        store.store_access_token(
+            token="at-1",
+            jti="at-jti-1",
+            client_id="claude-desktop",
+            user_sub="admin",
+            scope="mcp",
+            ttl_seconds=900,
+            now=1000,
+        )
+        store.store_access_token(
+            token="at-2",
+            jti="at-jti-2",
+            client_id="claude-desktop",
+            user_sub="admin",
+            scope="mcp",
+            ttl_seconds=900,
+            now=1000,
+        )
+        # A token for a different admin must NOT be revoked.
+        store.store_access_token(
+            token="at-other",
+            jti="at-jti-other",
+            client_id="claude-desktop",
+            user_sub="admin-2",
+            scope="mcp",
+            ttl_seconds=900,
+            now=1000,
+        )
+        count = store.revoke_access_tokens_for(
+            client_id="claude-desktop", user_sub="admin", now=1100
+        )
+        assert count == 2
+        assert store.is_jti_revoked("at-jti-1") is True
+        assert store.is_jti_revoked("at-jti-2") is True
+        assert store.is_jti_revoked("at-jti-other") is False
