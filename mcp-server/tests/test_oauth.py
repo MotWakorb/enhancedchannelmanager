@@ -60,6 +60,8 @@ import time
 
 from unittest.mock import patch
 
+import pytest
+
 # ── Streamable-HTTP client headers + initialize body (mirror test_server.py) ──
 _MCP_HEADERS = {
     "Content-Type": "application/json",
@@ -162,6 +164,9 @@ def _assert_rejected_401_no_fallback(client, token):
 # ───────────────── RS-side abuse cases (4, 5, 9, 10) ──────────────────────────
 
 
+@pytest.mark.skip(
+    reason="MCP OAuth offering retired (bd-9axgc); /mcp no longer accepts OAuth Bearer JWTs (rejected 401), and the OAuth verify wiring (get_signing_key / get_oauth_issuer_for_rs) was removed from server.py. Re-enable when MCP OAuth is re-offered."
+)
 class TestResourceServerAbuseCases:
     """The four RS-verifiable abuse cases, asserted at the HTTP layer (no network).
 

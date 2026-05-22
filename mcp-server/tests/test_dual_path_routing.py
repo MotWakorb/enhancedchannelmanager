@@ -23,6 +23,20 @@ import time
 
 from unittest.mock import patch
 
+import pytest
+
+# MCP OAuth offering RETIRED (bd-9axgc). The OAuth-path classes below
+# (TestNoFailCascade, TestOAuthHappyPath, TestBothCredentialsPresent, and the
+# discovery/signing-key parts of TestExemptPathsUnaffected) exercise the
+# now-disabled OAuth Bearer-JWT auth path and the removed RFC 9728 discovery
+# endpoint, and patch symbols (get_signing_key, get_oauth_issuer_for_rs,
+# get_signing_key_status, resolve_issuer, …) that were removed from server.py.
+# They are skipped. TestStaticKeyRegression stays ACTIVE — it is the guardrail
+# proof that the supported static ?api_key= path still works (guardrail #1).
+_OAUTH_RETIRED = pytest.mark.skip(
+    reason="MCP OAuth offering retired (bd-9axgc); OAuth Bearer path + RFC 9728 discovery removed from server.py. Re-enable when MCP OAuth is re-offered."
+)
+
 _MCP_HEADERS = {
     "Content-Type": "application/json",
     "Accept": "application/json, text/event-stream",
@@ -97,6 +111,7 @@ class _StaticKeySpy:
 # ───────────────── CD1: no fail-cascade (the headline) ───────────────────────
 
 
+@_OAUTH_RETIRED
 class TestNoFailCascade:
     """A JWT-shaped Bearer that fails OAuth validation returns 401 and is
     NEVER compared against the static key (threat model CD1)."""
@@ -181,6 +196,7 @@ class TestNoFailCascade:
 # ───────────────── OAuth happy path ──────────────────────────────────────────
 
 
+@_OAUTH_RETIRED
 class TestOAuthHappyPath:
     def test_valid_oauth_jwt_authenticates(self, client):
         token = _mint(_base_claims())
@@ -300,6 +316,7 @@ class TestStaticKeyRegression:
 # ───────────────── Both credentials present: OAuth wins ──────────────────────
 
 
+@_OAUTH_RETIRED
 class TestBothCredentialsPresent:
     """When an OAuth-shaped Bearer AND ?api_key= are both present, OAuth wins;
     the static key is ignored entirely (CD1 / ADR-009 §2)."""
@@ -341,6 +358,7 @@ class TestBothCredentialsPresent:
 # ───────────────── /health + discovery stay public ───────────────────────────
 
 
+@_OAUTH_RETIRED
 class TestExemptPathsUnaffected:
     def test_health_still_public(self, client):
         with patch("server.get_mcp_api_key_status", return_value=("k", "ok")), \

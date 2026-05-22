@@ -163,6 +163,9 @@ class TestHealthEndpoint:
 
     # ---- bd-buiqr10 Option-A slice: signing_key_missing diagnostic ----
 
+    @pytest.mark.skip(
+        reason="MCP OAuth offering retired (bd-9axgc); /health no longer reports signing_key_status/hint (OAuth Bearer-JWT auth removed). Re-enable when MCP OAuth is re-offered."
+    )
     def test_health_reports_signing_key_ok_when_present(self, client):
         """/health includes signing_key_status='ok' when the HS256 signing secret
         is present in settings.json (bd-buiqr10).
@@ -178,6 +181,9 @@ class TestHealthEndpoint:
         # No signing_key_hint when the secret is wired correctly.
         assert "signing_key_hint" not in data
 
+    @pytest.mark.skip(
+        reason="MCP OAuth offering retired (bd-9axgc); /health no longer reports signing_key_status/hint (OAuth Bearer-JWT auth removed). Re-enable when MCP OAuth is re-offered."
+    )
     def test_health_reports_signing_key_missing_when_absent(self, client):
         """/health reports signing_key_status='signing_key_missing' when the HS256
         secret field is absent from settings.json (bd-buiqr10).
@@ -196,6 +202,9 @@ class TestHealthEndpoint:
         hint = data["signing_key_hint"].lower()
         assert "signing" in hint or "oauth" in hint or "secret" in hint
 
+    @pytest.mark.skip(
+        reason="MCP OAuth offering retired (bd-9axgc); /health no longer reports signing_key_status/hint (OAuth Bearer-JWT auth removed). Re-enable when MCP OAuth is re-offered."
+    )
     def test_health_signing_key_status_does_not_expose_secret(self, client):
         """SECURITY: /health response body never contains the HS256 signing secret.
 
@@ -210,6 +219,9 @@ class TestHealthEndpoint:
         assert response.status_code == 200
         assert secret not in response.text
 
+    @pytest.mark.skip(
+        reason="MCP OAuth offering retired (bd-9axgc); /health no longer reports signing_key_status/hint (OAuth Bearer-JWT auth removed). Re-enable when MCP OAuth is re-offered."
+    )
     def test_health_signing_key_missing_hint_is_distinct(self, client):
         """/health signing_key_hint differs from api_key setup_hint strings.
 
@@ -227,6 +239,9 @@ class TestHealthEndpoint:
         # They must be distinct strings
         assert data["setup_hint"] != data["signing_key_hint"]
 
+    @pytest.mark.skip(
+        reason="MCP OAuth offering retired (bd-9axgc); /health no longer reports signing_key_status/hint (OAuth Bearer-JWT auth removed). Re-enable when MCP OAuth is re-offered."
+    )
     def test_health_existing_api_key_statuses_unaffected(self, client):
         """Existing api_key_status codes are unaffected by the signing_key addition.
 
@@ -274,6 +289,9 @@ class TestMCPAuth:
         assert response.status_code == 401
 
 
+@pytest.mark.skip(
+    reason="MCP OAuth offering retired (bd-9axgc); RS no longer serves /.well-known/oauth-protected-resource. Re-enable when MCP OAuth is re-offered."
+)
 class TestProtectedResourceDiscovery:
     """GET /.well-known/oauth-protected-resource (RFC 9728, bead buiqr.5).
 
@@ -501,7 +519,13 @@ class _OAuthBearerMode(_AuthMode):
         return client.get("/mcp")
 
 
-_AUTH_MODES = [_StaticKeyMode(), _OAuthBearerMode()]
+# MCP OAuth offering RETIRED (bd-9axgc): the oauth_bearer auth-mode was removed
+# from the parametrize set — the RS no longer accepts OAuth Bearer JWTs and the
+# OAuth verify wiring (_OAuthBearerMode patches get_signing_key /
+# get_oauth_issuer_for_rs) was removed from server.py. The matrix now guards the
+# supported static-key path only. _OAuthBearerMode is kept dormant above for
+# reversibility; re-add it here to re-enable the OAuth matrix coverage.
+_AUTH_MODES = [_StaticKeyMode()]
 
 
 @pytest.fixture(params=_AUTH_MODES, ids=[m.name for m in _AUTH_MODES])

@@ -46,12 +46,11 @@ The Stats tab, including the Stats v2 features shipped in v0.17.0.
 
 Connect ECM to Emby, Plex, and/or Jellyfin so the Stats tab shows viewer
 usernames instead of raw IP addresses. Also covers the full MCP / Claude AI
-connection reference — both the OAuth Custom Connector path and the mcp-remote
-bridge.
+connection reference — the mcp-remote bridge (Claude Desktop) and the Claude
+Code `.mcp.json` path, both using the static `?api_key=` authentication method.
 
-- **[MCP Integration](integrations/mcp.md)** — step-by-step OAuth Custom
-  Connector walkthrough, mcp-remote bridge setup, Claude Code `.mcp.json`,
-  key rotation, and OAuth troubleshooting.
+- **[MCP Integration](integrations/mcp.md)** — step-by-step mcp-remote bridge
+  setup, Claude Code `.mcp.json`, key rotation, and troubleshooting.
 
 ### 9. [Backup & Restore](backup-restore/index.md) — Placeholder
 

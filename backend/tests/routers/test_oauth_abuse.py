@@ -46,6 +46,14 @@ import pytest
 from auth.oauth_clients import CLAUDE_DESKTOP_CLIENT_ID, seed_oauth_clients
 from auth.oauth_store import OAuthStore
 
+# MCP OAuth offering RETIRED (bd-9axgc). The OAuth AS router is no longer
+# registered, so /api/oauth/* returns 404. Every abuse-case test here exercises
+# those now-disabled endpoints through the app, so the whole module is skipped.
+# Re-enable when MCP OAuth is re-offered.
+pytestmark = pytest.mark.skip(
+    reason="MCP OAuth offering retired (bd-9axgc); /api/oauth/* endpoints unregistered → 404. Re-enable when MCP OAuth is re-offered."
+)
+
 # A signing secret comfortably above the 32-byte HMAC floor (mirrors test_oauth_mcp.py).
 TEST_SECRET = "z" * 48
 

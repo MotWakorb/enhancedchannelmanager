@@ -186,9 +186,7 @@ Things you can ask Claude to do:
 > | `url` | Dispatcharr base URL |
 > | `dispatcharr_api_key` | **Dispatcharr REST API token** — ECM uses this to talk to Dispatcharr. (Canonical field name as of v0.17.1, GH #273. Operators upgrading from v0.17.0 or earlier will have the value in the legacy `api_key` field; ECM auto-migrates on next startup with a one-time `[CONFIG] Reading deprecated 'api_key' field …` WARN log.) Never replace it with an MCP key. |
 > | `api_key` | **DEPRECATED legacy alias for `dispatcharr_api_key`.** ECM still reads this for one release of back-compat (v0.17.x). The first read after upgrade emits a deprecation WARN and silently mirrors the value into `dispatcharr_api_key` on the next save. Rename or remove this field once you confirm `dispatcharr_api_key` is populated. |
-> | `mcp_api_key` | **ECM MCP static key** — the `ecm-mcp` sidecar uses this to authenticate calls to ECM via the `?api_key=` path. This is what the Generate / Regenerate button in Settings > MCP Integration writes. The `?api_key=` path is **permanent** — it will never be deprecated. |
-> | `mcp_oauth_signing_secret` | **OAuth HS256 signing secret** — auto-generated and managed by ECM; operators do not set this manually. It is the shared secret ECM and the MCP container use to sign and verify OAuth Bearer JWTs. Treat as credential-class; it is redacted in backup exports. |
-> | `oauth_allow_insecure` | **Default: `false`.** Set to `true` to enable OAuth on plain-HTTP (non-loopback) deployments. Without HTTPS, the MCP SDK rejects the OAuth flow. Only set this if you have a closed LAN and accept the token-interception risk. See [HTTPS Reverse Proxy](#claude-desktop--custom-connector-public-internet-facing) below for the standard HTTPS setup. |
+> | `mcp_api_key` | **ECM MCP static key** — the `ecm-mcp` sidecar uses this to authenticate calls to ECM via the `?api_key=` path. This is what the Generate / Regenerate button in Settings > MCP Integration writes. The `?api_key=` path is the supported MCP authentication method. |
 >
 > When rotating an MCP key, the new key goes in `mcp_api_key`. Do **not** touch `dispatcharr_api_key` (or its legacy `api_key` alias) — overwriting either with an MCP key breaks every channel and stream operation (ECM returns 401 to Dispatcharr). If you see `api_key_configured: false` from the `/health` endpoint after a rotation, the diagnostic's `status` field will indicate whether `mcp_api_key` is missing from the file (`field_missing`), blank (`field_empty`), or the file itself is unreadable (`file_not_found` / `invalid_json`) — use `GET http://YOUR_ECM_HOST:6100/api/health` to check.
 >
@@ -217,56 +215,18 @@ Things you can ask Claude to do:
 
 ### Choose your connection method
 
-> ⚠️ **Public vs. private — read this first.** Claude Desktop's **Custom Connector** is *brokered by Anthropic's infrastructure*: Anthropic's servers connect **out** to your MCP server, so it must be reachable from the **public internet** (HTTPS + a public DNS name/tunnel). A purely private/LAN or homelab deployment (e.g. an internal `*.home.lan` name on a `10.x`/`172.16.x`/`192.168.x` address) will fail the Custom Connector with **"Couldn't reach the MCP server"** even though your own browser on the LAN loads it fine — because Anthropic's cloud can't route to your private network.
->
-> **If you want to keep ECM private (no public exposure), use the `mcp-remote` bridge (Claude Desktop) or `.mcp.json` (Claude Code) instead** — both run on *your* machine and connect over your LAN/VPN, so nothing is exposed to the internet. This is a "pick two of {Claude Desktop · no Node.js · stays private}" trade-off; the Custom Connector is the only option that gives no-Node, and it's the one that requires public exposure.
+ECM's MCP server is authenticated with a static API key (`mcp_api_key`), passed as the `?api_key=` query parameter. Both connection methods below run on *your* machine and connect to ECM over your LAN/VPN — nothing needs to be exposed to the public internet.
 
-| Method | Node.js? | Network | Best for |
-|---|---|---|---|
-| [Claude Desktop — Custom Connector](#claude-desktop--custom-connector-public-internet-facing) | No | **Public** — Anthropic's cloud must reach your MCP server (HTTPS + internet-reachable) | Internet-exposed deploys that want the no-Node, in-app OAuth experience |
-| [Claude Desktop — mcp-remote bridge](#claude-desktop--mcp-remote-bridge-node-required) | Yes (LTS 18+ on the Claude Desktop machine) | **Private OK** — the bridge runs on your machine and connects over your LAN/VPN | Private/homelab deploys; plain-HTTP deploys; existing setups |
-| [Claude Code — `.mcp.json`](#claude-code-mcpjson) | No | **Private OK** — Claude Code connects directly from your machine | Private/homelab; Claude Code in any project; direct HTTP, no auth UI |
-
----
-
-### Claude Desktop — Custom Connector (public, internet-facing)
-
-Claude Desktop's built-in **Connectors** UI (Settings → Connectors → Add custom connector) uses OAuth 2.1 + PKCE. ECM acts as the Authorization Server; you authorize in a browser window and Claude Desktop stores the token automatically. **No Node.js required.**
-
-> ⚠️ **This path requires your MCP server (and ECM) to be reachable from the public internet.** The Custom Connector is brokered by Anthropic's infrastructure — Anthropic's servers, not the desktop app, connect out to your MCP URL — so a LAN-only / private deployment cannot use it (you'll get "Couldn't reach the MCP server"). **If you don't want to expose ECM publicly, skip this section and use [mcp-remote](#claude-desktop--mcp-remote-bridge-node-required) (Claude Desktop) or [`.mcp.json`](#claude-code-mcpjson) (Claude Code)** — both connect locally over your LAN/VPN with no public exposure.
-
-**Prerequisites:**
-- **Public reachability.** Expose `ecm` and `ecm-mcp` to the internet — a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) (no inbound ports) is the cleanest homelab option, or a public DNS name + port-forward to your reverse proxy.
-- **HTTPS.** The MCP SDK rejects plain-HTTP issuers for non-loopback hostnames. Front the MCP container (port 6101) — and ECM (port 6100) — with a TLS reverse proxy. See **[docs/runbooks/mcp-https-reverse-proxy.md](docs/runbooks/mcp-https-reverse-proxy.md)** for Caddy, nginx, and Traefik recipes.
-
-**Required: `OAUTH_ISSUER` must be identical on both containers.** Set the same external HTTPS origin on the ECM container and the MCP container. If they differ, every OAuth Bearer token fails verification with a silent 401.
-
-```yaml
-# In your docker-compose.yml — both containers
-environment:
-  - OAUTH_ISSUER=https://mcp.yourdomain.com
-```
-
-**Setup steps:**
-
-1. Stand up an HTTPS reverse proxy (see [mcp-https-reverse-proxy.md](docs/runbooks/mcp-https-reverse-proxy.md)) and set `OAUTH_ISSUER` on both containers.
-2. In Claude Desktop, go to **Settings → Connectors → Add custom connector**.
-3. Enter the MCP URL: `https://mcp.yourdomain.com/mcp`
-4. Claude Desktop discovers OAuth endpoints automatically.
-5. Your browser opens the ECM consent screen. Log in and click **Authorize**.
-6. Claude Desktop stores the token — you are connected. No config file edits required.
-
-> **`oauth_allow_insecure` escape hatch**: on a closed LAN with no DNS, set `oauth_allow_insecure: true` in `settings.json` to enable OAuth over plain HTTP. This accepts the token-interception risk. The MCP SDK may still reject `http://` issuers in some SDK versions regardless. Default is `false` (fail-closed).
-
-> **Static `?api_key=` is permanent**: the `?api_key=` query-parameter authentication path will never be deprecated. Existing Claude Code and mcp-remote setups are unaffected by the addition of OAuth.
-
-> **redirect_uri caveat**: ECM's registered `redirect_uri` for Claude Desktop is a placeholder pending verification (bead `buiqr.6`). If the OAuth consent flow fails with a `redirect_uri mismatch` error, check ECM's backend logs for the actual URI Claude Desktop sent, and update the client registry. This is a known open item.
+| Method | Node.js? | Best for |
+|---|---|---|
+| [Claude Desktop — mcp-remote bridge](#claude-desktop--mcp-remote-bridge-node-required) | Yes (LTS 18+ on the Claude Desktop machine) | Claude Desktop users; private/homelab deploys; existing setups |
+| [Claude Code — `.mcp.json`](#claude-code-mcpjson) | No | Claude Code in any project; direct HTTP, no Node.js |
 
 ---
 
 ### Claude Desktop — mcp-remote bridge (Node required)
 
-✅ **Works on a private network — no public exposure.** Unlike the Custom Connector, `mcp-remote` runs **on your machine** and connects to ECM over your LAN/VPN, so ECM never has to be reachable from the internet. This is the recommended Claude Desktop path for a private/homelab deployment (the cost is needing Node.js on the Claude Desktop machine).
+✅ **Works on a private network — no public exposure.** `mcp-remote` runs **on your machine** and connects to ECM over your LAN/VPN, so ECM never has to be reachable from the internet (the cost is needing Node.js on the Claude Desktop machine).
 
 Claude Desktop talks to remote MCP servers through the `mcp-remote` bridge. Add this to your `claude_desktop_config.json`:
 
@@ -323,7 +283,7 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 
 **Redeploying or rotating the MCP key:** use Settings > MCP Integration > Regenerate Key — this updates `mcp_api_key` in `settings.json`. Then update the `?api_key=` value in your Claude Desktop / Claude Code config. Do **not** edit `dispatcharr_api_key` (or its legacy `api_key` alias) in `settings.json` — that is the Dispatcharr REST token and is separate (see the field reference at the top of this section). As of v0.17.1 (GH #273) the Dispatcharr token lives in `dispatcharr_api_key`; the legacy `api_key` field is still read for one release of back-compat with a deprecation WARN.
 
-**For the full reference** — step-by-step OAuth walkthrough, key rotation details, and OAuth troubleshooting — see **[docs/user_guide/integrations/mcp.md](docs/user_guide/integrations/mcp.md)**.
+**For the full reference** — step-by-step connection setup, key rotation details, and troubleshooting — see **[docs/user_guide/integrations/mcp.md](docs/user_guide/integrations/mcp.md)**.
 
 ### Available Tools (124)
 
