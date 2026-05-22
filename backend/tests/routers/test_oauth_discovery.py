@@ -16,6 +16,14 @@ import pytest
 
 from config import DispatcharrSettings
 
+# MCP OAuth offering RETIRED (bd-9axgc). The OAuth discovery router is no longer
+# registered, so /.well-known/oauth-authorization-server returns 404. Every test
+# here exercises that now-disabled endpoint, so the whole module is skipped.
+# Re-enable when MCP OAuth is re-offered.
+pytestmark = pytest.mark.skip(
+    reason="MCP OAuth offering retired (bd-9axgc); OAuth discovery endpoint unregistered → 404. Re-enable when MCP OAuth is re-offered."
+)
+
 _WELL_KNOWN = "/.well-known/oauth-authorization-server"
 
 

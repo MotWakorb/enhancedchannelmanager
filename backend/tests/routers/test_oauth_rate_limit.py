@@ -74,6 +74,9 @@ def _registered_redirect(store):
 # ───────────────────────── /token rate limit (D1) ─────────────────────────
 
 
+@pytest.mark.skip(
+    reason="MCP OAuth offering retired (bd-9axgc); /api/oauth/token endpoint unregistered → 404. Re-enable when MCP OAuth is re-offered."
+)
 class TestTokenRateLimit:
     @pytest.mark.asyncio
     async def test_token_trips_429_after_limit(
@@ -108,6 +111,9 @@ class TestTokenRateLimit:
 # ───────────────────────── /authorize rate limit (D2) ─────────────────────
 
 
+@pytest.mark.skip(
+    reason="MCP OAuth offering retired (bd-9axgc); /api/oauth/authorize endpoint unregistered → 404. Re-enable when MCP OAuth is re-offered."
+)
 class TestAuthorizeRateLimit:
     @pytest.mark.asyncio
     async def test_authorize_trips_429_after_limit(

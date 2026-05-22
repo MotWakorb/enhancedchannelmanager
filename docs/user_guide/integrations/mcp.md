@@ -3,212 +3,46 @@
 > **Audience:** Operator who has the MCP sidecar container running and wants to
 > connect Claude Desktop or Claude Code to ECM.
 >
-> **Status:** Complete as of v0.17.1 (OAuth 2.1 + static key both supported).
+> **Status:** Current as of v0.17.1. MCP authenticates with a static API key via
+> the `?api_key=` path. (The OAuth 2.1 "Custom Connector" offering was retired —
+> see [ADR-009 (Superseded)](../../adr/ADR-009-mcp-oauth-authorization-server-split.md).)
 
 This is the full operator reference for connecting Claude to ECM via the Model
 Context Protocol. The [README MCP section](../../../README.md#mcp-server-claude-integration)
-covers quick-start setup; come here when you need the step-by-step OAuth
-walkthrough, key rotation details, or troubleshooting.
+covers quick-start setup; come here when you need the step-by-step setup, key
+rotation details, or troubleshooting.
 
 ---
 
 ## Choose your connection method
 
-Two paths connect Claude to ECM. They run in parallel — you can use both at the
-same time.
+ECM's MCP server is authenticated with a static API key (`mcp_api_key`), passed
+as the `?api_key=` query parameter. Both methods below run on *your* machine and
+connect to ECM over your LAN/VPN — **nothing needs to be exposed to the public
+internet**.
 
-> ⚠️ **Public vs. private — decide this first.** The **Custom Connector is brokered by Anthropic's infrastructure**: Anthropic's servers connect *out* to your MCP server, so it must be reachable from the **public internet**. A private/LAN/homelab deployment (an internal DNS name on an RFC-1918 address like `10.x` / `172.16.x` / `192.168.x`) **cannot** use the Custom Connector — it fails with *"Couldn't reach the MCP server"* even though your own browser on the LAN loads it fine, because Anthropic's cloud can't route into your private network. **To keep ECM private, use the mcp-remote bridge (Path B below) or [Claude Code](#claude-code-mcpjson)** — both run on *your* machine and connect over your LAN/VPN, so nothing is exposed to the internet.
-
-| | Custom Connector (OAuth) | mcp-remote bridge |
+| | mcp-remote bridge (Claude Desktop) | Claude Code (`.mcp.json`) |
 |---|---|---|
-| **Network reachability** | **Public** — Anthropic's cloud must reach your MCP server | **Private OK** — bridge runs on your machine, connects over LAN/VPN |
-| **Best for** | Internet-exposed deploys; no Node.js; in-app OAuth | Private/homelab; existing setups; static-key control |
-| **Auth model** | OAuth 2.1 + PKCE — ECM issues a short-lived JWT; Claude Desktop stores and refreshes it | Static API key embedded in the MCP URL |
-| **Prerequisites** | Public internet reachability + HTTPS reverse proxy (MCP port 6101 and ECM port 6100); `OAUTH_ISSUER` set on both containers | Node.js LTS 18+ on the Claude Desktop machine |
-| **Config file edits** | None — Claude Desktop's connector UI handles everything | `claude_desktop_config.json` |
-| **Claude Code** | Not applicable — Claude Code uses the static-key `.mcp.json` path | Not applicable |
+| **Best for** | Claude Desktop users; private/homelab; existing setups | Claude Code in any project |
+| **Auth model** | Static API key embedded in the MCP URL | Static API key embedded in the MCP URL |
+| **Prerequisites** | Node.js LTS 18+ on the Claude Desktop machine | None — Claude Code speaks Streamable HTTP natively |
+| **Config file** | `claude_desktop_config.json` | `.mcp.json` in your project directory |
+| **Network** | Private OK — bridge runs on your machine, connects over LAN/VPN | Private OK — Claude Code connects directly from your machine |
 
-**Claude Code** uses neither path above. It talks Streamable HTTP directly:
-create a `.mcp.json` file with the `?api_key=` URL and Claude Code picks it up
-automatically. See [Claude Code](#claude-code-mcpjson) below.
+- **Using Claude Desktop?** See [mcp-remote bridge](#claude-desktop--mcp-remote-bridge-node-required).
+- **Using Claude Code?** See [Claude Code](#claude-code-mcpjson).
 
 ---
 
-## Path A: Custom Connector (OAuth — no Node required)
-
-### What this path is
-
-Claude Desktop's built-in **Settings → Connectors → Add custom connector** UI
-uses OAuth 2.1 with PKCE. ECM acts as the Authorization Server (AS): it hosts
-the consent screen, issues short-lived Bearer JWTs, and manages grant records.
-The MCP container acts as the Resource Server (RS): it validates Bearer JWTs
-offline on every tool call without calling back to ECM.
-
-No Node.js or `npx` is involved. The trade-off is that **your MCP server (and
-ECM) must be reachable from the public internet** — Anthropic's cloud connects
-out to your MCP URL — fronted by HTTPS. If you want to keep ECM private, use
-[Path B (mcp-remote)](#path-b-mcp-remote-bridge-node-required) or
-[Claude Code](#claude-code-mcpjson) instead.
-
-> **ECM is the Authorization Server, not Anthropic — but Anthropic is in the
-> network path.** ECM (not Anthropic) issues and signs the OAuth tokens, so
-> Anthropic is **not in the trust chain**. However, the Custom Connector is
-> *brokered* by Anthropic's servers, which connect **out** to your MCP URL —
-> which is why this path requires public reachability. That's a **network**
-> requirement, not a trust one. See
-> [ADR-009](../../adr/ADR-009-mcp-oauth-authorization-server-split.md) for the
-> full architecture rationale.
-
-### Prerequisites
-
-Before adding the connector in Claude Desktop:
-
-1. **Public internet reachability.** Anthropic's infrastructure must be able to
-   reach your MCP server **and** ECM. Expose `ecm` and `ecm-mcp` via a
-   [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
-   (no inbound ports — cleanest for a homelab) or a public DNS name + a
-   port-forward to your reverse proxy. **A LAN-only / private deployment cannot
-   use this path** — it fails with "Couldn't reach the MCP server." Use
-   [Path B (mcp-remote)](#path-b-mcp-remote-bridge-node-required) or
-   [Claude Code](#claude-code-mcpjson) if you don't want to expose ECM.
-2. **MCP container is running.** Verify: `curl http://YOUR_ECM_HOST:6101/health`
-   should return `{"status": "ok", ...}`.
-3. **HTTPS reverse proxy in front of port 6101.** The MCP SDK rejects plain-HTTP
-   issuer URLs for non-loopback hosts. See the
-   [HTTPS reverse-proxy runbook](../../runbooks/mcp-https-reverse-proxy.md) for
-   Caddy (recommended, auto TLS), nginx, and Traefik recipes.
-4. **`OAUTH_ISSUER` set identically on both containers.** This is the single
-   most common misconfiguration. Both the ECM container and the MCP container
-   must have `OAUTH_ISSUER` set to the same external HTTPS origin.
-
-   ```yaml
-   # In docker-compose.yml — must be identical on both services
-   services:
-     ecm:
-       environment:
-         - OAUTH_ISSUER=https://mcp.yourdomain.com
-     ecm-mcp:
-       environment:
-         - OAUTH_ISSUER=https://mcp.yourdomain.com
-   ```
-
-   If they differ by even one character, every OAuth Bearer token fails with a
-   silent 401. Without this variable, both containers default to
-   `https://ecm.local`, which only works loopback.
-
-5. **ECM API key generated** (Settings → MCP Integration → Generate Key). The
-   static key and OAuth operate independently, but the key must be generated for
-   the MCP container's health endpoint to report `api_key_configured: true`.
-
-> **Known open item — `redirect_uri` placeholder (buiqr.6):** ECM's registered
-> `redirect_uri` for Claude Desktop is a confirmed placeholder pending
-> verification. The Custom Connector authorization flow will fail with a
-> `redirect_uri mismatch` error until the exact URI Claude Desktop sends is
-> confirmed and registered. Watch bead `enhancedchannelmanager-buiqr.6` for
-> resolution. The mcp-remote bridge and Claude Code paths are **unaffected**.
-
-### Step-by-step walkthrough
-
-1. **Set `OAUTH_ISSUER` on both containers** and restart them (see prerequisites
-   above).
-
-2. **Set up HTTPS** in front of MCP port 6101. Follow the
-   [HTTPS reverse-proxy runbook](../../runbooks/mcp-https-reverse-proxy.md). At
-   the end of that runbook, verify the discovery endpoint responds:
-
-   ```bash
-   curl -s https://mcp.yourdomain.com/.well-known/oauth-protected-resource
-   # Expected: {"issuer": "https://mcp.yourdomain.com", ...}
-   ```
-
-3. **Open Claude Desktop** and navigate to **Settings → Connectors**.
-
-4. Click **Add custom connector**.
-
-5. Enter the MCP server URL:
-
-   ```
-   https://YOUR_MCP_HTTPS_DOMAIN/mcp
-   ```
-
-   Replace `YOUR_MCP_HTTPS_DOMAIN` with the hostname your HTTPS proxy answers on
-   (e.g., `mcp.yourdomain.com`).
-
-6. Claude Desktop queries the discovery endpoint automatically. If it cannot
-   reach `/.well-known/oauth-protected-resource`, confirm your proxy is
-   running and the hostname resolves.
-
-7. **Your browser opens the ECM consent screen.** Log in to ECM if prompted.
-
-   <!-- SCREENSHOT PLACEHOLDER: ECM consent screen
-   Alt text: "ECM OAuth consent screen showing 'Claude Desktop is requesting
-   access to your ECM install. It will be able to read and manage your channels,
-   streams, M3U accounts, and EPG sources.' with an Authorize button."
-   Caption: The ECM consent screen — log in and click Authorize.
-   NOTE: Real screenshot is a manual follow-up. Capture once buiqr.6 (redirect_uri)
-   is resolved and an end-to-end OAuth flow can be completed against a live install. -->
-
-8. Click **Authorize**. ECM creates a grant record and issues a Bearer JWT to
-   Claude Desktop.
-
-9. **Claude Desktop shows the connector as connected.** No config file edits
-   were needed.
-
-You can now ask Claude to manage your ECM install — "list my channels," "probe
-all streams," "run the auto-creation pipeline and report what it created," etc.
-
-### Managing active connections
-
-In **ECM Settings → MCP Integration → Active Connections** you can see every app
-that has an active OAuth grant.
-
-<!-- SCREENSHOT PLACEHOLDER: Active Connections section
-Alt text: "Settings → MCP Integration showing the 'Active Connections' section
-with a row for 'Claude Desktop', granted timestamp, last-used timestamp, and a
-Revoke button."
-Caption: Active Connections — each authorized app appears here with its grant
-time and last-used time.
-NOTE: Real screenshot is a manual follow-up (same dependency as consent screen). -->
-
-Each row shows:
-- **Client name** — the name ECM registered for that client (e.g., "Claude
-  Desktop").
-- **Granted** — when you authorized it.
-- **Last used** — when it last made a tool call.
-- **Revoke** — immediately invalidates the access. The app must re-authorize
-  to connect again.
-
-**Revoke all** (the "Revoke all active tokens" button) is a two-step panic
-button: it requires a first confirmation ("This will disconnect ALL apps. Are
-you sure?") and then typing `REVOKE` to execute. Use it if you suspect a grant
-was issued inadvertently or a connected device is lost or compromised.
-
-### Key rotation in the OAuth context
-
-OAuth tokens are managed by ECM. "Rotation" in this context means two different
-things:
-
-- **`mcp_oauth_signing_secret` rotation** (the HS256 signing secret ECM uses to
-  mint Bearer JWTs): ECM auto-generates this on startup if absent. If you
-  manually rotate it (by deleting it from `settings.json` and restarting ECM),
-  every live OAuth access token immediately fails to verify — Claude Desktop gets
-  a 401 on the next tool call. Active grants remain in the database, but the app
-  must re-authorize to get a new token. Do not rotate the signing secret unless
-  you intend to invalidate all live sessions.
-- **Revoking individual grants** (the Revoke button in Active Connections): stops
-  refresh token issuance immediately. The live access token lives until its TTL
-  expires (≤ 15 minutes), after which the app cannot renew and must re-authorize.
-
----
-
-## Path B: mcp-remote bridge (Node required)
+## Claude Desktop — mcp-remote bridge (Node required)
 
 ### What this path is
 
 The `mcp-remote` npm package acts as a local bridge: Claude Desktop runs it via
 `npx`, it connects to ECM's Streamable HTTP MCP endpoint over plain HTTP, and
 presents a standard MCP interface to Claude Desktop. The static API key is
-embedded in the URL.
+embedded in the URL. Everything runs on your machine — ECM never has to be
+reachable from the internet.
 
 ### Prerequisites
 
@@ -251,6 +85,9 @@ Install Node from [nodejs.org](https://nodejs.org/), or via a package manager:
 
 3. **Restart Claude Desktop.** It launches the `mcp-remote` bridge on startup.
 
+You can now ask Claude to manage your ECM install — "list my channels," "probe
+all streams," "run the auto-creation pipeline and report what it created," etc.
+
 > The `?api_key=` parameter is your `mcp_api_key` — the key generated in
 > Settings → MCP Integration. It is not your Dispatcharr API key. Mixing them up
 > breaks both: Dispatcharr returns 401, and the MCP container reports "API key
@@ -258,10 +95,10 @@ Install Node from [nodejs.org](https://nodejs.org/), or via a package manager:
 > [README field reference](../../../README.md#mcp-server-claude-integration) for
 > the distinction.
 
-### Key rotation in the static-key context
+### Key rotation
 
-The `?api_key=` URL uses `mcp_api_key` from `settings.json`. This is a
-**permanent path** — it is not deprecated and has no planned sunset.
+The `?api_key=` URL uses `mcp_api_key` from `settings.json`. This is the
+supported MCP authentication path.
 
 To rotate the static key:
 
@@ -277,7 +114,7 @@ the Dispatcharr REST API token and is separate from MCP auth.
 
 ## Claude Code (`.mcp.json`)
 
-Claude Code talks Streamable HTTP directly — no bridge, no OAuth. Create a
+Claude Code talks Streamable HTTP directly — no bridge, no Node.js. Create a
 `.mcp.json` file in any project directory where you want ECM tools:
 
 ```json
@@ -296,133 +133,19 @@ Claude Code talks Streamable HTTP directly — no bridge, no OAuth. Create a
 2. Start Claude Code in that directory — it auto-detects `.mcp.json` on launch.
 3. Run `/mcp` to reconnect if the MCP container restarts mid-session.
 
-The `?api_key=` path is permanent (PO-locked — no deprecation). Claude Code is
-unaffected by the HTTPS or `OAUTH_ISSUER` requirements — those only apply to the
-Custom Connector OAuth flow.
+If running ECM locally, use `localhost` as your host. If the MCP container is on
+the same Docker network as Claude Code, use the container name (`ecm-mcp`).
 
 ---
 
 ## Troubleshooting
 
-### Custom Connector: "Couldn't reach the MCP server" (no browser/consent opens)
-
-**Cause:** the Custom Connector is brokered by Anthropic's infrastructure —
-Anthropic's servers connect *out* to your MCP URL. If ECM is on a private/LAN
-network (internal DNS, RFC-1918 address), Anthropic's cloud cannot route to it,
-so the connector never even starts the OAuth flow (no browser opens). A telltale
-sign: your own browser on the LAN loads
-`https://YOUR_MCP_HOST/.well-known/oauth-protected-resource` fine, but the MCP
-server's access log shows **no** request from Anthropic during the attempt.
-
-**Fix — pick one:**
-- **Keep it private (recommended for homelab):** don't use the Custom Connector.
-  Use [Path B (mcp-remote)](#path-b-mcp-remote-bridge-node-required) or
-  [Claude Code](#claude-code-mcpjson) — both run on your machine and reach ECM
-  over your LAN/VPN, no public exposure.
-- **Expose it:** make `ecm` and `ecm-mcp` reachable from the internet (a
-  [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
-  is the cleanest, no inbound ports), then retry. The OAuth consent + admin login
-  is the gate that keeps that exposure safe.
-
-To confirm it's a reachability problem (not config): on the MCP host, watch the
-reverse-proxy access log while you click *Add* in Claude Desktop. **No log entry =
-Anthropic can't reach you** (private-network issue, above). A log entry that 4xxs
-is a different problem (see the other entries here).
-
-### The connector authorization fails with `redirect_uri mismatch`
-
-**Cause:** ECM's registered `redirect_uri` for Claude Desktop is a placeholder
-pending verification (open item: bead `enhancedchannelmanager-buiqr.6`).
-
-**What to do:**
-1. Check the ECM backend logs for the exact URI Claude Desktop sent:
-   `docker logs ecm-ecm-1 2>&1 | grep "redirect_uri" | tail -5`
-2. Note the actual URI.
-3. Report it to the project by commenting on bead `buiqr.6` — the maintainer
-   will update the hardcoded client registry and release a fix.
-
-This blocks the Custom Connector path only. The mcp-remote bridge and Claude
-Code paths are unaffected.
-
-### Silent 401s on every tool call (OAuth connector connected but tools fail)
-
-**Most likely cause:** `OAUTH_ISSUER` is set differently on the ECM and MCP
-containers. ECM mints tokens with `iss = OAUTH_ISSUER`; MCP verifies them
-against its own `OAUTH_ISSUER`. A one-character difference produces a silent 401
-on every tool call.
-
-**Diagnose:**
-
-```bash
-# What OAUTH_ISSUER does each container have?
-docker inspect ecm-ecm-1 | python3 -m json.tool | grep -A1 OAUTH_ISSUER
-docker inspect ecm-mcp-1 | python3 -m json.tool | grep -A1 OAUTH_ISSUER
-```
-
-They must be identical. Correct them and restart both containers.
-
-**Also check:** the discovery endpoint's `issuer` field matches:
-
-```bash
-curl -s https://YOUR_MCP_HTTPS_DOMAIN/.well-known/oauth-protected-resource \
-  | python3 -m json.tool | grep issuer
-```
-
-### Access token expired — tool calls fail after a period of inactivity
-
-**Normal behavior.** OAuth access tokens have a short TTL (≤ 15 minutes). The
-MCP connector refreshes them automatically in the background when it detects
-expiry. If the refresh token has also expired (or was revoked), Claude Desktop
-prompts you to re-authorize.
-
-**If re-authorization prompts do not appear and tool calls just fail silently:**
-Remove the connector from Claude Desktop (Settings → Connectors → remove ECM)
-and add it again. This is a one-time reset that forces a fresh authorization.
-
-### PKCE failure (`invalid_request` or `invalid_grant`)
-
-ECM enforces PKCE S256 only. The `plain` method is rejected. This error means
-the client sent a non-S256 `code_challenge_method` or no code challenge at all.
-
-Claude Desktop's built-in Custom Connector sends S256 correctly. If you see this
-error, it usually means:
-- A third-party MCP client is sending `plain` or no PKCE.
-- A proxy or interceptor is stripping the `code_challenge` parameter.
-
-ECM's authorization endpoint logs rejected requests at the WARN level:
-`docker logs ecm-ecm-1 2>&1 | grep -i "pkce\|code_challenge\|invalid_request" | tail -20`
-
-### OAuth discovery returns 404 on plain HTTP
-
-**Expected behavior** (not a bug). ECM's OAuth discovery endpoints return 404 on
-plain-HTTP, non-loopback requests by default (`oauth_allow_insecure` defaults to
-`false`). This prevents token interception on unencrypted connections.
-
-**Fix:** set up HTTPS as described in the
-[HTTPS reverse-proxy runbook](../../runbooks/mcp-https-reverse-proxy.md).
-
-**If you cannot set up HTTPS** (closed LAN, no DNS), you can explicitly opt in
-to plain-HTTP OAuth by adding `"oauth_allow_insecure": true` to
-`settings.json` (or Settings → Advanced in the UI). This carries the risk that
-OAuth Bearer tokens transit the network in cleartext — anyone on the same network
-segment can intercept and replay them. Only use this on a private, trusted LAN.
-
-### `OAUTH_ISSUER` drift — silent 401s after settings change
-
-If `OAUTH_ISSUER` changes on one container while the other retains the old value,
-tokens minted after the change fail to verify. Symptoms: tool calls return 401
-immediately after a container restart or compose change; the Settings → MCP
-Integration → Active Connections list shows grants but they don't work.
-
-**Fix:** ensure `OAUTH_ISSUER` is identical on both containers and restart both.
-
 ### `spawn npx ENOENT` in Claude Desktop logs (mcp-remote path)
 
 Node.js is not on `PATH` for the Claude Desktop process. Install Node.js (see
-[mcp-remote path prerequisites](#prerequisites-1)) and restart Claude Desktop.
+[mcp-remote prerequisites](#prerequisites)) and restart Claude Desktop.
 
-This error only applies to the mcp-remote bridge. It does not occur with the
-Custom Connector path.
+This error only applies to the mcp-remote bridge.
 
 ### MCP server not reachable (Settings → MCP Integration shows "offline")
 
@@ -440,20 +163,52 @@ If that fails, check the MCP container is running (`docker ps | grep ecm-mcp`)
 and that the `ECM_URL` environment variable on the MCP container points at the
 ECM container correctly.
 
+### MCP server online but "API key not configured"
+
+The MCP container's `/health` endpoint reports `api_key_configured: false`. ECM
+and the MCP container share the `/config` volume, and the MCP container reads
+`mcp_api_key` from `settings.json`. The most common causes:
+
+- **No key generated yet.** Open Settings → MCP Integration and click Generate
+  Key. The MCP `/health` endpoint surfaces a machine-readable `api_key_status`
+  (`file_not_found` / `invalid_json` / `field_missing` / `field_empty`) plus a
+  setup hint describing the exact cause.
+- **The two containers don't share the same `/config` volume.** Verify both
+  containers mount the same volume.
+
+Diagnose:
+```bash
+curl -s http://YOUR_ECM_HOST:6101/health | python3 -m json.tool
+```
+
+### `401 Invalid API key` on tool calls
+
+The `?api_key=` value in your Claude config does not match `mcp_api_key` in
+`settings.json`. This happens after a key rotation if the config wasn't updated.
+Regenerate the key in ECM (or copy the current value), update your config, and
+restart Claude.
+
+Make sure you are using the **MCP** key (`mcp_api_key`), not the Dispatcharr
+REST token (`dispatcharr_api_key` / legacy `api_key`).
+
+### Upgrading from the deprecated SSE transport
+
+The MCP server moved from the deprecated SSE transport (`/sse` + `/messages/`)
+to the modern Streamable HTTP transport on a single `/mcp` endpoint. If you have
+an existing config pointing at `http://YOUR_ECM_HOST:6101/sse?api_key=...` (or
+`"type": "sse"` in a `.mcp.json`), change the path to `/mcp` (and `"type":
+"http"` for Claude Code). The `/sse` endpoint was removed. API-key auth is
+unchanged.
+
 ---
 
 ## Going deeper
 
-- **Architecture**: [ADR-009 — MCP OAuth AS/RS split](../../adr/ADR-009-mcp-oauth-authorization-server-split.md)
-  — the full design rationale: why ECM is the AS, dual-path-by-shape routing,
-  offline HS256 verification, and the OAUTH_ISSUER requirement.
-- **HTTPS setup**: [Runbook: HTTPS Reverse Proxy for MCP OAuth](../../runbooks/mcp-https-reverse-proxy.md)
-  — Caddy (recommended), nginx, and Traefik recipes. OAUTH_ISSUER alignment
-  documented as the critical step.
-- **Release gate**: [Runbook: MCP Release Verification Checklist](../../runbooks/mcp-release-verification.md)
-  — the per-release manual checklist (Custom Connector flow, tool call, token
-  refresh, static key backward-compat, settings panel smoke).
-- **Security model**: `docs/security/threat_model_mcp_oauth.md` — STRIDE threat
-  analysis for the OAuth surface.
+- **Architecture**: [`docs/architecture.md`](../../architecture.md) — the MCP
+  Server static-key baseline and `settings.json` credential schema.
 - **README**: [MCP Server (Claude Integration)](../../../README.md#mcp-server-claude-integration)
   — quick-start setup and the "choose your method" overview table.
+- **Retired OAuth offering**: [ADR-009 (Superseded)](../../adr/ADR-009-mcp-oauth-authorization-server-split.md)
+  and `docs/security/threat_model_mcp_oauth.md` (Superseded/dormant) — history of
+  the OAuth 2.1 "Custom Connector" offering that was retired (`bd-9axgc`); the
+  code is kept dormant in-tree for reversibility.

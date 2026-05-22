@@ -30,8 +30,15 @@ from routers.backup import router as backup_router
 from routers.lookup_tables import router as lookup_tables_router
 from routers.client_errors import router as client_errors_router
 from routers.session_starts import router as session_starts_router
-from routers.oauth_mcp import router as oauth_mcp_router
-from routers.oauth_discovery import router as oauth_discovery_router
+
+# MCP OAuth offering RETIRED (bd-9axgc). The OAuth Authorization Server routers
+# (oauth_mcp = AS token/authorize/consent + grants; oauth_discovery = RFC 8414
+# AS metadata) are NO LONGER REGISTERED, so /api/oauth/* and the OAuth
+# /.well-known/* endpoints return 404. The router + provider modules are kept
+# in-tree, DORMANT, so the offering is reversible by re-adding the imports and
+# list entries below. The supported MCP path is the static ?api_key= method,
+# which is unaffected. See ADR-009 (Superseded) and
+# docs/security/threat_model_mcp_oauth.md (Superseded/dormant banner).
 
 all_routers = [
     tasks_router,
@@ -61,6 +68,4 @@ all_routers = [
     lookup_tables_router,
     client_errors_router,
     session_starts_router,
-    oauth_mcp_router,
-    oauth_discovery_router,
 ]

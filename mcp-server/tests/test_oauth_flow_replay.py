@@ -39,7 +39,16 @@ import json
 from pathlib import Path
 
 import jwt.api_jwt
+import pytest
 from unittest.mock import patch
+
+# MCP OAuth offering RETIRED (bd-9axgc). This module replays a captured OAuth
+# flow against the RS /mcp endpoint + the removed RFC 9728 discovery endpoint —
+# both of which no longer accept/serve OAuth. The whole module is skipped.
+# Re-enable when MCP OAuth is re-offered.
+pytestmark = pytest.mark.skip(
+    reason="MCP OAuth offering retired (bd-9axgc); RS no longer accepts OAuth Bearer JWTs and no longer serves /.well-known/oauth-protected-resource. Re-enable when MCP OAuth is re-offered."
+)
 
 _FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "claude_desktop_oauth_flow.json"
 

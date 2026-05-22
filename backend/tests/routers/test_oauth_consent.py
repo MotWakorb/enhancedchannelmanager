@@ -24,6 +24,14 @@ from auth.oauth_clients import (
 )
 from auth.oauth_store import OAuthStore
 
+# MCP OAuth offering RETIRED (bd-9axgc). The OAuth AS router (consent-context +
+# grants endpoints) is no longer registered, so /api/oauth/* returns 404. Every
+# test here exercises those now-disabled endpoints, so the whole module is
+# skipped. Re-enable when MCP OAuth is re-offered.
+pytestmark = pytest.mark.skip(
+    reason="MCP OAuth offering retired (bd-9axgc); /api/oauth/* endpoints unregistered → 404. Re-enable when MCP OAuth is re-offered."
+)
+
 
 TEST_SECRET = "z" * 48
 
