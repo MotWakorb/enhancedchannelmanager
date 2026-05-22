@@ -1,0 +1,90 @@
+/**
+ * StreamDedupModal styles (BD-G / bd-4vxjj, ADR-008 §D1).
+ *
+ * Uses ModalBase.css for:
+ *   .modal-overlay, .modal-container, .modal-md, .modal-header, .modal-body,
+ *   .modal-footer, .modal-close-btn, .modal-btn, .modal-btn-primary,
+ *   .modal-btn-secondary, .modal-form-group, .modal-error-banner,
+ *   .modal-empty-state
+ *
+ * Uses index.css design tokens (and Material Icons font) for colors and
+ * spacing. No new shared classes introduced — the `.confidence-badge`
+ * class name matches BulkEPGAssignModal.css's existing pattern but is
+ * redeclared here scoped under `.stream-dedup-modal` to avoid cross-modal
+ * coupling. If a third consumer appears, promoting `.confidence-badge` to
+ * common.css is the right next move.
+ *
+ * Reduced-motion: when `.is-reduced-motion` is applied (driven by
+ * `prefers-reduced-motion: reduce`), the modal-container slide-in
+ * animation is suppressed.
+ */
+
+.stream-dedup-modal .stream-dedup-stream-name {
+  padding: 0.625rem 0.75rem;
+  background: var(--bg-tertiary, #1a1a2e);
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary, #fff);
+  font-size: 0.95rem;
+  font-weight: 500;
+  /* Long stream names should wrap rather than overflow horizontally. */
+  word-break: break-word;
+}
+
+.stream-dedup-modal .stream-dedup-candidate-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  background: var(--bg-tertiary, #1a1a2e);
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-lg);
+}
+
+.stream-dedup-modal .stream-dedup-candidate-name {
+  flex: 1;
+  color: var(--text-primary, #fff);
+  font-size: 0.95rem;
+  font-weight: 500;
+  word-break: break-word;
+}
+
+/*
+ * Confidence badge — visually mirrors BulkEPGAssignModal.css's
+ * `.confidence-badge`, scoped here so the two modals do not have to share a
+ * stylesheet boundary. See header comment for the promote-to-common.css
+ * trigger.
+ */
+.stream-dedup-modal .confidence-badge {
+  flex-shrink: 0;
+  padding: 0.25rem 0.625rem;
+  background: var(--bg-secondary, #252540);
+  color: var(--text-secondary, #888);
+  font-size: 0.8rem;
+  font-weight: 600;
+  border-radius: var(--radius-2xl);
+}
+
+/*
+ * Exact-match badge gets a brighter color treatment to signal "this is a
+ * one-click confirmation" — matching the Merge button's primary styling
+ * applied in the same exact-match branch.
+ */
+.stream-dedup-modal .stream-dedup-exact-badge {
+  background: var(--success-bg, rgba(34, 197, 94, 0.15));
+  color: var(--success, #4ade80);
+}
+
+.stream-dedup-modal .stream-dedup-empty {
+  padding: 1.5rem 1rem;
+}
+
+/*
+ * Reduced-motion: suppress the modal-container slide-in animation from
+ * ModalBase.css. The fade-in on the overlay backdrop is a 200ms opacity
+ * change with no transform/translate and is left in place — Apple/W3C
+ * guidance treats pure opacity as motion-safe.
+ */
+.stream-dedup-modal.is-reduced-motion {
+  animation: none !important;
+}

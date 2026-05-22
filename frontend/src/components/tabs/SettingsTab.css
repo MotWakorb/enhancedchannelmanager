@@ -969,6 +969,43 @@
   color: #fcd34d;
 }
 
+/* Inline link-style button — used in form-description paragraphs (e.g. Plex token help) */
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent-primary);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+
+.link-button:hover {
+  color: var(--accent-hover, var(--accent-primary));
+  text-decoration: none;
+}
+
+/* Plex token discovery modal */
+.plex-token-modal .plex-token-steps {
+  padding-left: 1.25rem;
+  margin: 0 0 1.25rem 0;
+}
+
+.plex-token-modal .plex-token-steps li {
+  margin-bottom: 0.6rem;
+  line-height: 1.5;
+}
+
+.plex-token-modal .plex-token-ref-link {
+  margin-top: 1rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.plex-token-modal .plex-token-ref-link a {
+  color: var(--accent-primary);
+}
+
 /* ========================================
    Email Settings Page
    ======================================== */
@@ -1080,4 +1117,27 @@
   color: var(--text-secondary);
   margin-bottom: 1rem;
   line-height: 1.5;
+}
+
+/* Integration test-connection action block (bd-r5f0c.13 / W13)
+   Replaces inline style={{ alignSelf: 'flex-start' }} on the button and
+   inline color styles on the result spans. Used identically in Emby,
+   Plex, and Jellyfin sections. */
+.integration-test-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.integration-test-result {
+  font-size: 0.875rem;
+}
+
+.integration-test-result--success {
+  color: var(--accent-success);
+}
+
+.integration-test-result--error {
+  color: var(--accent-error);
 }

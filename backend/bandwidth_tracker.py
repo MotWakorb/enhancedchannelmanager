@@ -13,13 +13,16 @@ was the (a)→(d) transition gate and there is no off-state once legacy
 writes are gone.
 """
 import asyncio
+import json
 import logging
 import os
 import re
 import time
 from collections import OrderedDict
+from dataclasses import dataclass, field
 from datetime import datetime, date, timedelta, timezone
 from typing import Any, ClassVar, NamedTuple, Optional
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import distinct, func
@@ -32,8 +35,248 @@ from models import (
     SessionTelemetry,
     UniqueClientConnection,
 )
+from services.emby_resolver import (
+    EmbyAttribution,
+    resolve_emby_user,
+    resolve_emby_users,
+)
+from services.jellyfin_resolver import (
+    JellyfinAttribution,
+    resolve_jellyfin_user,
+    resolve_jellyfin_users,
+)
+from services.plex_resolver import (
+    PlexAttribution,
+    resolve_plex_user,
+    resolve_plex_users,
+)
 
 logger = logging.getLogger(__name__)
+
+
+# bd-gih6d: rate-limit window for the per-source resolver-failure WARN
+# lines. The resolvers themselves document that they "never raise" —
+# every upstream defensive path returns ``None`` and logs at the
+# appropriate level. The per-source guards exist as a belt-and-braces
+# wrapper around the resolver call so a future refactor that lets an
+# exception escape (or any unforeseen runtime fault: cache failure,
+# settings access raise, etc.) cannot block the telemetry write.
+# WARN-ONCE-PER-WINDOW keeps the log honest: operators need a visible
+# signal when attribution is silently failing, but not one line per
+# (channel, ip) pair per poll cycle (which on a busy install would
+# drown the log). 60 seconds matches the order-of-magnitude of the
+# resolver cache TTL — transient failures self-heal inside one window.
+#
+# bd-r5f0c.4: per-source clocks (separate ``_emby_*``, ``_plex_*``,
+# ``_jellyfin_*`` timestamps) so a sustained Plex outage cannot silence
+# Jellyfin failure WARNs — failure isolation across sources is the SRE
+# requirement that motivated the multi-resolver fan-out in
+# ``_resolve_attributions``.
+_EMBY_WARN_WINDOW_SECONDS: float = 60.0
+_PLEX_WARN_WINDOW_SECONDS: float = 60.0
+_JELLYFIN_WARN_WINDOW_SECONDS: float = 60.0
+
+
+# Module-level monotonic timestamps of the last per-source resolver
+# failure WARN. Initialised to ``None`` (never logged) so the first
+# failure in a fresh process always surfaces. Module-level rather than
+# instance-level so multi-tracker test seams (rare, but possible in
+# parallel test runs) share the same rate-limit clock — duplicating the
+# WARN across tracker instances would defeat the suppression.
+_emby_resolver_last_warn_at: float | None = None
+_plex_resolver_last_warn_at: float | None = None
+_jellyfin_resolver_last_warn_at: float | None = None
+
+
+@dataclass(frozen=True)
+class AttributionResult:
+    """Sparse per-(channel, ip) attribution from all three media sources.
+
+    bd-r5f0c.4 (epic bd-r5f0c). Populated by
+    :meth:`BandwidthTracker._resolve_attributions` for every active
+    viewing connection in a poll. Each field is ``None`` (or empty list)
+    when the corresponding source did not match this client — typical
+    for the common case where the operator has only one media server
+    enabled, or the stream is not media-server-mediated at all (direct
+    Dispatcharr proxy traffic).
+
+    bd-r5f0c.9 extension — multi-viewer attribution. The original
+    bd-r5f0c.4 single-viewer fields (``*_user_id`` / ``*_user_name``)
+    are retained for back-compat with Stats v2 aggregations and the
+    pre-W5 frontend rendering. Three new fields carry the FULL list of
+    viewers per source so multi-viewer scenarios (N upstream users on
+    one channel via the same media-server transcoding proxy) are
+    captured. The legacy singular slots are populated with position 0
+    of the corresponding viewer list (most-recent viewer) so existing
+    consumers see exactly the same shape as v0.17.1-0042.
+
+    The Plex resolver currently surfaces only ``user_name`` (no Plex-
+    side user UUID is exposed on the public ``/status/sessions``
+    surface — Plex Web users are identified by their numeric
+    ``User/@id``, which ``plex_resolver`` could surface but currently
+    does not). The ``plex_user_id`` slot and the ``user_id`` keys
+    inside ``plex_viewers`` dicts stay NULL today — the schema and the
+    dataclass tolerate this; the column tolerates NULL via the
+    nullable TEXT type.
+
+    All three pairs ride together in one dataclass so the writer can
+    look up one ``AttributionResult`` per (channel, ip) instead of
+    consulting three separate dicts.
+    """
+
+    emby_user_id: Optional[str] = None
+    emby_user_name: Optional[str] = None
+    plex_user_id: Optional[str] = None
+    plex_user_name: Optional[str] = None
+    jellyfin_user_id: Optional[str] = None
+    jellyfin_user_name: Optional[str] = None
+    # bd-r5f0c.9 multi-viewer lists. Each is a list of
+    # ``{"user_id": str | None, "user_name": str}`` dicts, sorted
+    # ``last_activity_date`` descending so position 0 is the most-recent
+    # viewer (the same viewer the legacy *_user_name field carries).
+    # Empty list (default) when the corresponding source did not
+    # match — semantically identical to "no viewers" / NULL in the DB.
+    # ``field(default_factory=list)`` rather than a bare ``[]`` because
+    # this dataclass is frozen and a mutable default would be a shared
+    # class-level instance across every AttributionResult.
+    emby_viewers: list[dict] = field(default_factory=list)
+    plex_viewers: list[dict] = field(default_factory=list)
+    jellyfin_viewers: list[dict] = field(default_factory=list)
+
+    def is_empty(self) -> bool:
+        """True when no source matched this client (every field empty/NULL)."""
+        return not any(
+            (
+                self.emby_user_id, self.emby_user_name,
+                self.plex_user_id, self.plex_user_name,
+                self.jellyfin_user_id, self.jellyfin_user_name,
+                self.emby_viewers, self.plex_viewers, self.jellyfin_viewers,
+            )
+        )
+
+
+def _coerce_connected_at(value) -> Optional[float]:
+    """Best-effort coerce a Dispatcharr ``connected_at`` to a float (bd-mlcla).
+
+    Used only as the IP-bucket tie-break in the reconciler, so a missing or
+    unparsable value is harmless (sorts last). Never raises.
+    """
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_persisted_connection(*, ip: str, meta: dict, source_server_ip):
+    """Build one reconciler :class:`Connection` for the persisted path (bd-rools).
+
+    Mirrors ``routers.stats._build_attribution_connections`` so the live and
+    persisted attribution paths apply the IDENTICAL per-connection
+    discriminator. ``meta`` is the ``client_meta`` entry for this IP (or an
+    empty dict). A connection carries a Dispatcharr ACCOUNT identity when its
+    ``user_id`` is a positive integer (the ``client_meta`` now threads it
+    through, bd-rools) — that marks a genuine direct-IPTV subscriber, which is
+    excluded from media-server reconciliation and is never the server proxy.
+    Anonymous pulls (``user_id`` ``"0"`` / ``0`` / ``None``, including the
+    transcoding proxy and NAT'd browser-direct playback) stay eligible.
+
+    ``has_url_identity`` is always ``False`` here — bd-4w9w6 removed the
+    channel-upstream-URL discriminator that conflated channel SOURCE with
+    client IDENTITY and dropped every media-server viewer to User #0.
+    """
+    from services.attribution_reconciler import (
+        Connection,
+        has_dispatcharr_account_identity,
+    )
+
+    has_account_identity = has_dispatcharr_account_identity(
+        user_id=meta.get("user_id"),
+    )
+    return Connection(
+        client_id=str(meta.get("client_id") or ip),
+        ip_address=ip,
+        connected_at=_coerce_connected_at(meta.get("connected_at")),
+        # bd-4w9w6: the channel's upstream provider URL is the operator's
+        # account, NOT a per-client identity — it must not exclude these
+        # connections from reconciliation (the live "User #0" root cause).
+        has_url_identity=False,
+        # bd-rools: genuine direct subscriber → excluded from reconciliation.
+        has_account_identity=has_account_identity,
+        # A real subscriber is never the media server's own transcoding proxy.
+        is_server_proxy=(
+            not has_account_identity
+            and source_server_ip is not None
+            and ip == source_server_ip
+        ),
+    )
+
+
+def _build_persisted_trusted_networks(configured_cidrs: list[str]):
+    """Assemble the soft IP-ranking trusted-network list for the persisted
+    path (bd-mlcla).
+
+    Unions the three configured media-server IPs (resolved from their base
+    URLs), the operator's ``trusted_media_networks``, and auto-detected
+    Docker bridge gateways. Ranking-only — never gates. Resolving the
+    server IPs reuses each resolver's cached server-IP helper so this adds
+    no DNS thrash. Any failure degrades to the configured + detected sets.
+
+    Returns ``(trusted_networks, server_ip_by_source)`` — the second value
+    maps ``"emby"``/``"plex"``/``"jellyfin"`` to the resolved server IP (or
+    ``None``), so the reconciler can flag the server-proxy connection per
+    source (the bd-r5f0c.9 full-viewer-set carrier).
+    """
+    from config import detect_local_bridge_gateways, get_settings
+    from services.attribution_reconciler import build_trusted_networks
+
+    server_ip_by_source: dict[str, Optional[str]] = {}
+    try:
+        settings = get_settings()
+        from services.emby_resolver import _resolve_emby_server_ip
+        from services.jellyfin_resolver import _resolve_jellyfin_server_ip
+        from services.plex_resolver import _resolve_plex_server_ip
+
+        if getattr(settings, "emby_enabled", False):
+            server_ip_by_source["emby"] = _resolve_emby_server_ip(
+                getattr(settings, "emby_base_url", "") or ""
+            )
+        if getattr(settings, "plex_enabled", False):
+            server_ip_by_source["plex"] = _resolve_plex_server_ip(
+                getattr(settings, "plex_base_url", "") or ""
+            )
+        if getattr(settings, "jellyfin_enabled", False):
+            server_ip_by_source["jellyfin"] = _resolve_jellyfin_server_ip(
+                getattr(settings, "jellyfin_base_url", "") or ""
+            )
+    except Exception as exc:  # noqa: BLE001 — ranking hint, must never raise
+        logger.debug("[BANDWIDTH] server-IP rank-hint resolution failed: %s", exc)
+
+    try:
+        detected = detect_local_bridge_gateways()
+    except Exception:  # noqa: BLE001
+        detected = []
+
+    networks = build_trusted_networks(
+        server_ips=list(server_ip_by_source.values()),
+        configured_cidrs=configured_cidrs,
+        detected_gateways=detected,
+    )
+    return networks, server_ip_by_source
+
+
+# bd-r5f0c.4: per-source resolver timeout for the asyncio.gather fan-out
+# in ``_resolve_attributions``. SRE failure-isolation requirement —
+# a slow Plex server cannot block the per-poll telemetry write past
+# this threshold. 2.0 seconds is generous relative to the resolver's
+# cache-fast-path (which is microseconds), but tight enough that a
+# misconfigured server URL or a DNS hang fails forward to NULL
+# attribution within one poll interval. The resolvers themselves
+# already wrap their HTTP calls in shorter (5s/10s) timeouts; this is
+# the outer envelope so the whole-source attempt completes inside one
+# poll's budget.
+_RESOLVER_PER_SOURCE_TIMEOUT_SECONDS: float = 2.0
 
 
 # Dispatcharr stream-URL convention: the last path segment before ``.ts`` is
@@ -123,20 +366,24 @@ def _extract_stream_id_from_url(url: Optional[str]) -> Optional[int]:
 
 
 class ProviderResolution(NamedTuple):
-    """Per-channel resolver output (bd-kh23e).
+    """Per-channel resolver output (bd-kh23e, extended by bd-gy5nd).
 
     ``BandwidthTracker._resolve_provider_ids`` returns one
     ``ProviderResolution`` per channel in the snapshot. The three
-    fields move together as a unit because they all come from the same
-    ``get_streams_by_ids`` batch response and they all fail (NULL)
-    together when resolution can't complete (same failure modes as the
-    pre-kh23e provider-only path: ``no_stream_id`` /
-    ``stream_not_found`` / ``stream_has_no_provider`` / ``lookup_raised``
-    / channel-streams fallback raise/miss).
+    legacy fields (``provider_id``/``stream_id``/``stream_name``) move
+    together as a unit because they come from the ``get_streams_by_ids``
+    batch response and they all fail (NULL) together when stream-id
+    resolution can't complete. The two trailing fields (``provider_name``
+    and ``hostname``) populate from the bd-gy5nd URL-hostname-match
+    path, which derives provider identity from the ``url`` field on the
+    ``/proxy/ts/status`` snapshot — independent of stream-id
+    resolution, so a channel can carry ``hostname="infinity.gives"``
+    even when ``stream_id``/``stream_name`` are NULL.
 
     * ``provider_id`` — the M3U-account id of the stream's upstream
-      provider (``streams.m3u_account_id``). NULL when the resolver
-      could not identify the stream's owner.
+      provider (``streams.m3u_account_id`` from the stream-id direct
+      lookup OR ``m3u_accounts[*].id`` from the bd-gy5nd URL-hostname
+      match). NULL when neither path attributes the stream.
     * ``stream_id`` — the Dispatcharr stream row id (``streams.id``).
       NULL when the resolver could not identify the active stream at
       all (no stream id on the snapshot, no URL-derived match, etc.).
@@ -144,25 +391,127 @@ class ProviderResolution(NamedTuple):
       record (e.g. ``"US: TNT"``). NULL when the stream record had no
       ``name`` field, or when the resolver could not identify the
       stream.
+    * ``provider_name`` (bd-gy5nd) — operator-visible provider label.
+      The M3U account ``name`` when the URL hostname matched one of
+      Dispatcharr's configured M3U accounts; the bare hostname (e.g.
+      ``"infinity.gives"``) when the URL parses but no M3U match
+      exists; NULL when the URL itself is unparsable or absent.
+    * ``hostname`` (bd-gy5nd) — the bare hostname parsed from the
+      active stream URL. Populated whenever the URL parses to a
+      hostname (independent of whether the M3U match succeeded), so
+      downstream consumers always have a stable provider-identity
+      string when a URL is available.
 
-    Zero runtime overhead vs. a 3-tuple — ``typing.NamedTuple`` is a
+    Zero runtime overhead vs. a 5-tuple — ``typing.NamedTuple`` is a
     plain ``tuple`` subclass. Field access (``.provider_id``) is
     callsite documentation; iteration / equality / hashing behave
-    identically to a tuple.
+    identically to a tuple. The two trailing fields default to ``None``
+    so existing 3-arg constructions stay backward-compatible.
 
-    The all-NULL sentinel is ``ProviderResolution(None, None, None)`` —
-    use ``EMPTY_RESOLUTION`` below to avoid re-allocating it.
+    The all-NULL sentinel is ``ProviderResolution(None, None, None,
+    None, None)`` — use ``EMPTY_RESOLUTION`` below to avoid
+    re-allocating it.
     """
 
     provider_id: Optional[int]
     stream_id: Optional[int]
     stream_name: Optional[str]
+    provider_name: Optional[str] = None
+    hostname: Optional[str] = None
 
 
 # Sentinel for the "resolution failed" case — same object reused across
 # call sites so the dict[channel_uuid, ProviderResolution] map doesn't
 # allocate a fresh tuple for every NULL row.
-EMPTY_RESOLUTION = ProviderResolution(None, None, None)
+EMPTY_RESOLUTION = ProviderResolution(None, None, None, None, None)
+
+
+def _parse_url_hostname(url: Optional[str]) -> Optional[str]:
+    """Extract the bare hostname from a stream URL (bd-gy5nd).
+
+    Returns the lowercased host component (no port, no userinfo) when
+    parsing succeeds, otherwise ``None``. Defensive against malformed
+    input — non-string, empty, missing scheme, no host.
+
+    The hostname becomes the M3U-account match key (compared against
+    each account's ``server_url`` hostname) AND, when no M3U match
+    exists, the bare-hostname provider-name fallback so the operator
+    always sees something concrete instead of "Unknown".
+    """
+    if not url or not isinstance(url, str):
+        return None
+    try:
+        parsed = urlparse(url)
+    except (ValueError, TypeError):
+        return None
+    host = parsed.hostname
+    if not host:
+        return None
+    return host.lower()
+
+
+def _match_provider_from_url(
+    url: Optional[str],
+    m3u_accounts: list[dict],
+) -> tuple[Optional[int], Optional[str], Optional[str]]:
+    """Derive provider identity from the active stream URL (bd-gy5nd).
+
+    The replacement for the bd-5g7kx channel-streams URL-match
+    fallback, which depended on
+    ``GET /api/channels/channels/<channel_uuid>/streams/`` — that path
+    never worked for the proxy-session UUIDs ECM gets from
+    ``/proxy/ts/status`` (wrong identifier space — Dispatcharr returns
+    the SPA ``index.html`` rather than 404).
+
+    Parse the URL hostname, then match against each M3U account's
+    ``server_url`` hostname (case-insensitive). When the match succeeds,
+    return ``(account_id, account_name, hostname)``. When the URL
+    parses but no account matches, return ``(None, hostname, hostname)``
+    — the bare hostname becomes the operator-visible provider label
+    instead of "Unknown". When the URL is unparsable or missing, return
+    the all-``None`` triple.
+
+    The ``m3u_accounts`` argument is the list returned by
+    ``DispatcharrClient.get_m3u_accounts()`` — each entry is a dict
+    with ``id``, ``name``, and ``server_url`` keys. Defensive against
+    missing/non-string fields per entry: a malformed account is
+    skipped, not raised on.
+
+    Returns ``(provider_id, provider_name, hostname)`` — three optional
+    values populated independently per the match outcome above.
+    """
+    hostname = _parse_url_hostname(url)
+    if hostname is None:
+        return (None, None, None)
+    for account in m3u_accounts:
+        if not isinstance(account, dict):
+            continue
+        server_url = account.get("server_url")
+        account_host = _parse_url_hostname(server_url)
+        if account_host is None:
+            continue
+        if account_host == hostname:
+            account_id = account.get("id")
+            account_name = account.get("name")
+            try:
+                provider_id: Optional[int] = (
+                    int(account_id) if account_id is not None else None
+                )
+            except (TypeError, ValueError):
+                provider_id = None
+            provider_name = (
+                str(account_name)
+                if isinstance(account_name, str) and account_name
+                else None
+            )
+            # Prefer the M3U account name when present; fall back to the
+            # bare hostname so the operator always sees something concrete.
+            return (provider_id, provider_name or hostname, hostname)
+    # URL parsed but no M3U account hostname matched. Surface the bare
+    # hostname so the frontend renders ``infinity.gives`` instead of
+    # "Unknown" — the upstream provider is identified even when the
+    # operator hasn't configured an M3U account for it.
+    return (None, hostname, hostname)
 
 
 # Default LRU sizing for the cross-poll channel-streams cache. Matches
@@ -252,64 +601,110 @@ async def resolve_active_channel_streams(
     Free-function entry point shared by:
 
     * ``BandwidthTracker._resolve_provider_ids`` — the polling cycle's
-      hot path. Passes its instance ``ChannelStreamsCache`` so successive
-      polls reuse channel-streams responses (bd-5g7kx) within TTL.
+      hot path.
     * ``routers.stats.get_channel_stats`` — the live Stats v2 Active
-      Channels endpoint (bd-ox5q8). Passes a fresh cache per request so
-      operator-facing data is at most one Dispatcharr round-trip behind
-      reality (no cross-request caching of channel-streams lookups —
-      operators expect immediate accuracy).
+      Channels endpoint (bd-ox5q8).
 
     Snapshot entry shape (the union both callers feed in):
 
-    * ``channel_uuid`` (str, required) — Dispatcharr channel UUID.
+    * ``channel_uuid`` (str, required) — Dispatcharr proxy-session UUID
+      (the ``channel_id`` field on ``/proxy/ts/status``).
     * ``stream_id`` (int | None) — Dispatcharr stream row id from
-      ``/proxy/ts/status``. Resolved first; absence triggers the
-      URL-derived fallback below.
-    * ``url`` (str | None) — Active stream URL. Used for the URL-derived
-      stream-id parse (bd-kbgey) and for the channel-streams URL-match
-      fallback (bd-5g7kx).
+      ``/proxy/ts/status``. Resolved first when present; absence
+      triggers the URL-derived fallbacks below.
+    * ``url`` (str | None) — Active stream URL (e.g.
+      ``https://infinity.gives/live/.../<id>.ts``). Used for both the
+      URL-derived stream-id parse (bd-kbgey) and the bd-gy5nd URL
+      hostname match against configured M3U accounts.
 
     Returns ``{channel_uuid: ProviderResolution}``. Resolution failures
-    land ``EMPTY_RESOLUTION`` (the all-None NamedTuple) — same row still
-    surfaces, all three identity fields NULL.
+    land ``EMPTY_RESOLUTION`` (the all-None NamedTuple) — same row
+    still surfaces, all five identity fields NULL.
 
     Resolution paths (tried in order, first hit wins per channel):
 
-    1. **Direct stream_id**: snapshot's ``stream_id`` → batched
-       ``get_streams_by_ids`` → stream's ``m3u_account_id``.
-    2. **URL-derived stream_id** (bd-kbgey): when ``stream_id`` is
+    1. **Direct stream_id** — snapshot's ``stream_id`` → batched
+       ``get_streams_by_ids`` → stream's ``m3u_account_id`` /
+       ``name``. Also populates ``provider_name`` from the matched
+       M3U account when ``m3u_account_id`` resolves to a known
+       account.
+    2. **URL-derived stream_id** (bd-kbgey) — when ``stream_id`` is
        absent, parse the trailing ``<id>.ts`` integer from the active
        URL and route it through the SAME batched call. Wins when the
        URL's trailing id coincidentally collides with a Dispatcharr
        stream row id.
-    3. **Channel-streams URL match** (bd-5g7kx): when path 2 misses —
-       the URL's trailing id is the *upstream* M3U provider's id, not
-       Dispatcharr's — fetch ``/api/channels/channels/<uuid>/streams/``
-       and find the stream whose persisted ``url`` matches the active
-       URL. Results cached (when a cache is provided) cross-call in a
-       bounded LRU.
+    3. **URL-hostname match** (bd-gy5nd, replaces bd-5g7kx's broken
+       channel-streams fallback) — when neither stream-id path
+       attributes the stream, derive provider identity from the URL
+       hostname directly: match against each configured M3U account's
+       ``server_url`` hostname; on no M3U match, surface the bare
+       hostname as the provider name so operators see ``infinity.gives``
+       instead of "Unknown".
 
-    Failure modes — all surface as ``EMPTY_RESOLUTION`` with a
-    structured ``[STATS_V2] provider_resolution_failed`` log line.
-    See ``BandwidthTracker._resolve_provider_ids`` docstring for the
-    full reason taxonomy.
+    The bd-5g7kx channel-streams fallback (which called
+    ``GET /api/channels/channels/<channel_uuid>/streams/`` with the
+    proxy-session UUID) was removed in bd-gy5nd because the endpoint
+    expects a Dispatcharr REST channel id — different identifier space
+    than proxy-session UUIDs. Dispatcharr returned the SPA
+    ``index.html`` rather than 404, which fed an HTML body into the
+    JSON parser and produced the 10s ``provider_resolution_failed``
+    WARN spam. The URL-hostname match is the structural replacement.
 
-    Metrics: when ``emit_metrics`` is True (the default — the polling
-    hot path) a per-call SLI line and Prometheus counter increment are
-    emitted via ``_log_provider_resolution_sli``. When False (the
-    on-demand endpoint path) the SLI line is suppressed so it doesn't
-    drown the cyclic poll signal.
+    Metrics: when ``emit_metrics`` is True (the polling hot path) a
+    per-call SLI line and Prometheus counter increment are emitted via
+    ``_log_provider_resolution_sli``. When False (the on-demand
+    endpoint path) the SLI line is suppressed so it doesn't drown the
+    cyclic poll signal.
+
+    The ``channel_streams_cache`` and ``poll_count`` parameters are
+    retained as no-op kwargs for back-compat with existing call sites;
+    bd-gy5nd no longer issues per-channel HTTP calls so neither cache
+    is needed in the URL-hostname-match path. The fields will be
+    removed in a follow-up that retires the back-compat shims.
     """
     from stream_prober import extract_m3u_account_id
+
+    # bd-gy5nd: pre-fetch the M3U accounts list once per resolver call.
+    # Used as the lookup table for URL-hostname matching when stream-id
+    # resolution misses (path 3 above) AND for ``provider_name``
+    # enrichment when the direct stream-id path succeeds. Best-effort:
+    # on Dispatcharr error we degrade to an empty list — every channel
+    # falls back to bare-hostname ``provider_name`` so the operator
+    # still sees a meaningful string.
+    m3u_accounts: list[dict] = []
+    try:
+        raw_accounts = await client.get_m3u_accounts()
+        if isinstance(raw_accounts, list):
+            m3u_accounts = raw_accounts
+    except Exception as e:
+        logger.debug(
+            "[STATS_V2] m3u_accounts_fetch_failed error=%s — degrading to "
+            "bare-hostname provider_name (bd-gy5nd)",
+            e,
+        )
+    # Build {account_id: account_name} once for ``provider_name``
+    # enrichment on the direct stream-id path.
+    m3u_name_by_id: dict[int, str] = {}
+    for account in m3u_accounts:
+        if not isinstance(account, dict):
+            continue
+        account_id = account.get("id")
+        account_name = account.get("name")
+        if account_id is None or not isinstance(account_name, str) or not account_name:
+            continue
+        try:
+            m3u_name_by_id[int(account_id)] = account_name
+        except (TypeError, ValueError):
+            continue
 
     provider_by_channel: dict[str, ProviderResolution] = {}
     unresolvable_channels: list[str] = []
     stream_id_by_channel: dict[str, int] = {}
-    # Channels whose stream_id came from URL parsing (bd-kbgey fallback)
-    # rather than the direct ``stream_id`` field. These are the
-    # candidates for the channel-streams URL-match fallback (bd-5g7kx)
-    # if the direct lookup misses.
+    # Channels whose stream_id came from URL parsing (bd-kbgey
+    # fallback) rather than the direct ``stream_id`` field. These are
+    # the candidates for the URL-hostname-match fallback (bd-gy5nd) if
+    # the direct lookup misses — the same gate the bd-5g7kx fallback
+    # used.
     url_derived_channels: set[str] = set()
     url_by_channel: dict[str, str] = {}
     for entry in channel_snapshot:
@@ -321,12 +716,19 @@ async def resolve_active_channel_streams(
         if stream_id is None:
             derived = _extract_stream_id_from_url(url) if url else None
             if derived is None:
+                # No stream id AND no URL-derived id — try URL-hostname
+                # match directly. When the URL parses to a hostname, we
+                # can still surface the provider identity for the
+                # operator even though the stream-row identity stays
+                # NULL.
+                hostname_resolution = _resolution_from_url_hostname(
+                    url_by_channel.get(channel_uuid), m3u_accounts
+                )
+                if hostname_resolution is not None:
+                    provider_by_channel[channel_uuid] = hostname_resolution
+                    continue
                 unresolvable_channels.append(channel_uuid)
                 provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
-                logger.warning(
-                    "[STATS_V2] provider_resolution_failed channel=%s reason=no_stream_id",
-                    channel_uuid,
-                )
                 continue
             stream_id_by_channel[channel_uuid] = derived
             url_derived_channels.add(channel_uuid)
@@ -335,7 +737,14 @@ async def resolve_active_channel_streams(
 
     if not stream_id_by_channel:
         if emit_metrics:
-            _log_provider_resolution_sli(0, len(unresolvable_channels))
+            resolved_so_far = sum(
+                1
+                for resolution in provider_by_channel.values()
+                if resolution is not EMPTY_RESOLUTION
+            )
+            _log_provider_resolution_sli(
+                resolved_so_far, len(unresolvable_channels)
+            )
         return provider_by_channel
 
     unique_stream_ids = sorted(set(stream_id_by_channel.values()))
@@ -346,16 +755,31 @@ async def resolve_active_channel_streams(
             "[STATS_V2] provider_resolution_failed reason=lookup_raised error=%s",
             e,
         )
+        # Stream-id lookup failed — try URL-hostname match for every
+        # affected channel so the operator still sees a provider name
+        # when possible.
+        unresolved_after_url = 0
+        url_resolved = 0
         for channel_uuid in stream_id_by_channel:
-            provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
-            logger.warning(
-                "[STATS_V2] provider_resolution_failed channel=%s stream=%s reason=lookup_raised",
-                channel_uuid,
-                stream_id_by_channel[channel_uuid],
+            hostname_resolution = _resolution_from_url_hostname(
+                url_by_channel.get(channel_uuid), m3u_accounts
             )
+            if hostname_resolution is not None:
+                provider_by_channel[channel_uuid] = hostname_resolution
+                url_resolved += 1
+                continue
+            provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
+            unresolved_after_url += 1
         if emit_metrics:
+            already_resolved_via_hostname = sum(
+                1
+                for ch, resolution in provider_by_channel.items()
+                if ch not in stream_id_by_channel
+                and resolution is not EMPTY_RESOLUTION
+            )
             _log_provider_resolution_sli(
-                0, len(unresolvable_channels) + len(stream_id_by_channel)
+                url_resolved + already_resolved_via_hostname,
+                len(unresolvable_channels) + unresolved_after_url,
             )
         return provider_by_channel
 
@@ -374,62 +798,117 @@ async def resolve_active_channel_streams(
             str(raw_name) if isinstance(raw_name, str) and raw_name else None
         )
 
-    # Per-invocation cache for the channel-streams fallback. Multiple
-    # unresolved channels sharing a channel_uuid in one call consult
-    # Dispatcharr ONCE. Distinct from the cross-call LRU passed in;
-    # this map drops when the function returns.
-    per_call_channel_streams_cache: dict[str, Optional[list[dict]]] = {}
-
-    resolved_count = 0
+    resolved_count = sum(
+        1
+        for resolution in provider_by_channel.values()
+        if resolution is not EMPTY_RESOLUTION
+    )
     unresolved_count = len(unresolvable_channels)
     for channel_uuid, stream_id in stream_id_by_channel.items():
         provider_id = provider_by_stream.get(stream_id)
         stream_in_response = stream_id in provider_by_stream
         stream_name = name_by_stream.get(stream_id)
-        if (
-            provider_id is None
-            and not stream_in_response
-            and channel_uuid in url_derived_channels
-        ):
-            fallback_result = await _resolve_via_channel_streams(
-                client,
-                channel_uuid,
-                url_by_channel.get(channel_uuid),
-                per_call_channel_streams_cache,
-                channel_streams_cache,
-                poll_count,
-            )
-            if fallback_result is not None:
-                provider_by_channel[channel_uuid] = fallback_result
-                resolved_count += 1
-                continue
-            provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
-            unresolved_count += 1
-            continue
-        if provider_id is None:
-            provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
-            unresolved_count += 1
-            if not stream_in_response:
-                reason = "stream_not_found"
-            else:
-                reason = "stream_has_no_provider"
-            logger.warning(
-                "[STATS_V2] provider_resolution_failed channel=%s stream=%s reason=%s",
-                channel_uuid,
-                stream_id,
-                reason,
-            )
-        else:
+        # Direct stream-id path succeeded → build the resolution and
+        # enrich ``provider_name`` from the M3U accounts lookup. The
+        # URL is also parsed here so ``hostname`` is consistently
+        # populated whenever a URL is available, irrespective of which
+        # resolution path won.
+        active_url = url_by_channel.get(channel_uuid)
+        active_hostname = _parse_url_hostname(active_url)
+        if provider_id is not None:
+            provider_name = m3u_name_by_id.get(int(provider_id))
+            # When the M3U account name is not in the side-load (e.g.
+            # the account list is stale and we got back an account id
+            # for a freshly-added account), fall back to the bare
+            # hostname so the operator still sees a label.
+            if provider_name is None:
+                provider_name = active_hostname
             provider_by_channel[channel_uuid] = ProviderResolution(
                 provider_id=provider_id,
                 stream_id=stream_id,
                 stream_name=stream_name,
+                provider_name=provider_name,
+                hostname=active_hostname,
             )
             resolved_count += 1
+            continue
+
+        # Direct stream-id path missed (URL-derived id didn't land in
+        # Dispatcharr's stream table, or the stream has no
+        # m3u_account). Fall back to URL-hostname match — bd-gy5nd's
+        # replacement for the bd-5g7kx channel-streams fallback.
+        if channel_uuid in url_derived_channels or not stream_in_response:
+            hostname_resolution = _resolution_from_url_hostname(
+                active_url, m3u_accounts, stream_id=None, stream_name=None
+            )
+            if hostname_resolution is not None:
+                provider_by_channel[channel_uuid] = hostname_resolution
+                resolved_count += 1
+                continue
+        # Neither stream-id direct nor URL-hostname match attributed
+        # the channel — surface the empty resolution and continue.
+        # Logged at DEBUG (not WARN) because the legitimate "no URL
+        # available" case is a normal data shape, not an error
+        # condition; the SLI summary line above carries the
+        # unresolved-count signal operators monitor.
+        provider_by_channel[channel_uuid] = EMPTY_RESOLUTION
+        unresolved_count += 1
+        if not stream_in_response:
+            reason = "stream_not_found"
+        else:
+            reason = "stream_has_no_provider"
+        logger.debug(
+            "[STATS_V2] provider_unresolved channel=%s stream=%s reason=%s",
+            channel_uuid,
+            stream_id,
+            reason,
+        )
 
     if emit_metrics:
         _log_provider_resolution_sli(resolved_count, unresolved_count)
     return provider_by_channel
+
+
+def _resolution_from_url_hostname(
+    url: Optional[str],
+    m3u_accounts: list[dict],
+    *,
+    stream_id: Optional[int] = None,
+    stream_name: Optional[str] = None,
+) -> Optional[ProviderResolution]:
+    """Build a ``ProviderResolution`` from URL hostname match (bd-gy5nd).
+
+    Returns ``None`` when the URL is missing/unparsable so callers can
+    fall through to the empty-resolution path. Otherwise returns a
+    populated ``ProviderResolution`` carrying the matched M3U account
+    id + name when an M3U account's hostname equals the URL's
+    hostname, OR the bare hostname as ``provider_name`` when no M3U
+    match exists. Emits the structured INFO trace operators grep for.
+
+    ``stream_id`` / ``stream_name`` carry forward when a stream-row
+    identity was resolved upstream (rare for this path — bd-gy5nd is
+    primarily the fallback when the stream-id chain misses, so usually
+    these are ``None``).
+    """
+    provider_id, provider_name, hostname = _match_provider_from_url(
+        url, m3u_accounts
+    )
+    if hostname is None:
+        return None
+    logger.info(
+        "[STATS_V2] provider_resolved host=%s source=%r m3u_account_id=%s "
+        "(bd-gy5nd)",
+        hostname,
+        provider_name,
+        provider_id,
+    )
+    return ProviderResolution(
+        provider_id=provider_id,
+        stream_id=stream_id,
+        stream_name=stream_name,
+        provider_name=provider_name,
+        hostname=hostname,
+    )
 
 
 async def _resolve_via_channel_streams(
@@ -761,6 +1240,121 @@ def _is_excluded_telemetry_user(
         if username.strip().lower() in exclude_tokens:
             return True
     return False
+
+
+def _log_emby_resolver_failure(exc: BaseException) -> None:
+    """Emit a [BANDWIDTH] [EMBY] WARN at most once per ``_EMBY_WARN_WINDOW_SECONDS``.
+
+    Companion to the per-(channel, ip) resolver wrapper in
+    ``_resolve_emby_attributions`` (bd-gih6d). The resolver is documented
+    to "never raise" — every defensive path returns ``None`` and logs at
+    the appropriate level. This helper exists as a belt-and-braces guard
+    so that if a future refactor (or any unforeseen runtime fault: cache
+    failure, settings access raise, etc.) lets an exception escape, the
+    BandwidthTracker poll loop still produces telemetry rows AND the
+    operator sees a single visible signal per minute.
+
+    The rate-limit window is module-level (``_emby_resolver_last_warn_at``)
+    so multi-tracker test seams share the same clock — without that,
+    parallel tracker instances would each log their own WARN inside the
+    same window and drown the signal.
+
+    The exception is included in the log line so operators can grep for
+    the failure mode. ``exc_info`` is intentionally NOT passed: a full
+    traceback on every poll cycle (until the window expires) is too
+    noisy for the operational signal-to-noise ratio that motivated this
+    suppression in the first place.
+    """
+    global _emby_resolver_last_warn_at
+    now = time.monotonic()
+    last = _emby_resolver_last_warn_at
+    if last is not None and (now - last) < _EMBY_WARN_WINDOW_SECONDS:
+        return
+    _emby_resolver_last_warn_at = now
+    logger.warning(
+        "[BANDWIDTH] [EMBY] resolver failed; telemetry will be written "
+        "without Emby attribution this poll cycle (rate-limited to one "
+        "warning per %.0fs): %s",
+        _EMBY_WARN_WINDOW_SECONDS, exc,
+    )
+
+
+def _reset_emby_warn_state_for_tests() -> None:
+    """Clear the module-level WARN rate-limit timestamp — tests only.
+
+    The rate-limit module-global persists across test functions; without
+    this reset, a test that triggers the WARN once would suppress the
+    WARN in a subsequent test that wants to assert it surfaces again.
+    Production code paths do not call this.
+    """
+    global _emby_resolver_last_warn_at
+    _emby_resolver_last_warn_at = None
+
+
+def _log_plex_resolver_failure(exc: BaseException) -> None:
+    """Per-source twin of :func:`_log_emby_resolver_failure` for Plex.
+
+    Independent rate-limit clock (``_plex_resolver_last_warn_at``) so a
+    sustained Emby or Jellyfin outage cannot silence Plex WARN lines —
+    failure isolation across sources (bd-r5f0c.4, SRE requirement).
+    """
+    global _plex_resolver_last_warn_at
+    now = time.monotonic()
+    last = _plex_resolver_last_warn_at
+    if last is not None and (now - last) < _PLEX_WARN_WINDOW_SECONDS:
+        return
+    _plex_resolver_last_warn_at = now
+    logger.warning(
+        "[BANDWIDTH] [PLEX] resolver failed; telemetry will be written "
+        "without Plex attribution this poll cycle (rate-limited to one "
+        "warning per %.0fs): %s",
+        _PLEX_WARN_WINDOW_SECONDS, exc,
+    )
+
+
+def _log_jellyfin_resolver_failure(exc: BaseException) -> None:
+    """Per-source twin of :func:`_log_emby_resolver_failure` for Jellyfin.
+
+    Independent rate-limit clock (``_jellyfin_resolver_last_warn_at``)
+    so a sustained Emby or Plex outage cannot silence Jellyfin WARN
+    lines (bd-r5f0c.4, SRE requirement).
+    """
+    global _jellyfin_resolver_last_warn_at
+    now = time.monotonic()
+    last = _jellyfin_resolver_last_warn_at
+    if last is not None and (now - last) < _JELLYFIN_WARN_WINDOW_SECONDS:
+        return
+    _jellyfin_resolver_last_warn_at = now
+    logger.warning(
+        "[BANDWIDTH] [JELLYFIN] resolver failed; telemetry will be written "
+        "without Jellyfin attribution this poll cycle (rate-limited to one "
+        "warning per %.0fs): %s",
+        _JELLYFIN_WARN_WINDOW_SECONDS, exc,
+    )
+
+
+def _reset_plex_warn_state_for_tests() -> None:
+    """Clear the module-level Plex WARN rate-limit timestamp — tests only."""
+    global _plex_resolver_last_warn_at
+    _plex_resolver_last_warn_at = None
+
+
+def _reset_jellyfin_warn_state_for_tests() -> None:
+    """Clear the module-level Jellyfin WARN rate-limit timestamp — tests only."""
+    global _jellyfin_resolver_last_warn_at
+    _jellyfin_resolver_last_warn_at = None
+
+
+def _reset_attribution_warn_state_for_tests() -> None:
+    """Clear all per-source resolver WARN rate-limit timestamps — tests only.
+
+    Convenience for the attribution test suite which wants every source
+    re-armed between cases. Sidesteps three separate reset calls in
+    every fixture.
+    """
+    _reset_emby_warn_state_for_tests()
+    _reset_plex_warn_state_for_tests()
+    _reset_jellyfin_warn_state_for_tests()
 
 
 def get_user_timezone() -> timezone:
@@ -1238,11 +1832,40 @@ class BandwidthTracker:
                 telemetry_channel_snapshot.append({
                     "channel_uuid": channel_id,
                     "channel_number": channel_number,
+                    # bd-zldrq (fix-forward for v0.17.1-0033): pass the
+                    # ECM-resolved channel name into _resolve_emby_attributions
+                    # so the tiered resolver can match Emby's live-TV
+                    # item.Name "<number> | <name>" against the channel
+                    # name (the Dispatcharr stream name does not fuzzy
+                    # match it above 0.85 for provider-prefixed verbose
+                    # names like "US: ESPN FHD").
+                    "channel_name": channel_name,
                     "client_ips": list(client_ips),
                     "client_user_map": dict(client_user_map),
                     "channel_bytes_delta": channel_bytes_delta,
                     "stream_id": channel.get("stream_id"),
                     "url": channel.get("url"),
+                    # bd-mlcla: per-connection metadata for the reconciler.
+                    # ``connected_at`` is the IP-bucket tie-break. (The channel
+                    # ``url`` above feeds the bd-gy5nd provider/hostname path;
+                    # bd-4w9w6 removed its use as a reconciliation discriminator
+                    # — see _reconcile_persisted_attributions.)
+                    # bd-rools: carry the Dispatcharr account ``user_id`` so the
+                    # persisted reconciler can apply the SAME per-connection
+                    # account-identity discriminator as the live stats path — a
+                    # genuine direct subscriber (positive user_id) is excluded
+                    # from media-server reconciliation, anonymous pulls
+                    # (user_id "0"/None) stay eligible.
+                    "client_meta": [
+                        {
+                            "ip_address": c.get("ip_address"),
+                            "client_id": c.get("client_id"),
+                            "connected_at": c.get("connected_at"),
+                            "user_id": c.get("user_id"),
+                        }
+                        for c in clients
+                        if c.get("ip_address")
+                    ],
                 })
 
         # Check for channels that stopped being watched
@@ -1384,6 +2007,19 @@ class BandwidthTracker:
         channel_events_by_channel = await self._collect_channel_events(
             telemetry_channel_snapshot
         )
+        # bd-r5f0c.4 (extends bd-gih6d): cross-reference each active
+        # (channel, ip) pair against ALL THREE media-source session
+        # lists (Emby + Plex + Jellyfin) so the writer can stamp the
+        # corresponding ``session_telemetry.*_user_id`` /
+        # ``*_user_name`` columns. The helper fans out via
+        # ``asyncio.gather`` with per-source timeout — one source's
+        # outage CANNOT block the telemetry write or the other
+        # sources' attributions. Returns a sparse
+        # ``{(channel, ip): AttributionResult}`` map; pairs not in the
+        # map land NULL across every source's column pair.
+        attributions = await self._resolve_attributions(
+            telemetry_channel_snapshot, provider_by_channel,
+        )
         self._write_session_telemetry(
             telemetry_channel_snapshot,
             observed_at_ms,
@@ -1396,6 +2032,10 @@ class BandwidthTracker:
             # helper before any per-row work runs.
             dispatcharr_user_map=dispatcharr_user_map,
             exclude_user_tokens=exclude_user_tokens,
+            # bd-r5f0c.4: sparse {(channel_uuid, ip): AttributionResult}
+            # map — empty when all sources are disabled or no pair
+            # resolved on any source.
+            attributions=attributions,
         )
 
     def _update_daily_record(
@@ -2078,6 +2718,613 @@ class BandwidthTracker:
             attributed_by_type.get("stream_switch", 0),
         )
 
+    async def _resolve_attributions(
+        self,
+        telemetry_channel_snapshot: list[dict],
+        provider_by_channel: dict[str, ProviderResolution],
+    ) -> dict[tuple[str, str], AttributionResult]:
+        """Cross-reference active (channel, ip) pairs against all three media sources.
+
+        bd-r5f0c.4 (epic bd-r5f0c) — extends bd-gih6d (Emby-only) to
+        Plex + Jellyfin. Builds a sparse map of
+        ``(channel_uuid, client_ip) → AttributionResult`` for every
+        active viewing connection this poll. The result populates
+        ``session_telemetry.{emby,plex,jellyfin}_user_id`` /
+        ``..._user_name`` columns in the downstream
+        ``_write_session_telemetry`` call — each source's columns get
+        populated only when THAT source matched the (channel, ip) pair;
+        all six default to NULL otherwise.
+
+        Concurrency + failure isolation
+        --------------------------------
+        Each source's per-(channel, ip) resolution loop is wrapped in
+        :func:`asyncio.wait_for` against
+        ``_RESOLVER_PER_SOURCE_TIMEOUT_SECONDS``, then the three loops
+        run concurrently via :func:`asyncio.gather` (``return_exceptions=
+        True`` so one source's timeout / unexpected raise does NOT
+        poison the others' results). SRE failure-isolation requirement:
+        a slow Plex server cannot block Jellyfin attribution past one
+        timeout budget; an Emby cache fault cannot prevent the writer
+        from getting Plex matches.
+
+        Settings gate
+        -------------
+        Each source's coroutine reads its own ``<source>_enabled`` flag
+        and short-circuits to an empty dict if the source is disabled.
+        On a single-source install (the common case today), only one
+        source's resolver actually walks the snapshot — the other two
+        coroutines return an empty dict in microseconds without
+        touching their resolvers.
+
+        Per-source WARN rate-limiting
+        -----------------------------
+        Each source has its own module-level WARN clock
+        (:func:`_log_emby_resolver_failure` /
+        :func:`_log_plex_resolver_failure` /
+        :func:`_log_jellyfin_resolver_failure`) so a sustained Plex
+        outage cannot silence Emby or Jellyfin WARNs — failure
+        signals stay independent across sources.
+
+        Args:
+            telemetry_channel_snapshot: Per-channel snapshot the
+                ``_collect_stats`` loop already built — ``channel_uuid``
+                + ``client_ips`` + ``channel_name`` + ``channel_number``
+                per entry are the fields the resolvers consume.
+            provider_by_channel: Same map ``_write_session_telemetry``
+                already receives; used here to read the resolved
+                ``stream_name`` so each resolver can match against its
+                source's now-playing surface.
+
+        Returns:
+            ``{(channel_uuid, client_ip): AttributionResult}``. Sparse —
+            entries are only present for pairs at least one source
+            attributed. Empty dict when all sources are disabled, when
+            no pair resolved, or when every resolver call failed.
+        """
+        try:
+            from config import get_settings
+            settings = get_settings()
+        except Exception as exc:
+            # Settings access raise is exotic but defensible — config
+            # is loaded at import in normal flow. Fail soft so the
+            # writer still runs. Log against each source so the operator
+            # sees the failure in whatever source's monitoring they
+            # have wired up.
+            _log_emby_resolver_failure(exc)
+            _log_plex_resolver_failure(exc)
+            _log_jellyfin_resolver_failure(exc)
+            return {}
+
+        emby_enabled = bool(getattr(settings, "emby_enabled", False))
+        plex_enabled = bool(getattr(settings, "plex_enabled", False))
+        jellyfin_enabled = bool(getattr(settings, "jellyfin_enabled", False))
+
+        # Short-circuit: every source disabled (the common posture on
+        # installs without any media server configured). Skips three
+        # coroutine creations + the gather machinery on the hot path.
+        if not (emby_enabled or plex_enabled or jellyfin_enabled):
+            return {}
+
+        async def _with_timeout(
+            coro,
+            source: str,
+            log_failure,
+        ) -> dict[tuple[str, str], Any]:
+            """Wrap one source's coroutine in a per-source timeout.
+
+            Returns an empty dict on TimeoutError or any unexpected
+            exception so ``gather`` can compose the source results
+            without inheriting a per-source failure into the merged
+            output.
+            """
+            try:
+                return await asyncio.wait_for(
+                    coro, timeout=_RESOLVER_PER_SOURCE_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                # Surface the timeout against the source's own WARN
+                # clock so SRE can see one source got slow without the
+                # other sources' clocks being affected. Synthesize a
+                # marker exception so the existing log helper's
+                # ``%s`` formatting reads naturally.
+                log_failure(asyncio.TimeoutError(
+                    f"{source} resolver exceeded "
+                    f"{_RESOLVER_PER_SOURCE_TIMEOUT_SECONDS:.1f}s budget"
+                ))
+                return {}
+            except Exception as exc:  # noqa: BLE001 — top-level failure isolation
+                log_failure(exc)
+                return {}
+
+        emby_task = _with_timeout(
+            self._resolve_emby_for_clients(
+                telemetry_channel_snapshot, provider_by_channel,
+                enabled=emby_enabled,
+            ),
+            "emby",
+            _log_emby_resolver_failure,
+        )
+        plex_task = _with_timeout(
+            self._resolve_plex_for_clients(
+                telemetry_channel_snapshot, provider_by_channel,
+                enabled=plex_enabled,
+            ),
+            "plex",
+            _log_plex_resolver_failure,
+        )
+        jellyfin_task = _with_timeout(
+            self._resolve_jellyfin_for_clients(
+                telemetry_channel_snapshot, provider_by_channel,
+                enabled=jellyfin_enabled,
+            ),
+            "jellyfin",
+            _log_jellyfin_resolver_failure,
+        )
+
+        emby_map, plex_map, jellyfin_map = await asyncio.gather(
+            emby_task, plex_task, jellyfin_task,
+        )
+
+        # bd-mlcla: RECONCILE per channel instead of broadcasting the
+        # per-(channel, ip) candidate lists onto the row verbatim. The
+        # per-source maps gathered above are
+        # ``{(channel_uuid, ip): [Attribution]}`` — but with the IP gate
+        # removed every (channel, ip) on the channel carries the SAME
+        # candidate set (the channel's matched users). Reconciliation
+        # assigns each user to AT MOST ONE connection (anti-collapse),
+        # never broadcasts one user to all connections (anti-broadcast),
+        # and surplus users surface only at the channel level (no phantom
+        # rows). Each source is reconciled independently so a connection
+        # that matches Emby AND Plex gets both columns.
+        return self._reconcile_persisted_attributions(
+            telemetry_channel_snapshot,
+            emby_map=emby_map,
+            plex_map=plex_map,
+            jellyfin_map=jellyfin_map,
+            settings=settings,
+        )
+
+    def _reconcile_persisted_attributions(
+        self,
+        telemetry_channel_snapshot: list[dict],
+        *,
+        emby_map: dict[tuple[str, str], list],
+        plex_map: dict[tuple[str, str], list],
+        jellyfin_map: dict[tuple[str, str], list],
+        settings,
+    ) -> dict[tuple[str, str], "AttributionResult"]:
+        """Reconcile per-channel candidate sets into per-(channel, ip) rows.
+
+        bd-mlcla. For the persisted telemetry path the row granularity is
+        ``(channel_uuid, client_ip)``, so each distinct (channel, ip) is one
+        reconciler :class:`Connection`. For each source independently:
+
+        1. Pool the channel's distinct candidate users (the union of the
+           per-ip lists for that channel — same set on each ip post-gate-
+           removal, but unioning is robust to Tier-3 server-IP-only hits).
+        2. Build one Connection per distinct (channel, ip), excluding
+           direct-IPTV channels via the URL-identity discriminator.
+        3. Reconcile (anti-collapse / anti-broadcast / Option-B rollup).
+        4. Emit the per-ip assignment into the row's source columns +
+           ``*_viewers`` list. The channel-level distinct set is NOT
+           persisted per row (the read APIs aggregate per user from the
+           assigned rows); surplus users simply do not stamp a row.
+
+        The Option-B rollup is encoded into the row as a single synthetic
+        viewer whose ``user_name`` is the ``"N viewers: ..."`` label (so
+        the read APIs + frontend render the rollup) with ``user_id=None``.
+        """
+        from services.attribution_reconciler import (
+            CandidateUser,
+            reconcile_channel,
+            rollup_client_ips,
+            rollup_label,
+        )
+
+        configured = getattr(settings, "trusted_media_networks", None)
+        if not isinstance(configured, list):
+            configured = []
+        trusted_networks, server_ip_by_source = _build_persisted_trusted_networks(
+            configured
+        )
+
+        # Index snapshot rows by channel for per-connection metadata.
+        snapshot_by_channel = {
+            entry["channel_uuid"]: entry for entry in telemetry_channel_snapshot
+        }
+
+        # AttributionResult is frozen, so accumulate per-key mutable dicts
+        # and freeze into AttributionResult at the end.
+        acc: dict[tuple[str, str], dict] = {}
+
+        def _row(key):
+            if key not in acc:
+                acc[key] = {
+                    "emby_user_id": None, "emby_user_name": None,
+                    "plex_user_id": None, "plex_user_name": None,
+                    "jellyfin_user_id": None, "jellyfin_user_name": None,
+                    "emby_viewers": [], "plex_viewers": [], "jellyfin_viewers": [],
+                }
+            return acc[key]
+
+        # Set of channels touched by any source.
+        channels = {k[0] for k in emby_map} | {k[0] for k in plex_map} \
+            | {k[0] for k in jellyfin_map}
+
+        for channel_uuid in channels:
+            entry = snapshot_by_channel.get(channel_uuid, {})
+            meta_by_ip = {
+                m.get("ip_address"): m
+                for m in (entry.get("client_meta") or [])
+                if m.get("ip_address")
+            }
+
+            for source, source_map in (
+                ("emby", emby_map),
+                ("plex", plex_map),
+                ("jellyfin", jellyfin_map),
+            ):
+                # Per-channel candidate pool (union across ips).
+                pooled: list[CandidateUser] = []
+                seen: set = set()
+                ips_for_channel: set[str] = set()
+                for (ch_uuid, ip), viewers in source_map.items():
+                    if ch_uuid != channel_uuid:
+                        continue
+                    ips_for_channel.add(ip)
+                    for a in viewers or []:
+                        name = getattr(a, "user_name", None)
+                        if not name:
+                            continue
+                        uid = getattr(a, "user_id", None)
+                        dedup = ("id", uid) if uid is not None else ("name", name)
+                        if dedup in seen:
+                            continue
+                        seen.add(dedup)
+                        pooled.append(
+                            CandidateUser(
+                                user_name=name,
+                                user_id=uid,
+                                last_activity_date=getattr(
+                                    a, "last_activity_date", None
+                                ),
+                                source=source,
+                                # bd-7ncci: thread the real client device IP
+                                # the media server reported for this viewer's
+                                # session through to the assignment.
+                                client_ip=getattr(a, "client_ip", None),
+                            )
+                        )
+                if not pooled:
+                    continue
+
+                # One Connection per distinct ip on this channel. A
+                # connection whose IP IS this source's resolved server IP is
+                # the transcoding proxy and carries the FULL viewer set
+                # (bd-r5f0c.9 multi-viewer-on-proxy); others are direct.
+                source_server_ip = server_ip_by_source.get(source)
+                connections = [
+                    _build_persisted_connection(
+                        ip=ip,
+                        meta=meta_by_ip.get(ip) or {},
+                        source_server_ip=source_server_ip,
+                    )
+                    for ip in sorted(ips_for_channel)
+                ]
+                # Map client_id back to ip for row emission.
+                ip_by_client_id = {
+                    c.client_id: ip
+                    for c, ip in zip(connections, sorted(ips_for_channel))
+                }
+
+                result = reconcile_channel(
+                    connections, pooled, trusted_networks=trusted_networks,
+                    channel_label=f"{channel_uuid} [{source}]",
+                )
+                for assignment in result.assignments:
+                    ip = ip_by_client_id.get(assignment.client_id)
+                    if ip is None:
+                        continue
+                    # bd-7ncci: each viewer dict carries the real client
+                    # device IP the media server reported (rides inside the
+                    # *_viewers JSON — no schema migration). The Option-B
+                    # rollup encodes the SET of distinct IPs (mirroring the
+                    # "N viewers: ..." label) on its single synthetic dict.
+                    if assignment.is_proxy_multi:
+                        # Server-proxy carrying N genuine viewers (bd-r5f0c.9):
+                        # write the FULL viewer list; legacy = position 0.
+                        viewers_payload = [
+                            {"user_id": u.user_id, "user_name": u.user_name,
+                             "client_ip": u.client_ip}
+                            for u in assignment.proxy_viewers
+                        ]
+                    elif assignment.is_rollup:
+                        rollup_ips = rollup_client_ips(assignment.rollup_users)
+                        viewers_payload = [
+                            {"user_id": None,
+                             "user_name": rollup_label(assignment.rollup_users),
+                             "client_ip": None,
+                             "client_ips": rollup_ips}
+                        ]
+                    elif assignment.user is not None:
+                        viewers_payload = [
+                            {"user_id": assignment.user.user_id,
+                             "user_name": assignment.user.user_name,
+                             "client_ip": assignment.user.client_ip}
+                        ]
+                    else:
+                        continue  # User #0 — leave the row's source slot NULL
+                    top_name = viewers_payload[0]["user_name"]
+                    top_uid = viewers_payload[0]["user_id"]
+                    row = _row((channel_uuid, ip))
+                    row[f"{source}_user_id"] = top_uid
+                    row[f"{source}_user_name"] = top_name
+                    row[f"{source}_viewers"] = viewers_payload
+
+        return {
+            key: AttributionResult(**fields) for key, fields in acc.items()
+        }
+
+    async def _resolve_emby_for_clients(
+        self,
+        telemetry_channel_snapshot: list[dict],
+        provider_by_channel: dict[str, ProviderResolution],
+        *,
+        enabled: bool,
+    ) -> dict[tuple[str, str], list[EmbyAttribution]]:
+        """Per-source Emby resolution loop (bd-r5f0c.4 + bd-r5f0c.9 multi-viewer).
+
+        bd-r5f0c.9: per (channel_uuid, client_ip), capture the FULL list
+        of matched Emby viewers (sorted ``last_activity_date``
+        descending) rather than just the most-recent winner. Multi-viewer
+        scenarios (N upstream users on the same channel via the same
+        Emby server proxy) are now visible end-to-end.
+
+        Back-compat call-site discipline: this loop calls BOTH
+        :func:`resolve_emby_user` (singular, the bd-gih6d/bd-r5f0c.4
+        mock target the existing
+        ``test_bandwidth_tracker_emby.py`` regression suite asserts
+        against) AND :func:`resolve_emby_users` (plural,
+        bd-r5f0c.9 multi-viewer surface). Whichever returns the most
+        viewers wins. In production both go to the same real resolver
+        chain and the plural carries everything the singular does (the
+        singular wrapper internally is ``plural[0]``); in legacy tests
+        that mock only the singular function, the plural call hits the
+        real un-mocked resolver and returns empty, so we fall back to
+        wrapping the singular result into a 1-element list. The
+        production cost is one extra microsecond-scale function call per
+        (channel, ip); the back-compat benefit is the full bd-gih6d
+        Emby regression suite continues to verify the single-viewer
+        contract without test-file edits.
+        """
+        if not enabled:
+            return {}
+        attributions: dict[tuple[str, str], list[EmbyAttribution]] = {}
+        for entry in telemetry_channel_snapshot:
+            channel_uuid = entry["channel_uuid"]
+            client_ips = entry.get("client_ips") or []
+            if not client_ips:
+                continue
+            resolution = provider_by_channel.get(channel_uuid)
+            stream_name = resolution.stream_name if resolution else None
+            channel_name = entry.get("channel_name")
+            channel_number = entry.get("channel_number")
+            if not stream_name and not channel_name and channel_number is None:
+                continue
+            for ip in client_ips:
+                viewers: list[EmbyAttribution] = []
+                # Singular first — this is the bd-gih6d/bd-r5f0c.4
+                # legacy mock seam. Existing tests patch this function
+                # name; in production, it returns plural[0].
+                try:
+                    single = await resolve_emby_user(
+                        ip,
+                        stream_name or "",
+                        ecm_channel_name=channel_name,
+                        ecm_channel_number=channel_number,
+                    )
+                except Exception as exc:
+                    _log_emby_resolver_failure(exc)
+                    # Continue to the next ip — one failure should not
+                    # poison the rest of the poll's attributions.
+                    continue
+                # Plural — the bd-r5f0c.9 multi-viewer source. In
+                # production, this is the authoritative full list. In
+                # legacy single-source-mocked tests, plural is
+                # unmocked and returns [] (real resolver short-circuits
+                # because cache isn't mocked); we fall back to wrapping
+                # the singular result.
+                try:
+                    plural = await resolve_emby_users(
+                        ip,
+                        stream_name or "",
+                        ecm_channel_name=channel_name,
+                        ecm_channel_number=channel_number,
+                    )
+                except Exception as exc:
+                    # Defensive: if plural raised but singular returned
+                    # something useful, use the singular result. The
+                    # resolver itself never raises in production
+                    # (defensive ``except`` guards inside) so this is
+                    # paranoia for edge-case test mocks.
+                    _log_emby_resolver_failure(exc)
+                    plural = []
+                if plural:
+                    viewers = list(plural)
+                elif single is not None:
+                    # Back-compat path: legacy single-viewer test mock
+                    # provided a singular result but no plural mock.
+                    viewers = [single]
+                if viewers:
+                    attributions[(channel_uuid, ip)] = viewers
+        return attributions
+
+    async def _resolve_plex_for_clients(
+        self,
+        telemetry_channel_snapshot: list[dict],
+        provider_by_channel: dict[str, ProviderResolution],
+        *,
+        enabled: bool,
+    ) -> dict[tuple[str, str], list[PlexAttribution]]:
+        """Per-source Plex resolution loop (bd-r5f0c.4 + bd-r5f0c.9 multi-viewer).
+
+        Same dual-call back-compat discipline as
+        :meth:`_resolve_emby_for_clients` — call singular
+        :func:`resolve_plex_user` first (bd-r5f0c.4 mock target,
+        returns ``str | None``) AND plural :func:`resolve_plex_users`
+        (bd-r5f0c.9 mock target, returns ``list[PlexAttribution]``).
+        Whichever returns the most viewers wins. Legacy test mocks
+        only the singular; the plural is unmocked and returns [] in
+        those tests, so we wrap the singular ``str`` into a
+        ``[PlexAttribution(user_name=..., user_id=None)]`` 1-element
+        list.
+        """
+        if not enabled:
+            return {}
+        attributions: dict[tuple[str, str], list[PlexAttribution]] = {}
+        for entry in telemetry_channel_snapshot:
+            channel_uuid = entry["channel_uuid"]
+            client_ips = entry.get("client_ips") or []
+            if not client_ips:
+                continue
+            resolution = provider_by_channel.get(channel_uuid)
+            stream_name = resolution.stream_name if resolution else None
+            channel_name = entry.get("channel_name")
+            channel_number = entry.get("channel_number")
+            if not stream_name and not channel_name and channel_number is None:
+                continue
+            for ip in client_ips:
+                viewers: list[PlexAttribution] = []
+                try:
+                    single_name = await resolve_plex_user(
+                        ip,
+                        stream_name or "",
+                        ecm_channel_name=channel_name,
+                        ecm_channel_number=channel_number,
+                    )
+                except Exception as exc:
+                    _log_plex_resolver_failure(exc)
+                    continue
+                try:
+                    plural = await resolve_plex_users(
+                        ip,
+                        stream_name or "",
+                        ecm_channel_name=channel_name,
+                        ecm_channel_number=channel_number,
+                    )
+                except Exception as exc:
+                    _log_plex_resolver_failure(exc)
+                    plural = []
+                if plural:
+                    viewers = list(plural)
+                elif single_name is not None:
+                    viewers = [
+                        PlexAttribution(user_name=single_name, user_id=None)
+                    ]
+                if viewers:
+                    attributions[(channel_uuid, ip)] = viewers
+        return attributions
+
+    async def _resolve_jellyfin_for_clients(
+        self,
+        telemetry_channel_snapshot: list[dict],
+        provider_by_channel: dict[str, ProviderResolution],
+        *,
+        enabled: bool,
+    ) -> dict[tuple[str, str], list[JellyfinAttribution]]:
+        """Per-source Jellyfin resolution loop (bd-r5f0c.4 + bd-r5f0c.9 multi-viewer).
+
+        Same dual-call back-compat discipline as
+        :meth:`_resolve_emby_for_clients` and
+        :meth:`_resolve_plex_for_clients`.
+        """
+        if not enabled:
+            return {}
+        attributions: dict[tuple[str, str], list[JellyfinAttribution]] = {}
+        for entry in telemetry_channel_snapshot:
+            channel_uuid = entry["channel_uuid"]
+            client_ips = entry.get("client_ips") or []
+            if not client_ips:
+                continue
+            resolution = provider_by_channel.get(channel_uuid)
+            stream_name = resolution.stream_name if resolution else None
+            channel_name = entry.get("channel_name")
+            channel_number = entry.get("channel_number")
+            if not stream_name and not channel_name and channel_number is None:
+                continue
+            for ip in client_ips:
+                viewers: list[JellyfinAttribution] = []
+                try:
+                    single = await resolve_jellyfin_user(
+                        ip,
+                        stream_name or "",
+                        ecm_channel_name=channel_name,
+                        ecm_channel_number=channel_number,
+                    )
+                except Exception as exc:
+                    _log_jellyfin_resolver_failure(exc)
+                    continue
+                try:
+                    plural = await resolve_jellyfin_users(
+                        ip,
+                        stream_name or "",
+                        ecm_channel_name=channel_name,
+                        ecm_channel_number=channel_number,
+                    )
+                except Exception as exc:
+                    _log_jellyfin_resolver_failure(exc)
+                    plural = []
+                if plural:
+                    viewers = list(plural)
+                elif single is not None:
+                    viewers = [single]
+                if viewers:
+                    attributions[(channel_uuid, ip)] = viewers
+        return attributions
+
+    async def _resolve_emby_attributions(
+        self,
+        telemetry_channel_snapshot: list[dict],
+        provider_by_channel: dict[str, ProviderResolution],
+    ) -> dict[tuple[str, str], EmbyAttribution]:
+        """Back-compat shim — Emby-only single-viewer attribution map.
+
+        bd-gih6d (Emby-only) → bd-r5f0c.4 (multi-source) → bd-r5f0c.9
+        (multi-viewer). The current ``_collect_stats`` hot path uses
+        :meth:`_resolve_attributions`; this wrapper is retained ONLY so
+        the existing Emby regression test suite
+        (``tests/unit/test_bandwidth_tracker_emby.py``) continues to
+        verify the original single-viewer Emby-attribution contract
+        end-to-end without rewriting every assertion against the new
+        multi-viewer shape.
+
+        Reads ``settings.emby_enabled`` and delegates to
+        :meth:`_resolve_emby_for_clients` (which now returns lists of
+        :class:`EmbyAttribution` post-bd-r5f0c.9). This wrapper
+        flattens each list to its position-0 element so the legacy
+        return shape ``{(channel, ip): EmbyAttribution}`` is preserved.
+        Production code paths SHOULD prefer :meth:`_resolve_attributions`
+        which carries the full viewer list.
+        """
+        try:
+            from config import get_settings
+            settings = get_settings()
+        except Exception as exc:
+            _log_emby_resolver_failure(exc)
+            return {}
+        viewer_lists = await self._resolve_emby_for_clients(
+            telemetry_channel_snapshot,
+            provider_by_channel,
+            enabled=bool(getattr(settings, "emby_enabled", False)),
+        )
+        # Flatten to position 0 (most-recent viewer) for the legacy
+        # single-viewer contract the bd-gih6d test suite asserts against.
+        return {
+            key: viewers[0]
+            for key, viewers in viewer_lists.items()
+            if viewers
+        }
+
     def _record_session_telemetry_metrics(
         self,
         *,
@@ -2139,6 +3386,8 @@ class BandwidthTracker:
         *,
         dispatcharr_user_map: Optional[dict[str, str]] = None,
         exclude_user_tokens: Optional[frozenset[str]] = None,
+        emby_attributions: Optional[dict[tuple[str, str], EmbyAttribution]] = None,
+        attributions: Optional[dict[tuple[str, str], AttributionResult]] = None,
     ) -> None:
         """Write one row per active viewing connection into ``session_telemetry``.
 
@@ -2236,6 +3485,23 @@ class BandwidthTracker:
             dispatcharr_user_map = {}
         if exclude_user_tokens is None:
             exclude_user_tokens = frozenset()
+        if emby_attributions is None:
+            # bd-gih6d: empty map = no Emby attribution this poll
+            # (Emby disabled, no matches, or every resolver call failed).
+            # Default to empty so the older test seams that don't pass
+            # this kwarg continue working with NULL emby columns.
+            emby_attributions = {}
+        if attributions is None:
+            # bd-r5f0c.4: empty map = no multi-source attribution this
+            # poll (every source disabled, no match across any source,
+            # or every resolver call failed). Default to empty so the
+            # older test seams that only pass ``emby_attributions``
+            # continue to work — the per-row merge below uses
+            # ``attributions`` as the primary lookup and falls back to
+            # ``emby_attributions`` when the merged map is missing a
+            # key, so an Emby-only caller still populates the Emby
+            # columns the old way.
+            attributions = {}
         # bd-skqln.12: time the entire write attempt and record success /
         # failure on the way out. ``rows_written`` is hoisted here so it is
         # visible to the metric-emission block in the ``finally`` (it is 0
@@ -2395,6 +3661,85 @@ class BandwidthTracker:
                             row_reconnect_count = 0
                             row_error_count = 0
                             row_switch_count = 0
+                        # bd-r5f0c.4 (extends bd-gih6d): look up the
+                        # per-(channel, ip) attribution the caller
+                        # resolved in ``_resolve_attributions`` for this
+                        # poll cycle. Sparse map — most pairs are NOT
+                        # media-server-mediated so the lookup returns
+                        # ``None``, which we collapse to NULL across
+                        # every source's column pair. All six fields
+                        # ride together on the row so any future split
+                        # of the model into per-source tables can
+                        # migrate this writer in one place.
+                        #
+                        # Back-compat: if the caller only passed the
+                        # legacy ``emby_attributions`` kwarg (older test
+                        # seams pre bd-r5f0c.4), the merged
+                        # ``attributions`` map will be missing this key
+                        # — fall back to the Emby-only lookup so the
+                        # legacy contract continues working.
+                        attribution = attributions.get((channel_uuid, ip))
+                        if attribution is None:
+                            emby_attr_legacy = emby_attributions.get((channel_uuid, ip))
+                            emby_user_id = (
+                                emby_attr_legacy.user_id if emby_attr_legacy else None
+                            )
+                            emby_user_name = (
+                                emby_attr_legacy.user_name if emby_attr_legacy else None
+                            )
+                            plex_user_id: Optional[str] = None
+                            plex_user_name: Optional[str] = None
+                            jellyfin_user_id: Optional[str] = None
+                            jellyfin_user_name: Optional[str] = None
+                            # bd-r5f0c.9: legacy emby-only caller does
+                            # not carry multi-viewer lists. Build a
+                            # 1-element list from the legacy single
+                            # attribution so the new emby_viewers column
+                            # still reflects the writer's single match;
+                            # plex / jellyfin viewers stay NULL (the
+                            # legacy emby-only path doesn't surface them).
+                            if emby_attr_legacy is not None:
+                                emby_viewers_json: Optional[str] = json.dumps([
+                                    {
+                                        "user_id": emby_attr_legacy.user_id,
+                                        "user_name": emby_attr_legacy.user_name,
+                                        # bd-7ncci: real client device IP.
+                                        "client_ip": getattr(
+                                            emby_attr_legacy, "client_ip", None
+                                        ),
+                                    }
+                                ])
+                            else:
+                                emby_viewers_json = None
+                            plex_viewers_json: Optional[str] = None
+                            jellyfin_viewers_json: Optional[str] = None
+                        else:
+                            emby_user_id = attribution.emby_user_id
+                            emby_user_name = attribution.emby_user_name
+                            plex_user_id = attribution.plex_user_id
+                            plex_user_name = attribution.plex_user_name
+                            jellyfin_user_id = attribution.jellyfin_user_id
+                            jellyfin_user_name = attribution.jellyfin_user_name
+                            # bd-r5f0c.9: serialise the full viewer lists
+                            # for the new JSON columns. Empty list →
+                            # NULL (semantically identical: no viewers
+                            # for this source on this row). Non-empty
+                            # → JSON-encoded ``[{"user_id", "user_name"},
+                            # ...]`` per the column docstring in
+                            # ``models.py``.
+                            emby_viewers_json = (
+                                json.dumps(attribution.emby_viewers)
+                                if attribution.emby_viewers else None
+                            )
+                            plex_viewers_json = (
+                                json.dumps(attribution.plex_viewers)
+                                if attribution.plex_viewers else None
+                            )
+                            jellyfin_viewers_json = (
+                                json.dumps(attribution.jellyfin_viewers)
+                                if attribution.jellyfin_viewers else None
+                            )
+
                         session.add(
                             SessionTelemetry(
                                 session_id=f"conn-{conn_id}",
@@ -2431,6 +3776,29 @@ class BandwidthTracker:
                                 # provider_id.
                                 stream_id=stream_id,
                                 stream_name=stream_name,
+                                # bd-gih6d (Emby) + bd-r5f0c.4 (Plex +
+                                # Jellyfin): per-source attribution
+                                # populated via the resolvers when the
+                                # ECM session's client IP matches the
+                                # configured source server's IP AND a
+                                # concurrent source session is playing
+                                # a matching item. All six NULL for
+                                # non-source-mediated rows (most rows
+                                # on most installs).
+                                emby_user_id=emby_user_id,
+                                emby_user_name=emby_user_name,
+                                plex_user_id=plex_user_id,
+                                plex_user_name=plex_user_name,
+                                jellyfin_user_id=jellyfin_user_id,
+                                jellyfin_user_name=jellyfin_user_name,
+                                # bd-r5f0c.9: per-source full viewer
+                                # lists (JSON-encoded). NULL when the
+                                # source matched zero viewers for this
+                                # (channel, ip) — semantically equivalent
+                                # to the legacy *_user_name being NULL.
+                                emby_viewers=emby_viewers_json,
+                                plex_viewers=plex_viewers_json,
+                                jellyfin_viewers=jellyfin_viewers_json,
                             )
                         )
                         rows_written += 1

@@ -10,9 +10,14 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from urllib.parse import urlparse, urlunparse
 
+from auth import RequireAdminIfEnabled
 from config import get_settings, save_settings, clear_settings_cache, set_log_level, DispatcharrSettings
 from dispatcharr_client import get_client, reset_client
+from emby_client import EmbyClient, EmbyClientError
+from jellyfin_client import JellyfinClient, JellyfinClientError
+from plex_client import PlexClient, PlexClientError
 from cache import get_cache
 from database import get_session
 from stream_prober import StreamProber, get_prober, set_prober
@@ -50,7 +55,11 @@ class SettingsRequest(BaseModel):
     auth_method: str = "password"  # "password" or "api_key"
     username: str = ""
     password: Optional[str] = None  # Optional - only required if changing auth settings
-    api_key: Optional[str] = None  # Optional - only required if changing to/rotating api_key
+    # bd-jmi1c (GH #273): canonical Dispatcharr REST token field. The legacy
+    # ``api_key`` field below is accepted as a back-compat alias for one
+    # release. New clients should send ``dispatcharr_api_key``.
+    dispatcharr_api_key: Optional[str] = None  # Optional - only required if (re)setting Dispatcharr API key
+    api_key: Optional[str] = None  # DEPRECATED — legacy alias for dispatcharr_api_key. Remove in v0.19.0 (bd-jmi1c, bd-ewm4h).
     auto_rename_channel_number: bool = False
     include_channel_number_in_name: bool = False
     channel_number_separator: str = "-"
@@ -68,6 +77,14 @@ class SettingsRequest(BaseModel):
     default_channel_profile_ids: list[int] = []
     linked_m3u_accounts: list[list[int]] = []
     epg_auto_match_threshold: int = 80
+    # bd-ugzn4 (BD-K): dedup epic operator settings. Defaults match
+    # config.DispatcharrSettings so an older frontend bundle that doesn't
+    # send these fields persists the current value rather than getting
+    # nudged back to a hardcoded default on every save. Pydantic validator
+    # on the canonical field (bd-0b6xj / BD-B in backend/config.py) clamps
+    # to [CONFIDENCE_FLOOR, 1.00] per ADR-008 §D2.
+    dedup_threshold: float = 0.80
+    dedup_m3u_toast_suppressed: bool = False
     custom_network_prefixes: list[str] = []
     custom_network_suffixes: list[str] = []
     stats_poll_interval: int = 10
@@ -126,14 +143,48 @@ class SettingsRequest(BaseModel):
     # Default ON; honored by both the backend /api/client-errors endpoint
     # and the frontend clientErrorReporter.
     telemetry_client_errors_enabled: bool = True
+    # Emby integration (bd-8wc6q, epic bd-2cenq). Defaults match
+    # config.DispatcharrSettings so an older frontend bundle that doesn't
+    # send these fields persists the current value rather than getting
+    # nudged back to a hardcoded default on every save.
+    emby_enabled: bool = False
+    emby_base_url: str = ""
+    # ``emby_api_key`` is Optional so a partial POST that omits it preserves
+    # the stored value (same preserve-on-omit contract as ``smtp_password``
+    # and ``mcp_api_key`` — bd-vj8n9).
+    emby_api_key: Optional[str] = None
+    # Plex integration (bd-r5f0c.4, epic bd-r5f0c). Mirror the Emby
+    # contract: an older frontend bundle that omits these fields must
+    # NOT clobber stored values to defaults, so the saver applies the
+    # preserve-on-omit pattern for ``plex_token`` and the existing
+    # values for the toggle + base URL when the request key is absent.
+    plex_enabled: bool = False
+    plex_base_url: str = ""
+    # ``plex_token`` is Optional so a partial POST that omits it preserves
+    # the stored value (same posture as ``emby_api_key``).
+    plex_token: Optional[str] = None
+    # Jellyfin integration (bd-r5f0c.4, epic bd-r5f0c). Same posture
+    # as Emby + Plex.
+    jellyfin_enabled: bool = False
+    jellyfin_base_url: str = ""
+    jellyfin_api_key: Optional[str] = None
+    # bd-mlcla: trusted media/proxy networks (CIDRs or bare IPs) used ONLY
+    # to RANK media-server attribution candidates, never to gate. Optional
+    # so an older frontend bundle that omits it preserves the stored value.
+    trusted_media_networks: Optional[list[str]] = None
 
 
 class SettingsResponse(BaseModel):
     url: str
     auth_method: str
     username: str
-    # Non-empty signal that an API key is stored, without returning the secret.
-    api_key_configured: bool
+    # Non-empty signal that a Dispatcharr REST API key is stored, without
+    # returning the secret. bd-jmi1c (GH #273): both field names are
+    # surfaced — ``dispatcharr_api_key_configured`` is canonical; the legacy
+    # ``api_key_configured`` is kept for one release so older frontend
+    # bundles (cached browser tabs) keep showing the indicator correctly.
+    dispatcharr_api_key_configured: bool
+    api_key_configured: bool  # DEPRECATED — alias for dispatcharr_api_key_configured. Remove in v0.19.0 (bd-jmi1c, bd-ewm4h).
     configured: bool
     auto_rename_channel_number: bool
     include_channel_number_in_name: bool
@@ -152,6 +203,8 @@ class SettingsResponse(BaseModel):
     default_channel_profile_ids: list[int]
     linked_m3u_accounts: list[list[int]]
     epg_auto_match_threshold: int
+    dedup_threshold: float
+    dedup_m3u_toast_suppressed: bool
     custom_network_prefixes: list[str]
     custom_network_suffixes: list[str]
     stats_poll_interval: int
@@ -212,6 +265,57 @@ class SettingsResponse(BaseModel):
     mcp_api_key_configured: bool  # Whether an MCP API key has been generated
     # Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m)
     telemetry_client_errors_enabled: bool
+    # Emby integration (bd-8wc6q, epic bd-2cenq). The API key itself is NOT
+    # returned — only a boolean indicator that one is stored, mirroring
+    # ``dispatcharr_api_key_configured`` and ``mcp_api_key_configured``.
+    emby_enabled: bool
+    emby_base_url: str
+    emby_api_key_configured: bool
+    # Plex integration (bd-r5f0c.4, epic bd-r5f0c). The token itself is
+    # NOT returned — only a boolean indicator that one is stored, mirroring
+    # ``emby_api_key_configured``.
+    plex_enabled: bool
+    plex_base_url: str
+    plex_token_configured: bool
+    # Jellyfin integration (bd-r5f0c.4, epic bd-r5f0c). Same posture as
+    # Emby + Plex.
+    jellyfin_enabled: bool
+    jellyfin_base_url: str
+    jellyfin_api_key_configured: bool
+    # bd-mlcla: trusted media/proxy networks (ranking hint only).
+    trusted_media_networks: list[str]
+
+
+class EmbyTestConnectionRequest(BaseModel):
+    """Inline credentials for the Emby test-connection endpoint (bd-8wc6q).
+
+    The operator may be testing values BEFORE saving them, so we accept the
+    base URL and API key in the request body rather than reading from saved
+    settings. Mirrors the Dispatcharr ``TestConnectionRequest`` shape.
+    """
+    base_url: str
+    api_key: str
+
+
+class PlexTestConnectionRequest(BaseModel):
+    """Inline credentials for the Plex test-connection endpoint (bd-r5f0c.4).
+
+    Mirrors :class:`EmbyTestConnectionRequest`. The token field is named
+    ``token`` rather than ``api_key`` to match Plex ecosystem nomenclature
+    operators are used to (``X-Plex-Token``).
+    """
+    base_url: str
+    token: str
+
+
+class JellyfinTestConnectionRequest(BaseModel):
+    """Inline credentials for the Jellyfin test-connection endpoint (bd-r5f0c.4).
+
+    Mirrors :class:`EmbyTestConnectionRequest` exactly — Jellyfin uses a
+    server-issued API key (Dashboard > API Keys), same posture as Emby.
+    """
+    base_url: str
+    api_key: str
 
 
 class TestConnectionRequest(BaseModel):
@@ -219,7 +323,12 @@ class TestConnectionRequest(BaseModel):
     auth_method: str = "password"  # "password" or "api_key"
     username: str = ""
     password: str = ""
-    api_key: str = ""
+    # bd-jmi1c (GH #273): canonical field; legacy ``api_key`` accepted below
+    # for one release of back-compat. The handler reads
+    # ``dispatcharr_api_key or api_key`` so either populates the X-API-Key
+    # header on the connection probe.
+    dispatcharr_api_key: str = ""
+    api_key: str = ""  # DEPRECATED — legacy alias for dispatcharr_api_key. Remove in v0.19.0 (bd-jmi1c, bd-ewm4h).
 
 
 class SMTPTestRequest(BaseModel):
@@ -270,7 +379,14 @@ async def get_current_settings():
         url=settings.url,
         auth_method=settings.auth_method,
         username=settings.username,
-        api_key_configured=bool(settings.api_key),
+        # bd-jmi1c (GH #273): both indicators reflect the same underlying
+        # state — whether ECM has a Dispatcharr REST token configured. The
+        # ``or`` covers the migration window where legacy is populated but
+        # ``load_settings()`` hasn't yet copied it into the canonical field
+        # (won't happen in practice — load always migrates — but defensive).
+        # Back-compat: drop ``api_key_configured`` mirror in v0.19.0 (bd-ewm4h).
+        dispatcharr_api_key_configured=bool(settings.dispatcharr_api_key or settings.api_key),
+        api_key_configured=bool(settings.dispatcharr_api_key or settings.api_key),
         configured=settings.is_configured(),
         auto_rename_channel_number=settings.auto_rename_channel_number,
         include_channel_number_in_name=settings.include_channel_number_in_name,
@@ -289,6 +405,8 @@ async def get_current_settings():
         default_channel_profile_ids=settings.default_channel_profile_ids,
         linked_m3u_accounts=settings.linked_m3u_accounts,
         epg_auto_match_threshold=settings.epg_auto_match_threshold,
+        dedup_threshold=settings.dedup_threshold,
+        dedup_m3u_toast_suppressed=settings.dedup_m3u_toast_suppressed,
         custom_network_prefixes=settings.custom_network_prefixes,
         custom_network_suffixes=settings.custom_network_suffixes,
         stats_poll_interval=settings.stats_poll_interval,
@@ -350,6 +468,22 @@ async def get_current_settings():
         auto_creation_exclude_auto_sync_groups=settings.auto_creation_exclude_auto_sync_groups,
         mcp_api_key_configured=bool(settings.mcp_api_key),
         telemetry_client_errors_enabled=settings.telemetry_client_errors_enabled,
+        # Emby integration (bd-8wc6q). Surface the toggle + base URL so the
+        # operator sees what's configured; the API key itself is masked —
+        # only a boolean indicator is returned.
+        emby_enabled=settings.emby_enabled,
+        emby_base_url=settings.emby_base_url,
+        emby_api_key_configured=bool(settings.emby_api_key),
+        # Plex integration (bd-r5f0c.4). Same mask-secret posture as Emby.
+        plex_enabled=settings.plex_enabled,
+        plex_base_url=settings.plex_base_url,
+        plex_token_configured=bool(settings.plex_token),
+        # Jellyfin integration (bd-r5f0c.4). Same mask-secret posture.
+        jellyfin_enabled=settings.jellyfin_enabled,
+        jellyfin_base_url=settings.jellyfin_base_url,
+        jellyfin_api_key_configured=bool(settings.jellyfin_api_key),
+        # bd-mlcla: trusted media/proxy networks (ranking hint only).
+        trusted_media_networks=settings.trusted_media_networks,
     )
 
 
@@ -362,10 +496,61 @@ async def update_settings(request: SettingsRequest):
     # If password is not provided, keep the existing password (preserve-on-omit
     # lets the UI update non-auth fields without re-asking for the secret).
     password = request.password if request.password else current_settings.password
-    api_key = request.api_key if request.api_key else current_settings.api_key
+    # bd-jmi1c (GH #273): accept either ``dispatcharr_api_key`` (canonical)
+    # or legacy ``api_key`` in the request body. Canonical wins when both
+    # are provided. The preserved value also prefers canonical so an older
+    # frontend bundle sending only ``api_key`` doesn't unconditionally clobber
+    # a freshly-rotated canonical value with the legacy mirror.
+    # Back-compat: drop ``or request.api_key`` and the conflict-WARN block in v0.19.0 (bd-ewm4h).
+    request_dispatcharr_key = request.dispatcharr_api_key or request.api_key
+    # bd-jmi1c P1-1: warn (per request — POST is rare enough that flag-gating
+    # isn't worth it) when both fields are present in the body and differ.
+    # The canonical wins silently otherwise; logging only the conflict case
+    # avoids spam from clients that double-send for back-compat.
+    if (
+        request.dispatcharr_api_key
+        and request.api_key
+        and request.dispatcharr_api_key != request.api_key
+    ):
+        logger.warning(
+            "[SETTINGS] POST body has differing 'dispatcharr_api_key' and "
+            "'api_key' values; using canonical 'dispatcharr_api_key' and "
+            "ignoring 'api_key'. (bd-jmi1c, GH #273)"
+        )
+    dispatcharr_api_key = (
+        request_dispatcharr_key
+        if request_dispatcharr_key
+        else (current_settings.dispatcharr_api_key or current_settings.api_key)
+    )
 
     # Same for SMTP password - preserve existing if not provided
     smtp_password = request.smtp_password if request.smtp_password else current_settings.smtp_password
+
+    # Emby API key: preserve-on-omit (bd-8wc6q). A partial POST that doesn't
+    # send ``emby_api_key`` must keep the stored value — same contract as
+    # ``smtp_password`` and ``mcp_api_key`` so the Settings UI can save
+    # non-secret fields (toggle, base URL) without re-asking for the key.
+    emby_api_key = request.emby_api_key if request.emby_api_key else current_settings.emby_api_key
+
+    # Plex token + Jellyfin API key: same preserve-on-omit posture
+    # (bd-r5f0c.4). A partial POST (e.g. older frontend bundle that doesn't
+    # know about Plex / Jellyfin yet) must NOT silently clear stored secrets
+    # or flip toggles back to defaults.
+    plex_token = request.plex_token if request.plex_token else current_settings.plex_token
+    jellyfin_api_key = (
+        request.jellyfin_api_key
+        if request.jellyfin_api_key
+        else current_settings.jellyfin_api_key
+    )
+
+    # bd-mlcla: trusted_media_networks preserve-on-omit. An older frontend
+    # bundle that doesn't send the field (None) keeps the stored value; an
+    # explicit empty list clears it.
+    trusted_media_networks = (
+        request.trusted_media_networks
+        if request.trusted_media_networks is not None
+        else current_settings.trusted_media_networks
+    )
 
     # MCP API key is never accepted on this endpoint (it has dedicated
     # generate/revoke endpoints) — always preserve the stored value so a
@@ -386,12 +571,13 @@ async def update_settings(request: SettingsRequest):
     if request.auth_method == "api_key":
         # api_key mode: url + api_key required; ignore password entirely.
         # Require a new key when switching modes or rotating an empty key.
-        if mode_changed and not request.api_key:
+        # bd-jmi1c: accept either field name on the request body.
+        if mode_changed and not request_dispatcharr_key:
             raise HTTPException(
                 status_code=400,
                 detail="API key is required when switching to API key authentication",
             )
-        if not api_key:
+        if not dispatcharr_api_key:
             raise HTTPException(
                 status_code=400,
                 detail="API key is required when auth_method is 'api_key'",
@@ -415,7 +601,10 @@ async def update_settings(request: SettingsRequest):
         auth_method=request.auth_method,
         username=request.username,
         password=password,
-        api_key=api_key,
+        # bd-jmi1c (GH #273): canonical field; ``save_settings()`` mirrors
+        # this value into the legacy ``api_key`` field on disk for one
+        # release of back-compat with external readers.
+        dispatcharr_api_key=dispatcharr_api_key,
         auto_rename_channel_number=request.auto_rename_channel_number,
         include_channel_number_in_name=request.include_channel_number_in_name,
         channel_number_separator=request.channel_number_separator,
@@ -433,6 +622,8 @@ async def update_settings(request: SettingsRequest):
         default_channel_profile_ids=request.default_channel_profile_ids,
         linked_m3u_accounts=request.linked_m3u_accounts,
         epg_auto_match_threshold=request.epg_auto_match_threshold,
+        dedup_threshold=request.dedup_threshold,
+        dedup_m3u_toast_suppressed=request.dedup_m3u_toast_suppressed,
         custom_network_prefixes=request.custom_network_prefixes,
         custom_network_suffixes=request.custom_network_suffixes,
         stats_poll_interval=request.stats_poll_interval,
@@ -496,6 +687,22 @@ async def update_settings(request: SettingsRequest):
         # where mcp_api_key is captured (bd-vj8n9).
         mcp_api_key=mcp_api_key,
         telemetry_client_errors_enabled=request.telemetry_client_errors_enabled,
+        # Emby integration (bd-8wc6q). emby_api_key uses the preserve-on-omit
+        # pattern resolved above so a partial POST cannot silently clear the
+        # stored key.
+        emby_enabled=request.emby_enabled,
+        emby_base_url=request.emby_base_url,
+        emby_api_key=emby_api_key,
+        # Plex integration (bd-r5f0c.4). plex_token preserved above.
+        plex_enabled=request.plex_enabled,
+        plex_base_url=request.plex_base_url,
+        plex_token=plex_token,
+        # Jellyfin integration (bd-r5f0c.4). jellyfin_api_key preserved above.
+        jellyfin_enabled=request.jellyfin_enabled,
+        jellyfin_base_url=request.jellyfin_base_url,
+        jellyfin_api_key=jellyfin_api_key,
+        # bd-mlcla: trusted media/proxy networks (preserve-on-omit above).
+        trusted_media_networks=trusted_media_networks,
     )
     save_settings(new_settings)
     clear_settings_cache()
@@ -656,12 +863,14 @@ async def test_connection(request: TestConnectionRequest):
             if request.auth_method == "api_key":
                 # API key auth: probe /api/accounts/users/me/ with X-API-Key.
                 # A 2xx means the key authenticates to an active user.
-                if not request.api_key:
+                # bd-jmi1c (GH #273): accept either field name; canonical wins.
+                test_key = request.dispatcharr_api_key or request.api_key
+                if not test_key:
                     return {"success": False, "message": "API key is required"}
                 target_url = f"{base_url}/api/accounts/users/me/"
                 response = await client.get(
                     target_url,
-                    headers={"X-API-Key": request.api_key},
+                    headers={"X-API-Key": test_key},
                 )
                 if 200 <= response.status_code < 300:
                     logger.info("[SETTINGS-TEST] API key connection test successful - %s", parsed.hostname)
@@ -761,6 +970,18 @@ You can now use email features like M3U Digest reports.
         msg.attach(MIMEText(plain_text, "plain"))
         msg.attach(MIMEText(html_text, "html"))
 
+        # Resolve auth credentials with the same preserve-on-omit contract as
+        # update_settings (see smtp_password handling above). The Settings UI
+        # never re-sends the stored password — it's masked and cleared on load
+        # ("Never load password from server" in SettingsTab) — so an empty
+        # smtp_password in a test request means "use the saved one". Without
+        # this fallback the test sends with no auth and Gmail rejects it with
+        # 530 Authentication Required even though scheduled notifications, which
+        # read the stored password directly, succeed (gh-380).
+        stored_settings = get_settings()
+        smtp_user = request.smtp_user or stored_settings.smtp_user
+        smtp_password = request.smtp_password or stored_settings.smtp_password
+
         # Connect and send
         if request.smtp_use_ssl:
             context = ssl.create_default_context()
@@ -772,8 +993,8 @@ You can now use email features like M3U Digest reports.
             if request.smtp_use_tls and not request.smtp_use_ssl:
                 server.starttls(context=ssl.create_default_context())
 
-            if request.smtp_user and request.smtp_password:
-                server.login(request.smtp_user, request.smtp_password)
+            if smtp_user and smtp_password:
+                server.login(smtp_user, smtp_password)
 
             server.sendmail(request.smtp_from_email, [request.to_email], msg.as_string())
             logger.info("[SETTINGS-TEST] SMTP test email sent successfully to %s", request.to_email)
@@ -912,6 +1133,199 @@ async def test_telegram_bot(request: TelegramTestRequest):
     except Exception as e:
         logger.exception("[SETTINGS-TEST] Telegram test failed - unexpected error: %s", e)
         return {"success": False, "message": "Unexpected error during Telegram test"}
+
+
+def _sanitize_base_url(raw_url: str) -> tuple[Optional[str], Optional[str]]:
+    """Sanitize an operator-supplied base URL for media-server test endpoints.
+
+    SSRF mitigation (security finding SEC-2 — bd-r5f0c.4 backfill).
+    Mirrors the Dispatcharr ``/test`` endpoint pattern (routers.settings.
+    test_connection, around the ``urlparse`` + scheme allowlist +
+    ``urlunparse((scheme, netloc, '', '', '', ''))`` reconstruction):
+
+    1. Reject any scheme outside {http, https}. ``file://`` /
+       ``gopher://`` / ``ftp://`` / etc. let an attacker pivot the
+       proxy-server request through unintended protocols (file
+       exfiltration, internal protocol smuggling).
+    2. Reject when no hostname is present — without a hostname the
+       client would either bind to a default loopback or raise late;
+       fail-closed at the entry edge instead.
+    3. Reconstruct the URL from scheme + netloc ONLY, stripping any
+       path / params / query / fragment the operator typed (or an
+       attacker tried to embed). The downstream client builds its own
+       paths off the base URL — preserving the operator's path would
+       let a crafted ``http://attacker.com/legit/path?bypass`` survive
+       to the HTTP probe.
+
+    Returns:
+        ``(sanitized_url, None)`` on success; ``(None, error_message)``
+        on rejection. Callers route the error message into the
+        ``{ok: False, error: <msg>}`` envelope so the UI surfaces an
+        inline banner rather than a 500.
+    """
+    if not raw_url:
+        return None, "Base URL is required"
+    try:
+        parsed = urlparse(raw_url)
+    except ValueError:
+        return None, "Invalid base URL — could not parse"
+    if parsed.scheme.lower() not in ("http", "https"):
+        return None, "Invalid URL scheme — must be http or https"
+    if not parsed.hostname:
+        return None, "Invalid base URL — no hostname provided"
+    # Reconstruct from (scheme, netloc, path='', params='', query='',
+    # fragment=''). netloc carries hostname + optional port + optional
+    # userinfo — the operator's port stays attached, but everything past
+    # the authority is dropped.
+    sanitized = urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
+    return sanitized, None
+
+
+@router.post("/emby/test-connection")
+async def test_emby_connection(
+    request: EmbyTestConnectionRequest,
+    _admin=RequireAdminIfEnabled,
+):
+    """Test connectivity to an Emby server using operator-supplied credentials.
+
+    Wired into the Settings UI 'Test Connection' button (bd-8wc6q). The
+    operator may be testing values BEFORE saving them, so this endpoint
+    reads ``base_url`` + ``api_key`` from the request body — it does NOT
+    read from saved settings. Admin-only because the operator is providing
+    a secret on the wire (same posture as MCP key generation /
+    backup-restore writes).
+
+    Returns ``{ok: True}`` on success and ``{ok: False, error: <msg>}`` on
+    any auth / network / non-2xx failure. The endpoint deliberately does
+    NOT raise HTTPException on connection failure — the operator wants to
+    SEE the error message inline in the UI, not get a generic 500.
+
+    bd-r5f0c.4: SSRF mitigation via :func:`_sanitize_base_url`. Backfilled
+    on this previously-unsafe endpoint at the same time the new Plex +
+    Jellyfin endpoints landed with the helper from day one (security
+    finding SEC-2).
+    """
+    logger.debug(
+        "[SETTINGS-TEST] POST /api/settings/emby/test-connection - base_url=%s",
+        request.base_url,
+    )
+    base_url, err = _sanitize_base_url(request.base_url)
+    if err is not None:
+        logger.info("[SETTINGS-TEST] Emby test rejected by SSRF guard: %s", err)
+        return {"ok": False, "error": err}
+    client = EmbyClient(base_url, request.api_key)
+    try:
+        # ``test_connection()`` already swallows EmbyClientError → False, but
+        # we want the operator-actionable error STRING for the UI banner.
+        # Calling ``get_sessions()`` directly lets us surface that string.
+        await client.get_sessions()
+    except EmbyClientError as exc:
+        logger.info("[SETTINGS-TEST] Emby connection test failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:  # pylint: disable=broad-except
+        # Defensive: EmbyClient should wrap all known failures in
+        # EmbyClientError, but an unexpected exception class still needs
+        # to render inline rather than 500.
+        logger.exception("[SETTINGS-TEST] Emby connection test unexpected error: %s", exc)
+        return {"ok": False, "error": f"Unexpected error: {type(exc).__name__}"}
+    finally:
+        # Release the underlying httpx connection pool so the per-request
+        # client doesn't leak sockets.
+        await client.close()
+    logger.info(
+        "[SETTINGS-TEST] Emby connection test successful - base_url=%s",
+        base_url,
+    )
+    return {"ok": True}
+
+
+@router.post("/plex/test-connection")
+async def test_plex_connection(
+    request: PlexTestConnectionRequest,
+    _admin=RequireAdminIfEnabled,
+):
+    """Test connectivity to a Plex server using operator-supplied credentials.
+
+    Wired into the Settings UI 'Test Connection' button (bd-r5f0c.4). Mirrors
+    :func:`test_emby_connection` exactly — operator may be testing values
+    BEFORE saving so request body credentials win over saved settings;
+    admin-only; inline ``{ok: False, error: <msg>}`` on failure (never a 500).
+
+    SSRF mitigation (security finding SEC-2): scheme allowlist
+    (``http`` / ``https`` only) + netloc-only URL reconstruction via
+    :func:`_sanitize_base_url`. ``file://`` / ``gopher://`` / paths /
+    queries / fragments are rejected or stripped before the HTTP probe.
+    """
+    logger.debug(
+        "[SETTINGS-TEST] POST /api/settings/plex/test-connection - base_url=%s",
+        request.base_url,
+    )
+    base_url, err = _sanitize_base_url(request.base_url)
+    if err is not None:
+        logger.info("[SETTINGS-TEST] Plex test rejected by SSRF guard: %s", err)
+        return {"ok": False, "error": err}
+    client = PlexClient(base_url, request.token)
+    try:
+        await client.get_sessions()
+    except PlexClientError as exc:
+        logger.info("[SETTINGS-TEST] Plex connection test failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception(
+            "[SETTINGS-TEST] Plex connection test unexpected error: %s", exc,
+        )
+        return {"ok": False, "error": f"Unexpected error: {type(exc).__name__}"}
+    finally:
+        await client.close()
+    logger.info(
+        "[SETTINGS-TEST] Plex connection test successful - base_url=%s",
+        base_url,
+    )
+    return {"ok": True}
+
+
+@router.post("/jellyfin/test-connection")
+async def test_jellyfin_connection(
+    request: JellyfinTestConnectionRequest,
+    _admin=RequireAdminIfEnabled,
+):
+    """Test connectivity to a Jellyfin server using operator-supplied credentials.
+
+    Wired into the Settings UI 'Test Connection' button (bd-r5f0c.4). Mirrors
+    :func:`test_emby_connection` exactly — operator may be testing values
+    BEFORE saving so request body credentials win over saved settings;
+    admin-only; inline ``{ok: False, error: <msg>}`` on failure (never a 500).
+
+    SSRF mitigation (security finding SEC-2): scheme allowlist
+    (``http`` / ``https`` only) + netloc-only URL reconstruction via
+    :func:`_sanitize_base_url`.
+    """
+    logger.debug(
+        "[SETTINGS-TEST] POST /api/settings/jellyfin/test-connection - base_url=%s",
+        request.base_url,
+    )
+    base_url, err = _sanitize_base_url(request.base_url)
+    if err is not None:
+        logger.info("[SETTINGS-TEST] Jellyfin test rejected by SSRF guard: %s", err)
+        return {"ok": False, "error": err}
+    client = JellyfinClient(base_url, request.api_key)
+    try:
+        await client.get_sessions()
+    except JellyfinClientError as exc:
+        logger.info("[SETTINGS-TEST] Jellyfin connection test failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception(
+            "[SETTINGS-TEST] Jellyfin connection test unexpected error: %s", exc,
+        )
+        return {"ok": False, "error": f"Unexpected error: {type(exc).__name__}"}
+    finally:
+        await client.close()
+    logger.info(
+        "[SETTINGS-TEST] Jellyfin connection test successful - base_url=%s",
+        base_url,
+    )
+    return {"ok": True}
 
 
 @router.post("/restart-services")
@@ -1080,12 +1494,19 @@ async def revoke_mcp_api_key():
 
 @router.get("/mcp-status")
 async def get_mcp_status():
-    """Check MCP server health by calling its /health endpoint."""
+    """Check MCP server health by calling its /health endpoint.
+
+    Resolves the MCP host from MCP_HOST (default 'ecm-mcp'), matching the
+    canonical docker-compose.mcp.yml service name. Operators running both
+    ECM and MCP under network_mode: host should set MCP_HOST=localhost.
+    (bd-d2171)
+    """
     import os
     import httpx
 
+    mcp_host = os.environ.get("MCP_HOST", "ecm-mcp")
     mcp_port = os.environ.get("MCP_PORT", "6101")
-    mcp_url = f"http://localhost:{mcp_port}/health"
+    mcp_url = f"http://{mcp_host}:{mcp_port}/health"
 
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:

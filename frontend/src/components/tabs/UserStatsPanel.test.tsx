@@ -84,8 +84,8 @@ const nonAdminUser: User = {
 
 const mockTotalsResponse: WatchTimeTotalsResponse = {
   data: [
-    { user_id: 10, username: 'alice', total_watch_seconds: 7200, last_watched: '2026-05-12T10:00:00Z' },
-    { user_id: 20, username: 'bob', total_watch_seconds: 3600, last_watched: '2026-05-11T08:00:00Z' },
+    { user_id: 10, username: 'alice', attribution_source: 'dispatcharr', total_watch_seconds: 7200, last_watched: '2026-05-12T10:00:00Z' },
+    { user_id: 20, username: 'bob', attribution_source: 'dispatcharr', total_watch_seconds: 3600, last_watched: '2026-05-11T08:00:00Z' },
   ],
   meta: { from_iso: null, to_iso: null, group_by: 'total', total_rows: 2 },
   pagination: null,
@@ -93,9 +93,9 @@ const mockTotalsResponse: WatchTimeTotalsResponse = {
 
 const mockDailyResponse: WatchTimeDailyResponse = {
   data: [
-    { user_id: 10, username: 'alice', day: '2026-05-10', watch_seconds: 1800 },
-    { user_id: 10, username: 'alice', day: '2026-05-11', watch_seconds: 3600 },
-    { user_id: 20, username: 'bob', day: '2026-05-11', watch_seconds: 1800 },
+    { user_id: 10, username: 'alice', attribution_source: 'dispatcharr', day: '2026-05-10', watch_seconds: 1800 },
+    { user_id: 10, username: 'alice', attribution_source: 'dispatcharr', day: '2026-05-11', watch_seconds: 3600 },
+    { user_id: 20, username: 'bob', attribution_source: 'dispatcharr', day: '2026-05-11', watch_seconds: 1800 },
   ],
   meta: { from_iso: null, to_iso: null, group_by: 'day', total_rows: 3 },
   pagination: null,
@@ -509,9 +509,9 @@ describe('UserStatsPanel — chart data-table labels & in-progress marker (bd-1q
       if (groupBy === 'day') {
         return {
           data: [
-            { user_id: 1, username: 'a', day: '2026-05-12', watch_seconds: 600 },
-            { user_id: 1, username: 'a', day: '2026-05-13', watch_seconds: 1200 },
-            { user_id: 1, username: 'a', day: '2026-05-14', watch_seconds: 300 },
+            { user_id: 1, username: 'a', attribution_source: 'dispatcharr', day: '2026-05-12', watch_seconds: 600 },
+            { user_id: 1, username: 'a', attribution_source: 'dispatcharr', day: '2026-05-13', watch_seconds: 1200 },
+            { user_id: 1, username: 'a', attribution_source: 'dispatcharr', day: '2026-05-14', watch_seconds: 300 },
           ],
           meta: { from_iso: null, to_iso: null, group_by: 'day' as const, total_rows: 3 },
           pagination: null,
@@ -543,8 +543,8 @@ describe('UserStatsPanel — chart data-table labels & in-progress marker (bd-1q
       if (groupBy === 'day') {
         return {
           data: [
-            { user_id: 1, username: 'a', day: '2026-05-13', watch_seconds: 1200 },
-            { user_id: 1, username: 'a', day: '2026-05-14', watch_seconds: 300 },
+            { user_id: 1, username: 'a', attribution_source: 'dispatcharr', day: '2026-05-13', watch_seconds: 1200 },
+            { user_id: 1, username: 'a', attribution_source: 'dispatcharr', day: '2026-05-14', watch_seconds: 300 },
           ],
           meta: { from_iso: null, to_iso: null, group_by: 'day' as const, total_rows: 2 },
           pagination: null,
@@ -577,5 +577,59 @@ describe('UserStatsPanel — chart data-table labels & in-progress marker (bd-1q
     await waitFor(() => {
       expect(screen.getByText(/updates every ~?10s/i)).toBeInTheDocument();
     });
+  });
+});
+
+// bd-fm23o (final bead of EPIC bd-2cenq — Emby user attribution):
+// the user-totals table surfaces a "via Emby" badge alongside the username
+// when ``attribution_source === "emby"`` so operators can tell at a glance
+// which sessions were resolved via the Emby cross-reference rather than
+// the Dispatcharr-side proxy account.
+
+describe('UserStatsPanel — Emby attribution badge (bd-fm23o)', () => {
+  it('renders the username with a "via Emby" badge when attribution_source is emby', async () => {
+    vi.mocked(api.getWatchTimeByUser).mockImplementation(async ({ groupBy } = {}) => {
+      if (groupBy === 'day') {
+        return {
+          ...mockDailyResponse,
+          data: [
+            { user_id: 10, username: 'alice', attribution_source: 'emby', day: '2026-05-10', watch_seconds: 1800 },
+          ],
+        };
+      }
+      return {
+        ...mockTotalsResponse,
+        data: [
+          // Two rows — one Emby-attributed, one Dispatcharr — so the test
+          // proves the badge is per-row, not a panel-level flag.
+          { user_id: 10, username: 'alice', attribution_source: 'emby', total_watch_seconds: 7200, last_watched: '2026-05-12T10:00:00Z' },
+          { user_id: 20, username: 'bob', attribution_source: 'dispatcharr', total_watch_seconds: 3600, last_watched: '2026-05-11T08:00:00Z' },
+        ],
+      };
+    });
+    render(<UserStatsPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText('alice')).toBeInTheDocument();
+    });
+
+    // alice has the badge — it lives in the same row as the username.
+    const aliceRow = screen.getByText('alice').closest('tr');
+    expect(aliceRow).not.toBeNull();
+    expect(aliceRow!).toHaveTextContent(/via Emby/i);
+  });
+
+  it('does NOT render the "via Emby" badge when attribution_source is dispatcharr', async () => {
+    // Default mock — both users on dispatcharr.
+    render(<UserStatsPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText('bob')).toBeInTheDocument();
+    });
+
+    // bob's row carries no "via Emby" text.
+    const bobRow = screen.getByText('bob').closest('tr');
+    expect(bobRow).not.toBeNull();
+    expect(bobRow!).not.toHaveTextContent(/via Emby/i);
   });
 });

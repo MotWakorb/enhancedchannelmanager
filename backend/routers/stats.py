@@ -113,6 +113,17 @@ def _distinct_poll_subquery(session: Session):
     carry the same username (one human, one poll). MAX picks one
     deterministically without inflating the row count, so the outer
     GROUP-BY-user can read the username back without a second join.
+
+    bd-fm23o (final bead of epic bd-2cenq): ``MAX(emby_user_name)`` is
+    surfaced for the same reason — the writer
+    (``BandwidthTracker._collect_emby_attributions``) populates this
+    when the stream pull originates from the configured Emby server IP
+    AND the resolver attributes the session to exactly one Emby user.
+    The watch-time endpoint denormalizes it onto the per-user
+    aggregation as the preferred display name (Emby wins over
+    Dispatcharr when present) with a discriminator
+    ``attribution_source`` field so the frontend can render a "via
+    Emby" badge.
     """
     return (
         session.query(
@@ -121,6 +132,14 @@ def _distinct_poll_subquery(session: Session):
             SessionTelemetry.observed_at.label("observed_at"),
             func.max(SessionTelemetry.poll_interval_ms).label("poll_interval_ms"),
             func.max(SessionTelemetry.dispatcharr_username).label("dispatcharr_username"),
+            func.max(SessionTelemetry.emby_user_name).label("emby_user_name"),
+            # bd-r5f0c.4: Plex + Jellyfin attribution surfaces alongside
+            # Emby on the same per-row aggregation. Same defensive MAX
+            # rationale as the Emby column — within one (user, channel,
+            # observed_at) tuple every row should agree, but MAX picks
+            # one deterministically without inflating the row count.
+            func.max(SessionTelemetry.plex_user_name).label("plex_user_name"),
+            func.max(SessionTelemetry.jellyfin_user_name).label("jellyfin_user_name"),
         )
         .group_by(
             SessionTelemetry.user_id,
@@ -166,6 +185,626 @@ def _channel_name_or_fallback(channel_id: str, name_map: dict) -> str:
     return f"Channel {channel_id[:8]}..."
 
 
+def _seed_attribution_keys(channels: list) -> None:
+    """Seed every channel + client with attribution keys (single + multi-viewer).
+
+    Idempotent — ``setdefault`` only writes when the key is missing.
+    Called from every short-circuit branch in
+    :func:`_enrich_channels_with_attribution` so the TypeScript shape
+    contract on the frontend stays stable (key present, value
+    ``None`` / empty list) regardless of which sources are enabled or
+    whether the resolver call short-circuits.
+
+    bd-r5f0c.9: also seeds the three multi-viewer ``*_viewers`` list
+    keys at parity with the singular ``*_user_name`` keys. The
+    frontend (W5) renders the viewers list separately; this helper
+    keeps the response shape stable so the frontend can rely on key
+    presence regardless of resolver state.
+    """
+    for ch in channels:
+        ch.setdefault("emby_user_name", None)
+        ch.setdefault("plex_user_name", None)
+        ch.setdefault("jellyfin_user_name", None)
+        ch.setdefault("emby_viewers", [])
+        ch.setdefault("plex_viewers", [])
+        ch.setdefault("jellyfin_viewers", [])
+        for client in ch.get("clients", []) or []:
+            client.setdefault("emby_user_name", None)
+            client.setdefault("plex_user_name", None)
+            client.setdefault("jellyfin_user_name", None)
+            client.setdefault("emby_viewers", [])
+            client.setdefault("plex_viewers", [])
+            client.setdefault("jellyfin_viewers", [])
+            # bd-7ncci: the real requesting-device IP the media server
+            # reported for an attributed connection (source-agnostic at the
+            # connection level). ``client_ip`` for a single attributed
+            # viewer; ``client_ips`` for the proxy / Option-B rollup set.
+            # Seeded blank so the frontend TS shape is stable for
+            # unattributed (and direct-XC) connections.
+            client.setdefault("client_ip", None)
+            client.setdefault("client_ips", [])
+
+
+async def _enrich_channels_with_attribution(channels: list) -> None:
+    """Populate per-source ``*_user_name`` per channel + per client (bd-r5f0c.4).
+
+    Extends bd-fm23o (Emby-only) to Plex + Jellyfin. Mutates ``channels``
+    in place — adds three nullable fields (``emby_user_name``,
+    ``plex_user_name``, ``jellyfin_user_name``) to each channel entry
+    AND to each entry in the channel's ``clients`` list. The frontend
+    AttributionBadge keys on whichever of the three is non-null,
+    falling back to the Dispatcharr-side username if all three are
+    None.
+
+    Gate
+    ----
+    Each source's enrichment branch checks its own ``<source>_enabled``
+    flag and short-circuits when disabled. Sources that are off
+    contribute ``None`` to every channel/client field — the keys are
+    still seeded via :func:`_seed_attribution_keys` so the shape
+    contract holds regardless of operator configuration.
+
+    Precedence
+    ----------
+    Each source's resolver is called independently — a channel may
+    surface attribution from multiple sources concurrently when an
+    operator runs multiple media servers. The frontend (and
+    :func:`_pick_display_name_and_source` on backend read paths)
+    decides which to display via the documented precedence:
+    Emby > Plex > Jellyfin > Dispatcharr.
+
+    Back-compat
+    -----------
+    bd-fm23o (existing) keyed on ``emby_user_name`` and the
+    ``_enrich_channels_with_emby`` alias below preserves the old
+    name for any external caller. The Active Channels endpoint now
+    calls THIS helper instead so Plex + Jellyfin attribution
+    surfaces on the same response shape.
+    """
+    if not channels:
+        return
+    try:
+        from config import get_settings
+        settings = get_settings()
+    except Exception:  # pragma: no cover — settings access raise is exotic
+        _seed_attribution_keys(channels)
+        return
+
+    _seed_attribution_keys(channels)
+
+    emby_enabled = bool(getattr(settings, "emby_enabled", False))
+    plex_enabled = bool(getattr(settings, "plex_enabled", False))
+    jellyfin_enabled = bool(getattr(settings, "jellyfin_enabled", False))
+
+    if not (emby_enabled or plex_enabled or jellyfin_enabled):
+        # Every source disabled — keys already seeded to None above.
+        return
+
+    # Lazy imports — when a source is disabled, we don't pay the import
+    # cost on the hot path. The disabled checks already short-circuited
+    # the disabled-everything case above; from here on at least one
+    # source is enabled.
+    #
+    # bd-r5f0c.9: import BOTH the singular (bd-fm23o/bd-r5f0c.4 mock
+    # target, also the existing test_stats_emby.py regression target)
+    # and the plural (bd-r5f0c.9 multi-viewer surface) resolvers. The
+    # per-source helper calls both — whichever returns the most
+    # viewers populates the response. In production the plural is
+    # authoritative (singular = plural[0]); in legacy tests that mock
+    # only singular, the plural call returns empty and we wrap the
+    # singular result into a 1-element list so the legacy contract
+    # holds.
+    resolve_emby_user = None
+    resolve_emby_users = None
+    resolve_plex_user = None
+    resolve_plex_users = None
+    resolve_jellyfin_user = None
+    resolve_jellyfin_users = None
+    if emby_enabled:
+        from services.emby_resolver import resolve_emby_user as resolve_emby_user
+        from services.emby_resolver import resolve_emby_users as resolve_emby_users
+    if plex_enabled:
+        from services.plex_resolver import resolve_plex_user as resolve_plex_user
+        from services.plex_resolver import resolve_plex_users as resolve_plex_users
+    if jellyfin_enabled:
+        from services.jellyfin_resolver import resolve_jellyfin_user as resolve_jellyfin_user
+        from services.jellyfin_resolver import resolve_jellyfin_users as resolve_jellyfin_users
+
+    for ch in channels:
+        stream_name = ch.get("stream_name")
+        # bd-zldrq (fix-forward for v0.17.1-0033): pull channel_name +
+        # channel_number off the Dispatcharr response so the tiered
+        # resolvers can match each source's live-TV
+        # "<number> | <name>" item surface even when the Dispatcharr
+        # stream name is provider-prefixed verbose.
+        channel_name = ch.get("channel_name")
+        channel_number = ch.get("channel_number")
+        clients = ch.get("clients") or []
+        client_ips = [c.get("ip_address") for c in clients if c.get("ip_address")]
+
+        # bd-dok7u: per-channel forensic trace — captures every short-circuit
+        # cause so "User #0 on channel X" can be diagnosed in one log read.
+        # The skip reason names the EXACT guard that fired (no_data /
+        # no_clients) or 'proceed' when both guards passed.
+        if not stream_name and not channel_name and channel_number is None:
+            decision = "skip:no_data"
+        elif not client_ips:
+            decision = "skip:no_clients"
+        else:
+            decision = "proceed"
+        logger.info(
+            "[STATS-ENRICH] channel_trace ch_id=%s stream_name=%r "
+            "channel_name=%r channel_number=%r client_ips=%s decision=%s "
+            "(bd-dok7u)",
+            ch.get("channel_id"),
+            stream_name, channel_name, channel_number, client_ips, decision,
+        )
+        if decision != "proceed":
+            continue
+
+        # Each source's enrichment is independent — a channel can
+        # surface attribution from multiple sources on the same poll
+        # if the operator runs multiple media servers (rare but
+        # supported).
+        # bd-dok7u: per-source dispatch trace — captures which sources
+        # actually run for this channel so an operator seeing no
+        # attribution can tell at a glance whether the source was
+        # disabled or merely failed to match.
+        logger.info(
+            "[STATS-ENRICH] source_dispatch ch_id=%s emby_enabled=%s "
+            "plex_enabled=%s jellyfin_enabled=%s (bd-dok7u)",
+            ch.get("channel_id"),
+            emby_enabled, plex_enabled, jellyfin_enabled,
+        )
+        if emby_enabled:
+            await _enrich_one_source(
+                ch=ch,
+                clients=clients,
+                client_ips=client_ips,
+                stream_name=stream_name,
+                channel_name=channel_name,
+                channel_number=channel_number,
+                single_resolver=resolve_emby_user,
+                plural_resolver=resolve_emby_users,
+                source_label="emby",
+                user_name_key="emby_user_name",
+                viewers_key="emby_viewers",
+            )
+        if plex_enabled:
+            await _enrich_one_source(
+                ch=ch,
+                clients=clients,
+                client_ips=client_ips,
+                stream_name=stream_name,
+                channel_name=channel_name,
+                channel_number=channel_number,
+                single_resolver=resolve_plex_user,
+                plural_resolver=resolve_plex_users,
+                source_label="plex",
+                user_name_key="plex_user_name",
+                viewers_key="plex_viewers",
+            )
+        if jellyfin_enabled:
+            await _enrich_one_source(
+                ch=ch,
+                clients=clients,
+                client_ips=client_ips,
+                stream_name=stream_name,
+                channel_name=channel_name,
+                channel_number=channel_number,
+                single_resolver=resolve_jellyfin_user,
+                plural_resolver=resolve_jellyfin_users,
+                source_label="jellyfin",
+                user_name_key="jellyfin_user_name",
+                viewers_key="jellyfin_viewers",
+            )
+
+
+def _build_attribution_connections(ch: dict, clients: list, server_ip=None) -> list:
+    """Build reconciler :class:`Connection` objects for a channel's clients.
+
+    bd-mlcla / bd-4w9w6 / bd-rools. Each ``client`` here is a Dispatcharr
+    ``/proxy/ts/status`` connection — i.e. a viewer connected to ECM's own
+    proxy. The status payload never carries embedded XC/M3U credentials, so
+    ``has_url_identity`` is always ``False`` here.
+
+    **bd-4w9w6 root-cause fix:** the original bd-mlcla code derived a
+    per-connection ``has_url_identity`` from the *channel's upstream provider
+    URL* (``ch["url"]``, e.g. ``https://provider.tv/live/<user>/<pass>/...``).
+    That URL is the operator's UPSTREAM PROVIDER ACCOUNT — shared by every
+    viewer of the channel — not a per-client identity. Since virtually every
+    XC-sourced channel carries such a URL, the discriminator excluded ALL of
+    those channels from reconciliation, silently dropping every legitimate
+    media-server match (the live TSN5/Jellyfin "User #0" bug) to User #0.
+
+    **bd-rools per-connection discriminator (re-fix for the bd-cat70
+    direct-client cross-attribution):** the real per-client signal is the
+    Dispatcharr ACCOUNT identity. A connection authenticated to Dispatcharr
+    with a real sub-account carries a positive ``user_id`` (and a resolved
+    ``username``) on the client dict — that is a genuine direct-IPTV
+    subscriber, attributed via its Dispatcharr account (bd-gy5nd path), and
+    must be EXCLUDED from media-server reconciliation. If it stayed eligible,
+    the non-IP-gated resolver would offer it the channel's media-server users
+    and B1 direct-first ordering would let it absorb a media-server viewer
+    (``kmfelmer`` showing ``MotWakorb``; the real viewer → User #0).
+    Anonymous connections (Dispatcharr ``user_id == "0"`` / ``0`` / ``None``,
+    including the transcoding proxy AND NAT'd browser-direct playback) carry
+    no account identity and stay eligible. An account-identity connection is
+    additionally never flagged ``is_server_proxy`` (it is a real subscriber,
+    not the media server's proxy).
+
+    The channel-provider label is computed independently via the bd-gy5nd
+    provider/hostname path and continues to surface alongside the
+    media-server user; the two are NOT mutually exclusive (a viewer can
+    watch an XC-sourced channel through Jellyfin/Emby/Plex).
+
+    A connection whose IP equals ``server_ip`` (the resolved media-server
+    IP for the source being reconciled) is flagged ``is_server_proxy`` — it
+    is the transcoding proxy that carries the full viewer set (bd-r5f0c.9).
+
+    ``client_id`` falls back to ``ip_address`` then a positional synthetic
+    so reconciliation always has a stable key. ``connected_at`` is parsed
+    from the float Dispatcharr surfaces — it is only a tie-break, so a
+    missing value is safe.
+    """
+    from services.attribution_reconciler import (
+        Connection,
+        has_dispatcharr_account_identity,
+    )
+
+    connections: list[Connection] = []
+    for idx, client in enumerate(clients):
+        ip = client.get("ip_address")
+        client_id = client.get("client_id") or ip or f"_conn{idx}"
+        connected_at = client.get("connected_at")
+        try:
+            connected_at = float(connected_at) if connected_at is not None else None
+        except (TypeError, ValueError):
+            connected_at = None
+        # bd-rools: genuine direct-IPTV subscriber iff the client carries a
+        # Dispatcharr account identity (positive user_id / real username).
+        # The username is resolved onto the client dict earlier in
+        # get_channel_stats (the user_map join); user_id comes straight from
+        # the /proxy/ts/status payload.
+        has_account_identity = has_dispatcharr_account_identity(
+            user_id=client.get("user_id"),
+            username=client.get("username"),
+        )
+        connections.append(
+            Connection(
+                client_id=str(client_id),
+                ip_address=ip,
+                connected_at=connected_at,
+                # Proxy connections never carry per-client credentials; the
+                # channel's upstream provider URL is NOT a per-client signal.
+                has_url_identity=False,
+                has_account_identity=has_account_identity,
+                # A real subscriber is never the media server's own proxy.
+                is_server_proxy=(
+                    not has_account_identity
+                    and server_ip is not None
+                    and ip == server_ip
+                ),
+            )
+        )
+    return connections
+
+
+def _resolve_source_server_ip(source_label: str, settings):
+    """Resolve the media-server IP for a source (bd-mlcla). None on failure.
+
+    Reuses each resolver's cached server-IP helper so this adds no DNS
+    thrash. Used to flag the server-proxy connection (the full-viewer-set
+    carrier) — a best-effort hint, so any failure returns ``None`` and the
+    connection is treated as a direct (1:1) connection.
+    """
+    try:
+        if source_label == "emby":
+            from services.emby_resolver import _resolve_emby_server_ip
+            return _resolve_emby_server_ip(getattr(settings, "emby_base_url", "") or "")
+        if source_label == "plex":
+            from services.plex_resolver import _resolve_plex_server_ip
+            return _resolve_plex_server_ip(getattr(settings, "plex_base_url", "") or "")
+        if source_label == "jellyfin":
+            from services.jellyfin_resolver import _resolve_jellyfin_server_ip
+            return _resolve_jellyfin_server_ip(
+                getattr(settings, "jellyfin_base_url", "") or ""
+            )
+    except Exception:  # noqa: BLE001 — hint only, never raise
+        return None
+    return None
+
+
+def _build_trusted_networks_for_attribution(settings, server_ip):
+    """Assemble the soft IP-ranking trusted-network list (bd-mlcla).
+
+    Unions the resolved media-server IP, the operator's
+    ``trusted_media_networks`` setting, and auto-detected local Docker
+    bridge gateways. Ranking-only — never gates. Auto-detect failures
+    degrade silently to ``connected_at`` ordering.
+    """
+    from config import detect_local_bridge_gateways
+    from services.attribution_reconciler import build_trusted_networks
+
+    configured = getattr(settings, "trusted_media_networks", None)
+    if not isinstance(configured, list):
+        configured = []
+    return build_trusted_networks(
+        server_ips=[server_ip],
+        configured_cidrs=configured,
+        detected_gateways=detect_local_bridge_gateways(),
+    )
+
+
+async def _enrich_one_source(
+    *,
+    ch: dict,
+    clients: list,
+    client_ips: list,
+    stream_name,
+    channel_name,
+    channel_number,
+    single_resolver,
+    plural_resolver,
+    source_label: str,
+    user_name_key: str,
+    viewers_key: str,
+) -> None:
+    """Reconcile one channel's clients against one media source (bd-mlcla).
+
+    Replaces the pre-bd-mlcla per-IP broadcast loop. The resolvers no
+    longer IP-gate; they return the channel's matched-user SET for any IP
+    (Tier 3 fuzzy still server-IP-gated internally). This function:
+
+    1. Builds reconciler :class:`Connection` objects from ``clients``,
+       excluding direct-IPTV channels via the URL-identity discriminator.
+    2. Gathers the distinct candidate-user set by calling the resolver for
+       each eligible connection's IP and unioning the results — so a
+       server-IP connection contributes its Tier-3 matches while NAT'd
+       connections contribute Tier-1/2 matches, all pooled.
+    3. Reconciles connections against candidate users via
+       :func:`services.attribution_reconciler.reconcile_channel` (each
+       user assigned at most once; surplus users channel-level only; the
+       Option-B rollup for genuinely-ambiguous groups).
+    4. Stamps per-client + channel-level fields from the assignment.
+
+    Back-compat: BOTH ``single_resolver`` and ``plural_resolver`` are
+    still called (the existing ``test_stats_emby.py`` / ``_attribution``
+    suites mock only the singular). Whichever yields the most viewers for
+    an IP feeds the candidate pool.
+
+    Surfaces per channel + per client:
+
+    * ``<user_name_key>`` — singular display name. For a connection in an
+      Option-B rollup group this is the ``"N viewers: ..."`` rollup label;
+      otherwise the single user_name (or unset for User #0).
+    * ``<viewers_key>`` — list of ``{"user_id", "user_name"}`` dicts. The
+      channel-level list is the full distinct user set; a per-connection
+      list is that connection's assigned user(s) (one, or the rollup set).
+    """
+    from config import get_settings
+    from services.attribution_reconciler import (
+        CandidateUser,
+        eligible_connections,
+        reconcile_channel,
+        rollup_client_ips,
+        rollup_label,
+    )
+
+    try:
+        settings = get_settings()
+    except Exception:  # pragma: no cover — settings access raise is exotic
+        settings = None
+    server_ip = (
+        _resolve_source_server_ip(source_label, settings)
+        if settings is not None
+        else None
+    )
+
+    connections = _build_attribution_connections(ch, clients, server_ip=server_ip)
+    # eligible IPs = connections the reconciler will consider. bd-rools:
+    # reuse eligible_connections() so the URL-identity AND Dispatcharr-account
+    # discriminators stay in ONE place — an account-identity connection (a
+    # genuine direct subscriber) contributes no IP and is never offered the
+    # channel's media-server users.
+    eligible_ips = [
+        c.ip_address for c in eligible_connections(connections)
+        if c.ip_address
+    ]
+    # Preserve channel-level seeded keys when nothing is eligible.
+    if not eligible_ips:
+        return
+
+    # --- Gather the distinct candidate-user set across eligible IPs.
+    # Call the resolver per IP and union; the resolver returns the same
+    # channel-user set regardless of IP except Tier 3 (server-IP only), so
+    # unioning lets a server-IP connection contribute fuzzy matches while
+    # NAT'd connections contribute strict matches.
+    candidate_users: list[CandidateUser] = []
+    seen_candidate_keys: set = set()
+    for ip in eligible_ips:
+        try:
+            single_result = await single_resolver(
+                ip, stream_name or "",
+                ecm_channel_name=channel_name,
+                ecm_channel_number=channel_number,
+            )
+        except Exception as exc:  # pragma: no cover — resolver never raises
+            logger.debug(
+                "[STATS] %s singular resolver raised for ip=%s stream=%r: %s",
+                source_label.upper(), ip, stream_name, exc,
+            )
+            single_result = None
+        try:
+            plural_result = await plural_resolver(
+                ip, stream_name or "",
+                ecm_channel_name=channel_name,
+                ecm_channel_number=channel_number,
+            )
+        except Exception as exc:  # pragma: no cover — resolver never raises
+            logger.debug(
+                "[STATS] %s plural resolver raised for ip=%s stream=%r: %s",
+                source_label.upper(), ip, stream_name, exc,
+            )
+            plural_result = []
+
+        viewers_list: list = []
+        if plural_result:
+            viewers_list = list(plural_result)
+        elif single_result is not None:
+            viewers_list = [single_result]
+
+        for v in viewers_list:
+            payload = _coerce_viewer_to_dict(v)
+            name = payload.get("user_name")
+            if not name:
+                continue
+            uid = payload.get("user_id")
+            key = ("id", uid) if uid is not None else ("name", name)
+            if key in seen_candidate_keys:
+                continue
+            seen_candidate_keys.add(key)
+            candidate_users.append(
+                CandidateUser(
+                    user_name=name,
+                    user_id=uid,
+                    last_activity_date=payload.get("last_activity_date"),
+                    source=source_label,
+                    client_ip=payload.get("client_ip"),
+                )
+            )
+
+    if not candidate_users:
+        return
+
+    # --- Reconcile.
+    trusted_networks = (
+        _build_trusted_networks_for_attribution(settings, server_ip)
+        if settings is not None
+        else None
+    )
+    result = reconcile_channel(
+        connections, candidate_users, trusted_networks=trusted_networks,
+        channel_label=(
+            f"{channel_name or stream_name or ch.get('channel_id')} [{source_label}]"
+        ),
+    )
+
+    # --- Channel-level: the full distinct user set + top display name.
+    # bd-7ncci: each viewer dict carries the real client device IP.
+    channel_viewers_payload = [
+        {"user_id": u.user_id, "user_name": u.user_name, "client_ip": u.client_ip}
+        for u in result.channel_viewers
+    ]
+    if channel_viewers_payload:
+        ch[viewers_key] = channel_viewers_payload
+        ch[user_name_key] = channel_viewers_payload[0]["user_name"]
+
+    # --- Per-client stamp from the reconciler assignment.
+    assignment_by_id = {a.client_id: a for a in result.assignments}
+    conn_by_client = {c.client_id: c for c in connections}
+    for client in clients:
+        ip = client.get("ip_address")
+        # Re-derive the same client_id the connection builder used.
+        client_id = str(client.get("client_id") or ip or "")
+        # Match by client_id when present; otherwise the synthetic key.
+        conn = conn_by_client.get(client_id)
+        if conn is None:
+            continue
+        assignment = assignment_by_id.get(conn.client_id)
+        if assignment is None:
+            continue
+        if assignment.is_proxy_multi:
+            # Server-proxy carrying N genuine viewers (bd-r5f0c.9): the full
+            # viewer list, legacy single name = position 0. bd-7ncci: each
+            # viewer carries its real client device IP, and the connection-
+            # level client_ip rolls up the distinct set (the proxy fronts
+            # multiple real devices).
+            client[viewers_key] = [
+                {"user_id": u.user_id, "user_name": u.user_name,
+                 "client_ip": u.client_ip}
+                for u in assignment.proxy_viewers
+            ]
+            client[user_name_key] = assignment.proxy_viewers[0].user_name
+            proxy_ips = rollup_client_ips(assignment.proxy_viewers)
+            if proxy_ips:
+                client["client_ips"] = proxy_ips
+        elif assignment.is_rollup:
+            # Option B: the group is genuinely ambiguous — show the rollup
+            # LABEL via the singular field (NOT the viewers list, which the
+            # frontend would render as confident distinct names). Leaving
+            # the viewers list empty makes StatsTab fall to the singular
+            # path and render the "N viewers: ..." label verbatim — the
+            # operator sees the ambiguity rather than a possibly-wrong pin.
+            # bd-7ncci: mirror that with the SET of distinct real client IPs
+            # across the rolled-up viewers (no possibly-wrong 1:1 pin).
+            client[user_name_key] = rollup_label(assignment.rollup_users)
+            rollup_ips = rollup_client_ips(assignment.rollup_users)
+            if rollup_ips:
+                client["client_ips"] = rollup_ips
+        elif assignment.user is not None:
+            client[user_name_key] = assignment.user.user_name
+            client[viewers_key] = [
+                {
+                    "user_id": assignment.user.user_id,
+                    "user_name": assignment.user.user_name,
+                    "client_ip": assignment.user.client_ip,
+                }
+            ]
+            # bd-7ncci: the single attributed viewer's real client device IP
+            # as the connection-level "Client IP" field. Blank when the
+            # source did not expose it.
+            if assignment.user.client_ip:
+                client["client_ip"] = assignment.user.client_ip
+        # else: User #0 — leave the seeded None/[] in place.
+
+
+def _coerce_viewer_to_dict(viewer) -> dict:
+    """Normalise a resolver result to ``{"user_id", "user_name", "client_ip"}``.
+
+    Handles three input shapes:
+
+    * Bare ``str`` (legacy Plex singular wrapper) → ``{"user_id": None,
+      "user_name": <str>, "client_ip": None}``.
+    * Dataclass with ``.user_id`` + ``.user_name`` (+ the bd-7ncci
+      ``.client_ip``) — Emby / Jellyfin attribution + the bd-r5f0c.9
+      PlexAttribution → dict of the same.
+    * Plain dict → return verbatim (defensive; the bandwidth_tracker
+      writer's JSON-decoded form already uses this shape).
+
+    bd-7ncci: ``client_ip`` is the REAL requesting-device IP the media
+    server reported for the viewer's session, threaded through to the
+    candidate-user pool so the reconciler assignment can stamp it as the
+    separate "Client IP" Stats field.
+    """
+    if isinstance(viewer, str):
+        return {"user_id": None, "user_name": viewer, "client_ip": None}
+    if isinstance(viewer, dict):
+        return {
+            "user_id": viewer.get("user_id"),
+            "user_name": viewer.get("user_name"),
+            "client_ip": viewer.get("client_ip"),
+        }
+    return {
+        "user_id": getattr(viewer, "user_id", None),
+        "user_name": getattr(viewer, "user_name", None),
+        "client_ip": getattr(viewer, "client_ip", None),
+    }
+
+
+async def _enrich_channels_with_emby(channels: list) -> None:
+    """Back-compat alias for :func:`_enrich_channels_with_attribution` (bd-fm23o).
+
+    bd-r5f0c.4 superseded this Emby-only helper with the multi-source
+    enrichment. The alias is kept so external callers (and any older
+    tests that haven't migrated yet) continue working without a hard
+    break — the new helper produces a superset of the old's fields
+    (plex / jellyfin keys added; existing ``emby_user_name`` path
+    unchanged).
+    """
+    await _enrich_channels_with_attribution(channels)
+
+
 # =============================================================================
 # Stats & Monitoring
 # =============================================================================
@@ -188,6 +827,16 @@ async def get_channel_stats():
     Resolver failure leaves both fields ``None`` and the row still
     surfaces (best-effort enrichment — never block the live view on a
     Dispatcharr lookup hiccup).
+
+    bd-fm23o (final bead of EPIC bd-2cenq — Emby user attribution): each
+    channel additionally surfaces ``emby_user_name`` when at least one
+    of its clients resolves to an Emby session via
+    :func:`services.emby_resolver.resolve_emby_user` (gated on
+    ``settings.emby_enabled``). The field is ``None`` when Emby is
+    disabled, the resolver couldn't attribute any client, or no client
+    came from the configured Emby server IP. This drives the Active
+    Channels "(watching: <emby_user>)" badge — the operator-visible
+    surface that completes the Emby attribution chain in the live view.
     """
     logger.debug("[STATS] GET /api/stats/channels")
     client = get_client()
@@ -260,6 +909,13 @@ async def get_channel_stats():
                 if resolution is None:
                     ch["stream_name"] = ch.get("stream_name")
                     ch["m3u_account_id"] = None
+                    # bd-gy5nd: ensure the provider_name / hostname keys
+                    # are always present on the response (the frontend
+                    # uses ``in`` checks to detect the resolver-ran-but-
+                    # returned-null contract from key-absent — see
+                    # bd-lhxfu's badge-sum invariant).
+                    ch.setdefault("provider_name", None)
+                    ch.setdefault("provider_hostname", None)
                     continue
                 # Only override the existing stream_name when the
                 # resolver actually produced one (preserve whatever
@@ -271,6 +927,36 @@ async def get_channel_stats():
                 if resolution.stream_id is not None and not ch.get("stream_id"):
                     ch["stream_id"] = resolution.stream_id
                 ch["m3u_account_id"] = resolution.provider_id
+                # bd-gy5nd: operator-visible provider label (M3U source
+                # name OR bare URL hostname OR ``None`` only when the
+                # active URL itself is absent/unparsable). The frontend
+                # surfaces this string verbatim in the per-channel
+                # badge so the PO sees ``"Infinity TV"`` or
+                # ``"infinity.gives"`` instead of "Unknown".
+                ch["provider_name"] = resolution.provider_name
+                ch["provider_hostname"] = resolution.hostname
+
+            # bd-fm23o: Emby attribution enrichment for the Active
+            # Channels live view. Mirrors the writer-side enrichment
+            # (``BandwidthTracker._collect_emby_attributions``) but
+            # operates per-channel on the request-time stream_name and
+            # the live client IPs surfaced by Dispatcharr's
+            # ``/proxy/ts/status`` response. ``emby_user_name`` is
+            # populated on the channel when AT LEAST ONE client resolves
+            # to a single Emby user — the frontend renders the
+            # "(watching: <emby_user>)" badge from this field. ``None``
+            # when Emby is disabled, no client matched, or the resolver
+            # produced no attribution. Never blocks the live view: any
+            # resolver fault drops the field for that channel and
+            # continues.
+            # bd-r5f0c.4: multi-source attribution. Same call shape as
+            # the bd-fm23o Emby-only enrichment — the function now
+            # populates emby_user_name + plex_user_name +
+            # jellyfin_user_name per channel and per client. Existing
+            # frontend consumers reading emby_user_name see no shape
+            # change; new consumers (W5 AttributionBadge) read the
+            # added keys.
+            await _enrich_channels_with_attribution(channels)
 
         return result
     except Exception as e:
@@ -635,10 +1321,22 @@ async def get_watch_time_by_user(
            pagination: null}``
 
     Row shape for ``group_by=total``:
-        ``{user_id, username, total_watch_seconds, last_watched}``
+        ``{user_id, username, attribution_source, total_watch_seconds,
+           last_watched}``
 
     Row shape for ``group_by=day``:
-        ``{user_id, username, day, watch_seconds}``
+        ``{user_id, username, attribution_source, day, watch_seconds}``
+
+    bd-fm23o (final bead of EPIC bd-2cenq — Emby user attribution): the
+    ``username`` field prefers ``emby_user_name`` (denormalized at write
+    time on rows attributed to an Emby user by
+    ``BandwidthTracker._collect_emby_attributions``) over the
+    Dispatcharr-side ``dispatcharr_username`` for users with ANY
+    Emby-attributed row. The ``attribution_source`` discriminator
+    (``"emby"`` or ``"dispatcharr"``) lets the frontend render a "via
+    Emby" badge so the operator knows the attribution chain. When neither
+    name is present the row still surfaces with ``username = null``
+    (the legacy "Unknown viewer" case).
     """
     logger.debug(
         "[STATS] GET /api/stats/watch-time from=%s to=%s user_id=%s group_by=%s",
@@ -698,18 +1396,31 @@ async def get_watch_time_by_user(
                     # account) and gives stable behavior even if a
                     # Dispatcharr-side rename mid-window left both old
                     # and new values in the table.
-                    func.max(inner.c.dispatcharr_username).label("username"),
+                    func.max(inner.c.dispatcharr_username).label(
+                        "dispatcharr_username"
+                    ),
+                    # bd-fm23o: also pull the denormalized Emby username
+                    # so we can prefer it over the Dispatcharr-side name
+                    # when present. MAX is again defensive — multiple
+                    # Emby-attributed rows for one ECM user_id should
+                    # carry the same emby_user_name (one viewer, one Emby
+                    # account); MAX picks one deterministically without
+                    # inflating the row count.
+                    func.max(inner.c.emby_user_name).label("emby_user_name"),
+                    # bd-r5f0c.4: Plex + Jellyfin attribution alongside
+                    # Emby. ``_pick_display_name_and_source`` applies the
+                    # precedence (Emby > Plex > Jellyfin > Dispatcharr)
+                    # to choose the user-facing display name.
+                    func.max(inner.c.plex_user_name).label("plex_user_name"),
+                    func.max(inner.c.jellyfin_user_name).label(
+                        "jellyfin_user_name"
+                    ),
                 )
                 .group_by(inner.c.user_id)
                 .all()
             )
             data = [
-                {
-                    "user_id": r.user_id,
-                    "username": r.username,
-                    "total_watch_seconds": int((r.total_ms or 0) // 1000),
-                    "last_watched": _ms_to_iso_z(r.last_observed_at),
-                }
+                _build_watch_time_row_total(r)
                 for r in rows
             ]
             # Stable ordering: highest total first, then user_id ASC.
@@ -723,18 +1434,23 @@ async def get_watch_time_by_user(
                     day_expr,
                     func.sum(inner.c.poll_interval_ms).label("total_ms"),
                     # bd-gsn3r: same denormalized read as the total branch.
-                    func.max(inner.c.dispatcharr_username).label("username"),
+                    func.max(inner.c.dispatcharr_username).label(
+                        "dispatcharr_username"
+                    ),
+                    # bd-fm23o: same Emby denorm as the total branch.
+                    func.max(inner.c.emby_user_name).label("emby_user_name"),
+                    # bd-r5f0c.4: Plex + Jellyfin denorm — same MAX
+                    # rationale as Emby.
+                    func.max(inner.c.plex_user_name).label("plex_user_name"),
+                    func.max(inner.c.jellyfin_user_name).label(
+                        "jellyfin_user_name"
+                    ),
                 )
                 .group_by(inner.c.user_id, day_expr)
                 .all()
             )
             data = [
-                {
-                    "user_id": r.user_id,
-                    "username": r.username,
-                    "day": r.day,
-                    "watch_seconds": int((r.total_ms or 0) // 1000),
-                }
+                _build_watch_time_row_day(r)
                 for r in rows
             ]
             data.sort(key=lambda d: (d["user_id"], d["day"]))
@@ -798,6 +1514,51 @@ async def get_watch_time_for_user(
             detail="Watch-time stats are admin-only",
         )
 
+    return _per_user_breakdown_by_channel(
+        db,
+        source="dispatcharr",
+        identifier=user_id,
+        from_=from_,
+        to=to,
+    )
+
+
+def _per_user_breakdown_by_channel(
+    db: Session,
+    *,
+    source: str,
+    identifier,
+    from_: Optional[str],
+    to: Optional[str],
+):
+    """Build the per-channel watch-time breakdown for one user (any source).
+
+    bd-fm23o (final bead of EPIC bd-2cenq): factored out of
+    :func:`get_watch_time_for_user` so the dispatcharr-keyed and
+    emby-keyed endpoints can share aggregation logic without each
+    sprouting its own copy.
+
+    Args:
+        db: SQLAlchemy session (caller-provided so tests can override).
+        source: ``"dispatcharr"`` (filter by ``session_telemetry.user_id ==
+            identifier``) or ``"emby"`` (filter by
+            ``session_telemetry.emby_user_id == identifier``). Any other
+            value is a programmer error and raises ``ValueError`` — the
+            caller validates before reaching this helper.
+        identifier: For ``source="dispatcharr"`` this is the integer ECM
+            user_id. For ``source="emby"`` this is the Emby user GUID
+            (string). Both column types are nullable in the schema, so a
+            no-match identifier returns an empty data list rather than
+            an error.
+        from_, to: ISO-8601 UTC range bounds (forwarded from the route).
+    """
+    if source == "dispatcharr":
+        user_filter_col = SessionTelemetry.user_id
+    elif source == "emby":
+        user_filter_col = SessionTelemetry.emby_user_id
+    else:  # pragma: no cover — guarded at route layer
+        raise ValueError(f"unknown attribution source: {source!r}")
+
     from_ms = _parse_iso_utc(from_, param="from") if from_ else None
     to_ms = _parse_iso_utc(to, param="to") if to else None
     if from_ms is not None and to_ms is not None and from_ms >= to_ms:
@@ -805,17 +1566,47 @@ async def get_watch_time_for_user(
 
     try:
         distinct = _distinct_poll_subquery(db)
-        base_q = db.query(distinct).filter(distinct.c.user_id == user_id)
+        # The distinct subquery groups by (user_id, channel_id,
+        # observed_at) and surfaces emby_user_name but not emby_user_id.
+        # For source="emby" we need to filter on the raw column, so we
+        # apply the filter against ``SessionTelemetry`` directly via a
+        # correlated inner-join surface. Cheap because SQLite folds the
+        # subquery into the outer filter.
+        if source == "dispatcharr":
+            base_q = db.query(distinct).filter(distinct.c.user_id == identifier)
+        else:
+            # Correlate the (user_id, channel_id, observed_at) tuple back
+            # against session_telemetry rows whose emby_user_id matches.
+            # An EXISTS subquery keeps the row population the same as the
+            # dispatcharr path (one row per distinct (user, channel,
+            # observed_at) tuple) while restricting to Emby-attributed
+            # ticks. The exists targets the same poll tick the distinct
+            # subquery already collapsed, so multi-client overcount is
+            # preserved.
+            from sqlalchemy import and_, exists
+            emby_marker = (
+                exists()
+                .where(
+                    and_(
+                        SessionTelemetry.user_id == distinct.c.user_id,
+                        SessionTelemetry.channel_id == distinct.c.channel_id,
+                        SessionTelemetry.observed_at == distinct.c.observed_at,
+                        SessionTelemetry.emby_user_id == identifier,
+                    )
+                )
+                .correlate(distinct)
+            )
+            base_q = db.query(distinct).filter(emby_marker)
         if from_ms is not None:
             base_q = base_q.filter(distinct.c.observed_at >= from_ms)
         if to_ms is not None:
             base_q = base_q.filter(distinct.c.observed_at < to_ms)
         inner = base_q.subquery()
 
-        # session_count: count distinct session_ids per channel (informational
-        # only — not the legacy ``watch_count`` state-transition counter,
-        # which is not derivable from per-poll rows; see migration 0008
-        # docstring).
+        # session_count: count distinct session_ids per channel
+        # (informational only — not the legacy ``watch_count``
+        # state-transition counter, which is not derivable from per-poll
+        # rows; see migration 0008 docstring).
         sess_q = (
             db.query(
                 SessionTelemetry.channel_id.label("channel_id"),
@@ -823,7 +1614,7 @@ async def get_watch_time_for_user(
                     "session_count"
                 ),
             )
-            .filter(SessionTelemetry.user_id == user_id)
+            .filter(user_filter_col == identifier)
         )
         if from_ms is not None:
             sess_q = sess_q.filter(SessionTelemetry.observed_at >= from_ms)
@@ -842,26 +1633,33 @@ async def get_watch_time_for_user(
             .all()
         )
 
-        # Side-load channel names from UniqueClientConnection. One query per
-        # request — the in-range channel_id set is bounded by the user's
-        # viewing footprint (typically O(10) channels), so an IN-list lookup
-        # is fine without a join.
+        # Side-load channel names from UniqueClientConnection. One query
+        # per request — the in-range channel_id set is bounded by the
+        # user's viewing footprint (typically O(10) channels), so an
+        # IN-list lookup is fine without a join.
         channel_ids = [r.channel_id for r in agg_rows]
         name_map = _load_channel_names(db, channel_ids)
         # bd-kh23e: side-load the latest stream identity per channel.
-        # Aggregation choice — ``MAX(observed_at)`` per channel: one row
-        # per channel, stream identity reflects the MOST RECENT stream
-        # watched on that channel within the window. Picking the latest
-        # is intentional: the frontend label
-        # ``[<provider>] - <stream_name>`` represents what the user most
-        # recently watched, not an arbitrary sample.
-        latest_stream_map = _load_latest_stream_identity_per_channel(
-            db,
-            channel_ids,
-            user_id=user_id,
-            from_ms=from_ms,
-            to_ms=to_ms,
-        )
+        # The helper filters by ECM user_id, which is only meaningful for
+        # source="dispatcharr". For source="emby" we re-implement the
+        # MAX(observed_at) join here with the emby_user_id filter — same
+        # aggregation rule, different identity axis.
+        if source == "dispatcharr":
+            latest_stream_map = _load_latest_stream_identity_per_channel(
+                db,
+                channel_ids,
+                user_id=identifier,
+                from_ms=from_ms,
+                to_ms=to_ms,
+            )
+        else:
+            latest_stream_map = _load_latest_stream_identity_per_emby_user(
+                db,
+                channel_ids,
+                emby_user_id=identifier,
+                from_ms=from_ms,
+                to_ms=to_ms,
+            )
 
         data = [
             {
@@ -884,8 +1682,233 @@ async def get_watch_time_for_user(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("[STATS] Failed to get per-user watch-time breakdown")
+        logger.exception(
+            "[STATS] Failed to get per-user watch-time breakdown (source=%s)",
+            source,
+        )
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# ---------------------------------------------------------------------------
+# bd-fm23o: per-user channel breakdown routes split by attribution source
+# (final bead of EPIC bd-2cenq — Emby user attribution).
+# ---------------------------------------------------------------------------
+#
+# URL shape rationale (PO decision, recorded in the bead):
+#
+#   * ``/api/stats/users/dispatcharr/{id}`` keys on the ECM user_id
+#     (integer) — same as the legacy ``/api/stats/watch-time/{user_id}``
+#     endpoint, just under a source-prefixed URL so the operator can
+#     tell from the URL which identity space the id belongs to.
+#   * ``/api/stats/users/emby/{id}`` keys on the Emby user GUID
+#     (string). This is the new surface that fulfills the epic's
+#     acceptance: stats can be reached BY EMBY USER, not just by
+#     Dispatcharr-side user.
+#   * ``/api/stats/users/{user_id}`` is a deprecated alias that routes
+#     to the dispatcharr behavior. Kept for back-compat with any
+#     consumer that started wiring against the natural URL before the
+#     source split landed. Logs a WARN per call so operators / log
+#     analysis can see when consumers still use it.
+#
+# Deprecation removal date: not scheduled yet. The alias is a
+# comment-only marker until we see whether any consumer actually
+# depends on it.
+
+
+@router.get("/users/dispatcharr/{user_id}")
+async def get_user_breakdown_by_dispatcharr_id(
+    user_id: int,
+    db: Session = Depends(get_session),
+    caller: Optional[User] = Depends(get_watch_time_caller),
+    from_: Optional[str] = Query(None, alias="from"),
+    to: Optional[str] = None,
+):
+    """Per-channel watch-time breakdown keyed by ECM (Dispatcharr) user_id.
+
+    bd-fm23o: source-prefixed sibling of ``/api/stats/watch-time/{user_id}``
+    introduced as the final bead of EPIC bd-2cenq. Same response shape,
+    same auth posture (admin-only), same aggregation rules — the only
+    behavioral difference vs. the legacy endpoint is the URL shape.
+
+    See :func:`_per_user_breakdown_by_channel` for the row contract and
+    side-load behavior. ``user_id`` is the integer ECM user identifier
+    (same key as ``session_telemetry.user_id``).
+    """
+    logger.debug(
+        "[STATS] GET /api/stats/users/dispatcharr/%s from=%s to=%s",
+        user_id, from_, to,
+    )
+    if caller is not None and not caller.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Watch-time stats are admin-only",
+        )
+    return _per_user_breakdown_by_channel(
+        db,
+        source="dispatcharr",
+        identifier=user_id,
+        from_=from_,
+        to=to,
+    )
+
+
+@router.get("/users/emby/{emby_user_id}")
+async def get_user_breakdown_by_emby_id(
+    emby_user_id: str,
+    db: Session = Depends(get_session),
+    caller: Optional[User] = Depends(get_watch_time_caller),
+    from_: Optional[str] = Query(None, alias="from"),
+    to: Optional[str] = None,
+):
+    """Per-channel watch-time breakdown keyed by Emby user GUID.
+
+    bd-fm23o (final bead of EPIC bd-2cenq — Emby user attribution):
+    surfaces watch-time aggregations for sessions ECM attributed to
+    one specific Emby user. The ``emby_user_id`` path parameter is the
+    Emby ``UserId`` field (a GUID-shaped string like
+    ``b5c2a1e8-...``) persisted to ``session_telemetry.emby_user_id``
+    by :meth:`BandwidthTracker._collect_emby_attributions`.
+
+    Same response shape and admin-only auth as the dispatcharr-keyed
+    sibling — see :func:`_per_user_breakdown_by_channel`.
+    """
+    logger.debug(
+        "[STATS] GET /api/stats/users/emby/%s from=%s to=%s",
+        emby_user_id, from_, to,
+    )
+    if caller is not None and not caller.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Watch-time stats are admin-only",
+        )
+    return _per_user_breakdown_by_channel(
+        db,
+        source="emby",
+        identifier=emby_user_id,
+        from_=from_,
+        to=to,
+    )
+
+
+@router.get("/users/{user_id}")
+async def get_user_breakdown_deprecated_alias(
+    user_id: int,
+    db: Session = Depends(get_session),
+    caller: Optional[User] = Depends(get_watch_time_caller),
+    from_: Optional[str] = Query(None, alias="from"),
+    to: Optional[str] = None,
+):
+    """DEPRECATED alias for ``/api/stats/users/dispatcharr/{user_id}``.
+
+    bd-fm23o: kept for back-compat with any consumer that wired against
+    the natural URL before the source split landed. Defaults to the
+    Dispatcharr-source behavior (the pre-bd-fm23o contract).
+
+    Each call logs a WARN with the URL so operators / log analysis can
+    see whether any consumer is still using it. Removal is not yet
+    scheduled — the deprecation marker stays comment-only until usage
+    data shows it's safe to drop.
+    """
+    logger.warning(
+        "[STATS] Deprecated alias /api/stats/users/%s called — "
+        "use /api/stats/users/dispatcharr/%s instead (bd-fm23o)",
+        user_id, user_id,
+    )
+    if caller is not None and not caller.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Watch-time stats are admin-only",
+        )
+    return _per_user_breakdown_by_channel(
+        db,
+        source="dispatcharr",
+        identifier=user_id,
+        from_=from_,
+        to=to,
+    )
+
+
+def _pick_display_name_and_source(
+    *,
+    emby_user_name: Optional[str],
+    dispatcharr_username: Optional[str],
+    plex_user_name: Optional[str] = None,
+    jellyfin_user_name: Optional[str] = None,
+) -> tuple[Optional[str], str]:
+    """Pick the per-row display name + attribution source (bd-r5f0c.4).
+
+    Extends bd-fm23o (Emby > Dispatcharr) to the full multi-source
+    precedence: Emby > Plex > Jellyfin > Dispatcharr. Each media
+    source's username, when present, represents the TRUE viewer
+    identity for that row — the Dispatcharr-side username is the
+    proxy/API account name, which is what the epic exists to replace.
+
+    Why Emby wins: every match guarantee is equivalent across sources
+    (single concurrent session on a matching item), so ordering is
+    historical (Emby shipped first in bd-fm23o) plus PO direction:
+    operators with both Emby and Plex configured almost always have
+    one as the primary surface and the other as a secondary.
+    Emby > Plex > Jellyfin keeps the W4 precedence simple to reason
+    about. W8 will exercise the spill behavior across all 7 ordered
+    sub-cases.
+
+    Args:
+        emby_user_name: Emby attribution from the row (or None).
+        dispatcharr_username: Dispatcharr proxy username from the row.
+        plex_user_name: Plex attribution from the row (bd-r5f0c.4).
+        jellyfin_user_name: Jellyfin attribution from the row (bd-r5f0c.4).
+
+    Returns:
+        ``(display_name, attribution_source)`` — source is one of
+        ``"emby"``, ``"plex"``, ``"jellyfin"``, ``"dispatcharr"``.
+        ``display_name`` may still be ``None`` when no source provided
+        a name (legacy rows pre-bd-gsn3r); the frontend renders that
+        as "Unknown viewer".
+    """
+    if emby_user_name:
+        return emby_user_name, "emby"
+    if plex_user_name:
+        return plex_user_name, "plex"
+    if jellyfin_user_name:
+        return jellyfin_user_name, "jellyfin"
+    return dispatcharr_username, "dispatcharr"
+
+
+def _build_watch_time_row_total(row) -> dict:
+    """Render one ``/api/stats/watch-time?group_by=total`` row."""
+    display_name, source = _pick_display_name_and_source(
+        emby_user_name=row.emby_user_name,
+        dispatcharr_username=row.dispatcharr_username,
+        # bd-r5f0c.4: plex / jellyfin attribution feed the precedence.
+        # ``getattr`` defaults to ``None`` so older row objects (test
+        # seams that build rows without these labels) keep working.
+        plex_user_name=getattr(row, "plex_user_name", None),
+        jellyfin_user_name=getattr(row, "jellyfin_user_name", None),
+    )
+    return {
+        "user_id": row.user_id,
+        "username": display_name,
+        "attribution_source": source,
+        "total_watch_seconds": int((row.total_ms or 0) // 1000),
+        "last_watched": _ms_to_iso_z(row.last_observed_at),
+    }
+
+
+def _build_watch_time_row_day(row) -> dict:
+    """Render one ``/api/stats/watch-time?group_by=day`` row."""
+    display_name, source = _pick_display_name_and_source(
+        emby_user_name=row.emby_user_name,
+        dispatcharr_username=row.dispatcharr_username,
+        plex_user_name=getattr(row, "plex_user_name", None),
+        jellyfin_user_name=getattr(row, "jellyfin_user_name", None),
+    )
+    return {
+        "user_id": row.user_id,
+        "username": display_name,
+        "attribution_source": source,
+        "day": row.day,
+        "watch_seconds": int((row.total_ms or 0) // 1000),
+    }
 
 
 def _load_channel_names(db: Session, channel_ids):
@@ -976,6 +1999,58 @@ def _load_latest_stream_identity_per_channel(
             & (SessionTelemetry.observed_at == latest_sq.c.max_observed_at),
         )
         .filter(SessionTelemetry.user_id == user_id)
+        .group_by(SessionTelemetry.channel_id)
+        .all()
+    )
+    return {r.channel_id: (r.stream_id, r.stream_name) for r in rows}
+
+
+def _load_latest_stream_identity_per_emby_user(
+    db: Session,
+    channel_ids,
+    *,
+    emby_user_id: str,
+    from_ms: Optional[int],
+    to_ms: Optional[int],
+):
+    """Same as :func:`_load_latest_stream_identity_per_channel` but keyed by Emby user.
+
+    bd-fm23o: side-loader for the ``/api/stats/users/emby/{id}`` endpoint
+    (final bead of EPIC bd-2cenq). Returns the latest stream identity
+    per channel for rows whose ``emby_user_id`` matches — same
+    MAX(observed_at)-per-channel aggregation rule as the
+    Dispatcharr-source helper so the two endpoints render identical
+    label semantics on the frontend.
+    """
+    if not channel_ids:
+        return {}
+
+    latest_q = (
+        db.query(
+            SessionTelemetry.channel_id.label("channel_id"),
+            func.max(SessionTelemetry.observed_at).label("max_observed_at"),
+        )
+        .filter(SessionTelemetry.emby_user_id == emby_user_id)
+        .filter(SessionTelemetry.channel_id.in_(channel_ids))
+    )
+    if from_ms is not None:
+        latest_q = latest_q.filter(SessionTelemetry.observed_at >= from_ms)
+    if to_ms is not None:
+        latest_q = latest_q.filter(SessionTelemetry.observed_at < to_ms)
+    latest_sq = latest_q.group_by(SessionTelemetry.channel_id).subquery()
+
+    rows = (
+        db.query(
+            SessionTelemetry.channel_id.label("channel_id"),
+            func.max(SessionTelemetry.stream_id).label("stream_id"),
+            func.max(SessionTelemetry.stream_name).label("stream_name"),
+        )
+        .join(
+            latest_sq,
+            (SessionTelemetry.channel_id == latest_sq.c.channel_id)
+            & (SessionTelemetry.observed_at == latest_sq.c.max_observed_at),
+        )
+        .filter(SessionTelemetry.emby_user_id == emby_user_id)
         .group_by(SessionTelemetry.channel_id)
         .all()
     )

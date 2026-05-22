@@ -345,6 +345,49 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [customNetworkPrefixes, setCustomNetworkPrefixes] = useState<string[]>([]);
   const [customNetworkSuffixes, setCustomNetworkSuffixes] = useState<string[]>([]);
   const [normalizeOnChannelCreate, setNormalizeOnChannelCreate] = useState(false);
+  // Dedup settings (BD-K / bd-ugzn4, ADR-008 §D2). UI stores as integer percent (60-100);
+  // converted to float (0.60-1.00) on save and back to integer percent on load.
+  const [dedupThreshold, setDedupThreshold] = useState(80);
+  const [dedupM3uToastSuppressed, setDedupM3uToastSuppressed] = useState(false);
+
+  // Emby integration (bd-8wc6q, epic bd-2cenq). The api_key form-state is
+  // populated from operator input only — the backend never returns the key,
+  // only ``embyApiKeyConfigured``. On save, an empty key is omitted from
+  // the request body to honor the preserve-on-omit contract.
+  const [embyEnabled, setEmbyEnabled] = useState(false);
+  const [embyBaseUrl, setEmbyBaseUrl] = useState('');
+  const [embyApiKey, setEmbyApiKey] = useState('');
+  const [embyApiKeyConfigured, setEmbyApiKeyConfigured] = useState(false);
+  // Test-connection inline state. ``status`` controls the inline message:
+  //   'idle' — no test attempted this session
+  //   'testing' — request in flight
+  //   'success' — last test succeeded
+  //   'error' — last test failed; ``message`` carries the operator-facing string
+  const [embyTestStatus, setEmbyTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [embyTestMessage, setEmbyTestMessage] = useState('');
+
+  // Plex integration (bd-r5f0c.5 / W5). plex_token uses preserve-on-omit.
+  const [plexEnabled, setPlexEnabled] = useState(false);
+  const [plexBaseUrl, setPlexBaseUrl] = useState('');
+  const [plexToken, setPlexToken] = useState('');
+  const [plexTokenConfigured, setPlexTokenConfigured] = useState(false);
+  const [plexTestStatus, setPlexTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [plexTestMessage, setPlexTestMessage] = useState('');
+  // bd-r5f0c.15 / W15: controls "How to find your Plex token" discovery modal
+  const [showPlexTokenHelp, setShowPlexTokenHelp] = useState(false);
+
+  // Jellyfin integration (bd-r5f0c.5 / W5). jellyfin_api_key uses preserve-on-omit.
+  const [jellyfinEnabled, setJellyfinEnabled] = useState(false);
+  const [jellyfinBaseUrl, setJellyfinBaseUrl] = useState('');
+  const [jellyfinApiKey, setJellyfinApiKey] = useState('');
+  const [jellyfinApiKeyConfigured, setJellyfinApiKeyConfigured] = useState(false);
+  const [jellyfinTestStatus, setJellyfinTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [jellyfinTestMessage, setJellyfinTestMessage] = useState('');
+
+  // bd-mlcla: trusted media/proxy networks (CIDRs or bare IPs). Edited as a
+  // newline/comma-separated textarea; used ONLY to rank media-server
+  // attribution candidates, never to gate.
+  const [trustedMediaNetworks, setTrustedMediaNetworks] = useState<string[]>([]);
 
   const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels']);
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false });
@@ -744,7 +787,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setOriginalUrl(settings.url);
       setOriginalUsername(settings.username);
       setPassword(''); // Never load password from server
-      setApiKeyConfigured(settings.api_key_configured);
+      // bd-jmi1c (GH #273): prefer the canonical
+      // ``dispatcharr_api_key_configured`` indicator; fall back to the
+      // legacy alias so this bundle still works against an older backend.
+      // Both fields are optional on the response type (bd-jmi1c P1-3 /
+      // bd-46g4t), so the trailing ``?? false`` keeps the setter's
+      // boolean contract when both are absent.
+      setApiKeyConfigured(settings.dispatcharr_api_key_configured ?? settings.api_key_configured ?? false);
       setAutoRenameChannelNumber(settings.auto_rename_channel_number);
       setIncludeChannelNumberInName(settings.include_channel_number_in_name);
       setChannelNumberSeparator(settings.channel_number_separator);
@@ -770,6 +819,34 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setCustomNetworkPrefixes(settings.custom_network_prefixes ?? []);
       setCustomNetworkSuffixes(settings.custom_network_suffixes ?? []);
       setNormalizeOnChannelCreate(settings.normalize_on_channel_create ?? false);
+      // Dedup settings: server stores as float (0.60-1.00), UI shows as integer percent (60-100).
+      setDedupThreshold(Math.round((settings.dedup_threshold ?? 0.80) * 100));
+      setDedupM3uToastSuppressed(settings.dedup_m3u_toast_suppressed ?? false);
+      // Emby integration (bd-8wc6q). The API key itself is never returned —
+      // only the configured indicator — so we leave the embyApiKey form
+      // field blank on load. Operators re-enter the key only when rotating.
+      setEmbyEnabled(settings.emby_enabled ?? false);
+      setEmbyBaseUrl(settings.emby_base_url ?? '');
+      setEmbyApiKey('');
+      setEmbyApiKeyConfigured(settings.emby_api_key_configured ?? false);
+      setEmbyTestStatus('idle');
+      setEmbyTestMessage('');
+      // Plex integration (bd-r5f0c.5 / W5)
+      setPlexEnabled(settings.plex_enabled ?? false);
+      setPlexBaseUrl(settings.plex_base_url ?? '');
+      setPlexToken('');
+      setPlexTokenConfigured(settings.plex_token_configured ?? false);
+      setPlexTestStatus('idle');
+      setPlexTestMessage('');
+      // Jellyfin integration (bd-r5f0c.5 / W5)
+      setJellyfinEnabled(settings.jellyfin_enabled ?? false);
+      setJellyfinBaseUrl(settings.jellyfin_base_url ?? '');
+      setJellyfinApiKey('');
+      setJellyfinApiKeyConfigured(settings.jellyfin_api_key_configured ?? false);
+      setJellyfinTestStatus('idle');
+      setJellyfinTestMessage('');
+      // bd-mlcla: trusted media/proxy networks (ranking hint only).
+      setTrustedMediaNetworks(settings.trusted_media_networks ?? []);
       setStatsPollInterval(settings.stats_poll_interval ?? 10);
       setOriginalPollInterval(settings.stats_poll_interval ?? 10);
       setUserTimezone(settings.user_timezone ?? '');
@@ -950,6 +1027,122 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     onThemeChange?.(newTheme);
   };
 
+  // Emby Settings UI 'Test Connection' button (bd-8wc6q). Sends the
+  // current form-state values (NOT saved settings) so operators can test
+  // BEFORE saving. The backend never raises on connection failure — it
+  // returns ``{ok: false, error: <msg>}`` so we render the message inline.
+  const handleTestEmbyConnection = async () => {
+    if (!embyBaseUrl) {
+      setEmbyTestStatus('error');
+      setEmbyTestMessage('Base URL is required');
+      return;
+    }
+    // If the operator hasn't entered a new key and there's no stored key,
+    // the test would fail with a useless 401 — flag it early.
+    if (!embyApiKey && !embyApiKeyConfigured) {
+      setEmbyTestStatus('error');
+      setEmbyTestMessage('API key is required');
+      return;
+    }
+    setEmbyTestStatus('testing');
+    setEmbyTestMessage('');
+    try {
+      // If the form has a fresh key, use it; otherwise the operator is
+      // testing the stored key — but the endpoint takes credentials inline
+      // per the spec, so we send what we have. An empty embyApiKey paired
+      // with an existing configured key means we cannot test without
+      // re-entering — surface that to the operator.
+      if (!embyApiKey) {
+        setEmbyTestStatus('error');
+        setEmbyTestMessage('Re-enter the API key to test the connection');
+        return;
+      }
+      const result = await api.testEmbyConnection(embyBaseUrl, embyApiKey);
+      if (result.ok) {
+        setEmbyTestStatus('success');
+        setEmbyTestMessage('Connection successful');
+      } else {
+        setEmbyTestStatus('error');
+        setEmbyTestMessage(result.error || 'Connection failed');
+      }
+    } catch (err) {
+      logger.error('Failed to test Emby connection', err);
+      setEmbyTestStatus('error');
+      setEmbyTestMessage(err instanceof Error ? err.message : 'Connection failed');
+    }
+  };
+
+  // Plex test-connection (bd-r5f0c.5 / W5). Mirrors Emby pattern.
+  // SEC-1: uses server-local Plex token (operator-entered), not plex.tv account token.
+  const handleTestPlexConnection = async () => {
+    if (!plexBaseUrl) {
+      setPlexTestStatus('error');
+      setPlexTestMessage('Base URL is required');
+      return;
+    }
+    if (!plexToken && !plexTokenConfigured) {
+      setPlexTestStatus('error');
+      setPlexTestMessage('Plex token is required');
+      return;
+    }
+    if (!plexToken) {
+      setPlexTestStatus('error');
+      setPlexTestMessage('Re-enter the token to test the connection');
+      return;
+    }
+    setPlexTestStatus('testing');
+    setPlexTestMessage('');
+    try {
+      const result = await api.testPlexConnection(plexBaseUrl, plexToken);
+      if (result.ok) {
+        setPlexTestStatus('success');
+        setPlexTestMessage('Connection successful');
+      } else {
+        setPlexTestStatus('error');
+        setPlexTestMessage(result.error || 'Connection failed');
+      }
+    } catch (err) {
+      logger.error('Failed to test Plex connection', err);
+      setPlexTestStatus('error');
+      setPlexTestMessage(err instanceof Error ? err.message : 'Connection failed');
+    }
+  };
+
+  // Jellyfin test-connection (bd-r5f0c.5 / W5). Mirrors Emby pattern.
+  const handleTestJellyfinConnection = async () => {
+    if (!jellyfinBaseUrl) {
+      setJellyfinTestStatus('error');
+      setJellyfinTestMessage('Base URL is required');
+      return;
+    }
+    if (!jellyfinApiKey && !jellyfinApiKeyConfigured) {
+      setJellyfinTestStatus('error');
+      setJellyfinTestMessage('API key is required');
+      return;
+    }
+    if (!jellyfinApiKey) {
+      setJellyfinTestStatus('error');
+      setJellyfinTestMessage('Re-enter the API key to test the connection');
+      return;
+    }
+    setJellyfinTestStatus('testing');
+    setJellyfinTestMessage('');
+    try {
+      const result = await api.testJellyfinConnection(jellyfinBaseUrl, jellyfinApiKey);
+      if (result.ok) {
+        setJellyfinTestStatus('success');
+        setJellyfinTestMessage('Connection successful');
+      } else {
+        setJellyfinTestStatus('error');
+        setJellyfinTestMessage(result.error || 'Connection failed');
+      }
+    } catch (err) {
+      logger.error('Failed to test Jellyfin connection', err);
+      setJellyfinTestStatus('error');
+      setJellyfinTestMessage(err instanceof Error ? err.message : 'Connection failed');
+    }
+  };
+
   const handleResetStats = async () => {
     if (!confirm('This will clear all channel/stream statistics, watch history, and hidden groups. Use this when switching Dispatcharr servers. Continue?')) {
       return;
@@ -1021,6 +1214,25 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         custom_network_prefixes: customNetworkPrefixes,
         custom_network_suffixes: customNetworkSuffixes,
         normalize_on_channel_create: normalizeOnChannelCreate,
+        // Dedup: UI works in integer percent (60-100); backend stores float (0.60-1.00).
+        dedup_threshold: dedupThreshold / 100,
+        dedup_m3u_toast_suppressed: dedupM3uToastSuppressed,
+        // Emby integration (bd-8wc6q). Only send emby_api_key when the
+        // operator has entered a value — empty means "keep the stored
+        // key" per the preserve-on-omit contract on the backend.
+        emby_enabled: embyEnabled,
+        emby_base_url: embyBaseUrl,
+        ...(embyApiKey ? { emby_api_key: embyApiKey } : {}),
+        // Plex integration (bd-r5f0c.5 / W5). preserve-on-omit for token.
+        plex_enabled: plexEnabled,
+        plex_base_url: plexBaseUrl,
+        ...(plexToken ? { plex_token: plexToken } : {}),
+        // Jellyfin integration (bd-r5f0c.5 / W5). preserve-on-omit for key.
+        jellyfin_enabled: jellyfinEnabled,
+        jellyfin_base_url: jellyfinBaseUrl,
+        ...(jellyfinApiKey ? { jellyfin_api_key: jellyfinApiKey } : {}),
+        // bd-mlcla: trusted media/proxy networks (ranking hint only).
+        trusted_media_networks: trustedMediaNetworks,
         stats_poll_interval: statsPollInterval,
         user_timezone: userTimezone,
         backend_log_level: backendLogLevel,
@@ -2265,6 +2477,61 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
       <div className="settings-section">
         <div className="settings-section-header">
+          <span className="material-icons">merge_type</span>
+          <h3>Stream Deduplication</h3>
+        </div>
+
+        <div className="form-group">
+          <div className="threshold-label-row">
+            <label htmlFor="dedupThreshold">Dedup confidence threshold</label>
+            <div className="threshold-input-group">
+              <input
+                id="dedupThreshold"
+                type="number"
+                min="60"
+                max="100"
+                value={dedupThreshold}
+                onChange={(e) => {
+                  const value = Math.max(60, Math.min(100, Number(e.target.value) || 60));
+                  setDedupThreshold(value);
+                }}
+                onBlur={(e) => {
+                  const value = Math.max(60, Math.min(100, Number(e.target.value) || 60));
+                  setDedupThreshold(value);
+                }}
+                className="threshold-input"
+                data-testid="dedup-threshold-input"
+              />
+              <span className="threshold-percent">%</span>
+            </div>
+          </div>
+          <p className="form-hint">
+            Streams matching an existing channel at or above this confidence score are offered as merge
+            candidates. Range: 60–100. Default: 80. Below 60% the matcher will not surface candidates
+            (ADR-008 hard floor).
+          </p>
+        </div>
+
+        <div className="checkbox-group">
+          <input
+            id="dedupM3uToastSuppressed"
+            type="checkbox"
+            checked={dedupM3uToastSuppressed}
+            onChange={(e) => setDedupM3uToastSuppressed(e.target.checked)}
+            data-testid="dedup-toast-suppressed-checkbox"
+          />
+          <div className="checkbox-content">
+            <label htmlFor="dedupM3uToastSuppressed">Suppress &ldquo;pending merges queued&rdquo; toast after M3U refresh</label>
+            <p>
+              Pending merges are still queued and visible on the Pending Merges page; only the
+              post-refresh toast notification is hidden.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
           <span className="material-icons">sort</span>
           <h3>Smart Sort Priority</h3>
           <button
@@ -3136,6 +3403,378 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           onClick={handleSave}
           disabled={loading}
         >
+          {loading ? 'Saving...' : 'Save Settings'}
+        </button>
+      </div>
+    </div>
+  );
+
+  // Integrations page (bd-8wc6q / bd-r5f0c.5, epic bd-2cenq). Third-party
+  // server integrations: Emby, Plex, Jellyfin. Distinct from "Linked
+  // Accounts" (ECM-internal M3U account linking) and from the Dispatcharr
+  // connection on the General page (the primary upstream).
+  const renderIntegrationsPage = () => (
+    <div className="settings-page">
+      <div className="settings-page-header">
+        <h2>Integrations</h2>
+        <p>Configure third-party server integrations for cross-referenced data (Stats user attribution, etc.).</p>
+      </div>
+
+      {/* Emby Integration */}
+      <div id="emby-integration" className="settings-section" data-testid="emby-integration-section">
+        <div className="settings-section-header">
+          <span className="material-icons">live_tv</span>
+          <h3>Emby Integration</h3>
+          <span className={`badge badge-sm ${embyEnabled && embyApiKeyConfigured ? 'badge-success' : ''}`}>
+            {embyEnabled && embyApiKeyConfigured ? 'Configured' : 'Unconfigured'}
+          </span>
+        </div>
+
+        <div className="settings-group">
+          <div className="form-group-vertical">
+            <span className="form-description">
+              When enabled, ECM cross-references active stream sessions against the operator's Emby
+              <code> /Sessions </code>feed so Stats can attribute real Emby usernames instead of
+              collapsing every Emby-mediated pull to the proxy IP.
+            </span>
+          </div>
+
+          <div className="checkbox-group">
+            <input
+              id="embyEnabled"
+              type="checkbox"
+              checked={embyEnabled}
+              onChange={(e) => setEmbyEnabled(e.target.checked)}
+              data-testid="emby-enabled-checkbox"
+            />
+            <div className="checkbox-content">
+              <label htmlFor="embyEnabled">Enable Emby user attribution</label>
+              <p>Requires base URL and API key below. Disabling stops the cross-reference but does not clear stored values.</p>
+            </div>
+          </div>
+
+          <div className="form-group-vertical">
+            <label htmlFor="embyBaseUrl">Emby base URL</label>
+            <span className="form-description">
+              Full URL to your Emby server (e.g. <code>http://emby.local:8096</code>). Sub-paths are
+              preserved for reverse-proxy setups.
+            </span>
+            <input
+              id="embyBaseUrl"
+              type="text"
+              value={embyBaseUrl}
+              onChange={(e) => setEmbyBaseUrl(e.target.value)}
+              placeholder="http://emby.local:8096"
+              data-testid="emby-base-url-input"
+              className="settings-text-input"
+            />
+          </div>
+
+          <div className="form-group-vertical">
+            <label htmlFor="embyApiKey">Emby API key</label>
+            <span className="form-description">
+              Generate in Emby: Dashboard → API Keys → New API Key. Stored plaintext at rest, same as the
+              Dispatcharr API key. {embyApiKeyConfigured ? 'A key is currently stored — leave blank to keep it.' : 'No key stored.'}
+            </span>
+            <input
+              id="embyApiKey"
+              type="password"
+              value={embyApiKey}
+              onChange={(e) => setEmbyApiKey(e.target.value)}
+              placeholder={embyApiKeyConfigured ? '••••••••' : 'Paste your Emby API key'}
+              data-testid="emby-api-key-input"
+              className="settings-text-input"
+              autoComplete="new-password"
+            />
+          </div>
+
+          <div className="integration-test-actions">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleTestEmbyConnection}
+              disabled={embyTestStatus === 'testing'}
+              data-testid="emby-test-connection-btn"
+            >
+              <span className="material-icons">
+                {embyTestStatus === 'testing' ? 'sync' : 'cable'}
+              </span>
+              {embyTestStatus === 'testing' ? 'Testing...' : 'Test Connection'}
+            </button>
+            {embyTestStatus === 'success' && (
+              <span
+                className="integration-test-result integration-test-result--success"
+                data-testid="emby-test-result-success"
+              >
+                ✓ {embyTestMessage}
+              </span>
+            )}
+            {embyTestStatus === 'error' && (
+              <span
+                className="integration-test-result integration-test-result--error"
+                data-testid="emby-test-result-error"
+              >
+                ✗ {embyTestMessage}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Plex Integration (bd-r5f0c.5 / W5) */}
+      <div id="plex-integration" className="settings-section" data-testid="plex-integration-section">
+        <div className="settings-section-header">
+          <span className="material-icons">smart_display</span>
+          <h3>Plex Integration</h3>
+          <span className={`badge badge-sm ${plexEnabled && plexTokenConfigured ? 'badge-success' : ''}`}>
+            {plexEnabled && plexTokenConfigured ? 'Configured' : 'Unconfigured'}
+          </span>
+        </div>
+
+        <div className="settings-group">
+          <div className="form-group-vertical">
+            <span className="form-description">
+              When enabled, ECM cross-references active stream sessions against the operator's Plex
+              <code> /status/sessions </code>feed so Stats can attribute real Plex usernames.
+            </span>
+          </div>
+
+          <div className="checkbox-group">
+            <input
+              id="plexEnabled"
+              type="checkbox"
+              checked={plexEnabled}
+              onChange={(e) => setPlexEnabled(e.target.checked)}
+              data-testid="plex-enabled-checkbox"
+            />
+            <div className="checkbox-content">
+              <label htmlFor="plexEnabled">Enable Plex user attribution</label>
+              <p>Requires base URL and token below. Disabling stops the cross-reference but does not clear stored values.</p>
+            </div>
+          </div>
+
+          <div className="form-group-vertical">
+            <label htmlFor="plexBaseUrl">Plex base URL</label>
+            <span className="form-description">
+              Full URL to your Plex Media Server (e.g. <code>http://plex.local:32400</code>). Sub-paths are
+              preserved for reverse-proxy setups.
+            </span>
+            <input
+              id="plexBaseUrl"
+              type="text"
+              value={plexBaseUrl}
+              onChange={(e) => setPlexBaseUrl(e.target.value)}
+              placeholder="http://plex.local:32400"
+              data-testid="plex-base-url-input"
+              className="settings-text-input"
+            />
+          </div>
+
+          <div className="form-group-vertical">
+            <label htmlFor="plexToken">Plex token</label>
+            {/* SEC-1: The account-vs-server-local security requirement is surfaced in the
+                discovery modal (bd-r5f0c.15 / W15) as a prominent callout. The SEC-1 test
+                asserts on the modal callout directly (bd-r5f0c.16 / W16). */}
+            <span className="form-description" data-testid="plex-token-helper-text">
+              {plexTokenConfigured ? 'A token is currently stored — leave blank to keep it.' : 'No token stored.'}
+              {' '}
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => setShowPlexTokenHelp(true)}
+                data-testid="plex-token-help-link"
+              >
+                How to find your Plex token
+              </button>
+            </span>
+            <input
+              id="plexToken"
+              type="password"
+              value={plexToken}
+              onChange={(e) => setPlexToken(e.target.value)}
+              placeholder={plexTokenConfigured ? '••••••••' : 'Paste your server-local Plex token'}
+              data-testid="plex-token-input"
+              className="settings-text-input"
+              autoComplete="new-password"
+            />
+          </div>
+
+          <div className="integration-test-actions">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleTestPlexConnection}
+              disabled={plexTestStatus === 'testing'}
+              data-testid="plex-test-connection-btn"
+            >
+              <span className="material-icons">
+                {plexTestStatus === 'testing' ? 'sync' : 'cable'}
+              </span>
+              {plexTestStatus === 'testing' ? 'Testing...' : 'Test Connection'}
+            </button>
+            {plexTestStatus === 'success' && (
+              <span
+                className="integration-test-result integration-test-result--success"
+                data-testid="plex-test-result-success"
+              >
+                ✓ {plexTestMessage}
+              </span>
+            )}
+            {plexTestStatus === 'error' && (
+              <span
+                className="integration-test-result integration-test-result--error"
+                data-testid="plex-test-result-error"
+              >
+                ✗ {plexTestMessage}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Jellyfin Integration (bd-r5f0c.5 / W5) */}
+      <div id="jellyfin-integration" className="settings-section" data-testid="jellyfin-integration-section">
+        <div className="settings-section-header">
+          <span className="material-icons">play_circle</span>
+          <h3>Jellyfin Integration</h3>
+          <span className={`badge badge-sm ${jellyfinEnabled && jellyfinApiKeyConfigured ? 'badge-success' : ''}`}>
+            {jellyfinEnabled && jellyfinApiKeyConfigured ? 'Configured' : 'Unconfigured'}
+          </span>
+        </div>
+
+        <div className="settings-group">
+          <div className="form-group-vertical">
+            <span className="form-description">
+              When enabled, ECM cross-references active stream sessions against the operator's Jellyfin
+              <code> /Sessions </code>feed so Stats can attribute real Jellyfin usernames.
+            </span>
+          </div>
+
+          <div className="checkbox-group">
+            <input
+              id="jellyfinEnabled"
+              type="checkbox"
+              checked={jellyfinEnabled}
+              onChange={(e) => setJellyfinEnabled(e.target.checked)}
+              data-testid="jellyfin-enabled-checkbox"
+            />
+            <div className="checkbox-content">
+              <label htmlFor="jellyfinEnabled">Enable Jellyfin user attribution</label>
+              <p>Requires base URL and API key below. Disabling stops the cross-reference but does not clear stored values.</p>
+            </div>
+          </div>
+
+          <div className="form-group-vertical">
+            <label htmlFor="jellyfinBaseUrl">Jellyfin base URL</label>
+            <span className="form-description">
+              Full URL to your Jellyfin server (e.g. <code>http://jellyfin.local:8096</code>). Sub-paths are
+              preserved for reverse-proxy setups.
+            </span>
+            <input
+              id="jellyfinBaseUrl"
+              type="text"
+              value={jellyfinBaseUrl}
+              onChange={(e) => setJellyfinBaseUrl(e.target.value)}
+              placeholder="http://jellyfin.local:8096"
+              data-testid="jellyfin-base-url-input"
+              className="settings-text-input"
+            />
+          </div>
+
+          <div className="form-group-vertical">
+            <label htmlFor="jellyfinApiKey">Jellyfin API key</label>
+            <span className="form-description">
+              Generate in Jellyfin: Dashboard → API Keys → New API Key. Stored plaintext at rest.
+              {jellyfinApiKeyConfigured ? ' A key is currently stored — leave blank to keep it.' : ' No key stored.'}
+            </span>
+            <input
+              id="jellyfinApiKey"
+              type="password"
+              value={jellyfinApiKey}
+              onChange={(e) => setJellyfinApiKey(e.target.value)}
+              placeholder={jellyfinApiKeyConfigured ? '••••••••' : 'Paste your Jellyfin API key'}
+              data-testid="jellyfin-api-key-input"
+              className="settings-text-input"
+              autoComplete="new-password"
+            />
+          </div>
+
+          <div className="integration-test-actions">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleTestJellyfinConnection}
+              disabled={jellyfinTestStatus === 'testing'}
+              data-testid="jellyfin-test-connection-btn"
+            >
+              <span className="material-icons">
+                {jellyfinTestStatus === 'testing' ? 'sync' : 'cable'}
+              </span>
+              {jellyfinTestStatus === 'testing' ? 'Testing...' : 'Test Connection'}
+            </button>
+            {jellyfinTestStatus === 'success' && (
+              <span
+                className="integration-test-result integration-test-result--success"
+                data-testid="jellyfin-test-result-success"
+              >
+                ✓ {jellyfinTestMessage}
+              </span>
+            )}
+            {jellyfinTestStatus === 'error' && (
+              <span
+                className="integration-test-result integration-test-result--error"
+                data-testid="jellyfin-test-result-error"
+              >
+                ✗ {jellyfinTestMessage}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Trusted media networks — soft ranking hint for media-server
+          attribution (bd-mlcla). Never gates; only breaks ties when
+          pairing media-server viewers to connections. */}
+      <div id="trusted-media-networks" className="settings-section" data-testid="trusted-media-networks-section">
+        <div className="settings-section-header">
+          <h3>Trusted Media Networks</h3>
+        </div>
+        <div className="settings-section-body">
+          <div className="form-group-vertical">
+            <label htmlFor="trustedMediaNetworks">Trusted media/proxy networks</label>
+            <span className="form-description">
+              Optional. One CIDR or IP per line (e.g. <code>172.16.0.0/24</code> or
+              {' '}<code>172.16.0.19</code>). These are used ONLY to <strong>rank</strong> media-server
+              attribution candidates — connections whose source IP falls inside a trusted network are
+              treated as most-likely media-mediated and sorted first. They are <strong>never</strong> used
+              to reject a connection, so getting this list wrong can only change tie-break order, never
+              which user is attributed. Local Docker bridge gateways are auto-detected and added to the
+              ranking automatically; leave this empty unless you need to override.
+            </span>
+            <textarea
+              id="trustedMediaNetworks"
+              value={trustedMediaNetworks.join('\n')}
+              onChange={(e) =>
+                setTrustedMediaNetworks(
+                  e.target.value
+                    .split(/[\n,]/)
+                    .map((s) => s.trim())
+                    .filter((s) => s.length > 0)
+                )
+              }
+              placeholder={'172.16.0.0/24\n172.16.0.19'}
+              rows={4}
+              data-testid="trusted-media-networks-input"
+              className="settings-text-input"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-actions">
+        <div className="settings-actions-left" />
+        <button className="btn-primary" onClick={handleSave} disabled={loading}>
+          <span className="material-icons">save</span>
           {loading ? 'Saving...' : 'Save Settings'}
         </button>
       </div>
@@ -4504,6 +5143,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Notification Settings
           </li>
           <li
+            className={`settings-nav-item ${activePage === 'integrations' ? 'active' : ''}`}
+            onClick={() => setActivePage('integrations')}
+            data-testid="settings-nav-integrations"
+          >
+            <span className="material-icons">extension</span>
+            Integrations
+          </li>
+          <li
             className={`settings-nav-item ${activePage === 'scheduled-tasks' ? 'active' : ''}`}
             onClick={() => setActivePage('scheduled-tasks')}
           >
@@ -4589,6 +5236,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'lookup-tables' && <LookupTableSection />}
         {activePage === 'appearance' && renderAppearancePage()}
         {activePage === 'email' && renderEmailSettingsPage()}
+        {activePage === 'integrations' && renderIntegrationsPage()}
         {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}
         {activePage === 'auto-creation' && renderAutoCreationPage()}
         {activePage === 'm3u-digest' && renderM3UDigestPage()}
@@ -4909,6 +5557,92 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               )}
             </div>
 
+          </div>
+        </ModalOverlay>
+      )}
+
+      {/* bd-r5f0c.15 / W15: Plex token discovery modal */}
+      {showPlexTokenHelp && (
+        <ModalOverlay onClose={() => setShowPlexTokenHelp(false)}>
+          <div
+            className="modal-container modal-md plex-token-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="plex-token-help-title"
+            data-testid="plex-token-help-modal"
+          >
+            <div className="modal-header">
+              <h2 id="plex-token-help-title">How to find your Plex token</h2>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={() => setShowPlexTokenHelp(false)}
+                data-testid="plex-token-help-close"
+                aria-label="Close"
+              >
+                <span className="material-icons">close</span>
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <ol className="plex-token-steps">
+                <li>
+                  Open Plex Web in your browser — typically{' '}
+                  <code>{'http://<your-plex-host>:32400/web'}</code>.
+                </li>
+                <li>
+                  Play any media item (a movie, TV episode, or live channel — anything in your library).
+                </li>
+                <li>
+                  While the item is playing, click the three-dot (&ldquo;&#8943;&rdquo;) menu on the
+                  now-playing item and select <strong>Get Info</strong>.
+                </li>
+                <li>
+                  In the info dialog, click <strong>View XML</strong>. A new browser tab opens showing
+                  the item&apos;s XML metadata.
+                </li>
+                <li>
+                  Look at the URL of that new tab. At the end of the URL you&apos;ll see{' '}
+                  <code>X-Plex-Token=&lt;long-string&gt;</code>. The value after the{' '}
+                  <code>=</code> is your <strong>server-local Plex token</strong>. Copy it.
+                </li>
+              </ol>
+
+              {/* SEC-1: Account-token vs server-local security callout.
+                  This warning is a security requirement — do not remove it. */}
+              <div className="modal-warning-banner" data-testid="plex-token-security-callout">
+                <span className="material-icons" aria-hidden="true">warning</span>
+                <p>
+                  <strong>Important:</strong> use the server-local token from the steps above — NOT
+                  your plex.tv account token. Account tokens have full plex.tv scope (server
+                  management, account changes, payment surface). Server-local tokens are scoped to
+                  the specific server. If you obtained your token from{' '}
+                  <code>https://plex.tv/users/sign_in.xml</code> or a similar endpoint, that is the
+                  account token — do not use it.
+                </p>
+              </div>
+
+              <p className="plex-token-ref-link">
+                Official Plex support article:{' '}
+                <a
+                  href="https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Finding an authentication token (X-Plex-Token)
+                </a>
+              </p>
+            </div>
+
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="modal-btn modal-btn-secondary"
+                onClick={() => setShowPlexTokenHelp(false)}
+              >
+                Close
+              </button>
+            </div>
           </div>
         </ModalOverlay>
       )}

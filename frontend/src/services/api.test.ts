@@ -11,6 +11,7 @@ import {
   removeStreamFromChannel,
   reorderChannelStreams,
   deleteChannel,
+  getChannelMergeCandidates,
   // Compute sort
   computeSort,
   // Enhanced stats (v0.11.0)
@@ -35,6 +36,10 @@ import {
   updateAlertMethod,
   // Logos (bd-nh50y debug-logging contract)
   getAllLogos,
+  // Integration test-connection wire-format guards (bd-8zi93)
+  testEmbyConnection,
+  testPlexConnection,
+  testJellyfinConnection,
 } from './api';
 import { logger } from '../utils/logger';
 
@@ -144,6 +149,57 @@ describe('API Service', () => {
       const result = await updateChannel(1, { channel_number: 200 });
 
       expect(result.channel_number).toBe(200);
+    });
+  });
+
+  describe('getChannelMergeCandidates (BD-D / ADR-008 §D1)', () => {
+    it('returns the BD-D response envelope verbatim and forwards stream_name + group_id query params', async () => {
+      let requestUrl = '';
+      server.use(
+        http.get('/api/channel-merges/candidates', ({ request }) => {
+          requestUrl = request.url;
+          return HttpResponse.json({
+            stream_name: 'ESPN HD',
+            candidates: [
+              { channel_id: 'channel-uuid-abc', channel_name: 'ESPN HD', confidence: 0.92 },
+            ],
+            total: 1,
+            page: 1,
+            page_size: 50,
+            total_pages: 1,
+          });
+        })
+      );
+
+      const result = await getChannelMergeCandidates('ESPN HD', 7);
+
+      expect(requestUrl).toContain('stream_name=ESPN+HD');
+      expect(requestUrl).toContain('group_id=7');
+      expect(result.candidates).toHaveLength(1);
+      expect(result.candidates[0].channel_id).toBe('channel-uuid-abc');
+      expect(result.candidates[0].confidence).toBe(0.92);
+    });
+
+    it('omits group_id when null (search all groups)', async () => {
+      let requestUrl = '';
+      server.use(
+        http.get('/api/channel-merges/candidates', ({ request }) => {
+          requestUrl = request.url;
+          return HttpResponse.json({
+            stream_name: 'CNN',
+            candidates: [],
+            total: 0,
+            page: 1,
+            page_size: 50,
+            total_pages: 0,
+          });
+        })
+      );
+
+      await getChannelMergeCandidates('CNN', null);
+
+      expect(requestUrl).toContain('stream_name=CNN');
+      expect(requestUrl).not.toContain('group_id=');
     });
   });
 
@@ -1239,6 +1295,68 @@ describe('API Service', () => {
         errSpy.mockRestore();
         logger.setLevel(prevLevel);
       }
+    });
+  });
+
+  // Wire-format guards for the Settings → Integrations test-connection
+  // endpoints (bd-8zi93). The backend Pydantic schemas pick specific field
+  // names per integration:
+  //   - Emby:     { base_url, api_key }
+  //   - Plex:     { base_url, token }       — X-Plex-Token nomenclature
+  //   - Jellyfin: { base_url, api_key }
+  // A mismatch surfaces as a 422 "Field required" inline error in the UI
+  // (the original Plex symptom). These tests lock the exact JSON shape sent
+  // over the wire so a future rename can't silently break it again.
+  describe('integration test-connection wire format', () => {
+    it('testEmbyConnection sends { base_url, api_key }', async () => {
+      let requestBody: unknown;
+      server.use(
+        http.post('/api/settings/emby/test-connection', async ({ request }) => {
+          requestBody = await request.json();
+          return HttpResponse.json({ ok: true });
+        }),
+      );
+
+      await testEmbyConnection('http://emby.local:8096', 'emby-api-key');
+
+      expect(requestBody).toEqual({
+        base_url: 'http://emby.local:8096',
+        api_key: 'emby-api-key',
+      });
+    });
+
+    it('testPlexConnection sends { base_url, token }', async () => {
+      let requestBody: unknown;
+      server.use(
+        http.post('/api/settings/plex/test-connection', async ({ request }) => {
+          requestBody = await request.json();
+          return HttpResponse.json({ ok: true });
+        }),
+      );
+
+      await testPlexConnection('http://plex.local:32400', 'plex-token-value');
+
+      expect(requestBody).toEqual({
+        base_url: 'http://plex.local:32400',
+        token: 'plex-token-value',
+      });
+    });
+
+    it('testJellyfinConnection sends { base_url, api_key }', async () => {
+      let requestBody: unknown;
+      server.use(
+        http.post('/api/settings/jellyfin/test-connection', async ({ request }) => {
+          requestBody = await request.json();
+          return HttpResponse.json({ ok: true });
+        }),
+      );
+
+      await testJellyfinConnection('http://jellyfin.local:8096', 'jellyfin-api-key');
+
+      expect(requestBody).toEqual({
+        base_url: 'http://jellyfin.local:8096',
+        api_key: 'jellyfin-api-key',
+      });
     });
   });
 });

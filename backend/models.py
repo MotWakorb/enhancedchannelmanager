@@ -5,6 +5,7 @@ import json
 import logging
 from datetime import datetime, date
 from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, Date, Float, Index, ForeignKey, UniqueConstraint, CheckConstraint
+from sqlalchemy import text as sa_text
 from sqlalchemy.orm import relationship
 from db_base import Base
 
@@ -1375,6 +1376,67 @@ class SessionTelemetry(Base):
     # ``[<provider_name>] - <stream_name>`` (PO directive 2026-05-14).
     # Added in migration 0010 (bd-kh23e).
     stream_name = Column(Text, nullable=True)
+    # bd-k026g (migration 0016): Emby user attribution columns. ECM only
+    # sees the Dispatcharr stream session's IP, and when users watch via
+    # an Emby server ALL stream pulls share that one IP — Stats can't
+    # distinguish individual Emby viewers without enrichment. The Emby
+    # integration (parent epic bd-2cenq) cross-references each live Emby
+    # session against ECM's active streams; when a match is resolved at
+    # write time the ``BandwidthTracker`` writer (bd-gih6d) populates
+    # these two columns from the per-poll Emby ``/Sessions`` lookup the
+    # resolver maintains. Both columns are NULL for non-Emby rows (most
+    # rows on most installs — only sessions whose client IP matches the
+    # configured Emby server IP AND has a concurrent matching Emby
+    # session are enriched). ``emby_user_id`` is TEXT because Emby user
+    # IDs are GUIDs, NOT integers like the Dispatcharr ``user_id``
+    # column. Denormalized on this table rather than split into a
+    # separate ``emby_users`` table to keep Stats v2 query patterns
+    # flat — same rationale as the bd-gsn3r ``dispatcharr_username``
+    # denormalization. Read paths surface these columns verbatim;
+    # there are no read-side joins against any Emby endpoint or local
+    # table. Plain nullable columns, NOT FKs — Emby's user table is
+    # upstream and not an ECM table, mirroring the established pattern
+    # for every other upstream identifier on this row (``user_id``,
+    # ``provider_id``, ``channel_id``, ``stream_id``).
+    emby_user_id = Column(Text, nullable=True)
+    emby_user_name = Column(Text, nullable=True)
+    # bd-r5f0c.1 (migration 0017): Plex + Jellyfin user attribution
+    # columns, at parity with the Emby pair above. Identical rationale —
+    # ECM only sees the Dispatcharr stream session's IP, so when users
+    # watch via a Plex or Jellyfin server all stream pulls collapse to
+    # the media server's IP. The Plex (W2) and Jellyfin (W3) resolvers
+    # cross-reference each live upstream session against ECM's active
+    # streams and the W4 ``BandwidthTracker`` writer populates these
+    # four columns from the per-poll upstream lookup. Both ID columns
+    # are TEXT — Plex serves user IDs as strings in its ``/sessions``
+    # payload, and Jellyfin (Emby fork) uses GUID-string IDs — staying
+    # aligned with the ``emby_user_id`` TEXT choice. All four are NULL
+    # for non-Plex / non-Jellyfin rows. Plain nullable columns, NOT
+    # FKs — Plex's and Jellyfin's user tables are upstream and not ECM
+    # tables, mirroring the established pattern for every other
+    # upstream identifier on this row.
+    plex_user_id = Column(Text, nullable=True)
+    plex_user_name = Column(Text, nullable=True)
+    jellyfin_user_id = Column(Text, nullable=True)
+    jellyfin_user_name = Column(Text, nullable=True)
+    # bd-r5f0c.9 (migration 0018): multi-viewer attribution. Media servers
+    # are transcoding proxies — N upstream viewers share ONE ECM client
+    # (the server itself). The single-viewer columns above retain the
+    # most-recent viewer for back-compat (Stats v2 aggregations, frontend
+    # rendering pre-W5); these three new TEXT columns hold the FULL list
+    # of viewers as JSON-encoded ``[{"user_id": "...", "user_name":
+    # "..."}, ...]`` strings (or NULL when the source matched zero
+    # viewers). Application-layer JSON serialization (``json.dumps`` at
+    # write time, ``json.loads`` on read) — not SQLAlchemy's JSON type —
+    # because SQLite stores JSON as TEXT either way and the in-row
+    # serialization keeps the column shape identical to the other TEXT
+    # attribution columns above (no driver-specific type adapter coupling
+    # for the W5 frontend reader to know about). Order in the list is
+    # ``last_activity_date`` descending so position 0 is the most-recent
+    # viewer (matches the legacy *_user_name column's content).
+    emby_viewers = Column(Text, nullable=True)
+    plex_viewers = Column(Text, nullable=True)
+    jellyfin_viewers = Column(Text, nullable=True)
 
     __table_args__ = (
         CheckConstraint(
@@ -1518,8 +1580,22 @@ class SessionTelemetryProviderDaily(Base):
     # numerator, not the derived rate).
     bytes_delta_sum = Column(BigInteger, nullable=False)
     # Count of buffer/stall events ingested for this provider that day
-    # (skqln.15). Feeds the "buffering by provider" time-series.
+    # (skqln.15). Preserved for back-compat with pre-bd-d0ha9 read paths.
     buffer_event_count = Column(Integer, nullable=False)
+    # Per-type channel-event counters added by migration 0014 (bd-d0ha9).
+    # Companion columns to the three that migration 0013 (bd-ov5vb) added
+    # to the raw ``session_telemetry`` table; the rollup now SUMs them
+    # alongside ``buffer_event_count`` so historical data beyond the 30-day
+    # raw-row retention window retains the full event-type breakdown.
+    reconnect_event_count = Column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    error_event_count = Column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    switch_event_count = Column(
+        Integer, nullable=False, server_default="0", default=0
+    )
 
     __table_args__ = (
         Index(
@@ -1849,6 +1925,17 @@ class AutoCreationRule(Base):
     # default does NOT migrate them; no Alembic revision is needed.
     match_scope_target_group = Column(Boolean, default=True, nullable=False)
 
+    # Explicit rule-level scope group for merge lookups (GH #298, bd-kncun).
+    # When match_scope_target_group is on, this column lets the operator pin
+    # the group that name lookups are restricted to — independent of any
+    # Create Channel action's Target Group. NULL (the default) preserves the
+    # prior behavior: create_channel derives the scope from the action's
+    # effective group_id, and merge_streams stays group-agnostic. A non-NULL
+    # value is enforced across BOTH create_channel and merge_streams name
+    # lookups so a Merge-Streams-only rule can finally scope its match to one
+    # group instead of matching same-name channels in any group.
+    match_scope_group_id = Column(Integer, nullable=True)
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -1952,6 +2039,7 @@ class AutoCreationRule(Base):
             "skip_struck_streams": self.skip_struck_streams or False,
             "orphan_action": self.orphan_action or "delete",
             "match_scope_target_group": self.match_scope_target_group or False,
+            "match_scope_group_id": self.match_scope_group_id,
             "last_run_at": self.last_run_at.isoformat() + "Z" if self.last_run_at else None,
             "last_run_stats": self.get_last_run_stats(),
             "match_count": self.match_count or 0,
@@ -2569,4 +2657,203 @@ class RuleLintFinding(Base):
         return (
             f"<RuleLintFinding(id={self.id}, rule_type={self.rule_type}, "
             f"rule_id={self.rule_id}, code={self.code})>"
+        )
+
+
+# =============================================================================
+# v0.17.1 Interactive Stream Deduplication (ADR-008 §D8 / BD-C / bd-6by2n)
+# =============================================================================
+#
+# Migration 0014 creates the two tables below. Both are out-of-band of the
+# Stats v2 / auto-creation pipelines — they back the interactive
+# stream-to-channel deduplication queue surfaced via /api/channel-merges/*
+# (ADR-008 §D1) and the MCP tools in §D7.
+#
+# The model declarations exist so the smart-bootstrap fast-path
+# (``database._schema_matches_head``) correctly detects that an install at
+# alembic_version=0013 with no pending_merges* tables is BEHIND head and
+# runs the upgrade. Without these models, the fast-path would falsely
+# stamp forward without ever creating the tables (bd-zaaey-class bug).
+#
+# Column shape and index set MUST match migration 0014 — the schema-parity
+# guard (``_assert_schema_matches_models``) verifies every model column
+# exists in the live DB on every boot. Type mismatches are tolerated
+# (SQLite affinity is fuzzy) but column NAMES are load-bearing.
+
+
+class PendingMerge(Base):
+    """One pending / resolved fuzzy-match candidate from the dedup matcher.
+
+    Source of truth: ``docs/adr/ADR-008-interactive-stream-dedup.md`` §D8 +
+    ``backend/alembic/versions/.../0014_pending_merges.py``. Schema review
+    history and the BD-C ``trigger_context``-no-CHECK deviation note live
+    in the migration docstring; this model carries only the shape, not the
+    rationale.
+
+    State machine (§D3): ``status`` transitions
+    ``pending → merged`` (operator/auto/MCP accepted the candidate) or
+    ``pending → dismissed`` (operator/auto/MCP rejected). Terminal states
+    are not garbage-collected in v0.17.1 (§D10 retention is deferred).
+
+    Idempotency invariant (§D5): the partial unique index
+    ``uq_pending_merges_active`` prevents duplicate ``pending`` rows for
+    the same ``(stream_name, candidate_channel_id)`` pair. The repeating
+    bulk-M3U-import path can re-queue the same candidate every refresh
+    and the DB filters at insert time — the application does not need to
+    pre-check.
+    """
+
+    __tablename__ = "pending_merges"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # Raw stream name as delivered by the import surface. NOT normalised
+    # — operators see what the M3U actually delivered; normalisation is
+    # the matcher's compare-time job (ADR-008 §D8).
+    stream_name = Column(Text, nullable=False)
+    # Dispatcharr group id (nullable; NULL = ungrouped import scope).
+    group_id = Column(Integer, nullable=True)
+    # Dispatcharr channel UUID. TEXT, no local FK (channels is not an
+    # ECM table — ADR-008 §D4).
+    candidate_channel_id = Column(Text, nullable=False)
+    # RapidFuzz token_set_ratio, 0.0–1.0. Application enforces the
+    # §D2 floor; not a DB CHECK because the floor is install-configurable.
+    confidence = Column(Float, nullable=False)
+    # State machine column. CHECK is load-bearing for §D3 transitions.
+    status = Column(
+        Text,
+        nullable=False,
+        server_default=sa_text("'pending'"),
+        default="pending",
+    )
+    # Epoch-ms — matches session_telemetry / ADR-007 convention.
+    created_at = Column(Integer, nullable=False)
+    # Epoch-ms when the row left 'pending'; NULL while pending.
+    resolved_at = Column(Integer, nullable=True)
+    # 'operator' / 'auto' / 'bulk_m3u_hook' / 'mcp_tool'; NULL while
+    # pending. App-validated enum (no DB CHECK).
+    resolution_source = Column(Text, nullable=True)
+    # Surface that enqueued the row: 'drag_drop' / 'add_stream' /
+    # 'm3u_refresh' / 'mcp_tool'. App-validated enum per the BD-C
+    # implementation brief (migration 0014 docstring documents the
+    # ADR-vs-brief deviation).
+    trigger_context = Column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','merged','dismissed')",
+            name="ck_pending_merges_status",
+        ),
+        # Dominant queue-list-per-group read path (§D8).
+        Index("idx_pending_merges_group_created", "group_id", "created_at"),
+        # Sweep pending rows (badge count, retention reaper, §D8).
+        Index("idx_pending_merges_status_created", "status", "created_at"),
+        # Offline orphan detection (§D4): which queue rows reference
+        # candidate channels that no longer exist in Dispatcharr.
+        Index("idx_pending_merges_candidate", "candidate_channel_id"),
+        # §D5 invariant: at most one ``pending`` row per
+        # (stream_name, candidate_channel_id) pair. ``merged`` and
+        # ``dismissed`` rows are historical and may repeat freely.
+        # SQLite native partial-index syntax via sqlite_where; the index
+        # is fully formed on every create_all() / migration replay.
+        Index(
+            "uq_pending_merges_active",
+            "stream_name",
+            "candidate_channel_id",
+            unique=True,
+            sqlite_where=sa_text("status = 'pending'"),
+        ),
+    )
+
+    def __repr__(self):
+        return (
+            f"<PendingMerge(id={self.id}, stream={self.stream_name!r}, "
+            f"channel={self.candidate_channel_id}, status={self.status}, "
+            f"confidence={self.confidence})>"
+        )
+
+
+class PendingMergeJournal(Base):
+    """Audit trail row for every accept / dismiss / queue / auto-age action.
+
+    Source of truth: ``docs/adr/ADR-008-interactive-stream-dedup.md`` §D6 +
+    ``backend/alembic/versions/.../0014_pending_merges.py``.
+
+    Discrete audit substrate — separate from ``journal_entries`` (PO
+    decision 2026-05-16) and separate from ``pending_merges``. Every
+    audit field is a queryable column, NOT a JSON blob; the
+    MCP-vs-operator distinction the epic asks for is answerable from
+    ``actor_token_id`` + ``trigger_context`` directly.
+
+    FK ``pending_merge_id`` is NOT NULL with ``ON DELETE RESTRICT`` (BD-C
+    brief): the audit substrate is the system of record, so deleting a
+    queue row whose journal still references it is rejected. SQLite
+    enforces FKs only when ``PRAGMA foreign_keys=ON``; ECM's connect
+    listener handles that everywhere, but raw ``sqlite3`` CLI sessions
+    opened for debugging must set the PRAGMA themselves.
+    """
+
+    __tablename__ = "pending_merge_journal"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # Back-reference to the queue row (ADR-008 §D6).
+    pending_merge_id = Column(
+        Integer,
+        ForeignKey(
+            "pending_merges.id",
+            name="fk_pending_merge_journal_pending_merge",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    # Opaque token DB id, NOT a username string (§D6 audit-actor
+    # contract). This is a token row id, not a token secret.
+    actor_token_id = Column(Text, nullable=False)
+    # What was decided. CHECK is load-bearing for §D6 audit semantics.
+    action_type = Column(Text, nullable=False)
+    # Identifier for the Dispatcharr stream that triggered the prompt.
+    # Audit-first contract (ADR-008 §D6): when the accept-path's
+    # stream-name lookup resolves to exactly one Dispatcharr stream,
+    # this is the resolved stream id as a string. When the lookup
+    # returns zero matches, multiple ambiguous matches, or fails, this
+    # falls back to the raw ``stream_name`` from the pending_merges
+    # row so the operator decision is still recorded in a queryable
+    # form. The lookup-failure case is triageable from the journal via
+    # the human-readable name; the resolved-id case is the canonical
+    # cross-system reference. Both shapes are valid per the audit-first
+    # contract.
+    source_channel_id = Column(Text, nullable=False)
+    # Dispatcharr channel UUID that was the merge candidate.
+    target_channel_id = Column(Text, nullable=False)
+    # RapidFuzz score captured at action time, 0.0–1.0. Stored so
+    # auditors can answer "what was the confidence when the decision
+    # was made?" without reconstructing from a deleted pending row.
+    confidence_score = Column(Float, nullable=False)
+    # Epoch-ms, UTC — consistent with pending_merges.created_at and
+    # ADR-007's epoch-ms convention.
+    timestamp_utc = Column(Integer, nullable=False)
+    # Surface the decision came in through. App-validated enum (no
+    # DB CHECK) per BD-C implementation brief.
+    trigger_context = Column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "action_type IN ('merge_confirmed','merge_dismissed',"
+            "'auto_queued','auto_aged_out')",
+            name="ck_pending_merge_journal_action_type",
+        ),
+        # FK lookup — every "show all audit rows for this queue row"
+        # query keys off this column (§D8 indexes).
+        Index("idx_pending_merge_journal_pending", "pending_merge_id"),
+        # Time-range queries (audit log reviews, analytics, retention).
+        Index("idx_pending_merge_journal_time", "timestamp_utc"),
+        # Revocation audits: "find all actions taken by this token."
+        Index("idx_pending_merge_journal_actor", "actor_token_id"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<PendingMergeJournal(id={self.id}, "
+            f"pending_merge_id={self.pending_merge_id}, "
+            f"action={self.action_type}, "
+            f"trigger={self.trigger_context})>"
         )

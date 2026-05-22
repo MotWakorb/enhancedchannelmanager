@@ -364,6 +364,18 @@ async def schema_version() -> dict:
 
 
 # ============================================================================
+# OAuth store diagnostics — REMOVED (bd-9axgc)
+# ============================================================================
+# The MCP OAuth offering was retired (bd-9axgc). The /api/health/oauth endpoint
+# (originally bd-m19zx) reported the OAuth state-store / client-registry health,
+# which only mattered while the OAuth Authorization Server was offered. With the
+# offering disabled, the endpoint is no longer registered and now returns 404.
+# The static ?api_key= MCP path reports through api_key_configured (settings),
+# unaffected by this removal. The oauth_store module is kept dormant in-tree;
+# re-add this endpoint to re-enable diagnostics when MCP OAuth is re-offered.
+
+
+# ============================================================================
 # Cache management endpoints (unchanged)
 # ============================================================================
 @router.post("/api/cache/invalidate", tags=["Cache"])

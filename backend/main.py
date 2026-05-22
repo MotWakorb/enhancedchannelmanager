@@ -101,6 +101,8 @@ tags_metadata = [
     {"name": "Backup", "description": "Backup and restore ECM configuration"},
     {"name": "Lookup Tables", "description": "Named key→value tables used by the dummy EPG template engine"},
     {"name": "Observability", "description": "Telemetry endpoints — frontend runtime error reporting (ADR-006)"},
+    {"name": "Channel Merges", "description": "Interactive stream-to-channel deduplication — candidate lookup and merge queue (ADR-008, bd-1v4ht)"},
+    {"name": "OAuth", "description": "OAuth 2.1 + PKCE Authorization Server for the MCP integration — /authorize, /token, /revoke (ADR-009, bd-buiqr.3)"},
 ]
 
 app = FastAPI(
@@ -126,7 +128,8 @@ handle authentication automatically when accessed through the web UI.
 ## Rate Limiting
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
-    version="0.17.0",
+
+    version="0.17.1",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -196,9 +199,7 @@ async def security_headers_middleware(request: Request, call_next):
     return response
 
 
-# ============================================================================
 # Observability Middleware — trace-id correlation + Prometheus instrumentation
-# ============================================================================
 # The trace-id middleware must run first so every downstream handler (and
 # every log line) can pick up the id from the contextvar. The metrics
 # middleware piggy-backs on the same request cycle to emit counter/histogram
@@ -376,9 +377,7 @@ async def metrics_endpoint():
     )
 
 
-# ============================================================================
 # Request Timeout Middleware (bd-w3z4h)
-# ============================================================================
 # Wraps every request in asyncio.wait_for(..., timeout=ECM_REQUEST_TIMEOUT_SECONDS).
 # If a handler exceeds the timeout, returns 504 Gateway Timeout and cancels the
 # handler coroutine. This is a secondary line of defense behind the thread-pool
@@ -433,9 +432,7 @@ async def request_timeout_middleware(request: Request, call_next):
         )
 
 
-# ============================================================================
 # Global Auth Middleware — secure-by-default for all /api/* endpoints
-# ============================================================================
 # Paths that are intentionally public (no auth required even when auth is enabled)
 AUTH_EXEMPT_PATHS = {
     # Health check (Docker, load balancers)
@@ -444,6 +441,8 @@ AUTH_EXEMPT_PATHS = {
     "/api/health/ready",
     # Schema version — public so DBAS restore/sync can gate on revision
     "/api/health/schema",
+    # NOTE (bd-9axgc): /api/health/oauth was REMOVED with the MCP OAuth
+    # offering. It is no longer registered and returns 404.
     # Build identity — public so operators can detect container drift from
     # origin/dev (bd-h0wfu) without authenticating. Echoes the same env
     # vars baked into the image at Docker build time. No subsystem access.
@@ -473,6 +472,11 @@ AUTH_EXEMPT_PATHS = {
     "/api/auth/providers",
     "/api/auth/dispatcharr/login",
     "/api/auth/admin/settings",
+    # NOTE (bd-9axgc): the MCP OAuth offering was retired. The OAuth token /
+    # revoke endpoints (/api/oauth/token, /api/oauth/revoke) and the OAuth
+    # discovery documents (/.well-known/oauth-authorization-server,
+    # /.well-known/oauth-protected-resource) are no longer registered and
+    # return 404. Their AUTH_EXEMPT entries were removed with the routers.
     # Initial setup (only works when no config exists)
     "/api/backup/restore-initial",
     # OpenAPI docs
@@ -531,9 +535,7 @@ for _router in all_routers:
     app.include_router(_router)
 
 
-# ============================================================================
 # Request Timing and Rate Tracking Middleware (for CPU diagnostics)
-# ============================================================================
 # Track request rates per endpoint to detect rapid polling
 _request_rate_tracker: dict[str, list[float]] = defaultdict(list)
 _rate_window_seconds = 10  # Track requests over 10-second window
@@ -595,9 +597,7 @@ async def request_timing_middleware(request: Request, call_next):
     return response
 
 
-# ============================================================================
 # Diagnostic Endpoint for Request Rate Stats
-# ============================================================================
 @app.get("/api/debug/request-rates", tags=["Health"])
 async def get_request_rates():
     """Get current request rate statistics for all endpoints.
@@ -698,6 +698,29 @@ async def startup_event():
 
     # Initialize journal database
     init_db()
+
+    # MCP OAuth offering RETIRED (bd-9axgc). The startup OAuth state-store seed
+    # (OAuthStore init + seed_oauth_clients), the dedicated signing-secret
+    # generation (get_or_create_oauth_signing_secret), and the OAuth discovery
+    # HTTP-posture WARN were REMOVED here because the OAuth Authorization Server
+    # is no longer offered (routers unregistered → /api/oauth/* + OAuth
+    # /.well-known/* return 404). The auth/oauth_* modules + config helper are
+    # kept dormant in-tree; re-add this seed block to re-enable the offering.
+
+    # Seed the ecm_pending_merges_queue_depth gauge on startup (bd-wvr1d).
+    # This ensures the gauge reflects the actual queue depth immediately
+    # after boot — without this, the gauge starts at 0 until the first
+    # BD-F insert or BD-E accept/dismiss. Best-effort: a failed COUNT or
+    # gauge.set is logged at WARN and does NOT abort startup.
+    try:
+        from observability import set_pending_merges_queue_depth_gauge
+        _gauge_seed_sess = get_session()
+        try:
+            set_pending_merges_queue_depth_gauge(_gauge_seed_sess)
+        finally:
+            _gauge_seed_sess.close()
+    except Exception as _gauge_seed_err:
+        logger.warning("[MAIN] Failed to seed pending_merges queue-depth gauge: %s", _gauge_seed_err)
 
     # Purge all expired user sessions
     try:
@@ -1107,6 +1130,33 @@ async def shutdown_event():
 ASSETS_CACHE_CONTROL = "public, max-age=31536000, immutable"
 INDEX_CACHE_CONTROL = "no-cache, must-revalidate"
 
+#: The frontend OAuth consent route (bead buiqr.7). The backend AS
+#: (/api/oauth/authorize) redirects here after validating the request; this is
+#: the page where the admin approves Claude Desktop's access. Kept in sync with
+#: routers/oauth_mcp.py CONSENT_ROUTE.
+CONSENT_FRONTEND_PATH = "oauth/consent"
+#: Modern anti-framing for the consent route — defends against clickjacking even
+#: on browsers that ignore the (already globally-set) X-Frame-Options: DENY
+#: header (bead buiqr.7, threat model CP1).
+CONSENT_CSP = "frame-ancestors 'none'"
+
+
+def spa_headers_for(full_path: str) -> dict[str, str]:
+    """Build the response headers for an SPA (index.html) route.
+
+    Every SPA route gets the revalidate-always Cache-Control (bd-hl603). The
+    OAuth consent route additionally gets CSP ``frame-ancestors 'none'`` so the
+    consent screen can never be embedded in a frame (clickjacking — threat model
+    CP1). X-Frame-Options: DENY is already applied to every response by the
+    global ``security_headers_middleware``; this adds the CSP belt to that
+    suspenders. Scoped to the consent route so it doesn't constrain the rest of
+    the SPA.
+    """
+    headers = {"Cache-Control": INDEX_CACHE_CONTROL}
+    if full_path.rstrip("/") == CONSENT_FRONTEND_PATH:
+        headers["Content-Security-Policy"] = CONSENT_CSP
+    return headers
+
 
 class ImmutableStaticFiles(StaticFiles):
     """StaticFiles variant that stamps Cache-Control: immutable on every response.
@@ -1165,10 +1215,7 @@ if os.path.exists(static_dir):
         # static-file mounts.
         index_path = os.path.join(static_dir, "index.html")
         if os.path.exists(index_path):
-            return FileResponse(
-                index_path,
-                headers={"Cache-Control": INDEX_CACHE_CONTROL},
-            )
+            return FileResponse(index_path, headers=spa_headers_for(full_path))
         return {"detail": "Frontend not built"}
 
 

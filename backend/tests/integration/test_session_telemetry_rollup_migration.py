@@ -163,6 +163,11 @@ class TestRollupMigrationUpgrade:
                 "watch_seconds",
                 "bytes_delta_sum",
                 "buffer_event_count",
+                # Three per-type channel-event counters added by migration 0014
+                # (bd-d0ha9): these are rolled up alongside buffer_event_count.
+                "reconnect_event_count",
+                "error_event_count",
+                "switch_event_count",
             }
             # provider_id is TEXT NOT NULL so the 'unknown' bucket can live
             # in the PK as a literal string (ADR-007 §line 109).

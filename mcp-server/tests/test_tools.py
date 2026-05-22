@@ -756,3 +756,290 @@ class TestVerifyTheEffect:
         with patch("tools.channel_groups.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("delete_channel_group", {"group_id": 5})
         assert "deleted" in result[0][0].text and "WARNING" not in result[0][0].text
+
+
+class TestAddStream:
+    """add_stream MCP tool — dedup_action enum branches (BD-P / bd-7u8ms, ADR-008 §D7)."""
+
+    @pytest.mark.asyncio
+    async def test_force_new_skips_candidates_and_creates_channel(self):
+        """force_new skips /candidates entirely — creates channel + assigns stream."""
+        from tools.channels import register
+        from mcp.server.fastmcp import FastMCP
+        from _endpoint_contracts import ENDPOINTS
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        # call_endpoint call order:
+        #   1st: channels_create → created channel
+        #   2nd: streams_list → stream lookup
+        #   3rd: channels_add_stream → stream assignment
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = [
+            {"id": 42, "name": "ESPN HD", "channel_group_id": 7},  # channels_create
+            {"results": [{"id": 101, "name": "ESPN HD"}], "count": 1},  # streams_list
+            None,  # channels_add_stream
+        ]
+
+        with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "add_stream",
+                {"stream_name": "ESPN HD", "group_id": 7, "dedup_action": "force_new"},
+            )
+
+        text = result[0][0].text
+        assert "force_new" in text
+        assert "ESPN HD" in text
+        assert "id=42" in text
+        assert "id=101" in text
+
+        # Verify channels_create was called (first call) and NOT enqueue.
+        calls = mock_client.call_endpoint.call_args_list
+        assert calls[0].args[0] is ENDPOINTS["channels_create"]
+        # None of the calls should be the dedup enqueue.
+        called_endpoints = [c.args[0] for c in calls]
+        assert ENDPOINTS["channel_merges_enqueue"] not in called_endpoints
+
+    @pytest.mark.asyncio
+    async def test_prompt_no_candidate_creates_channel(self):
+        """prompt with no dedup candidate falls through to normal channel creation."""
+        from tools.channels import register
+        from mcp.server.fastmcp import FastMCP
+        from _endpoint_contracts import ENDPOINTS
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        # call_endpoint order:
+        #   1st: channel_merges_enqueue → no candidate (merge_id None)
+        #   2nd: channels_create → created channel
+        #   3rd: streams_list → stream lookup
+        #   4th: channels_add_stream → stream assignment
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = [
+            {"merge_id": None, "created": False},  # enqueue → no candidate
+            {"id": 55, "name": "CNN HD", "channel_group_id": 3},  # channels_create
+            {"results": [{"id": 202, "name": "CNN HD"}], "count": 1},  # streams_list
+            None,  # channels_add_stream
+        ]
+
+        with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "add_stream",
+                {"stream_name": "CNN HD", "group_id": 3},  # dedup_action defaults to 'prompt'
+            )
+
+        text = result[0][0].text
+        assert "CNN HD" in text
+        assert "id=55" in text
+        assert "id=202" in text
+
+        calls = mock_client.call_endpoint.call_args_list
+        assert calls[0].args[0] is ENDPOINTS["channel_merges_enqueue"]
+        assert calls[1].args[0] is ENDPOINTS["channels_create"]
+
+    @pytest.mark.asyncio
+    async def test_prompt_with_candidate_returns_merge_id_and_accept_dismiss(self):
+        """prompt with a candidate enqueues and returns merge_id + accept/dismiss guidance."""
+        from tools.channels import register
+        from mcp.server.fastmcp import FastMCP
+        from _endpoint_contracts import ENDPOINTS
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = [
+            {
+                "merge_id": 77,
+                "created": True,
+                "candidate_channel_id": "uuid-abc",
+                "candidate_channel_name": "ESPN HD",
+                "confidence": 0.92,
+                "meets_threshold": True,
+                "status": "pending",
+            },
+        ]
+
+        with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "add_stream",
+                {"stream_name": "ESPN", "group_id": 5, "dedup_action": "prompt"},
+            )
+
+        text = result[0][0].text
+        assert "pending_merge" in text
+        assert "ESPN HD" in text
+        assert "uuid-abc" in text
+        # merge_id surfaced and accept/dismiss referenced (NOT old re-call text).
+        assert "merge_id: 77" in text
+        assert "accept_channel_merge(77)" in text
+        assert "dismiss_channel_merge(77)" in text
+        assert "merge_if_found') to add" not in text  # old guidance gone
+        # Confidence present.
+        assert "92%" in text or "0.92" in text or "92" in text
+
+        # Only one backend call: the enqueue POST — no channel create.
+        mock_client.call_endpoint.assert_awaited_once()
+        call = mock_client.call_endpoint.call_args
+        assert call.args[0] is ENDPOINTS["channel_merges_enqueue"]
+        assert call.kwargs["body"]["stream_name"] == "ESPN"
+        assert call.kwargs["body"]["group_id"] == 5
+
+    @pytest.mark.asyncio
+    async def test_merge_if_found_above_threshold_auto_accepts(self):
+        """merge_if_found with an at/above-threshold candidate auto-accepts the merge."""
+        from tools.channels import register
+        from mcp.server.fastmcp import FastMCP
+        from _endpoint_contracts import ENDPOINTS
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        # call_endpoint order:
+        #   1st: channel_merges_enqueue → candidate above threshold (merge_id 88)
+        #   2nd: channel_merges_accept → auto-accept the queued merge
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = [
+            {
+                "merge_id": 88,
+                "created": True,
+                "candidate_channel_id": "uuid-fox",
+                "candidate_channel_name": "FOX Network",
+                "confidence": 0.85,
+                "meets_threshold": True,
+                "status": "pending",
+            },
+            {
+                "merged_into_channel_id": "uuid-fox",
+                "journal_entry_id": 5,
+                "source_stream_id": "303",
+                "confidence": 0.85,
+                "status": "merged",
+            },
+        ]
+
+        with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "add_stream",
+                {"stream_name": "FOX", "group_id": 2, "dedup_action": "merge_if_found"},
+            )
+
+        text = result[0][0].text
+        assert "merge_if_found" in text
+        assert "FOX Network" in text or "uuid-fox" in text
+        assert "merge_id=88" in text
+
+        calls = mock_client.call_endpoint.call_args_list
+        assert calls[0].args[0] is ENDPOINTS["channel_merges_enqueue"]
+        # Auto-accept goes through accept_channel_merge (not direct add-stream).
+        assert calls[1].args[0] is ENDPOINTS["channel_merges_accept"]
+        assert calls[1].kwargs["path_args"]["merge_id"] == 88
+
+    @pytest.mark.asyncio
+    async def test_merge_if_found_below_threshold_enqueues_and_prompts(self):
+        """merge_if_found below threshold falls back to prompt — queues + returns merge_id."""
+        from tools.channels import register
+        from mcp.server.fastmcp import FastMCP
+        from _endpoint_contracts import ENDPOINTS
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        # The enqueue returns a candidate above the floor but below the
+        # auto-merge threshold → meets_threshold False → prompt fallback.
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = [
+            {
+                "merge_id": 99,
+                "created": True,
+                "candidate_channel_id": "uuid-low",
+                "candidate_channel_name": "ESPN Sports",
+                "confidence": 0.73,
+                "meets_threshold": False,
+                "status": "pending",
+            },
+        ]
+
+        with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "add_stream",
+                {"stream_name": "ESPN HD", "group_id": 2, "dedup_action": "merge_if_found"},
+            )
+
+        text = result[0][0].text
+        assert "pending_merge" in text
+        assert "merge_id: 99" in text
+        assert "accept_channel_merge(99)" in text
+        assert "dismiss_channel_merge(99)" in text
+        # Only the enqueue call — no auto-accept below threshold.
+        mock_client.call_endpoint.assert_awaited_once()
+        assert mock_client.call_endpoint.call_args.args[0] is ENDPOINTS["channel_merges_enqueue"]
+
+    @pytest.mark.asyncio
+    async def test_invalid_dedup_action_returns_error(self):
+        """An unrecognized dedup_action value is rejected with an error message."""
+        from tools.channels import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = AsyncMock()
+        with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "add_stream",
+                {"stream_name": "X", "group_id": 1, "dedup_action": "not_a_real_mode"},
+            )
+
+        text = result[0][0].text
+        assert "Invalid" in text or "invalid" in text
+        assert "not_a_real_mode" in text
+        mock_client.call_endpoint.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_enqueue_failure_returns_structured_error(self):
+        """A failed enqueue surfaces a structured error (no silent drop / throw)."""
+        from tools.channels import register
+        from mcp.server.fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+        register(mcp)
+
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = RuntimeError(
+            "POST /api/channel-merges -> HTTP 500 boom"
+        )
+        with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "add_stream",
+                {"stream_name": "ESPN", "group_id": 5, "dedup_action": "prompt"},
+            )
+        text = result[0][0].text
+        assert "action=error" in text
+        # Agent is told it can fall back to force_new.
+        assert "force_new" in text
+
+
+class TestChannelMergesEnqueueContract:
+    """The new POST /api/channel-merges enqueue endpoint contract (bd-b3czq)."""
+
+    def test_enqueue_endpoint_registered_with_expected_contract(self):
+        """channel_merges_enqueue exists with the §D7 method/path/fields."""
+        from _endpoint_contracts import ENDPOINTS
+
+        ep = ENDPOINTS["channel_merges_enqueue"]
+        assert ep.method == "POST"
+        assert ep.path == "/api/channel-merges"
+        # Tool sends only the stream context — never a confidence.
+        assert ep.request_fields == frozenset({"stream_name", "group_id"})
+        assert "confidence" not in ep.request_fields
+        # Response carries the merge_id + candidate + meets_threshold signal
+        # the tool reads to drive prompt vs auto-accept.
+        assert {
+            "merge_id",
+            "candidate_channel_id",
+            "confidence",
+            "meets_threshold",
+        }.issubset(ep.response_fields)

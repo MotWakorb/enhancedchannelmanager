@@ -1,0 +1,47 @@
+/* AttributionBadge.css (bd-r5f0c.5 / W5)
+ *
+ * Mirrors .attribution-source-badge (StatsTab.css) for visual consistency.
+ * Each source variant uses a distinct icon + text — no color-only
+ * differentiation — to satisfy the a11y requirement from the bead spec.
+ */
+
+.attribution-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.06));
+  color: var(--text-secondary, rgba(255, 255, 255, 0.7));
+  border: 1px solid var(--border-primary, rgba(255, 255, 255, 0.1));
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.attribution-badge__icon {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.attribution-badge__text {
+  /* text is always present — no color-only differentiation */
+}
+
+/* Per-source accent colours are supplementary (icon+text are the primary
+   differentiators). Using very subtle tints so they don't overwhelm. */
+.attribution-badge--emby {
+  border-color: rgba(82, 197, 183, 0.3);
+  color: var(--text-primary, rgba(255, 255, 255, 0.9));
+}
+
+.attribution-badge--plex {
+  border-color: rgba(229, 160, 13, 0.3);
+  color: var(--text-primary, rgba(255, 255, 255, 0.9));
+}
+
+.attribution-badge--jellyfin {
+  border-color: rgba(0, 164, 220, 0.3);
+  color: var(--text-primary, rgba(255, 255, 255, 0.9));
+}

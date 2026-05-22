@@ -392,6 +392,120 @@ class TestUpdateAutoCreationRule:
         assert response.json()["name"] == "Renamed"
 
 
+class TestMatchScopeGroupIdPersistence:
+    """GH #298 / bd-kncun: persistence + round-trip of ``match_scope_group_id``.
+
+    The new explicit scope-group column must survive create, be readable via
+    GET, be settable AND clearable-to-NULL via PUT (the "Auto" choice), and be
+    included in the YAML export so import/restore round-trips it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_create_persists_scope_group_and_get_round_trips(
+        self, async_client
+    ):
+        """POST with match_scope_group_id stores it; GET returns it."""
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            create = await async_client.post("/api/auto-creation/rules", json={
+                "name": "Scoped Rule",
+                "conditions": [{"type": "stream_name_contains", "value": "ESPN"}],
+                "actions": [{"type": "merge_streams", "target": "auto"}],
+                "match_scope_target_group": True,
+                "match_scope_group_id": 7,
+            })
+
+        assert create.status_code == 200, create.text
+        rule_id = create.json()["id"]
+        assert create.json()["match_scope_group_id"] == 7
+
+        get = await async_client.get(f"/api/auto-creation/rules/{rule_id}")
+        assert get.status_code == 200
+        assert get.json()["match_scope_group_id"] == 7
+
+    @pytest.mark.asyncio
+    async def test_create_defaults_scope_group_to_null(self, async_client):
+        """POST without the field stores NULL (the Auto default)."""
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            create = await async_client.post("/api/auto-creation/rules", json={
+                "name": "Unscoped Rule",
+                "conditions": [{"type": "stream_name_contains", "value": "CNN"}],
+                "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+            })
+
+        assert create.status_code == 200, create.text
+        assert create.json()["match_scope_group_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_update_sets_scope_group(self, async_client, test_session):
+        """PUT match_scope_group_id stores the value."""
+        rule = _create_rule(test_session, name="ToScope")
+
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.put(
+                f"/api/auto-creation/rules/{rule.id}",
+                json={"match_scope_group_id": 3},
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["match_scope_group_id"] == 3
+
+    @pytest.mark.asyncio
+    async def test_update_clears_scope_group_to_null(self, async_client, test_session):
+        """PUT with explicit null resets to Auto (model_fields_set path).
+
+        The other Optional fields use the ``is not None`` convention which can
+        never express "reset to None"; match_scope_group_id uses
+        ``model_fields_set`` so an explicit null clears the stored group.
+        """
+        rule = _create_rule(test_session, name="ScopedThenAuto", match_scope_group_id=5)
+        assert rule.match_scope_group_id == 5
+
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.put(
+                f"/api/auto-creation/rules/{rule.id}",
+                json={"match_scope_group_id": None},
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["match_scope_group_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_update_omitting_field_leaves_scope_group_unchanged(
+        self, async_client, test_session
+    ):
+        """PUT without the field must not touch the stored scope group."""
+        rule = _create_rule(test_session, name="KeepScope", match_scope_group_id=9)
+
+        with patch("auto_creation_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.auto_creation.journal"):
+            response = await async_client.put(
+                f"/api/auto-creation/rules/{rule.id}",
+                json={"name": "Renamed Keep"},
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["match_scope_group_id"] == 9
+
+    @pytest.mark.asyncio
+    async def test_export_includes_scope_group(self, async_client, test_session):
+        """The YAML export carries match_scope_group_id for round-trip restore."""
+        _create_rule(test_session, name="ExportScoped", match_scope_group_id=4)
+
+        mock_client = AsyncMock()
+        mock_client.get_channel_groups.return_value = []
+        mock_client.get_m3u_accounts.return_value = []
+
+        with patch("routers.auto_creation.get_client", return_value=mock_client):
+            response = await async_client.get("/api/auto-creation/export/yaml")
+
+        assert response.status_code == 200
+        assert "match_scope_group_id" in response.text
+
+
 class TestBulkUpdateAutoCreationRules:
     """Tests for POST /api/auto-creation/rules/bulk-update."""
 
@@ -1670,6 +1784,89 @@ class TestDebugBundle:
         manifest = json.loads(manifest_bytes)
         assert manifest["normalization_group_count"] == 1
         assert manifest["normalization_rule_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_bundle_redacts_both_dispatcharr_api_key_and_legacy_api_key(
+        self, async_client
+    ):
+        """The debug-bundle settings.json redactor must scrub BOTH the
+        canonical ``dispatcharr_api_key`` (bd-jmi1c) and the legacy
+        ``api_key`` field (pre-existing leak since v0.16.0-0004). Regression
+        guard for bd-46g4t / bd-jmi1c P0-1.
+        """
+        import asyncio as _asyncio
+        import io as _io
+        import json as _json
+        import tarfile as _tarfile
+        from config import DispatcharrSettings
+
+        # Distinctive sentinels so a substring scan on the tarball bytes
+        # catches any leak path, not just the settings.json file we assert on.
+        raw_canonical = "raw-canon-VANSIRTEST"
+        raw_legacy = "raw-leg-XYZSENTINEL"
+        raw_password = "raw-pass-PWDLEAK"
+        raw_smtp = "raw-smtp-SMTPLEAK"
+        raw_telegram_bot = "raw-tg-bot-TELEGRAMLEAK"
+        raw_mcp = "raw-mcp-MCPLEAK"
+
+        seeded = DispatcharrSettings(
+            url="http://dispatcharr:9191",
+            auth_method="api_key",
+            username="admin",
+            password=raw_password,
+            dispatcharr_api_key=raw_canonical,
+            api_key=raw_legacy,
+            smtp_password=raw_smtp,
+            telegram_bot_token=raw_telegram_bot,
+            mcp_api_key=raw_mcp,
+        )
+
+        mock_client = AsyncMock()
+        mock_client.get_channels = AsyncMock(return_value={"results": [], "next": None, "count": 0})
+        mock_client.get_channel_groups = AsyncMock(return_value=[])
+        mock_client.get_streams_by_ids = AsyncMock(return_value=[])
+        mock_client.get_m3u_accounts = AsyncMock(return_value=[])
+
+        with patch("routers.auto_creation.get_client", return_value=mock_client), \
+             patch("log_utils.get_recent_logs", return_value=[]), \
+             patch("config.get_settings", return_value=seeded), \
+             patch("config.load_settings", return_value=seeded):
+            enqueue = await async_client.post("/api/auto-creation/debug-bundle")
+            assert enqueue.status_code == 202
+            job_id = enqueue.json()["job_id"]
+            for _ in range(80):
+                await _asyncio.sleep(0)
+
+            response = await async_client.get(f"/api/auto-creation/debug-bundle/{job_id}")
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("application/gzip")
+            archive_bytes = response.content
+
+        # Belt-and-suspenders: no raw credential value may appear anywhere in
+        # the tar.gz bytes — catches future leak paths beyond settings.json.
+        for label, raw in (
+            ("dispatcharr_api_key", raw_canonical),
+            ("api_key", raw_legacy),
+            ("password", raw_password),
+            ("smtp_password", raw_smtp),
+            ("telegram_bot_token", raw_telegram_bot),
+            ("mcp_api_key", raw_mcp),
+        ):
+            assert raw.encode() not in archive_bytes, (
+                f"raw {label} value '{raw}' leaked into the debug bundle"
+            )
+
+        with _tarfile.open(fileobj=_io.BytesIO(archive_bytes), mode="r:gz") as tf:
+            settings_member = tf.extractfile("settings.json")
+            assert settings_member is not None
+            settings_in_bundle = _json.loads(settings_member.read().decode("utf-8"))
+
+        assert settings_in_bundle["dispatcharr_api_key"] == "***REDACTED***"
+        assert settings_in_bundle["api_key"] == "***REDACTED***"
+        assert settings_in_bundle["password"] == "***REDACTED***"
+        assert settings_in_bundle["smtp_password"] == "***REDACTED***"
+        assert settings_in_bundle["telegram_bot_token"] == "***REDACTED***"
+        assert settings_in_bundle["mcp_api_key"] == "***REDACTED***"
 
 
 # =========================================================================

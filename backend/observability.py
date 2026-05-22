@@ -372,6 +372,78 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             registry=registry,
         ),
         # ----------------------------------------------------------------
+        # Interactive stream dedup (ADR-008, BD-F / bd-a5lb2).
+        #
+        # ``pending_merges_queue_depth_added_total`` is the LOCKED CONTRACT
+        # counter per BD-M (``docs/sre/slos.md`` SLI-10b denominator and
+        # the ``ECMDedupPendingMergeResolutionStale`` alert rule). One
+        # increment per row inserted into the ``pending_merges`` queue —
+        # currently emitted only by BD-F's bulk-M3U-import hook; BD-D
+        # (candidate lookup) and BD-E (operator drag-drop / add-stream /
+        # MCP enqueue) will also emit it as those land.
+        #
+        # Label-free: per-source attribution belongs in structured logs
+        # (``[DEDUP] Enqueued pending merge … trigger=m3u_refresh``), NOT
+        # in the metric. ADR-008 §D6's ``trigger_context`` enum has four
+        # values; pushing them through a label would create a cardinality
+        # contract this metric does not commit to.
+        #
+        # The companion gauge ``ecm_pending_merges_queue_depth`` (below) is
+        # NOT in the BD-M locked contract — gauge maintenance landed as a
+        # separate bead (bd-wvr1d) so BD-F was not blocked on the
+        # cross-cutting plumbing required to keep a gauge in sync across
+        # all four trigger surfaces + the operator-resolution paths.
+        # ----------------------------------------------------------------
+        "pending_merges_queue_depth_added_total": Counter(
+            "ecm_pending_merges_queue_depth_added_total",
+            "Count of rows inserted into the pending_merges queue by the "
+            "interactive stream-dedup epic (ADR-008). One increment per "
+            "fresh insert; partial-unique-index collisions (ADR-008 §D5) "
+            "do not increment. Denominator for SLI-10b "
+            "(pending merge resolution rate within 24h) per "
+            "docs/sre/slos.md.",
+            registry=registry,
+        ),
+        # ----------------------------------------------------------------
+        # Companion gauge to the LOCKED CONTRACT counter above (bd-wvr1d).
+        #
+        # ``pending_merges_queue_depth`` is set to the CURRENT count of
+        # ``pending_merges`` rows with ``status='pending'`` after every
+        # transition that changes the queue depth:
+        #
+        #   * BD-F insert (fresh row added)              → set after commit
+        #   * BD-E accept (row flipped to 'merged')      → set after commit
+        #   * BD-E dismiss (row flipped to 'dismissed')  → set after commit
+        #   * Startup task                                → seeds on boot
+        #
+        # IMPORTANT — NOT A LOCKED CONTRACT. The counter
+        # ``ecm_pending_merges_queue_depth_added_total`` is the SLI-10b
+        # source (docs/sre/slos.md SLO-10). This gauge is a *diagnostic*
+        # complement — it answers "how big is the queue right now?" for
+        # dashboards and ad-hoc debugging. Alerts and runbooks MUST NOT
+        # take a dependency on this gauge without explicit cross-team
+        # review, because:
+        #
+        #   1. Gauge accuracy is best-effort. Every set-site wraps the
+        #      COUNT query in a try/except; a DB hiccup or startup race
+        #      leaves the gauge stale rather than crashing the write path.
+        #   2. The gauge reflects the queue depth *after* the transition
+        #      that triggered the set — there is no atomic "flip + read"
+        #      guarantee; a concurrent accept/dismiss can race the COUNT.
+        #
+        # Use the counter for SLI math; use this gauge for dashboards.
+        # ----------------------------------------------------------------
+        "pending_merges_queue_depth": Gauge(
+            "ecm_pending_merges_queue_depth",
+            "Current number of pending_merges rows in status='pending'. "
+            "Set after every BD-F insert and BD-E accept/dismiss commit, "
+            "and seeded on app startup. Diagnostic companion to the LOCKED "
+            "CONTRACT counter ecm_pending_merges_queue_depth_added_total — "
+            "NOT a contract SLI; see observability.py for dependency "
+            "restrictions (bd-wvr1d).",
+            registry=registry,
+        ),
+        # ----------------------------------------------------------------
         # Frontend error telemetry (ADR-006, bd-i6a1m).
         #
         # ``client_errors_total`` labels:
@@ -731,6 +803,225 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             "next scrape without waiting for a container restart.",
             registry=registry,
         ),
+        # ----------------------------------------------------------------
+        # Dedup candidate lookup latency (ADR-008 §D1 + BD-M locked contract).
+        #
+        # ``dedup_candidate_lookup_duration_seconds`` is the BD-M SLO-10
+        # latency SLI for the interactive stream deduplication feature
+        # (bd-1v4ht). Emitted by ``GET /api/channel-merges/candidates``
+        # on every request, wrapping the ``find_candidate`` matcher call
+        # (the latency bottleneck per ADR-008 §D9).
+        #
+        # Metric name is LOCKED CONTRACT per BD-M — do not rename without
+        # updating BD-M's Prometheus alert rules (bd-ft3hk) in lockstep.
+        # Buckets align with the drag-drop p95 < 200ms budget from the
+        # epic body — the sub-100ms buckets cover the happy path (warm
+        # Dispatcharr + small candidate set), the 500ms-2s tail covers
+        # slow/cold Dispatcharr responses, and the 5s/10s buckets capture
+        # the pathological case for SRE alerting.
+        #
+        # No labels — the endpoint has no label-safe bounded dimension
+        # (group_id is user-supplied and unbounded as a label). Per-group
+        # latency breakdown belongs in logs (trace_id correlation), not in
+        # metric label space (SRE cardinality posture).
+        # ----------------------------------------------------------------
+        "dedup_candidate_lookup_duration_seconds": Histogram(
+            "ecm_dedup_candidate_lookup_duration_seconds",
+            "Duration of the find_candidate matcher call inside "
+            "GET /api/channel-merges/candidates, in seconds. "
+            "SLO-10 latency SLI for the interactive dedup feature "
+            "(ADR-008 §D1, bd-ft3hk BD-M locked contract). "
+            "No labels — group_id is unbounded cardinality.",
+            buckets=_HTTP_LATENCY_BUCKETS,
+            registry=registry,
+        ),
+        # ----------------------------------------------------------------
+        # Interactive stream-dedup merge outcome (ADR-008, bd-ft3hk /
+        # BD-M contract; emitted by BD-E's accept/dismiss endpoints).
+        #
+        # ``dedup_merge_requests_total`` labels by ``status`` — a bounded
+        # enum drawn from ADR-008 §D6 outcome semantics:
+        #   * ``success`` — accept completed end-to-end (SLO-10c denominator).
+        #   * ``error``   — accept raised an unhandled exception or a
+        #                   Dispatcharr 5xx (SLO-10c numerator). Excludes
+        #                   4xx-by-design (404 stale target, 409 invalid
+        #                   state) — those are correct backend behavior
+        #                   per the bd-ct9wl / bd-ozhkf precedent and are
+        #                   NOT service unreliability.
+        #   * ``dismissed`` — operator (or MCP) chose to reject the
+        #                   candidate. Not an error; counts toward
+        #                   SLI-10b resolution (terminal state).
+        #   * ``cancelled`` — reserved for the modal-cancel surface
+        #                   (BD-G) when the operator opens the prompt and
+        #                   then dismisses without choosing accept/reject.
+        #                   BD-E does not emit this label itself.
+        #
+        # Label cardinality is hard-bounded to those four values per the
+        # runbook contract (docs/runbooks/dedup-merge-api-error-rate-high.md).
+        #
+        # The SLI-10b denominator counter
+        # ``pending_merges_queue_depth_added_total`` is declared earlier
+        # in this function (in the BD-F block) — owned by the enqueue
+        # surface (currently bulk-M3U-import). BD-E does NOT emit it;
+        # accept/dismiss transition the row's status, they do not INSERT.
+        # ----------------------------------------------------------------
+        "dedup_merge_requests_total": Counter(
+            "ecm_dedup_merge_requests_total",
+            "Count of POST /api/channel-merges/{id}/accept and /dismiss "
+            "outcomes, labeled by status (success|error|dismissed|"
+            "cancelled). SLI-10c numerator (status='error') and SLI-10b "
+            "numerator (status='success'|'dismissed' = terminal-state "
+            "transitions out of the pending queue). 4xx-by-design "
+            "responses (404 stale target, 409 invalid state) are NOT "
+            "counted as 'error' per the bd-ct9wl / bd-ozhkf precedent.",
+            ["status"],
+            registry=registry,
+        ),
+        # ----------------------------------------------------------------
+        # Media-session attribution observability (bd-r5f0c.6).
+        #
+        # Six metrics cover the cache + resolver hot path for Emby /
+        # Plex / Jellyfin user attribution. All share a single bounded
+        # ``source`` label.
+        #
+        # Resolver metrics carry exactly three values: "emby", "plex",
+        # "jellyfin" — one per primary attribution source.
+        #
+        # Cache metrics carry the resolver three values PLUS one
+        # secondary surface introduced by bd-ma6r3:
+        #
+        #   * "plex_epg" — the Plex EPG-airings cache used by the
+        #     :mod:`services.plex_epg_cache` module to cross-reference
+        #     a Live TV session's ``grandparentTitle`` (program name)
+        #     to the airing's ``channelCallSign``. The cache lives
+        #     beside the session cache; same TTL / lock / stale-
+        #     fallback envelope, different upstream surface and
+        #     longer TTL (30 s vs 5 s session). Dashboards that filter
+        #     on ``source=plex`` will see ONLY the session cache —
+        #     filter on ``source=~"plex|plex_epg"`` for full Plex
+        #     attribution-stack visibility.
+        #
+        # Attribution is best-effort (SLO-8 posture) — the alert rules
+        # that wire on these are warn-only, never paging.
+        #
+        # Cache metrics (incremented by services/<source>_cache.py):
+        #
+        #   * ``media_session_cache_hits_total`` — cache hit before any
+        #     upstream call (fast-path and under-lock re-check). One
+        #     increment per cache-hit return, not per caller if multiple
+        #     waiters share a just-populated entry.
+        #   * ``media_session_fetch_duration_seconds`` — wall time of
+        #     the upstream ``get_sessions()`` HTTP call. Cache hits are
+        #     NOT counted — the histogram tracks upstream latency only.
+        #     Buckets match ``_HTTP_LATENCY_BUCKETS`` (LAN requests, the
+        #     same regime as other ECM upstream calls).
+        #   * ``media_session_fetch_errors_total`` — upstream fetch raised
+        #     an exception (network error, auth failure, server error).
+        #     The stale-fallback and cold-start paths both increment this
+        #     counter so the denominator is "all failed fetch attempts",
+        #     not just the ones that had a stale entry to fall back on.
+        #   * ``media_session_stale_fallback_total`` — stale cache entry
+        #     returned after a fetch failure. Subset of fetch_errors_total
+        #     (only those where a prior cache existed). Non-zero rate means
+        #     ECM is serving stale data to the resolver.
+        #
+        # Resolver metrics (incremented by services/<source>_resolver.py):
+        #
+        #   * ``user_attribution_resolved_total`` — resolver matched a
+        #     session to a user (returned a non-None attribution).
+        #     Incremented AFTER the IP match succeeds and a session match
+        #     is found — the IP short-circuit (not our session) does NOT
+        #     increment this counter.
+        #   * ``user_attribution_unresolved_total`` — resolver had an IP
+        #     match (the session came from the right source server) but
+        #     found no matching Emby/Plex/Jellyfin session. Incremented
+        #     after the IP-match succeeds and the session match loop
+        #     returns empty. The IP short-circuit does NOT increment.
+        #
+        # The ratio resolved / (resolved + unresolved) is the attribution
+        # quality SLI for the r5f0c epic — target ≥ 80% steady state
+        # (operators who configure all three sources should see most
+        # sessions attributed). Below 50% for > 30m → investigate.
+        # ----------------------------------------------------------------
+        "media_session_cache_hits_total": Counter(
+            "ecm_media_session_cache_hits_total",
+            "Count of per-source session-cache hits (returned without an "
+            "upstream fetch). source ∈ {emby, plex, jellyfin, plex_epg}. "
+            "Incremented on both the fast-path hit (before lock) and the "
+            "under-lock re-check hit (another waiter populated the cache "
+            "while we waited). Does NOT count cache misses that went to "
+            "the upstream and succeeded. The plex_epg label (bd-ma6r3) "
+            "covers the Plex EPG-airings cache, a secondary surface used "
+            "only by the Plex resolver's Live TV cross-reference tier.",
+            ["source"],
+            registry=registry,
+        ),
+        "media_session_fetch_duration_seconds": Histogram(
+            "ecm_media_session_fetch_duration_seconds",
+            "Wall time of the upstream get_sessions() HTTP call, in "
+            "seconds. source ∈ {emby, plex, jellyfin, plex_epg}. Cache "
+            "hits are NOT counted — this histogram tracks upstream "
+            "latency only. Recorded on every fetch attempt regardless "
+            "of outcome (success or exception); the _count gives total "
+            "fetch attempts, the _sum gives total latency across all "
+            "fetches. The plex_epg label (bd-ma6r3) measures the full "
+            "DVR/section sweep (multiple sequential HTTP GETs); samples "
+            "will be wider than the single-GET session caches.",
+            ["source"],
+            buckets=_HTTP_LATENCY_BUCKETS,
+            registry=registry,
+        ),
+        "media_session_fetch_errors_total": Counter(
+            "ecm_media_session_fetch_errors_total",
+            "Count of upstream session-fetch failures (exception raised "
+            "by the upstream client). source ∈ {emby, plex, jellyfin, "
+            "plex_epg}. Incremented on every exception from "
+            "get_sessions() / get_current_live_epg_channels(), "
+            "regardless of whether a stale cache exists to fall back on. "
+            "Alert rule MediaSessionFetchErrorsSustained fires when this "
+            "counter has a non-zero rate for > 10m (warn-only, SLO-8 "
+            "posture — attribution is best-effort).",
+            ["source"],
+            registry=registry,
+        ),
+        "media_session_stale_fallback_total": Counter(
+            "ecm_media_session_stale_fallback_total",
+            "Count of stale-cache returns after an upstream fetch failure. "
+            "source ∈ {emby, plex, jellyfin, plex_epg}. Incremented when "
+            "fetch_errors_total fires AND a prior cache entry exists to "
+            "return. A non-zero rate means ECM is serving stale session "
+            "data to resolvers; attribution quality degrades but does not "
+            "go dark (the stale entry is still returned). Alert rule "
+            "MediaSessionStaleFallbackRising fires when rate > 0.01 for "
+            "> 30m (warn-only, SLO-8 posture).",
+            ["source"],
+            registry=registry,
+        ),
+        "user_attribution_resolved_total": Counter(
+            "ecm_user_attribution_resolved_total",
+            "Count of successful user-attribution resolutions per source. "
+            "source ∈ {emby, plex, jellyfin}. Incremented by the "
+            "resolver when the ECM session IP matches the source server IP "
+            "AND a session match is found across the three match tiers. "
+            "The IP-short-circuit case (session is not from this source's "
+            "server) is NOT counted. Numerator of the attribution quality "
+            "SLI: resolved / (resolved + unresolved).",
+            ["source"],
+            registry=registry,
+        ),
+        "user_attribution_unresolved_total": Counter(
+            "ecm_user_attribution_unresolved_total",
+            "Count of attribution failures for sessions whose IP matched "
+            "the source server but no session match was found. "
+            "source ∈ {emby, plex, jellyfin}. Incremented when the IP "
+            "matches the configured source server but the three-tier "
+            "session-match loop returns empty. Does NOT increment on "
+            "IP-short-circuit (session is not from this source). "
+            "Denominator complement: resolved / (resolved + unresolved) "
+            "is the attribution quality SLI.",
+            ["source"],
+            registry=registry,
+        ),
     }
 
 
@@ -788,6 +1079,47 @@ def get_metric(name: str) -> Any:
     if not _METRICS:
         install_metrics()
     return _METRICS[name]
+
+
+def set_pending_merges_queue_depth_gauge(db) -> None:
+    """Read the current pending_merges queue depth and update the gauge.
+
+    Queries ``SELECT COUNT(*) FROM pending_merges WHERE status='pending'``
+    via the supplied SQLAlchemy session and calls
+    ``ecm_pending_merges_queue_depth.set(count)``.
+
+    This helper is the single canonical implementation shared by all four
+    call sites that change the pending_merges queue depth:
+
+      * BD-F insert (``backend/services/m3u_dedup_hook.py``)
+      * BD-E accept  (``backend/routers/channel_merges.py``)
+      * BD-E dismiss (``backend/routers/channel_merges.py``)
+      * App startup  (``backend/main.py``)
+
+    The helper is intentionally best-effort: a failed COUNT or gauge-set
+    is logged at WARN with the ``[DEDUP]`` prefix and swallowed — gauge
+    accuracy is a diagnostic nicety, NOT a correctness requirement. The
+    caller's queue-state transition (insert / status flip / startup seed)
+    is never blocked by an observability failure.
+
+    Parameters
+    ----------
+    db:
+        An active SQLAlchemy ``Session`` that is already connected to the
+        ECM journal DB. The COUNT query is read-only and does NOT consume
+        a transaction slot or flush any pending state.
+    """
+    try:
+        from sqlalchemy import text as _sa_text
+        row = db.execute(_sa_text("SELECT COUNT(*) FROM pending_merges WHERE status='pending'")).fetchone()
+        count = row[0] if row is not None else 0
+        get_metric("pending_merges_queue_depth").set(float(count))
+    except Exception:  # pragma: no cover — gauge set is best-effort, never blocks callers
+        logging.getLogger(__name__).warning(
+            "[DEDUP] set_pending_merges_queue_depth_gauge: COUNT query or "
+            "gauge.set failed — gauge may be stale",
+            exc_info=True,
+        )
 
 
 def update_database_size_metrics(db_path: Optional[str] = None) -> None:

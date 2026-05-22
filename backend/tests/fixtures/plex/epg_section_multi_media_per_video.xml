@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- bd-ma6r3 EPG fixture: one <Video> with MULTIPLE <Media> elements.
+
+     Plex's real EPG response shape — a single episode that airs at
+     multiple times (or on multiple channels) carries one <Media> per
+     airing slot. The parser must emit one PlexEpgEntry per <Media>;
+     the time-window filter then keeps only the airing currently
+     covering "now".
+
+     Captured from PO's Plex 2026-05-18: Fox 11 News at Five episode
+     with 4 upcoming <Media> elements across consecutive evenings. -->
+<MediaContainer size="1" identifier="tv.plex.providers.epg.xmltv" title1="News" title2="All Shows" viewGroup="show">
+  <Video ratingKey="news-episode" type="episode"
+         title="Episode 09-03"
+         grandparentTitle="Fox 11 News at Five"
+         parentTitle="Season 1999">
+    <Media id="4346" duration="3600000" channelCallSign="11.1 | FOX: WLUK Green Bay"
+           channelIdentifier="11.1" channelTitle="11.1 11.1 | FOX: WLUK Green Bay"
+           channelVcn="11.1" protocol="livetv"
+           beginsAt="1779141600" endsAt="1779145200" channelID="9" />
+    <Media id="4375" duration="3600000" channelCallSign="11.1 | FOX: WLUK Green Bay"
+           channelIdentifier="11.1" channelTitle="11.1 11.1 | FOX: WLUK Green Bay"
+           channelVcn="11.1" protocol="livetv"
+           beginsAt="1779228000" endsAt="1779231600" channelID="9" />
+    <Media id="4404" duration="3600000" channelCallSign="11.1 | FOX: WLUK Green Bay"
+           channelIdentifier="11.1" channelTitle="11.1 11.1 | FOX: WLUK Green Bay"
+           channelVcn="11.1" protocol="livetv"
+           beginsAt="1779314400" endsAt="1779318000" channelID="9" />
+    <Media id="4433" duration="3600000" channelCallSign="11.1 | FOX: WLUK Green Bay"
+           channelIdentifier="11.1" channelTitle="11.1 11.1 | FOX: WLUK Green Bay"
+           channelVcn="11.1" protocol="livetv"
+           beginsAt="1779400800" endsAt="1779404400" channelID="9" />
+  </Video>
+</MediaContainer>

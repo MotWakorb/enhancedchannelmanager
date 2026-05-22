@@ -62,18 +62,32 @@ def _resolve_backup_normalization_group_ids(item: dict, session) -> str | None:
 BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 
 # App version for manifest (imported at call time to avoid circular imports)
-APP_VERSION = "0.17.0"
+
+APP_VERSION = "0.17.1"
 
 REDACTED = "***REDACTED***"
 
 # Credential fields in DispatcharrSettings that must never appear raw in an
 # exported backup. Mirrors the YAML export contract for parity (bd-l0nhi).
+# bd-jmi1c (GH #273): both ``dispatcharr_api_key`` (canonical) and the
+# legacy ``api_key`` are listed so the back-compat mirror in
+# ``config.save_settings`` doesn't accidentally leak a value the canonical
+# redaction would have caught.
+# Back-compat: drop 'api_key' from this tuple in v0.19.0 (bd-ewm4h) when
+# the legacy field is removed from the model. The debug-bundle redactor in
+# routers/auto_creation.py imports this tuple, so a single edit there
+# propagates everywhere.
 _SETTINGS_CREDENTIAL_FIELDS = (
     "password",
+    "dispatcharr_api_key",
     "api_key",
     "smtp_password",
     "telegram_bot_token",
     "mcp_api_key",
+    # Dedicated OAuth token-signing secret (ADR-009 §3 / threat model ID5, SR1).
+    # Credential-class: a leaked backup must not expose the HS256 secret used to
+    # sign/verify MCP OAuth tokens. Added with bead buiqr.3 (dedicated-secret).
+    "mcp_oauth_signing_secret",
 )
 
 # Credential-class keys that may live inside alert_methods.config JSON. Matches
@@ -1172,6 +1186,9 @@ def _restore_auto_creation_rules(items: list) -> dict:
                 # backups always include this field (via to_dict). An ancient
                 # backup that omits it inherits the new-rule default (True).
                 match_scope_target_group=item.get("match_scope_target_group", True),
+                # GH #298 (bd-kncun): None = "Auto" (preserves prior behavior).
+                # Backups predating this column omit it and inherit None.
+                match_scope_group_id=item.get("match_scope_group_id"),
             )
             session.add(rule)
         session.commit()

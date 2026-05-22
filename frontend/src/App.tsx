@@ -13,7 +13,8 @@ import {
   type TabId,
 } from './components';
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
-import { useChangeHistory, useEditMode, useHashRoute } from './hooks';
+import { useChangeHistory, useEditMode, useHashRoute, useDedupOnDrop } from './hooks';
+import { StreamDedupModal } from './components/StreamDedupModal';
 import * as api from './services/api';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress } from './types';
 import packageJson from '../package.json';
@@ -185,6 +186,10 @@ function App() {
   const [hideM3uUrls, setHideM3uUrls] = useState(false);
   const [gracenoteConflictMode, setGracenoteConflictMode] = useState<'ask' | 'skip' | 'overwrite'>('ask');
   const [epgAutoMatchThreshold, setEpgAutoMatchThreshold] = useState(80);
+  // BD-J / bd-gfxrz: when true, suppress the "N streams queued for dedup
+  // review" toast that fires after an M3U refresh queues pending merges.
+  // Sourced from `settings.dedup_m3u_toast_suppressed` (BD-K Settings UI).
+  const [dedupM3uToastSuppressed, setDedupM3uToastSuppressed] = useState(false);
   const [normalizeOnChannelCreate, setNormalizeOnChannelCreate] = useState(false);
   const [showVLCHelperModal, setShowVLCHelperModal] = useState(false);
   const [vlcModalStreamUrl, setVlcModalStreamUrl] = useState('');
@@ -541,6 +546,7 @@ function App() {
         setHideM3uUrls(settings.hide_m3u_urls ?? false);
         setGracenoteConflictMode(settings.gracenote_conflict_mode || 'ask');
         setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
+        setDedupM3uToastSuppressed(settings.dedup_m3u_toast_suppressed ?? false);
         setNormalizeOnChannelCreate(settings.normalize_on_channel_create ?? false);
         // Store VLC settings globally for vlc utility to access
         const vlcBehavior = (settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only') || 'm3u_fallback';
@@ -760,6 +766,7 @@ function App() {
       setHideM3uUrls(settings.hide_m3u_urls ?? false);
       setGracenoteConflictMode(settings.gracenote_conflict_mode || 'ask');
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
+      setDedupM3uToastSuppressed(settings.dedup_m3u_toast_suppressed ?? false);
       setChannelDefaults({
         includeChannelNumberInName: settings.include_channel_number_in_name,
         channelNumberSeparator: settings.channel_number_separator,
@@ -2015,13 +2022,46 @@ function App() {
     }
   }, []);
 
+  // Dedup-on-drop integration (bd-u6ftw / BD-H, ADR-008 §D1).
+  // Wraps the single-stream drop-into-group flow with the BD-D candidates
+  // lookup. Multi-stream drops bypass dedup entirely — bulk dedup is a
+  // separate epic surface (bd-a5lb2 / bulk M3U dedup hook).
+  const dedupOnDrop = useDedupOnDrop({ reloadChannels: loadChannels });
+
   // Handle bulk streams drop on channels pane (triggers bulk create modal for specific streams)
   const handleBulkStreamsDrop = useCallback((streamIds: number[], groupId: number | null, startingNumber: number) => {
-    // Set the dropped stream IDs and target info - StreamsPane will react to this and open the modal
-    setDroppedStreamIds(streamIds);
-    setDroppedStreamTargetGroupId(groupId);
-    setDroppedStreamStartingNumber(startingNumber);
-  }, []);
+    const proceedWithCreate = () => {
+      // Set the dropped stream IDs and target info - StreamsPane will react to this and open the modal
+      setDroppedStreamIds(streamIds);
+      setDroppedStreamTargetGroupId(groupId);
+      setDroppedStreamStartingNumber(startingNumber);
+    };
+
+    if (streamIds.length !== 1) {
+      // Multi-stream drops keep the existing bulk-create flow unchanged.
+      proceedWithCreate();
+      return;
+    }
+
+    const streamId = streamIds[0];
+    const stream = streams.find((s) => s.id === streamId) ?? seenStreams.get(streamId);
+    if (!stream) {
+      // No stream metadata available — proceed with the existing flow so
+      // the drop is never silently dropped on the floor.
+      logger.warn('[DEDUP] dropped stream id %s not found in client cache; skipping dedup lookup', streamId);
+      proceedWithCreate();
+      return;
+    }
+
+    void dedupOnDrop.handleSingleStreamDrop(
+      {
+        streamId,
+        streamName: stream.name,
+        targetGroupId: groupId,
+      },
+      proceedWithCreate,
+    );
+  }, [streams, seenStreams, dedupOnDrop]);
 
   // Handle open create channel modal (triggers bulk create modal in manual entry mode)
   const handleOpenCreateChannelModal = useCallback(() => {
@@ -2231,7 +2271,7 @@ function App() {
               <path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.17 6.839 9.49.5.092.682-.217.682-.482 0-.237-.009-.866-.013-1.7-2.782.604-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.463-1.11-1.463-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.831.092-.646.35-1.086.636-1.336-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836a9.59 9.59 0 012.504.337c1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.167 22 16.418 22 12c0-5.523-4.477-10-10-10z"/>
             </svg>
           </a>
-          <NotificationCenter />
+          <NotificationCenter dedupM3uToastSuppressed={dedupM3uToastSuppressed} />
           <UserMenu />
         </div>
       </header>
@@ -2258,6 +2298,19 @@ function App() {
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         onSaved={handleSettingsSaved}
+      />
+
+      {/* Stream dedup decision surface (bd-u6ftw / BD-H). Opens when a
+          single-stream drop onto a group finds a candidate channel above
+          the §D2 confidence floor. Multi-stream drops never reach this. */}
+      <StreamDedupModal
+        isOpen={dedupOnDrop.modalState !== null}
+        streamName={dedupOnDrop.modalState?.streamName ?? ''}
+        candidate={dedupOnDrop.modalState?.candidate ?? null}
+        trigger="drag_drop"
+        onMerge={dedupOnDrop.handleMerge}
+        onCreateNew={dedupOnDrop.handleCreateNew}
+        onCancel={dedupOnDrop.handleCancel}
       />
 
       <main className="main">
@@ -2408,6 +2461,13 @@ function App() {
 
               // Refresh streams (bypasses cache)
               onRefreshStreams={refreshStreams}
+
+              // Stream dedup cancel-pulse highlight (bd-u6ftw / BD-H)
+              dedupReturningStreamIds={dedupOnDrop.returningStreamIds}
+
+              // Refresh channels after BD-I dedup merge (bd-1lznl) so the
+              // mapped-streams set reflects the new channel→stream binding.
+              onChannelsChanged={loadChannels}
 
               // External trigger to open edit modal from Guide tab
               externalChannelToEdit={channelToEditFromGuide}

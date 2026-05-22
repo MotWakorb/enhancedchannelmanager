@@ -311,7 +311,8 @@ def collect_failures_from_zip(zip_bytes: bytes) -> list[TestId]:
 
 
 # Artifact names emitted by .github/workflows/test.yml. Keep in sync.
-JUNIT_ARTIFACT_NAMES = ("junit-backend", "junit-frontend")
+# bd-ak7xa added junit-mcp for the mcp-server suite.
+JUNIT_ARTIFACT_NAMES = ("junit-backend", "junit-frontend", "junit-mcp")
 
 
 def aggregate(

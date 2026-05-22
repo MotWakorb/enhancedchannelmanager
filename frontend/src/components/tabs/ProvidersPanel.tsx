@@ -261,6 +261,59 @@ function formatBitrateBps(bps: number): string {
   return `${bps} bps`;
 }
 
+/**
+ * Compact X-axis tick label for time-bucketed line charts.
+ *
+ * time_bucket values are full UTC ISO-8601 strings from the backend
+ * (e.g. "2026-05-14T02:00:00Z"). We convert to the operator's local
+ * timezone for display — consistent with UserStatsPanel's approach for
+ * day labels (which also converts UTC-anchored buckets to local time).
+ * For hour granularity the local-time hour is more meaningful to operators
+ * than a UTC hour; for day granularity a short date is sufficient.
+ *
+ * Format produced:
+ *   hour → "MM/DD HH:mm"  e.g. "05/14 02:00" (local)
+ *   day  → "MM/DD"        e.g. "05/14"        (local)
+ *
+ * Falls back to the raw string if Date parsing fails (malformed input).
+ *
+ * `locale` and `timeZone` are injection points for unit tests (same
+ * pattern as `formatLocalDayLabel` in UserStatsPanel.tsx).
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- pure helper co-located with the only component that uses it; splitting is mechanical churn
+export function formatBucketTick(
+  timeBucket: string,
+  granularity: ProviderStatsBucket,
+  locale?: string,
+  timeZone?: string,
+): string {
+  const d = new Date(timeBucket);
+  if (Number.isNaN(d.getTime())) return timeBucket;
+
+  if (granularity === 'hour') {
+    // Render as "MM/DD HH:mm" in the operator's local timezone.
+    const datePart = new Intl.DateTimeFormat(locale ?? 'en-US', {
+      month: '2-digit',
+      day: '2-digit',
+      timeZone,
+    }).format(d);
+    const timePart = new Intl.DateTimeFormat(locale ?? 'en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone,
+    }).format(d);
+    return `${datePart} ${timePart}`;
+  }
+
+  // granularity === 'day': render as "MM/DD" in the operator's local timezone.
+  return new Intl.DateTimeFormat(locale ?? 'en-US', {
+    month: '2-digit',
+    day: '2-digit',
+    timeZone,
+  }).format(d);
+}
+
 function formatBytes(b: number): string {
   if (b >= 1_000_000_000) return `${(b / 1_000_000_000).toFixed(2)} GB`;
   if (b >= 1_000_000) return `${(b / 1_000_000).toFixed(1)} MB`;
@@ -552,7 +605,12 @@ export function ProvidersPanel() {
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={bufferingChart} margin={{ top: 10, right: 16, bottom: 8, left: 8 }}>
                 <CartesianGrid stroke="var(--border-primary)" strokeDasharray="3 3" />
-                <XAxis dataKey="time_bucket" tick={{ fontSize: 11, fill: 'var(--text-primary)' }} />
+                <XAxis
+                  dataKey="time_bucket"
+                  tick={{ fontSize: 11, fill: 'var(--text-primary)' }}
+                  tickFormatter={(v: string) => formatBucketTick(v, bucketSel)}
+                  minTickGap={50}
+                />
                 <YAxis tick={{ fontSize: 11, fill: 'var(--text-primary)' }} width={40} />
                 <Tooltip />
                 <Legend />
@@ -837,7 +895,12 @@ export function ProvidersPanel() {
             <ResponsiveContainer width="100%" height={220}>
               <LineChart data={bitrateChart} margin={{ top: 10, right: 16, bottom: 8, left: 8 }}>
                 <CartesianGrid stroke="var(--border-primary)" strokeDasharray="3 3" />
-                <XAxis dataKey="time_bucket" tick={{ fontSize: 11, fill: 'var(--text-primary)' }} />
+                <XAxis
+                  dataKey="time_bucket"
+                  tick={{ fontSize: 11, fill: 'var(--text-primary)' }}
+                  tickFormatter={(v: string) => formatBucketTick(v, bucketSel)}
+                  minTickGap={50}
+                />
                 <YAxis
                   tick={{ fontSize: 11, fill: 'var(--text-primary)' }}
                   width={80}

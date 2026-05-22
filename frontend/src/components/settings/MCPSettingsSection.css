@@ -183,6 +183,30 @@
   right: 0.5rem;
 }
 
+.mcp-prereq-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  margin-top: 0.5rem;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+  border-left: 3px solid var(--accent-color, #4a9eff);
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.mcp-prereq-note .material-icons {
+  color: var(--accent-color, #4a9eff);
+  font-size: 1.1rem;
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.mcp-prereq-note a {
+  color: var(--accent-color, #4a9eff);
+}
+
 /* Tools grid */
 .mcp-tools-grid {
   display: grid;
@@ -229,4 +253,93 @@
   font-size: 0.8rem;
   color: var(--text-secondary);
   line-height: 1.3;
+}
+
+/* Active Connections (OAuth grants) — bead buiqr.7 (d) */
+.mcp-grants-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.mcp-grant-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+}
+
+.mcp-grant-info {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.mcp-grant-icon {
+  color: var(--accent, #646cff);
+  font-size: 1.25rem;
+}
+
+.mcp-grant-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.mcp-grant-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.mcp-grant-times {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.mcp-grant-confirm {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.mcp-grant-confirm-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+/* Bulk-revoke panic button + double-confirm (buiqr.12) */
+.mcp-bulk-revoke {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+  display: flex;
+  justify-content: flex-end;
+}
+
+.mcp-bulk-revoke-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: flex-end;
+}
+
+.mcp-bulk-revoke-input {
+  font-size: 0.85rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.2));
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  width: 9rem;
 }

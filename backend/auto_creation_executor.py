@@ -75,6 +75,14 @@ class ExecutionContext:
     # Stream IDs queued for post-pipeline probing
     probe_stream_ids: list[int] = field(default_factory=list)
 
+    # BD-F (bd-a5lb2): per-stream count of pending_merges rows
+    # enqueued by the bulk-M3U dedup hook (ADR-008 §D1). One per
+    # would-be channel creation deferred to operator review. The
+    # engine aggregates this across all streams in the run and
+    # surfaces it on the pipeline result as ``pending_merges_added``
+    # so the M3U-refresh response can drive BD-J's toast.
+    pending_merges_added: int = 0
+
     def add_result(self, result: ActionResult):
         """Add an action result and update statistics."""
         self.results.append(result)
@@ -123,7 +131,8 @@ class ActionExecutor:
 
     def __init__(self, client, existing_channels: list = None, existing_groups: list = None,
                  normalization_engine=None, settings=None, all_profile_ids: list = None,
-                 epg_data: list = None, epg_sources: list = None):
+                 epg_data: list = None, epg_sources: list = None,
+                 triggered_by: str = "manual"):
         """
         Initialize the executor.
 
@@ -136,6 +145,13 @@ class ActionExecutor:
             all_profile_ids: All channel profile IDs (for default profile assignment)
             epg_data: EPG data entries from Dispatcharr (for assign_epg resolution)
             epg_sources: EPG source dicts from Dispatcharr (for dummy EPG detection)
+            triggered_by: The engine-side ``triggered_by`` string (e.g.
+                "m3u_refresh", "scheduled", "manual"). Passed through to
+                the BD-F bulk-M3U dedup hook (``services.m3u_dedup_hook``)
+                so only the ``m3u_refresh`` path enqueues pending merges
+                per ADR-008 §D1. Defaults to "manual" so non-engine
+                callers (and existing tests that construct executors
+                directly) keep their pre-BD-F behaviour.
         """
         self.client = client
         self.existing_channels = existing_channels or []
@@ -143,6 +159,7 @@ class ActionExecutor:
         self._normalization_engine = normalization_engine
         self._settings = settings
         self._all_profile_ids = all_profile_ids or []
+        self._triggered_by = triggered_by
 
         # Build EPG data lookup: epg_source_id -> list of data entries
         self._epg_data_by_source: dict[int, list[dict]] = {}
@@ -255,7 +272,8 @@ class ActionExecutor:
     async def execute(self, action: Action | dict, stream_ctx: StreamContext,
                       exec_ctx: ExecutionContext, rule_target_group_id: int = None,
                       normalization_group_ids: list[int] = None,
-                      match_scope_target_group: bool = False) -> ActionResult:
+                      match_scope_target_group: bool = False,
+                      rule_scope_group_id: int = None) -> ActionResult:
         """
         Execute a single action.
 
@@ -271,6 +289,14 @@ class ActionExecutor:
                 to create separate channels with the same name instead of
                 merging into the first group's channel (GH-92, bd-r9mtd).
                 Default False preserves pre-GH-92 global-lookup behavior.
+            rule_scope_group_id: Explicit rule-level scope group (GH #298,
+                bd-kncun). When set AND match_scope_target_group is True, it
+                pins the group that name lookups are restricted to — in
+                create_channel it takes precedence over the action's derived
+                group_id, and in merge_streams it is the ONLY way to scope the
+                match (merge_streams has no action group_id). None (default)
+                preserves prior behavior: create_channel falls back to the
+                derived group, merge_streams stays group-agnostic.
 
         Returns:
             ActionResult with execution details
@@ -304,13 +330,16 @@ class ActionExecutor:
             result = await self._execute_create_channel(
                 action, stream_ctx, exec_ctx, template_ctx, rule_target_group_id,
                 normalization_group_ids=normalization_group_ids,
-                match_scope_target_group=match_scope_target_group
+                match_scope_target_group=match_scope_target_group,
+                rule_scope_group_id=rule_scope_group_id
             )
         elif action_type == ActionType.CREATE_GROUP:
             result = await self._execute_create_group(action, stream_ctx, exec_ctx, template_ctx)
         elif action_type == ActionType.MERGE_STREAMS:
             result = await self._execute_merge_streams(action, stream_ctx, exec_ctx, template_ctx,
-                                                         normalization_group_ids=normalization_group_ids)
+                                                         normalization_group_ids=normalization_group_ids,
+                                                         match_scope_target_group=match_scope_target_group,
+                                                         rule_scope_group_id=rule_scope_group_id)
         elif action_type == ActionType.ASSIGN_LOGO:
             result = await self._execute_assign_logo(action, stream_ctx, exec_ctx, template_ctx)
         elif action_type == ActionType.ASSIGN_TVG_ID:
@@ -490,7 +519,8 @@ class ActionExecutor:
                                        exec_ctx: ExecutionContext, template_ctx: dict,
                                        rule_target_group_id: int = None,
                                        normalization_group_ids: list[int] = None,
-                                       match_scope_target_group: bool = False) -> ActionResult:
+                                       match_scope_target_group: bool = False,
+                                       rule_scope_group_id: int = None) -> ActionResult:
         """Execute create_channel action."""
         params = action.params
         name_template = params.get("name_template", "{stream_name}")
@@ -541,7 +571,11 @@ class ActionExecutor:
         # When match_scope_target_group is True, restrict the lookup to channels in the
         # effective target group (GH-92, bd-r9mtd) so that two rules targeting different
         # groups can create separate channels with the same name.
-        scope_group_id = group_id if match_scope_target_group else None
+        #
+        # GH #298 (bd-kncun): prefer the explicit rule-level scope group when set,
+        # falling back to the action's derived group_id. NULL rule_scope_group_id
+        # preserves the prior behavior (scope = derived group_id).
+        scope_group_id = (rule_scope_group_id or group_id) if match_scope_target_group else None
         existing = self._find_channel_by_name(channel_name, scope_group_id=scope_group_id)
         logger.debug(
             "[AUTO-CREATE-EXEC] Lookup '%s' (scope_group_id=%s): %s",
@@ -647,6 +681,50 @@ class ActionExecutor:
             normalized_label = "true" if pre_norm_name != channel_name else "false"
         else:
             normalized_label = "skipped"
+
+        # BD-F (bd-a5lb2) — bulk-M3U dedup hook per ADR-008 §D1.
+        #
+        # The existing exact / normalized lookups above have already
+        # returned None (we are below the `if existing:` branch). If
+        # the engine was invoked from the M3U-refresh post-sync path
+        # (``triggered_by == 'm3u_refresh'``), score the incoming
+        # ``stream_ctx.stream_name`` against the same-group existing
+        # channels via BD-A's matcher. A confidence above the
+        # operator-configured threshold (clamped to the §D2 floor by
+        # the matcher itself) enqueues a ``pending_merges`` row and
+        # signals "skip the create_channel API call" — the pending
+        # row encodes the deferred operator decision for BD-J's UI
+        # (and BD-E's accept/dismiss endpoints) to resolve.
+        #
+        # The hook short-circuits in dry-run (a preview must not
+        # mutate the queue) and for triggered_by values other than
+        # ``m3u_refresh`` (scheduled / manual auto-creation runs
+        # predate the dedup epic and stay on the legacy "always
+        # create" semantics — they are not one of the four ADR-008
+        # §D1 interactive trigger surfaces).
+        # Per BD-F reviewer Warn-1 (bd-a5lb2 fix-forward): degrade
+        # gracefully on hook failure. Without this guard, a hook bug
+        # (matcher exception, ORM error other than IntegrityError, etc.)
+        # would propagate out of ``_execute_create_channel`` and abort
+        # the entire engine batch via the outer ``run_pipeline``
+        # handler. Falling through to ``create_channel`` preserves
+        # pre-BD-F behavior per stream and keeps batch progress intact.
+        try:
+            dedup_skip = await self._maybe_enqueue_pending_merge(
+                stream_ctx=stream_ctx,
+                channel_name=channel_name,
+                group_id=group_id,
+                exec_ctx=exec_ctx,
+            )
+        except Exception:
+            logger.warning(
+                "[DEDUP] Hook failed for stream=%s group_id=%s; falling through "
+                "to channel creation (pre-BD-F behavior)",
+                channel_name, group_id, exc_info=True,
+            )
+            dedup_skip = None
+        if dedup_skip is not None:
+            return dedup_skip
 
         # Create new channel
         if exec_ctx.dry_run:
@@ -1012,19 +1090,36 @@ class ActionExecutor:
 
     async def _execute_merge_streams(self, action: Action, stream_ctx: StreamContext,
                                       exec_ctx: ExecutionContext, template_ctx: dict,
-                                      normalization_group_ids: list[int] = None) -> ActionResult:
-        """Execute merge_streams action."""
+                                      normalization_group_ids: list[int] = None,
+                                      match_scope_target_group: bool = False,
+                                      rule_scope_group_id: int = None) -> ActionResult:
+        """Execute merge_streams action.
+
+        GH #298 (bd-kncun): when ``match_scope_target_group`` is on and the rule
+        carries an explicit ``rule_scope_group_id``, the channel match is scoped
+        to that group across EVERY resolution path (name_exact, regex, tvg_id,
+        normalized auto, core-name map, deparen, word-prefix, call-sign). merge_
+        streams has no action group_id, so ``rule_scope_group_id`` is the only
+        source of an effective scope group — if scope is on but the rule has no
+        explicit scope group (NULL), behavior is unchanged (search all groups),
+        and the rule builder warns the operator about that case.
+        """
         params = action.params
         target = params.get("target", "auto")
         find_channel_by = params.get("find_channel_by")
         max_streams = params.get("max_streams_per_channel", 0)  # 0 = unlimited
         find_channel_value = params.get("find_channel_value")
         remove_non_matching = params.get("remove_non_matching", False) is True
+        # Effective scope group for merge lookups (GH #298). merge_streams has no
+        # action group_id, so the explicit rule scope group is the only source.
+        # None when scope is off or no explicit group is pinned — preserves the
+        # prior group-agnostic match.
+        effective_scope_group_id = rule_scope_group_id if match_scope_target_group else None
         logger.debug(
             "[AUTO-CREATE-EXEC] target=%s find_by=%s "
-            "find_value=%s stream=%r",
+            "find_value=%s stream=%r scope_group_id=%s",
             target, find_channel_by,
-            find_channel_value, stream_ctx.stream_name
+            find_channel_value, stream_ctx.stream_name, effective_scope_group_id
         )
 
         # For existing_channel target, find the channel
@@ -1033,7 +1128,7 @@ class ActionExecutor:
 
             if find_channel_by == "name_exact":
                 expanded_name = TemplateVariables.expand_template(find_channel_value or "", template_ctx, exec_ctx.custom_variables)
-                channel = self._find_channel_by_name(expanded_name)
+                channel = self._find_channel_by_name(expanded_name, scope_group_id=effective_scope_group_id)
             elif find_channel_by == "name_regex":
                 channel = self._find_channel_by_regex(find_channel_value)
             elif find_channel_by == "tvg_id":
@@ -1052,7 +1147,7 @@ class ActionExecutor:
                     except Exception as e:
                         logger.warning("[AUTO-CREATE-EXEC] Normalization failed for stream '%s': %s", stream_ctx.stream_name, e)
                 logger.debug("[AUTO-CREATE-EXEC] Auto-lookup by normalized name: '%s'", lookup_name)
-                channel = self._find_channel_by_name(lookup_name)
+                channel = self._find_channel_by_name(lookup_name, scope_group_id=effective_scope_group_id)
 
             # Core-name fallback: strip country prefix + quality suffix using
             # tag groups directly (works even when normalization rules are disabled)
@@ -1110,6 +1205,26 @@ class ActionExecutor:
                             logger.debug("[AUTO-CREATE-EXEC] Call sign matched '%s' (id=%s)", channel.get('name'), channel.get('id'))
                 except Exception as e:
                     logger.debug("[AUTO-CREATE-EXEC] Call sign fallback failed: %s", e)
+
+            # GH #298 (bd-kncun): post-resolution scope enforcement. The name-
+            # keyed paths above — name_regex, tvg_id, and especially the global
+            # fallback maps (_core_name_to_channel, _callsign_to_channel) and the
+            # deparen / word-prefix lookups — do NOT honor the group scope on
+            # their own. Whatever path produced the candidate, if a scope group
+            # is in effect and the resolved channel lives in a different group,
+            # treat it as "not found" so the rule does not merge across groups.
+            # name_exact and the normalized auto-fallback already filtered via
+            # _find_channel_by_name(scope_group_id=...); re-checking them here is
+            # a cheap, harmless no-op (same group passes again).
+            if channel and effective_scope_group_id is not None \
+                    and channel.get("channel_group_id") != effective_scope_group_id:
+                logger.debug(
+                    "[AUTO-CREATE-EXEC] Scope reject: candidate '%s' (id=%s) in "
+                    "group %s != scope group %s — treating as not found",
+                    channel.get('name'), channel.get('id'),
+                    channel.get('channel_group_id'), effective_scope_group_id
+                )
+                channel = None
 
             if channel:
                 # Track merged stream IDs per channel for optional prune step.
@@ -2460,6 +2575,148 @@ class ActionExecutor:
                                  name, core_lower, cand.get('id'))
                     return cand
         return None
+
+    async def _maybe_enqueue_pending_merge(
+        self,
+        *,
+        stream_ctx: StreamContext,
+        channel_name: str,
+        group_id: Optional[int],
+        exec_ctx: ExecutionContext,
+    ) -> Optional[ActionResult]:
+        """BD-F bulk-M3U dedup hook integration (ADR-008 §D1, §D5, §D9).
+
+        Wraps ``services.m3u_dedup_hook.check_and_enqueue_pending_merge``
+        with the executor-side concerns: build the same-group candidate
+        list from ``self.existing_channels``, source the operator
+        threshold from settings, manage a short-lived DB session, and
+        translate the hook's ``DedupHookResult`` into either an
+        ``ActionResult`` (when the caller should skip channel creation)
+        or ``None`` (when the caller should proceed with normal
+        channel creation).
+
+        Returns
+        -------
+        ActionResult | None
+            ``ActionResult`` with ``skipped=True`` when a pending merge
+            was enqueued (or was already present from an earlier M3U
+            refresh — §D5 partial-unique-index collision). The caller
+            MUST return this verbatim instead of creating the channel.
+            ``None`` when no candidate was found or the hook
+            short-circuited (dry-run, non-m3u_refresh triggered_by) —
+            the caller proceeds with normal channel creation.
+        """
+        from services.m3u_dedup_hook import (
+            M3U_REFRESH_TRIGGERED_BY,
+            check_and_enqueue_pending_merge,
+        )
+
+        # Cheap short-circuit before any imports / DB work: only the
+        # M3U-refresh path is in scope for BD-F. Other triggered_by
+        # values (scheduled, manual) stay on legacy "always create"
+        # semantics. The hook itself enforces this too — the early
+        # check here just avoids unnecessary settings / candidate
+        # work for the common non-M3U paths.
+        if self._triggered_by != M3U_REFRESH_TRIGGERED_BY:
+            return None
+
+        if exec_ctx.dry_run:
+            # Dry-run preview must not mutate the queue. The
+            # downstream branch handles the simulated channel.
+            return None
+
+        # Build same-group candidate list from the executor's already-
+        # loaded channel cache. The auto-creation engine fetches the
+        # full Dispatcharr channel list once per pipeline run; here we
+        # just filter by ``channel_group_id`` so the matcher scores
+        # against the in-scope set (ADR-008 contract: candidates are
+        # the existing channels in the target group). When
+        # ``group_id`` is None (ungrouped import), we pass the full
+        # list — the matcher's threshold + floor still bounds quality.
+        if group_id is not None:
+            candidates = [
+                (c["id"], c.get("name", ""))
+                for c in self.existing_channels
+                if c.get("channel_group_id") == group_id and c.get("name")
+            ]
+        else:
+            candidates = [
+                (c["id"], c.get("name", ""))
+                for c in self.existing_channels
+                if c.get("name")
+            ]
+
+        if not candidates:
+            return None
+
+        # Source the operator-configured threshold from settings. The
+        # matcher clamps to ADR-008 §D2 CONFIDENCE_FLOOR regardless,
+        # so a missing settings field falls back to the floor (silent
+        # refusal for anything below) rather than crashing.
+        from config import get_settings
+        try:
+            settings = get_settings()
+            threshold = float(getattr(settings, "dedup_threshold", 0.80))
+        except Exception:
+            logger.warning(
+                "[DEDUP] Failed to read dedup_threshold from settings; "
+                "falling back to 0.80",
+                exc_info=True,
+            )
+            threshold = 0.80
+
+        from database import get_session
+        db_session = get_session()
+        try:
+            result = check_and_enqueue_pending_merge(
+                stream_name=stream_ctx.stream_name,
+                group_id=group_id,
+                candidates=candidates,
+                threshold=threshold,
+                triggered_by=self._triggered_by,
+                dry_run=exec_ctx.dry_run,
+                db_session=db_session,
+            )
+        finally:
+            db_session.close()
+
+        if not result.enqueued:
+            return None
+
+        # Track the enqueue (fresh insert OR idempotent collision) on
+        # the execution context so the engine can aggregate
+        # ``pending_merges_added`` across all streams in the run and
+        # surface it on the pipeline result for BD-J's toast.
+        exec_ctx.pending_merges_added += 1
+
+        # A pending merge row exists for this (stream_name, candidate)
+        # pair after the hook returned — either freshly inserted by
+        # this call or already present from an earlier refresh. In
+        # both cases the caller skips the create_channel API call.
+        # Description distinguishes the two paths for trace clarity.
+        if result.candidate is not None:
+            description = (
+                f"Stream '{stream_ctx.stream_name}' enqueued as pending "
+                f"merge candidate for existing channel id="
+                f"{result.candidate.candidate_channel_id} "
+                f"(confidence={result.candidate.confidence:.2f}); "
+                f"channel creation deferred to operator review"
+            )
+        else:
+            description = (
+                f"Stream '{stream_ctx.stream_name}' already in pending "
+                f"merges queue; channel creation deferred"
+            )
+
+        return ActionResult(
+            success=True,
+            action_type="create_channel",
+            description=description,
+            entity_type="channel",
+            entity_name=channel_name,
+            skipped=True,
+            details=[description],
+        )
 
     def _find_channel_by_regex(self, pattern: str) -> Optional[dict]:
         """Find first channel matching regex pattern."""
