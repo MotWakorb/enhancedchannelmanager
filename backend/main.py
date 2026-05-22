@@ -129,7 +129,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.17.1-0088",
+    version="0.17.1-0089",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -441,9 +441,8 @@ AUTH_EXEMPT_PATHS = {
     "/api/health/ready",
     # Schema version — public so DBAS restore/sync can gate on revision
     "/api/health/schema",
-    # OAuth store / client-registry diagnostics — public presence/health
-    # check; exposes no secrets or token values (bd-m19zx, ADR-009 §5).
-    "/api/health/oauth",
+    # NOTE (bd-9axgc): /api/health/oauth was REMOVED with the MCP OAuth
+    # offering. It is no longer registered and returns 404.
     # Build identity — public so operators can detect container drift from
     # origin/dev (bd-h0wfu) without authenticating. Echoes the same env
     # vars baked into the image at Docker build time. No subsystem access.
@@ -473,21 +472,11 @@ AUTH_EXEMPT_PATHS = {
     "/api/auth/providers",
     "/api/auth/dispatcharr/login",
     "/api/auth/admin/settings",
-    # OAuth 2.1 token + revocation endpoints (PUBLIC per spec — the PKCE
-    # verifier / refresh token / revoked token value IS the credential, not an
-    # ECM admin session). bead buiqr.3 AC6 (token) + RFC 7009 (revoke).
-    # /api/oauth/authorize is NOT exempt — it requires the admin session.
-    "/api/oauth/token",
-    "/api/oauth/revoke",
-    # OAuth discovery documents (PUBLIC by spec — RFC 8414 / RFC 9728). The ECM
-    # AS serves the authorization-server doc; the MCP RS serves the
-    # protected-resource doc. These live at the well-known root (not under
-    # /api/), so the auth middleware already passes them through — listing them
-    # here documents the public-by-spec intent and keeps the exempt set the
-    # single source of truth (bead buiqr.5, ADR-009 §7). Fail-closed on plain
-    # HTTP is enforced inside the handlers, not here (threat model HT1).
-    "/.well-known/oauth-authorization-server",
-    "/.well-known/oauth-protected-resource",
+    # NOTE (bd-9axgc): the MCP OAuth offering was retired. The OAuth token /
+    # revoke endpoints (/api/oauth/token, /api/oauth/revoke) and the OAuth
+    # discovery documents (/.well-known/oauth-authorization-server,
+    # /.well-known/oauth-protected-resource) are no longer registered and
+    # return 404. Their AUTH_EXEMPT entries were removed with the routers.
     # Initial setup (only works when no config exists)
     "/api/backup/restore-initial",
     # OpenAPI docs
@@ -710,59 +699,13 @@ async def startup_event():
     # Initialize journal database
     init_db()
 
-    # Initialize the ECM-managed OAuth state store schema + seed the hardcoded
-    # OAuth client registry (beads buiqr.2 / buiqr.3 / buiqr.6, ADR-009 §5).
-    # Under Option A the store is ECM-owned (/config rw); the MCP RS mounts
-    # /config read-only and never touches it. Seeding here (not on MCP start —
-    # buiqr.6 AC1's "MCP container first start" is infeasible under Option A)
-    # is idempotent: create_client is an upsert, so a restart re-seeds harmlessly.
-    # Best-effort — a failure is logged at WARN and does NOT abort startup; the
-    # per-request store init in routers/oauth_mcp.py also runs the schema DDL.
-    try:
-        from auth.oauth_store import OAuthStore
-        from auth.oauth_clients import seed_oauth_clients
-        from config import CONFIG_DIR, get_or_create_oauth_signing_secret
-        _oauth_store = OAuthStore(CONFIG_DIR / "mcp_oauth.db")
-        try:
-            _oauth_store.init_schema()
-            seed_oauth_clients(_oauth_store)
-        finally:
-            _oauth_store.close()
-        # Generate the DEDICATED OAuth signing secret (settings.json →
-        # mcp_oauth_signing_secret) if absent, so it exists for the read-only
-        # MCP RS to verify against (ADR-009 §3, dedicated-secret design). Kept
-        # separate from ECM's user-session jwt.secret_key (blast-radius
-        # isolation, threat model SR1). Idempotent.
-        get_or_create_oauth_signing_secret()
-    except Exception as _oauth_seed_err:
-        logger.warning("[MAIN] Failed to init/seed OAuth store + signing secret: %s", _oauth_seed_err)
-
-    # OAuth HTTP-posture gate: emit EXACTLY ONE WARN per startup describing the
-    # discovery posture (bead buiqr.5, ADR-009 §4, threat model HT1). When the
-    # issuer is plain-HTTP/non-loopback and oauth_allow_insecure is false, the
-    # discovery endpoints fail-closed to 404; when the operator opted in, we
-    # acknowledge the insecure posture. A secure (HTTPS or loopback) posture
-    # logs nothing — only the noteworthy postures warn. Best-effort.
-    try:
-        from auth.oauth_discovery import discovery_blocked, issuer_is_insecure, resolve_issuer
-        _oauth_settings = get_settings()
-        _oauth_issuer = resolve_issuer()
-        if discovery_blocked(_oauth_issuer, _oauth_settings.oauth_allow_insecure):
-            logger.warning(
-                "[OAUTH] Discovery endpoints DISABLED (HTTP 404): issuer is plain-HTTP "
-                "on a non-loopback host and oauth_allow_insecure=false (fail-closed, "
-                "ADR-009 §4). Front MCP with HTTPS or set oauth_allow_insecure=true in "
-                "settings.json to opt in to plain-HTTP OAuth."
-            )
-        elif _oauth_settings.oauth_allow_insecure and issuer_is_insecure(_oauth_issuer):
-            logger.warning(
-                "[OAUTH] oauth_allow_insecure=true — serving OAuth discovery over PLAIN "
-                "HTTP on a non-loopback host. Tokens traverse cleartext and can be "
-                "replayed within their TTL (threat model HT1). This is an explicit, "
-                "operator-accepted insecure posture; HTTPS via reverse proxy is the safe default."
-            )
-    except Exception as _oauth_posture_err:
-        logger.warning("[MAIN] OAuth discovery posture check failed: %s", _oauth_posture_err)
+    # MCP OAuth offering RETIRED (bd-9axgc). The startup OAuth state-store seed
+    # (OAuthStore init + seed_oauth_clients), the dedicated signing-secret
+    # generation (get_or_create_oauth_signing_secret), and the OAuth discovery
+    # HTTP-posture WARN were REMOVED here because the OAuth Authorization Server
+    # is no longer offered (routers unregistered → /api/oauth/* + OAuth
+    # /.well-known/* return 404). The auth/oauth_* modules + config helper are
+    # kept dormant in-tree; re-add this seed block to re-enable the offering.
 
     # Seed the ecm_pending_merges_queue_depth gauge on startup (bd-wvr1d).
     # This ensures the gauge reflects the actual queue depth immediately

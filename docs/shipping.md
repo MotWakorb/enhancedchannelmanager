@@ -145,17 +145,19 @@ these steps.
 
 ## MCP Release Verification
 
-Before cutting any release that touches MCP or OAuth code, the releaser must walk the manual verification checklist in [`docs/runbooks/mcp-release-verification.md`](runbooks/mcp-release-verification.md). This covers:
+Before cutting any release that touches MCP code, the releaser must walk the manual verification checklist in [`docs/runbooks/mcp-release-verification.md`](runbooks/mcp-release-verification.md). This covers:
 
-1. Adding a Custom Connector (OAuth flow end-to-end)
-2. Making a tool call via the OAuth connector
-3. Token refresh / re-authorization after revoke
-4. Static `?api_key=` backward-compat path
-5. Settings panel smoke check
+1. Static `?api_key=` connection (query-param path) end-to-end
+2. Making a tool call over the static-key connection
+3. Settings panel smoke check (MCP server status, key generate/regenerate)
 
 Sign-off text from the checklist goes in the release PR description alongside the G1a–G7 gate checklist.
 
-Releases that do not touch `mcp-server/`, `backend/routers/oauth*.py`, or `MCPSettingsSection.tsx` may skip this checklist (at releaser discretion).
+> **Note (bd-9axgc):** the MCP OAuth "Custom Connector" offering was retired. The
+> static `?api_key=` path is the supported MCP authentication method. The OAuth
+> verification steps were removed from this checklist.
+
+Releases that do not touch `mcp-server/` or `MCPSettingsSection.tsx` may skip this checklist (at releaser discretion).
 
 ## Release Workflow (Merging to Main)
 

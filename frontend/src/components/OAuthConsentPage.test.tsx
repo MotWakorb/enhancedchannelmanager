@@ -1,7 +1,13 @@
 /**
  * Unit tests for OAuthConsentPage (bead buiqr.7).
  *
- * Pinned behavior:
+ * SKIPPED (bd-9axgc): the MCP OAuth offering was retired. OAuthConsentPage is no
+ * longer routed (its /oauth/consent route was removed from ProtectedRoute); the
+ * component is kept as a dormant orphan in-tree for reversibility but is not
+ * reachable in the app. These tests exercise the removed consent flow, so they
+ * are skipped. Re-enable when MCP OAuth is re-offered.
+ *
+ * Pinned behavior (retained for reference):
  *  - The client NAME is rendered from the server-fetched consent-context
  *    (registry-pinned), NOT from the client_id query parameter (CP1).
  *  - The PO-locked permission summary copy is shown verbatim.
@@ -50,7 +56,7 @@ const firstTimeContext = {
   return_to: '/?tab=settings',
 };
 
-describe('OAuthConsentPage — first-time consent', () => {
+describe.skip('OAuthConsentPage — first-time consent', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setLocation(VALID_SEARCH);
@@ -142,7 +148,7 @@ describe('OAuthConsentPage — first-time consent', () => {
   });
 });
 
-describe('OAuthConsentPage — returning user (already connected)', () => {
+describe.skip('OAuthConsentPage — returning user (already connected)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setLocation(VALID_SEARCH);
@@ -207,7 +213,7 @@ describe('OAuthConsentPage — returning user (already connected)', () => {
   });
 });
 
-describe('OAuthConsentPage — error + gating states', () => {
+describe.skip('OAuthConsentPage — error + gating states', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
