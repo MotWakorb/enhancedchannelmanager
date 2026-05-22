@@ -17,11 +17,14 @@ walkthrough, key rotation details, or troubleshooting.
 Two paths connect Claude to ECM. They run in parallel — you can use both at the
 same time.
 
+> ⚠️ **Public vs. private — decide this first.** The **Custom Connector is brokered by Anthropic's infrastructure**: Anthropic's servers connect *out* to your MCP server, so it must be reachable from the **public internet**. A private/LAN/homelab deployment (an internal DNS name on an RFC-1918 address like `10.x` / `172.16.x` / `192.168.x`) **cannot** use the Custom Connector — it fails with *"Couldn't reach the MCP server"* even though your own browser on the LAN loads it fine, because Anthropic's cloud can't route into your private network. **To keep ECM private, use the mcp-remote bridge (Path B below) or [Claude Code](#claude-code-mcp-json)** — both run on *your* machine and connect over your LAN/VPN, so nothing is exposed to the internet.
+
 | | Custom Connector (OAuth) | mcp-remote bridge |
 |---|---|---|
-| **Best for** | Claude Desktop without Node.js installed | Claude Desktop when Node.js is already installed; advanced users who want static-key control |
+| **Network reachability** | **Public** — Anthropic's cloud must reach your MCP server | **Private OK** — bridge runs on your machine, connects over LAN/VPN |
+| **Best for** | Internet-exposed deploys; no Node.js; in-app OAuth | Private/homelab; existing setups; static-key control |
 | **Auth model** | OAuth 2.1 + PKCE — ECM issues a short-lived JWT; Claude Desktop stores and refreshes it | Static API key embedded in the MCP URL |
-| **Prerequisites** | HTTPS reverse proxy in front of MCP port 6101; `OAUTH_ISSUER` set on both containers | Node.js LTS 18+ on the Claude Desktop machine |
+| **Prerequisites** | Public internet reachability + HTTPS reverse proxy (MCP port 6101 and ECM port 6100); `OAUTH_ISSUER` set on both containers | Node.js LTS 18+ on the Claude Desktop machine |
 | **Config file edits** | None — Claude Desktop's connector UI handles everything | `claude_desktop_config.json` |
 | **Claude Code** | Not applicable — Claude Code uses the static-key `.mcp.json` path | Not applicable |
 
@@ -41,25 +44,40 @@ the consent screen, issues short-lived Bearer JWTs, and manages grant records.
 The MCP container acts as the Resource Server (RS): it validates Bearer JWTs
 offline on every tool call without calling back to ECM.
 
-No Node.js or `npx` is involved. The trade-off is that you need HTTPS in front
-of the MCP container before starting.
+No Node.js or `npx` is involved. The trade-off is that **your MCP server (and
+ECM) must be reachable from the public internet** — Anthropic's cloud connects
+out to your MCP URL — fronted by HTTPS. If you want to keep ECM private, use
+[Path B (mcp-remote)](#path-b-mcp-remote-bridge-node-required) or
+[Claude Code](#claude-code-mcp-json) instead.
 
-> **ECM is the Authorization Server, not Anthropic.** ECM issues the OAuth
-> tokens that Claude Desktop stores. Anthropic is not in the trust chain.
-> See [ADR-009](../../adr/ADR-009-mcp-oauth-authorization-server-split.md) for
-> the full architecture rationale.
+> **ECM is the Authorization Server, not Anthropic — but Anthropic is in the
+> network path.** ECM (not Anthropic) issues and signs the OAuth tokens, so
+> Anthropic is **not in the trust chain**. However, the Custom Connector is
+> *brokered* by Anthropic's servers, which connect **out** to your MCP URL —
+> which is why this path requires public reachability. That's a **network**
+> requirement, not a trust one. See
+> [ADR-009](../../adr/ADR-009-mcp-oauth-authorization-server-split.md) for the
+> full architecture rationale.
 
 ### Prerequisites
 
 Before adding the connector in Claude Desktop:
 
-1. **MCP container is running.** Verify: `curl http://YOUR_ECM_HOST:6101/health`
+1. **Public internet reachability.** Anthropic's infrastructure must be able to
+   reach your MCP server **and** ECM. Expose `ecm` and `ecm-mcp` via a
+   [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+   (no inbound ports — cleanest for a homelab) or a public DNS name + a
+   port-forward to your reverse proxy. **A LAN-only / private deployment cannot
+   use this path** — it fails with "Couldn't reach the MCP server." Use
+   [Path B (mcp-remote)](#path-b-mcp-remote-bridge-node-required) or
+   [Claude Code](#claude-code-mcp-json) if you don't want to expose ECM.
+2. **MCP container is running.** Verify: `curl http://YOUR_ECM_HOST:6101/health`
    should return `{"status": "ok", ...}`.
-2. **HTTPS reverse proxy in front of port 6101.** The MCP SDK rejects plain-HTTP
+3. **HTTPS reverse proxy in front of port 6101.** The MCP SDK rejects plain-HTTP
    issuer URLs for non-loopback hosts. See the
    [HTTPS reverse-proxy runbook](../../runbooks/mcp-https-reverse-proxy.md) for
    Caddy (recommended, auto TLS), nginx, and Traefik recipes.
-3. **`OAUTH_ISSUER` set identically on both containers.** This is the single
+4. **`OAUTH_ISSUER` set identically on both containers.** This is the single
    most common misconfiguration. Both the ECM container and the MCP container
    must have `OAUTH_ISSUER` set to the same external HTTPS origin.
 
@@ -78,7 +96,7 @@ Before adding the connector in Claude Desktop:
    silent 401. Without this variable, both containers default to
    `https://ecm.local`, which only works loopback.
 
-4. **ECM API key generated** (Settings → MCP Integration → Generate Key). The
+5. **ECM API key generated** (Settings → MCP Integration → Generate Key). The
    static key and OAuth operate independently, but the key must be generated for
    the MCP container's health endpoint to report `api_key_configured: true`.
 
@@ -285,6 +303,31 @@ Custom Connector OAuth flow.
 ---
 
 ## Troubleshooting
+
+### Custom Connector: "Couldn't reach the MCP server" (no browser/consent opens)
+
+**Cause:** the Custom Connector is brokered by Anthropic's infrastructure —
+Anthropic's servers connect *out* to your MCP URL. If ECM is on a private/LAN
+network (internal DNS, RFC-1918 address), Anthropic's cloud cannot route to it,
+so the connector never even starts the OAuth flow (no browser opens). A telltale
+sign: your own browser on the LAN loads
+`https://YOUR_MCP_HOST/.well-known/oauth-protected-resource` fine, but the MCP
+server's access log shows **no** request from Anthropic during the attempt.
+
+**Fix — pick one:**
+- **Keep it private (recommended for homelab):** don't use the Custom Connector.
+  Use [Path B (mcp-remote)](#path-b-mcp-remote-bridge-node-required) or
+  [Claude Code](#claude-code-mcp-json) — both run on your machine and reach ECM
+  over your LAN/VPN, no public exposure.
+- **Expose it:** make `ecm` and `ecm-mcp` reachable from the internet (a
+  [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+  is the cleanest, no inbound ports), then retry. The OAuth consent + admin login
+  is the gate that keeps that exposure safe.
+
+To confirm it's a reachability problem (not config): on the MCP host, watch the
+reverse-proxy access log while you click *Add* in Claude Desktop. **No log entry =
+Anthropic can't reach you** (private-network issue, above). A log entry that 4xxs
+is a different problem (see the other entries here).
 
 ### The connector authorization fails with `redirect_uri mismatch`
 

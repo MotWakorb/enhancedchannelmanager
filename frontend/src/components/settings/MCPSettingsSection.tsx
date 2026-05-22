@@ -374,9 +374,15 @@ export function MCPSettingsSection({ isAdmin }: Props) {
             </p>
 
             {/* Custom Connector (OAuth) — bd-buiqr.11 */}
-            <label className="form-label">Claude Desktop — Custom Connector (no Node required)</label>
+            <label className="form-label">Claude Desktop — Custom Connector (no Node required, public internet-facing)</label>
             <p className="form-description">
               Claude Desktop&apos;s built-in <strong>Settings → Connectors → Add custom connector</strong> uses OAuth 2.1. ECM authorizes the connection in your browser; Claude Desktop stores the token automatically. No Node.js needed.
+            </p>
+            <p className="form-description mcp-prereq-note">
+              <span className="material-icons" aria-hidden="true">public</span>
+              <span>
+                <strong>Prerequisite: the MCP server must be reachable from the public internet.</strong> Custom Connectors are <em>Anthropic-brokered</em> — Anthropic&apos;s cloud connects <em>out</em> to your MCP URL on ECM&apos;s behalf, so a LAN-only / VPN-only / split-horizon-DNS hostname will never be reachable and you&apos;ll get <em>&quot;Couldn&apos;t reach the MCP server.&quot;</em> This is a connector-architecture requirement, <strong>not</strong> an OAuth one. If you don&apos;t want to expose ECM publicly, use the <strong>mcp-remote bridge</strong> (below) or <strong>Claude Code with <code>.mcp.json</code></strong> instead — both keep all traffic on your private network.
+              </span>
             </p>
             <p className="form-description mcp-prereq-note">
               <span className="material-icons" aria-hidden="true">https</span>
@@ -402,7 +408,10 @@ export function MCPSettingsSection({ isAdmin }: Props) {
             </ol>
 
             {/* mcp-remote bridge (Node) — existing path */}
-            <label className="form-label" style={{ marginTop: '1.25rem' }}>Claude Desktop — mcp-remote bridge (Node required)</label>
+            <label className="form-label" style={{ marginTop: '1.25rem' }}>Claude Desktop — mcp-remote bridge (Node required, private-network OK)</label>
+            <p className="form-description" style={{ color: 'var(--accent-green, #4caf50)' }}>
+              ✅ Runs entirely on your machine — works on a LAN/VPN-only ECM with no public exposure.
+            </p>
             <p className="form-description">
               If you have Node.js installed on the same machine as Claude Desktop (LTS 18+ — install from{' '}
               <a href="https://nodejs.org/" target="_blank" rel="noopener noreferrer">nodejs.org</a>
@@ -436,7 +445,10 @@ export function MCPSettingsSection({ isAdmin }: Props) {
               </button>
             </div>
 
-            <label className="form-label" style={{ marginTop: '1rem' }}>Claude Code Config (.mcp.json)</label>
+            <label className="form-label" style={{ marginTop: '1rem' }}>Claude Code Config (.mcp.json) — private-network OK, no Node</label>
+            <p className="form-description" style={{ color: 'var(--accent-green, #4caf50)' }}>
+              ✅ Connects directly over HTTP from your machine — works on a LAN/VPN-only ECM with no public exposure and no Node.js.
+            </p>
             <p className="form-description">
               Save this as <code>.mcp.json</code> in a project directory where you want ECM tools available.
             </p>
