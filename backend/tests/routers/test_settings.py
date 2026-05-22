@@ -617,6 +617,61 @@ class TestTestSMTP:
         assert response.status_code == 200
         assert response.json()["success"] is False
 
+    @pytest.mark.asyncio
+    async def test_falls_back_to_stored_password_when_omitted(self, async_client):
+        """gh-380: an empty smtp_password reuses the saved one so the test
+        authenticates instead of failing with 530 Authentication Required.
+
+        The Settings UI never re-sends the stored password (masked + cleared
+        on load), so a test request normally arrives with smtp_password="".
+        The endpoint must mirror update_settings' preserve-on-omit contract.
+        """
+        mock = _mock_settings(smtp_user="user@example.com", smtp_password="stored-secret")
+        mock_server = MagicMock()
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("smtplib.SMTP", return_value=mock_server) as MockSMTP:
+            response = await async_client.post("/api/settings/test-smtp", json={
+                "smtp_host": "smtp.gmail.com",
+                "smtp_port": 587,
+                "smtp_user": "user@example.com",
+                "smtp_password": "",  # masked: UI never resends it
+                "smtp_from_email": "user@example.com",
+                "smtp_use_tls": True,
+                "smtp_use_ssl": False,
+                "to_email": "recipient@example.com",
+            })
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        MockSMTP.assert_called_once()
+        mock_server.login.assert_called_once_with("user@example.com", "stored-secret")
+        mock_server.sendmail.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_uses_request_password_over_stored(self, async_client):
+        """A password typed into the test form takes precedence over the
+        stored one (operator validating credentials before saving)."""
+        mock = _mock_settings(smtp_user="user@example.com", smtp_password="stored-secret")
+        mock_server = MagicMock()
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("smtplib.SMTP", return_value=mock_server):
+            response = await async_client.post("/api/settings/test-smtp", json={
+                "smtp_host": "smtp.gmail.com",
+                "smtp_port": 587,
+                "smtp_user": "user@example.com",
+                "smtp_password": "typed-secret",
+                "smtp_from_email": "user@example.com",
+                "smtp_use_tls": True,
+                "smtp_use_ssl": False,
+                "to_email": "recipient@example.com",
+            })
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        mock_server.login.assert_called_once_with("user@example.com", "typed-secret")
+
 
 class TestTestDiscord:
     """Tests for POST /api/settings/test-discord."""
