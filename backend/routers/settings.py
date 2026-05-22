@@ -970,6 +970,18 @@ You can now use email features like M3U Digest reports.
         msg.attach(MIMEText(plain_text, "plain"))
         msg.attach(MIMEText(html_text, "html"))
 
+        # Resolve auth credentials with the same preserve-on-omit contract as
+        # update_settings (see smtp_password handling above). The Settings UI
+        # never re-sends the stored password — it's masked and cleared on load
+        # ("Never load password from server" in SettingsTab) — so an empty
+        # smtp_password in a test request means "use the saved one". Without
+        # this fallback the test sends with no auth and Gmail rejects it with
+        # 530 Authentication Required even though scheduled notifications, which
+        # read the stored password directly, succeed (gh-380).
+        stored_settings = get_settings()
+        smtp_user = request.smtp_user or stored_settings.smtp_user
+        smtp_password = request.smtp_password or stored_settings.smtp_password
+
         # Connect and send
         if request.smtp_use_ssl:
             context = ssl.create_default_context()
@@ -981,8 +993,8 @@ You can now use email features like M3U Digest reports.
             if request.smtp_use_tls and not request.smtp_use_ssl:
                 server.starttls(context=ssl.create_default_context())
 
-            if request.smtp_user and request.smtp_password:
-                server.login(request.smtp_user, request.smtp_password)
+            if smtp_user and smtp_password:
+                server.login(smtp_user, smtp_password)
 
             server.sendmail(request.smtp_from_email, [request.to_email], msg.as_string())
             logger.info("[SETTINGS-TEST] SMTP test email sent successfully to %s", request.to_email)
