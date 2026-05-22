@@ -14,7 +14,11 @@
 
 Claude Desktop's **Custom Connector** UI (Settings → Connectors → Add custom connector) uses OAuth 2.1 + PKCE. ECM acts as the OAuth Authorization Server; the MCP container acts as the Resource Server.
 
-The MCP SDK (1.27.0+) **rejects `http://` issuer URLs for non-loopback hostnames** during OAuth discovery. A typical ECM deployment on `http://192.168.x.x:6101` or `http://my-server:6101` falls into this category — the SDK refuses to proceed, and the Custom Connector flow cannot complete.
+> ⚠️ **This runbook is only for the Custom Connector path, which requires PUBLIC internet exposure.** The Custom Connector is brokered by Anthropic's infrastructure — **Anthropic's servers connect *out* to your MCP server**, so it must be reachable from the public internet, not just over HTTPS on your LAN. A private/homelab deployment (internal DNS, RFC-1918 address) will fail the Custom Connector with *"Couldn't reach the MCP server"* — HTTPS alone does **not** fix that, because Anthropic's cloud can't route into your private network. **If you want to keep ECM private, you do not need this runbook at all** — use the `mcp-remote` bridge (Claude Desktop) or `.mcp.json` (Claude Code) instead; both run on your machine and connect over your LAN/VPN. See the README "Choose your connection method" and `docs/user_guide/integrations/mcp.md`.
+
+So this runbook covers **two** requirements for the Custom Connector path: (1) **public reachability** — a public DNS name + a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) (no inbound ports, cleanest for homelab) or a port-forward; and (2) **HTTPS** — described below.
+
+The MCP SDK (1.27.0+) **rejects `http://` issuer URLs for non-loopback hostnames** during OAuth discovery. A deployment on `http://192.168.x.x:6101` or `http://my-server:6101` falls into this category — the SDK refuses to proceed. (Note this is a *second*, separate reason the Custom Connector needs HTTPS, on top of the public-reachability requirement above.)
 
 **Solution**: front the MCP container with HTTPS using a reverse proxy (Caddy, nginx, or Traefik). The proxy terminates TLS on a public port (e.g., 443) and forwards traffic to the MCP container's plain-HTTP port 6101 on the local network.
 
@@ -226,6 +230,29 @@ curl -s https://mcp.yourdomain.com/health
 
 curl -s https://mcp.yourdomain.com/.well-known/oauth-protected-resource | python3 -m json.tool
 # Expect: {"issuer": "https://mcp.yourdomain.com", ...}
+```
+
+---
+
+## Nginx Proxy Manager (NPM) — field notes
+
+NPM is a UI over nginx, so the nginx guidance applies. Add **one** Proxy Host per hostname (`ecm.yourdomain.com` → `:6100`, `ecm-mcp.yourdomain.com` → `:6101`), Scheme `http`, Force SSL + HTTP/2, Websockets Support ON. Two gotchas that have cost operators hours:
+
+**1. Do NOT put `proxy_http_version 1.1;` in the Advanced tab when Websockets Support is on.** NPM already emits `proxy_http_version 1.1;` (and the `Connection`/`Upgrade` headers) when Websockets Support is enabled. If your Advanced (SSE) block *also* sets it, nginx fails with `"proxy_http_version" directive is duplicate` — and **NPM silently rolls back that host's config file**. The host + cert still look fine in the UI, but nginx serves no server block for the hostname, so TLS fails with `unrecognized name` and clients get *"couldn't reach the server."* For the MCP host, the Advanced tab should contain **only**:
+```nginx
+proxy_buffering off;
+proxy_request_buffering off;
+proxy_read_timeout 3600s;
+proxy_send_timeout 3600s;
+```
+
+**2. Each hostname needs its own cert (or a wildcard).** A per-host cert for `ecm.yourdomain.com` does **not** cover `ecm-mcp.yourdomain.com`. Either issue a cert per host, or — cleanest for internal/homelab names — a `*.yourdomain.com` **wildcard via DNS-01** (e.g. Cloudflare/Route53), assigned to both Proxy Hosts.
+
+**Confirm a host is really being served** (vs. a UI-only / rolled-back config), from any box that can reach NPM:
+```bash
+echo | openssl s_client -connect <npm-ip>:443 -servername ecm-mcp.yourdomain.com 2>&1 | openssl x509 -noout -subject
+# A subject line = good. "tlsv1 unrecognized name" = nginx has no server block for that SNI
+# (rolled-back conf or missing cert) — check the Advanced tab for a duplicate directive.
 ```
 
 ---

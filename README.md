@@ -217,19 +217,27 @@ Things you can ask Claude to do:
 
 ### Choose your connection method
 
-| Method | Prerequisite | Best for |
-|---|---|---|
-| [Claude Desktop — Custom Connector](#claude-desktop-custom-connector-https-required) | HTTPS in front of MCP (port 6101) | No Node.js; OAuth 2.1 flow; lowest friction once HTTPS is set up |
-| [Claude Desktop — mcp-remote bridge](#claude-desktop-mcp-remote-bridge-node-required) | Node.js (LTS 18+) on the same machine as Claude Desktop | Plain HTTP deploys; existing setups; no reverse proxy needed |
-| [Claude Code — `.mcp.json`](#claude-code-mcp-json) | None | Claude Code in any project directory; direct HTTP, no auth UI |
+> ⚠️ **Public vs. private — read this first.** Claude Desktop's **Custom Connector** is *brokered by Anthropic's infrastructure*: Anthropic's servers connect **out** to your MCP server, so it must be reachable from the **public internet** (HTTPS + a public DNS name/tunnel). A purely private/LAN or homelab deployment (e.g. an internal `*.home.lan` name on a `10.x`/`172.16.x`/`192.168.x` address) will fail the Custom Connector with **"Couldn't reach the MCP server"** even though your own browser on the LAN loads it fine — because Anthropic's cloud can't route to your private network.
+>
+> **If you want to keep ECM private (no public exposure), use the `mcp-remote` bridge (Claude Desktop) or `.mcp.json` (Claude Code) instead** — both run on *your* machine and connect over your LAN/VPN, so nothing is exposed to the internet. This is a "pick two of {Claude Desktop · no Node.js · stays private}" trade-off; the Custom Connector is the only option that gives no-Node, and it's the one that requires public exposure.
+
+| Method | Node.js? | Network | Best for |
+|---|---|---|---|
+| [Claude Desktop — Custom Connector](#claude-desktop-custom-connector-public-internet-facing) | No | **Public** — Anthropic's cloud must reach your MCP server (HTTPS + internet-reachable) | Internet-exposed deploys that want the no-Node, in-app OAuth experience |
+| [Claude Desktop — mcp-remote bridge](#claude-desktop-mcp-remote-bridge-node-required) | Yes (LTS 18+ on the Claude Desktop machine) | **Private OK** — the bridge runs on your machine and connects over your LAN/VPN | Private/homelab deploys; plain-HTTP deploys; existing setups |
+| [Claude Code — `.mcp.json`](#claude-code-mcp-json) | No | **Private OK** — Claude Code connects directly from your machine | Private/homelab; Claude Code in any project; direct HTTP, no auth UI |
 
 ---
 
-### Claude Desktop — Custom Connector (HTTPS required)
+### Claude Desktop — Custom Connector (public, internet-facing)
 
 Claude Desktop's built-in **Connectors** UI (Settings → Connectors → Add custom connector) uses OAuth 2.1 + PKCE. ECM acts as the Authorization Server; you authorize in a browser window and Claude Desktop stores the token automatically. **No Node.js required.**
 
-**Prerequisite: HTTPS.** The MCP SDK rejects plain-HTTP issuers for non-loopback hostnames. You must front the MCP container (port 6101) with a TLS reverse proxy. See **[docs/runbooks/mcp-https-reverse-proxy.md](docs/runbooks/mcp-https-reverse-proxy.md)** for Caddy, nginx, and Traefik recipes.
+> ⚠️ **This path requires your MCP server (and ECM) to be reachable from the public internet.** The Custom Connector is brokered by Anthropic's infrastructure — Anthropic's servers, not the desktop app, connect out to your MCP URL — so a LAN-only / private deployment cannot use it (you'll get "Couldn't reach the MCP server"). **If you don't want to expose ECM publicly, skip this section and use [mcp-remote](#claude-desktop-mcp-remote-bridge-node-required) (Claude Desktop) or [`.mcp.json`](#claude-code-mcp-json) (Claude Code)** — both connect locally over your LAN/VPN with no public exposure.
+
+**Prerequisites:**
+- **Public reachability.** Expose `ecm` and `ecm-mcp` to the internet — a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) (no inbound ports) is the cleanest homelab option, or a public DNS name + port-forward to your reverse proxy.
+- **HTTPS.** The MCP SDK rejects plain-HTTP issuers for non-loopback hostnames. Front the MCP container (port 6101) — and ECM (port 6100) — with a TLS reverse proxy. See **[docs/runbooks/mcp-https-reverse-proxy.md](docs/runbooks/mcp-https-reverse-proxy.md)** for Caddy, nginx, and Traefik recipes.
 
 **Required: `OAUTH_ISSUER` must be identical on both containers.** Set the same external HTTPS origin on the ECM container and the MCP container. If they differ, every OAuth Bearer token fails verification with a silent 401.
 
@@ -258,6 +266,8 @@ environment:
 
 ### Claude Desktop — mcp-remote bridge (Node required)
 
+✅ **Works on a private network — no public exposure.** Unlike the Custom Connector, `mcp-remote` runs **on your machine** and connects to ECM over your LAN/VPN, so ECM never has to be reachable from the internet. This is the recommended Claude Desktop path for a private/homelab deployment (the cost is needing Node.js on the Claude Desktop machine).
+
 Claude Desktop talks to remote MCP servers through the `mcp-remote` bridge. Add this to your `claude_desktop_config.json`:
 
 > **Prerequisite:** Claude Desktop does **not** bundle Node.js. The `mcp-remote` bridge is an npm package that Claude Desktop runs via `npx`, so you need Node.js installed on the same machine as Claude Desktop (any current LTS — Node 18+ — is fine). Install it from [nodejs.org](https://nodejs.org/) (or via a package manager: `winget install OpenJS.NodeJS.LTS` on Windows, `brew install node` on macOS, `apt install nodejs npm` on Debian/Ubuntu). Without Node on PATH, Claude Desktop fails to launch the MCP server with a `spawn npx ENOENT` error in its logs.
@@ -283,6 +293,8 @@ Claude Desktop talks to remote MCP servers through the `mcp-remote` bridge. Add 
 ---
 
 ### Claude Code (`.mcp.json`)
+
+✅ **Works on a private network — no Node.js, no public exposure.** Claude Code speaks the HTTP transport natively and connects directly from your machine, so a LAN/VPN-reachable ECM is all you need. This is the simplest private path if you use Claude Code.
 
 Create a `.mcp.json` file in any project directory where you want ECM tools available:
 
