@@ -17,7 +17,7 @@ walkthrough, key rotation details, or troubleshooting.
 Two paths connect Claude to ECM. They run in parallel — you can use both at the
 same time.
 
-> ⚠️ **Public vs. private — decide this first.** The **Custom Connector is brokered by Anthropic's infrastructure**: Anthropic's servers connect *out* to your MCP server, so it must be reachable from the **public internet**. A private/LAN/homelab deployment (an internal DNS name on an RFC-1918 address like `10.x` / `172.16.x` / `192.168.x`) **cannot** use the Custom Connector — it fails with *"Couldn't reach the MCP server"* even though your own browser on the LAN loads it fine, because Anthropic's cloud can't route into your private network. **To keep ECM private, use the mcp-remote bridge (Path B below) or [Claude Code](#claude-code-mcp-json)** — both run on *your* machine and connect over your LAN/VPN, so nothing is exposed to the internet.
+> ⚠️ **Public vs. private — decide this first.** The **Custom Connector is brokered by Anthropic's infrastructure**: Anthropic's servers connect *out* to your MCP server, so it must be reachable from the **public internet**. A private/LAN/homelab deployment (an internal DNS name on an RFC-1918 address like `10.x` / `172.16.x` / `192.168.x`) **cannot** use the Custom Connector — it fails with *"Couldn't reach the MCP server"* even though your own browser on the LAN loads it fine, because Anthropic's cloud can't route into your private network. **To keep ECM private, use the mcp-remote bridge (Path B below) or [Claude Code](#claude-code-mcpjson)** — both run on *your* machine and connect over your LAN/VPN, so nothing is exposed to the internet.
 
 | | Custom Connector (OAuth) | mcp-remote bridge |
 |---|---|---|
@@ -30,7 +30,7 @@ same time.
 
 **Claude Code** uses neither path above. It talks Streamable HTTP directly:
 create a `.mcp.json` file with the `?api_key=` URL and Claude Code picks it up
-automatically. See [Claude Code](#claude-code-mcp-json) below.
+automatically. See [Claude Code](#claude-code-mcpjson) below.
 
 ---
 
@@ -48,7 +48,7 @@ No Node.js or `npx` is involved. The trade-off is that **your MCP server (and
 ECM) must be reachable from the public internet** — Anthropic's cloud connects
 out to your MCP URL — fronted by HTTPS. If you want to keep ECM private, use
 [Path B (mcp-remote)](#path-b-mcp-remote-bridge-node-required) or
-[Claude Code](#claude-code-mcp-json) instead.
+[Claude Code](#claude-code-mcpjson) instead.
 
 > **ECM is the Authorization Server, not Anthropic — but Anthropic is in the
 > network path.** ECM (not Anthropic) issues and signs the OAuth tokens, so
@@ -70,7 +70,7 @@ Before adding the connector in Claude Desktop:
    port-forward to your reverse proxy. **A LAN-only / private deployment cannot
    use this path** — it fails with "Couldn't reach the MCP server." Use
    [Path B (mcp-remote)](#path-b-mcp-remote-bridge-node-required) or
-   [Claude Code](#claude-code-mcp-json) if you don't want to expose ECM.
+   [Claude Code](#claude-code-mcpjson) if you don't want to expose ECM.
 2. **MCP container is running.** Verify: `curl http://YOUR_ECM_HOST:6101/health`
    should return `{"status": "ok", ...}`.
 3. **HTTPS reverse proxy in front of port 6101.** The MCP SDK rejects plain-HTTP
@@ -317,7 +317,7 @@ server's access log shows **no** request from Anthropic during the attempt.
 **Fix — pick one:**
 - **Keep it private (recommended for homelab):** don't use the Custom Connector.
   Use [Path B (mcp-remote)](#path-b-mcp-remote-bridge-node-required) or
-  [Claude Code](#claude-code-mcp-json) — both run on your machine and reach ECM
+  [Claude Code](#claude-code-mcpjson) — both run on your machine and reach ECM
   over your LAN/VPN, no public exposure.
 - **Expose it:** make `ecm` and `ecm-mcp` reachable from the internet (a
   [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
