@@ -44,7 +44,6 @@ const settingsUnconfigured = {
 describe('MCPSettingsSection — Server Status diagnostic (bd-ix1g6)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(api.getOAuthGrants).mockResolvedValue({ grants: [] });
   });
 
   it('shows the online badge with tool count when reachable AND key configured', async () => {
@@ -117,14 +116,14 @@ describe('MCPSettingsSection — Server Status diagnostic (bd-ix1g6)', () => {
 /**
  * bd-buiqr10 (Option-A slice): signing_key_missing diagnostic rendering.
  *
- * The /health endpoint now includes signing_key_status alongside api_key_status.
- * When signing_key_status != 'ok', the panel renders a signing_key_hint using
- * the same pattern as the api_key setup_hint (bd-ix1g6).
+ * SKIPPED (bd-9axgc): the MCP OAuth offering was retired. The OAuth signing-key
+ * diagnostic (signing_key_status / signing_key_hint) was removed from the
+ * MCPSettingsSection Server Status panel, so these assertions no longer have a
+ * UI to exercise. Re-enable when MCP OAuth is re-offered.
  */
-describe('MCPSettingsSection — signing key diagnostic (bd-buiqr10)', () => {
+describe.skip('MCPSettingsSection — signing key diagnostic (bd-buiqr10) [retired bd-9axgc]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(api.getOAuthGrants).mockResolvedValue({ grants: [] });
   });
 
   it('shows signing_key_hint when signing_key_status is signing_key_missing', async () => {
@@ -230,12 +229,12 @@ describe('MCPSettingsSection — signing key diagnostic (bd-buiqr10)', () => {
 /**
  * Active Connections (OAuth grants) — bead buiqr.7 (d).
  *
- * The section lists active grants with the registry-pinned client name, grant +
- * last-used timestamps, and an inline-confirm revoke (NOT a modal). The section
- * is absent entirely when there are no grants (no empty state). A successful
- * revoke fires a toast and removes the row.
+ * SKIPPED (bd-9axgc): the MCP OAuth offering was retired. The "Active
+ * Connections" (OAuth grants) section was removed from MCPSettingsSection, so
+ * there is no grants list / inline-revoke UI to exercise. Re-enable when MCP
+ * OAuth is re-offered.
  */
-describe('MCPSettingsSection — Active Connections (bd-buiqr.7)', () => {
+describe.skip('MCPSettingsSection — Active Connections (bd-buiqr.7) [retired bd-9axgc]', () => {
   const grant = {
     id: 'fam-1',
     client_id: 'claude-desktop',
@@ -329,11 +328,12 @@ describe('MCPSettingsSection — Active Connections (bd-buiqr.7)', () => {
 /**
  * Bulk-revoke panic button — bead buiqr.12.
  *
- * AC1: button visible only when grants exist.
- * AC2: double confirmation — "Are you sure?" → "Type REVOKE to confirm".
- * AC3: after successful bulk revoke, all grant rows disappear + toast fires.
+ * SKIPPED (bd-9axgc): the MCP OAuth offering was retired. The bulk-revoke panic
+ * button lived inside the now-removed "Active Connections" (OAuth grants)
+ * section, so there is no UI to exercise. Re-enable when MCP OAuth is
+ * re-offered.
  */
-describe('MCPSettingsSection — Bulk Revoke (bd-buiqr.12)', () => {
+describe.skip('MCPSettingsSection — Bulk Revoke (bd-buiqr.12) [retired bd-9axgc]', () => {
   const grant = {
     id: 'fam-bulk-1',
     client_id: 'claude-desktop',

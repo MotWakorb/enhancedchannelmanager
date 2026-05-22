@@ -29,11 +29,10 @@ from fastapi import APIRouter, Response
 from sqlalchemy import text
 
 from cache import get_cache
-from config import get_settings, CONFIG_DIR
+from config import get_settings
 from database import get_session
 from dispatcharr_client import get_client
 from observability import get_metric
-from auth.oauth_store import get_oauth_store_status
 
 logger = logging.getLogger(__name__)
 
@@ -365,94 +364,15 @@ async def schema_version() -> dict:
 
 
 # ============================================================================
-# OAuth store diagnostics (bd-m19zx — ECM-side Option A follow-up)
+# OAuth store diagnostics — REMOVED (bd-9axgc)
 # ============================================================================
-
-# Operator-facing setup hints keyed by diagnostic code.  Written for the
-# person staring at a Grafana panel at 2am who has never heard of WAL mode.
-_OAUTH_SETUP_HINTS: dict[str, str] = {
-    "token_store_unreadable": (
-        "The OAuth state store (/config/mcp_oauth.db) is missing or unreadable. "
-        "If this is a first run the store will be created on the next OAuth request — "
-        "this warning is harmless until a client actually tries to authorise. "
-        "If OAuth was previously working, ensure the /config volume is mounted "
-        "read-write and that ECM has write permission to that directory, then "
-        "restart the ECM container to re-create the store."
-    ),
-    "token_store_corrupt": (
-        "The OAuth state store (/config/mcp_oauth.db) failed SQLite integrity_check. "
-        "The file may be truncated, partially written, or replaced with a non-SQLite "
-        "file. Back up the file for forensics, delete it, and restart the ECM "
-        "container — ECM will re-create an empty store and re-seed the client "
-        "registry. Active OAuth sessions will be invalidated."
-    ),
-    "client_registry_missing": (
-        "The oauth_clients table in the OAuth state store is empty. ECM seeds the "
-        "hardcoded client registry (Claude Desktop / Claude Code) on every startup. "
-        "An empty table after startup means the seed step failed — check the ECM "
-        "startup logs for [OAUTH] or [MAIN] errors. Restarting the ECM container "
-        "will retry the seed."
-    ),
-}
-
-
-def _make_oauth_check(code: Optional[str], code_name: str) -> dict:
-    """Build a single check dict from a diagnostic code value.
-
-    ``code`` is ``None`` (pass) or the code string (fail), matching the shape
-    returned by :func:`auth.oauth_store.get_oauth_store_status`.
-    """
-    if code is None:
-        return {"status": "ok"}
-    return {
-        "status": "fail",
-        "code": code_name,
-        "setup_hint": _OAUTH_SETUP_HINTS[code_name],
-    }
-
-
-@router.get("/api/health/oauth")
-async def oauth_store_diagnostics() -> dict:
-    """ECM-side OAuth store / client-registry health diagnostics (bd-m19zx).
-
-    Surfaces the three diagnostic codes that ECM can observe as the sole
-    owner of the OAuth state store (ADR-009 §1/§5, Option A):
-
-    - ``token_store_unreadable`` — ``/config/mcp_oauth.db`` missing or
-      unreadable (ENOENT / EACCES).
-    - ``token_store_corrupt``    — SQLite ``PRAGMA integrity_check`` reports
-      at least one error.
-    - ``client_registry_missing`` — ``oauth_clients`` table empty / unseeded.
-
-    Each failing check includes a ``setup_hint`` string that describes the
-    likely cause and the remediation step.
-
-    The check is **read-only and non-destructive**: the store is opened with
-    ``?immutable=1`` so no WAL mutations occur. Token values and DB content
-    are never exposed in the response.
-
-    Public endpoint (AUTH_EXEMPT_PATHS in main.py): no auth, no rate limit,
-    presence/health only — no secrets leak.
-    """
-    raw = get_oauth_store_status(CONFIG_DIR / "mcp_oauth.db")
-
-    checks = {
-        "token_store_unreadable": _make_oauth_check(
-            raw["token_store_unreadable"], "token_store_unreadable"
-        ),
-        "token_store_corrupt": _make_oauth_check(
-            raw["token_store_corrupt"], "token_store_corrupt"
-        ),
-        "client_registry_missing": _make_oauth_check(
-            raw["client_registry_missing"], "client_registry_missing"
-        ),
-    }
-
-    any_failing = any(c["status"] == "fail" for c in checks.values())
-    return {
-        "status": "degraded" if any_failing else "ok",
-        "checks": checks,
-    }
+# The MCP OAuth offering was retired (bd-9axgc). The /api/health/oauth endpoint
+# (originally bd-m19zx) reported the OAuth state-store / client-registry health,
+# which only mattered while the OAuth Authorization Server was offered. With the
+# offering disabled, the endpoint is no longer registered and now returns 404.
+# The static ?api_key= MCP path reports through api_key_configured (settings),
+# unaffected by this removal. The oauth_store module is kept dormant in-tree;
+# re-add this endpoint to re-enable diagnostics when MCP OAuth is re-offered.
 
 
 # ============================================================================

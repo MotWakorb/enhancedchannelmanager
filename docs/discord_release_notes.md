@@ -75,11 +75,4 @@
 
 **📝 Documentation**
 • New Integrations operator guide covering Emby, Plex, and Jellyfin side-by-side (Settings → Integrations)
-
-**🆕 MCP: Claude Desktop Custom Connectors now supported**
-• Claude Desktop's built-in Connector UI (Settings → Connectors → Add custom connector) now works with ECM — no Node.js required
-• ECM acts as the OAuth 2.1 Authorization Server; complete the authorization in ECM's consent screen and Claude Desktop stores the token automatically
-• Requires HTTPS in front of the MCP server (see the new HTTPS reverse-proxy runbook in docs — Caddy, nginx, and Traefik recipes included)
-• The mcp-remote bridge path (Node.js) continues to work as before — no changes required for existing setups
-• Static ?api_key= auth is permanent and unchanged (backward-compatible with Claude Code and all existing integrations)
 ```

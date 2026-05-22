@@ -107,18 +107,17 @@ server.
 ## MCP Integration (Claude AI)
 
 ECM's MCP sidecar container exposes all ECM operations to Claude Desktop and
-Claude Code through the Model Context Protocol. Two connection paths are
+Claude Code through the Model Context Protocol. Authentication uses a static API
+key (`mcp_api_key`) via the `?api_key=` path. Two connection methods are
 supported:
 
 | Path | When to use |
 |---|---|
-| **Custom Connector (OAuth)** | Claude Desktop without Node.js — requires HTTPS in front of MCP |
 | **mcp-remote bridge** | Claude Desktop with Node.js installed |
-| **`.mcp.json`** | Claude Code — always, no HTTPS or Node required |
+| **`.mcp.json`** | Claude Code — no Node.js required |
 
-For the full walkthrough — including the step-by-step OAuth consent flow,
-key rotation, and troubleshooting — see the
-**[MCP Integration reference](mcp.md)**.
+For the full walkthrough — including step-by-step setup, key rotation, and
+troubleshooting — see the **[MCP Integration reference](mcp.md)**.
 
 ---
 
@@ -126,4 +125,4 @@ key rotation, and troubleshooting — see the
 
 - API response fields: [`docs/api.md` — Enhanced Stats § Per-channel attribution fields](../../api.md)
 - Pipeline internals: [`docs/architecture.md` — User Attribution Pipeline](../../architecture.md)
-- MCP architecture: [`docs/adr/ADR-009`](../../adr/ADR-009-mcp-oauth-authorization-server-split.md) — ECM as OAuth Authorization Server
+- MCP OAuth history: [`docs/adr/ADR-009`](../../adr/ADR-009-mcp-oauth-authorization-server-split.md) (Superseded) — the retired OAuth Authorization Server offering (`bd-9axgc`)

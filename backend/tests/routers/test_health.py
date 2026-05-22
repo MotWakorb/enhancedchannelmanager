@@ -364,6 +364,9 @@ class TestReadiness:
 # ============================================================================
 # OAuth store diagnostics tests — GET /api/health/oauth
 # ============================================================================
+@pytest.mark.skip(
+    reason="MCP OAuth offering retired (bd-9axgc); GET /api/health/oauth endpoint removed → 404. Re-enable when MCP OAuth is re-offered."
+)
 class TestOAuthStoreDiagnostics:
     """Tests for GET /api/health/oauth (bd-m19zx).
 

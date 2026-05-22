@@ -11,7 +11,10 @@ import { LoginPage } from './LoginPage';
 import { SetupPage } from './SetupPage';
 import { ForgotPasswordPage } from './ForgotPasswordPage';
 import { ResetPasswordPage } from './ResetPasswordPage';
-import { OAuthConsentPage } from './OAuthConsentPage';
+// MCP OAuth offering RETIRED (bd-9axgc): OAuthConsentPage is no longer routed.
+// The component + its CSS are kept as dormant orphan files (not imported here)
+// so the offering is reversible; re-add this import + the /oauth/consent route
+// blocks below to re-enable the consent flow.
 import { checkSetupRequired } from '../services/api';
 import './ProtectedRoute.css';
 
@@ -100,13 +103,7 @@ export function ProtectedRoute({ children, requireAdmin = false }: ProtectedRout
     if (currentPath === '/login' || currentPath === '/forgot-password' || currentPath === '/reset-password') {
       window.history.replaceState({}, '', '/');
     }
-    // OAuth consent screen (bead buiqr.7) — a standalone full-page route, not a
-    // Settings panel. In open mode (no auth) the single-admin deployment may
-    // authorize directly. The page itself enforces the admin gate when a user
-    // is present (defence in depth; the backend /authorize already gated).
-    if (currentPath === '/oauth/consent') {
-      return <OAuthConsentPage />;
-    }
+    // MCP OAuth offering RETIRED (bd-9axgc): the /oauth/consent route was removed.
     return <>{children}</>;
   }
 
@@ -120,12 +117,7 @@ export function ProtectedRoute({ children, requireAdmin = false }: ProtectedRout
     window.history.replaceState({}, '', '/');
   }
 
-  // OAuth consent screen (bead buiqr.7) — admin-gated standalone route. The
-  // backend /authorize already required the admin session before redirecting
-  // here; the page also checks user.is_admin client-side (threat model SP3/CP1).
-  if (currentPath === '/oauth/consent') {
-    return <OAuthConsentPage />;
-  }
+  // MCP OAuth offering RETIRED (bd-9axgc): the /oauth/consent route was removed.
 
   // Check admin requirement
   if (requireAdmin && !user?.is_admin) {

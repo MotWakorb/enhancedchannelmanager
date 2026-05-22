@@ -7,7 +7,6 @@
 import { logger } from '../../utils/logger';
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../services/api';
-import type { OAuthGrant } from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { copyToClipboard } from '../../utils/clipboard';
 import { MCP_TOOL_CATEGORIES } from './mcpToolCategories';
@@ -15,11 +14,6 @@ import './MCPSettingsSection.css';
 
 interface Props {
   isAdmin: boolean;
-}
-
-/** Format an epoch-seconds timestamp for the Active Grants list (locale date+time). */
-function formatGrantTime(epochSeconds: number): string {
-  return new Date(epochSeconds * 1000).toLocaleString();
 }
 
 export function MCPSettingsSection({ isAdmin }: Props) {
@@ -40,27 +34,7 @@ export function MCPSettingsSection({ isAdmin }: Props) {
     api_key_configured?: boolean;
     api_key_status?: 'ok' | 'file_not_found' | 'invalid_json' | 'field_missing' | 'field_empty';
     setup_hint?: string;
-    // bd-buiqr10 (Option-A slice): OAuth signing key diagnostic.
-    // signing_key_status='ok' means the HS256 secret is present in settings.json
-    // and offline JWT verification is possible. 'signing_key_missing' means
-    // the secret is absent — OAuth Bearer-JWT auth cannot work until it is set.
-    signing_key_status?: 'ok' | 'signing_key_missing' | 'file_not_found' | 'invalid_json';
-    signing_key_hint?: string;
   } | null>(null);
-
-  // Active Grants (bead buiqr.7 (d)) — OAuth authorizations the admin made to
-  // Claude clients. Listed with inline-confirm revoke; the section is absent
-  // entirely when there are no grants (no empty state).
-  const [grants, setGrants] = useState<OAuthGrant[]>([]);
-  const [confirmingGrantId, setConfirmingGrantId] = useState<string | null>(null);
-  const [revokingGrantId, setRevokingGrantId] = useState<string | null>(null);
-
-  // Bulk-revoke state machine (buiqr.12):
-  // null → idle; 'confirm1' → first Are-you-sure prompt;
-  // 'confirm2' → type-REVOKE gate; 'revoking' → in-flight.
-  type BulkRevokeStage = null | 'confirm1' | 'confirm2' | 'revoking';
-  const [bulkRevokeStage, setBulkRevokeStage] = useState<BulkRevokeStage>(null);
-  const [bulkRevokeInput, setBulkRevokeInput] = useState('');
 
   const loadSettings = useCallback(async () => {
     try {
@@ -72,57 +46,6 @@ export function MCPSettingsSection({ isAdmin }: Props) {
       setLoading(false);
     }
   }, []);
-
-  const loadGrants = useCallback(async () => {
-    try {
-      const result = await api.getOAuthGrants();
-      setGrants(result.grants);
-    } catch (err) {
-      // A missing/empty grants surface is non-fatal — leave the list empty so
-      // the section simply doesn't render (no scary error for an absent feature).
-      logger.error('Failed to load OAuth grants:', err);
-      setGrants([]);
-    }
-  }, []);
-
-  const handleRevokeGrant = async (grantId: string) => {
-    setRevokingGrantId(grantId);
-    try {
-      await api.revokeOAuthGrant(grantId);
-      setGrants((prev) => prev.filter((g) => g.id !== grantId));
-      notifications.success('Connection revoked');
-    } catch (err) {
-      logger.error('Failed to revoke OAuth grant:', err);
-      notifications.error('Failed to revoke connection');
-    } finally {
-      setRevokingGrantId(null);
-      setConfirmingGrantId(null);
-    }
-  };
-
-  const handleRevokeAll = async () => {
-    // Guard: only proceed from the confirm2 stage with exact typed confirmation.
-    if (bulkRevokeStage !== 'confirm2' || bulkRevokeInput !== 'REVOKE') return;
-    setBulkRevokeStage('revoking');
-    try {
-      const result = await api.revokeAllOAuthGrants();
-      setGrants([]);
-      notifications.success(
-        `All active connections revoked (${result.revoked} total)`
-      );
-    } catch (err) {
-      logger.error('Failed to bulk-revoke OAuth grants:', err);
-      notifications.error('Failed to revoke all connections');
-    } finally {
-      setBulkRevokeStage(null);
-      setBulkRevokeInput('');
-    }
-  };
-
-  const cancelBulkRevoke = () => {
-    setBulkRevokeStage(null);
-    setBulkRevokeInput('');
-  };
 
   const checkMcpStatus = useCallback(async () => {
     try {
@@ -136,8 +59,7 @@ export function MCPSettingsSection({ isAdmin }: Props) {
   useEffect(() => {
     loadSettings();
     checkMcpStatus();
-    loadGrants();
-  }, [loadSettings, checkMcpStatus, loadGrants]);
+  }, [loadSettings, checkMcpStatus]);
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -278,18 +200,6 @@ export function MCPSettingsSection({ isAdmin }: Props) {
             {mcpStatus.setup_hint}
           </p>
         )}
-        {/* bd-buiqr10: OAuth signing key hint — shown when the HS256 secret is
-            absent from settings.json. Rendered identically to the api_key setup_hint
-            pattern (bd-ix1g6) so the operator sees a consistent diagnostic UI. */}
-        {mcpStatus?.reachable && mcpStatus.signing_key_status && mcpStatus.signing_key_status !== 'ok' && mcpStatus.signing_key_hint && (
-          <p
-            className="mcp-status-hint"
-            data-testid="mcp-signing-key-hint"
-            style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary, #888)' }}
-          >
-            {mcpStatus.signing_key_hint}
-          </p>
-        )}
       </div>
 
       {/* API Key Management */}
@@ -370,44 +280,10 @@ export function MCPSettingsSection({ isAdmin }: Props) {
 
           <div className="form-group-vertical">
             <p className="form-description">
-              The MCP server runs on port <strong>{mcpPort}</strong> alongside ECM, using the Streamable HTTP transport on a single <code>/mcp</code> endpoint.
+              The MCP server runs on port <strong>{mcpPort}</strong> alongside ECM, using the Streamable HTTP transport on a single <code>/mcp</code> endpoint. Authentication uses your static MCP API key, passed as the <code>?api_key=</code> query parameter — all traffic stays on your private network, with no public exposure required.
             </p>
 
-            {/* Custom Connector (OAuth) — bd-buiqr.11 */}
-            <label className="form-label">Claude Desktop — Custom Connector (no Node required, public internet-facing)</label>
-            <p className="form-description">
-              Claude Desktop&apos;s built-in <strong>Settings → Connectors → Add custom connector</strong> uses OAuth 2.1. ECM authorizes the connection in your browser; Claude Desktop stores the token automatically. No Node.js needed.
-            </p>
-            <p className="form-description mcp-prereq-note">
-              <span className="material-icons" aria-hidden="true">public</span>
-              <span>
-                <strong>Prerequisite: the MCP server must be reachable from the public internet.</strong> Custom Connectors are <em>Anthropic-brokered</em> — Anthropic&apos;s cloud connects <em>out</em> to your MCP URL on ECM&apos;s behalf, so a LAN-only / VPN-only / split-horizon-DNS hostname will never be reachable and you&apos;ll get <em>&quot;Couldn&apos;t reach the MCP server.&quot;</em> This is a connector-architecture requirement, <strong>not</strong> an OAuth one. If you don&apos;t want to expose ECM publicly, use the <strong>mcp-remote bridge</strong> (below) or <strong>Claude Code with <code>.mcp.json</code></strong> instead — both keep all traffic on your private network.
-              </span>
-            </p>
-            <p className="form-description mcp-prereq-note">
-              <span className="material-icons" aria-hidden="true">https</span>
-              <span>
-                <strong>Prerequisite: HTTPS.</strong> The MCP SDK rejects plain-HTTP origins for non-loopback hosts. You must front the MCP container (port {mcpPort}) with a TLS reverse proxy before using Custom Connectors. See the{' '}
-                <a href="https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/runbooks/mcp-https-reverse-proxy.md" target="_blank" rel="noopener noreferrer">HTTPS reverse-proxy runbook</a>{' '}
-                for Caddy, nginx, and Traefik recipes.
-              </span>
-            </p>
-            <p className="form-description mcp-prereq-note">
-              <span className="material-icons" aria-hidden="true">warning</span>
-              <span>
-                <strong>Required: set <code>OAUTH_ISSUER</code> identically on both containers.</strong> Both the ECM and MCP containers must have <code>OAUTH_ISSUER</code> set to the same external HTTPS origin (e.g. <code>https://mcp.yourdomain.com</code>). If they differ, every OAuth Bearer token fails with a silent 401. Without this env var, both containers default to <code>https://ecm.local</code>, which only works loopback.
-              </span>
-            </p>
-            <ol className="form-description" style={{ paddingLeft: '1.25rem', margin: '0 0 0.75rem' }}>
-              <li>Stand up an HTTPS reverse proxy and set <code>OAUTH_ISSUER</code> on both containers.</li>
-              <li>In Claude Desktop, go to <strong>Settings → Connectors → Add custom connector</strong>.</li>
-              <li>Enter the MCP URL: <code>https://YOUR_MCP_HTTPS_DOMAIN/mcp</code></li>
-              <li>Claude Desktop discovers the OAuth endpoints automatically.</li>
-              <li>Your browser opens the ECM consent screen. Log in and click <strong>Authorize</strong>.</li>
-              <li>Claude Desktop stores the token — connected. No config file edits needed.</li>
-            </ol>
-
-            {/* mcp-remote bridge (Node) — existing path */}
+            {/* mcp-remote bridge (Node) — Claude Desktop static-key path */}
             <label className="form-label" style={{ marginTop: '1.25rem' }}>Claude Desktop — mcp-remote bridge (Node required, private-network OK)</label>
             <p className="form-description" style={{ color: 'var(--accent-green, #4caf50)' }}>
               ✅ Runs entirely on your machine — works on a LAN/VPN-only ECM with no public exposure.
@@ -466,154 +342,10 @@ export function MCPSettingsSection({ isAdmin }: Props) {
         </div>
       )}
 
-      {/* Active Grants (bead buiqr.7 (d)) — OAuth connections (Claude Desktop,
-          etc.). Absent entirely when there are no grants; no empty state. */}
-      {grants.length > 0 && (
-        <div className="settings-section" data-testid="oauth-grants-section">
-          <div className="settings-section-header">
-            <span className="material-icons">verified_user</span>
-            <h3>Active Connections</h3>
-          </div>
-          <p className="form-description">
-            Apps you have authorized to access ECM via OAuth. Revoking a
-            connection immediately invalidates its access — the app must be
-            re-authorized to connect again.
-          </p>
-          <ul className="mcp-grants-list">
-            {grants.map((grant) => (
-              <li
-                key={grant.id}
-                className="mcp-grant-row"
-                data-testid="oauth-grant-row"
-              >
-                <div className="mcp-grant-info">
-                  <span className="material-icons mcp-grant-icon" aria-hidden="true">
-                    desktop_windows
-                  </span>
-                  <div className="mcp-grant-meta">
-                    <span className="mcp-grant-name">{grant.client_name}</span>
-                    <span className="mcp-grant-times">
-                      Granted {formatGrantTime(grant.granted_at)} · Last used{' '}
-                      {formatGrantTime(grant.last_used)}
-                    </span>
-                  </div>
-                </div>
-                {confirmingGrantId === grant.id ? (
-                  <div className="mcp-grant-confirm" role="group" aria-label="Confirm revoke">
-                    <span className="mcp-grant-confirm-label">Revoke?</span>
-                    <button
-                      className="btn btn-sm btn-danger"
-                      onClick={() => handleRevokeGrant(grant.id)}
-                      disabled={revokingGrantId === grant.id}
-                    >
-                      {revokingGrantId === grant.id ? 'Revoking...' : 'Yes, revoke'}
-                    </button>
-                    <button
-                      className="btn btn-sm"
-                      onClick={() => setConfirmingGrantId(null)}
-                      disabled={revokingGrantId === grant.id}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    className="btn btn-sm btn-danger"
-                    onClick={() => setConfirmingGrantId(grant.id)}
-                    data-testid="oauth-grant-revoke"
-                  >
-                    <span className="material-icons">block</span>
-                    Revoke
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-
-          {/* Bulk-revoke panic button (buiqr.12 AC1-3) — double-confirmation
-              because this is destructive: kills ALL active connections at once. */}
-          <div className="mcp-bulk-revoke" data-testid="oauth-bulk-revoke-section">
-            {bulkRevokeStage === null && (
-              <button
-                className="btn btn-sm btn-danger"
-                onClick={() => setBulkRevokeStage('confirm1')}
-                data-testid="oauth-bulk-revoke-btn"
-              >
-                <span className="material-icons">block</span>
-                Revoke all active tokens
-              </button>
-            )}
-
-            {/* Step 1: Are you sure? */}
-            {bulkRevokeStage === 'confirm1' && (
-              <div
-                className="mcp-bulk-revoke-confirm"
-                role="group"
-                aria-label="Confirm revoke all"
-                data-testid="oauth-bulk-revoke-confirm1"
-              >
-                <span className="mcp-grant-confirm-label">
-                  This will disconnect ALL apps. Are you sure?
-                </span>
-                <button
-                  className="btn btn-sm btn-danger"
-                  onClick={() => setBulkRevokeStage('confirm2')}
-                  data-testid="oauth-bulk-revoke-confirm1-yes"
-                >
-                  Yes, continue
-                </button>
-                <button
-                  className="btn btn-sm"
-                  onClick={cancelBulkRevoke}
-                  data-testid="oauth-bulk-revoke-cancel"
-                >
-                  Cancel
-                </button>
-              </div>
-            )}
-
-            {/* Step 2: Type REVOKE to confirm */}
-            {(bulkRevokeStage === 'confirm2' || bulkRevokeStage === 'revoking') && (
-              <div
-                className="mcp-bulk-revoke-confirm"
-                role="group"
-                aria-label="Type REVOKE to confirm"
-                data-testid="oauth-bulk-revoke-confirm2"
-              >
-                <span className="mcp-grant-confirm-label">
-                  Type <strong>REVOKE</strong> to confirm:
-                </span>
-                <input
-                  type="text"
-                  className="mcp-bulk-revoke-input"
-                  value={bulkRevokeInput}
-                  onChange={(e) => setBulkRevokeInput(e.target.value)}
-                  placeholder="REVOKE"
-                  disabled={bulkRevokeStage === 'revoking'}
-                  data-testid="oauth-bulk-revoke-input"
-                  autoFocus
-                />
-                <button
-                  className="btn btn-sm btn-danger"
-                  onClick={handleRevokeAll}
-                  disabled={bulkRevokeInput !== 'REVOKE' || bulkRevokeStage === 'revoking'}
-                  data-testid="oauth-bulk-revoke-confirm2-yes"
-                >
-                  {bulkRevokeStage === 'revoking' ? 'Revoking...' : 'Revoke all'}
-                </button>
-                <button
-                  className="btn btn-sm"
-                  onClick={cancelBulkRevoke}
-                  disabled={bulkRevokeStage === 'revoking'}
-                  data-testid="oauth-bulk-revoke-cancel"
-                >
-                  Cancel
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Active Connections (OAuth grants) section REMOVED (bd-9axgc) — the MCP
+          OAuth offering was retired, so there are no OAuth grants to list or
+          revoke. The static ?api_key= path is managed via the API Key section
+          above (generate / regenerate / revoke). */}
 
       {/* Available Tools */}
       {keyConfigured && (
