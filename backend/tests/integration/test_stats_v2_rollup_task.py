@@ -119,6 +119,11 @@ def _seed_session_telemetry(
     Using raw INSERTs (not the ORM) so the test can stamp arbitrary
     observed_at ms values and exercise NULL user_id / NULL provider_id
     edge cases without ORM-side defaulting.
+
+    Per-type event counter columns (``reconnect_event_count``,
+    ``error_event_count``, ``switch_event_count``) default to 0 when
+    absent from the row dict — callers that only care about bytes/buffer
+    need not change.
     """
     session = Session()
     try:
@@ -128,12 +133,20 @@ def _seed_session_telemetry(
                     "INSERT INTO session_telemetry "
                     "(session_id, observed_at, user_id, provider_id, "
                     " channel_id, bytes_delta, buffer_event_count, "
-                    " poll_interval_ms) "
+                    " reconnect_event_count, error_event_count, "
+                    " switch_event_count, poll_interval_ms) "
                     "VALUES (:session_id, :observed_at, :user_id, "
                     "        :provider_id, :channel_id, :bytes_delta, "
-                    "        :buffer_event_count, :poll_interval_ms)"
+                    "        :buffer_event_count, :reconnect_event_count, "
+                    "        :error_event_count, :switch_event_count, "
+                    "        :poll_interval_ms)"
                 ),
-                row,
+                {
+                    "reconnect_event_count": 0,
+                    "error_event_count": 0,
+                    "switch_event_count": 0,
+                    **row,
+                },
             )
         session.commit()
     finally:
@@ -766,3 +779,306 @@ class TestRollupMetrics:
             f"expected errors_total{{phase=rollup}} to increment, "
             f"got {before} → {after}"
         )
+
+
+# ---------------------------------------------------------------------------
+# 4. EVENT COUNTER ROLLUP CORRECTNESS (bd-d0ha9)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+class TestRollupProviderDailyEventCounters:
+    """Migration 0015 / bd-d0ha9: reconnect/error/switch counters are rolled up.
+
+    The three per-type channel-event counters added to ``session_telemetry``
+    by migration 0013 (bd-ov5vb) must appear in
+    ``session_telemetry_provider_daily`` after the nightly rollup. The rollup
+    uses the same per-poll-per-client SUM logic as ``bytes_delta`` and
+    ``buffer_event_count`` — no DISTINCT collapse needed because these are
+    per-poll-per-client samples.
+    """
+
+    def test_rollup_provider_daily_includes_reconnect_event_count(
+        self, rollup_db
+    ):
+        """SUM(reconnect_event_count) from raw rows equals rollup column."""
+        engine, Session = rollup_db
+
+        target_day = FROZEN_NOW.date() - timedelta(days=2)
+        base_obs = datetime.combine(
+            target_day, datetime.min.time(), tzinfo=timezone.utc
+        ) + timedelta(hours=8)
+
+        # Seed: 4 rows with 3 reconnect events each for provider 10.
+        rows = [
+            {
+                "session_id": f"sess-rcn-{i}",
+                "observed_at": _ms_at_utc(base_obs + timedelta(seconds=i * 10)),
+                "user_id": 60,
+                "provider_id": 10,
+                "channel_id": "ch-reconnect",
+                "bytes_delta": 500,
+                "buffer_event_count": 0,
+                "reconnect_event_count": 3,
+                "error_event_count": 0,
+                "switch_event_count": 0,
+                "poll_interval_ms": 10_000,
+            }
+            for i in range(4)
+        ]
+        _seed_session_telemetry(Session, rows)
+
+        result, _ = _run_task(Session, now_utc=FROZEN_NOW)
+        assert result.success, f"task failed: {result.message!r}"
+
+        with engine.connect() as conn:
+            rollup_reconnect = conn.execute(text(
+                "SELECT COALESCE(SUM(reconnect_event_count), 0) FROM "
+                "session_telemetry_provider_daily WHERE day = :day"
+            ), {"day": target_day.isoformat()}).scalar()
+
+            raw_reconnect = conn.execute(text(
+                "SELECT COALESCE(SUM(reconnect_event_count), 0) FROM "
+                "session_telemetry WHERE "
+                "date(observed_at / 1000, 'unixepoch') = :day"
+            ), {"day": target_day.isoformat()}).scalar()
+
+        assert rollup_reconnect == raw_reconnect, (
+            f"reconnect_event_count rollup ({rollup_reconnect}) != "
+            f"raw sum ({raw_reconnect}) for day {target_day}"
+        )
+        # Explicit: 4 rows × 3 reconnect events = 12
+        assert rollup_reconnect == 12, (
+            f"expected reconnect_event_count=12, got {rollup_reconnect}"
+        )
+
+    def test_rollup_provider_daily_includes_error_event_count(
+        self, rollup_db
+    ):
+        """SUM(error_event_count) from raw rows equals rollup column."""
+        engine, Session = rollup_db
+
+        target_day = FROZEN_NOW.date() - timedelta(days=2)
+        base_obs = datetime.combine(
+            target_day, datetime.min.time(), tzinfo=timezone.utc
+        ) + timedelta(hours=9)
+
+        rows = [
+            {
+                "session_id": f"sess-err-{i}",
+                "observed_at": _ms_at_utc(base_obs + timedelta(seconds=i * 10)),
+                "user_id": 61,
+                "provider_id": 11,
+                "channel_id": "ch-error",
+                "bytes_delta": 200,
+                "buffer_event_count": 0,
+                "reconnect_event_count": 0,
+                "error_event_count": 2,
+                "switch_event_count": 0,
+                "poll_interval_ms": 10_000,
+            }
+            for i in range(5)
+        ]
+        _seed_session_telemetry(Session, rows)
+
+        result, _ = _run_task(Session, now_utc=FROZEN_NOW)
+        assert result.success, f"task failed: {result.message!r}"
+
+        with engine.connect() as conn:
+            rollup_error = conn.execute(text(
+                "SELECT COALESCE(SUM(error_event_count), 0) FROM "
+                "session_telemetry_provider_daily WHERE day = :day"
+            ), {"day": target_day.isoformat()}).scalar()
+
+            raw_error = conn.execute(text(
+                "SELECT COALESCE(SUM(error_event_count), 0) FROM "
+                "session_telemetry WHERE "
+                "date(observed_at / 1000, 'unixepoch') = :day"
+            ), {"day": target_day.isoformat()}).scalar()
+
+        assert rollup_error == raw_error, (
+            f"error_event_count rollup ({rollup_error}) != "
+            f"raw sum ({raw_error}) for day {target_day}"
+        )
+        # Explicit: 5 rows × 2 error events = 10
+        assert rollup_error == 10, (
+            f"expected error_event_count=10, got {rollup_error}"
+        )
+
+    def test_rollup_provider_daily_includes_switch_event_count(
+        self, rollup_db
+    ):
+        """SUM(switch_event_count) from raw rows equals rollup column."""
+        engine, Session = rollup_db
+
+        target_day = FROZEN_NOW.date() - timedelta(days=2)
+        base_obs = datetime.combine(
+            target_day, datetime.min.time(), tzinfo=timezone.utc
+        ) + timedelta(hours=10)
+
+        rows = [
+            {
+                "session_id": f"sess-sw-{i}",
+                "observed_at": _ms_at_utc(base_obs + timedelta(seconds=i * 10)),
+                "user_id": 62,
+                "provider_id": 12,
+                "channel_id": "ch-switch",
+                "bytes_delta": 300,
+                "buffer_event_count": 0,
+                "reconnect_event_count": 0,
+                "error_event_count": 0,
+                "switch_event_count": 1,
+                "poll_interval_ms": 10_000,
+            }
+            for i in range(6)
+        ]
+        _seed_session_telemetry(Session, rows)
+
+        result, _ = _run_task(Session, now_utc=FROZEN_NOW)
+        assert result.success, f"task failed: {result.message!r}"
+
+        with engine.connect() as conn:
+            rollup_switch = conn.execute(text(
+                "SELECT COALESCE(SUM(switch_event_count), 0) FROM "
+                "session_telemetry_provider_daily WHERE day = :day"
+            ), {"day": target_day.isoformat()}).scalar()
+
+            raw_switch = conn.execute(text(
+                "SELECT COALESCE(SUM(switch_event_count), 0) FROM "
+                "session_telemetry WHERE "
+                "date(observed_at / 1000, 'unixepoch') = :day"
+            ), {"day": target_day.isoformat()}).scalar()
+
+        assert rollup_switch == raw_switch, (
+            f"switch_event_count rollup ({rollup_switch}) != "
+            f"raw sum ({raw_switch}) for day {target_day}"
+        )
+        # Explicit: 6 rows × 1 switch event = 6
+        assert rollup_switch == 6, (
+            f"expected switch_event_count=6, got {rollup_switch}"
+        )
+
+    def test_rollup_provider_daily_buffer_event_count_no_regression(
+        self, rollup_db
+    ):
+        """Pre-existing buffer_event_count rollup still works after bd-d0ha9.
+
+        Verifies the INSERT OR REPLACE projection extension did not
+        accidentally drop or mis-map the buffer_event_count column.
+        """
+        engine, Session = rollup_db
+
+        target_day = FROZEN_NOW.date() - timedelta(days=2)
+        base_obs = datetime.combine(
+            target_day, datetime.min.time(), tzinfo=timezone.utc
+        ) + timedelta(hours=11)
+
+        rows = [
+            {
+                "session_id": f"sess-buf-{i}",
+                "observed_at": _ms_at_utc(base_obs + timedelta(seconds=i * 10)),
+                "user_id": 63,
+                "provider_id": 13,
+                "channel_id": "ch-buffer",
+                "bytes_delta": 400,
+                "buffer_event_count": 4,
+                "reconnect_event_count": 0,
+                "error_event_count": 0,
+                "switch_event_count": 0,
+                "poll_interval_ms": 10_000,
+            }
+            for i in range(3)
+        ]
+        _seed_session_telemetry(Session, rows)
+
+        result, _ = _run_task(Session, now_utc=FROZEN_NOW)
+        assert result.success, f"task failed: {result.message!r}"
+
+        with engine.connect() as conn:
+            rollup_buffer = conn.execute(text(
+                "SELECT COALESCE(SUM(buffer_event_count), 0) FROM "
+                "session_telemetry_provider_daily WHERE day = :day"
+            ), {"day": target_day.isoformat()}).scalar()
+
+        # 3 rows × 4 buffer events = 12
+        assert rollup_buffer == 12, (
+            f"buffer_event_count regression: expected 12, got {rollup_buffer}"
+        )
+
+    def test_rollup_provider_daily_all_four_counters_mixed(
+        self, rollup_db
+    ):
+        """All four event counters roll up correctly in a mixed-event row set.
+
+        Verifies that the rollup does not cross-contaminate counters when
+        a single session_telemetry row has nonzero values in multiple event
+        counter columns simultaneously.
+        """
+        engine, Session = rollup_db
+
+        target_day = FROZEN_NOW.date() - timedelta(days=2)
+        base_obs = datetime.combine(
+            target_day, datetime.min.time(), tzinfo=timezone.utc
+        ) + timedelta(hours=13)
+
+        # Three rows, each with different counts across all four event types.
+        rows = [
+            {
+                "session_id": "sess-mix-0",
+                "observed_at": _ms_at_utc(base_obs),
+                "user_id": 64,
+                "provider_id": 14,
+                "channel_id": "ch-mix",
+                "bytes_delta": 100,
+                "buffer_event_count": 1,
+                "reconnect_event_count": 2,
+                "error_event_count": 3,
+                "switch_event_count": 4,
+                "poll_interval_ms": 10_000,
+            },
+            {
+                "session_id": "sess-mix-1",
+                "observed_at": _ms_at_utc(base_obs + timedelta(seconds=10)),
+                "user_id": 64,
+                "provider_id": 14,
+                "channel_id": "ch-mix",
+                "bytes_delta": 100,
+                "buffer_event_count": 0,
+                "reconnect_event_count": 1,
+                "error_event_count": 0,
+                "switch_event_count": 2,
+                "poll_interval_ms": 10_000,
+            },
+            {
+                "session_id": "sess-mix-2",
+                "observed_at": _ms_at_utc(base_obs + timedelta(seconds=20)),
+                "user_id": 64,
+                "provider_id": 14,
+                "channel_id": "ch-mix",
+                "bytes_delta": 100,
+                "buffer_event_count": 5,
+                "reconnect_event_count": 0,
+                "error_event_count": 1,
+                "switch_event_count": 0,
+                "poll_interval_ms": 10_000,
+            },
+        ]
+        _seed_session_telemetry(Session, rows)
+
+        result, _ = _run_task(Session, now_utc=FROZEN_NOW)
+        assert result.success, f"task failed: {result.message!r}"
+
+        with engine.connect() as conn:
+            row = conn.execute(text(
+                "SELECT buffer_event_count, reconnect_event_count, "
+                "       error_event_count, switch_event_count "
+                "FROM session_telemetry_provider_daily "
+                "WHERE channel_id = 'ch-mix' AND day = :day"
+            ), {"day": target_day.isoformat()}).fetchone()
+
+        assert row is not None, "no rollup row written for ch-mix"
+        buf, rcn, err, sw = row
+        # buf: 1+0+5=6, rcn: 2+1+0=3, err: 3+0+1=4, sw: 4+2+0=6
+        assert buf == 6, f"buffer_event_count expected 6, got {buf}"
+        assert rcn == 3, f"reconnect_event_count expected 3, got {rcn}"
+        assert err == 4, f"error_event_count expected 4, got {err}"
+        assert sw == 6, f"switch_event_count expected 6, got {sw}"

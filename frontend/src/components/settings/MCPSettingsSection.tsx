@@ -8,6 +8,8 @@ import { logger } from '../../utils/logger';
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
+import { copyToClipboard } from '../../utils/clipboard';
+import { MCP_TOOL_CATEGORIES } from './mcpToolCategories';
 import './MCPSettingsSection.css';
 
 interface Props {
@@ -91,9 +93,13 @@ export function MCPSettingsSection({ isAdmin }: Props) {
     }
   };
 
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    notifications.success('Copied to clipboard');
+  const handleCopy = async (text: string, label: string) => {
+    const ok = await copyToClipboard(text, label);
+    if (ok) {
+      notifications.success('Copied to clipboard');
+    } else {
+      notifications.error('Failed to copy to clipboard');
+    }
   };
 
   const mcpPort = '6101';
@@ -216,7 +222,7 @@ export function MCPSettingsSection({ isAdmin }: Props) {
                   <code>{apiKey}</code>
                   <button
                     className="mcp-copy-btn"
-                    onClick={() => handleCopy(apiKey)}
+                    onClick={() => handleCopy(apiKey, 'API key')}
                     title="Copy API key"
                   >
                     <span className="material-icons">content_copy</span>
@@ -274,37 +280,51 @@ export function MCPSettingsSection({ isAdmin }: Props) {
 
           <div className="form-group-vertical">
             <p className="form-description">
-              The MCP server runs on port <strong>{mcpPort}</strong> alongside ECM, using the Streamable HTTP transport on a single <code>/mcp</code> endpoint. Connect Claude Desktop or Claude Code using the endpoint below.
+              The MCP server runs on port <strong>{mcpPort}</strong> alongside ECM, using the Streamable HTTP transport on a single <code>/mcp</code> endpoint. Authentication uses your static MCP API key, passed as the <code>?api_key=</code> query parameter — all traffic stays on your private network, with no public exposure required.
             </p>
 
-            <label className="form-label">MCP Endpoint</label>
+            {/* mcp-remote bridge (Node) — Claude Desktop static-key path */}
+            <label className="form-label" style={{ marginTop: '1.25rem' }}>Claude Desktop — mcp-remote bridge (Node required, private-network OK)</label>
+            <p className="form-description" style={{ color: 'var(--accent-green, #4caf50)' }}>
+              ✅ Runs entirely on your machine — works on a LAN/VPN-only ECM with no public exposure.
+            </p>
+            <p className="form-description">
+              If you have Node.js installed on the same machine as Claude Desktop (LTS 18+ — install from{' '}
+              <a href="https://nodejs.org/" target="_blank" rel="noopener noreferrer">nodejs.org</a>
+              {', '}
+              <code>winget install OpenJS.NodeJS.LTS</code>, <code>brew install node</code>, or <code>apt install nodejs npm</code>), add this to your <code>claude_desktop_config.json</code>.
+              Replace <code>YOUR_ECM_HOST</code> and <code>YOUR_API_KEY</code>. Without Node on PATH, Claude Desktop&apos;s logs show <code>spawn npx ENOENT</code>.
+            </p>
+            <div className="mcp-config-block">
+              <pre>{claudeDesktopConfig}</pre>
+              <button
+                className="mcp-copy-btn"
+                onClick={() => handleCopy(claudeDesktopConfig, 'Claude Desktop config')}
+                title="Copy config"
+              >
+                <span className="material-icons">content_copy</span>
+              </button>
+            </div>
+            <p className="form-description" style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: 'var(--text-secondary, #888)' }}>
+              (<code>--allow-http</code> is needed because the endpoint is plain HTTP. The <code>?api_key=</code> parameter is your <code>mcp_api_key</code> — not your Dispatcharr key.)
+            </p>
+
+            <label className="form-label" style={{ marginTop: '1rem' }}>MCP Endpoint (reference)</label>
             <div className="mcp-key-display">
               <code>http://YOUR_ECM_HOST:{mcpPort}/mcp?api_key=YOUR_API_KEY</code>
               <button
                 className="mcp-copy-btn"
-                onClick={() => handleCopy(mcpEndpoint)}
+                onClick={() => handleCopy(mcpEndpoint, 'MCP endpoint URL')}
                 title="Copy URL"
               >
                 <span className="material-icons">content_copy</span>
               </button>
             </div>
 
-            <label className="form-label" style={{ marginTop: '1rem' }}>Claude Desktop Config</label>
-            <p className="form-description">
-              Add this to your Claude Desktop settings. Replace <code>YOUR_ECM_HOST</code> with your server's IP or hostname and <code>YOUR_API_KEY</code> with the key above. (Claude Desktop reaches remote MCP servers through the <code>mcp-remote</code> bridge; <code>--allow-http</code> is needed for plain-HTTP endpoints.)
+            <label className="form-label" style={{ marginTop: '1rem' }}>Claude Code Config (.mcp.json) — private-network OK, no Node</label>
+            <p className="form-description" style={{ color: 'var(--accent-green, #4caf50)' }}>
+              ✅ Connects directly over HTTP from your machine — works on a LAN/VPN-only ECM with no public exposure and no Node.js.
             </p>
-            <div className="mcp-config-block">
-              <pre>{claudeDesktopConfig}</pre>
-              <button
-                className="mcp-copy-btn"
-                onClick={() => handleCopy(claudeDesktopConfig)}
-                title="Copy config"
-              >
-                <span className="material-icons">content_copy</span>
-              </button>
-            </div>
-
-            <label className="form-label" style={{ marginTop: '1rem' }}>Claude Code Config (.mcp.json)</label>
             <p className="form-description">
               Save this as <code>.mcp.json</code> in a project directory where you want ECM tools available.
             </p>
@@ -312,7 +332,7 @@ export function MCPSettingsSection({ isAdmin }: Props) {
               <pre>{claudeCodeConfig}</pre>
               <button
                 className="mcp-copy-btn"
-                onClick={() => handleCopy(claudeCodeConfig)}
+                onClick={() => handleCopy(claudeCodeConfig, 'Claude Code config')}
                 title="Copy config"
               >
                 <span className="material-icons">content_copy</span>
@@ -322,6 +342,11 @@ export function MCPSettingsSection({ isAdmin }: Props) {
         </div>
       )}
 
+      {/* Active Connections (OAuth grants) section REMOVED (bd-9axgc) — the MCP
+          OAuth offering was retired, so there are no OAuth grants to list or
+          revoke. The static ?api_key= path is managed via the API Key section
+          above (generate / regenerate / revoke). */}
+
       {/* Available Tools */}
       {keyConfigured && (
         <div className="settings-section">
@@ -330,21 +355,7 @@ export function MCPSettingsSection({ isAdmin }: Props) {
             <h3>Available Tools (80)</h3>
           </div>
           <div className="mcp-tools-grid">
-            {[
-              { category: 'Channels', count: 12, icon: 'tv', desc: 'CRUD, streams, merge, bulk numbering' },
-              { category: 'Groups', count: 6, icon: 'folder', desc: 'CRUD, hidden, orphaned, auto-created' },
-              { category: 'Streams', count: 11, icon: 'stream', desc: 'List, search, probe, health, struck-out' },
-              { category: 'M3U', count: 8, icon: 'playlist_play', desc: 'Account CRUD, refresh, group settings' },
-              { category: 'EPG', count: 7, icon: 'schedule', desc: 'Source CRUD, grid, refresh, auto-match' },
-              { category: 'Auto-Create', count: 9, icon: 'auto_fix_high', desc: 'Rule CRUD, toggle, executions, rollback' },
-              { category: 'Export', count: 6, icon: 'file_download', desc: 'Profiles, cloud targets, publish' },
-              { category: 'Tasks', count: 7, icon: 'timer', desc: 'Run, cancel, history, schedules' },
-              { category: 'Stats', count: 6, icon: 'analytics', desc: 'Top watched, bandwidth, popularity, viewers' },
-              { category: 'System', count: 3, icon: 'settings', desc: 'Settings, backup, journal' },
-              { category: 'Notifications', count: 3, icon: 'notifications', desc: 'List, mark read, clear' },
-              { category: 'Profiles', count: 3, icon: 'tune', desc: 'Channel/stream profiles, bulk assign' },
-              { category: 'Normalize', count: 2, icon: 'text_format', desc: 'Test normalization, list rules' },
-            ].map(t => (
+            {MCP_TOOL_CATEGORIES.map(t => (
               <div key={t.category} className="mcp-tool-card">
                 <div className="mcp-tool-card-header">
                   <span className="material-icons">{t.icon}</span>

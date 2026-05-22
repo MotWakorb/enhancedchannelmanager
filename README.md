@@ -69,6 +69,10 @@ Or if you're building from source, use the MCP compose overlay:
 docker compose -f docker-compose.yml -f docker-compose.mcp.yml up -d
 ```
 
+**Reaching the MCP container from ECM** — ECM's Settings > MCP Integration status badge probes the MCP server's `/health` endpoint. By default it targets `ecm-mcp:6101`, which Docker DNS resolves to the MCP container on the canonical compose network — no extra configuration needed. If you run both containers with `network_mode: host` (host network namespace shared), set `MCP_HOST=localhost` on the ECM service so the probe targets the host loopback instead of the (non-existent on that topology) `ecm-mcp` DNS name.
+
+> **Upgrade note (v0.17.1-0066+):** If you previously ran ECM and ecm-mcp with `network_mode: host` and never set `MCP_HOST`, you need to act. Earlier versions hardcoded `localhost` as the probe target; v0.17.1-0064 changed the default to `ecm-mcp` (the canonical compose service name). On a host-networking deploy, `ecm-mcp` does not resolve — so after pulling `dev`, your Settings > MCP Integration badge will show "MCP server not reachable" even when MCP is healthy. Fix: add `MCP_HOST=localhost` to the ECM service's `environment` block in your compose file and restart the container.
+
 See [MCP Server (Claude Integration)](#mcp-server-claude-integration) for setup instructions.
 
 **User / Group Identifiers:**
@@ -175,21 +179,59 @@ Things you can ask Claude to do:
 
 ### Setup
 
-> **`settings.json` field reference — two separate keys**
+> **`settings.json` field reference**
 >
 > | Field in `settings.json` | What it is for |
 > |---|---|
 > | `url` | Dispatcharr base URL |
-> | `api_key` | **Dispatcharr REST API token** — ECM uses this to talk to Dispatcharr. Never replace it with an MCP key. |
-> | `mcp_api_key` | **ECM MCP key** — the `ecm-mcp` sidecar uses this to authenticate calls to ECM. This is what the Generate / Regenerate button in Settings > MCP Integration writes. |
+> | `dispatcharr_api_key` | **Dispatcharr REST API token** — ECM uses this to talk to Dispatcharr. (Canonical field name as of v0.17.1, GH #273. Operators upgrading from v0.17.0 or earlier will have the value in the legacy `api_key` field; ECM auto-migrates on next startup with a one-time `[CONFIG] Reading deprecated 'api_key' field …` WARN log.) Never replace it with an MCP key. |
+> | `api_key` | **DEPRECATED legacy alias for `dispatcharr_api_key`.** ECM still reads this for one release of back-compat (v0.17.x). The first read after upgrade emits a deprecation WARN and silently mirrors the value into `dispatcharr_api_key` on the next save. Rename or remove this field once you confirm `dispatcharr_api_key` is populated. |
+> | `mcp_api_key` | **ECM MCP static key** — the `ecm-mcp` sidecar uses this to authenticate calls to ECM via the `?api_key=` path. This is what the Generate / Regenerate button in Settings > MCP Integration writes. The `?api_key=` path is the supported MCP authentication method. |
 >
-> When rotating an MCP key, the new key goes in `mcp_api_key`. Do **not** touch `api_key` — overwriting it with an MCP key breaks every channel and stream operation (ECM returns 401 to Dispatcharr). If you see `api_key_configured: false` from the `/health` endpoint after a rotation, the diagnostic's `status` field will indicate whether `mcp_api_key` is missing from the file (`field_missing`), blank (`field_empty`), or the file itself is unreadable (`file_not_found` / `invalid_json`) — use `GET http://YOUR_ECM_HOST:6100/api/health` to check.
+> When rotating an MCP key, the new key goes in `mcp_api_key`. Do **not** touch `dispatcharr_api_key` (or its legacy `api_key` alias) — overwriting either with an MCP key breaks every channel and stream operation (ECM returns 401 to Dispatcharr). If you see `api_key_configured: false` from the `/health` endpoint after a rotation, the diagnostic's `status` field will indicate whether `mcp_api_key` is missing from the file (`field_missing`), blank (`field_empty`), or the file itself is unreadable (`file_not_found` / `invalid_json`) — use `GET http://YOUR_ECM_HOST:6100/api/health` to check.
+>
+> **Migration example.** A v0.17.0 `settings.json` from an operator hit by GH #273:
+> ```json
+> {
+>   "url": "http://dispatcharr:9191",
+>   "api_key": "real-dispatcharr-rest-token-abc",
+>   "mcp_api_key": "ecm-mcp-key-xyz"
+> }
+> ```
+> After the first v0.17.1 startup and the next settings save, the file becomes:
+> ```json
+> {
+>   "url": "http://dispatcharr:9191",
+>   "dispatcharr_api_key": "real-dispatcharr-rest-token-abc",
+>   "api_key": "real-dispatcharr-rest-token-abc",
+>   "mcp_api_key": "ecm-mcp-key-xyz"
+> }
+> ```
+> Both fields hold the same Dispatcharr token (the duplicate is intentional — external scripts that still read `api_key` keep working). Once you've removed any such scripts, you can manually delete the legacy `api_key` line; ECM will keep using `dispatcharr_api_key` from then on.
 
 1. **Generate an API key** in ECM Settings > MCP Integration (this writes to `mcp_api_key` in `settings.json`)
 2. **Start the MCP container** — add the `ecm-mcp` service to your compose file (see [With MCP Server](#with-mcp-server-claude-ai-integration)) and start it on port 6101
-3. **Connect Claude** using one of the methods below (replace `YOUR_ECM_HOST` and `YOUR_API_KEY` with the value from step 1):
+3. **Connect Claude** — choose your method:
 
-**Claude Desktop** — Claude Desktop talks to remote MCP servers through the `mcp-remote` bridge, so add this to your `claude_desktop_config.json`:
+### Choose your connection method
+
+ECM's MCP server is authenticated with a static API key (`mcp_api_key`), passed as the `?api_key=` query parameter. Both connection methods below run on *your* machine and connect to ECM over your LAN/VPN — nothing needs to be exposed to the public internet.
+
+| Method | Node.js? | Best for |
+|---|---|---|
+| [Claude Desktop — mcp-remote bridge](#claude-desktop--mcp-remote-bridge-node-required) | Yes (LTS 18+ on the Claude Desktop machine) | Claude Desktop users; private/homelab deploys; existing setups |
+| [Claude Code — `.mcp.json`](#claude-code-mcpjson) | No | Claude Code in any project; direct HTTP, no Node.js |
+
+---
+
+### Claude Desktop — mcp-remote bridge (Node required)
+
+✅ **Works on a private network — no public exposure.** `mcp-remote` runs **on your machine** and connects to ECM over your LAN/VPN, so ECM never has to be reachable from the internet (the cost is needing Node.js on the Claude Desktop machine).
+
+Claude Desktop talks to remote MCP servers through the `mcp-remote` bridge. Add this to your `claude_desktop_config.json`:
+
+> **Prerequisite:** Claude Desktop does **not** bundle Node.js. The `mcp-remote` bridge is an npm package that Claude Desktop runs via `npx`, so you need Node.js installed on the same machine as Claude Desktop (any current LTS — Node 18+ — is fine). Install it from [nodejs.org](https://nodejs.org/) (or via a package manager: `winget install OpenJS.NodeJS.LTS` on Windows, `brew install node` on macOS, `apt install nodejs npm` on Debian/Ubuntu). Without Node on PATH, Claude Desktop fails to launch the MCP server with a `spawn npx ENOENT` error in its logs.
+
 ```json
 {
   "mcpServers": {
@@ -204,11 +246,18 @@ Things you can ask Claude to do:
   }
 }
 ```
-(`--allow-http` is needed because the endpoint is plain HTTP. If your Claude Desktop build supports a direct remote URL, `{ "mcpServers": { "ecm": { "url": "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_API_KEY" } } }` also works — the `mcp-remote` form is the most broadly compatible.)
+(`--allow-http` is needed because the endpoint is plain HTTP.)
 
 > **Note:** the `?api_key=` query parameter in these URLs is your `mcp_api_key` value from `settings.json` — the key generated in ECM Settings > MCP Integration. It is **not** your Dispatcharr `api_key`.
 
-**Claude Code** — create a `.mcp.json` file in any project directory where you want ECM tools available:
+---
+
+### Claude Code (`.mcp.json`)
+
+✅ **Works on a private network — no Node.js, no public exposure.** Claude Code speaks the HTTP transport natively and connects directly from your machine, so a LAN/VPN-reachable ECM is all you need. This is the simplest private path if you use Claude Code.
+
+Create a `.mcp.json` file in any project directory where you want ECM tools available:
+
 ```json
 {
   "mcpServers": {
@@ -228,9 +277,13 @@ To connect:
 
 If running ECM locally, use `localhost` as your host. If the MCP container is on the same Docker network as Claude Code, use the container name (`ecm-mcp`).
 
+---
+
 **Upgrading from an earlier version:** the MCP server moved from the deprecated SSE transport (`/sse` + `/messages/`) to the modern Streamable HTTP transport on a single `/mcp` endpoint. If you have an existing config pointing at `http://YOUR_ECM_HOST:6101/sse?api_key=...` (or `"type": "sse"` in a `.mcp.json`), change the path to `/mcp` (and `"type": "http"` for Claude Code). The `/sse` endpoint was removed in this version. API-key auth is unchanged.
 
-**Redeploying or rotating the MCP key:** use Settings > MCP Integration > Regenerate Key — this updates `mcp_api_key` in `settings.json`. Then update the `?api_key=` value in your Claude Desktop / Claude Code config. Do **not** edit `api_key` in `settings.json` — that is the Dispatcharr REST token and is separate (see the field reference at the top of this section).
+**Redeploying or rotating the MCP key:** use Settings > MCP Integration > Regenerate Key — this updates `mcp_api_key` in `settings.json`. Then update the `?api_key=` value in your Claude Desktop / Claude Code config. Do **not** edit `dispatcharr_api_key` (or its legacy `api_key` alias) in `settings.json` — that is the Dispatcharr REST token and is separate (see the field reference at the top of this section). As of v0.17.1 (GH #273) the Dispatcharr token lives in `dispatcharr_api_key`; the legacy `api_key` field is still read for one release of back-compat with a deprecation WARN.
+
+**For the full reference** — step-by-step connection setup, key rotation details, and troubleshooting — see **[docs/user_guide/integrations/mcp.md](docs/user_guide/integrations/mcp.md)**.
 
 ### Available Tools (124)
 

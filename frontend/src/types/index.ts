@@ -357,6 +357,25 @@ export * from './journal';
 // Stats & Monitoring Types
 // =============================================================================
 
+// Multi-viewer attribution (bd-r5f0c.9 / W9). Each entry represents one
+// upstream user observed in a media-server session that corresponds to an
+// ECM stream. The ``user_id`` may be null when the resolver doesn't surface
+// a stable server-side identifier (e.g. Plex today).
+export interface Viewer {
+  user_id: string | null;
+  user_name: string;
+  // bd-7ncci: the REAL requesting-device IP the media server reported for
+  // this viewer's session (Emby/Jellyfin RemoteEndPoint / Plex
+  // Player@address, normalized to a bare IP). Null when the source did not
+  // expose it. Distinct from the StreamClient's Dispatcharr-observed
+  // ip_address — this is the device behind the media server.
+  client_ip?: string | null;
+}
+
+// Attribution source for a given client or channel. Drives badge icon +
+// label in <AttributionBadge>. Null = no source resolved.
+export type AttributionSource = 'emby' | 'plex' | 'jellyfin' | 'dispatcharr' | null;
+
 // Client connection info for an active stream
 export interface StreamClient {
   client_id: string;
@@ -370,6 +389,27 @@ export interface StreamClient {
   current_rate_KBps?: number;
   user_id?: string;
   username?: string;
+  /** Legacy singular attribution (back-compat; most-recent viewer's name).
+   * bd-5kbyf: Emby user resolved via cross-reference when this channel is
+   * Emby-mediated. Null when Emby is disabled or no attribution matched. */
+  emby_user_name?: string | null;
+  // Plex/Jellyfin legacy singular (W4 / bd-r5f0c.4)
+  plex_user_name?: string | null;
+  jellyfin_user_name?: string | null;
+  // Multi-viewer lists (W9 / bd-r5f0c.9). Null = no attribution from that source.
+  emby_viewers?: Viewer[] | null;
+  plex_viewers?: Viewer[] | null;
+  jellyfin_viewers?: Viewer[] | null;
+  // bd-7ncci: the REAL requesting-device IP the media server reported for an
+  // attributed connection (source-agnostic). ``client_ip`` is the single
+  // attributed viewer's device IP; ``client_ips`` is the distinct set for a
+  // server-proxy or Option-B rollup connection. Blank/empty for an
+  // unattributed (or direct-XC) connection. Distinct from ``ip_address``
+  // (the Dispatcharr connection IP ECM observes).
+  client_ip?: string | null;
+  client_ips?: string[];
+  // Most-recent viewer's attribution source (drives badge selection)
+  attribution_source?: AttributionSource;
 }
 
 // Active channel stats from /proxy/ts/status
@@ -425,6 +465,42 @@ export interface ChannelStats {
   // additional /api round-trip per row. Null when the resolver could
   // not attribute the active stream to a provider.
   m3u_account_id?: number | null;
+
+  // bd-gy5nd: backend-derived operator-visible provider label. The M3U
+  // source ``name`` when the URL hostname matched a configured M3U
+  // account, OR the bare URL hostname (e.g. ``"infinity.gives"``) when
+  // no M3U account match exists. ``null`` only when the active URL
+  // itself is absent/unparsable. The Stats Tab badge prefers this
+  // string over the side-load ``m3uAccounts`` lookup so the PO sees
+  // the actual upstream provider instead of "Unknown".
+  provider_name?: string | null;
+  // bd-gy5nd: bare URL hostname parsed from the active stream URL.
+  // Populated whenever the URL is well-formed (independent of M3U
+  // match). Mainly diagnostic — the operator-visible badge uses
+  // ``provider_name`` (which already falls back to the hostname when
+  // no M3U match exists).
+  provider_hostname?: string | null;
+
+  // Emby attribution enrichment (bd-fm23o, final bead of EPIC bd-2cenq):
+  // backend calls the Emby resolver per-client at request time and
+  // surfaces the matched viewer's Emby username here when at least one
+  // client resolves. Null when Emby is disabled, no client came from
+  // the configured Emby server IP, or no live Emby session matched the
+  // stream name. bd-cat70 (v0.17.1-0057): the Active Channels card no
+  // longer renders this in the channel header — the single-viewer name
+  // is shown only in the per-client Connected Clients section (with
+  // the AttributionBadge). The channel header shows the multi-viewer
+  // "(N viewers)" rollup only when N > 1.
+  emby_user_name?: string | null;
+  // Plex / Jellyfin legacy singular (W4 / bd-r5f0c.4)
+  plex_user_name?: string | null;
+  jellyfin_user_name?: string | null;
+  // Multi-viewer lists (W9 / bd-r5f0c.9). Null = no attribution from that source.
+  emby_viewers?: Viewer[] | null;
+  plex_viewers?: Viewer[] | null;
+  jellyfin_viewers?: Viewer[] | null;
+  // Most-recent viewer's attribution source (drives badge selection)
+  attribution_source?: AttributionSource;
 }
 
 // Response from /proxy/ts/status
@@ -1141,10 +1217,21 @@ export interface WatchHistoryResponse {
 // { data, meta: { from_iso, to_iso, group_by, total_rows }, pagination: null }.
 // Both are admin-only — non-admin callers receive 403.
 
+// bd-fm23o (final bead of EPIC bd-2cenq — Emby user attribution):
+// ``attribution_source`` discriminates between Dispatcharr-side and
+// Emby-side attribution chains. When ``"emby"``, the ``username`` field
+// is the resolved Emby username (rather than the Dispatcharr-side proxy
+// account that ECM would otherwise see) and the UI renders a "via Emby"
+// badge so the operator knows the attribution path. ``"dispatcharr"`` is
+// the pre-bd-fm23o default for sessions with no Emby attribution.
+// Extended by bd-r5f0c.5 to include 'plex' and 'jellyfin' variants.
+// The canonical definition is at the top of this file (line ~371).
+
 // Row shape for /watch-time with group_by=total
 export interface WatchTimeUserTotalRow {
   user_id: number;
   username: string | null;
+  attribution_source: AttributionSource;
   total_watch_seconds: number;
   last_watched: string | null;  // ISO-8601 UTC, e.g. "2026-05-13T12:34:56Z"
 }
@@ -1153,6 +1240,7 @@ export interface WatchTimeUserTotalRow {
 export interface WatchTimeUserDayRow {
   user_id: number;
   username: string | null;
+  attribution_source: AttributionSource;
   day: string;  // "YYYY-MM-DD" (UTC)
   watch_seconds: number;
 }

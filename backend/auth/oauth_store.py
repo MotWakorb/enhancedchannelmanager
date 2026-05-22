@@ -1,0 +1,1056 @@
+"""OAuth 2.1 state store — SQLite at /config/mcp_oauth.db (bead buiqr.2).
+
+Foundation layer of the OAuth 2.1 epic (``enhancedchannelmanager-buiqr``).
+This module is a clean, framework-agnostic data layer; it holds **no** HTTP
+logic, no MCP-SDK coupling, and no FastAPI/Starlette dependency.
+
+OWNERSHIP — ECM-OWNED, SINGLE WRITER (ADR-009 §1/§5, Option A — gswk2)
+================================================================================
+This store is owned **exclusively by the ECM container** (the Authorization
+Server, bead ``buiqr.3``). ECM mounts ``/config`` read-write and is the sole
+process that creates, reads, and writes ``/config/mcp_oauth.db``. The MCP
+container (the Resource Server, bead ``buiqr.8``) mounts ``/config``
+**read-only** and does **not** touch this DB at all: it validates Bearer JWTs
+purely offline (HS256 signature verify against the shared secret it already
+reads from ``settings.json``), and the revocation window is bounded by a short
+access-token TTL (≤ 15 min) rather than by the RS reading a revocation table.
+
+This re-homes the module from ``mcp-server/`` to ``backend/auth/`` and reverses
+the original "MCP-container-managed, RS-reads-the-shared-file" design (epic
+PO-locked decision #3): the MCP container's ``/config:ro`` mount makes both
+writing the DB and reliably reading a live WAL DB infeasible from MCP. See
+blocker ``enhancedchannelmanager-gswk2`` and ADR-009's revision history.
+
+Security posture (ADR-009 §5, threat model TS1/T3/SP*):
+  - **Hashed-at-rest.** Token/code values are SHA-256 hashed before storage,
+    mirroring ``backend/auth/tokens.py`` ``hash_token()``
+    (``hashlib.sha256(value.encode()).hexdigest()``). A read of the DB yields
+    hashes, not bearer credentials (TS1).
+  - **jti revocation.** Revocation marks the ``jti`` revoked, mirroring
+    ``revoke_token(jti)`` in the existing JWT subsystem. Because the RS verifies
+    offline and never reads this store, revocation is enforced by the AS at
+    ``/token`` (a revoked refresh token cannot mint a new access token) and
+    backstopped by the short access-token TTL — not by a per-request RS lookup.
+  - **Refresh rotation + reuse detection.** Refresh tokens rotate on use; a
+    replayed (already-consumed) refresh token is rejected AND invalidates the
+    whole token *family* — the standard breach response to refresh reuse (T3).
+  - **Parameterized SQL only.** No string interpolation into SQL anywhere.
+  - **0600 file mode.** The DB file is created/tightened to owner-only rw.
+  - **WAL mode.** Enables concurrent access from ECM's own worker threads.
+
+================================================================================
+SCHEMA
+================================================================================
+The canonical DDL lives in ``_SCHEMA_DDL`` below (idempotent
+``CREATE TABLE IF NOT EXISTS``). The ECM AS endpoints (``buiqr.3``) import this
+module directly — one owner, one source of truth, no cross-process schema
+duplication.
+
+All time columns are **epoch seconds** (``int(time.time())``), consistent with
+JWT ``iat``/``exp`` and the second-resolution epoch used elsewhere in the
+codebase (e.g. ``stream_prober.py``). Boolean columns are stored as INTEGER
+0/1 (SQLite has no native bool).
+
+oauth_clients      — the hardcoded OAuth client registry (seeded by buiqr.6).
+  client_id        TEXT PRIMARY KEY    — e.g. "claude-desktop", "claude-code".
+  client_name      TEXT NOT NULL       — display name pinned on the consent UI.
+  redirect_uris    TEXT NOT NULL       — JSON array of exact-match allowlisted URIs.
+  created_at       INTEGER NOT NULL    — epoch seconds.
+
+auth_codes         — short-lived PKCE authorization codes (<=10 min TTL).
+  code_hash        TEXT PRIMARY KEY    — SHA-256(code). The raw code is never stored.
+  client_id        TEXT NOT NULL
+  redirect_uri     TEXT NOT NULL       — the redirect_uri presented at /authorize.
+  code_challenge   TEXT NOT NULL       — PKCE S256 challenge.
+  code_challenge_method TEXT NOT NULL  — "S256" (ADR-009 §3; "plain" rejected upstream).
+  scope            TEXT NOT NULL       — "mcp" (single scope, v1).
+  user_sub         TEXT NOT NULL       — the ECM admin subject the grant binds to.
+  created_at       INTEGER NOT NULL    — epoch seconds.
+  expires_at       INTEGER NOT NULL    — epoch seconds; capped at created_at + 600.
+  consumed_at      INTEGER             — epoch seconds when consumed; NULL = unused.
+
+access_tokens      — issued access-token records (hashed, for revocation/audit).
+  token_hash       TEXT PRIMARY KEY    — SHA-256(token).
+  jti              TEXT NOT NULL       — unique token id for revocation (UNIQUE).
+  client_id        TEXT NOT NULL
+  user_sub         TEXT NOT NULL
+  scope            TEXT NOT NULL
+  created_at       INTEGER NOT NULL
+  expires_at       INTEGER NOT NULL
+
+refresh_tokens     — refresh tokens with rotation/reuse-detection (<=30 day cap).
+  token_hash       TEXT PRIMARY KEY    — SHA-256(token).
+  jti              TEXT NOT NULL       — unique id (UNIQUE).
+  family_id        TEXT NOT NULL       — rotation lineage; reuse kills the family.
+  client_id        TEXT NOT NULL
+  user_sub         TEXT NOT NULL
+  scope            TEXT NOT NULL
+  created_at       INTEGER NOT NULL
+  expires_at       INTEGER NOT NULL    — capped at created_at + 30 days.
+  consumed         INTEGER NOT NULL    — 0 = live, 1 = rotated/consumed.
+  consumed_at      INTEGER             — epoch seconds when rotated; NULL = live.
+
+revocations        — explicit revocation ledger (jti-based and family-based).
+  id               INTEGER PRIMARY KEY AUTOINCREMENT
+  jti              TEXT                — revoked token jti (NULL for family rows).
+  family_id        TEXT                — revoked refresh family (NULL for jti rows).
+  reason           TEXT
+  revoked_at       INTEGER NOT NULL    — epoch seconds.
+
+consent_states     — CSRF state bindings for the /authorize → consent → approve
+                     flow (bead buiqr.4 AC3). A short-lived row that binds the
+                     anti-CSRF ``state`` value to the admin subject that started
+                     the flow at /authorize, so a forged/mismatched state on
+                     /authorize/approve is rejected. Single-use, like auth codes.
+  state_hash       TEXT PRIMARY KEY    — SHA-256(state). The raw state is never stored.
+  client_id        TEXT NOT NULL       — the client the flow was started for.
+  user_sub         TEXT NOT NULL       — the admin subject the state binds to.
+  created_at       INTEGER NOT NULL    — epoch seconds.
+  expires_at       INTEGER NOT NULL    — epoch seconds; capped at created_at + 600.
+  consumed_at      INTEGER             — epoch seconds when consumed; NULL = unused.
+================================================================================
+"""
+import hashlib
+import json
+import logging
+import os
+import secrets
+import sqlite3
+import time
+from pathlib import Path
+from typing import Any, Optional, Union
+
+logger = logging.getLogger(__name__)
+
+# ── TTL ceilings (ADR-009 §3, §5; epic AC) ──────────────────────────────────
+#: Authorization codes expire in at most 10 minutes (AC2).
+AUTH_CODE_MAX_TTL_SECONDS = 10 * 60  # 600
+#: Refresh tokens are capped at 30 days (AC).
+REFRESH_TOKEN_MAX_TTL_SECONDS = 30 * 24 * 60 * 60  # 2_592_000
+#: CSRF consent-state bindings expire in at most 10 minutes — the same window as
+#: an authorization code, since the state must survive only the brief
+#: /authorize → consent → approve round-trip (bead buiqr.4 AC3).
+CONSENT_STATE_MAX_TTL_SECONDS = 10 * 60  # 600
+
+#: File mode for the DB file: owner read/write only (AC6).
+_DB_FILE_MODE = 0o600
+
+# ── Canonical schema DDL (idempotent). ──────────────────────────────────────
+# ECM (buiqr.3) is the sole owner; the AS endpoints import this module and run
+# this DDL on init. One owner, one source of truth — no schema mirroring.
+_SCHEMA_DDL = """
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    client_id     TEXT PRIMARY KEY,
+    client_name   TEXT NOT NULL,
+    redirect_uris TEXT NOT NULL,
+    created_at    INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS auth_codes (
+    code_hash             TEXT PRIMARY KEY,
+    client_id             TEXT NOT NULL,
+    redirect_uri          TEXT NOT NULL,
+    code_challenge        TEXT NOT NULL,
+    code_challenge_method TEXT NOT NULL,
+    scope                 TEXT NOT NULL,
+    user_sub              TEXT NOT NULL,
+    created_at            INTEGER NOT NULL,
+    expires_at            INTEGER NOT NULL,
+    consumed_at           INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS access_tokens (
+    token_hash TEXT PRIMARY KEY,
+    jti        TEXT NOT NULL UNIQUE,
+    client_id  TEXT NOT NULL,
+    user_sub   TEXT NOT NULL,
+    scope      TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    token_hash  TEXT PRIMARY KEY,
+    jti         TEXT NOT NULL UNIQUE,
+    family_id   TEXT NOT NULL,
+    client_id   TEXT NOT NULL,
+    user_sub    TEXT NOT NULL,
+    scope       TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    expires_at  INTEGER NOT NULL,
+    consumed    INTEGER NOT NULL DEFAULT 0,
+    consumed_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS revocations (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    jti        TEXT,
+    family_id  TEXT,
+    reason     TEXT,
+    revoked_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS consent_states (
+    state_hash  TEXT PRIMARY KEY,
+    client_id   TEXT NOT NULL,
+    user_sub    TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    expires_at  INTEGER NOT NULL,
+    consumed_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_revocations_jti        ON revocations(jti);
+CREATE INDEX IF NOT EXISTS idx_revocations_family     ON revocations(family_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_family         ON refresh_tokens(family_id);
+CREATE INDEX IF NOT EXISTS idx_auth_codes_expires     ON auth_codes(expires_at);
+CREATE INDEX IF NOT EXISTS idx_access_tokens_expires  ON access_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_consent_states_expires ON consent_states(expires_at);
+"""
+
+
+class RefreshTokenReuseError(Exception):
+    """Raised when an already-rotated (consumed) refresh token is replayed.
+
+    Per the standard refresh-rotation breach response (ADR-009 §3, threat
+    model T3), the consumer maps this to HTTP 400 ``invalid_grant`` AND the
+    store invalidates the entire token family. A replayed refresh token is a
+    signal that the token chain may be compromised.
+    """
+
+
+def hash_secret(value: str) -> str:
+    """Return the SHA-256 hex digest of a token/code value (hashed-at-rest).
+
+    Mirrors ``backend/auth/tokens.py`` ``hash_token()`` exactly so the AS and
+    RS produce identical hashes for the same value. The plaintext is never
+    persisted; only this digest goes into the DB.
+    """
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _now() -> int:
+    """Current epoch time in seconds (matches JWT iat/exp resolution)."""
+    return int(time.time())
+
+
+# ── Store-health diagnostics (bd-m19zx, Option A follow-up) ─────────────────
+# ECM owns /config/mcp_oauth.db exclusively (ADR-009 §1/§5). These diagnostic
+# codes mirror the ``get_mcp_api_key_status()`` pattern from mcp-server/config.py
+# but are ECM-side because the MCP RS cannot read the store (it mounts /config
+# read-only and never opens this DB — see module docstring).
+#
+# All three codes surface on GET /api/health/oauth (routers/health.py). The
+# check is read-only and non-destructive: it opens the DB with
+# ``immutable=1`` so no WAL / journal mutations can occur, runs
+# ``PRAGMA integrity_check(1)`` (stops at first error to stay fast), and counts
+# rows in oauth_clients. Never exposes token values or DB content.
+
+def get_oauth_store_status(db_path: "Union[str, Path]") -> "dict[str, Optional[str]]":
+    """Classify the health of the ECM-managed OAuth state store (read-only).
+
+    Returns a dict with one key per diagnostic code. Each value is either
+    ``None`` (check passed) or the string code name (check failed).
+
+    Codes:
+
+    ``"token_store_unreadable"``
+        ``/config/mcp_oauth.db`` is missing (ENOENT) or unreadable (EACCES)
+        from ECM's perspective. First-run is the expected cause (the store is
+        created lazily at the first AS request); but a missing store *after*
+        the AS has served at least one flow is a real problem.
+
+    ``"token_store_corrupt"``
+        The file exists and is readable but SQLite's ``PRAGMA integrity_check``
+        reports at least one error — the DB may be partially written, truncated,
+        or replaced with a non-SQLite file.
+
+    ``"client_registry_missing"``
+        The ``oauth_clients`` table exists but contains zero rows. ECM seeds
+        the hardcoded registry (``auth/oauth_clients.py``) on every startup; an
+        empty table after startup signals that the seed step failed or the DB
+        was replaced without restarting ECM.
+    """
+    db_path = Path(db_path)
+    result: dict[str, Optional[str]] = {
+        "token_store_unreadable": None,
+        "token_store_corrupt": None,
+        "client_registry_missing": None,
+    }
+
+    # ── 1. Existence / readability ───────────────────────────────────────────
+    if not db_path.exists():
+        logger.warning("[OAUTH-HEALTH] Store not found at %s", db_path)
+        result["token_store_unreadable"] = "token_store_unreadable"
+        return result
+
+    try:
+        # Open read-only + immutable so we cannot accidentally acquire a write
+        # lock or create WAL sidecar files. ``?immutable=1`` is a SQLite URI
+        # parameter supported in Python's sqlite3 since 3.4+ (Python 3.6).
+        uri = f"file:{db_path}?mode=ro&immutable=1"
+        conn = sqlite3.connect(uri, uri=True)
+    except (OSError, sqlite3.OperationalError) as exc:
+        logger.warning("[OAUTH-HEALTH] Cannot open store at %s: %s", db_path, exc)
+        result["token_store_unreadable"] = "token_store_unreadable"
+        return result
+
+    try:
+        # ── 2. Integrity check (stops at first error for speed) ──────────────
+        try:
+            row = conn.execute("PRAGMA integrity_check(1)").fetchone()
+            if row is None or row[0] != "ok":
+                logger.warning(
+                    "[OAUTH-HEALTH] Integrity check on %s failed: %s",
+                    db_path,
+                    row[0] if row else "no result",
+                )
+                result["token_store_corrupt"] = "token_store_corrupt"
+                # Still run the client-registry check if we can — the table
+                # may still be readable even with integrity errors elsewhere.
+        except sqlite3.DatabaseError as exc:
+            logger.warning(
+                "[OAUTH-HEALTH] Integrity check raised on %s: %s", db_path, exc
+            )
+            result["token_store_corrupt"] = "token_store_corrupt"
+
+        # ── 3. Client registry presence ──────────────────────────────────────
+        # Only attempt the count if we could open the DB (if it was unreadable
+        # we already returned above). Skip if the table doesn't exist yet
+        # (pre-schema DB — which is also "missing" from the registry perspective).
+        if result["token_store_corrupt"] is None:
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM oauth_clients"
+                ).fetchone()
+                if row is None or row[0] == 0:
+                    logger.warning(
+                        "[OAUTH-HEALTH] oauth_clients table is empty in %s", db_path
+                    )
+                    result["client_registry_missing"] = "client_registry_missing"
+            except sqlite3.OperationalError as exc:
+                # Table doesn't exist — schema never initialised.
+                logger.warning(
+                    "[OAUTH-HEALTH] oauth_clients table absent in %s: %s",
+                    db_path,
+                    exc,
+                )
+                result["client_registry_missing"] = "client_registry_missing"
+    finally:
+        conn.close()
+
+    return result
+
+
+class OAuthStore:
+    """SQLite-backed OAuth state store (WAL, hashed-at-rest, 0600).
+
+    A single instance owns one ``sqlite3.Connection``. Instances are **not**
+    shared across threads (sqlite3 connections are per-thread by default);
+    each ECM worker thread opens its own ``OAuthStore``. WAL mode lets ECM's
+    concurrent worker connections operate without writer starvation. The store
+    is single-owner (ECM); the MCP RS never opens this file (ADR-009 §1/§5).
+    """
+
+    def __init__(self, db_path: Union[str, Path]):
+        self.db_path = Path(db_path)
+        self._conn: Optional[sqlite3.Connection] = None
+
+    # ── lifecycle ───────────────────────────────────────────────────────────
+
+    def connect(self) -> sqlite3.Connection:
+        """Open (or reuse) the connection, enforcing WAL + 0600 file mode.
+
+        Idempotent: calling twice returns the same connection. Use this when
+        the schema already exists (e.g. a new ECM worker opening the file).
+        """
+        if self._conn is not None:
+            return self._conn
+
+        # Ensure the parent dir exists (e.g. /config on first run).
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create the file with 0600 BEFORE sqlite opens it, so the bytes are
+        # never briefly world-readable. If it already exists, tighten it.
+        if not self.db_path.exists():
+            # O_CREAT|O_EXCL with mode 0600; closed immediately, sqlite reopens.
+            fd = os.open(
+                self.db_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, _DB_FILE_MODE
+            )
+            os.close(fd)
+        else:
+            self._enforce_file_mode()
+
+        conn = sqlite3.connect(str(self.db_path))
+        conn.row_factory = sqlite3.Row
+        # WAL mode for concurrent access from ECM worker threads (AC5, ADR-009 §5).
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        # Wait up to 5s for a write lock rather than failing immediately —
+        # smooths concurrent-writer contention under WAL.
+        conn.execute("PRAGMA busy_timeout=5000")
+        self._conn = conn
+
+        # WAL creates -wal/-shm sidecar files; tighten their perms too.
+        self._enforce_file_mode()
+        return conn
+
+    def init_schema(self) -> None:
+        """Create all tables (idempotent) and confirm WAL + 0600.
+
+        Safe to call repeatedly (any ECM worker) — ``CREATE TABLE IF NOT EXISTS``.
+        """
+        conn = self.connect()
+        conn.executescript(_SCHEMA_DDL)
+        conn.commit()
+        self._enforce_file_mode()
+
+    def close(self) -> None:
+        """Close the underlying connection if open."""
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+    def _enforce_file_mode(self) -> None:
+        """Set the DB file (and WAL sidecars) to 0600 (AC6)."""
+        for suffix in ("", "-wal", "-shm"):
+            p = Path(str(self.db_path) + suffix)
+            if p.exists():
+                try:
+                    os.chmod(p, _DB_FILE_MODE)
+                except OSError as e:  # pragma: no cover - platform-dependent
+                    logger.warning(
+                        "[OAUTH-STORE] Could not chmod %s to 0600: %s", p, e
+                    )
+
+    def _require_conn(self) -> sqlite3.Connection:
+        if self._conn is None:
+            return self.connect()
+        return self._conn
+
+    # ── oauth_clients ─────────────────────────────────────────────────────────
+
+    def create_client(
+        self, *, client_id: str, client_name: str, redirect_uris: list[str]
+    ) -> None:
+        """Insert or update a registered OAuth client (idempotent upsert).
+
+        The client registry is hardcoded (ADR-009 §3); this method is the seed
+        path (buiqr.6). ``redirect_uris`` is stored as a JSON array of
+        exact-match allowlisted URIs.
+        """
+        conn = self._require_conn()
+        conn.execute(
+            """
+            INSERT INTO oauth_clients (client_id, client_name, redirect_uris, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(client_id) DO UPDATE SET
+                client_name   = excluded.client_name,
+                redirect_uris = excluded.redirect_uris
+            """,
+            (client_id, client_name, json.dumps(redirect_uris), _now()),
+        )
+        conn.commit()
+
+    def get_client(self, client_id: str) -> Optional[dict[str, Any]]:
+        """Return the client record, or None if unregistered."""
+        conn = self._require_conn()
+        row = conn.execute(
+            "SELECT client_id, client_name, redirect_uris, created_at "
+            "FROM oauth_clients WHERE client_id = ?",
+            (client_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        record["redirect_uris"] = json.loads(record["redirect_uris"])
+        return record
+
+    # ── auth_codes ────────────────────────────────────────────────────────────
+
+    def create_auth_code(
+        self,
+        *,
+        code: str,
+        client_id: str,
+        redirect_uri: str,
+        code_challenge: str,
+        code_challenge_method: str,
+        scope: str,
+        user_sub: str,
+        ttl_seconds: int,
+        now: Optional[int] = None,
+    ) -> None:
+        """Persist a PKCE authorization code (hashed). TTL capped at 10 min.
+
+        The raw ``code`` is hashed before storage. The requested ``ttl_seconds``
+        is clamped to ``AUTH_CODE_MAX_TTL_SECONDS`` (AC2) so a caller can never
+        mint a code that outlives the 10-minute ceiling.
+        """
+        now = _now() if now is None else now
+        ttl = min(ttl_seconds, AUTH_CODE_MAX_TTL_SECONDS)
+        conn = self._require_conn()
+        conn.execute(
+            """
+            INSERT INTO auth_codes (
+                code_hash, client_id, redirect_uri, code_challenge,
+                code_challenge_method, scope, user_sub, created_at, expires_at,
+                consumed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                hash_secret(code),
+                client_id,
+                redirect_uri,
+                code_challenge,
+                code_challenge_method,
+                scope,
+                user_sub,
+                now,
+                now + ttl,
+            ),
+        )
+        conn.commit()
+
+    def consume_auth_code(
+        self, code: str, now: Optional[int] = None
+    ) -> Optional[dict[str, Any]]:
+        """Atomically consume an auth code: return its grant or None.
+
+        Returns the grant record (client_id, redirect_uri, PKCE challenge,
+        scope, user_sub) on the first call for a valid, unexpired, unconsumed
+        code; subsequent calls return None (single-use replay protection, AC1).
+        An expired code (AC2) also returns None.
+        """
+        now = _now() if now is None else now
+        code_hash = hash_secret(code)
+        conn = self._require_conn()
+        row = conn.execute(
+            """
+            SELECT client_id, redirect_uri, code_challenge,
+                   code_challenge_method, scope, user_sub, expires_at, consumed_at
+            FROM auth_codes WHERE code_hash = ?
+            """,
+            (code_hash,),
+        ).fetchone()
+        if row is None:
+            return None
+        if row["consumed_at"] is not None:
+            return None  # already used (replay)
+        if row["expires_at"] <= now:
+            return None  # expired (AC2)
+        # Mark consumed atomically — only succeeds if still unconsumed.
+        cur = conn.execute(
+            "UPDATE auth_codes SET consumed_at = ? "
+            "WHERE code_hash = ? AND consumed_at IS NULL",
+            (now, code_hash),
+        )
+        conn.commit()
+        if cur.rowcount != 1:
+            return None  # lost a race; another caller consumed it
+        record = dict(row)
+        record.pop("expires_at", None)
+        record.pop("consumed_at", None)
+        return record
+
+    # ── access_tokens ─────────────────────────────────────────────────────────
+
+    def store_access_token(
+        self,
+        *,
+        token: str,
+        jti: str,
+        client_id: str,
+        user_sub: str,
+        scope: str,
+        ttl_seconds: int,
+        now: Optional[int] = None,
+    ) -> None:
+        """Persist an issued access token's hashed record (audit + revocation).
+
+        The token is hashed before storage (AC4). The record exists so the RS
+        can correlate the ``jti`` for revocation and so issuance is auditable
+        (threat model R2).
+        """
+        now = _now() if now is None else now
+        conn = self._require_conn()
+        conn.execute(
+            """
+            INSERT INTO access_tokens (
+                token_hash, jti, client_id, user_sub, scope, created_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (hash_secret(token), jti, client_id, user_sub, scope, now, now + ttl_seconds),
+        )
+        conn.commit()
+
+    def get_access_token(
+        self, token: str, now: Optional[int] = None
+    ) -> Optional[dict[str, Any]]:
+        """Look up an access-token record by value; None if absent/expired.
+
+        Note: this does NOT check revocation — the caller (RS validator,
+        buiqr.8) consults :meth:`is_jti_revoked` on the returned ``jti``. This
+        keeps the store's responsibilities orthogonal: lookup vs revocation.
+        """
+        now = _now() if now is None else now
+        conn = self._require_conn()
+        row = conn.execute(
+            "SELECT jti, client_id, user_sub, scope, created_at, expires_at "
+            "FROM access_tokens WHERE token_hash = ?",
+            (hash_secret(token),),
+        ).fetchone()
+        if row is None:
+            return None
+        if row["expires_at"] <= now:
+            return None
+        return dict(row)
+
+    def revoke_access_tokens_for(
+        self,
+        *,
+        client_id: str,
+        user_sub: str,
+        reason: Optional[str] = None,
+        now: Optional[int] = None,
+    ) -> int:
+        """Revoke every live access-token ``jti`` for a (client, admin) pair.
+
+        Used when revoking a grant (bead buiqr.7): killing the refresh family
+        stops *renewal*, but a live access token would otherwise survive until
+        its short TTL. Access tokens are not tagged with ``family_id`` in the
+        schema, so the correlation handle is ``(client_id, user_sub)`` — under
+        the single-admin model and returning-user detection (which prevents
+        multiple live families per client+admin) this targets exactly the grant
+        being revoked. Already-expired records are skipped (no point revoking a
+        dead jti). Returns the number of jtis newly revoked, for logging.
+        """
+        now = _now() if now is None else now
+        conn = self._require_conn()
+        rows = conn.execute(
+            "SELECT jti FROM access_tokens "
+            "WHERE client_id = ? AND user_sub = ? AND expires_at > ?",
+            (client_id, user_sub, now),
+        ).fetchall()
+        count = 0
+        for row in rows:
+            if not self.is_jti_revoked(row["jti"]):
+                self.revoke_jti(row["jti"], reason=reason, now=now)
+                count += 1
+        return count
+
+    # ── refresh_tokens ────────────────────────────────────────────────────────
+
+    def store_refresh_token(
+        self,
+        *,
+        token: str,
+        jti: str,
+        family_id: str,
+        client_id: str,
+        user_sub: str,
+        scope: str,
+        ttl_seconds: int,
+        now: Optional[int] = None,
+    ) -> None:
+        """Persist a refresh token (hashed) in a rotation family.
+
+        ``ttl_seconds`` is clamped to ``REFRESH_TOKEN_MAX_TTL_SECONDS`` (30-day
+        cap). ``family_id`` ties rotation lineage together so reuse detection
+        can invalidate the whole chain.
+        """
+        now = _now() if now is None else now
+        ttl = min(ttl_seconds, REFRESH_TOKEN_MAX_TTL_SECONDS)
+        conn = self._require_conn()
+        conn.execute(
+            """
+            INSERT INTO refresh_tokens (
+                token_hash, jti, family_id, client_id, user_sub, scope,
+                created_at, expires_at, consumed, consumed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
+            """,
+            (
+                hash_secret(token),
+                jti,
+                family_id,
+                client_id,
+                user_sub,
+                scope,
+                now,
+                now + ttl,
+            ),
+        )
+        conn.commit()
+
+    def get_refresh_token(
+        self, token: str, now: Optional[int] = None
+    ) -> Optional[dict[str, Any]]:
+        """Look up a refresh-token record by value; None if absent/expired.
+
+        Returns the row including ``consumed`` (0 live / 1 rotated) and
+        ``family_id`` so callers can reason about rotation state.
+        """
+        now = _now() if now is None else now
+        conn = self._require_conn()
+        row = conn.execute(
+            "SELECT jti, family_id, client_id, user_sub, scope, "
+            "created_at, expires_at, consumed, consumed_at "
+            "FROM refresh_tokens WHERE token_hash = ?",
+            (hash_secret(token),),
+        ).fetchone()
+        if row is None:
+            return None
+        if row["expires_at"] <= now:
+            return None
+        return dict(row)
+
+    def rotate_refresh_token(
+        self,
+        *,
+        old_token: str,
+        new_token: str,
+        new_jti: str,
+        ttl_seconds: int,
+        now: Optional[int] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Rotate a refresh token: consume the old, persist the new (AC3).
+
+        Returns the old token's grant metadata (client_id, user_sub, scope,
+        family_id) on success so the caller can mint the replacement access +
+        refresh tokens bound to the same grant. The new refresh token inherits
+        the old token's ``family_id``.
+
+        Failure modes:
+          - **Unknown / expired old token** → returns ``None`` (not reuse; the
+            caller maps this to ``invalid_grant`` with no family kill).
+          - **Already-consumed old token (reuse)** → raises
+            :class:`RefreshTokenReuseError` AND revokes the whole family
+            (breach response, T3).
+          - **Family already revoked** → raises :class:`RefreshTokenReuseError`
+            (a successor of a breached family can no longer rotate).
+        """
+        now = _now() if now is None else now
+        conn = self._require_conn()
+        row = conn.execute(
+            "SELECT jti, family_id, client_id, user_sub, scope, expires_at, consumed "
+            "FROM refresh_tokens WHERE token_hash = ?",
+            (hash_secret(old_token),),
+        ).fetchone()
+        if row is None:
+            return None  # never issued — not reuse, just absent
+
+        family_id = row["family_id"]
+
+        # If the family was already killed (prior breach), reject.
+        if self.is_refresh_family_revoked(family_id):
+            raise RefreshTokenReuseError(
+                f"refresh token family {family_id} is revoked"
+            )
+
+        if row["consumed"]:
+            # Reuse of an already-rotated token: breach response — kill family.
+            self.revoke_refresh_family(
+                family_id, reason="refresh-token-reuse-detected", now=now
+            )
+            raise RefreshTokenReuseError(
+                f"refresh token already rotated (family {family_id} invalidated)"
+            )
+
+        if row["expires_at"] <= now:
+            return None  # expired — not reuse
+
+        ttl = min(ttl_seconds, REFRESH_TOKEN_MAX_TTL_SECONDS)
+        # Mark the old token consumed (only if still live — race-safe).
+        cur = conn.execute(
+            "UPDATE refresh_tokens SET consumed = 1, consumed_at = ? "
+            "WHERE token_hash = ? AND consumed = 0",
+            (now, hash_secret(old_token)),
+        )
+        if cur.rowcount != 1:
+            # Lost a race: someone consumed it between our read and write.
+            # Treat as reuse and kill the family.
+            conn.commit()
+            self.revoke_refresh_family(
+                family_id, reason="refresh-token-reuse-detected", now=now
+            )
+            raise RefreshTokenReuseError(
+                f"refresh token already rotated (family {family_id} invalidated)"
+            )
+        # Insert the successor in the same family.
+        conn.execute(
+            """
+            INSERT INTO refresh_tokens (
+                token_hash, jti, family_id, client_id, user_sub, scope,
+                created_at, expires_at, consumed, consumed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
+            """,
+            (
+                hash_secret(new_token),
+                new_jti,
+                family_id,
+                row["client_id"],
+                row["user_sub"],
+                row["scope"],
+                now,
+                now + ttl,
+            ),
+        )
+        conn.commit()
+        return {
+            "jti": row["jti"],
+            "family_id": family_id,
+            "client_id": row["client_id"],
+            "user_sub": row["user_sub"],
+            "scope": row["scope"],
+        }
+
+    # ── revocations ───────────────────────────────────────────────────────────
+
+    def revoke_jti(
+        self, jti: str, reason: Optional[str] = None, now: Optional[int] = None
+    ) -> None:
+        """Mark a token ``jti`` revoked (mirrors ``revoke_token(jti)``).
+
+        Idempotent at the API level — re-revoking the same jti is harmless;
+        :meth:`is_jti_revoked` is the read side.
+        """
+        now = _now() if now is None else now
+        conn = self._require_conn()
+        conn.execute(
+            "INSERT INTO revocations (jti, family_id, reason, revoked_at) "
+            "VALUES (?, NULL, ?, ?)",
+            (jti, reason, now),
+        )
+        conn.commit()
+
+    def is_jti_revoked(self, jti: str) -> bool:
+        """True if the given token ``jti`` has been revoked."""
+        conn = self._require_conn()
+        row = conn.execute(
+            "SELECT 1 FROM revocations WHERE jti = ? LIMIT 1", (jti,)
+        ).fetchone()
+        return row is not None
+
+    def revoke_refresh_family(
+        self, family_id: str, reason: Optional[str] = None, now: Optional[int] = None
+    ) -> None:
+        """Revoke an entire refresh-token family (rotation-reuse breach kill).
+
+        Records a family revocation row AND marks every refresh token in the
+        family consumed so no successor can rotate (T3 breach response).
+        """
+        now = _now() if now is None else now
+        conn = self._require_conn()
+        conn.execute(
+            "INSERT INTO revocations (jti, family_id, reason, revoked_at) "
+            "VALUES (NULL, ?, ?, ?)",
+            (family_id, reason, now),
+        )
+        conn.execute(
+            "UPDATE refresh_tokens SET consumed = 1, consumed_at = ? "
+            "WHERE family_id = ? AND consumed = 0",
+            (now, family_id),
+        )
+        conn.commit()
+
+    def is_refresh_family_revoked(self, family_id: str) -> bool:
+        """True if the refresh-token family has been revoked."""
+        conn = self._require_conn()
+        row = conn.execute(
+            "SELECT 1 FROM revocations WHERE family_id = ? LIMIT 1", (family_id,)
+        ).fetchone()
+        return row is not None
+
+    # ── active grants (bead buiqr.7 — Active Grants UI + revoke) ──────────────
+    #
+    # A *grant* is one authorization the admin made to a client: it is created
+    # when an authorization code is exchanged for tokens (a fresh refresh-token
+    # family per grant, see OAuthProvider.exchange_authorization_code). The
+    # ``family_id`` IS the grant id — stable across refresh rotation. Listing
+    # grants groups the refresh_tokens table by family and excludes families
+    # that are revoked or fully expired. Token VALUES/hashes are never exposed:
+    # only the family id, client, subject, and lifecycle timestamps leave the
+    # store (threat model TS1 — a read of this surface yields no credential).
+
+    def list_active_grants(self, now: Optional[int] = None) -> list[dict[str, Any]]:
+        """Return active grants (one row per live refresh-token family).
+
+        A grant is *active* when its family has not been revoked AND at least one
+        refresh token in the family is unexpired. For each family we report:
+
+          - ``family_id``  — the grant id (stable across rotation).
+          - ``client_id``  — the client the grant was issued to.
+          - ``user_sub``   — the admin subject that authorized it.
+          - ``granted_at`` — the earliest ``created_at`` in the family (when the
+                             admin first approved the grant).
+          - ``last_used``  — the most recent ``created_at`` in the family (each
+                             refresh rotation appends a successor, so the newest
+                             row marks the last token activity).
+
+        Revoked families are excluded by an anti-join against ``revocations``.
+        Fully-expired families (no live refresh token) are excluded by the
+        ``MAX(expires_at) > now`` having-clause. Ordered newest-first by
+        ``granted_at`` for a stable UI list.
+        """
+        now = _now() if now is None else now
+        conn = self._require_conn()
+        rows = conn.execute(
+            """
+            SELECT rt.family_id            AS family_id,
+                   rt.client_id            AS client_id,
+                   rt.user_sub             AS user_sub,
+                   MIN(rt.created_at)      AS granted_at,
+                   MAX(rt.created_at)      AS last_used,
+                   MAX(rt.expires_at)      AS family_expires_at
+            FROM refresh_tokens rt
+            WHERE rt.family_id NOT IN (
+                SELECT family_id FROM revocations WHERE family_id IS NOT NULL
+            )
+            GROUP BY rt.family_id
+            HAVING MAX(rt.expires_at) > ?
+            ORDER BY granted_at DESC
+            """,
+            (now,),
+        ).fetchall()
+        grants = []
+        for row in rows:
+            record = dict(row)
+            record.pop("family_expires_at", None)
+            grants.append(record)
+        return grants
+
+    def get_active_grant(
+        self, family_id: str, now: Optional[int] = None
+    ) -> Optional[dict[str, Any]]:
+        """Return one active grant by family id, or None if absent/revoked/expired.
+
+        Used by revoke (DELETE /api/oauth/grants/{id}) to confirm the grant
+        exists and is the admin's before killing it, and by returning-user
+        detection. Applies the same active filter as :meth:`list_active_grants`.
+        """
+        now = _now() if now is None else now
+        if self.is_refresh_family_revoked(family_id):
+            return None
+        conn = self._require_conn()
+        row = conn.execute(
+            """
+            SELECT family_id,
+                   client_id,
+                   user_sub,
+                   MIN(created_at) AS granted_at,
+                   MAX(created_at) AS last_used,
+                   MAX(expires_at) AS family_expires_at
+            FROM refresh_tokens
+            WHERE family_id = ?
+            GROUP BY family_id
+            HAVING MAX(expires_at) > ?
+            """,
+            (family_id, now),
+        ).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        record.pop("family_expires_at", None)
+        return record
+
+    def find_active_grant_for_client(
+        self, client_id: str, user_sub: str, now: Optional[int] = None
+    ) -> Optional[dict[str, Any]]:
+        """Return the most-recent active grant for a (client, admin) pair, or None.
+
+        Powers the consent screen's returning-user detection (bead buiqr.7 (c)):
+        when an active grant already exists for the requesting ``client_id`` and
+        this admin ``user_sub``, the UI shows the 'Already connected' state
+        instead of silently minting another token family.
+        """
+        now = _now() if now is None else now
+        for grant in self.list_active_grants(now=now):
+            if grant["client_id"] == client_id and secrets.compare_digest(
+                str(grant["user_sub"]), str(user_sub)
+            ):
+                return grant
+        return None
+
+    # ── consent_states (CSRF state binding, bead buiqr.4 AC3) ─────────────────
+
+    def bind_consent_state(
+        self,
+        *,
+        state: str,
+        client_id: str,
+        user_sub: str,
+        ttl_seconds: int = CONSENT_STATE_MAX_TTL_SECONDS,
+        now: Optional[int] = None,
+    ) -> None:
+        """Bind a CSRF ``state`` value to the admin subject that started the flow.
+
+        Persists a single-use binding (state hashed at rest) created when
+        ``/authorize`` validates a request and confirms the admin session. The
+        consent-approval step (``/authorize/approve``) consumes it via
+        :meth:`consume_consent_state`; a forged/mismatched state has no live
+        binding and is rejected (bead buiqr.4 AC3).
+
+        ``ttl_seconds`` is clamped to ``CONSENT_STATE_MAX_TTL_SECONDS`` (10 min)
+        so a binding can never outlive the brief consent round-trip. Re-binding
+        the same state value (e.g. a retried /authorize) upserts in place.
+        """
+        now = _now() if now is None else now
+        ttl = min(ttl_seconds, CONSENT_STATE_MAX_TTL_SECONDS)
+        conn = self._require_conn()
+        conn.execute(
+            """
+            INSERT INTO consent_states (
+                state_hash, client_id, user_sub, created_at, expires_at, consumed_at
+            ) VALUES (?, ?, ?, ?, ?, NULL)
+            ON CONFLICT(state_hash) DO UPDATE SET
+                client_id   = excluded.client_id,
+                user_sub    = excluded.user_sub,
+                created_at  = excluded.created_at,
+                expires_at  = excluded.expires_at,
+                consumed_at = NULL
+            """,
+            (hash_secret(state), client_id, user_sub, now, now + ttl),
+        )
+        conn.commit()
+
+    def consume_consent_state(
+        self,
+        *,
+        state: str,
+        user_sub: str,
+        now: Optional[int] = None,
+    ) -> bool:
+        """Atomically consume a CSRF state binding for ``user_sub``.
+
+        Returns ``True`` only when a live (unexpired, unconsumed) binding exists
+        for the exact ``state`` value AND it is bound to ``user_sub`` — i.e. the
+        same admin subject that started the flow at ``/authorize``. Any other
+        case (unknown state, expired, already-consumed/replay, or bound to a
+        different subject) returns ``False`` so the caller rejects the approval
+        with 400 (bead buiqr.4 AC3). The binding is single-use: a successful
+        consume burns it, so a replayed approval also fails.
+        """
+        now = _now() if now is None else now
+        state_hash = hash_secret(state)
+        conn = self._require_conn()
+        row = conn.execute(
+            "SELECT user_sub, expires_at, consumed_at "
+            "FROM consent_states WHERE state_hash = ?",
+            (state_hash,),
+        ).fetchone()
+        if row is None:
+            return False  # unknown / forged state
+        if row["consumed_at"] is not None:
+            return False  # replay of an already-approved state
+        if row["expires_at"] <= now:
+            return False  # expired binding
+        # Constant-time subject comparison — the state must belong to THIS admin.
+        if not secrets.compare_digest(str(row["user_sub"]), str(user_sub)):
+            return False  # bound to a different subject (cross-session forgery)
+        # Mark consumed atomically — only succeeds if still unconsumed (race-safe).
+        cur = conn.execute(
+            "UPDATE consent_states SET consumed_at = ? "
+            "WHERE state_hash = ? AND consumed_at IS NULL",
+            (now, state_hash),
+        )
+        conn.commit()
+        return cur.rowcount == 1

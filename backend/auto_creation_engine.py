@@ -172,7 +172,9 @@ class AutoCreationEngine:
             )
 
         # Process streams through rules
-        results = await self._process_streams(streams, rules, execution, dry_run)
+        results = await self._process_streams(
+            streams, rules, execution, dry_run, triggered_by=triggered_by
+        )
 
         # Prepend exclusion log entries and set streams_excluded count
         results["execution_log"] = exclusion_log + results["execution_log"]
@@ -873,7 +875,8 @@ class AutoCreationEngine:
         streams: list[StreamContext],
         rules: list[AutoCreationRule],
         execution: AutoCreationExecution,
-        dry_run: bool
+        dry_run: bool,
+        triggered_by: str = "manual",
     ) -> dict:
         """
         Process streams through the rules pipeline.
@@ -883,6 +886,11 @@ class AutoCreationEngine:
             rules: List of rules sorted by priority
             execution: Execution record for tracking
             dry_run: Whether to simulate only
+            triggered_by: Engine-side triggered_by string (e.g.
+                "m3u_refresh", "scheduled", "manual"). Threaded
+                through to ``ActionExecutor`` so the BD-F bulk-M3U
+                dedup hook in ``_execute_create_channel`` only fires
+                for the M3U-refresh path per ADR-008 §D1.
 
         Returns:
             Dict with processing results
@@ -994,7 +1002,11 @@ class AutoCreationEngine:
             settings=settings,
             all_profile_ids=all_profile_ids,
             epg_data=epg_data,
-            epg_sources=epg_sources
+            epg_sources=epg_sources,
+            # BD-F (bd-a5lb2): thread triggered_by into the executor so
+            # the bulk-M3U dedup hook in _execute_create_channel only
+            # fires for the M3U-refresh path per ADR-008 §D1.
+            triggered_by=triggered_by,
         )
 
         # Results tracking
@@ -1009,6 +1021,11 @@ class AutoCreationEngine:
             "streams_removed": 0,
             "channels_removed": 0,
             "channels_moved": 0,
+            # BD-F (bd-a5lb2): aggregate count of rows enqueued to the
+            # pending_merges queue by the bulk-M3U dedup hook (ADR-008
+            # §D1). Surfaces on the pipeline result so the M3U-refresh
+            # task can hand the count to BD-J's toast handler.
+            "pending_merges_added": 0,
             "created_entities": [],
             "modified_entities": [],
             "dry_run_results": [],
@@ -1274,7 +1291,8 @@ class AutoCreationEngine:
                 action_result = await executor.execute(
                     action, stream, exec_ctx, winning_rule.target_group_id,
                     normalization_group_ids=winning_rule.get_normalization_group_ids(),
-                    match_scope_target_group=bool(getattr(winning_rule, 'match_scope_target_group', False))
+                    match_scope_target_group=bool(getattr(winning_rule, 'match_scope_target_group', False)),
+                    rule_scope_group_id=getattr(winning_rule, 'match_scope_group_id', None)
                 )
 
                 action_entry = {
@@ -1331,6 +1349,13 @@ class AutoCreationEngine:
             results["streams_merged"] += exec_ctx.streams_merged
             results["streams_skipped"] += exec_ctx.streams_skipped
             results["streams_removed"] += exec_ctx.streams_removed
+            # BD-F (bd-a5lb2): aggregate per-stream pending-merge enqueues
+            # so the pipeline result surfaces a total the M3U-refresh
+            # response can pass to BD-J's toast handler. Includes both
+            # fresh inserts and ADR-008 §D5 idempotent collisions —
+            # operationally both are "would have created a channel, now
+            # waiting on operator review".
+            results["pending_merges_added"] += exec_ctx.pending_merges_added
             results["created_entities"].extend(exec_ctx.created_entities)
             results["modified_entities"].extend(exec_ctx.modified_entities)
             results["probe_stream_ids"].update(exec_ctx.probe_stream_ids)
@@ -2444,10 +2469,16 @@ def _smart_sort_streams(
             elif criterion == "m3u_priority":
                 # m3u_priority does NOT require a successful probe — it comes
                 # from the m3u account map, so it's always meaningful.
+                # bd-sgtmx / GH #244: custom streams (no m3u_account_id) fall
+                # back to the "custom" key in m3u_priorities so operators can
+                # assign an explicit priority to operator-added streams.
                 m3u_priority_value = 0
                 m3u_account_id = stream_m3u_map.get(sid)
                 if m3u_account_id is not None:
                     m3u_priority_value = m3u_priorities.get(str(m3u_account_id), 0)
+                else:
+                    # Custom stream — not backed by an M3U account.
+                    m3u_priority_value = m3u_priorities.get("custom", 0)
                 values.append(-m3u_priority_value)
 
             elif criterion == "audio_channels":
@@ -2526,11 +2557,17 @@ def _m3u_account_priority_value(
     stream_m3u_map: dict | None,
     settings,
 ) -> int:
-    """Numeric ECM M3U priority for *sid* (0 when unknown)."""
+    """Numeric ECM M3U priority for *sid* (0 when unknown).
+
+    Custom streams (operator-added, not from any M3U account) fall back to
+    ``m3u_account_priorities["custom"]`` so the same key used by Smart Sort's
+    ``compute_criteria_values`` applies uniformly across provider-order and
+    quality-tie-break paths that consume this helper (bd-sgtmx, GH #244).
+    """
     pri_map = getattr(settings, "m3u_account_priorities", None) or {} if settings is not None else {}
     aid = (stream_m3u_map or {}).get(sid)
     if aid is None:
-        return 0
+        return pri_map.get("custom", 0)
     return pri_map.get(str(aid), 0)
 
 

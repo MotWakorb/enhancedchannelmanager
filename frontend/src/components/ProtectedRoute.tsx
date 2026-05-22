@@ -11,6 +11,10 @@ import { LoginPage } from './LoginPage';
 import { SetupPage } from './SetupPage';
 import { ForgotPasswordPage } from './ForgotPasswordPage';
 import { ResetPasswordPage } from './ResetPasswordPage';
+// MCP OAuth offering RETIRED (bd-9axgc): OAuthConsentPage is no longer routed.
+// The component + its CSS are kept as dormant orphan files (not imported here)
+// so the offering is reversible; re-add this import + the /oauth/consent route
+// blocks below to re-enable the consent flow.
 import { checkSetupRequired } from '../services/api';
 import './ProtectedRoute.css';
 
@@ -99,6 +103,7 @@ export function ProtectedRoute({ children, requireAdmin = false }: ProtectedRout
     if (currentPath === '/login' || currentPath === '/forgot-password' || currentPath === '/reset-password') {
       window.history.replaceState({}, '', '/');
     }
+    // MCP OAuth offering RETIRED (bd-9axgc): the /oauth/consent route was removed.
     return <>{children}</>;
   }
 
@@ -111,6 +116,8 @@ export function ProtectedRoute({ children, requireAdmin = false }: ProtectedRout
   if (currentPath === '/login' || currentPath === '/forgot-password') {
     window.history.replaceState({}, '', '/');
   }
+
+  // MCP OAuth offering RETIRED (bd-9axgc): the /oauth/consent route was removed.
 
   // Check admin requirement
   if (requireAdmin && !user?.is_admin) {

@@ -15,7 +15,19 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
-from config import MCP_PORT, get_mcp_api_key, get_mcp_api_key_status
+from config import (
+    MCP_PORT,
+    get_mcp_api_key,
+    get_mcp_api_key_status,
+)
+# MCP OAuth offering RETIRED (bd-9axgc). The OAuth Resource-Server modules —
+# ``oauth_rs`` (HS256 token verify) and ``oauth_discovery`` (RFC 9728 metadata) —
+# plus the config OAuth helpers (get_signing_key / get_signing_key_status /
+# get_oauth_allow_insecure / OAUTH_ISSUER / MCP_RESOURCE_URL) are kept dormant
+# in-tree but NO LONGER IMPORTED here. The only symbol still needed from
+# oauth_rs is ``looks_like_jwt``, used to SHAPE-classify and REJECT JWT-shaped
+# Bearer tokens (so they can never fall through to the static-key path — CD1).
+from oauth_rs import looks_like_jwt
 from resources import register_all_resources
 from tools import register_all_tools
 
@@ -48,14 +60,38 @@ register_all_tools(mcp)
 register_all_resources(mcp)
 
 
-class APIKeyAuthMiddleware(BaseHTTPMiddleware):
-    """Validate the ECM MCP API key on every request except ``/health``.
+#: The 401 challenge header. Per RFC 6750 / RFC 9728 a client that gets this on
+#: /mcp learns OAuth is offered and where to discover it. Always present on a
+#: 401 so an OAuth client can bootstrap from any rejected request (ADR-009 §2).
+_WWW_AUTHENTICATE = {"WWW-Authenticate": "Bearer"}
 
-    Accepts the key via query param (``?api_key=``) or ``Authorization: Bearer``
-    header. The ``/health`` endpoint is exempt so Docker healthchecks work
-    without a key. With the Streamable HTTP transport every request (POST and
-    the SSE GET stream) hits the single ``/mcp`` endpoint, so auth is checked on
-    each one — the key is static and re-read from disk per call.
+
+class APIKeyAuthMiddleware(BaseHTTPMiddleware):
+    """Static-key auth for the MCP RS. OAuth offering RETIRED (bd-9axgc).
+
+    The MCP OAuth offering was retired by PO decision (bd-9axgc): ECM no longer
+    accepts OAuth 2.1 Bearer tokens for MCP. The ONLY supported credential is
+    the static ``?api_key=`` (or non-JWT-shaped ``Bearer <key>``) path —
+    PO-locked permanent.
+
+    Routing (decided pre-validation, preserving the CD1 no-fail-cascade
+    invariant — a JWT-shaped Bearer must NEVER be compared to the static key):
+      - ``Authorization: Bearer <JWT-shaped>`` (3 base64url segments, header
+        JSON with ``alg``) → **REJECTED 401**. OAuth/JWT-shaped tokens are no
+        longer accepted; the request is NEVER tried against the static key
+        (no fail-cascade leakage).
+      - ``?api_key=<value>`` OR ``Bearer <non-JWT-shaped>`` → **static-key path**.
+      - Neither → 401 + ``WWW-Authenticate: Bearer``.
+
+    The OAuth verify path (``oauth_rs.verify_oauth_token``) and the RFC 9728
+    discovery endpoint are kept dormant in-tree but no longer wired up; re-add
+    the ``_handle_oauth`` dispatch + the discovery route to re-enable the
+    offering.
+
+    ``/health`` stays public (exempt below). With the Streamable HTTP transport
+    every POST and the SSE GET hit the single ``/mcp`` endpoint, so auth is
+    checked per request; the static key is re-read from disk per call so
+    rotation takes effect without a restart.
     """
 
     async def dispatch(self, request, call_next):
@@ -65,6 +101,28 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         if path == "/health":
             return await call_next(request)
 
+        # ── SHAPE CLASSIFICATION (before any validation — CD1 no-fail-cascade) ──
+        auth_header = request.headers.get("authorization", "")
+        bearer_value = auth_header[7:] if auth_header.startswith("Bearer ") else ""
+
+        if bearer_value and looks_like_jwt(bearer_value):
+            # JWT-shaped Bearer → OAuth offering RETIRED (bd-9axgc). Reject with
+            # a uniform 401 and NEVER fall through to the static-key check (CD1):
+            # an attacker who presents a JWT-shaped value must not be able to
+            # have it re-interpreted as a static key. We log only that an OAuth
+            # token was rejected — never the token value (CodeQL #1604).
+            logger.warning("[MCP] OAuth/JWT-shaped Bearer rejected: MCP OAuth offering retired (bd-9axgc)")
+            return JSONResponse(
+                {"error": "OAuth is not supported. Use the static ?api_key= MCP credential."},
+                status_code=401,
+                headers=_WWW_AUTHENTICATE,
+            )
+
+        # Not JWT-shaped → static-key path ONLY (the supported method).
+        return await self._handle_static_key(request, bearer_value, call_next)
+
+    async def _handle_static_key(self, request, bearer_value, call_next):
+        """Static-key-only path — existing behavior, PO-locked permanent (EP2)."""
         expected_key = get_mcp_api_key()
         if not expected_key:
             logger.warning("[MCP] Connection rejected: no MCP API key configured in ECM")
@@ -73,17 +131,27 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
                 status_code=503,
             )
 
-        # Extract key from query param or Authorization header
-        api_key = request.query_params.get("api_key", "")
+        # Extract key from query param, else the (non-JWT-shaped) Bearer value.
+        api_key = request.query_params.get("api_key", "") or bearer_value
+
         if not api_key:
-            auth_header = request.headers.get("authorization", "")
-            if auth_header.startswith("Bearer "):
-                api_key = auth_header[7:]
+            # No credential at all → 401 with the OAuth bootstrap challenge.
+            return JSONResponse(
+                {"error": "Authentication required"},
+                status_code=401,
+                headers=_WWW_AUTHENTICATE,
+            )
 
         if api_key != expected_key:
             logger.warning("[MCP] Connection rejected: invalid API key")
-            return JSONResponse({"error": "Invalid API key"}, status_code=401)
+            return JSONResponse(
+                {"error": "Invalid API key"},
+                status_code=401,
+                headers=_WWW_AUTHENTICATE,
+            )
 
+        # Success. AC5: distinguish the auth method in logs.
+        logger.info("[MCP] Authenticated request auth_method=static_key")
         return await call_next(request)
 
 
@@ -96,6 +164,11 @@ async def handle_health(request):
     (no settings file, corrupted JSON, missing field, empty field). This
     lets an operator (and the ECM Settings UI's MCP Server Status panel)
     diagnose a misconfigured deployment without container shell access.
+
+    MCP OAuth offering RETIRED (bd-9axgc): the previously-reported
+    ``signing_key_status`` / ``signing_key_hint`` OAuth fields were REMOVED —
+    OAuth Bearer-JWT auth is no longer accepted, so signing-secret readiness is
+    irrelevant. Only the static-key (``api_key_*``) diagnostics remain.
     """
     api_key, status = get_mcp_api_key_status()
     configured = bool(api_key)
@@ -139,6 +212,14 @@ async def handle_health(request):
     return JSONResponse(response)
 
 
+# MCP OAuth offering RETIRED (bd-9axgc). ``handle_protected_resource`` (RFC 9728
+# /.well-known/oauth-protected-resource discovery) and
+# ``_log_oauth_discovery_posture`` (the one-per-startup discovery WARN) were
+# REMOVED — the RS no longer advertises an OAuth Authorization Server. The
+# oauth_discovery module is kept dormant in-tree; re-add this handler + its
+# Route registration to re-enable the offering.
+
+
 # The StreamableHTTP transport needs mcp.session_manager.run() active for the
 # lifetime of the app. streamable_http_app() wires that up via its own lifespan,
 # but Starlette does NOT propagate a Mounted sub-app's lifespan — so the outer
@@ -148,6 +229,8 @@ streamable_app = mcp.streamable_http_app()
 
 @contextlib.asynccontextmanager
 async def lifespan(app):
+    # MCP OAuth offering RETIRED (bd-9axgc): the one-per-startup OAuth discovery
+    # posture WARN was removed with the discovery endpoint.
     async with mcp.session_manager.run():
         yield
 
@@ -155,6 +238,10 @@ async def lifespan(app):
 app = Starlette(
     routes=[
         Route("/health", endpoint=handle_health),
+        # MCP OAuth offering RETIRED (bd-9axgc): the RFC 9728
+        # /.well-known/oauth-protected-resource discovery Route was removed —
+        # the RS no longer advertises an OAuth Authorization Server. It now
+        # falls through to the Mount and returns 404.
         Mount("/", app=streamable_app),
     ],
     lifespan=lifespan,

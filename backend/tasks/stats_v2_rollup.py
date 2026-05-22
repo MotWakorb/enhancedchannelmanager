@@ -157,10 +157,15 @@ def _rollup_provider_daily(session, day: date) -> int:
     happen at write time.
 
     Uses the same DISTINCT-(channel_id, observed_at) collapse the user
-    rollup uses, for ``watch_seconds``. ``bytes_delta_sum`` and
-    ``buffer_event_count`` are summed across ALL raw rows (not collapsed)
+    rollup uses, for ``watch_seconds``. ``bytes_delta_sum``,
+    ``buffer_event_count``, ``reconnect_event_count``, ``error_event_count``,
+    and ``switch_event_count`` are summed across ALL raw rows (not collapsed)
     — those are per-poll-per-client measurements, not per-channel
     state, so the multiplicity is the truth.
+
+    bd-d0ha9: extended to SUM the three per-type channel-event counters
+    added by migration 0013 (bd-ov5vb) into the three new rollup columns
+    added by migration 0014 (bd-d0ha9).
     """
     day_start_ms = int(
         datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc).timestamp() * 1000
@@ -170,20 +175,28 @@ def _rollup_provider_daily(session, day: date) -> int:
     # Two scans, UNION-coalesced:
     #   * watch_seconds — DISTINCT-(provider_bucket, channel, observed_at)
     #     collapse, then SUM(poll_interval).
-    #   * bytes_delta_sum + buffer_event_count — SUM over all raw rows.
+    #   * bytes_delta_sum + all four event counters — SUM over all raw rows.
+    #     Per-poll-per-client samples — no DISTINCT collapse needed (the
+    #     multiplicity is the truth for these columns).
     # Done as a single CTE-style query so the upsert is one statement.
+    # bd-d0ha9: extended projection to include reconnect/error/switch event
+    # counts alongside the pre-existing buffer_event_count.
     sql = text(
         """
         INSERT OR REPLACE INTO session_telemetry_provider_daily
             (provider_id, channel_id, day, watch_seconds,
-             bytes_delta_sum, buffer_event_count)
+             bytes_delta_sum, buffer_event_count,
+             reconnect_event_count, error_event_count, switch_event_count)
         SELECT
             ws.provider_id,
             ws.channel_id,
             :day AS day,
             ws.watch_seconds,
-            COALESCE(bb.bytes_delta_sum, 0) AS bytes_delta_sum,
-            COALESCE(bb.buffer_event_count, 0) AS buffer_event_count
+            COALESCE(bb.bytes_delta_sum, 0)         AS bytes_delta_sum,
+            COALESCE(bb.buffer_event_count, 0)      AS buffer_event_count,
+            COALESCE(bb.reconnect_event_count, 0)   AS reconnect_event_count,
+            COALESCE(bb.error_event_count, 0)       AS error_event_count,
+            COALESCE(bb.switch_event_count, 0)      AS switch_event_count
         FROM (
             -- DISTINCT-collapsed watch_seconds per (provider_bucket, channel).
             SELECT
@@ -204,14 +217,17 @@ def _rollup_provider_daily(session, day: date) -> int:
             GROUP BY provider_bucket, channel_id
         ) AS ws
         LEFT JOIN (
-            -- Multi-client-aware sums: bytes_delta and buffer_event_count
-            -- are per-poll-per-client samples, so they DON'T get the
-            -- DISTINCT collapse.
+            -- Multi-client-aware sums: bytes_delta and all four event
+            -- counters are per-poll-per-client samples, so they DON'T
+            -- get the DISTINCT collapse.
             SELECT
                 COALESCE(CAST(provider_id AS TEXT), 'unknown') AS provider_bucket,
                 channel_id,
-                SUM(bytes_delta) AS bytes_delta_sum,
-                SUM(buffer_event_count) AS buffer_event_count
+                SUM(bytes_delta)             AS bytes_delta_sum,
+                SUM(buffer_event_count)      AS buffer_event_count,
+                SUM(reconnect_event_count)   AS reconnect_event_count,
+                SUM(error_event_count)       AS error_event_count,
+                SUM(switch_event_count)      AS switch_event_count
             FROM session_telemetry
             WHERE observed_at >= :day_start_ms
               AND observed_at <  :day_end_ms

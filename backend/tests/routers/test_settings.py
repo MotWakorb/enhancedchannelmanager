@@ -19,6 +19,9 @@ def _mock_settings(**overrides):
         "auth_method": "password",
         "username": "admin",
         "password": "secret",
+        # bd-jmi1c (GH #273): canonical Dispatcharr REST API token field.
+        # ``api_key`` is the legacy alias retained for one release.
+        "dispatcharr_api_key": "",
         "api_key": "",
         "auto_rename_channel_number": False,
         "include_channel_number_in_name": False,
@@ -81,6 +84,25 @@ def _mock_settings(**overrides):
         "auto_creation_excluded_groups": [],
         "auto_creation_exclude_auto_sync_groups": False,
         "mcp_api_key": "",
+        # Emby integration (bd-8wc6q, epic bd-2cenq). Defaults disabled so
+        # existing tests can ignore the fields entirely.
+        "emby_enabled": False,
+        "emby_base_url": "",
+        "emby_api_key": "",
+        # Plex + Jellyfin integration (bd-r5f0c.4, epic bd-r5f0c). Same
+        # disabled-default posture as Emby so existing test cases continue
+        # ignoring these fields; the bd-r5f0c.4 suites in
+        # test_plex_settings.py / test_jellyfin_settings.py / the
+        # multi-source attribution suites cover the enabled paths.
+        "plex_enabled": False,
+        "plex_base_url": "",
+        "plex_token": "",
+        "jellyfin_enabled": False,
+        "jellyfin_base_url": "",
+        "jellyfin_api_key": "",
+        # bd-mlcla: soft IP-ranking trusted networks (ranking only, never a
+        # gate). Empty default so existing tests ignore it.
+        "trusted_media_networks": [],
     }
     defaults.update(overrides)
     mock = MagicMock()
@@ -269,6 +291,178 @@ class TestUpdateSettings:
             "Partial POST cleared smtp_password — sensitive field not preserved"
         )
 
+    @pytest.mark.asyncio
+    async def test_accepts_canonical_dispatcharr_api_key_field(self, async_client):
+        """bd-jmi1c (GH #273): POST with canonical ``dispatcharr_api_key``
+        field name persists to the canonical attribute on the saved settings."""
+        current = _mock_settings(auth_method="password")
+        captured = {}
+
+        def capture_save(new_settings):
+            captured["dispatcharr_api_key"] = new_settings.dispatcharr_api_key
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "auth_method": "api_key",
+                "username": current.username,
+                "dispatcharr_api_key": "new-canonical-key",
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["dispatcharr_api_key"] == "new-canonical-key"
+
+    @pytest.mark.asyncio
+    async def test_accepts_legacy_api_key_field_for_back_compat(self, async_client):
+        """bd-jmi1c (GH #273): POST with legacy ``api_key`` field name still
+        works — an older frontend bundle in a cached browser tab continues to
+        function. The value is persisted into the canonical attribute on the
+        saved settings (legacy in, canonical out)."""
+        current = _mock_settings(auth_method="password")
+        captured = {}
+
+        def capture_save(new_settings):
+            captured["dispatcharr_api_key"] = new_settings.dispatcharr_api_key
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "auth_method": "api_key",
+                "username": current.username,
+                "api_key": "legacy-from-old-bundle",
+            })
+
+        assert response.status_code == 200, response.json()
+        # Legacy field on the request body maps to the canonical attribute
+        # on the persisted settings — operators never see the legacy name
+        # re-emerge as the source of truth on disk.
+        assert captured["dispatcharr_api_key"] == "legacy-from-old-bundle"
+
+    @pytest.mark.asyncio
+    async def test_canonical_field_wins_when_both_fields_in_request_body(self, async_client):
+        """bd-jmi1c (GH #273): if a confused client sends BOTH field names,
+        the canonical wins so a stale value in the legacy slot cannot
+        override an intentionally-rotated canonical value."""
+        current = _mock_settings(auth_method="password")
+        captured = {}
+
+        def capture_save(new_settings):
+            captured["dispatcharr_api_key"] = new_settings.dispatcharr_api_key
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "auth_method": "api_key",
+                "username": current.username,
+                "dispatcharr_api_key": "canonical-wins",
+                "api_key": "legacy-loses",
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["dispatcharr_api_key"] == "canonical-wins"
+
+    @pytest.mark.asyncio
+    async def test_post_warns_when_both_fields_differ(self, async_client, caplog):
+        """bd-jmi1c P1-1 / bd-46g4t: when the POST body contains both
+        ``dispatcharr_api_key`` and ``api_key`` with differing values, log a
+        WARN so the silent-discard of the legacy value is auditable. POST is
+        rare enough that per-request logging is acceptable — no flag-gating
+        is needed."""
+        import logging
+        current = _mock_settings(auth_method="password")
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            with caplog.at_level(logging.WARNING, logger="routers.settings"):
+                response = await async_client.post("/api/settings", json={
+                    "url": current.url,
+                    "auth_method": "api_key",
+                    "username": current.username,
+                    "dispatcharr_api_key": "canonical-keep-me",
+                    "api_key": "legacy-drop-me",
+                })
+
+        assert response.status_code == 200, response.json()
+        conflict_warns = [
+            record.getMessage()
+            for record in caplog.records
+            if "differing 'dispatcharr_api_key' and 'api_key'" in record.getMessage()
+        ]
+        assert len(conflict_warns) == 1, (
+            f"Expected one conflict WARN; got: {conflict_warns}"
+        )
+        assert "bd-jmi1c" in conflict_warns[0]
+
+    @pytest.mark.asyncio
+    async def test_post_no_warn_when_both_fields_identical(self, async_client, caplog):
+        """If a client double-sends the same value into both field names
+        (e.g., for back-compat with an older backend), there's no conflict
+        and no WARN — the WARN is reserved for the genuine discard case."""
+        import logging
+        current = _mock_settings(auth_method="password")
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            with caplog.at_level(logging.WARNING, logger="routers.settings"):
+                response = await async_client.post("/api/settings", json={
+                    "url": current.url,
+                    "auth_method": "api_key",
+                    "username": current.username,
+                    "dispatcharr_api_key": "same-value",
+                    "api_key": "same-value",
+                })
+
+        assert response.status_code == 200, response.json()
+        assert not any(
+            "differing 'dispatcharr_api_key' and 'api_key'" in record.getMessage()
+            for record in caplog.records
+        ), "Conflict WARN fired despite identical values"
+
+    @pytest.mark.asyncio
+    async def test_response_exposes_both_indicators(self, async_client):
+        """bd-jmi1c (GH #273): GET /api/settings returns both
+        ``dispatcharr_api_key_configured`` (canonical) and the legacy
+        ``api_key_configured`` for one release of frontend back-compat. Both
+        track the same underlying state — a key is either configured or not."""
+        current = _mock_settings(dispatcharr_api_key="stored-canonical-key")
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["dispatcharr_api_key_configured"] is True
+        assert data["api_key_configured"] is True
+
 
 class TestTestConnection:
     """Tests for POST /api/settings/test."""
@@ -422,6 +616,61 @@ class TestTestSMTP:
         })
         assert response.status_code == 200
         assert response.json()["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_stored_password_when_omitted(self, async_client):
+        """gh-380: an empty smtp_password reuses the saved one so the test
+        authenticates instead of failing with 530 Authentication Required.
+
+        The Settings UI never re-sends the stored password (masked + cleared
+        on load), so a test request normally arrives with smtp_password="".
+        The endpoint must mirror update_settings' preserve-on-omit contract.
+        """
+        mock = _mock_settings(smtp_user="user@example.com", smtp_password="stored-secret")
+        mock_server = MagicMock()
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("smtplib.SMTP", return_value=mock_server) as MockSMTP:
+            response = await async_client.post("/api/settings/test-smtp", json={
+                "smtp_host": "smtp.gmail.com",
+                "smtp_port": 587,
+                "smtp_user": "user@example.com",
+                "smtp_password": "",  # masked: UI never resends it
+                "smtp_from_email": "user@example.com",
+                "smtp_use_tls": True,
+                "smtp_use_ssl": False,
+                "to_email": "recipient@example.com",
+            })
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        MockSMTP.assert_called_once()
+        mock_server.login.assert_called_once_with("user@example.com", "stored-secret")
+        mock_server.sendmail.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_uses_request_password_over_stored(self, async_client):
+        """A password typed into the test form takes precedence over the
+        stored one (operator validating credentials before saving)."""
+        mock = _mock_settings(smtp_user="user@example.com", smtp_password="stored-secret")
+        mock_server = MagicMock()
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("smtplib.SMTP", return_value=mock_server):
+            response = await async_client.post("/api/settings/test-smtp", json={
+                "smtp_host": "smtp.gmail.com",
+                "smtp_port": 587,
+                "smtp_user": "user@example.com",
+                "smtp_password": "typed-secret",
+                "smtp_from_email": "user@example.com",
+                "smtp_use_tls": True,
+                "smtp_use_ssl": False,
+                "to_email": "recipient@example.com",
+            })
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        mock_server.login.assert_called_once_with("user@example.com", "typed-secret")
 
 
 class TestTestDiscord:
@@ -738,3 +987,376 @@ class TestMCPStatusSanitization:
         assert body["error"] == "ConnectError"
         assert "10.0.5.42" not in body["error"]
         assert "network unreachable" not in body["error"]
+
+
+class TestEmbySettingsPersistence:
+    """bd-8wc6q: GET / POST plumbing for the Emby integration settings fields.
+
+    Covers the three new fields (``emby_enabled`` / ``emby_base_url`` /
+    ``emby_api_key``) appearing in the GET response (with the key masked),
+    a full POST persisting all three, defaults when the fields are absent
+    from the POST body, and the preserve-on-omit contract for the API key
+    so a partial POST cannot silently clear the stored secret (parity with
+    ``smtp_password`` and ``mcp_api_key``).
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_returns_emby_enabled_and_url(self, async_client):
+        """GET /api/settings exposes emby_enabled and emby_base_url verbatim."""
+        mock = _mock_settings(
+            emby_enabled=True,
+            emby_base_url="http://emby.local:8096",
+            emby_api_key="secret-token",
+        )
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["emby_enabled"] is True
+        assert data["emby_base_url"] == "http://emby.local:8096"
+
+    @pytest.mark.asyncio
+    async def test_get_masks_emby_api_key(self, async_client):
+        """The API key itself is never returned — only emby_api_key_configured."""
+        mock = _mock_settings(emby_api_key="secret-token")
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "emby_api_key" not in data
+        assert data["emby_api_key_configured"] is True
+
+    @pytest.mark.asyncio
+    async def test_get_reports_unconfigured_when_no_key(self, async_client):
+        """emby_api_key_configured=false when the key is empty."""
+        mock = _mock_settings(emby_api_key="")
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        assert response.json()["emby_api_key_configured"] is False
+
+    @pytest.mark.asyncio
+    async def test_post_persists_all_three_fields(self, async_client):
+        """POST /api/settings with the three Emby fields persists them via save_settings."""
+        current = _mock_settings()
+        captured: dict = {}
+
+        def capture_save(new_settings):
+            captured["emby_enabled"] = new_settings.emby_enabled
+            captured["emby_base_url"] = new_settings.emby_base_url
+            captured["emby_api_key"] = new_settings.emby_api_key
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+                "emby_enabled": True,
+                "emby_base_url": "http://emby.local:8096",
+                "emby_api_key": "fresh-emby-token",
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["emby_enabled"] is True
+        assert captured["emby_base_url"] == "http://emby.local:8096"
+        assert captured["emby_api_key"] == "fresh-emby-token"
+
+    @pytest.mark.asyncio
+    async def test_post_defaults_when_fields_absent(self, async_client):
+        """When the Emby fields are omitted from the POST body, defaults apply
+        (emby_enabled=False, emby_base_url="") — except the API key, which is
+        preserved per the preserve-on-omit contract below."""
+        current = _mock_settings(
+            emby_enabled=True,
+            emby_base_url="http://stale.example",
+            emby_api_key="",
+        )
+        captured: dict = {}
+
+        def capture_save(new_settings):
+            captured["emby_enabled"] = new_settings.emby_enabled
+            captured["emby_base_url"] = new_settings.emby_base_url
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+            })
+
+        assert response.status_code == 200, response.json()
+        # The Pydantic model defaults are applied when the fields are absent.
+        assert captured["emby_enabled"] is False
+        assert captured["emby_base_url"] == ""
+
+    @pytest.mark.asyncio
+    async def test_partial_post_preserves_stored_emby_api_key(self, async_client):
+        """bd-8wc6q: a POST that omits ``emby_api_key`` must NOT clear the
+        stored key. Same preserve-on-omit contract as ``smtp_password`` and
+        ``mcp_api_key`` (bd-vj8n9) — operators can save the toggle and base
+        URL without re-entering the secret on every save."""
+        current = _mock_settings(emby_api_key="stored-emby-key-xyz")
+        captured: dict = {}
+
+        def capture_save(new_settings):
+            captured["emby_api_key"] = new_settings.emby_api_key
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+                "emby_enabled": True,
+                "emby_base_url": "http://emby.local:8096",
+                # emby_api_key intentionally omitted
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["emby_api_key"] == "stored-emby-key-xyz", (
+            "Partial POST cleared emby_api_key — preserve-on-omit broken"
+        )
+
+
+class TestPlexJellyfinSecretPreserveOnOmit:
+    """bd-mlcla N3: symmetric preserve-on-omit tests for ``plex_token`` and
+    ``jellyfin_api_key``.
+
+    Only ``emby_api_key`` had this coverage. The settings router applies the
+    same truthiness-based preserve-on-omit contract to all three media-server
+    secrets (``routers/settings.py`` — ``request.X if request.X else
+    current.X``): a partial POST that omits the secret keeps the stored value
+    so the Settings UI can save non-secret fields without re-entering the key.
+    """
+
+    @pytest.mark.asyncio
+    async def test_partial_post_preserves_stored_plex_token(self, async_client):
+        """A POST that omits ``plex_token`` must NOT clear the stored token."""
+        current = _mock_settings(plex_token="stored-plex-token-xyz")
+        captured: dict = {}
+
+        def capture_save(new_settings):
+            captured["plex_token"] = new_settings.plex_token
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+                "plex_enabled": True,
+                "plex_base_url": "http://plex.local:32400",
+                # plex_token intentionally omitted
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["plex_token"] == "stored-plex-token-xyz", (
+            "Partial POST cleared plex_token — preserve-on-omit broken"
+        )
+
+    @pytest.mark.asyncio
+    async def test_partial_post_preserves_stored_jellyfin_api_key(self, async_client):
+        """A POST that omits ``jellyfin_api_key`` must NOT clear the key."""
+        current = _mock_settings(jellyfin_api_key="stored-jellyfin-key-xyz")
+        captured: dict = {}
+
+        def capture_save(new_settings):
+            captured["jellyfin_api_key"] = new_settings.jellyfin_api_key
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+                "jellyfin_enabled": True,
+                "jellyfin_base_url": "http://jellyfin.local:8096",
+                # jellyfin_api_key intentionally omitted
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["jellyfin_api_key"] == "stored-jellyfin-key-xyz", (
+            "Partial POST cleared jellyfin_api_key — preserve-on-omit broken"
+        )
+
+
+class TestTrustedMediaNetworksPersistence:
+    """bd-mlcla N3: router-level preserve-on-omit + clear semantics for
+    ``trusted_media_networks``.
+
+    Unlike the secret fields (which preserve on BOTH ``None`` and ``""``),
+    ``trusted_media_networks`` uses ``is not None`` semantics: ``None``
+    (omitted, e.g. an older frontend bundle) preserves the stored list, but an
+    explicit ``[]`` CLEARS it. This list is a soft IP-ranking hint only — it
+    never gates attribution — so the clear path is safe."""
+
+    @pytest.mark.asyncio
+    async def test_omitted_field_preserves_existing_list(self, async_client):
+        """An older frontend bundle omits the field (None) → stored list kept."""
+        current = _mock_settings(
+            trusted_media_networks=["172.18.0.0/16", "10.0.0.5"]
+        )
+        captured: dict = {}
+
+        def capture_save(new_settings):
+            captured["trusted_media_networks"] = new_settings.trusted_media_networks
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+                # trusted_media_networks intentionally omitted
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["trusted_media_networks"] == ["172.18.0.0/16", "10.0.0.5"], (
+            "Omitted trusted_media_networks must preserve the stored list"
+        )
+
+    @pytest.mark.asyncio
+    async def test_explicit_empty_list_clears_existing(self, async_client):
+        """An explicit ``[]`` clears the stored list (the operator emptied it)."""
+        current = _mock_settings(
+            trusted_media_networks=["172.18.0.0/16", "10.0.0.5"]
+        )
+        captured: dict = {}
+
+        def capture_save(new_settings):
+            captured["trusted_media_networks"] = new_settings.trusted_media_networks
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+                "trusted_media_networks": [],
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["trusted_media_networks"] == [], (
+            "Explicit empty list must CLEAR trusted_media_networks"
+        )
+
+    @pytest.mark.asyncio
+    async def test_explicit_list_persists(self, async_client):
+        """A non-empty list is persisted verbatim."""
+        current = _mock_settings(trusted_media_networks=[])
+        captured: dict = {}
+
+        def capture_save(new_settings):
+            captured["trusted_media_networks"] = new_settings.trusted_media_networks
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+                "trusted_media_networks": ["192.168.1.0/24"],
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["trusted_media_networks"] == ["192.168.1.0/24"]
+
+
+class TestMCPStatusHostResolution:
+    """bd-d2171: GET /api/settings/mcp-status must target the MCP container
+    via MCP_HOST (default 'ecm-mcp' for canonical Docker bridge networking),
+    not 'localhost' (which resolves to the ECM container itself under bridge
+    networking). Operators using network_mode: host can set MCP_HOST=localhost.
+    """
+
+    def _make_captor_client(self, captured):
+        """Build a stub AsyncClient that records the URL passed to .get()."""
+        class _CaptorClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc_info):
+                return False
+
+            async def get(self, url, *args, **kwargs):
+                captured["url"] = url
+                response = MagicMock()
+                response.raise_for_status = MagicMock()
+                response.json = MagicMock(return_value={"status": "ok"})
+                return response
+
+        return _CaptorClient
+
+    @pytest.mark.asyncio
+    async def test_default_host_is_ecm_mcp(self, async_client, monkeypatch):
+        """Unset MCP_HOST -> URL targets the canonical compose service name."""
+        monkeypatch.delenv("MCP_HOST", raising=False)
+        monkeypatch.delenv("MCP_PORT", raising=False)
+
+        captured = {}
+        with patch("httpx.AsyncClient", self._make_captor_client(captured)):
+            response = await async_client.get("/api/settings/mcp-status")
+
+        assert response.status_code == 200
+        assert response.json()["reachable"] is True
+        assert captured["url"] == "http://ecm-mcp:6101/health"
+
+    @pytest.mark.asyncio
+    async def test_mcp_host_override_localhost(self, async_client, monkeypatch):
+        """MCP_HOST=localhost restores host-networking back-compat shape."""
+        monkeypatch.setenv("MCP_HOST", "localhost")
+        monkeypatch.delenv("MCP_PORT", raising=False)
+
+        captured = {}
+        with patch("httpx.AsyncClient", self._make_captor_client(captured)):
+            response = await async_client.get("/api/settings/mcp-status")
+
+        assert response.status_code == 200
+        assert response.json()["reachable"] is True
+        assert captured["url"] == "http://localhost:6101/health"

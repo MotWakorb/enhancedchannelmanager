@@ -675,6 +675,65 @@ ENDPOINTS: dict[str, Endpoint] = {
             {"page", "page_size", "category", "action_type", "date_from", "date_to", "search", "user_initiated", "batch_id"}
         ),
     ),
+    # -- channel_merges (dedup) domain — BD-O (bd-70ylc) -----------------
+    # ADR-008 §D7: tool names are the contract; these endpoints mirror the
+    # REST surface in backend/routers/channel_merges.py.
+    "channel_merges_list": Endpoint(
+        name="channel_merges_list",
+        method="GET",
+        path="/api/channel-merges",
+        query_params=frozenset({"status", "group_id", "page", "page_size"}),
+        response_fields=frozenset({"merges", "total", "page", "page_size", "total_pages"}),
+    ),
+    "channel_merges_accept": Endpoint(
+        name="channel_merges_accept",
+        method="POST",
+        path="/api/channel-merges/{merge_id}/accept",
+        response_fields=frozenset(
+            {"merged_into_channel_id", "journal_entry_id", "source_stream_id", "confidence", "status"}
+        ),
+    ),
+    "channel_merges_dismiss": Endpoint(
+        name="channel_merges_dismiss",
+        method="POST",
+        path="/api/channel-merges/{merge_id}/dismiss",
+        response_fields=frozenset({"journal_entry_id", "status"}),
+    ),
+    # -- channel_merges candidates — BD-P (bd-7u8ms) consumer ---------------
+    # ADR-008 §D7. The list/accept/dismiss endpoints above are owned by BD-O
+    # (bd-70ylc); BD-P only owns candidates since add_stream's dedup_action
+    # is the sole consumer.
+    "channel_merges_candidates": Endpoint(
+        name="channel_merges_candidates",
+        method="GET",
+        path="/api/channel-merges/candidates",
+        query_params=frozenset({"stream_name", "group_id", "page", "page_size"}),
+        response_fields=frozenset({"stream_name", "candidates", "total", "page", "page_size", "total_pages"}),
+    ),
+    # -- channel_merges enqueue — bd-b3czq (ADR-008 §D7 MCP prompt path) -----
+    # POST /api/channel-merges async-queues a merge candidate (creates a
+    # pending_merges row with trigger_context='mcp_tool') and returns a
+    # merge_id so add_stream(dedup_action='prompt') can hand the agent a row
+    # to accept/dismiss. The server re-runs the matcher; the tool sends only
+    # the stream context (NOT a confidence — the action-time score is
+    # authoritative per §D6).
+    "channel_merges_enqueue": Endpoint(
+        name="channel_merges_enqueue",
+        method="POST",
+        path="/api/channel-merges",
+        request_fields=frozenset({"stream_name", "group_id"}),
+        response_fields=frozenset(
+            {
+                "merge_id",
+                "created",
+                "candidate_channel_id",
+                "candidate_channel_name",
+                "confidence",
+                "meets_threshold",
+                "status",
+            }
+        ),
+    ),
     # -- tasks domain ------------------------------------------------------
     "tasks_list": Endpoint(
         name="tasks_list",

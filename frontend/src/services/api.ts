@@ -282,6 +282,61 @@ export async function mergeChannels(request: MergeChannelsRequest): Promise<Chan
   });
 }
 
+// -----------------------------------------------------------------------------
+// Channel-merges dedup lookup (ADR-008 §D1 / BD-D)
+// -----------------------------------------------------------------------------
+
+/**
+ * Single dedup candidate returned by GET /api/channel-merges/candidates.
+ *
+ * `channel_id` is a string because `pending_merges.candidate_channel_id` is
+ * TEXT (ADR-008 §D8 channel-id-type note). The backend casts the Dispatcharr
+ * channel id to string before returning; the modal and consumers must do the
+ * same when comparing or passing it back.
+ */
+export interface ChannelMergeCandidate {
+  channel_id: string;
+  channel_name: string;
+  /** Normalized confidence score, 0.0–1.0. Always >= 0.60 per §D2 floor. */
+  confidence: number;
+}
+
+export interface ChannelMergeCandidatesResponse {
+  stream_name: string;
+  candidates: ChannelMergeCandidate[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+/**
+ * Synchronous top-1 dedup candidate lookup (BD-D / ADR-008 §D1).
+ *
+ * Used by the BD-H drag-drop and BD-I "Add Stream" flows to decide whether to
+ * prompt the operator with `StreamDedupModal` before creating a new channel.
+ * Returns the response envelope verbatim; callers consult `candidates[0]` for
+ * the top-1 match (the v0.17.1 matcher returns at most one) and fall through
+ * to the original create-channel path when the array is empty.
+ *
+ * The matcher's §D2 hard floor (60%) is enforced server-side, so a candidate
+ * present in the response is always above the floor — the client never has to
+ * filter sub-floor matches itself.
+ *
+ * @param streamName Raw incoming stream name; required, non-blank.
+ * @param groupId Optional target channel-group filter. Omit to search all groups.
+ */
+export async function getChannelMergeCandidates(
+  streamName: string,
+  groupId?: number | null,
+): Promise<ChannelMergeCandidatesResponse> {
+  const query = buildQuery({
+    stream_name: streamName,
+    group_id: groupId ?? undefined,
+  });
+  return fetchJson(`${API_BASE}/channel-merges/candidates${query}`);
+}
+
 // Find & merge duplicate channels
 export interface DuplicateGroup {
   normalized_name: string;
@@ -387,6 +442,45 @@ export async function bulkCommit(request: BulkCommitRequest): Promise<BulkCommit
     method: 'POST',
     body: JSON.stringify(request),
   });
+}
+
+// Stream-to-channel deduplication (ADR-008 / bd-1v4ht epic) ----------------
+// Re-exports the DedupCandidate shape from the modal so consumers don't pull
+// it from a component module. The modal owns the operator-facing fields;
+// this layer owns the wire contract.
+
+/** Single candidate returned by GET /api/channel-merges/candidates (BD-D). */
+export interface DedupCandidate {
+  channel_id: string;
+  channel_name: string;
+  /** Normalized confidence 0.0–1.0. Backend already enforces the ADR-008 §D2 floor. */
+  confidence: number;
+}
+
+/** Envelope for GET /api/channel-merges/candidates (BD-D). */
+export interface DedupCandidatesResponse {
+  stream_name: string;
+  candidates: DedupCandidate[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+/**
+ * Look up dedup candidates for an incoming stream name (BD-D).
+ *
+ * Synchronous top-1 candidate lookup. The backend returns an empty
+ * `candidates` array when nothing clears the §D2 confidence floor — that is
+ * the signal to proceed with normal channel creation. When a candidate is
+ * present, callers should surface the StreamDedupModal for operator decision.
+ */
+export async function getDedupCandidates(
+  streamName: string,
+  groupId?: number | null,
+): Promise<DedupCandidatesResponse> {
+  const query = buildQuery({ stream_name: streamName, group_id: groupId ?? undefined });
+  return fetchJson(`${API_BASE}/channel-merges/candidates${query}`);
 }
 
 // Channel Groups
@@ -828,7 +922,19 @@ export interface SettingsResponse {
   url: string;
   auth_method: DispatcharrAuthMethod;
   username: string;
-  api_key_configured: boolean;  // True if an api_key is stored (value never returned)
+  // bd-jmi1c (GH #273): canonical indicator for Dispatcharr REST API token.
+  // Older bundles read ``api_key_configured`` — backend responds with both
+  // for one release of overlap.
+  // Optional: older backends (pre-v0.17.1) omit this field — frontend
+  // fallbacks (`?? api_key_configured`) in SettingsModal.tsx and
+  // tabs/SettingsTab.tsx handle the undefined case. Remove the `?` (and
+  // the legacy alias below) when removing the legacy field in v0.19.0
+  // per bd-ewm4h.
+  dispatcharr_api_key_configured?: boolean;  // True if a Dispatcharr REST API key is stored (value never returned)
+  // Legacy alias retained for the back-compat window — newer backends
+  // still emit it for one release, but a future client running against
+  // a v0.19.0+ backend may not see it, so this is also optional.
+  api_key_configured?: boolean;  // DEPRECATED — alias for dispatcharr_api_key_configured (remove with bd-ewm4h)
   configured: boolean;
   auto_rename_channel_number: boolean;
   include_channel_number_in_name: boolean;
@@ -907,6 +1013,29 @@ export interface SettingsResponse {
   // Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m).
   // Default ON; operator can flip via /api/settings to disable reporting.
   telemetry_client_errors_enabled: boolean;
+  // Dedup settings (BD-B / BD-K). Server-side clamped to [CONFIDENCE_FLOOR=0.60, 1.00].
+  dedup_threshold: number;  // 0.60-1.00 float; UI shows as integer percent 60-100
+  dedup_m3u_toast_suppressed: boolean;  // When true, suppress the toast after M3U refresh queues dedup items
+  // Emby integration (bd-8wc6q, epic bd-2cenq). When ``emby_enabled`` is
+  // true and ``emby_base_url`` + ``emby_api_key`` are configured, the
+  // Stats v2 pipeline cross-references active streams against the
+  // operator's Emby /Sessions feed to attribute real Emby usernames.
+  // The API key itself is NEVER returned — only ``emby_api_key_configured``.
+  emby_enabled: boolean;
+  emby_base_url: string;
+  emby_api_key_configured: boolean;
+  // Plex integration (bd-r5f0c.2 / W2). Token uses preserve-on-omit.
+  plex_enabled: boolean;
+  plex_base_url: string;
+  plex_token_configured: boolean;
+  // Jellyfin integration (bd-r5f0c.3 / W3). Key uses preserve-on-omit.
+  jellyfin_enabled: boolean;
+  jellyfin_base_url: string;
+  jellyfin_api_key_configured: boolean;
+  // bd-mlcla: operator-configured trusted media/proxy networks (CIDRs or
+  // bare IPs). Used ONLY to RANK media-server attribution candidates,
+  // never to gate. Default empty.
+  trusted_media_networks: string[];
 }
 
 // Stream preview mode for browser playback
@@ -926,7 +1055,11 @@ export async function saveSettings(settings: {
   auth_method: DispatcharrAuthMethod;
   username: string;
   password?: string;  // Optional - only required when changing URL or username
-  api_key?: string;   // Optional - only required when (re)setting API key mode
+  // bd-jmi1c (GH #273): canonical Dispatcharr REST API key field. The
+  // backend accepts ``api_key`` as a deprecated alias for one release.
+  // New frontend code should always send ``dispatcharr_api_key``.
+  dispatcharr_api_key?: string;   // Optional - only required when (re)setting Dispatcharr API key mode
+  api_key?: string;   // DEPRECATED — legacy alias for dispatcharr_api_key (bd-jmi1c)
   auto_rename_channel_number: boolean;
   include_channel_number_in_name: boolean;
   channel_number_separator: string;
@@ -998,10 +1131,86 @@ export async function saveSettings(settings: {
   auto_creation_exclude_auto_sync_groups?: boolean;
   // Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m)
   telemetry_client_errors_enabled?: boolean;
+  // Dedup settings (BD-B / BD-K, ADR-008 §D2). Float 0.60-1.00; server clamps to floor.
+  dedup_threshold?: number;
+  dedup_m3u_toast_suppressed?: boolean;
+  // Emby integration (bd-8wc6q, epic bd-2cenq). emby_api_key uses
+  // preserve-on-omit on the backend — sending undefined keeps the stored
+  // value, same as smtp_password and mcp_api_key.
+  emby_enabled?: boolean;
+  emby_base_url?: string;
+  emby_api_key?: string;
+  // Plex integration (bd-r5f0c.2 / W2). plex_token uses preserve-on-omit.
+  plex_enabled?: boolean;
+  plex_base_url?: string;
+  plex_token?: string;
+  // Jellyfin integration (bd-r5f0c.3 / W3). jellyfin_api_key uses preserve-on-omit.
+  jellyfin_enabled?: boolean;
+  jellyfin_base_url?: string;
+  jellyfin_api_key?: string;
+  // bd-mlcla: trusted media/proxy networks (ranking hint only, never gates).
+  trusted_media_networks?: string[];
 }): Promise<{ status: string; configured: boolean; server_changed: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
     body: JSON.stringify(settings),
+  });
+}
+
+// Emby Settings UI (bd-8wc6q, epic bd-2cenq). The "Test Connection" button
+// sends the operator-entered (potentially unsaved) credentials to the
+// backend, which constructs an EmbyClient inline and renders the outcome.
+// Returns ``{ok: true}`` on a successful /Sessions probe or
+// ``{ok: false, error: <msg>}`` on any auth / network / non-2xx failure.
+// The backend deliberately does NOT raise — the operator wants the error
+// message inline in the UI, not as a generic HTTP failure.
+export interface EmbyTestConnectionResult {
+  ok: boolean;
+  error?: string;
+}
+
+export async function testEmbyConnection(
+  baseUrl: string,
+  apiKey: string,
+): Promise<EmbyTestConnectionResult> {
+  return fetchJson(`${API_BASE}/settings/emby/test-connection`, {
+    method: 'POST',
+    body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
+  });
+}
+
+// Plex Settings UI test-connection (bd-r5f0c.5 / W5). Same shape as Emby.
+export interface PlexTestConnectionResult {
+  ok: boolean;
+  error?: string;
+}
+
+export async function testPlexConnection(
+  baseUrl: string,
+  plexToken: string,
+): Promise<PlexTestConnectionResult> {
+  // Wire key is `token` to match the backend PlexTestConnectionRequest schema
+  // (X-Plex-Token ecosystem nomenclature). The JS parameter stays `plexToken`
+  // for readability at call sites. See bd-8zi93.
+  return fetchJson(`${API_BASE}/settings/plex/test-connection`, {
+    method: 'POST',
+    body: JSON.stringify({ base_url: baseUrl, token: plexToken }),
+  });
+}
+
+// Jellyfin Settings UI test-connection (bd-r5f0c.5 / W5). Same shape as Emby.
+export interface JellyfinTestConnectionResult {
+  ok: boolean;
+  error?: string;
+}
+
+export async function testJellyfinConnection(
+  baseUrl: string,
+  apiKey: string,
+): Promise<JellyfinTestConnectionResult> {
+  return fetchJson(`${API_BASE}/settings/jellyfin/test-connection`, {
+    method: 'POST',
+    body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
   });
 }
 
@@ -1027,6 +1236,14 @@ export async function getMCPStatus(): Promise<{
   // "field_empty" — field present but empty (no key generated / revoked).
   api_key_status?: 'ok' | 'file_not_found' | 'invalid_json' | 'field_missing' | 'field_empty';
   setup_hint?: string;
+  // bd-buiqr10 (Option-A slice): OAuth signing key diagnostic.
+  // signing_key_status='ok' means the HS256 secret is present in settings.json
+  // and offline JWT verification is possible. 'signing_key_missing' means
+  // the shared secret is absent — OAuth Bearer-JWT auth cannot work.
+  // 'file_not_found' / 'invalid_json' mirror the api_key_status states for
+  // the same underlying file-read failure modes.
+  signing_key_status?: 'ok' | 'signing_key_missing' | 'file_not_found' | 'invalid_json';
+  signing_key_hint?: string;
   tools_available?: number;
   resources_available?: number;
   error?: string;
@@ -1034,12 +1251,80 @@ export async function getMCPStatus(): Promise<{
   return fetchJson(`${API_BASE}/settings/mcp-status`);
 }
 
+// ── OAuth grants + consent (bead buiqr.7) ───────────────────────────────────
+
+/** One active OAuth grant the admin made to a client (Active Grants list). */
+export interface OAuthGrant {
+  /** The refresh-token family id — the handle for revoke. */
+  id: string;
+  client_id: string;
+  /** Display name PINNED from the hardcoded registry (never attacker input). */
+  client_name: string;
+  /** Epoch seconds when the admin first approved the grant. */
+  granted_at: number;
+  /** Epoch seconds of the most recent token activity in the grant. */
+  last_used: number;
+}
+
+/** Data the consent screen renders — sourced server-side, not from the query. */
+export interface ConsentContext {
+  /** Registry-pinned client name (CP1 — NEVER reflected from the query input). */
+  client_name: string;
+  client_id: string;
+  scope: string;
+  /** True when an active grant already exists for this client + admin. */
+  already_connected: boolean;
+  existing_grant: OAuthGrant | null;
+  /** Open-redirect-guarded cancel target (OR1) — always same-origin. */
+  return_to: string;
+}
+
+/** List the admin's active OAuth grants (Active Grants Settings sub-section). */
+export async function getOAuthGrants(): Promise<{ grants: OAuthGrant[] }> {
+  return fetchJson(`${API_BASE}/oauth/grants`);
+}
+
+/** Revoke one OAuth grant by id (kills its refresh family + access tokens). */
+export async function revokeOAuthGrant(grantId: string): Promise<void> {
+  await fetchJson(`${API_BASE}/oauth/grants/${encodeURIComponent(grantId)}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
+ * Bulk-revoke ALL active OAuth grants for the admin (buiqr.12 panic button).
+ *
+ * Kills every live refresh-token family + access-token jtis in one call.
+ * Returns the count of grants revoked (0 if none were active — idempotent).
+ */
+export async function revokeAllOAuthGrants(): Promise<{ revoked: number }> {
+  return fetchJson(`${API_BASE}/oauth/grants`, { method: 'DELETE' });
+}
+
+/**
+ * Fetch the trusted consent-screen context for a client_id.
+ *
+ * The consent page MUST call this rather than rendering the client name from
+ * its own query string — the name comes from the hardcoded registry server-side
+ * (threat model CP1). ``return_to`` is open-redirect-guarded server-side (OR1).
+ */
+export async function getConsentContext(
+  clientId: string,
+  returnTo?: string,
+): Promise<ConsentContext> {
+  const query = buildQuery({ client_id: clientId, return_to: returnTo });
+  return fetchJson(`${API_BASE}/oauth/authorize/consent-context${query}`);
+}
+
 export async function testConnection(settings: {
   url: string;
   auth_method: DispatcharrAuthMethod;
   username?: string;
   password?: string;
-  api_key?: string;
+  // bd-jmi1c (GH #273): canonical Dispatcharr REST API key; legacy
+  // ``api_key`` accepted for one release of back-compat.
+  dispatcharr_api_key?: string;
+  api_key?: string;  // DEPRECATED — legacy alias for dispatcharr_api_key
 }): Promise<TestConnectionResult> {
   return fetchJson(`${API_BASE}/settings/test`, {
     method: 'POST',
@@ -3507,4 +3792,117 @@ export async function updateLookupTable(id: number, data: LookupTableUpdateReque
 
 export async function deleteLookupTable(id: number): Promise<void> {
   return fetchJson(`${API_BASE}/lookup-tables/${id}`, { method: 'DELETE' });
+}
+
+// =============================================================================
+// Channel Merges (Pending Merges queue) — ADR-008 §D1
+// =============================================================================
+//
+// The pending_merges queue is populated by:
+//   • the bulk M3U import dedup hook (BD-F / bd-a5lb2)
+//   • the drag-drop and Add Stream surfaces (BD-H, BD-I)
+//
+// and consumed by the Pending Merges page (BD-J / bd-gfxrz) which renders one
+// row per queued candidate with operator-facing Merge / Create New actions.
+//
+// The list endpoint is GET-only and `RequireAuthIfEnabled`; the accept and
+// dismiss endpoints are `RequireAdminIfEnabled` (they mutate either ECM state
+// or Dispatcharr channel structure). All three follow the ECM flat-outcome
+// response envelope established by `POST /api/channels/merge` (no top-level
+// `data` wrapper).
+
+/**
+ * One pending_merges row, as projected by `GET /api/channel-merges`.
+ *
+ * Field set matches the backend `PendingMergeRecord` Pydantic model in
+ * `backend/routers/channel_merges.py`. `confidence` is a 0.0–1.0 float
+ * captured at queue-time; the UI renders it as an integer-percent badge.
+ * `created_at` and `resolved_at` are epoch-ms integers per ADR-007/§D8.
+ */
+export interface PendingMergeRecord {
+  id: number;
+  stream_name: string;
+  group_id: number | null;
+  candidate_channel_id: string;
+  confidence: number;
+  status: 'pending' | 'merged' | 'dismissed';
+  created_at: number;
+  resolved_at: number | null;
+  resolution_source: string | null;
+  trigger_context: string;
+}
+
+/** Paginated envelope for `GET /api/channel-merges`. */
+export interface PendingMergesListResponse {
+  merges: PendingMergeRecord[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+/**
+ * Flat-outcome envelope for `POST /api/channel-merges/{id}/accept` per
+ * ADR-008 §D1. Mirrors the `AcceptOutcome` Pydantic model.
+ */
+export interface AcceptMergeOutcome {
+  merged_into_channel_id: string;
+  journal_entry_id: number;
+  source_stream_id: string;
+  confidence: number;
+  status: 'merged';
+}
+
+/**
+ * Flat-outcome envelope for `POST /api/channel-merges/{id}/dismiss` per
+ * ADR-008 §D1. Mirrors the `DismissOutcome` Pydantic model.
+ */
+export interface DismissMergeOutcome {
+  journal_entry_id: number;
+  status: 'dismissed';
+}
+
+/**
+ * List pending merge queue rows. Defaults match BD-J's Pending Merges page:
+ * status='pending', page=1, page_size=50. Pass `group_id` to scope to a
+ * single channel group; omit to list across all groups.
+ */
+export async function getPendingMerges(params?: {
+  status?: 'pending' | 'merged' | 'dismissed';
+  groupId?: number;
+  page?: number;
+  pageSize?: number;
+}): Promise<PendingMergesListResponse> {
+  const query = buildQuery({
+    status: params?.status ?? 'pending',
+    group_id: params?.groupId,
+    page: params?.page ?? 1,
+    page_size: params?.pageSize ?? 50,
+  });
+  return fetchJson(`${API_BASE}/channel-merges${query}`);
+}
+
+/**
+ * Accept a pending merge (operator confirms the candidate match).
+ * Idempotent on terminal `merged` (returns the prior outcome envelope);
+ * 409 on terminal `dismissed`; 404 if the candidate channel has been
+ * deleted in Dispatcharr since the row was queued (ADR-008 §D4 lazy
+ * resolution — the operator's recovery is `/dismiss` + re-trigger).
+ */
+export async function acceptPendingMerge(mergeId: number): Promise<AcceptMergeOutcome> {
+  return fetchJson(`${API_BASE}/channel-merges/${mergeId}/accept`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * Dismiss a pending merge (operator rejects the candidate). Idempotent on
+ * terminal `dismissed`; 409 on terminal `merged`. The downstream creation
+ * path (drag-drop, Add Stream, M3U refresh) is the operator's next step
+ * — `dismiss` is purely an ECM-side state flip plus audit-journal row.
+ */
+export async function dismissPendingMerge(mergeId: number): Promise<DismissMergeOutcome> {
+  return fetchJson(`${API_BASE}/channel-merges/${mergeId}/dismiss`, {
+    method: 'POST',
+  });
 }

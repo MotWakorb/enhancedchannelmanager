@@ -22,6 +22,8 @@ import { WatchHistoryPanel } from './WatchHistoryPanel';
 import { BandwidthPanel } from './BandwidthPanel';
 import { UserStatsPanel } from './UserStatsPanel';
 import { ProvidersPanel } from './ProvidersPanel';
+import { AttributionBadge } from '../AttributionBadge';
+import type { Viewer } from '../../types';
 import './StatsTab.css';
 
 // Historical data point for charts
@@ -857,21 +859,34 @@ export function StatsTab() {
               // helper for consistency with kh23e's data-table render
               // in ProvidersPanel / UserStatsPanel.
               //
+              // bd-gy5nd: backend also surfaces ``provider_name`` —
+              // the M3U source name when the URL hostname matched a
+              // configured M3U account, or the bare URL hostname
+              // (e.g. ``"infinity.gives"``) when no M3U match exists.
+              // Prefer the backend-derived ``provider_name`` so the
+              // PO sees the actual upstream provider on the badge
+              // instead of "Unknown". Fall back to the side-load
+              // ``m3uAccountNameMap`` lookup for backward-compat when
+              // a pre-bd-gy5nd backend doesn't include the field.
+              //
               // Edge cases:
-              //   * No stream_name AND no m3u_account_id → no badge.
-              //   * stream_name === channel name → no badge (legacy
-              //     behaviour — the badge is meant to surface info NOT
-              //     already in the channel label).
+              //   * No stream_name AND no m3u_account_id AND no
+              //     provider_name → no badge.
+              //   * stream_name === channel name AND no provider_name
+              //     → no badge (legacy: the badge is meant to surface
+              //     info NOT already in the channel label).
               //   * m3u_account_id present but not in m3uAccounts map
-              //     → ``providerName`` is null; ``streamLabel`` omits
-              //     the bracketed prefix and renders the bare stream
-              //     name (no leaked ``[Provider 6] - X``).
+              //     AND no provider_name → ``providerName`` is null;
+              //     ``streamLabel`` omits the bracketed prefix and
+              //     renders the bare stream name.
               const hasStreamIdentity =
                 (channel.stream_name && channel.stream_name !== displayName)
-                || (channel.m3u_account_id != null);
-              const providerName = (channel.m3u_account_id != null)
-                ? (m3uAccountNameMap.get(channel.m3u_account_id) ?? null)
-                : null;
+                || (channel.m3u_account_id != null)
+                || (channel.provider_name != null);
+              const providerName = channel.provider_name
+                ?? (channel.m3u_account_id != null
+                  ? (m3uAccountNameMap.get(channel.m3u_account_id) ?? null)
+                  : null);
               const streamBadgeText = hasStreamIdentity
                 ? streamLabel(
                     providerName,
@@ -897,6 +912,34 @@ export function StatsTab() {
                         {streamBadgeText}
                       </span>
                     )}
+                    {/* bd-cat70 (fix-forward for v0.17.1-0056): channel-header
+                        shows ONLY the multi-viewer "(N viewers)" rollup. The
+                        single-viewer name + the legacy emby_user_name singular
+                        fallback were removed because they duplicated the name
+                        already rendered (with AttributionBadge) in the
+                        Connected Clients section below — visual noise the PO
+                        explicitly asked to drop. The expanded section keeps
+                        the full per-client + per-source breakdown. */}
+                    {(() => {
+                      const embyCount = channel.emby_viewers?.length ?? 0;
+                      const plexCount = channel.plex_viewers?.length ?? 0;
+                      const jellyfinCount = channel.jellyfin_viewers?.length ?? 0;
+                      const totalViewers = embyCount + plexCount + jellyfinCount;
+
+                      if (totalViewers > 1) {
+                        return (
+                          <span
+                            className="stream-name-badge channel-emby-viewer"
+                            title={`${totalViewers} viewers across all media servers`}
+                            data-testid="channel-header-viewer-rollup"
+                          >
+                            ({totalViewers} viewers)
+                          </span>
+                        );
+                      }
+
+                      return null;
+                    })()}
                     {m3uSource && (
                       <span className="m3u-source" title={`M3U Source: ${m3uSource}`}>
                         {m3uSource}
@@ -1143,19 +1186,202 @@ export function StatsTab() {
                   <div className="channel-clients">
                     <div className="clients-header">
                       <span className="material-icons">people</span>
-                      Connected Clients ({channel.clients.length})
+                      {/* bd-w9c2a: Count actual humans watching, not ECM-side
+                          proxy connections. An Emby / Plex / Jellyfin
+                          transcoding-proxy client is ONE ECM connection but
+                          can carry N upstream viewers (W9 / bd-r5f0c.9
+                          multi-viewer). Counting raw clients.length
+                          undercounts in the deduped-upstream case (e.g.,
+                          1 Dispatcharr + 1 Emby-proxy with 2 viewers = 3
+                          humans, not 2).
+
+                          Precedence when a client carries viewers from
+                          multiple sources concurrently (rare — would imply
+                          one connection mediated by two source servers):
+                          take the MAX across the three source lists rather
+                          than summing them. This matches the per-client
+                          renderer's source-precedence semantic (emby >
+                          plex > jellyfin in lookup order) and avoids
+                          double-counting when the same humans are visible
+                          to multiple resolvers. */}
+                      Connected Clients ({(channel.clients || []).reduce((n, c) => {
+                        const sourceViewerCounts = [
+                          c.emby_viewers?.length ?? 0,
+                          c.plex_viewers?.length ?? 0,
+                          c.jellyfin_viewers?.length ?? 0,
+                        ];
+                        const maxSource = Math.max(...sourceViewerCounts);
+                        return n + (maxSource > 0 ? maxSource : 1);
+                      }, 0)})
                     </div>
                     <div className="client-list">
                       {channel.clients.map((client, idx) => (
                         <div key={client.client_id || idx} className="client-item">
                           <div className="client-info">
-                            {(client.username || client.user_id) && (
-                              <span className="client-user">
-                                <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
-                                {client.username || `User #${client.user_id}`}
-                              </span>
-                            )}
+                            {/* bd-r5f0c.5 (W5): Multi-viewer rendering.
+                                Priority order per source:
+                                  1. *_viewers[] (W9 multi-viewer lists) → AttributionBadge
+                                  2. *_user_name singular (back-compat) → old inline badge
+                                     to preserve existing test contracts (bd-5kbyf)
+                                  3. dispatcharr username / user_id
+                                If a client has viewers from multiple sources,
+                                each gets its own <span className="client-user"> row. */}
+                            {/* bd-r5f0c.12: per-client display groups same-user multi-stream into
+                                "name (N)". The channel-header viewer rollup intentionally still
+                                counts raw streams (each concurrent stream is its own operational
+                                event at the channel level). */}
+                            {(() => {
+                              // --- Multi-viewer path (W9 emby_viewers / plex_viewers / jellyfin_viewers) ---
+                              type ViewerRow = { source: 'emby' | 'plex' | 'jellyfin'; viewers: Viewer[] };
+                              const viewerRows: ViewerRow[] = [];
+
+                              if (client.emby_viewers && client.emby_viewers.length > 0) {
+                                viewerRows.push({ source: 'emby', viewers: client.emby_viewers });
+                              }
+                              if (client.plex_viewers && client.plex_viewers.length > 0) {
+                                viewerRows.push({ source: 'plex', viewers: client.plex_viewers });
+                              }
+                              if (client.jellyfin_viewers && client.jellyfin_viewers.length > 0) {
+                                viewerRows.push({ source: 'jellyfin', viewers: client.jellyfin_viewers });
+                              }
+
+                              if (viewerRows.length > 0) {
+                                return (
+                                  <div className="client-attribution-rows" data-testid="client-attribution-rows">
+                                    {viewerRows.map(row => {
+                                      // bd-r5f0c.12: Group viewers by (user_id, user_name) — same user
+                                      // with multiple concurrent streams collapses into "name (N)"
+                                      // instead of repeating the name. user_id is the primary key;
+                                      // user_name is the fallback when user_id is null (e.g., Plex's
+                                      // PlexAttribution.user_id can be None per W9 report — same-name
+                                      // viewers still group via name fallback).
+                                      type ViewerGroup = { user_id: string | null; user_name: string; count: number };
+                                      const groupKey = (v: Viewer): string =>
+                                        v.user_id != null ? `id:${v.user_id}` : `name:${v.user_name}`;
+
+                                      const groupMap = new Map<string, ViewerGroup>();
+                                      for (const v of row.viewers) {
+                                        const key = groupKey(v);
+                                        const existing = groupMap.get(key);
+                                        if (existing) {
+                                          existing.count += 1;
+                                        } else {
+                                          groupMap.set(key, { user_id: v.user_id, user_name: v.user_name, count: 1 });
+                                        }
+                                      }
+                                      const groups = Array.from(groupMap.values());
+
+                                      // Format each group: "<name>" when count==1, "<name> (<count>)" otherwise
+                                      const formatGroup = (g: ViewerGroup): string =>
+                                        g.count === 1 ? g.user_name : `${g.user_name} (${g.count})`;
+
+                                      // Threshold for rollup is now group count, not raw viewer count
+                                      const isRollup = groups.length > 3;
+                                      let nameText: string;
+                                      if (groups.length === 1) {
+                                        nameText = formatGroup(groups[0]);
+                                      } else if (groups.length <= 3) {
+                                        nameText = groups.map(formatGroup).join(', ');
+                                      } else {
+                                        nameText = `${row.viewers.length} viewers`;
+                                      }
+                                      return (
+                                        <span key={row.source} className="client-user">
+                                          <AttributionBadge source={row.source} />
+                                          {isRollup ? (
+                                            <details className="viewer-details">
+                                              <summary>{nameText}</summary>
+                                              <ul className="viewer-list">
+                                                {row.viewers.map((v, i) => (
+                                                  <li key={i}>{v.user_name}</li>
+                                                ))}
+                                              </ul>
+                                            </details>
+                                          ) : (
+                                            <span className="viewer-names">{nameText}</span>
+                                          )}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                );
+                              }
+
+                              // --- Back-compat singular path (bd-5kbyf contract preserved) ---
+                              // When emby_viewers is absent/null but emby_user_name is set
+                              // (pre-W9 DB rows), render the original markup so existing
+                              // tests pass unmodified. Same for plex / jellyfin.
+                              if (client.emby_user_name) {
+                                return (
+                                  <span className="client-user">
+                                    <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
+                                    {client.emby_user_name}
+                                    <span
+                                      className="badge attribution-source-badge"
+                                      title="Identity resolved via Emby /Sessions cross-reference"
+                                    >
+                                      via Emby
+                                    </span>
+                                  </span>
+                                );
+                              }
+                              if (client.plex_user_name) {
+                                return (
+                                  <span className="client-user">
+                                    <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
+                                    {client.plex_user_name}
+                                    <span className="badge attribution-source-badge">via Plex</span>
+                                  </span>
+                                );
+                              }
+                              if (client.jellyfin_user_name) {
+                                return (
+                                  <span className="client-user">
+                                    <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
+                                    {client.jellyfin_user_name}
+                                    <span className="badge attribution-source-badge">via Jellyfin</span>
+                                  </span>
+                                );
+                              }
+
+                              // --- Dispatcharr username / user_id fallback ---
+                              if (client.username || client.user_id) {
+                                return (
+                                  <span className="client-user">
+                                    <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
+                                    {client.username || `User #${client.user_id}`}
+                                  </span>
+                                );
+                              }
+                              return null;
+                            })()}
                             <span className="client-ip">{client.ip_address || 'Unknown'}</span>
+                            {/* bd-7ncci: the REAL requesting-device IP the media
+                                server reported for an attributed connection,
+                                shown as a SEPARATE field (not replacing the
+                                Dispatcharr connection IP above). Single
+                                attributed viewer → client_ip; server-proxy /
+                                Option-B rollup → the distinct client_ips set.
+                                Blank when not attributed to a media-server
+                                session. */}
+                            {(() => {
+                              const ips: string[] = client.client_ips && client.client_ips.length > 0
+                                ? client.client_ips
+                                : (client.client_ip ? [client.client_ip] : []);
+                              if (ips.length === 0) return null;
+                              return (
+                                <span className="client-device-ip" data-testid="client-device-ip">
+                                  <span
+                                    className="material-icons"
+                                    style={{ fontSize: '14px' }}
+                                    title="Real client device IP reported by the media server"
+                                  >
+                                    devices
+                                  </span>
+                                  Client IP: {ips.join(', ')}
+                                </span>
+                              );
+                            })()}
                             <span className="client-ua">{parseUserAgent(client.user_agent)}</span>
                           </div>
                           <div className="client-stats">
