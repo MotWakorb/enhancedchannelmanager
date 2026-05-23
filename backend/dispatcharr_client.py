@@ -185,16 +185,45 @@ class DispatcharrClient:
         search: Optional[str] = None,
         channel_group: Optional[int] = None,
     ) -> dict:
-        """Get paginated list of channels."""
+        """Get paginated list of channels.
+
+        ``channel_group`` is a channel-group **ID** (the value ECM callers —
+        frontend, MCP — work with). Dispatcharr's ``channel_group`` query
+        filter, however, matches on the group **name**, not the ID (bd-1wq7z.11:
+        forwarding the bare ID matched zero groups and returned 0 rows). So when
+        a group filter is requested we translate the ID -> name before
+        forwarding. An unresolvable ID yields an empty page rather than falling
+        through to an unfiltered query (which would silently return everything).
+        """
         params = {"page": page, "page_size": page_size}
         if search:
             params["search"] = search
         if channel_group:
-            params["channel_group"] = channel_group
+            group_name = await self._channel_group_name_for_id(channel_group)
+            if group_name is None:
+                logger.warning(
+                    "[DISPATCHARR] channel_group filter id=%s matched no group; "
+                    "returning empty page", channel_group
+                )
+                return {"count": 0, "next": None, "previous": None, "results": []}
+            params["channel_group"] = group_name
 
         response = await self._request("GET", "/api/channels/channels/", params=params)
         response.raise_for_status()
         return response.json()
+
+    async def _channel_group_name_for_id(self, group_id: int) -> Optional[str]:
+        """Resolve a channel-group ID to its name, or None if no group matches.
+
+        Dispatcharr's channel list ``channel_group`` filter is name-based, so
+        callers that filter by group ID must translate first (see
+        ``get_channels``).
+        """
+        groups = await self.get_channel_groups()
+        for group in groups:
+            if group.get("id") == group_id:
+                return group.get("name")
+        return None
 
     async def get_channel(self, channel_id: int) -> dict:
         """Get a single channel by ID."""

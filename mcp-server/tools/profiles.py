@@ -59,21 +59,32 @@ def register(mcp: FastMCP):
     async def apply_profile_to_channels(
         profile_id: int,
         channel_ids: list[int],
+        enabled: bool = True,
     ) -> str:
         """Bulk-assign a channel profile to multiple channels.
+
+        The ``enabled`` flag controls whether the profile is enabled or disabled
+        on the targeted channels.  The backend defaults to ``True`` when the
+        field is absent, which means omitting it silently enables the profile on
+        all channels regardless of intent (bd-1wq7z.13).  Always send explicitly.
 
         Args:
             profile_id: The channel profile ID to apply
             channel_ids: List of channel IDs to assign the profile to
+            enabled: True to enable the profile on the channels (default),
+                     False to disable it.
         """
         try:
             client = get_ecm_client()
             await client.call_endpoint(
                 ENDPOINTS["channel_profiles_bulk_update"],
                 path_args={"profile_id": profile_id},
-                body={"channel_ids": channel_ids},
+                body={"channel_ids": channel_ids, "enabled": enabled},
             )
             # Read-back: confirm the profile now lists the requested channels.
+            # Note: the list endpoint returns the profile's channel memberships,
+            # not necessarily reflecting the enabled state — so we only confirm
+            # the request was accepted, not that enabled was applied.
             try:
                 profiles = await client.call_endpoint(ENDPOINTS["channel_profiles_list"])
                 prof = next(
@@ -83,8 +94,11 @@ def register(mcp: FastMCP):
                 now_count = len(prof.get("channels", [])) if prof else None
             except Exception:
                 now_count = None
+            state = "enabled" if enabled else "disabled"
             suffix = f" Profile now has {now_count} channels." if now_count is not None else ""
-            return f"Profile {profile_id} applied to {len(channel_ids)} channels.{suffix}"
+            return (
+                f"Profile {profile_id} {state} on {len(channel_ids)} channels.{suffix}"
+            )
         except Exception as e:
             logger.error("[MCP] apply_profile_to_channels failed: %s", e)
             return f"Error applying profile: {e}"

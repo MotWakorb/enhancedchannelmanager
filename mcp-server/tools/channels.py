@@ -465,9 +465,14 @@ def register(mcp: FastMCP):
     async def _resolve_stream_id(client, stream_name: str) -> int | None:
         """Find the stream id for a given name via a name-search lookup.
 
-        Returns the id of the first result or ``None`` when no match is found.
-        This is a best-effort lookup — the caller decides how to handle
-        ``None``.
+        Prefers an exact (normalised, case-insensitive) name match among the
+        search results before falling back to the first result.  This prevents
+        the common footgun where a substring search returns a more popular
+        near-duplicate first (e.g. search "US : ESPN" hits "US: ESPN FHD"
+        before the exact "US : ESPN" entry — bd-1wq7z.6).
+
+        Returns the id of the best-matching result or ``None`` when no results
+        are found.  The caller decides how to handle ``None``.
         """
         try:
             result = await client.call_endpoint(
@@ -479,7 +484,18 @@ def register(mcp: FastMCP):
                 if isinstance(result, dict)
                 else result
             )
-            return streams[0].get("id") if streams else None
+            if not streams:
+                return None
+
+            # Prefer an exact (case-insensitive, whitespace-normalised) match.
+            needle = " ".join(stream_name.casefold().split())
+            for s in streams:
+                candidate = " ".join(s.get("name", "").casefold().split())
+                if candidate == needle:
+                    return s.get("id")
+
+            # No exact match — fall back to the first result (best-effort).
+            return streams[0].get("id")
         except Exception as e:
             logger.warning("[MCP] _resolve_stream_id(%r) failed: %s", stream_name, e)
             return None

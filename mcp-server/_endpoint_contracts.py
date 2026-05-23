@@ -281,6 +281,21 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/auto-creation/executions",
         query_params=frozenset({"limit", "offset", "rule_id", "status"}),
     ),
+    "ac_get_execution": Endpoint(
+        name="ac_get_execution",
+        method="GET",
+        path="/api/auto-creation/executions/{execution_id}",
+        # query params the poll uses; include_entities and include_log default
+        # to False so we omit them from the poll call (saves DB work).
+        query_params=frozenset({"include_entities", "include_log"}),
+        # Fields the run_auto_creation tool reads from the execution row.
+        response_fields=frozenset({
+            "id", "status", "mode", "streams_evaluated", "streams_matched",
+            "channels_created", "channels_updated", "groups_created",
+            "streams_skipped", "duration_seconds", "error_message",
+            "dry_run_results",
+        }),
+    ),
     "ac_rollback": Endpoint(
         name="ac_rollback",
         method="POST",
@@ -341,7 +356,8 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/epg/sources",
         # Backend body is ``request: Request`` (raw) — forwarded to Dispatcharr.
         # These are the keys the tool sends; the call-time guard validates them.
-        request_fields=frozenset({"name", "url"}),
+        # source_type is required by Dispatcharr (bd-1wq7z.9: omitting it → 400).
+        request_fields=frozenset({"name", "url", "source_type"}),
     ),
     "epg_update_source": Endpoint(
         name="epg_update_source",
@@ -497,6 +513,9 @@ ENDPOINTS: dict[str, Endpoint] = {
         name="notifications_delete_all",
         method="DELETE",
         path="/api/notifications",
+        # Backend DELETE /api/notifications accepts read_only (bool, default True)
+        # to control whether unread notifications are included (bd-1wq7z.14).
+        query_params=frozenset({"read_only"}),
     ),
     "alert_methods_list": Endpoint(
         name="alert_methods_list",

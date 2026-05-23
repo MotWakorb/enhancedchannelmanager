@@ -29,6 +29,50 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/channels", tags=["Channels"])
 
 
+def validate_stream_permutation(
+    current_stream_ids: list[int], new_stream_ids: list[int]
+) -> Optional[str]:
+    """Validate that ``new_stream_ids`` is a true permutation of the channel's
+    current streams (a pure reorder), guarding against the replace-semantics
+    data loss of Dispatcharr's ``streams`` field.
+
+    Updating a channel's ``streams`` to a partial list silently DETACHES any
+    omitted streams. A reorder must therefore contain exactly the same set of
+    stream IDs as the channel currently has — no missing, unknown, or duplicate
+    IDs (bd-1wq7z.3 single-channel reorder; bd-1wq7z.25 bulk-commit reorder).
+
+    Returns ``None`` if ``new_stream_ids`` is a valid permutation, otherwise a
+    human-readable message describing the problem (suitable for an HTTP 400
+    detail or a per-op bulk error).
+    """
+    current = list(current_stream_ids)
+    new = list(new_stream_ids)
+
+    if len(new) != len(set(new)):
+        seen: set[int] = set()
+        dupes = sorted({sid for sid in new if sid in seen or seen.add(sid)})
+        return f"streamIds contains duplicate ids: {dupes}"
+
+    current_set = set(current)
+    new_set = set(new)
+
+    missing = sorted(current_set - new_set)  # would be detached
+    unknown = sorted(new_set - current_set)  # not attached to this channel
+
+    if missing or unknown:
+        parts = []
+        if missing:
+            parts.append(f"would detach attached streams {missing}")
+        if unknown:
+            parts.append(f"includes streams not on the channel {unknown}")
+        return (
+            "streamIds is not a permutation of the channel's current streams "
+            f"({'; '.join(parts)})"
+        )
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
@@ -1406,6 +1450,21 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                 elif op.type == "reorderChannelStreams":
                     channel_id = resolve_id(op.channelId)
                     logger.debug("[CHANNELS-BULK] [%s/%s] reorderChannelStreams: channel_id=%s, streams=%s", idx+1, len(request.operations), channel_id, op.streamIds)
+                    # Guard against silent stream detachment (bd-1wq7z.25):
+                    # Dispatcharr's ``streams`` field uses replace-semantics, so
+                    # a partial streamIds list would detach the omitted streams.
+                    # Require a true permutation of the channel's current set.
+                    channel = await client.get_channel(channel_id)
+                    current_streams = channel.get("streams", [])
+                    perm_error = validate_stream_permutation(current_streams, op.streamIds)
+                    if perm_error is not None:
+                        logger.warning(
+                            "[CHANNELS-BULK] reorderChannelStreams rejected for channel %s: %s",
+                            channel_id, perm_error,
+                        )
+                        raise ValueError(
+                            f"Cannot reorder streams for channel {channel_id}: {perm_error}"
+                        )
                     await client.update_channel(channel_id, {"streams": op.streamIds})
                     result["operationsApplied"] += 1
 
