@@ -57,6 +57,11 @@ def register(mcp: FastMCP):
         Args:
             name: Display name for the export profile
         """
+        # The backend accepts a blank name and creates an unnamed profile
+        # (lq38l.13 #7). Validate up front and return a clean error.
+        if not name or not name.strip():
+            return "Error: export profile name must not be empty."
+        name = name.strip()
         try:
             client = get_ecm_client()
             result = await client.call_endpoint(ENDPOINTS["export_create_profile"], body={"name": name})

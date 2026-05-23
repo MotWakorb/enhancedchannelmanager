@@ -9,6 +9,23 @@ from ecm_client import get_ecm_client
 logger = logging.getLogger(__name__)
 
 
+def _fmt_channel_number(value) -> str:
+    """Render a channel number without a spurious ``.0`` float suffix.
+
+    Dispatcharr stores channel numbers as floats, so the proxied API returns
+    e.g. ``10440.0``. Whole numbers should display as integers (``10440``);
+    genuine fractional numbers (``10440.5``) are preserved. Non-numeric or
+    missing values fall through to their string form (e.g. ``"?"`` / ``"N/A"``).
+    """
+    if isinstance(value, bool):  # bool is an int subclass — never a channel number
+        return str(value)
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else str(value)
+    return str(value)
+
+
 def register(mcp: FastMCP):
     @mcp.tool()
     async def list_channels(
@@ -87,7 +104,7 @@ def register(mcp: FastMCP):
             if compact:
                 lines = ["number|id|name|streams"]
                 for c in channels:
-                    num = c.get("channel_number", "?")
+                    num = _fmt_channel_number(c.get("channel_number", "?"))
                     cid = c.get("id", "?")
                     name = c.get("name", "Unknown")
                     stream_count = len(c.get("streams", []))
@@ -97,7 +114,7 @@ def register(mcp: FastMCP):
             shown = channels[:limit]
             lines = [f"Found {total} channels (showing {len(shown)}):"]
             for c in shown:
-                num = c.get("channel_number", "?")
+                num = _fmt_channel_number(c.get("channel_number", "?"))
                 name = c.get("name", "Unknown")
                 cid = c.get("id", "?")
                 stream_count = len(c.get("streams", []))
@@ -126,7 +143,7 @@ def register(mcp: FastMCP):
             lines = [
                 f"Channel: {c.get('name', 'Unknown')}",
                 f"  ID: {c.get('id')}",
-                f"  Number: {c.get('channel_number', 'N/A')}",
+                f"  Number: {_fmt_channel_number(c.get('channel_number', 'N/A'))}",
                 f"  Group ID: {c.get('channel_group_id', 'None')}",
                 f"  EPG TVG ID: {c.get('tvg_id', 'None')}",
                 f"  Logo: {'Yes' if c.get('logo_id') else 'No'}",
@@ -167,7 +184,7 @@ def register(mcp: FastMCP):
             # see what actually got created.
             cid = result.get("id", "?")
             rname = result.get("name", name)
-            rnum = result.get("channel_number", "?")
+            rnum = _fmt_channel_number(result.get("channel_number", "?"))
             rgrp = result.get("channel_group_id")
             grp_info = f", group_id={rgrp}" if rgrp is not None else ""
             return f"Channel created: #{rnum}: {rname} (id={cid}{grp_info})"
@@ -213,7 +230,7 @@ def register(mcp: FastMCP):
             # so a 200-with-no-effect can't fool the caller (the #221 failure mode).
             if isinstance(result, dict):
                 rname = result.get("name", "?")
-                rnum = result.get("channel_number", "?")
+                rnum = _fmt_channel_number(result.get("channel_number", "?"))
                 rgrp = result.get("channel_group_id")
                 return f"Channel {channel_id} updated: name='{rname}', channel_number={rnum}, group_id={rgrp}"
             return f"Channel {channel_id} updated."

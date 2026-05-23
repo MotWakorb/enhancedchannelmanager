@@ -119,10 +119,23 @@ def register(mcp: FastMCP):
             query["page_size"] = page_size
 
         try:
-            return await client.call_endpoint(
+            result = await client.call_endpoint(
                 ENDPOINTS["channel_merges_list"],
                 query=query,
             )
+            # Backend stores candidate_channel_id as TEXT (pending_merges
+            # schema, ADR-008 §D8) so each row returns it as a string. It is a
+            # numeric Dispatcharr channel id, so coerce to int for a consistent
+            # type to downstream consumers (lq38l.13 #9). Leave non-numeric or
+            # missing values untouched rather than crash.
+            if isinstance(result, dict):
+                for row in result.get("merges", []) or []:
+                    if not isinstance(row, dict):
+                        continue
+                    cid = row.get("candidate_channel_id")
+                    if isinstance(cid, str) and cid.lstrip("-").isdigit():
+                        row["candidate_channel_id"] = int(cid)
+            return result
         except Exception as e:
             logger.error("[MCP-DEDUP] list_pending_channel_merges failed: %s", e)
             raise
@@ -243,6 +256,24 @@ def register(mcp: FastMCP):
             return result
         except Exception as e:
             status_code = _http_status_code(e)
+            if status_code == 404:
+                # The pending_merges row does not exist (stale id). Backend
+                # dismiss has only one 404 path — the missing-row check — so
+                # this is unambiguous. Return a clean envelope to match the
+                # sibling accept_channel_merge instead of leaking a raw 404
+                # (lq38l.13 #8).
+                logger.warning(
+                    "[MCP-DEDUP] dismiss_channel_merge id=%s: merge not found (404): %s",
+                    merge_id, e,
+                )
+                return _error_envelope(
+                    "MERGE_NOT_FOUND",
+                    (
+                        f"Pending merge id={merge_id} does not exist. It may have "
+                        "already been resolved or the id is stale. Call "
+                        "list_pending_channel_merges to see current candidates."
+                    ),
+                )
             if status_code == 409:
                 logger.warning(
                     "[MCP-DEDUP] dismiss_channel_merge id=%s: invalid state (409): %s",
