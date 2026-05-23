@@ -115,17 +115,34 @@ class TestListM3UAccounts:
 
     @pytest.mark.asyncio
     async def test_returns_accounts(self):
-        """Returns formatted M3U account list."""
+        """Returns formatted M3U account list with stream count derived via streams_list."""
         from tools.m3u import register
         from mcp.server.fastmcp import FastMCP
+        from _endpoint_contracts import ENDPOINTS
 
         mcp = FastMCP("test")
         register(mcp)
 
-        mock_client = _make_ecm_client_mock(call_endpoint=[
-            {"id": 1, "name": "Provider A", "stream_count": 5000, "status": "success"},
-            {"id": 2, "name": "Provider B", "stream_count": 3000, "status": "error"},
-        ])
+        # stream_count is NOT in the Dispatcharr account payload; the tool
+        # derives it by calling streams_list with m3u_account=<id>&page_size=1.
+        # Use side_effect to return the right value per endpoint call.
+        async def call_endpoint_side_effect(endpoint, **kwargs):
+            if endpoint.name == "m3u_list_providers":
+                return [
+                    {"id": 1, "name": "Provider A", "server_url": "http://provider-a.example.com/m3u", "status": "active"},
+                    {"id": 2, "name": "Provider B", "server_url": "http://provider-b.example.com/m3u", "status": "error"},
+                ]
+            if endpoint.name == "streams_list":
+                query = kwargs.get("query", {})
+                m3u_id = query.get("m3u_account")
+                if m3u_id == 1:
+                    return {"count": 5000, "results": []}
+                if m3u_id == 2:
+                    return {"count": 3000, "results": []}
+            return {}
+
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = call_endpoint_side_effect
 
         with patch("tools.m3u.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("list_m3u_accounts", {})
