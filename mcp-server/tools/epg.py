@@ -163,6 +163,55 @@ def register(mcp: FastMCP):
             return f"Error running EPG auto-match: {e}"
 
     @mcp.tool()
+    async def link_channel_epg(
+        channel_id: int,
+        tvg_id: str | None = None,
+        epg_data_id: int | None = None,
+    ) -> str:
+        """Link a channel to a chosen EPG candidate so its guide data attaches.
+
+        Use this after ``match_channels_epg`` reports a channel with *multiple
+        candidates*: pick one candidate's ``tvg_id`` (shown in that output) and
+        link it here. This sets the channel's EPG data association (epg_data_id),
+        which ``bulk_assign_epg`` does NOT do — and which ``set_logo_from_epg``
+        needs to find the linked entry. Completes the
+        match -> link -> set-logo workflow without dropping to the UI.
+
+        Args:
+            channel_id: The channel to link.
+            tvg_id: The chosen candidate's tvg_id (resolved server-side to its
+                EPG data row). Either tvg_id or epg_data_id is required.
+            epg_data_id: The EPG data row id directly (preferred when known —
+                e.g. a candidate's "epg_id"). Wins over tvg_id if both given.
+        """
+        if tvg_id is None and epg_data_id is None:
+            return "Provide either tvg_id or epg_data_id to link."
+        try:
+            client = get_ecm_client()
+            body: dict = {}
+            if epg_data_id is not None:
+                body["epg_data_id"] = epg_data_id
+            if tvg_id is not None:
+                body["tvg_id"] = tvg_id
+
+            result = await client.call_endpoint(
+                ENDPOINTS["epg_link_channel"],
+                path_args={"channel_id": channel_id},
+                body=body,
+            )
+
+            linked_id = result.get("epg_data_id") if isinstance(result, dict) else None
+            ch_name = result.get("name") if isinstance(result, dict) else None
+            label = f"'{ch_name}' (id={channel_id})" if ch_name else f"channel {channel_id}"
+            return (
+                f"Linked {label} to EPG data id={linked_id}. "
+                "set_logo_from_epg can now resolve this channel's EPG entry."
+            )
+        except Exception as e:
+            logger.error("[MCP] link_channel_epg failed: %s", e)
+            return f"Error linking channel {channel_id} to EPG: {e}"
+
+    @mcp.tool()
     async def create_epg_source(name: str, url: str, source_type: str = "xmltv") -> str:
         """Create a new EPG data source.
 
