@@ -158,6 +158,7 @@ def register(mcp: FastMCP):
         day_of_month: int | None = None,
         enabled: bool = True,
         name: str | None = None,
+        timezone: str | None = None,
     ) -> str:
         """Create a new schedule for a task.
 
@@ -174,10 +175,17 @@ def register(mcp: FastMCP):
             day_of_month: Day of month 1-31, or -1 for last day (for monthly)
             enabled: Whether the schedule is active (default True)
             name: Optional display name for the schedule
+            timezone: IANA timezone name for the schedule (e.g. 'America/Chicago',
+                'Europe/London'). Defaults to 'UTC'. Schedules stored as UTC will
+                fire at the wrong local time if the operator is in a different zone.
         """
         try:
             client = get_ecm_client()
-            payload: dict = {"schedule_type": schedule_type, "enabled": enabled}
+            payload: dict = {
+                "schedule_type": schedule_type,
+                "enabled": enabled,
+                "timezone": timezone if timezone is not None else "UTC",
+            }
             if schedule_time is not None:
                 payload["schedule_time"] = schedule_time
             if interval_seconds is not None:

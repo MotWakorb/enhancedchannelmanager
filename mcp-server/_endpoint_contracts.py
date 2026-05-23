@@ -440,6 +440,16 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="GET",
         path="/api/export/cloud-targets",
     ),
+    # bd-1wq7z.21 — list publish configurations so callers can discover valid
+    # config_id values for publish_export.  Backend: GET /api/export/publish-configs
+    # (backend/routers/export.py::list_publish_configs).  Returns a JSON array
+    # of PublishConfiguration rows enriched with profile_name / target_name.
+    "export_list_publish_configs": Endpoint(
+        name="export_list_publish_configs",
+        method="GET",
+        path="/api/export/publish-configs",
+        response_is_list=True,
+    ),
     "export_publish_config": Endpoint(
         name="export_publish_config",
         method="POST",
