@@ -385,6 +385,11 @@ def register(mcp: FastMCP):
     async def probe_single_stream(stream_id: int) -> str:
         """Probe a single stream to check its health.
 
+        Note: this manual probe does NOT feed get_probe_results (only the
+        scheduled probe task does), but the result IS persisted, so
+        get_stream_health and get_streams_by_ids reflect it.
+        (See bd enhancedchannelmanager-znc76.5.)
+
         Args:
             stream_id: The stream ID to probe
         """
@@ -588,7 +593,14 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def get_probe_results() -> str:
-        """Get results from the most recent completed probe run."""
+        """Get results from the most recent completed probe run.
+
+        Note: this envelope is populated only by the scheduled stream probe task,
+        NOT by manual probe_single_stream / probe_bulk_streams calls. To see the
+        outcome of a manual probe, read its return value directly, or use
+        get_stream_health / get_struck_out_streams which draw from persisted
+        per-stream stats. (See bd enhancedchannelmanager-znc76.5.)
+        """
         try:
             client = get_ecm_client()
             result = await client.call_endpoint(ENDPOINTS["stream_stats_probe_results"])
@@ -727,6 +739,13 @@ def register(mcp: FastMCP):
     async def probe_bulk_streams(stream_ids: list[int]) -> str:
         """Probe multiple streams at once and return health results summary.
 
+        Note: manual probes triggered here do NOT feed get_probe_results — that
+        "latest probe run" envelope is populated only by the scheduled stream
+        probe task. The per-stream stats ARE persisted, so get_stream_health,
+        get_struck_out_streams, and get_streams_by_ids reflect the new results.
+        Large batches may time out at the gateway (504); probe in smaller
+        batches if that happens. (See bd enhancedchannelmanager-znc76.5.)
+
         Args:
             stream_ids: List of stream IDs to probe
         """
@@ -747,12 +766,18 @@ def register(mcp: FastMCP):
                 ]
                 results_list = result.get("results", [])
                 if results_list:
-                    failed_streams = [r for r in results_list if r.get("status") == "failed"]
+                    # Per-stream results are StreamStats dicts: the outcome is
+                    # under "probe_status" (success/failed/timeout) and the
+                    # human-readable error under "error_message". Anything that
+                    # isn't "success" is a failure for reporting purposes.
+                    failed_streams = [
+                        r for r in results_list if r.get("probe_status") != "success"
+                    ]
                     if failed_streams:
                         lines.append("  Failed streams:")
                         for r in failed_streams[:20]:
-                            name = r.get("name", f"id={r.get('stream_id', '?')}")
-                            error = r.get("error", "unknown error")
+                            name = r.get("stream_name") or f"id={r.get('stream_id', '?')}"
+                            error = r.get("error_message") or "unknown error"
                             lines.append(f"    - {name}: {error}")
                         if len(failed_streams) > 20:
                             lines.append(f"    ... and {len(failed_streams) - 20} more failures")
