@@ -2326,7 +2326,15 @@ async def remove_stream_from_channel(channel_id: int, request: RemoveStreamReque
 
 @router.post("/{channel_id}/reorder-streams")
 async def reorder_channel_streams(channel_id: int, request: ReorderStreamsRequest):
-    """Reorder streams within a channel."""
+    """Reorder streams within a channel.
+
+    This endpoint REPLACES the channel's stream set with the supplied list, so
+    the list must be a true reorder — a permutation of the channel's *current*
+    streams. A partial list would silently DETACH the omitted streams (data
+    loss). To guard against that (bd-1wq7z.3) we validate that the request is a
+    permutation before writing: same set of ids, no missing, no unknown, no
+    duplicates. Use add-stream / remove-stream to change membership.
+    """
     logger.debug("[CHANNELS] POST /channels/%s/reorder-streams - stream_ids=%s", channel_id, request.stream_ids)
     client = get_client()
     try:
@@ -2335,6 +2343,42 @@ async def reorder_channel_streams(channel_id: int, request: ReorderStreamsReques
         channel = await client.get_channel(channel_id)
         channel_name = channel.get("name", "Unknown")
         before_streams = channel.get("streams", [])
+
+        # Streams normally come back as bare ints, but defensively handle the
+        # case where upstream returns stream objects ({"id": ...}).
+        before_ids = [
+            (s.get("id") if isinstance(s, dict) else s)
+            for s in before_streams
+        ]
+
+        # --- Permutation guard (data-loss protection) ---
+        requested = request.stream_ids
+        requested_set = set(requested)
+        before_set = set(before_ids)
+
+        duplicate_ids = sorted({sid for sid in requested if requested.count(sid) > 1})
+        missing_ids = sorted(before_set - requested_set)      # on channel, absent from list -> would detach
+        unknown_ids = sorted(requested_set - before_set)      # in list, not on channel
+
+        if duplicate_ids or missing_ids or unknown_ids:
+            problems = []
+            if missing_ids:
+                problems.append(f"Missing (would be detached): {missing_ids}.")
+            if unknown_ids:
+                problems.append(f"Unknown (not on this channel): {unknown_ids}.")
+            if duplicate_ids:
+                problems.append(f"Duplicated: {duplicate_ids}.")
+            detail = (
+                "reorder-streams expects all of the channel's current streams in "
+                "the desired order. " + " ".join(problems) + " Use "
+                "remove_stream_from_channel to detach, or add_stream_to_channel "
+                "to add."
+            )
+            logger.warning(
+                "[CHANNELS] Rejected reorder-streams for channel %s (not a permutation): %s",
+                channel_id, detail,
+            )
+            raise HTTPException(status_code=400, detail=detail)
 
         result = await client.update_channel(channel_id, {"streams": request.stream_ids})
         elapsed_ms = (time.time() - start) * 1000
@@ -2352,6 +2396,11 @@ async def reorder_channel_streams(channel_id: int, request: ReorderStreamsReques
         )
 
         return result
+    except HTTPException:
+        # Validation rejections (e.g. the permutation guard above) are
+        # intentional client errors — let them propagate unchanged rather than
+        # masking them as a 500.
+        raise
     except Exception as e:
         logger.exception("[CHANNELS] Failed to reorder streams for channel %s: %s", channel_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")

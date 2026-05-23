@@ -380,13 +380,121 @@ class TestReorderStreams:
         mock_client.update_channel.return_value = {"id": 1, "name": "ESPN", "streams": [10, 5]}
 
         with patch("routers.channels.get_client", return_value=mock_client), \
-             patch("routers.channels.journal"):
+             patch("routers.channels.journal") as mock_journal:
             response = await async_client.post("/api/channels/1/reorder-streams", json={
                 "stream_ids": [10, 5],
             })
 
         assert response.status_code == 200
         mock_client.update_channel.assert_called_once_with(1, {"streams": [10, 5]})
+        # Journal entry still logged on success.
+        mock_journal.log_entry.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_rejects_partial_list_that_would_detach(self, async_client):
+        """A partial list missing a current stream is rejected (data-loss guard).
+
+        bd-1wq7z.3: reorder-streams REPLACES the channel's stream set. A partial
+        list silently detached the omitted streams. The guard must reject and
+        NOT call update_channel.
+        """
+        mock_client = AsyncMock()
+        mock_client.get_channel.return_value = {"id": 1, "name": "ESPN", "streams": [5001, 5002]}
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/1/reorder-streams", json={
+                "stream_ids": [5002],
+            })
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        # Names the stream that would be detached so the operator can act.
+        assert "5001" in detail
+        # The core guarantee: no detach happened.
+        mock_client.update_channel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejects_unknown_stream_not_on_channel(self, async_client):
+        """A stream id not on the channel is rejected."""
+        mock_client = AsyncMock()
+        mock_client.get_channel.return_value = {"id": 1, "name": "ESPN", "streams": [5, 10]}
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/1/reorder-streams", json={
+                "stream_ids": [5, 10, 99],
+            })
+
+        assert response.status_code == 400
+        assert "99" in response.json()["detail"]
+        mock_client.update_channel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejects_duplicate_stream_id(self, async_client):
+        """A duplicated id in the list is rejected."""
+        mock_client = AsyncMock()
+        mock_client.get_channel.return_value = {"id": 1, "name": "ESPN", "streams": [5, 10]}
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/1/reorder-streams", json={
+                "stream_ids": [5, 5],
+            })
+
+        assert response.status_code == 400
+        assert "5" in response.json()["detail"]
+        mock_client.update_channel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejects_empty_list_on_channel_with_streams(self, async_client):
+        """An empty list on a channel that has streams is rejected (would detach all)."""
+        mock_client = AsyncMock()
+        mock_client.get_channel.return_value = {"id": 1, "name": "ESPN", "streams": [5, 10]}
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/1/reorder-streams", json={
+                "stream_ids": [],
+            })
+
+        assert response.status_code == 400
+        mock_client.update_channel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_list_on_empty_channel_is_noop(self, async_client):
+        """Empty list on a channel with no streams is a sensible no-op (200)."""
+        mock_client = AsyncMock()
+        mock_client.get_channel.return_value = {"id": 1, "name": "ESPN", "streams": []}
+        mock_client.update_channel.return_value = {"id": 1, "name": "ESPN", "streams": []}
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/1/reorder-streams", json={
+                "stream_ids": [],
+            })
+
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_streams_returned_as_objects_still_validates(self, async_client):
+        """Defensive: if upstream returns stream objects (dicts) rather than bare
+        ints, the guard still extracts ids and validates correctly."""
+        mock_client = AsyncMock()
+        mock_client.get_channel.return_value = {
+            "id": 1, "name": "ESPN",
+            "streams": [{"id": 5001}, {"id": 5002}],
+        }
+        mock_client.update_channel.return_value = {"id": 1, "name": "ESPN", "streams": [5002, 5001]}
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/1/reorder-streams", json={
+                "stream_ids": [5002, 5001],
+            })
+
+        assert response.status_code == 200
+        mock_client.update_channel.assert_called_once_with(1, {"streams": [5002, 5001]})
 
 
 class TestGetLogos:
