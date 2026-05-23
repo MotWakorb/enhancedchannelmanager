@@ -295,6 +295,37 @@ class TestGetChannelStreams:
         assert response.status_code == 200
         mock_client.get_channel_streams.assert_called_once_with(1)
 
+    @pytest.mark.asyncio
+    async def test_missing_channel_returns_404_not_500(self, async_client):
+        """A missing channel id surfaces upstream 404 as 404, not an opaque 500
+        (bd-8w1ba). The client's get_channel_streams raises httpx.HTTPStatusError
+        via raise_for_status() when Dispatcharr 404s the unknown channel."""
+        request = httpx.Request(
+            "GET", "http://disp/api/channels/channels/999999/streams/"
+        )
+        upstream = httpx.Response(404, request=request, text='{"detail": "Not found."}')
+        mock_client = AsyncMock()
+        mock_client.get_channel_streams.side_effect = httpx.HTTPStatusError(
+            "404 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get("/api/channels/999999/streams")
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_non_upstream_error_stays_500(self, async_client):
+        """A non-upstream error (no embedded 4xx) stays a 500 (bd-8w1ba)."""
+        mock_client = AsyncMock()
+        mock_client.get_channel_streams.side_effect = RuntimeError("boom")
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get("/api/channels/1/streams")
+
+        assert response.status_code == 500
+
 
 class TestAddStream:
     """Tests for POST /api/channels/{channel_id}/add-stream."""
