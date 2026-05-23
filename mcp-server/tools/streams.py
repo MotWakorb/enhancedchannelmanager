@@ -269,6 +269,63 @@ def _stream_query(*, search=None, m3u_account=None, channel_group_name=None, pag
     return {k: v for k, v in q.items() if v is not None}
 
 
+async def _build_id_name_maps(client) -> tuple[dict, dict]:
+    """Fetch provider (m3u_account) and channel-group id->name lookup maps.
+
+    Raw Dispatcharr stream objects carry ``m3u_account`` (provider id) and
+    ``channel_group`` (group id) — numbers, not names. The streams-list
+    endpoint enriches list results with ``channel_group_name``, but
+    ``/api/channels/{id}/streams`` and ``/api/streams/by-ids`` return the raw
+    objects, so the MCP tool resolves names itself (lq38l.13 #2).
+
+    Returns ``(provider_map, group_map)``. A failed lookup degrades to an empty
+    map so the caller falls back to ids rather than erroring.
+    """
+    provider_map: dict = {}
+    group_map: dict = {}
+    try:
+        providers = await client.call_endpoint(ENDPOINTS["m3u_list_providers"])
+        for p in providers or []:
+            if isinstance(p, dict) and p.get("id") is not None:
+                provider_map[p["id"]] = p.get("name")
+    except Exception as e:  # degrade gracefully — fall back to ids
+        logger.warning("[MCP] could not resolve provider names: %s", e)
+    try:
+        groups = await client.call_endpoint(ENDPOINTS["groups_list"])
+        for g in groups or []:
+            if isinstance(g, dict) and g.get("id") is not None:
+                group_map[g["id"]] = g.get("name")
+    except Exception as e:
+        logger.warning("[MCP] could not resolve channel-group names: %s", e)
+    return provider_map, group_map
+
+
+def _stream_group_provider_suffix(s: dict, provider_map: dict, group_map: dict) -> str:
+    """Render the `` [Group] from Provider`` suffix for a raw stream dict.
+
+    Prefers an already-enriched ``channel_group_name`` / ``provider_name`` if
+    present; otherwise resolves the numeric ``channel_group`` / ``m3u_account``
+    ids through the supplied maps, falling back to the raw id when no name is
+    known.
+    """
+    group = s.get("channel_group_name") or s.get("group") or ""
+    if not group:
+        gid = s.get("channel_group")
+        if gid is not None:
+            group = group_map.get(gid) or f"group {gid}"
+
+    provider = s.get("provider_name") or ""
+    if not provider:
+        pid = s.get("m3u_account")
+        if pid is not None:
+            provider = provider_map.get(pid) or f"provider {pid}"
+
+    suffix = f" [{group}]" if group else ""
+    if provider:
+        suffix += f" from {provider}"
+    return suffix
+
+
 def register(mcp: FastMCP):
     @mcp.tool()
     async def list_streams(
@@ -586,7 +643,13 @@ def register(mcp: FastMCP):
         try:
             client = get_ecm_client()
             result = await client.call_endpoint(ENDPOINTS["stream_stats_probe_cancel"])
+            status = result.get("status") if isinstance(result, dict) else None
             msg = result.get("message", "") if isinstance(result, dict) else ""
+            # Backend returns status='no_probe_running' when nothing is active —
+            # don't prepend "Probe cancelled." (it contradicts the message).
+            # lq38l.13 #11.
+            if status == "no_probe_running":
+                return msg or "No probe is currently running."
             return f"Probe cancelled. {msg}".rstrip()
         except Exception as e:
             logger.error("[MCP] cancel_probe failed: %s", e)
@@ -611,6 +674,15 @@ def register(mcp: FastMCP):
                 return "No probe results available."
 
             if isinstance(result, dict):
+                # The backend returns an all-zero/all-empty envelope (success_count,
+                # failed_count, ... = 0; stream lists empty) when no probe has
+                # completed — a truthy dict that the `not result` guard misses.
+                # Treat "every *_count is 0" as "no results" rather than printing
+                # an empty structure (lq38l.13 #10).
+                count_keys = [k for k in result if k.endswith("_count")]
+                if count_keys and all((result.get(k) or 0) == 0 for k in count_keys):
+                    return "No probe results available."
+
                 lines = ["Latest Probe Results:"]
                 for key, value in result.items():
                     label = key.replace("_", " ").title()
@@ -643,14 +715,13 @@ def register(mcp: FastMCP):
             if not streams:
                 return f"Channel {channel_id} has no streams assigned."
 
+            provider_map, group_map = await _build_id_name_maps(client)
+
             lines = [f"Channel {channel_id} has {len(streams)} streams:"]
             for i, s in enumerate(streams, 1):
                 name = s.get("name", "Unknown")
                 sid = s.get("id", "?")
-                group = s.get("group", "")
-                provider = s.get("provider_name", s.get("m3u_account", ""))
-                info = f" [{group}]" if group else ""
-                info += f" from {provider}" if provider else ""
+                info = _stream_group_provider_suffix(s, provider_map, group_map)
                 lines.append(f"  {i}. {name} (id={sid}){info}")
 
             return "\n".join(lines)
@@ -722,14 +793,13 @@ def register(mcp: FastMCP):
             if not streams:
                 return f"No streams found for the given {len(stream_ids)} IDs."
 
+            provider_map, group_map = await _build_id_name_maps(client)
+
             lines = [f"Found {len(streams)} of {len(stream_ids)} requested streams:"]
             for s in streams:
                 name = s.get("name", "Unknown")
                 sid = s.get("id", "?")
-                group = s.get("group", "")
-                provider = s.get("provider_name", "")
-                info = f" [{group}]" if group else ""
-                info += f" from {provider}" if provider else ""
+                info = _stream_group_provider_suffix(s, provider_map, group_map)
                 lines.append(f"  {name} (id={sid}){info}")
 
             return "\n".join(lines)

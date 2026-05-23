@@ -144,7 +144,14 @@ def register(mcp: FastMCP):
                 query["category"] = category
             entries = await client.call_endpoint(ENDPOINTS["journal_list"], query=query)
 
-            items = entries if isinstance(entries, list) else entries.get("entries", [])
+            # Backend GET /api/journal returns a paginated envelope
+            # {"count","page","page_size","total_pages","results":[...]}
+            # (see backend/journal.py get_entries). Older drafts used "entries";
+            # fall back to that, then to [].
+            if isinstance(entries, list):
+                items = entries
+            else:
+                items = entries.get("results", entries.get("entries", []))
 
             if not items:
                 return "No journal entries found."
@@ -154,8 +161,14 @@ def register(mcp: FastMCP):
                 ts = e.get("timestamp", "?")
                 cat = e.get("category", "?")
                 action = e.get("action_type", e.get("action", "?"))
-                detail = e.get("detail", e.get("description", ""))[:80]
-                lines.append(f"  [{ts}] {cat}/{action}: {detail}")
+                # description may be null (Text column is non-null in the DB but
+                # be defensive); coerce to "" before slicing.
+                detail = (e.get("description") or e.get("detail") or "")[:80]
+                name = e.get("entity_name")
+                if name:
+                    lines.append(f"  [{ts}] {cat}/{action}: {name} — {detail}")
+                else:
+                    lines.append(f"  [{ts}] {cat}/{action}: {detail}")
 
             return "\n".join(lines)
         except Exception as e:
