@@ -151,7 +151,7 @@ def register(mcp: FastMCP):
                             tvg_id = c.get("tvg_id", "?")
                             epg_name = c.get("epg_name", "")
                             confidence = c.get("confidence")
-                            conf_str = f" ({confidence:.0%})" if confidence is not None else ""
+                            conf_str = f" ({confidence:.0f}%)" if confidence is not None else ""
                             name_str = f" — {epg_name}" if epg_name else ""
                             lines.append(f"    • {tvg_id}{name_str}{conf_str}")
                     else:
