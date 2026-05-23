@@ -1,9 +1,11 @@
 """System management tools (settings, backup, journal)."""
 import logging
 
+import httpx
 from mcp.server.fastmcp import FastMCP
 
 from _endpoint_contracts import ENDPOINTS
+from config import ECM_URL, get_mcp_api_key
 from ecm_client import get_ecm_client
 
 logger = logging.getLogger(__name__)
@@ -45,11 +47,20 @@ def register(mcp: FastMCP):
     async def create_backup() -> str:
         """Create a backup of all ECM configuration (settings, database, logos)."""
         try:
-            client = get_ecm_client()
-            # The backup endpoint returns a file download — we just trigger it
-            # and report success. The actual download happens through the ECM UI.
-            await client.call_endpoint(ENDPOINTS["backup_create"])
-            return "Backup created successfully. Download it from the ECM Settings page."
+            # /api/backup/create streams a binary ZIP — reading it via the shared
+            # ECMClient would call r.json() on binary bytes and crash with a
+            # UnicodeDecodeError (lq38l.10).  Use a short-lived httpx client to
+            # consume the raw bytes instead.
+            url = f"{ECM_URL.rstrip('/')}/api/backup/create"
+            headers = {"Authorization": f"Bearer {get_mcp_api_key()}"}
+            async with httpx.AsyncClient(timeout=60.0) as http:
+                r = await http.get(url, headers=headers)
+                r.raise_for_status()
+                size_kb = len(r.content) / 1024
+            return (
+                f"Backup created successfully ({size_kb:.1f} KB). "
+                "Download it from the ECM Settings page."
+            )
         except Exception as e:
             logger.error("[MCP] create_backup failed: %s", e)
             return f"Error creating backup: {e}"
@@ -133,7 +144,14 @@ def register(mcp: FastMCP):
                 query["category"] = category
             entries = await client.call_endpoint(ENDPOINTS["journal_list"], query=query)
 
-            items = entries if isinstance(entries, list) else entries.get("entries", [])
+            # Backend GET /api/journal returns a paginated envelope
+            # {"count","page","page_size","total_pages","results":[...]}
+            # (see backend/journal.py get_entries). Older drafts used "entries";
+            # fall back to that, then to [].
+            if isinstance(entries, list):
+                items = entries
+            else:
+                items = entries.get("results", entries.get("entries", []))
 
             if not items:
                 return "No journal entries found."
@@ -143,8 +161,14 @@ def register(mcp: FastMCP):
                 ts = e.get("timestamp", "?")
                 cat = e.get("category", "?")
                 action = e.get("action_type", e.get("action", "?"))
-                detail = e.get("detail", e.get("description", ""))[:80]
-                lines.append(f"  [{ts}] {cat}/{action}: {detail}")
+                # description may be null (Text column is non-null in the DB but
+                # be defensive); coerce to "" before slicing.
+                detail = (e.get("description") or e.get("detail") or "")[:80]
+                name = e.get("entity_name")
+                if name:
+                    lines.append(f"  [{ts}] {cat}/{action}: {name} — {detail}")
+                else:
+                    lines.append(f"  [{ts}] {cat}/{action}: {detail}")
 
             return "\n".join(lines)
         except Exception as e:

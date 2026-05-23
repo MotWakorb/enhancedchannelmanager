@@ -163,6 +163,41 @@ If that fails, check the MCP container is running (`docker ps | grep ecm-mcp`)
 and that the `ECM_URL` environment variable on the MCP container points at the
 ECM container correctly.
 
+### MCP tools fail with "All connection attempts failed"
+
+This is the reverse direction of the probe issue above: the MCP container
+cannot reach the ECM **backend**. The MCP server calls ECM's API at the URL in
+its `ECM_URL` environment variable, which defaults to `http://ecm:6100` (Docker
+DNS on the canonical compose network).
+
+If both containers run with `network_mode: host`, the `ecm` service name has no
+DNS entry on a shared host network — it resolves to nothing (or to a wrong
+external address) — and the ECM backend answers only on the host loopback. Every
+MCP tool call then fails with `All connection attempts failed`.
+
+**Fix:** set `ECM_URL=http://localhost:6100` on the MCP service so it reaches
+the backend over the host loopback. This is the symmetric partner to the
+`MCP_HOST=localhost` setting above: `MCP_HOST` fixes the ECM → MCP probe, while
+`ECM_URL` fixes MCP → ECM tool calls.
+
+```yaml
+# docker-compose.yml — host-networking deployment
+services:
+  ecm:
+    network_mode: host
+    environment:
+      MCP_HOST: "localhost"               # ECM → MCP health probe
+  ecm-mcp:
+    network_mode: host
+    environment:
+      ECM_URL: "http://localhost:6100"    # MCP → ECM backend API
+```
+
+Verify manually from inside the MCP container:
+```bash
+docker exec ecm-ecm-mcp-1 curl -s http://localhost:6100/api/health
+```
+
 ### MCP server online but "API key not configured"
 
 The MCP container's `/health` endpoint reports `api_key_configured: false`. ECM

@@ -7,6 +7,7 @@ Tests: GET/POST /api/stream-profiles, GET/POST /api/channel-profiles,
        PATCH /api/channel-profiles/{id}/channels/{channel_id}
 Mocks: get_client() to isolate from Dispatcharr.
 """
+import httpx
 import pytest
 from unittest.mock import AsyncMock, patch
 
@@ -208,6 +209,63 @@ class TestBulkUpdateProfileChannels:
 
         assert response.status_code == 200
         mock_client.bulk_update_profile_channels.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_missing_profile_returns_404_not_500(self, async_client):
+        """Bulk-updating channels on a nonexistent profile surfaces upstream 404
+        as 404, not 500 (bd-lq38l.4)."""
+        request = httpx.Request("PATCH", "http://disp/api/channels/profiles/999/channels/bulk-update/")
+        upstream = httpx.Response(404, request=request, text='{"detail": "Not found."}')
+        mock_client = AsyncMock()
+        mock_client.bulk_update_profile_channels.side_effect = httpx.HTTPStatusError(
+            "404 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.profiles.get_client", return_value=mock_client):
+            response = await async_client.patch(
+                "/api/channel-profiles/999/channels/bulk-update",
+                json={"channel_ids": [1, 2, 3], "enabled": True},
+            )
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_bad_channel_id_surfaces_400_not_500(self, async_client):
+        """An invalid channel id is rejected upstream as 4xx -> 400 with detail,
+        not an opaque 500 (bd-lq38l.4)."""
+        request = httpx.Request("PATCH", "http://disp/api/channels/profiles/1/channels/bulk-update/")
+        upstream = httpx.Response(
+            400, request=request,
+            text='{"channels": ["Invalid pk \\"999\\" - object does not exist."]}',
+        )
+        mock_client = AsyncMock()
+        mock_client.bulk_update_profile_channels.side_effect = httpx.HTTPStatusError(
+            "400 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.profiles.get_client", return_value=mock_client):
+            response = await async_client.patch(
+                "/api/channel-profiles/1/channels/bulk-update",
+                json={"channel_ids": [999], "enabled": True},
+            )
+
+        assert response.status_code == 400
+        assert "does not exist" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_genuine_server_error_still_500(self, async_client):
+        """A non-upstream error stays a 500 (bd-lq38l.4)."""
+        mock_client = AsyncMock()
+        mock_client.bulk_update_profile_channels.side_effect = RuntimeError("boom")
+
+        with patch("routers.profiles.get_client", return_value=mock_client):
+            response = await async_client.patch(
+                "/api/channel-profiles/1/channels/bulk-update",
+                json={"channel_ids": [1], "enabled": True},
+            )
+
+        assert response.status_code == 500
 
 
 class TestUpdateProfileChannel:

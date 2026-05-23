@@ -56,7 +56,10 @@ def register(mcp: FastMCP):
         """List channel groups that exist in Dispatcharr but have no channels assigned in ECM."""
         try:
             client = get_ecm_client()
-            groups = await client.call_endpoint(ENDPOINTS["groups_orphaned"])
+            resp = await client.call_endpoint(ENDPOINTS["groups_orphaned"])
+            # Backend returns {"orphaned_groups": [...], "total_groups": N, "groups_with_content": N}
+            # unwrap defensively (same class as bd-pvw35 / GH #222).
+            groups = resp.get("orphaned_groups", []) if isinstance(resp, dict) else (resp or [])
 
             if not groups:
                 return "No orphaned channel groups found."
@@ -122,7 +125,20 @@ def register(mcp: FastMCP):
                             channel_delete_err,
                         )
 
-            await client.call_endpoint(ENDPOINTS["groups_delete"], path_args={"group_id": group_id})
+            delete_response = await client.call_endpoint(ENDPOINTS["groups_delete"], path_args={"group_id": group_id})
+
+            # Inspect the backend response status — the backend returns
+            # {"status": "hidden"} when M3U sync settings prevent true deletion
+            # and {"status": "deleted"} (or None/204) when truly gone.
+            backend_status = (
+                delete_response.get("status") if isinstance(delete_response, dict) else None
+            )
+
+            if backend_status == "hidden":
+                return (
+                    f"Channel group {group_id} hidden (has M3U sync settings; not deleted). "
+                    f"Remove M3U sync settings first to fully delete this group."
+                )
 
             # Read-back: confirm the group is actually gone.
             try:
@@ -169,7 +185,10 @@ def register(mcp: FastMCP):
         """List channel groups that were created by the auto-creation pipeline."""
         try:
             client = get_ecm_client()
-            groups = await client.call_endpoint(ENDPOINTS["groups_auto_created"])
+            resp = await client.call_endpoint(ENDPOINTS["groups_auto_created"])
+            # Backend returns {"groups": [...], "total_auto_created_channels": N}
+            # unwrap defensively (same class as bd-pvw35 / GH #222).
+            groups = resp.get("groups", []) if isinstance(resp, dict) else (resp or [])
 
             if not groups:
                 return "No auto-created channel groups."
@@ -201,15 +220,23 @@ def register(mcp: FastMCP):
             if result is None:
                 return "No orphaned groups were deleted."
 
-            deleted = result.get("deleted", 0)
-            groups = result.get("groups", [])
+            # Backend returns {"status":..., "message":..., "deleted_groups": [...], "failed_groups": [...]}
+            # (bd-1wq7z.5 — old code read non-existent "deleted"/"groups" keys)
+            deleted_groups = result.get("deleted_groups", [])
+            failed_groups = result.get("failed_groups", [])
 
-            if deleted == 0:
+            if not deleted_groups:
                 return "No orphaned groups were deleted."
 
-            lines = [f"Deleted {deleted} orphaned group(s):"]
-            for g in groups:
+            lines = [f"Deleted {len(deleted_groups)} orphaned group(s):"]
+            for g in deleted_groups:
                 lines.append(f"  {g.get('name', 'Unknown')} (id={g.get('id', '?')})")
+
+            if failed_groups:
+                lines.append(f"Failed to delete {len(failed_groups)} group(s):")
+                for g in failed_groups:
+                    err = g.get("error", "unknown error")
+                    lines.append(f"  {g.get('name', 'Unknown')} (id={g.get('id', '?')}) — {err}")
 
             return "\n".join(lines)
         except Exception as e:
@@ -221,17 +248,21 @@ def register(mcp: FastMCP):
         """List channel groups with their stream count information."""
         try:
             client = get_ecm_client()
-            groups = await client.call_endpoint(ENDPOINTS["groups_with_streams"])
+            resp = await client.call_endpoint(ENDPOINTS["groups_with_streams"])
+            # Backend returns {"groups": [...], "total_groups": N}
+            # unwrap defensively (same class as bd-pvw35 / GH #222).
+            groups = resp.get("groups", []) if isinstance(resp, dict) else (resp or [])
 
             if not groups:
                 return "No channel groups found."
 
-            lines = [f"Found {len(groups)} groups with stream info:"]
+            # The /api/channel-groups/with-streams endpoint returns {id, name}
+            # only — no per-group stream count is available in this payload.
+            lines = [f"Found {len(groups)} groups that have channels with streams:"]
             for g in groups:
                 name = g.get("name", "Unknown")
                 gid = g.get("id", "?")
-                stream_count = g.get("stream_count", 0)
-                lines.append(f"  {name} (id={gid}) — {stream_count} streams")
+                lines.append(f"  {name} (id={gid})")
 
             return "\n".join(lines)
         except Exception as e:

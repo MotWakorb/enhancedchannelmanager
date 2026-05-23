@@ -18,6 +18,7 @@ import pytest
 from services.dedup_matcher import (
     CONFIDENCE_FLOOR,
     MatchResult,
+    _normalize,
     find_candidate,
 )
 
@@ -37,6 +38,58 @@ class TestConfidenceFloorConstant:
         # Schema stores REAL (0.0-1.0). A stray int 60 would silently
         # break the threshold comparisons in find_candidate.
         assert isinstance(CONFIDENCE_FLOOR, float)
+
+
+# ---------------------------------------------------------------------------
+# _normalize — channel-number prefix strip (lq38l.7)
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeChannelNumberPrefix:
+    """``_normalize`` strips a leading ``N | `` channel-number prefix.
+
+    Dispatcharr renders the channel number as a ``N | `` prefix on the name
+    (e.g. ``5 | US : ESPN 2``). Stripping it before scoring lets a real
+    prefixed channel name match an unprefixed incoming stream name (lq38l.7).
+    """
+
+    def test_strips_leading_number_pipe_prefix(self):
+        assert _normalize("5 | US : ESPN 2") == "us : espn 2"
+
+    def test_strips_multi_digit_prefix(self):
+        assert _normalize("1351 | FOX Network") == "fox network"
+
+    def test_strips_prefix_without_spaces_around_pipe(self):
+        assert _normalize("7|HBO") == "hbo"
+
+    def test_preserves_interior_pipe(self):
+        # A legitimate interior pipe is NOT a channel-number prefix and must
+        # survive — only a leading ``<digits> | `` is stripped.
+        assert _normalize("HBO | East") == "hbo | east"
+
+    def test_does_not_strip_leading_number_without_pipe(self):
+        # '2' here is part of the name, not a channel-number prefix.
+        assert _normalize("2 Broke Girls") == "2 broke girls"
+
+    def test_prefix_only_name_is_not_collapsed_to_empty(self):
+        # A degenerate name that is *only* a channel-number prefix must not
+        # normalize to empty (which would make it un-matchable and could
+        # violate the identical-input invariant). The strip is skipped when
+        # nothing non-blank remains after it.
+        assert _normalize("5 | ") != ""
+        assert _normalize("7|") != ""
+
+    def test_prefixed_name_matches_unprefixed_stream_exactly(self):
+        # End-to-end: a prefixed channel name scores as an exact (1.0) match
+        # against the equivalent unprefixed incoming stream name.
+        result = find_candidate(
+            stream_name="US : ESPN 2",
+            candidates=[("11874", "5 | US : ESPN 2")],
+            threshold=0.80,
+        )
+        assert result is not None
+        assert result.confidence == 1.0
+        assert result.candidate_channel_id == "11874"
 
 
 # ---------------------------------------------------------------------------

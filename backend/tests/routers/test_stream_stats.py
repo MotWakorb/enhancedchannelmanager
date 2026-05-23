@@ -257,27 +257,90 @@ class TestGetStreamStatsByIds:
 
 
 class TestProbeBulkStreams:
-    """Tests for POST /api/stream-stats/probe/bulk."""
+    """Tests for POST /api/stream-stats/probe/bulk.
+
+    The bulk endpoint is now ASYNC (enhancedchannelmanager-znc76.5): it starts a
+    background probe of the requested stream_ids using the SAME prober
+    job/progress/results-envelope machinery probe/all uses, and returns
+    immediately instead of probing each stream synchronously (which 504'd at
+    batches >=~3). Callers poll /probe/progress + /probe/results for the outcome.
+    """
 
     @pytest.mark.asyncio
-    async def test_probes_streams(self, async_client):
-        """Probes requested streams and returns results."""
-        mock_prober = AsyncMock()
-        mock_prober._fetch_all_streams.return_value = [
-            {"id": 10, "url": "http://example.com/10", "name": "Stream 10"},
-        ]
-        mock_prober.probe_stream.return_value = {"stream_id": 10, "status": "success"}
+    async def test_starts_background_probe_without_blocking(self, async_client):
+        """Returns immediately with status=started; does NOT block on N probes.
 
-        with patch("routers.stream_stats.ensure_prober", return_value=mock_prober):
+        The endpoint must NOT call probe_stream / probe_streams_by_ids inline —
+        it only schedules a background task. We assert the response comes back
+        before any probing happens (asyncio.create_task is patched out).
+        """
+        mock_prober = MagicMock()
+        mock_prober._probing_in_progress = False
+
+        with patch("routers.stream_stats.ensure_prober", return_value=mock_prober), \
+             patch("asyncio.create_task") as mock_create_task:
             response = await async_client.post(
                 "/api/stream-stats/probe/bulk",
-                json={"stream_ids": [10]},
+                json={"stream_ids": [10, 11, 12]},
             )
 
         assert response.status_code == 200
         data = response.json()
-        assert data["probed"] == 1
-        mock_prober.probe_stream.assert_called_once()
+        assert data["status"] == "started"
+        assert data["total"] == 3
+        # A background task was scheduled rather than probing inline.
+        mock_create_task.assert_called_once()
+        # The endpoint itself never probed synchronously.
+        mock_prober.probe_streams_by_ids.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejects_concurrent_start_when_probe_running(self, async_client):
+        """Honors single-probe-at-a-time: refuses to start over a running probe."""
+        mock_prober = MagicMock()
+        mock_prober._probing_in_progress = True
+
+        with patch("routers.stream_stats.ensure_prober", return_value=mock_prober), \
+             patch("asyncio.create_task") as mock_create_task:
+            response = await async_client.post(
+                "/api/stream-stats/probe/bulk",
+                json={"stream_ids": [10, 11]},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "already_running"
+        # Must NOT have scheduled a second probe.
+        mock_create_task.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_background_task_calls_probe_streams_by_ids(self, async_client):
+        """The scheduled background task drives probe_streams_by_ids with the IDs.
+
+        We capture the coroutine handed to create_task and await it to confirm it
+        delegates to the shared prober method (which owns the results envelope).
+        """
+        mock_prober = MagicMock()
+        mock_prober._probing_in_progress = False
+        mock_prober.probe_streams_by_ids = AsyncMock(
+            return_value={"status": "completed", "probed": 2, "total": 2, "success": 2, "failed": 0}
+        )
+
+        captured = {}
+
+        def fake_create_task(coro):
+            captured["coro"] = coro
+            return MagicMock()
+
+        with patch("routers.stream_stats.ensure_prober", return_value=mock_prober), \
+             patch("asyncio.create_task", side_effect=fake_create_task):
+            response = await async_client.post(
+                "/api/stream-stats/probe/bulk",
+                json={"stream_ids": [10, 11]},
+            )
+
+        assert response.status_code == 200
+        # Drive the captured background coroutine to completion.
+        await captured["coro"]
+        mock_prober.probe_streams_by_ids.assert_awaited_once_with([10, 11])
 
     @pytest.mark.asyncio
     async def test_returns_503_when_prober_unavailable(self, async_client):

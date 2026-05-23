@@ -281,6 +281,21 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/auto-creation/executions",
         query_params=frozenset({"limit", "offset", "rule_id", "status"}),
     ),
+    "ac_get_execution": Endpoint(
+        name="ac_get_execution",
+        method="GET",
+        path="/api/auto-creation/executions/{execution_id}",
+        # query params the poll uses; include_entities and include_log default
+        # to False so we omit them from the poll call (saves DB work).
+        query_params=frozenset({"include_entities", "include_log"}),
+        # Fields the run_auto_creation tool reads from the execution row.
+        response_fields=frozenset({
+            "id", "status", "mode", "streams_evaluated", "streams_matched",
+            "channels_created", "channels_updated", "groups_created",
+            "streams_skipped", "duration_seconds", "error_message",
+            "dry_run_results",
+        }),
+    ),
     "ac_rollback": Endpoint(
         name="ac_rollback",
         method="POST",
@@ -341,7 +356,8 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/epg/sources",
         # Backend body is ``request: Request`` (raw) — forwarded to Dispatcharr.
         # These are the keys the tool sends; the call-time guard validates them.
-        request_fields=frozenset({"name", "url"}),
+        # source_type is required by Dispatcharr (bd-1wq7z.9: omitting it → 400).
+        request_fields=frozenset({"name", "url", "source_type"}),
     ),
     "epg_update_source": Endpoint(
         name="epg_update_source",
@@ -365,6 +381,13 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="POST",
         path="/api/epg/match",
         request_fields=frozenset({"channel_ids", "epg_source_ids", "source_order"}),  # EPGMatchRequest
+    ),
+    "epg_link_channel": Endpoint(
+        name="epg_link_channel",
+        method="POST",
+        path="/api/epg/channels/{channel_id}/link",
+        request_fields=frozenset({"epg_data_id", "tvg_id"}),  # EPGLinkRequest
+        # Returns the updated channel dict (linked state) — not a list.
     ),
     "epg_grid": Endpoint(
         name="epg_grid",
@@ -424,6 +447,19 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="GET",
         path="/api/export/cloud-targets",
     ),
+    # bd-1wq7z.21 — list publish configurations so callers can discover valid
+    # config_id values for publish_export.  Backend: GET /api/export/publish-configs
+    # (backend/routers/export.py::list_publish_configs).  Returns a JSON array
+    # of PublishConfiguration rows enriched with profile_name / target_name.
+    "export_list_publish_configs": Endpoint(
+        name="export_list_publish_configs",
+        method="GET",
+        path="/api/export/publish-configs",
+        # Backend route is an untyped bare-list response (no response_model), so
+        # OpenAPI declares no array schema — matches the sibling list endpoints
+        # (export_list_profiles / export_list_cloud_targets) which also leave
+        # response_is_list at its default. The tool iterates the runtime list.
+    ),
     "export_publish_config": Endpoint(
         name="export_publish_config",
         method="POST",
@@ -481,6 +517,14 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="GET",
         path="/api/normalization/groups",
     ),
+    # GET /api/normalization/rules — returns {"groups": [{group fields...,
+    # "rules": [{rule fields...}]}]}.  Used by list_normalization_rules so
+    # rule counts and names are available (groups-only endpoint has no rules).
+    "normalization_list_rules": Endpoint(
+        name="normalization_list_rules",
+        method="GET",
+        path="/api/normalization/rules",
+    ),
     # -- notifications domain ---------------------------------------------
     "notifications_list": Endpoint(
         name="notifications_list",
@@ -497,6 +541,9 @@ ENDPOINTS: dict[str, Endpoint] = {
         name="notifications_delete_all",
         method="DELETE",
         path="/api/notifications",
+        # Backend DELETE /api/notifications accepts read_only (bool, default True)
+        # to control whether unread notifications are included (bd-1wq7z.14).
+        query_params=frozenset({"read_only"}),
     ),
     "alert_methods_list": Endpoint(
         name="alert_methods_list",
@@ -573,6 +620,92 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/stream-stats/compute-sort",
         request_fields=frozenset({"channels", "mode"}),  # ComputeSortRequest
         response_fields=frozenset({"results"}),  # ComputeSortResponse
+    ),
+    # -- co5wh.2: per-provider stats (Stats v2 Providers panel, bd-skqln.16) --
+    # All four routes are admin-only on the backend; the MCP static key is
+    # admin-equivalent (bd-1wq7z.1). None declare a response_model so
+    # response_is_list stays at its default (False) — the contract test
+    # compares against the OpenAPI schema which has no array type declared.
+    "stats_providers_buffering": Endpoint(
+        name="stats_providers_buffering",
+        method="GET",
+        path="/api/stats/providers/buffering",
+        query_params=frozenset({"window", "bucket"}),
+    ),
+    "stats_providers_watch_time": Endpoint(
+        name="stats_providers_watch_time",
+        method="GET",
+        path="/api/stats/providers/watch-time",
+        query_params=frozenset({"window"}),
+    ),
+    "stats_providers_channel_heatmap": Endpoint(
+        name="stats_providers_channel_heatmap",
+        method="GET",
+        path="/api/stats/providers/channel-heatmap",
+        query_params=frozenset({"window", "top_n"}),
+    ),
+    "stats_providers_bitrate": Endpoint(
+        name="stats_providers_bitrate",
+        method="GET",
+        path="/api/stats/providers/bitrate",
+        query_params=frozenset({"window", "bucket"}),
+    ),
+    # -- co5wh.3: per-user watch-time (Stats v2 GH-62, bd-skqln.5) -----------
+    # /watch-time: group_by=total|day; response_is_list stays default (untyped).
+    # /users/dispatcharr/{user_id} and /users/emby/{emby_user_id}: path-param
+    # routes; no body; no typed response_model in OpenAPI.
+    "stats_watch_time": Endpoint(
+        name="stats_watch_time",
+        method="GET",
+        path="/api/stats/watch-time",
+        query_params=frozenset({"group_by", "user_id", "from", "to"}),
+    ),
+    "stats_users_dispatcharr": Endpoint(
+        name="stats_users_dispatcharr",
+        method="GET",
+        path="/api/stats/users/dispatcharr/{user_id}",
+        query_params=frozenset({"from", "to"}),
+    ),
+    "stats_users_emby": Endpoint(
+        name="stats_users_emby",
+        method="GET",
+        path="/api/stats/users/emby/{emby_user_id}",
+        query_params=frozenset({"from", "to"}),
+    ),
+    # -- co5wh.4: popularity trending + per-channel score --------------------
+    # /popularity/trending: direction + limit query params; returns a runtime
+    # list of ChannelPopularityScore.to_dict() — no response_model in OpenAPI.
+    # /popularity/channel/{channel_id}: path-param; returns one score dict or
+    # 404; no response_model in OpenAPI.
+    # response_is_list stays default (False) — untyped in OpenAPI.
+    "stats_popularity_trending": Endpoint(
+        name="stats_popularity_trending",
+        method="GET",
+        path="/api/stats/popularity/trending",
+        query_params=frozenset({"direction", "limit"}),
+    ),
+    "stats_popularity_channel": Endpoint(
+        name="stats_popularity_channel",
+        method="GET",
+        path="/api/stats/popularity/channel/{channel_id}",
+    ),
+    # -- co5wh.5: activity feed + per-channel bandwidth ----------------------
+    # /activity: proxies Dispatcharr /api/core/system-events/; returns a
+    # Dispatcharr paginated dict {count, next, previous, results:[...]} — no
+    # response_model in OpenAPI. response_is_list stays default (False).
+    # /channel-bandwidth: BandwidthTracker.get_channel_bandwidth_stats returns
+    # a plain list — again no response_model declared in OpenAPI.
+    "stats_activity": Endpoint(
+        name="stats_activity",
+        method="GET",
+        path="/api/stats/activity",
+        query_params=frozenset({"limit", "offset", "event_type"}),
+    ),
+    "stats_channel_bandwidth": Endpoint(
+        name="stats_channel_bandwidth",
+        method="GET",
+        path="/api/stats/channel-bandwidth",
+        query_params=frozenset({"days", "limit", "sort_by"}),
     ),
     # -- streams domain ----------------------------------------------------
     "streams_list": Endpoint(
