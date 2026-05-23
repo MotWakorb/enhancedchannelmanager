@@ -613,6 +613,88 @@ class TestBulkCommit:
         data = response.json()
         assert data["success"] is True
 
+    @pytest.mark.asyncio
+    async def test_reorder_full_permutation_succeeds(self, async_client):
+        """A reorderChannelStreams op whose streamIds is a full permutation of
+        the channel's current streams reorders successfully."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [{"id": 1, "name": "ESPN", "streams": [5001, 5002, 5003]}],
+            "count": 1, "next": None,
+        }
+        mock_client.get_streams_by_ids.return_value = [
+            {"id": 5001, "name": "s1"}, {"id": 5002, "name": "s2"},
+            {"id": 5003, "name": "s3"},
+        ]
+        mock_client.get_channel.return_value = {
+            "id": 1, "name": "ESPN", "streams": [5001, 5002, 5003],
+        }
+        mock_client.update_channel.return_value = {"id": 1}
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/bulk-commit", json={
+                "operations": [
+                    {"type": "reorderChannelStreams", "channelId": 1,
+                     "streamIds": [5003, 5001, 5002]},
+                ],
+            })
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["operationsApplied"] == 1
+        assert data["operationsFailed"] == 0
+        # The reordered (full permutation) set is written through.
+        mock_client.update_channel.assert_awaited_once_with(
+            1, {"streams": [5003, 5001, 5002]}
+        )
+
+    @pytest.mark.asyncio
+    async def test_reorder_partial_streamids_does_not_detach(self, async_client):
+        """A reorderChannelStreams op with a PARTIAL streamIds list (omits a
+        currently-attached stream) must NOT silently detach the omitted stream.
+
+        bd-1wq7z.25: the op is reported as a per-op error and update_channel is
+        never called with the lossy set, mirroring the single-channel reorder
+        guard (bd-1wq7z.3)."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [{"id": 1, "name": "ESPN", "streams": [5001, 5002]}],
+            "count": 1, "next": None,
+        }
+        mock_client.get_streams_by_ids.return_value = [
+            {"id": 5002, "name": "s2"},
+        ]
+        mock_client.get_channel.return_value = {
+            "id": 1, "name": "ESPN", "streams": [5001, 5002],
+        }
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/bulk-commit", json={
+                "operations": [
+                    # Omits 5001 -> would detach it under replace-semantics.
+                    {"type": "reorderChannelStreams", "channelId": 1,
+                     "streamIds": [5002]},
+                ],
+                "continueOnError": True,
+            })
+
+        assert response.status_code == 200
+        data = response.json()
+        # The lossy op is rejected: reported as an error, not applied.
+        assert data["operationsApplied"] == 0
+        assert data["operationsFailed"] == 1
+        assert len(data["errors"]) == 1
+        # Critically: update_channel was NEVER called with the lossy set
+        # (no silent detach of stream 5001).
+        for call in mock_client.update_channel.await_args_list:
+            written = call.args[1] if len(call.args) > 1 else call.kwargs.get("data", {})
+            assert written.get("streams") != [5002]
+        # Strongest assertion: no replace happened at all for this channel.
+        mock_client.update_channel.assert_not_awaited()
+
 
 class TestClearAutoCreated:
     """Tests for POST /api/channels/clear-auto-created."""

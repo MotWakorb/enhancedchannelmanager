@@ -26,7 +26,8 @@ def register(mcp: FastMCP):
             for s in sources:
                 name = s.get("name", "Unknown")
                 sid = s.get("id", "?")
-                url = s.get("url", "")[:50]
+                # url may be present-but-None (4 of 8 real sources); `or ""` handles that
+                url = (s.get("url") or "")[:50]
                 channel_count = s.get("channel_count", 0)
                 lines.append(f"  {name} (id={sid}) — {channel_count} channels, url: {url}...")
 
@@ -94,30 +95,63 @@ def register(mcp: FastMCP):
             return f"Error refreshing EPG sources: {e}"
 
     @mcp.tool()
-    async def match_channels_epg() -> str:
-        """Auto-match channels to EPG data based on channel names."""
+    async def match_channels_epg(
+        channel_ids: list[int] | None = None,
+        epg_source_ids: list[int] | None = None,
+        source_order: list[int] | None = None,
+    ) -> str:
+        """Auto-match channels to EPG data based on channel names.
+
+        Args:
+            channel_ids: Optional list of channel IDs to match (default: all channels)
+            epg_source_ids: Optional list of EPG source IDs to search (default: all sources)
+            source_order: Optional list of EPG source IDs defining preferred match order
+        """
         try:
             client = get_ecm_client()
-            result = await client.call_endpoint(ENDPOINTS["epg_match"], timeout=300.0)
+            # EPGMatchRequest requires a body; all fields are optional (default []).
+            # Omitting the body entirely → HTTP 422 "Field required, loc:['body']".
+            body: dict = {
+                "channel_ids": channel_ids or [],
+                "epg_source_ids": epg_source_ids or [],
+                "source_order": source_order or [],
+            }
+            result = await client.call_endpoint(ENDPOINTS["epg_match"], body=body, timeout=300.0)
 
-            matched = result.get("matched", 0)
-            unmatched = result.get("unmatched", 0)
-            return f"EPG auto-match complete: {matched} channels matched, {unmatched} unmatched."
+            # Real backend response shape (v0.15.0):
+            # {"exact":[...], "multiple":[...], "none":[...],
+            #  "summary":{"total_channels":N, "exact_count":N, "multiple_count":N,
+            #              "none_count":N, "match_time_ms":N}}
+            summary = result.get("summary", {}) if isinstance(result, dict) else {}
+            total = summary.get("total_channels", len(result.get("exact", [])) + len(result.get("multiple", [])) + len(result.get("none", [])))
+            exact_count = summary.get("exact_count", len(result.get("exact", [])) if isinstance(result, dict) else 0)
+            multiple_count = summary.get("multiple_count", len(result.get("multiple", [])) if isinstance(result, dict) else 0)
+            none_count = summary.get("none_count", len(result.get("none", [])) if isinstance(result, dict) else 0)
+
+            return (
+                f"EPG auto-match complete: {total} channels total — "
+                f"{exact_count} exact, {multiple_count} multiple candidates, {none_count} unmatched."
+            )
         except Exception as e:
             logger.error("[MCP] match_channels_epg failed: %s", e)
             return f"Error running EPG auto-match: {e}"
 
     @mcp.tool()
-    async def create_epg_source(name: str, url: str) -> str:
+    async def create_epg_source(name: str, url: str, source_type: str = "xmltv") -> str:
         """Create a new EPG data source.
 
         Args:
             name: Display name for the EPG source
             url: URL of the XMLTV EPG feed
+            source_type: EPG source type — "xmltv" (default, standard XMLTV format)
         """
         try:
             client = get_ecm_client()
-            result = await client.call_endpoint(ENDPOINTS["epg_create_source"], body={"name": name, "url": url})
+            # source_type is required by Dispatcharr; omitting it → HTTP 400 (bd-1wq7z.9)
+            result = await client.call_endpoint(
+                ENDPOINTS["epg_create_source"],
+                body={"name": name, "url": url, "source_type": source_type},
+            )
             sid = result.get("id", "?") if isinstance(result, dict) else "?"
             rname = result.get("name", name) if isinstance(result, dict) else name
             return f"EPG source created: {rname} (id={sid})"

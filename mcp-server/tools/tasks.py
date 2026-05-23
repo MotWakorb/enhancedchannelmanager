@@ -15,7 +15,10 @@ def register(mcp: FastMCP):
         """List all scheduled tasks and their status."""
         try:
             client = get_ecm_client()
-            tasks = await client.call_endpoint(ENDPOINTS["tasks_list"])
+            resp = await client.call_endpoint(ENDPOINTS["tasks_list"])
+            # Backend returns {"tasks": [...]}; unwrap defensively
+            # (same class as bd-pvw35 / GH #222 — iterating the dict gives string keys).
+            tasks = resp.get("tasks", []) if isinstance(resp, dict) else (resp or [])
 
             if not tasks:
                 return "No tasks configured."
@@ -64,8 +67,15 @@ def register(mcp: FastMCP):
         try:
             client = get_ecm_client()
             result = await client.call_endpoint(ENDPOINTS["tasks_cancel"], path_args={"task_id": task_id})
-            msg = result.get("message", "") if isinstance(result, dict) else ""
-            return f"Task '{task_id}' cancelled. {msg}".rstrip()
+            if isinstance(result, dict):
+                status = result.get("status", "")
+                msg = result.get("message", "")
+                # bd-1wq7z.12: backend returns HTTP 200 {"status": "not_running", ...}
+                # when the task isn't running — don't hardcode "cancelled".
+                if status == "not_running":
+                    return f"Task '{task_id}' was not running. {msg}".rstrip()
+                return f"Task '{task_id}' cancelled. {msg}".rstrip()
+            return f"Task '{task_id}' cancelled."
         except Exception as e:
             logger.error("[MCP] cancel_task failed: %s", e)
             return f"Error cancelling task '{task_id}': {e}"
