@@ -57,22 +57,29 @@
 
 ## Pending release notes (copy-paste to Discord when cutting the release)
 
-### v0.17.1
+### v0.17.2
 
 ```
 @here
 
-## 🚀 ECM v0.17.1
+## 🚀 ECM v0.17.2
 
-**🆕 Plex + Jellyfin User Attribution + Multi-Viewer**
-• Connected Clients now shows usernames for Plex and Jellyfin streams (was: Emby only)
-• When multiple users watch the same channel through the same media server, all their names are listed (was: only the most-recent user's name)
-• Configure under Settings → Integrations → Plex Integration / Jellyfin Integration
-• No re-migration required; new columns in session_telemetry are populated as new sessions arrive
+**🆕 Manage ECM through Claude — full Stats v2 coverage**
+• 8 new MCP tools so Claude can answer questions about your data: provider performance, per-user watch time, trending & popularity, the activity feed, and channel bandwidth
+• "Who's watching channel X?" — Claude can now read media-server attribution (Emby/Plex/Jellyfin usernames, client IPs, provider) on active channels
+• 124 MCP tools total — the MCP surface now covers the Stats v2 + attribution features that were previously UI-only
+
+**🐛 MCP reliability — a big correctness pass (30+ fixes)**
+• Static API-key auth now works across every tool (dedup, add-stream merge modes, and backups were previously rejected)
+• Fixed reorder / bulk-commit silently dropping streams from a channel
+• get_journal returns entries again; the EPG grid shows real channel names; stream provider/group show names instead of raw IDs
+• Channel numbers display as whole numbers (no more "#10440.0"); clearer "nothing to show" messages for probes
+• Found and fixed via a live sweep of every MCP tool
 
 **🔒 Security**
-• SSRF mitigation on test-connection endpoints for Emby, Plex, and Jellyfin (scheme allowlist + netloc-only URL reconstruction)
+• Constant-time comparison for the MCP API key (timing-attack hardening)
+• The MCP service key can no longer modify ECM user accounts (clean 403 instead of a 500)
 
-**📝 Documentation**
-• New Integrations operator guide covering Emby, Plex, and Jellyfin side-by-side (Settings → Integrations)
+**⚠️ Deprecation (still works — removed in v0.18.0)**
+• `ECM_TELEMETRY_EXCLUDE_USERS` is deprecated — the Stats attribution bug it worked around is now fixed, so you no longer need it. If it's set, you'll see a one-time log warning.
 ```

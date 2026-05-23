@@ -38,11 +38,13 @@ History — why this guard exists:
 - **PR #277** (cherry-pick of bd-lkyg5 from `release/v0.16.1` to `dev`, 2026-05-13): the cherry-pick agent noticed `backend/routers/backup.py` was at `"0.16.0"` while `frontend/package.json` had been bumped 27 times to `"0.17.0-0027"`. The skew had been latent for months — only caught because the cherry-picked commit happened to touch `backup.py`. Fixed inline; bd-9rtlc filed.
 - **bd-9rtlc audit** (2026-05-14): grep across the codebase surfaced a second long-standing skew — `backend/main.py` was at `"0.16.0-0003"` (FastAPI kwarg) while `frontend/package.json` was at `"0.17.0-0033"`. The FastAPI version only shows in the OpenAPI schema, which no external consumer cited, so nobody noticed for ~30 builds. Both touchpoints are now bumped in lockstep at `"0.17.0-0034"` and the CI guard (this job) blocks any future divergence.
 
-## Yanked release note — 0.16.0
+## 0.16.0 — yanked first attempt, then re-cut
 
-Version `0.16.0` was tagged and pushed to GHCR on 2026-04-20 and then **hard-rolled-back the same day** — the tag, GitHub Release, and GHCR image were all deleted before any external consumer pulled them. See [`docs/runbooks/v0.16.0-rollback.md`](runbooks/v0.16.0-rollback.md) for the full incident and [ADR-004](adr/ADR-004-release-cut-promotion-discipline.md) for the pre-cut gate that now blocks a repeat.
+An initial `0.16.0` build was tagged and pushed to GHCR on 2026-04-20 and then **hard-rolled-back the same day** — the tag, GitHub Release, and GHCR image were all deleted before any external consumer pulled them. See [`docs/runbooks/v0.16.0-rollback.md`](runbooks/v0.16.0-rollback.md) for the full incident and [ADR-004](adr/ADR-004-release-cut-promotion-discipline.md) for the pre-cut gate that now blocks a repeat.
 
-Because of the rollback, the current dev stream is still on `0.16.0-NNNN`. Per PO decision (grooming 2026-04-22, bd-eio04.10), there is no `0.16.1` release cut planned — dev continues to increment `BUILD` until a full `0.17.0` cut. External users running `0.16.0-NNNN` images are on dev builds, not a promoted release; the `[Unreleased]` section of [`CHANGELOG.md`](../CHANGELOG.md) is the canonical list of fixes awaiting a cut.
+**0.16.0 was successfully re-cut and shipped on 2026-05-12.** The shipping release incorporates everything that was intended for the first attempt plus the blocking bug fixes; see the `## [0.16.0]` entry in [`CHANGELOG.md`](../CHANGELOG.md). The `v0.16.0` tag and GHCR image from that date are the canonical promoted release — the 2026-04-20 rollback was the first attempt only, not a permanent yank of the 0.16.x line.
+
+Three further releases have since been promoted: **0.17.0** (2026-05-16), **0.17.1** (2026-05-22), and **0.17.2** (2026-05-23). `dev` now increments `BUILD` toward the next planned release as `0.18.0-NNNN` (tip is `0.18.0-0000` after the 0.17.2 cut). External users running `0.18.0-NNNN` images are on dev builds, not a promoted release; the `[Unreleased]` section of [`CHANGELOG.md`](../CHANGELOG.md) is the canonical list of fixes awaiting the next cut.
 
 ## Where to read the version
 
