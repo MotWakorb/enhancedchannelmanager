@@ -150,6 +150,13 @@ async def update_epg_source(source_id: int, request: Request):
     except HTTPException:
         raise
     except Exception as e:
+        # A missing source id (or bad field) surfaces as an upstream 4xx — map it
+        # to a clean 4xx instead of an opaque 500 (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[EPG] Update EPG source %s rejected by Dispatcharr: %s", source_id, e)
+            raise mapped
+        logger.exception("[EPG] Failed to update EPG source %s: %s", source_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -179,7 +186,16 @@ async def delete_epg_source(source_id: int):
 
         logger.info("[EPG] Deleted EPG source id=%s name='%s' in %.1fms", source_id, source_name, elapsed_ms)
         return {"status": "deleted"}
+    except HTTPException:
+        raise
     except Exception as e:
+        # A missing source id surfaces as an upstream 404 — return 404, not 500
+        # (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[EPG] Delete EPG source %s rejected by Dispatcharr: %s", source_id, e)
+            raise mapped
+        logger.exception("[EPG] Failed to delete EPG source %s: %s", source_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -319,6 +335,13 @@ async def refresh_epg_source(source_id: int):
             )
         except Exception:
             pass  # Don't fail the request if notification fails
+        # A missing source id surfaces as an upstream 404 — return 404, not 500
+        # (bd-lq38l.4).
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning("[EPG-REFRESH] Refresh EPG source %s rejected by Dispatcharr: %s", source_id, e)
+            raise mapped
+        logger.exception("[EPG-REFRESH] Failed to refresh EPG source %s: %s", source_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
