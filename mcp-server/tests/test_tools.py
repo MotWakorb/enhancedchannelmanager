@@ -1797,8 +1797,8 @@ class TestMatchChannelsEpg:
                     "status": "multiple",
                     "best_score": 0.92,
                     "matches": [
-                        {"tvg_id": "FoxNews.us", "epg_name": "Fox News Channel", "confidence": 0.92, "match_type": "fuzzy"},
-                        {"tvg_id": "FoxNews.int", "epg_name": "Fox News Int", "confidence": 0.85, "match_type": "fuzzy"},
+                        {"tvg_id": "FoxNews.us", "epg_name": "Fox News Channel", "confidence": 92.0, "match_type": "fuzzy"},
+                        {"tvg_id": "FoxNews.int", "epg_name": "Fox News Int", "confidence": 85.0, "match_type": "fuzzy"},
                     ],
                 },
                 {
@@ -1807,7 +1807,7 @@ class TestMatchChannelsEpg:
                     "status": "multiple",
                     "best_score": 0.80,
                     "matches": [
-                        {"tvg_id": "Discovery.us", "epg_name": "Discovery Channel", "confidence": 0.80, "match_type": "fuzzy"},
+                        {"tvg_id": "Discovery.us", "epg_name": "Discovery Channel", "confidence": 80.0, "match_type": "fuzzy"},
                     ],
                 },
             ],
