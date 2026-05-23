@@ -118,7 +118,9 @@ def register(mcp: FastMCP):
                 watch_time = c.get("total_watch_seconds", c.get("total_watch_time", 0))
                 hours = watch_time / 3600 if watch_time else 0
                 viewers = c.get("unique_viewers", c.get("viewer_count", "?"))
-                lines.append(f"  {i}. {name} — {hours:.1f}h watched, {viewers} unique viewers")
+                channel_id = c.get("channel_id", "")
+                id_suffix = f" (id={channel_id})" if channel_id else ""
+                lines.append(f"  {i}. {name}{id_suffix} — {hours:.1f}h watched, {viewers} unique viewers")
 
             return "\n".join(lines)
         except Exception as e:
@@ -182,7 +184,9 @@ def register(mcp: FastMCP):
                 score = r.get("score", r.get("popularity_score", 0))
                 trend = r.get("trend", "")
                 trend_icon = " ↑" if trend == "up" else " ↓" if trend == "down" else ""
-                lines.append(f"  {name} — score: {score:.1f}{trend_icon}")
+                channel_id = r.get("channel_id", "")
+                id_suffix = f" (id={channel_id})" if channel_id else ""
+                lines.append(f"  {name}{id_suffix} — score: {score:.1f}{trend_icon}")
 
             return "\n".join(lines)
         except Exception as e:

@@ -130,10 +130,34 @@ def register(mcp: FastMCP):
             multiple_count = summary.get("multiple_count", len(result.get("multiple", [])) if isinstance(result, dict) else 0)
             none_count = summary.get("none_count", len(result.get("none", [])) if isinstance(result, dict) else 0)
 
-            return (
+            lines = [
                 f"EPG auto-match complete: {total} channels total — "
                 f"{exact_count} exact, {multiple_count} multiple candidates, {none_count} unmatched."
-            )
+            ]
+
+            # Surface candidate details for ambiguous channels so the operator
+            # can see the options without dropping to the UI (bd-1icn8).
+            # The backend returns result["multiple"] as a list of per-channel
+            # entries, each with a "matches" list capped at 10 candidates.
+            multiple_entries = result.get("multiple", []) if isinstance(result, dict) else []
+            if multiple_entries:
+                lines.append(f"\nChannels with multiple candidates ({len(multiple_entries)}):")
+                for entry in multiple_entries:
+                    ch_name = entry.get("channel_name", f"channel {entry.get('channel_id', '?')}")
+                    candidates = entry.get("matches", [])
+                    lines.append(f"  {ch_name}:")
+                    if candidates:
+                        for c in candidates:
+                            tvg_id = c.get("tvg_id", "?")
+                            epg_name = c.get("epg_name", "")
+                            confidence = c.get("confidence")
+                            conf_str = f" ({confidence:.0f}%)" if confidence is not None else ""
+                            name_str = f" — {epg_name}" if epg_name else ""
+                            lines.append(f"    • {tvg_id}{name_str}{conf_str}")
+                    else:
+                        lines.append("    (no candidate details available)")
+
+            return "\n".join(lines)
         except Exception as e:
             logger.error("[MCP] match_channels_epg failed: %s", e)
             return f"Error running EPG auto-match: {e}"

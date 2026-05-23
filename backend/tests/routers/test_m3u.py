@@ -75,6 +75,61 @@ class TestCreateM3UAccount:
         assert response.status_code == 200
         assert response.json()["name"] == "New M3U"
 
+    @pytest.mark.asyncio
+    async def test_standard_account_url_persisted_as_server_url(self, async_client):
+        """url field is normalized to server_url before forwarding to Dispatcharr.
+
+        The MCP create_m3u_account tool sends {name, url, server_type} but
+        Dispatcharr expects server_url.  The router must promote url → server_url
+        so the playlist URL round-trips correctly (bd-znc76.4).
+        """
+        mock_client = AsyncMock()
+        mock_client.create_m3u_account.return_value = {
+            "id": 7,
+            "name": "StandardProvider",
+            "server_url": "https://example.com/playlist.m3u8",
+        }
+
+        with patch("routers.m3u.get_client", return_value=mock_client), \
+             patch("routers.m3u.journal"):
+            response = await async_client.post("/api/m3u/accounts", json={
+                "name": "StandardProvider",
+                "url": "https://example.com/playlist.m3u8",
+                "server_type": "standard",
+            })
+
+        assert response.status_code == 200
+        # The payload forwarded to Dispatcharr must use server_url, not url
+        called_data = mock_client.create_m3u_account.call_args[0][0]
+        assert called_data.get("server_url") == "https://example.com/playlist.m3u8", (
+            f"Expected server_url in forwarded payload; got: {called_data!r}"
+        )
+        assert "url" not in called_data, (
+            f"'url' key must be promoted to 'server_url'; got: {called_data!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_server_url_not_overwritten_if_already_present(self, async_client):
+        """When the caller already provides server_url, it is not overwritten."""
+        mock_client = AsyncMock()
+        mock_client.create_m3u_account.return_value = {
+            "id": 8,
+            "name": "XtreamProvider",
+            "server_url": "https://xtream.example.com",
+        }
+
+        with patch("routers.m3u.get_client", return_value=mock_client), \
+             patch("routers.m3u.journal"):
+            response = await async_client.post("/api/m3u/accounts", json={
+                "name": "XtreamProvider",
+                "server_url": "https://xtream.example.com",
+                "server_type": "xtream",
+            })
+
+        assert response.status_code == 200
+        called_data = mock_client.create_m3u_account.call_args[0][0]
+        assert called_data.get("server_url") == "https://xtream.example.com"
+
 
 class TestUpdateM3UAccount:
     """Tests for PUT /api/m3u/accounts/{account_id}."""

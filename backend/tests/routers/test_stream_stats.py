@@ -266,7 +266,8 @@ class TestProbeBulkStreams:
         mock_prober._fetch_all_streams.return_value = [
             {"id": 10, "url": "http://example.com/10", "name": "Stream 10"},
         ]
-        mock_prober.probe_stream.return_value = {"stream_id": 10, "status": "success"}
+        # Per-stream result is a StreamStats.to_dict(): outcome under probe_status.
+        mock_prober.probe_stream.return_value = {"stream_id": 10, "probe_status": "success"}
 
         with patch("routers.stream_stats.ensure_prober", return_value=mock_prober):
             response = await async_client.post(
@@ -278,6 +279,44 @@ class TestProbeBulkStreams:
         data = response.json()
         assert data["probed"] == 1
         mock_prober.probe_stream.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_response_has_tally_envelope(self, async_client):
+        """Bulk-probe response carries total/success/failed tallies (bd-clb9a).
+
+        Regression for the 0/0 accounting bug: the endpoint must compute
+        success/failed counts from each result's probe_status so the MCP tool
+        can report real numbers instead of zeros.
+        """
+        mock_prober = AsyncMock()
+        mock_prober._fetch_all_streams.return_value = [
+            {"id": 10, "url": "http://example.com/10", "name": "Stream 10"},
+            {"id": 11, "url": "http://example.com/11", "name": "Stream 11"},
+            {"id": 12, "url": "http://example.com/12", "name": "Stream 12"},
+        ]
+        # 1 success, 1 failed, 1 timeout — timeout counts as failed.
+        outcomes = {
+            10: {"stream_id": 10, "probe_status": "success"},
+            11: {"stream_id": 11, "probe_status": "failed"},
+            12: {"stream_id": 12, "probe_status": "timeout"},
+        }
+        mock_prober.probe_stream.side_effect = (
+            lambda sid, url, name: outcomes[sid]
+        )
+
+        with patch("routers.stream_stats.ensure_prober", return_value=mock_prober):
+            response = await async_client.post(
+                "/api/stream-stats/probe/bulk",
+                json={"stream_ids": [10, 11, 12]},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 3
+        assert data["success"] == 1
+        assert data["failed"] == 2
+        assert data["probed"] == 3  # backward-compat alias of total
+        assert len(data["results"]) == 3
 
     @pytest.mark.asyncio
     async def test_returns_503_when_prober_unavailable(self, async_client):

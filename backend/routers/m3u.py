@@ -411,6 +411,14 @@ async def create_m3u_account(request: Request):
     start = time.time()
     try:
         data = await request.json()
+        # Normalize: callers (including MCP) may send `url`; Dispatcharr
+        # expects `server_url`.  Promote `url` → `server_url` when only
+        # `url` is supplied so the round-trip works for standard accounts
+        # (bd-znc76.4 / bd-ma5qn).
+        if data.get("url") and not data.get("server_url"):
+            url_val = data["url"]
+            data = {k: v for k, v in data.items() if k != "url"}
+            data["server_url"] = url_val
         if data.get("server_url"):
             validate_url_scheme(data["server_url"], "server URL")
         result = await client.create_m3u_account(data)
