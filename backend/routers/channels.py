@@ -1959,7 +1959,19 @@ async def get_channel_streams(channel_id: int):
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[CHANNELS] Fetched streams for channel id=%s in %.1fms", channel_id, elapsed_ms)
         return result
+    except HTTPException:
+        raise
     except Exception as e:
+        # A missing channel id surfaces as an upstream 404 — return 404, not 500
+        # (bd-8w1ba). Common trigger: callers pass a channel NUMBER (shown in the
+        # UI) rather than the internal channel id.
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning(
+                "[CHANNELS] Upstream error fetching streams for channel id=%s: %s",
+                channel_id, e,
+            )
+            raise mapped
         logger.exception("[CHANNELS] Failed to fetch streams for channel id=%s", channel_id)
         raise HTTPException(status_code=500, detail="Internal server error")
 
