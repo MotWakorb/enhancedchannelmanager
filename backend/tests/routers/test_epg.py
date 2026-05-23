@@ -5,6 +5,7 @@ Tests: 12 endpoints covering EPG sources CRUD, refresh, import,
        EPG data listing, grid, and LCN lookup.
 Mocks: get_client() to isolate from Dispatcharr.
 """
+import httpx
 import pytest
 from unittest.mock import AsyncMock, patch
 
@@ -74,6 +75,50 @@ class TestCreateEPGSource:
 
         assert response.status_code == 200
         assert response.json()["name"] == "New EPG"
+
+    @pytest.mark.asyncio
+    async def test_upstream_4xx_surfaces_400_not_500(self, async_client):
+        """A Dispatcharr 4xx on create (bad body / missing required field)
+        maps to 400 with the upstream detail, not an opaque 500 (bd-1wq7z.22).
+
+        create_epg_source raises httpx.HTTPStatusError via raise_for_status().
+        """
+        mock_client = AsyncMock()
+        request = httpx.Request("POST", "http://disp/api/epg/sources/")
+        upstream = httpx.Response(
+            400, request=request,
+            text='{"source_type": ["This field is required."]}',
+        )
+        mock_client.create_epg_source.side_effect = httpx.HTTPStatusError(
+            "400 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.epg.get_client", return_value=mock_client), \
+             patch("routers.epg.journal"):
+            response = await async_client.post("/api/epg/sources", json={
+                "name": "New EPG",
+                "url": "http://example.com/epg.xml",
+            })
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert "source_type" in detail
+        assert "required" in detail
+
+    @pytest.mark.asyncio
+    async def test_genuine_server_error_still_500(self, async_client):
+        """A non-upstream error on create stays a 500 (bd-1wq7z.22)."""
+        mock_client = AsyncMock()
+        mock_client.create_epg_source.side_effect = RuntimeError("boom")
+
+        with patch("routers.epg.get_client", return_value=mock_client), \
+             patch("routers.epg.journal"):
+            response = await async_client.post("/api/epg/sources", json={
+                "name": "New EPG",
+                "url": "http://example.com/epg.xml",
+            })
+
+        assert response.status_code == 500
 
 
 class TestUpdateEPGSource:
