@@ -1,7 +1,7 @@
 # ECM MCP Compound (Chained) Test Plan
 
-> **Purpose:** The per-tool plan (`docs/mcp_tool_test_plan.md`) checks each of the
-> 124 MCP tools in isolation. This plan checks whether the tools **chain** — i.e.
+> **Purpose:** Beyond verifying each of the 124 MCP tools in isolation, this plan
+> checks whether the tools **chain** — i.e.
 > whether the output of one tool feeds correctly into the next across a realistic
 > multi-step workflow. The interesting failures here are at the **seams**: an id
 > or name that tool A emits but tool B can't consume, an envelope shape that
@@ -385,4 +385,4 @@ dedup/duplicate tools rely on — a cross-feature consistency seam.
 | 11 | Task + schedule lifecycle | ☐ |
 | 12 | Normalization-driven dedup preview | ☐ |
 
-**Filing findings:** a chain failure is usually a *seam* bug — record which step's output the next step failed to consume, and whether each individual tool passes its per-tool test (`docs/mcp_tool_test_plan.md`). If both tools pass alone but fail chained, that's the high-value finding this plan exists to catch.
+**Filing findings:** a chain failure is usually a *seam* bug — record which step's output the next step failed to consume, and whether each individual tool behaves correctly on its own. If both tools pass alone but fail chained, that's the high-value finding this plan exists to catch.
