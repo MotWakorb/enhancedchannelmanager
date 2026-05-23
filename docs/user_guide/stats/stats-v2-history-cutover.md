@@ -115,9 +115,46 @@ across restarts.
 > **Tracking:** bead `bd-tp1pd` (operator-global telemetry opt-out
 > toggle). The Stats v2 epic is `bd-skqln`.
 
+## Excluding a specific viewer (`ECM_TELEMETRY_EXCLUDE_USERS`) — deprecated
+
+> **Deprecated; scheduled for removal in v0.18.0.** You no longer need this
+> env var for its original purpose. It still works for now — no action
+> required if you rely on it for an unrelated reason.
+
+`ECM_TELEMETRY_EXCLUDE_USERS` was introduced as a workaround for a
+namespace-collision bug: ECM's local `users` table (ECM login identities)
+and Dispatcharr's `users` table (stream viewers) have separate but
+coincidentally-overlapping integer IDs, so a Dispatcharr viewer could be
+mis-attributed to an ECM login (for example, the admin account) in the
+Stats v2 Watch Time panel. The env var let operators suppress the
+mis-attributed rows by username or Dispatcharr user-id.
+
+The architectural fix — migration `0011`, which adds
+`session_telemetry.dispatcharr_username` and drops the foreign key to ECM's
+`users` table — removes that collision at the source. Telemetry rows now
+carry the Dispatcharr-side username directly, so the panel no longer
+attributes a viewer's sessions to an ECM login. **The env var is therefore
+no longer needed for the namespace-collision use case.**
+
+It remains available, for now, if you want to exclude a specific Dispatcharr
+viewer from Stats v2 for any *other* reason. When the var is set, ECM logs a
+one-time deprecation warning at the first stats poll:
+
+```
+[BANDWIDTH] ECM_TELEMETRY_EXCLUDE_USERS is set (N token(s)) but is DEPRECATED: … will be REMOVED in v0.18.0.
+```
+
+If you no longer need the exclusion, unset the var. If you still rely on it,
+no action is required before v0.18.0 — the removal is tracked under bead
+`bd-lbpl7`.
+
 ## Tracking
 
 - Bead `bd-skqln.3` (single-write refactor + read repointing).
 - Bead `bd-tp1pd` (operator-facing Stats v2 telemetry opt-out — the
   `ECM_STATS_TELEMETRY_OPT_OUT` env var documented above).
+- Bead `bd-gsn3r` (namespace-collision architectural fix — migration 0011
+  adds `session_telemetry.dispatcharr_username`).
+- Bead `bd-ye075` (soft-deprecation of `ECM_TELEMETRY_EXCLUDE_USERS`).
+- Bead `bd-lbpl7` (v0.18.0 removal of `ECM_TELEMETRY_EXCLUDE_USERS`).
 - ADR-007 (retention policy for `session_telemetry`).
