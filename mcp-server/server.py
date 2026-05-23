@@ -5,6 +5,7 @@ to (single ``/mcp`` endpoint, session carried via the ``Mcp-Session-Id`` header)
 Communicates with the ECM backend via HTTP API using an API key for auth.
 """
 import contextlib
+import hmac
 import logging
 
 from mcp.server.fastmcp import FastMCP
@@ -102,8 +103,15 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # ── SHAPE CLASSIFICATION (before any validation — CD1 no-fail-cascade) ──
+        # RFC 6750 §2.1: the "Bearer" auth-scheme token is case-insensitive and
+        # the credential is whitespace-trimmed. Parse leniently so a well-formed
+        # request from a spec-compliant client is never rejected on a casing nit
+        # (LOW-2 hardening, bd-i3axt); a malformed/absent header still fails safe.
         auth_header = request.headers.get("authorization", "")
-        bearer_value = auth_header[7:] if auth_header.startswith("Bearer ") else ""
+        bearer_value = ""
+        scheme, _, credential = auth_header.partition(" ")
+        if scheme.lower() == "bearer":
+            bearer_value = credential.strip()
 
         if bearer_value and looks_like_jwt(bearer_value):
             # JWT-shaped Bearer → OAuth offering RETIRED (bd-9axgc). Reject with
@@ -142,7 +150,11 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
                 headers=_WWW_AUTHENTICATE,
             )
 
-        if api_key != expected_key:
+        # Constant-time compare to avoid a timing oracle on the static key
+        # (bd-i3axt LOW-1). ``expected_key`` is already known non-empty (guarded
+        # above) and ``api_key`` is non-empty here, so compare_digest never sees
+        # None; a length/charset mismatch fails closed without leaking timing.
+        if not hmac.compare_digest(api_key, expected_key):
             logger.warning("[MCP] Connection rejected: invalid API key")
             return JSONResponse(
                 {"error": "Invalid API key"},
