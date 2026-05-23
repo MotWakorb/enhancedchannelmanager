@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.17.2] — 2026-05-23
+
 ### Added
 - **MCP: expose the 0.17.0/0.17.1 Stats v2 + media-server attribution features through Claude (epic co5wh, v0.17.2-0002).** These features shipped to the UI/API but were never queryable via MCP. New/updated tools: `get_channel_stats` now renders the media-server attribution fields the Active Channels endpoint already returns (`emby_user_name`/`plex_user_name`/`jellyfin_user_name` + `*_viewers`, `client_ip`/`client_ips`, `provider_name`) so Claude can answer "who's watching channel X" (co5wh.1); a new `get_provider_stats` tool wraps the Providers panel (`/api/stats/providers/{buffering,watch-time,channel-heatmap,bitrate}`, GH-59) via a `metric` selector (co5wh.2); `get_user_watch_time` + `get_user_channel_breakdown` wrap the Users panel and per-source breakdowns (`/api/stats/watch-time`, `/users/dispatcharr/{id}`, `/users/emby/{id}`, GH-62; surfaces `attribution_source`) (co5wh.3); `get_trending` + `get_channel_popularity` wrap `/popularity/trending` and `/popularity/channel/{id}` (co5wh.4); and `get_activity` + `get_channel_bandwidth` round out stats coverage (co5wh.5). 8 new tools (124 total). All new contract entries match the backend's untyped-list OpenAPI shape (`response_is_list` default) to satisfy the cross-repo contract test. **Tests:** 30 new mcp-server tests; mcp-server suite 250 passed, contract test 120 passed. Live-verified against the real backend (provider watch-time, per-user totals with "via dispatcharr" attribution, activity feed). ([epic co5wh])
 
